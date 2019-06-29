@@ -19,7 +19,9 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
+#include <utility>
 
 namespace donner {
 
@@ -124,8 +126,8 @@ inline double Abs(double a) {
 template<typename T,
          typename = std::enable_if<std::is_integral<T>::value && std::is_signed<T>::value>>
 inline T Abs(T a) {
-    if (UTILS_UNLIKELY(a == std::numeric_limits<T>::min())) {
-        return std::numeric_limits<T>::max();
+  if (UTILS_PREDICT_FALSE(a == std::numeric_limits<T>::lowest())) {
+    return std::numeric_limits<T>::max();
     }
 
     return a < 0 ? -a : a;
@@ -175,7 +177,10 @@ inline bool NearZero(T a, T tolerance = std::numeric_limits<T>::epsilon()) {
  */
 template<typename T, typename = std::enable_if<std::is_integral<T>::value>>
 inline bool InRange(T var, T start, T end) {
-    return static_cast<typename details::AddUnsigned<T>::type>(var - start) <= end - start;
+  assert(start <= end);
+
+  using UnsignedT = typename details::AddUnsigned<T>::type;
+  return static_cast<UnsignedT>(var - start) <= UnsignedT(end - start);
 }
 
 template<typename T>

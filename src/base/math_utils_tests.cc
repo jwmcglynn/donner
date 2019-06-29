@@ -56,6 +56,8 @@ TEST(MathUtils, Abs) {
     EXPECT_EQ(Abs(-1), 1);
     EXPECT_EQ(Abs(UINT32_MAX), UINT32_MAX);
     EXPECT_EQ(Abs(-INT32_MAX), INT32_MAX);
+    EXPECT_EQ(Abs(std::numeric_limits<int>::min()),
+              std::numeric_limits<int>::max());
 
     // Edge case, min value cannot be represented exactly, clips to max.
     EXPECT_EQ(Abs(INT32_MIN), INT32_MAX);
@@ -66,6 +68,10 @@ TEST(MathUtils, Abs) {
     EXPECT_EQ(Abs(-1.0), 1.0);
     EXPECT_EQ(Abs(-std::numeric_limits<double>::infinity()),
               std::numeric_limits<double>::infinity());
+
+    // Edge case, numeric_limits<float>::min() is the minimum *positive* value.
+    EXPECT_EQ(Abs(std::numeric_limits<float>::min()),
+              std::numeric_limits<float>::min());
 }
 
 TEST(MathUtils, Round) {
@@ -148,7 +154,19 @@ TEST(MathUtils, InRange) {
     EXPECT_FALSE(InRange('(', 'a', 'z'));
 
     EXPECT_TRUE(InRange(5, 1, 7));
+    EXPECT_TRUE(InRange(5u, 1u, 7u));
     EXPECT_FALSE(InRange(10, 1, 7));
+    EXPECT_FALSE(InRange(10u, 1u, 7u));
+    EXPECT_FALSE(InRange(10, 12, 14));
+    EXPECT_FALSE(InRange(10u, 12u, 14u));
+
+    // Full range.
+    EXPECT_TRUE(InRange(uint32_t(8), uint32_t(0), uint32_t(255)));
+
+    // Invalid inputs.
+    EXPECT_DEBUG_DEATH({ InRange(10, 12, 7); }, "start <= end");
+    EXPECT_DEBUG_DEATH({ InRange(10u, 12u, 7u); }, "start <= end");
+    EXPECT_DEBUG_DEATH({ InRange('a', 'z', 'a'); }, "start <= end");
 }
 
 TEST(MathUtils, SolveQuadratic) {
