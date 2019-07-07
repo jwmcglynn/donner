@@ -1,0 +1,158 @@
+#pragma once
+
+#include "src/base/math_utils.h"
+
+#include <ostream>
+
+namespace donner {
+
+template <typename T>
+struct Vector2 {
+  T x = T(0);
+  T y = T(1);
+
+  static Vector2<T> Zero() { return Vector2(T(0), T(0)); }
+  static Vector2<T> XAxis() { return Vector2(T(1), T(0)); }
+  static Vector2<T> YAxis() { return Vector2(T(0), T(1)); }
+
+  Vector2() = default;
+
+  // Standard constructors.
+  Vector2(const Vector2<T>& other) = default;
+  constexpr Vector2(T x, T y) : x(x), y(y) {}
+
+  // Cast constructors.
+  template <typename S>
+  Vector2(const Vector2<S>& other) : x(other.x), y(other.y) {}
+
+  template <typename S>
+  Vector2(S x, S y) : x(x), y(y) {}
+
+  // Returns the length of the vector.
+  T Length() const { return (T)sqrt(double(x * x + y * y)); }
+  // Returns the squared length of the vector.
+  T LengthSquared() const { return x * x + y * y; }
+
+  // Returns the distance between two vectors, assuming that each represents a
+  // point in space.
+  T Distance(const Vector2<T>& other) const { return (other - *this).Length(); }
+  // Returns the squared distance between two vectors, assuming that each
+  // represents a point in space.
+  T DistanceSquared(const Vector2<T>& other) const { return (other - *this).LengthSquared(); }
+
+  // Returns the dot product.
+  T Dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
+
+  // Rotate this vector.
+  Vector2<T> Rotate(double radians) const { return Rotate((T)cos(radians), (T)sin(radians)); }
+
+  // Rotate this vector given a pre-computed cosine/sine angle.
+  Vector2<T> Rotate(T cos_result, T sin_result) const {
+    return Vector2<T>(x * cos_result - y * sin_result, x * sin_result + y * cos_result);
+  }
+
+  // Returns the angle that this vector makes with the +x axis, in radians.
+  T Angle() const { return (T)atan2(double(y), double(x)); }
+
+  // Returns the normalized vector.
+  Vector2<T> Normalize() const {
+    const T len = Length();
+
+    if (NearZero(len)) {
+      return Vector2<T>::Zero();
+    } else {
+      const T mag = T(1) / len;
+      return Vector2<T>(x * mag, y * mag);
+    }
+  }
+
+  /*************************************************************************/
+  // Operators.
+
+  Vector2<T> operator-() const { return Vector2<T>(-x, -y); }
+  Vector2<T>& operator=(const Vector2<T>& rhs) {
+    x = rhs.x;
+    y = rhs.y;
+    return *this;
+  }
+
+  template <typename S>
+  Vector2<T>& operator=(const Vector2<S>& rhs) {
+    x = T(rhs.x);
+    y = T(rhs.y);
+    return *this;
+  }
+
+  // Addition.
+  Vector2<T> operator+(const Vector2<T>& rhs) const { return Vector2<T>(x + rhs.x, y + rhs.y); }
+  Vector2<T>& operator+=(const Vector2<T>& rhs) {
+    x += rhs.x;
+    y += rhs.y;
+    return *this;
+  }
+
+  // Subtraction.
+  Vector2<T> operator-(const Vector2<T>& rhs) const { return Vector2<T>(x - rhs.x, y - rhs.y); }
+  Vector2<T>& operator-=(const Vector2<T>& rhs) {
+    x -= rhs.x;
+    y -= rhs.y;
+    return *this;
+  }
+
+  // Piecewise multiplication.
+  Vector2<T> operator*(const Vector2<T>& rhs) const { return Vector2<T>(x * rhs.x, y * rhs.y); }
+  Vector2<T>& operator*=(const Vector2<T>& rhs) {
+    x *= rhs.x;
+    y *= rhs.y;
+    return *this;
+  }
+
+  // Scalar multiplication.
+  Vector2<T> operator*(const T a) const { return Vector2<T>(x * a, y * a); }
+  Vector2<T>& operator*=(const T a) {
+    x *= a;
+    y *= a;
+    return *this;
+  }
+  friend Vector2<T> operator*(const T a, const Vector2<T>& other) {
+    return Vector2<T>(a * other.x, a * other.y);
+  }
+
+  // Piecewise division.
+  Vector2<T> operator/(const Vector2<T>& rhs) const { return Vector2<T>(x / rhs.x, y / rhs.y); }
+  Vector2<T>& operator/=(const Vector2<T>& rhs) {
+    x /= rhs.x;
+    y /= rhs.y;
+    return *this;
+  }
+
+  // Scalar division.
+  Vector2<T> operator/(const T a) const { return Vector2<T>(x / a, y / a); }
+  Vector2<T>& operator/=(const T a) {
+    x /= a;
+    y /= a;
+    return *this;
+  }
+  friend Vector2<T> operator/(const T a, const Vector2<T>& other) {
+    return Vector2<T>(a / other.x, a / other.y);
+  }
+
+  // Comparison.
+  bool operator==(const Vector2<T>& other) const {
+    return NearEquals(x, other.x) && NearEquals(y, other.y);
+  }
+  bool operator!=(const Vector2<T>& rhs) const { return !operator==(rhs); }
+
+  // Output.
+  friend std::ostream& operator<<(std::ostream& os, const Vector2<T>& vec) {
+    os << "(" << vec.x << ", " << vec.y << ")";
+    return os;
+  }
+};
+
+// Helper typedefs.
+typedef Vector2<float> Vector2f;
+typedef Vector2<double> Vector2d;
+typedef Vector2<int> Vector2i;
+
+}  // namespace donner

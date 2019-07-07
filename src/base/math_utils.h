@@ -1,17 +1,3 @@
-// Copyright 2018 Jeff McGlynn
-//
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
-//
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
 #pragma once
 
 #include "src/base/utils.h"
@@ -24,119 +10,118 @@
 #include <utility>
 
 namespace donner {
-
 namespace details {
 
-template<typename T>
+template <typename T>
 struct AddUnsigned {
 private:
-    typedef typename std::enable_if<std::is_integral<T>::value, T>::type EnableType;
+  typedef typename std::enable_if<std::is_integral<T>::value, T>::type EnableType;
 
 public:
-    typedef EnableType type;
+  typedef EnableType type;
 };
 
-template<>
+template <>
 struct AddUnsigned<char> {
-    typedef unsigned char type;
+  typedef unsigned char type;
 };
-template<>
+template <>
 struct AddUnsigned<signed char> {
-    typedef unsigned char type;
+  typedef unsigned char type;
 };
-template<>
+template <>
 struct AddUnsigned<short> {
-    typedef unsigned short type;
+  typedef unsigned short type;
 };
-template<>
+template <>
 struct AddUnsigned<int> {
-    typedef unsigned int type;
+  typedef unsigned int type;
 };
-template<>
+template <>
 struct AddUnsigned<long> {
-    typedef unsigned long type;
+  typedef unsigned long type;
 };
-template<>
+template <>
 struct AddUnsigned<long long> {
-    typedef unsigned long long type;
+  typedef unsigned long long type;
 };
 
 // Don't define these, these don't have an unsigned counterpart.
-template<>
+template <>
 struct AddUnsigned<bool>;
-template<>
+template <>
 struct AddUnsigned<wchar_t>;
 
 }  // namespace details
 
-template<typename T>
+template <typename T>
 struct MathConstants {};
 
-template<>
+template <>
 struct MathConstants<float> {
-    static constexpr float kPi = 3.14159265359f;
-    static constexpr float kReciprocalPi = 1.0f / kPi;
-    static constexpr float kHalfPi = kPi / 2.0f;
-    static constexpr float kDegToRad = kPi / 180.0f;
-    static constexpr float kRadToDeg = 180.0f / kPi;
+  static constexpr float kPi = 3.14159265359f;
+  static constexpr float kReciprocalPi = 1.0f / kPi;
+  static constexpr float kHalfPi = kPi / 2.0f;
+  static constexpr float kDegToRad = kPi / 180.0f;
+  static constexpr float kRadToDeg = 180.0f / kPi;
 };
 
-template<>
+template <>
 struct MathConstants<double> {
-    static constexpr double kPi = 3.1415926535897932384626433832795028841971693993751;
-    static constexpr double kReciprocalPi = 1.0 / kPi;
-    static constexpr double kHalfPi = kPi / 2.0;
-    static constexpr double kDegToRad = kPi / 180.0;
-    static constexpr double kRadToDeg = 180.0 / kPi;
+  static constexpr double kPi = 3.1415926535897932384626433832795028841971693993751;
+  static constexpr double kReciprocalPi = 1.0 / kPi;
+  static constexpr double kHalfPi = kPi / 2.0;
+  static constexpr double kDegToRad = kPi / 180.0;
+  static constexpr double kRadToDeg = 180.0 / kPi;
 };
 
 /// Returns minimum of the provided values.
-template<typename T>
+template <typename T>
 inline const T& Min(const T& a, const T& b) {
-    return a < b ? a : b;
+  return a < b ? a : b;
 }
 
 /// Returns minimum of the provided values.
-template<typename T, typename... Args>
+template <typename T, typename... Args>
 inline const T& Min(const T& a, const T& b, Args&&... args) {
-    return Min(Min(a, b), std::forward<Args>(args)...);
+  return Min(Min(a, b), std::forward<Args>(args)...);
 }
 
 /// Returns maximum of the provided values.
-template<typename T>
+template <typename T>
 inline const T& Max(const T& a, const T& b) {
-    return a < b ? b : a;
+  return a < b ? b : a;
 }
 
 /// Returns maximum of the provided values.
-template<typename T, typename... Args>
+template <typename T, typename... Args>
 inline const T& Max(const T& a, const T& b, Args&&... args) {
-    return Max(Max(a, b), std::forward<Args>(args)...);
+  return Max(Max(a, b), std::forward<Args>(args)...);
 }
 
 /// Returns abs of two values.
 inline float Abs(float a) {
-    return fabsf(a);
+  return fabsf(a);
 }
 
 inline double Abs(double a) {
-    return fabs(a);
+  return fabs(a);
 }
 
-template<typename T,
-         typename = std::enable_if<std::is_integral<T>::value && std::is_signed<T>::value>>
+template <typename T,
+          typename = std::enable_if<std::is_integral<T>::value && std::is_signed<T>::value>>
 inline T Abs(T a) {
   if (UTILS_PREDICT_FALSE(a == std::numeric_limits<T>::lowest())) {
     return std::numeric_limits<T>::max();
-    }
+  }
 
-    return a < 0 ? -a : a;
+  return a < 0 ? -a : a;
 }
 
 // Rounds a floating point value to an integer.
-template<typename T, typename = std::enable_if<std::is_floating_point<T>::value>>
+template <typename T, typename = std::enable_if<std::is_floating_point<T>::value>>
 inline T Round(T orig) {
-    return static_cast<T>(floor(orig + 0.5));
+  return static_cast<T>(floor(orig + 0.5));
 }
 
 /**
@@ -144,28 +129,28 @@ inline T Round(T orig) {
  *
  * @return a if t == 0, b if t == 1, and the linear interpolation else.
  */
-template<typename T>
+template <typename T>
 inline T Lerp(T a, T b, const float t) {
-    assert(t >= 0.0f && t <= 1.0f);
-    return T(a * (1.0f - t)) + (b * t);
+  assert(t >= 0.0f && t <= 1.0f);
+  return T(a * (1.0f - t)) + (b * t);
 }
 
 /// Clamps a value between low and high.
-template<typename T>
+template <typename T>
 inline const T Clamp(T value, T low, T high) {
-    return Min(Max(value, low), high);
+  return Min(Max(value, low), high);
 }
 
 /// Returns if a equals b, taking possible rounding errors into account.
-template<typename T>
+template <typename T>
 inline bool NearEquals(T a, T b, T tolerance = std::numeric_limits<T>::epsilon()) {
-    return (b <= a + tolerance) && (a <= b + tolerance);
+  return (b <= a + tolerance) && (a <= b + tolerance);
 }
 
 /// Returns if a equals zero, taking rounding errors into account.
-template<typename T>
+template <typename T>
 inline bool NearZero(T a, T tolerance = std::numeric_limits<T>::epsilon()) {
-    return Abs(a) <= tolerance;
+  return Abs(a) <= tolerance;
 }
 
 /**
@@ -175,7 +160,7 @@ inline bool NearZero(T a, T tolerance = std::numeric_limits<T>::epsilon()) {
  * Example:
  * if (InRange(var, 'a', 'z')) // ...
  */
-template<typename T, typename = std::enable_if<std::is_integral<T>::value>>
+template <typename T, typename = std::enable_if<std::is_integral<T>::value>>
 inline bool InRange(T var, T start, T end) {
   assert(start <= end);
 
@@ -183,10 +168,10 @@ inline bool InRange(T var, T start, T end) {
   return static_cast<UnsignedT>(var - start) <= UnsignedT(end - start);
 }
 
-template<typename T>
+template <typename T>
 struct QuadraticSolution {
-    T solution[2] = {};
-    bool has_solution = false;
+  T solution[2] = {};
+  bool has_solution = false;
 };
 
 /**
@@ -199,27 +184,27 @@ struct QuadraticSolution {
  * @param c Third coefficient.
  * @return QuadraticSolution, containing 0-2 solutions.
  */
-template<typename T>
+template <typename T>
 QuadraticSolution<T> SolveQuadratic(T a, T b, T c) {
-    QuadraticSolution<T> res;
+  QuadraticSolution<T> res;
 
-    // b^2 - 4ac.
-    T sqrt_content = b * b - T(4) * a * c;
+  // b^2 - 4ac.
+  T sqrt_content = b * b - T(4) * a * c;
 
-    // Check to see if any solutions exist.
-    if (sqrt_content < T(0) || a == T(0)) {
-        res.has_solution = false;
-        return res;
-    }
-
-    // Build up the equation.
-    sqrt_content = sqrt(sqrt_content);
-
-    // Solve the two conditions.
-    res.solution[0] = (-b + sqrt_content) / (T(2) * a);
-    res.solution[1] = (-b - sqrt_content) / (T(2) * a);
-    res.has_solution = true;
+  // Check to see if any solutions exist.
+  if (sqrt_content < T(0) || a == T(0)) {
+    res.has_solution = false;
     return res;
+  }
+
+  // Build up the equation.
+  sqrt_content = sqrt(sqrt_content);
+
+  // Solve the two conditions.
+  res.solution[0] = (-b + sqrt_content) / (T(2) * a);
+  res.solution[1] = (-b - sqrt_content) / (T(2) * a);
+  res.has_solution = true;
+  return res;
 }
 
 }  // namespace donner

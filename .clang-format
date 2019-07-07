@@ -1,12 +1,10 @@
 ---
 BasedOnStyle: Google
-AccessModifierOffset: -4
+AccessModifierOffset: -2
 AllowShortCaseLabelsOnASingleLine: true
 AllowShortFunctionsOnASingleLine: Inline
-FixNamespaceComments: true
-SpaceAfterTemplateKeyword: false
 ColumnLimit: 100
-IndentWidth: 4
+IndentWidth: 2
 ---
 Language: Cpp
 # Force pointers to the type for C++.
