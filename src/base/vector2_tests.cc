@@ -174,8 +174,11 @@ TEST(Vector2, Negation) {
 
 TEST(Vector2, Equals) {
   EXPECT_TRUE(Vector2i::Zero() == Vector2i(0, 0));
+  EXPECT_FALSE(Vector2i::Zero() == Vector2i(1, 0));
   EXPECT_TRUE(Vector2i::Zero() != Vector2i(123, 456));
+  EXPECT_FALSE(Vector2i::Zero() != Vector2i(0, 0));
   EXPECT_TRUE(Vector2i(123, 456) == Vector2i(123, 456));
+  EXPECT_FALSE(Vector2i(123, 456) == Vector2i(123, 567));
 }
 
 }  // namespace donner

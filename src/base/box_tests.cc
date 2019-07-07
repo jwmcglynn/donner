@@ -1,0 +1,95 @@
+#include "src/base/box.h"
+
+#include <gtest/gtest.h>
+
+namespace donner {
+
+TEST(Box, Construct) {
+  Boxd box(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0));
+  EXPECT_EQ(box.top_left, Vector2d(-1.0, -1.0));
+  EXPECT_EQ(box.bottom_right, Vector2d(1.0, 1.0));
+}
+
+TEST(Box, CreateEmpty) {
+  Boxd empty = Boxd::CreateEmpty(Vector2d(2.0, 1.0));
+  EXPECT_EQ(empty.top_left, Vector2d(2.0, 1.0));
+  EXPECT_EQ(empty.bottom_right, Vector2d(2.0, 1.0));
+}
+
+TEST(Box, AddPoint) {
+  Boxd box(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0));
+
+  // Zero is already in the box, this should no-op.
+  box.AddPoint(Vector2d::Zero());
+  EXPECT_EQ(box, Boxd(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0)));
+
+  // Expand the box in each dimension.
+  box.AddPoint(Vector2d(2.0, 0.0));
+  EXPECT_EQ(box, Boxd(Vector2d(-1.0, -1.0), Vector2d(2.0, 1.0)));
+  box.AddPoint(Vector2d(0.0, 3.0));
+  EXPECT_EQ(box, Boxd(Vector2d(-1.0, -1.0), Vector2d(2.0, 3.0)));
+  box.AddPoint(Vector2d(-4.0, 0.0));
+  EXPECT_EQ(box, Boxd(Vector2d(-4.0, -1.0), Vector2d(2.0, 3.0)));
+  box.AddPoint(Vector2d(0.0, -5.0));
+  EXPECT_EQ(box, Boxd(Vector2d(-4.0, -5.0), Vector2d(2.0, 3.0)));
+}
+
+TEST(Box, AddPoint_FromEmpty) {
+  Boxd box = Boxd::CreateEmpty(Vector2d::Zero());
+
+  // Zero is already in the box, this should no-op.
+  box.AddPoint(Vector2d::Zero());
+  EXPECT_EQ(box, Boxd(Vector2d::Zero(), Vector2d::Zero()));
+
+  box.AddPoint(Vector2d(2.0, 0.0));
+  EXPECT_EQ(box, Boxd(Vector2d(0.0, 0.0), Vector2d(2.0, 0.0)));
+}
+
+TEST(Box, AddBox) {
+  Boxd box(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));
+  box.AddBox(Boxd(Vector2d(5.0, 6.0), Vector2d(7.0, 8.0)));
+  EXPECT_EQ(box, Boxd(Vector2d(1.0, 2.0), Vector2d(7.0, 8.0)));
+}
+
+// Operators
+TEST(Box, OperatorAssign) {
+  const Boxd kBox1(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));
+  const Boxd kBox2(Vector2d(5.0, 6.0), Vector2d(7.0, 8.0));
+
+  Boxd box(kBox1);
+  EXPECT_EQ(box, kBox1);
+
+  box = kBox2;
+  EXPECT_EQ(box, kBox2);
+}
+
+TEST(Box, OperatorAdd) {
+  EXPECT_EQ(Boxd(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)) + Vector2d(-1.0, 1.0),
+            Boxd(Vector2d(0.0, 3.0), Vector2d(2.0, 5.0)));
+
+  Boxd box(Vector2d::Zero(), Vector2d::Zero());
+  box += Vector2d(5.0, 10.0);
+  EXPECT_EQ(box, Boxd(Vector2d(5.0, 10.0), Vector2d(5.0, 10.0)));
+}
+
+TEST(Box, OperatorSubtract) {
+  EXPECT_EQ(Boxd(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)) - Vector2d(-1.0, 1.0),
+            Boxd(Vector2d(2.0, 1.0), Vector2d(4.0, 3.0)));
+
+  Boxd box(Vector2d::Zero(), Vector2d::Zero());
+  box -= Vector2d(5.0, 10.0);
+  EXPECT_EQ(box, Boxd(Vector2d(-5.0, -10.0), Vector2d(-5.0, -10.0)));
+}
+
+TEST(Box, Equals) {
+  EXPECT_TRUE(Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)) ==
+              Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
+  EXPECT_FALSE(Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)) ==
+               Boxd(Vector2d(1.0, 0.0), Vector2d(1.0, 1.0)));
+  EXPECT_TRUE(Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)) !=
+              Boxd(Vector2d(1.0, 0.0), Vector2d(1.0, 1.0)));
+  EXPECT_FALSE(Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)) !=
+               Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
+}
+
+}  // namespace donner
