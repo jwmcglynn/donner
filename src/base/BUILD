@@ -6,7 +6,7 @@ cc_library(
         "utils.h",
         "vector2.h",
     ],
-    visibility = ["//:__pkg__"],
+    visibility = ["//:__subpackages__"],
 )
 
 cc_test(
