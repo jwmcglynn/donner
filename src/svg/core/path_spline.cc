@@ -4,7 +4,7 @@
 namespace donner {
 
 Boxd PathSpline::Bounds() const {
-  assert(!IsEmpty());
+  UTILS_RELEASE_ASSERT(!IsEmpty());
 
   Boxd box = Boxd::CreateEmpty(points_.front());
   Vector2d current;
@@ -130,6 +130,8 @@ static void ComputeMiter(Boxd& box, const Vector2d& current_point, const Vector2
 }
 
 Boxd PathSpline::StrokeMiterBounds(double stroke_width, double miter_limit) const {
+  UTILS_RELEASE_ASSERT(!IsEmpty());
+
   Boxd box = Boxd::CreateEmpty(points_.front());
   Vector2d current;
 
@@ -300,7 +302,7 @@ PathSpline::Builder& PathSpline::Builder::MoveTo(const Vector2d& point) {
 }
 
 PathSpline::Builder& PathSpline::Builder::LineTo(const Vector2d& point) {
-  assert(moveto_index_ != kNPos && "LineTo without calling MoveTo first");
+  UTILS_RELEASE_ASSERT(moveto_index_ != kNPos && "LineTo without calling MoveTo first");
 
   const size_t index = points_.size();
 
@@ -311,7 +313,7 @@ PathSpline::Builder& PathSpline::Builder::LineTo(const Vector2d& point) {
 
 PathSpline::Builder& PathSpline::Builder::CurveTo(const Vector2d& point1, const Vector2d& point2,
                                                   const Vector2d& point3) {
-  assert(moveto_index_ != kNPos && "CurveTo without calling MoveTo first");
+  UTILS_RELEASE_ASSERT(moveto_index_ != kNPos && "CurveTo without calling MoveTo first");
 
   const size_t index = points_.size();
   points_.push_back(point1);
@@ -430,38 +432,37 @@ PathSpline::Builder& PathSpline::Builder::ArcTo(const Vector2d& radius, double r
   // Draw num_segs segments.
   for (size_t i = 0; i < num_segs; ++i) {
     // Determine the properties of the current segment.
-    double theta_start = theta + double(i) * theta_increment;
-    double theta_end = theta + double(i + 1) * theta_increment;
+    const double theta_start = theta + double(i) * theta_increment;
+    const double theta_end = theta + double(i + 1) * theta_increment;
 
-    double theta_half = 0.5 * (theta_end - theta_start);
+    const double theta_half = 0.5 * (theta_end - theta_start);
 
-    double sin_half_theta_half = sin(theta_half * 0.5);
-    double t = (8.0 / 3.0) * sin_half_theta_half * sin_half_theta_half / sin(theta_half);
+    const double sin_half_theta_half = sin(theta_half * 0.5);
+    const double t = (8.0 / 3.0) * sin_half_theta_half * sin_half_theta_half / sin(theta_half);
 
-    double cos_theta_start = cos(theta_start);
-    double sin_theta_start = sin(theta_start);
-    Vector2d point1 = radius * Vector2d(cos_theta_start - t * sin_theta_start,
-                                        sin_theta_start + t * cos_theta_start);
+    const double cos_theta_start = cos(theta_start);
+    const double sin_theta_start = sin(theta_start);
+    const Vector2d point1 = ellipse_radius * Vector2d(cos_theta_start - t * sin_theta_start,
+                                                      sin_theta_start + t * cos_theta_start);
 
-    double cos_theta_end = cos(theta_end);
-    double sin_theta_end = sin(theta_end);
-    Vector2d point3 = radius * Vector2d(cos_theta_end, sin_theta_end);
+    const double cos_theta_end = cos(theta_end);
+    const double sin_theta_end = sin(theta_end);
+    const Vector2d point3 = ellipse_radius * Vector2d(cos_theta_end, sin_theta_end);
 
-    Vector2d point2 = point3 + radius * Vector2d(t * sin_theta_end, -t * cos_theta_end);
-
-    point1.Rotate(dir.x, dir.y);
-    point2.Rotate(dir.x, dir.y);
-    point3.Rotate(dir.x, dir.y);
+    const Vector2d point2 =
+        point3 + ellipse_radius * Vector2d(t * sin_theta_end, -t * cos_theta_end);
 
     // Draw a curve for this segment.
-    CurveTo(center + point1, center + point2, center + point3);
+    CurveTo(center + point1.Rotate(dir.x, dir.y), center + point2.Rotate(dir.x, dir.y),
+            center + point3.Rotate(dir.x, dir.y));
   }
 
   return *this;
 }
 
 PathSpline::Builder& PathSpline::Builder::ClosePath() {
-  assert((moveto_index_ != kNPos || !commands_.empty()) && "ClosePath without an open path");
+  UTILS_RELEASE_ASSERT((moveto_index_ != kNPos || !commands_.empty()) &&
+                       "ClosePath without an open path");
 
   // Move back to the last MoveTo.
   commands_.push_back({CommandType::MoveTo, commands_[moveto_index_].index});
@@ -505,6 +506,8 @@ PathSpline::Builder& PathSpline::Builder::Circle(const Vector2d& center, double 
 }
 
 PathSpline PathSpline::Builder::Build() {
+  UTILS_RELEASE_ASSERT(valid_ && "Builder can only be used once");
+  valid_ = false;
   return PathSpline(std::move(points_), std::move(commands_));
 }
 

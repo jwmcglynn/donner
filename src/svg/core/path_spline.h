@@ -58,6 +58,7 @@ public:
   private:
     static constexpr size_t kNPos = ~size_t(0);
 
+    bool valid_ = true;
     std::vector<Vector2d> points_;
     std::vector<Command> commands_;
 
