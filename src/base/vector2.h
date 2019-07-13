@@ -29,33 +29,37 @@ struct Vector2 {
   Vector2(S x, S y) : x(x), y(y) {}
 
   // Returns the length of the vector.
-  T Length() const { return (T)sqrt(double(x * x + y * y)); }
+  UTILS_NO_DISCARD T Length() const { return (T)sqrt(double(x * x + y * y)); }
   // Returns the squared length of the vector.
-  T LengthSquared() const { return x * x + y * y; }
+  UTILS_NO_DISCARD T LengthSquared() const { return x * x + y * y; }
 
   // Returns the distance between two vectors, assuming that each represents a
   // point in space.
-  T Distance(const Vector2<T>& other) const { return (other - *this).Length(); }
+  UTILS_NO_DISCARD T Distance(const Vector2<T>& other) const { return (other - *this).Length(); }
   // Returns the squared distance between two vectors, assuming that each
   // represents a point in space.
-  T DistanceSquared(const Vector2<T>& other) const { return (other - *this).LengthSquared(); }
+  UTILS_NO_DISCARD T DistanceSquared(const Vector2<T>& other) const {
+    return (other - *this).LengthSquared();
+  }
 
   // Returns the dot product.
-  T Dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
+  UTILS_NO_DISCARD T Dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
 
   // Rotate this vector.
-  Vector2<T> Rotate(double radians) const { return Rotate((T)cos(radians), (T)sin(radians)); }
+  UTILS_NO_DISCARD Vector2<T> Rotate(double radians) const {
+    return Rotate((T)cos(radians), (T)sin(radians));
+  }
 
   // Rotate this vector given a pre-computed cosine/sine angle.
-  Vector2<T> Rotate(T cos_result, T sin_result) const {
+  UTILS_NO_DISCARD Vector2<T> Rotate(T cos_result, T sin_result) const {
     return Vector2<T>(x * cos_result - y * sin_result, x * sin_result + y * cos_result);
   }
 
   // Returns the angle that this vector makes with the +x axis, in radians.
-  T Angle() const { return (T)atan2(double(y), double(x)); }
+  UTILS_NO_DISCARD T Angle() const { return (T)atan2(double(y), double(x)); }
 
   // Returns the normalized vector.
-  Vector2<T> Normalize() const {
+  UTILS_NO_DISCARD Vector2<T> Normalize() const {
     const T len = Length();
 
     if (NearZero(len)) {
