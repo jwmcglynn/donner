@@ -37,6 +37,16 @@ std::ostream& operator<<(std::ostream& os, const Command& command) {
   return os;
 }
 
+static testing::Matcher<Vector2d> MatchVec2d(testing::Matcher<double> x,
+                                             testing::Matcher<double> y) {
+  return testing::AllOf(testing::Field(&Vector2d::x, x), testing::Field(&Vector2d::y, y));
+}
+static testing::Matcher<Boxd> MatchBoxd(testing::Matcher<Vector2d> tl,
+                                        testing::Matcher<Vector2d> br) {
+  return testing::AllOf(testing::Field(&Boxd::top_left, tl),
+                        testing::Field(&Boxd::bottom_right, br));
+}
+
 TEST(PathSplineBuilder, MoveTo) {
   auto builder = PathSpline::Builder();
   builder.MoveTo(kVec1);
@@ -209,7 +219,35 @@ TEST(PathSpline, Empty_BoundsFails) {
   EXPECT_DEATH(spline.StrokeMiterBounds(1.0, 1.0), "IsEmpty");
 }
 
-// TODO: Bounds
+TEST(PathSpline, Bounds) {
+  auto builder = PathSpline::Builder();
+  builder.MoveTo(Vector2d::Zero());
+  builder.LineTo(kVec1);
+  builder.LineTo(kVec2);
+  PathSpline spline = builder.Build();
+
+  EXPECT_EQ(spline.Bounds(), Boxd(Vector2d(0.0, 0.0), Vector2d(123.0, 1011.12)));
+}
+
+TEST(PathSpline, Bounds_Curve) {
+  auto builder = PathSpline::Builder();
+  builder.MoveTo(Vector2d(0.0, 0.0));
+  builder.CurveTo(Vector2d(8.0, 9.0), Vector2d(2.0, 0.0), Vector2d(0.0, 0.0));
+  PathSpline spline = builder.Build();
+
+  EXPECT_THAT(spline.Bounds(),
+              MatchBoxd(Vector2d(0.0, 0.0), MatchVec2d(testing::DoubleNear(4.04307, 0.01),
+                                                       testing::DoubleNear(4.0, 0.01))));
+}
+
+TEST(PathSpline, Bounds_Ellipse) {
+  auto builder = PathSpline::Builder();
+  builder.Ellipse(Vector2d(1.0, 2.0), Vector2d(2.0, 1.0));
+  PathSpline spline = builder.Build();
+
+  EXPECT_THAT(spline.Bounds(), Boxd(Vector2d(-1.0, 1.0), Vector2d(3.0, 3.0)));
+}
+
 // TODO: StrokeMiterBounds
 // TODO: PointAt
 // TODO: TangentAt
