@@ -1,0 +1,18 @@
+# Common flags for Clang
+build:clang --action_env=CC=clang
+build:clang --action_env=CXX=clang++
+build:clang --action_env=BAZEL_COMPILER=clang
+build:clang --linkopt=-fuse-ld=lld
+
+# Clang with libc++
+build:libc++ --config=clang
+build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
+build:libc++ --action_env=LDFLAGS=-stdlib=libc++
+build:libc++ --action_env=BAZEL_CXXOPTS=-stdlib=libc++
+build:libc++ --action_env=BAZEL_LINKLIBS=-lc++abi:-lc++
+build:libc++ --define force_libcpp=enabled
+
+# C++20
+build:c++20 --cxxopt=-std=c++20
+
+build --config=libc++ --config=c++20
