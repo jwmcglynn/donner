@@ -21,7 +21,7 @@ struct Box {
   static Box<T> CreateEmpty(const Vector2<T>& point) { return Box<T>(point, point); }
 
   // Expand to include the provided point.
-  void AddPoint(const Vector2<T>& point) {
+  void addPoint(const Vector2<T>& point) {
     top_left.x = std::min(point.x, top_left.x);
     top_left.y = std::min(point.y, top_left.y);
     bottom_right.x = std::max(point.x, bottom_right.x);
@@ -29,9 +29,9 @@ struct Box {
   }
 
   // Adds a bounding box inside this bounding box.
-  void AddBox(const Box<T>& box) {
-    AddPoint(box.top_left);
-    AddPoint(box.bottom_right);
+  void addBox(const Box<T>& box) {
+    addPoint(box.top_left);
+    addPoint(box.bottom_right);
   }
 
   Box<T> operator-(const Vector2<T>& vec) const {

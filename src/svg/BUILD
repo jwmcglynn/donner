@@ -12,9 +12,9 @@ cc_library(
 )
 
 cc_test(
-    name = "core_test",
+    name = "core_tests",
     srcs = [
-        "core/path_spline_tests.cc",
+        "core/tests/path_spline_tests.cc",
     ],
     deps = [
         "@gtest//:gtest_main",

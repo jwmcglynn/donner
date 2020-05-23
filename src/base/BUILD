@@ -10,11 +10,11 @@ cc_library(
 )
 
 cc_test(
-    name = "base_test",
+    name = "base_tests",
     srcs = [
-        "box_tests.cc",
-        "math_utils_tests.cc",
-        "vector2_tests.cc",
+        "tests/box_tests.cc",
+        "tests/math_utils_tests.cc",
+        "tests/vector2_tests.cc",
     ],
     deps = [
         "@gtest//:gtest_main",

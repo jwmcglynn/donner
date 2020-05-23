@@ -1,8 +1,8 @@
 #pragma once
 
-#include "src/base/math_utils.h"
-
 #include <ostream>
+
+#include "src/base/math_utils.h"
 
 namespace donner {
 
@@ -29,38 +29,38 @@ struct Vector2 {
   Vector2(S x, S y) : x(x), y(y) {}
 
   // Returns the length of the vector.
-  UTILS_NO_DISCARD T Length() const { return (T)sqrt(double(x * x + y * y)); }
+  UTILS_NO_DISCARD T length() const { return (T)sqrt(double(x * x + y * y)); }
   // Returns the squared length of the vector.
-  UTILS_NO_DISCARD T LengthSquared() const { return x * x + y * y; }
+  UTILS_NO_DISCARD T lengthSquared() const { return x * x + y * y; }
 
   // Returns the distance between two vectors, assuming that each represents a
   // point in space.
-  UTILS_NO_DISCARD T Distance(const Vector2<T>& other) const { return (other - *this).Length(); }
+  UTILS_NO_DISCARD T distance(const Vector2<T>& other) const { return (other - *this).length(); }
   // Returns the squared distance between two vectors, assuming that each
   // represents a point in space.
-  UTILS_NO_DISCARD T DistanceSquared(const Vector2<T>& other) const {
-    return (other - *this).LengthSquared();
+  UTILS_NO_DISCARD T distanceSquared(const Vector2<T>& other) const {
+    return (other - *this).lengthSquared();
   }
 
   // Returns the dot product.
-  UTILS_NO_DISCARD T Dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
+  UTILS_NO_DISCARD T dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
 
   // Rotate this vector.
-  UTILS_NO_DISCARD Vector2<T> Rotate(double radians) const {
-    return Rotate((T)cos(radians), (T)sin(radians));
+  UTILS_NO_DISCARD Vector2<T> rotate(double radians) const {
+    return rotate((T)cos(radians), (T)sin(radians));
   }
 
   // Rotate this vector given a pre-computed cosine/sine angle.
-  UTILS_NO_DISCARD Vector2<T> Rotate(T cos_result, T sin_result) const {
+  UTILS_NO_DISCARD Vector2<T> rotate(T cos_result, T sin_result) const {
     return Vector2<T>(x * cos_result - y * sin_result, x * sin_result + y * cos_result);
   }
 
   // Returns the angle that this vector makes with the +x axis, in radians.
-  UTILS_NO_DISCARD T Angle() const { return (T)atan2(double(y), double(x)); }
+  UTILS_NO_DISCARD T angle() const { return (T)atan2(double(y), double(x)); }
 
   // Returns the normalized vector.
-  UTILS_NO_DISCARD Vector2<T> Normalize() const {
-    const T len = Length();
+  UTILS_NO_DISCARD Vector2<T> normalize() const {
+    const T len = length();
 
     if (NearZero(len)) {
       return Vector2<T>::Zero();
@@ -146,6 +146,16 @@ struct Vector2 {
     return NearEquals(x, other.x) && NearEquals(y, other.y);
   }
   bool operator!=(const Vector2<T>& rhs) const { return !operator==(rhs); }
+
+  // Comparison with a different type.
+  template <typename U>
+  bool operator==(const Vector2<U>& other) const {
+    return NearEquals(x, static_cast<T>(other.x)) && NearEquals(y, static_cast<T>(other.y));
+  }
+  template <typename U>
+  bool operator!=(const Vector2<U>& rhs) const {
+    return !operator==(rhs);
+  }
 
   // Output.
   friend std::ostream& operator<<(std::ostream& os, const Vector2<T>& vec) {

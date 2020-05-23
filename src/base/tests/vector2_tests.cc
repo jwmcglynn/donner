@@ -1,6 +1,6 @@
-#include "src/base/vector2.h"
-
 #include <gtest/gtest.h>
+
+#include "src/base/vector2.h"
 
 namespace donner {
 
@@ -52,60 +52,60 @@ TEST(Vector2, Constants) {
 }
 
 TEST(Vector2, Length) {
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).Length(), 1.0f);
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).LengthSquared(), 1.0f);
-  EXPECT_EQ(Vector2f(3.0f, 4.0f).Length(), 5.0f);
-  EXPECT_EQ(Vector2f(3.0f, 4.0f).LengthSquared(), 25.0f);
+  EXPECT_EQ(Vector2f(0.0f, 1.0f).length(), 1.0f);
+  EXPECT_EQ(Vector2f(0.0f, 1.0f).lengthSquared(), 1.0f);
+  EXPECT_EQ(Vector2f(3.0f, 4.0f).length(), 5.0f);
+  EXPECT_EQ(Vector2f(3.0f, 4.0f).lengthSquared(), 25.0f);
 
-  EXPECT_EQ(Vector2f::Zero().Length(), 0.0f);
-  EXPECT_EQ(Vector2f::Zero().LengthSquared(), 0.0f);
-  EXPECT_EQ(Vector2f(-3.0f, 4.0f).Length(), 5.0f);
-  EXPECT_EQ(Vector2f(-3.0f, 4.0f).LengthSquared(), 25.0f);
+  EXPECT_EQ(Vector2f::Zero().length(), 0.0f);
+  EXPECT_EQ(Vector2f::Zero().lengthSquared(), 0.0f);
+  EXPECT_EQ(Vector2f(-3.0f, 4.0f).length(), 5.0f);
+  EXPECT_EQ(Vector2f(-3.0f, 4.0f).lengthSquared(), 25.0f);
 }
 
 TEST(Vector2, Distance) {
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).DistanceSquared(Vector2f(1.0f, 1.0f)), 1.0f);
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).DistanceSquared(Vector2f(5.0f, 1.0f)), 25.0f);
+  EXPECT_EQ(Vector2f(0.0f, 1.0f).distanceSquared(Vector2f(1.0f, 1.0f)), 1.0f);
+  EXPECT_EQ(Vector2f(0.0f, 1.0f).distanceSquared(Vector2f(5.0f, 1.0f)), 25.0f);
 
-  EXPECT_EQ(Vector2i(0, 5).Distance(Vector2i(0, -5)), 10);
-  EXPECT_EQ(Vector2i(0, 5).DistanceSquared(Vector2i(0, -5)), 100);
+  EXPECT_EQ(Vector2i(0, 5).distance(Vector2i(0, -5)), 10);
+  EXPECT_EQ(Vector2i(0, 5).distanceSquared(Vector2i(0, -5)), 100);
 
   // Integers are truncated.
-  EXPECT_EQ(Vector2i(0, 0).Distance(Vector2i(2, 2)), 2);
-  EXPECT_EQ(Vector2i(0, 0).DistanceSquared(Vector2i(2, 2)), 8);
+  EXPECT_EQ(Vector2i(0, 0).distance(Vector2i(2, 2)), 2);
+  EXPECT_EQ(Vector2i(0, 0).distanceSquared(Vector2i(2, 2)), 8);
 }
 
 TEST(Vector2, Dot) {
-  EXPECT_EQ(Vector2i::Zero().Dot(Vector2i::Zero()), 0);
-  EXPECT_EQ(Vector2i::Zero().Dot(Vector2i(5, 5)), 0);
-  EXPECT_EQ(Vector2i(-2, -2).Dot(Vector2i(2, 2)), -8);
-  EXPECT_EQ(Vector2i(-2, 1).Dot(Vector2i(2, 2)), -2);
+  EXPECT_EQ(Vector2i::Zero().dot(Vector2i::Zero()), 0);
+  EXPECT_EQ(Vector2i::Zero().dot(Vector2i(5, 5)), 0);
+  EXPECT_EQ(Vector2i(-2, -2).dot(Vector2i(2, 2)), -8);
+  EXPECT_EQ(Vector2i(-2, 1).dot(Vector2i(2, 2)), -2);
 }
 
 TEST(Vector2, Rotate) {
-  EXPECT_EQ(Vector2f::XAxis().Rotate(MathConstants<float>::kHalfPi), Vector2f::YAxis());
-  EXPECT_EQ(Vector2f::XAxis().Rotate(MathConstants<float>::kPi * 0.25f),
+  EXPECT_EQ(Vector2f::XAxis().rotate(MathConstants<float>::kHalfPi), Vector2f::YAxis());
+  EXPECT_EQ(Vector2f::XAxis().rotate(MathConstants<float>::kPi * 0.25f),
             Vector2f(sqrt(2.0f) * 0.5f, sqrt(2.0f) * 0.5f));
 }
 
 TEST(Vector2, Angle) {
-  EXPECT_EQ(Vector2f::XAxis().Angle(), 0.0f);
-  EXPECT_EQ(Vector2f(-1.0f, 0.0f).Angle(), +MathConstants<float>::kPi);
-  EXPECT_EQ(Vector2f(0.0f, -1.0f).Angle(), -MathConstants<float>::kHalfPi);
-  EXPECT_EQ(Vector2f(sqrt(2.0f) * 0.5f, sqrt(2.0f) * 0.5f).Angle(),
+  EXPECT_EQ(Vector2f::XAxis().angle(), 0.0f);
+  EXPECT_EQ(Vector2f(-1.0f, 0.0f).angle(), +MathConstants<float>::kPi);
+  EXPECT_EQ(Vector2f(0.0f, -1.0f).angle(), -MathConstants<float>::kHalfPi);
+  EXPECT_EQ(Vector2f(sqrt(2.0f) * 0.5f, sqrt(2.0f) * 0.5f).angle(),
             MathConstants<float>::kPi * 0.25f);
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).Angle(), +MathConstants<float>::kHalfPi);
+  EXPECT_EQ(Vector2f(0.0f, 1.0f).angle(), +MathConstants<float>::kHalfPi);
 }
 
 // Normalize
 TEST(Vector2, Normalize) {
-  EXPECT_EQ(Vector2f(5.0f, 0.0).Normalize(), Vector2f::XAxis());
-  EXPECT_EQ(Vector2f(-5.0f, 0.0).Normalize(), Vector2f(-1.0f, 0.0f));
-  EXPECT_EQ(Vector2f(1.0f, 1.0).Normalize(), Vector2f(sqrt(2.0f) * 0.5f, sqrt(2.0f) * 0.5f));
+  EXPECT_EQ(Vector2f(5.0f, 0.0).normalize(), Vector2f::XAxis());
+  EXPECT_EQ(Vector2f(-5.0f, 0.0).normalize(), Vector2f(-1.0f, 0.0f));
+  EXPECT_EQ(Vector2f(1.0f, 1.0).normalize(), Vector2f(sqrt(2.0f) * 0.5f, sqrt(2.0f) * 0.5f));
 }
 
 TEST(Vector2, NormalizeNearZero) {
-  EXPECT_EQ(Vector2f(std::numeric_limits<float>::epsilon(), 0.0f).Normalize(), Vector2f::Zero());
+  EXPECT_EQ(Vector2f(std::numeric_limits<float>::epsilon(), 0.0f).normalize(), Vector2f::Zero());
 }
 
 // Operators
