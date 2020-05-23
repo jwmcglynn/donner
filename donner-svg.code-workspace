@@ -45,10 +45,65 @@
 			"tuple": "cpp",
 			"type_traits": "cpp",
 			"typeinfo": "cpp",
-			"utility": "cpp"
+			"utility": "cpp",
+			"atomic": "cpp",
+			"algorithm": "cpp",
+			"iterator": "cpp",
+			"map": "cpp",
+			"memory_resource": "cpp",
+			"numeric": "cpp",
+			"random": "cpp",
+			"string": "cpp",
+			"optional": "cpp",
+			"string_view": "cpp",
+			"__node_handle": "cpp",
+			"__split_buffer": "cpp",
+			"filesystem": "cpp",
+			"queue": "cpp",
+			"stack": "cpp",
+			"__functional_base": "cpp",
+			"locale": "cpp",
+			"thread": "cpp",
+			"chrono": "cpp"
 		},
 		"files.exclude": {
 			"bazel-*": true
-		}
-	}
+		},
+		"editor.tabSize": 2,
+		"C_Cpp.default.includePath": [
+			".",
+			"third_party/gtest/googletest/include",
+			"third_party/gtest/googlemock/include",
+		],
+		"C_Cpp.clang_format_sortIncludes": true,
+		"editor.formatOnSave": true,
+		"bazel.buildifierFixOnFormat": true,
+		"testMate.cpp.test.executables": "bazel-bin/**/*{test,Test,TEST}*",
+		"testMate.cpp.test.advancedExecutables": [
+			{
+				"pattern": "bazel-bin/src/base/base_tests",
+				"runTask": {
+					"before": [
+						"base_tests"
+					],
+				}
+			},
+			{
+				"pattern": "bazel-bin/src/svg/core_tests",
+				"runTask": {
+					"before": [
+						"core_tests"
+					],
+				}
+			},
+			{
+				"pattern": "bazel-bin/src/svg/parser_tests",
+				"runTask": {
+					"before": [
+						"parser_tests"
+					],
+				}
+			}
+		]
+	},
 }
