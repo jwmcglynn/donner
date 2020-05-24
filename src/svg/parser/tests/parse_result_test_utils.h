@@ -22,6 +22,13 @@ void PrintTo(const ParseResult<T>& result, std::ostream* os) {
 }
 
 /**
+ * Matches if the result does not contain a ParseError.
+ */
+MATCHER(NoParseError, "") {
+  return !arg.hasError();
+}
+
+/**
  * Given a ParseResult, matches if it contains an error with the given message.
  *
  * Usage:
@@ -37,7 +44,35 @@ MATCHER_P(ParseErrorIs, message, "") {
     return false;
   }
 
-  return ExplainMatchResult(message, arg.error().reason, result_listener);
+  return testing::ExplainMatchResult(message, arg.error().reason, result_listener);
+}
+
+/**
+ * Given a ParseResult, matches if it contains an error at the given offset.
+ *
+ * @param line Line number of the error.
+ * @param offset Column offset of the error.
+ */
+MATCHER_P2(ParseErrorPos, line, offset, "") {
+  if (!arg.hasError()) {
+    return false;
+  }
+
+  return arg.error().line == line && arg.error().offset == offset;
+}
+
+/**
+ * Matches if a ParseResult contains a result that matches the given value, and that it does not
+ * contain an error.
+ *
+ * @param value Value to match with.
+ */
+MATCHER_P(ParseResultIs, value, "") {
+  if (!arg.hasResult() || arg.hasError()) {
+    return false;
+  }
+
+  return testing::ExplainMatchResult(value, arg.result(), result_listener);
 }
 
 }  // namespace donner

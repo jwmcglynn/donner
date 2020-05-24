@@ -1,7 +1,8 @@
 #include "src/svg/parser/path_parser.h"
 
-#include <array>
-#include <stack>
+#include <span>
+
+#include "src/svg/parser/number_parser.h"
 
 namespace donner {
 
@@ -10,23 +11,52 @@ public:
   PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}
 
   ParseResult<PathSpline> parse() {
-    PathSpline::Builder spline;
-
     skipWhitespace();
     if (remaining_.empty()) {
       // Empty string, return empty path.
-      return spline.build();
+      return spline_.build();
     }
 
-    ParseResult<TokenCommand> maybeCommand = readCommand();
-    if (maybeCommand.hasError()) {
-      return std::move(maybeCommand.error());
+    // Read first command separately, since it must be a MoveTo command.
+    {
+      const int sourceOffset = currentOffset();
+
+      ParseResult<TokenCommand> maybeCommand = readCommand();
+      if (maybeCommand.hasError()) {
+        return ParseResult(spline_.build(), std::move(maybeCommand.error()));
+      }
+
+      const TokenCommand command = std::move(maybeCommand.result());
+      if (command.token != Token::MoveTo) {
+        ParseError err;
+        err.reason = "Unexpected command, first command must be 'm' or 'M'";
+        err.offset = sourceOffset;
+        return ParseResult(spline_.build(), std::move(err));
+      }
+
+      std::optional<ParseError> maybeError = processCommand(command);
+      if (maybeError.has_value()) {
+        return ParseResult(spline_.build(), std::move(maybeError.value()));
+      }
+      skipWhitespace();
     }
 
-    ParseError err;
-    err.reason = "Not implemented";
+    // Read remaining commands.
+    while (!remaining_.empty()) {
+      ParseResult<TokenCommand> maybeCommand = readCommand();
+      if (maybeCommand.hasError()) {
+        return ParseResult(spline_.build(), std::move(maybeCommand.error()));
+      }
 
-    return err;
+      const TokenCommand command = std::move(maybeCommand.result());
+      std::optional<ParseError> maybeError = processCommand(command);
+      if (maybeError.has_value()) {
+        return ParseResult(spline_.build(), std::move(maybeError.value()));
+      }
+      skipWhitespace();
+    }
+
+    return spline_.build();
   }
 
 private:
@@ -106,17 +136,60 @@ private:
       }
     }
 
+    remaining_.remove_prefix(1);
     return TokenCommand{token, relative};
   }
 
-  ParseResult<double> parseNumber(double number) {}
-  void processCommand(bool isFinal) {}
+  ParseResult<double> readNumber() {
+    ParseResult<NumberParser::Result> maybeResult = NumberParser::parse(remaining_);
+    if (maybeResult.hasError()) {
+      ParseError err = std::move(maybeResult.error());
+      err.offset += currentOffset();
+      return err;
+    }
+
+    const NumberParser::Result& result = maybeResult.result();
+    remaining_.remove_prefix(result.consumed_chars);
+    return result.number;
+  }
+
+  std::optional<ParseError> processCommand(TokenCommand command) {
+    if (command.token == Token::MoveTo) {
+      double coords[2];
+      auto maybeError = readNumbers(coords);
+      if (maybeError) {
+        return maybeError;
+      }
+
+      spline_.moveTo(Vector2d(coords[0], coords[1]));
+    } else {
+      ParseError err;
+      err.reason = "Not implemented";
+      return err;
+    }
+
+    return std::nullopt;
+  }
+
+  std::optional<ParseError> readNumbers(std::span<double> resultStorage) {
+    for (size_t i = 0; i < resultStorage.size(); ++i) {
+      skipWhitespace();
+
+      auto maybeNumber = readNumber();
+      if (maybeNumber.hasError()) {
+        return std::move(maybeNumber.error());
+      }
+
+      resultStorage[i] = maybeNumber.result();
+    }
+
+    return std::nullopt;
+  }
+
+  PathSpline::Builder spline_;
 
   const std::string_view d_;
   std::string_view remaining_;
-
-  //! Coordinate state.
-  bool using_relative_coords_ = false;
 
   Vector2d current_point_;     //!< Current point.
   Vector2d reflection_point_;  //!< Reflection point, for s and t commands.

@@ -43,37 +43,42 @@ cc_test(
 
 cc_library(
     name = "parser",
+    srcs = [
+        "parser/number_parser.cc",
+        "parser/parse_error.cc",
+        "parser/path_parser.cc",
+    ],
     hdrs = [
+        "parser/number_parser.h",
         "parser/parse_error.h",
         "parser/parse_result.h",
         "parser/path_parser.h",
     ],
-    srcs = [
-        "parser/parse_error.cc",
-        "parser/path_parser.cc",
-    ],
     deps = [
         ":core",
         "//src/base",
-    ]
+        "@absl//absl/strings",
+    ],
 )
 
 cc_test(
     name = "parser_tests",
     srcs = [
+        "parser/tests/number_parser_tests.cc",
         "parser/tests/parse_result_test_utils.h",
         "parser/tests/path_parser_tests.cc",
     ],
     deps = [
-        "@gtest//:gtest_main",
+        ":core_test_utils",
         ":parser",
+        "@gtest//:gtest_main",
     ],
 )
 
 cc_library(
     name = "svg",
+    visibility = ["//:__pkg__"],
     deps = [
         ":core",
     ],
-    visibility = ["//:__pkg__"],
 )

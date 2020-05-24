@@ -19,6 +19,9 @@ public:
   // Construct from a successful result.
   ParseResult(T&& result) : result_(std::move(result)) {}
 
+  // Construct from a successful result.
+  ParseResult(const T& result) : result_(result) {}
+
   // Construct from an error.
   ParseResult(ParseError&& error) : error_(std::move(error)) {}
 

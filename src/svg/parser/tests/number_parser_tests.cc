@@ -1,0 +1,109 @@
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include "src/svg/parser/number_parser.h"
+#include "src/svg/parser/tests/parse_result_test_utils.h"
+
+using testing::HasSubstr;
+
+namespace donner {
+
+using Result = NumberParser::Result;
+
+static bool operator==(const Result& lhs, const Result& rhs) {
+  return lhs.number == rhs.number && lhs.consumed_chars == rhs.consumed_chars;
+}
+
+static void PrintTo(const Result& result, std::ostream* os) {
+  *os << "(" << result.number << ", consumed: " << result.consumed_chars << ")";
+}
+
+TEST(NumberParser, Empty) {
+  EXPECT_THAT(NumberParser::parse(""), ParseErrorIs(HasSubstr("Invalid argument")));
+}
+
+TEST(NumberParser, Integers) {
+  EXPECT_THAT(NumberParser::parse("0"), ParseResultIs(Result{0.0, 1}));
+  EXPECT_THAT(NumberParser::parse("1"), ParseResultIs(Result{1.0, 1}));
+  EXPECT_THAT(NumberParser::parse("4294967295"), ParseResultIs(Result{4294967295.0, 10}));
+  // UINT32_MAX + 1
+  EXPECT_THAT(NumberParser::parse("4294967296"), ParseResultIs(Result{4294967296.0, 10}));
+}
+
+TEST(NumberParser, Signs) {
+  EXPECT_THAT(NumberParser::parse("+0"), ParseResultIs(Result{0.0, 2}));
+  EXPECT_THAT(NumberParser::parse("-0"), ParseResultIs(Result{0.0, 2}));
+  EXPECT_THAT(NumberParser::parse("+-0"), ParseErrorIs(HasSubstr("Invalid sign")));
+  EXPECT_THAT(NumberParser::parse("-+0"), ParseErrorIs(HasSubstr("Invalid argument")));
+  EXPECT_THAT(NumberParser::parse("+"), ParseErrorIs(HasSubstr("Invalid argument")));
+  EXPECT_THAT(NumberParser::parse("-"), ParseErrorIs(HasSubstr("Invalid argument")));
+  EXPECT_THAT(NumberParser::parse("+-"), ParseErrorIs(HasSubstr("Invalid argument")));
+  EXPECT_THAT(NumberParser::parse("-+"), ParseErrorIs(HasSubstr("Invalid argument")));
+}
+
+TEST(NumberParser, Decimal) {
+  EXPECT_THAT(NumberParser::parse("."), ParseErrorIs(HasSubstr("Invalid argument")));
+
+  // Zero decimal digits before the dot are allowed.
+  EXPECT_THAT(NumberParser::parse(".0"), ParseResultIs(Result{0.0, 2}));
+  EXPECT_THAT(NumberParser::parse(".1"), ParseResultIs(Result{0.1, 2}));
+  EXPECT_THAT(NumberParser::parse("-.1"), ParseResultIs(Result{-0.1, 3}));
+  EXPECT_THAT(NumberParser::parse("+.1"), ParseResultIs(Result{0.1, 3}));
+
+  // Numbers ending with a dot are out-of-spec, they should be parsed up until the dot.
+  EXPECT_THAT(NumberParser::parse("0."), ParseResultIs(Result{0.0, 1}));
+
+  // Per the SVG BNF, https://www.w3.org/TR/SVG/paths.html#PathDataBNF, 0.6.5 should parse as 0.6
+  // and 0.5:
+  EXPECT_THAT(NumberParser::parse("0.6.5"), ParseResultIs(Result{0.6, 3}));
+  EXPECT_THAT(NumberParser::parse(".5"), ParseResultIs(Result{0.5, 2}));
+}
+
+TEST(NumberParser, Exponent) {
+  // Zero exponent is valid.
+  EXPECT_THAT(NumberParser::parse("1e0"), ParseResultIs(Result{1.0, 3}));
+  EXPECT_THAT(NumberParser::parse("-1e0"), ParseResultIs(Result{-1.0, 4}));
+  EXPECT_THAT(NumberParser::parse("1e+0"), ParseResultIs(Result{1.0, 4}));
+  EXPECT_THAT(NumberParser::parse("-1e+0"), ParseResultIs(Result{-1.0, 5}));
+  EXPECT_THAT(NumberParser::parse("1e-0"), ParseResultIs(Result{1.0, 4}));
+  EXPECT_THAT(NumberParser::parse("-1e-0"), ParseResultIs(Result{-1.0, 5}));
+
+  // Standard cases.
+  EXPECT_THAT(NumberParser::parse("1e1"), ParseResultIs(Result{10.0, 3}));
+  EXPECT_THAT(NumberParser::parse("-1e1"), ParseResultIs(Result{-10.0, 4}));
+  EXPECT_THAT(NumberParser::parse("1e+1"), ParseResultIs(Result{10.0, 4}));
+  EXPECT_THAT(NumberParser::parse("-1e+1"), ParseResultIs(Result{-10.0, 5}));
+  EXPECT_THAT(NumberParser::parse("1e2"), ParseResultIs(Result{100.0, 3}));
+  EXPECT_THAT(NumberParser::parse("1e-2"), ParseResultIs(Result{0.01, 4}));
+  EXPECT_THAT(NumberParser::parse("+1e2"), ParseResultIs(Result{100.0, 4}));
+  EXPECT_THAT(NumberParser::parse("-1e2"), ParseResultIs(Result{-100.0, 4}));
+  EXPECT_THAT(NumberParser::parse("-1e-2"), ParseResultIs(Result{-0.01, 5}));
+
+  // Uppercase exponent character.
+  EXPECT_THAT(NumberParser::parse("1E2"), ParseResultIs(Result{100.0, 3}));
+}
+
+TEST(NumberParser, StopsParsingAtCharacter) {
+  EXPECT_THAT(NumberParser::parse("100L200"), ParseResultIs(Result{100.0, 3}));
+  EXPECT_THAT(NumberParser::parse("1e1M1"), ParseResultIs(Result{10.0, 3}));
+  EXPECT_THAT(NumberParser::parse("13,000.56"), ParseResultIs(Result{13.0, 2}));
+
+  EXPECT_THAT(NumberParser::parse("1e"), ParseResultIs(Result{1.0, 1}));
+  EXPECT_THAT(NumberParser::parse("1e-"), ParseResultIs(Result{1.0, 1}));
+  EXPECT_THAT(NumberParser::parse("1e.3"), ParseResultIs(Result{1.0, 1}));
+  EXPECT_THAT(NumberParser::parse("1e2.3"), ParseResultIs(Result{100.0, 3}));
+
+  // Hex should not parse either.
+  EXPECT_THAT(NumberParser::parse("0x1"), ParseResultIs(Result{0.0, 1}));
+}
+
+TEST(NumberParser, InfAndNaN) {
+  EXPECT_THAT(NumberParser::parse("Inf"), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::parse("+Inf"), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::parse("-Inf"), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::parse("NaN"), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::parse("+NaN"), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::parse("-NaN"), ParseErrorIs(HasSubstr("Not finite")));
+}
+
+}  // namespace donner
