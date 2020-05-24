@@ -1,5 +1,6 @@
 #include "src/svg/core/path_spline.h"
 
+#include "src/base/math_utils.h"
 #include "src/base/utils.h"
 
 namespace donner {
@@ -16,14 +17,15 @@ Boxd PathSpline::bounds() const {
     switch (command.type) {
       case CommandType::MoveTo:
       case CommandType::LineTo:
-        current = points_[command.index];
+      case CommandType::ClosePath:
+        current = points_[command.point_index];
         box.addPoint(current);
         break;
       case CommandType::CurveTo: {
         const Vector2d& curveStart = current;
-        const Vector2d& controlPoint1 = points_[command.index];
-        const Vector2d& controlPoint2 = points_[command.index + 1];
-        const Vector2d& curveEnd = points_[command.index + 2];
+        const Vector2d& controlPoint1 = points_[command.point_index];
+        const Vector2d& controlPoint2 = points_[command.point_index + 1];
+        const Vector2d& curveEnd = points_[command.point_index + 2];
 
         box.addPoint(curveStart);  // Absolute start point.
         box.addPoint(curveEnd);    // Absolute end point.
@@ -110,39 +112,59 @@ Boxd PathSpline::bounds() const {
 // @param miterLimit Miter limit of the stroke.
 static void ComputeMiter(Boxd& box, const Vector2d& currentPoint, const Vector2d& tangent0,
                          const Vector2d& tangent1, double strokeWidth, double miterLimit) {
-  // Do not use dot product because the tangents aren't normalized.
-  const double angle0 = tangent0.angle();
-  const double angle1 = tangent1.angle();
-  const double halfIntersectionAngle = Min(MathConstants<double>::kPi - Abs(angle0 - angle1),
-                                           MathConstants<double>::kPi - Abs(angle1 - angle0)) *
-                                       0.5;
+  const double intersectionAngle = tangent0.angleWith(-tangent1);
 
-  // epsilon is a magic number, to make it so our miter limit triggers at the same threshold as
-  // cairo.
-  const double kEpsilon = 0.03;
-
-  double miterLen = strokeWidth / tan(halfIntersectionAngle);
-  if (miterLen / strokeWidth < miterLimit - kEpsilon) {
+  // If we're under the miter limit, the miter applies. However, don't apply it if the tangents are
+  // colinear, since it would not apply in a consistent direction.
+  const double miterLength = strokeWidth / sin(intersectionAngle * 0.5);
+  if (miterLength < miterLimit && !NearEquals(intersectionAngle, MathConstants<double>::kPi)) {
     // We haven't exceeded the miter limit, compute the extrema.
-    const double jointAngle =
-        (angle0 + angle1 - MathConstants<double>::kPi) * 0.5;  // Direction of joint.
-    box.addPoint(currentPoint + miterLen * Vector2d(cos(jointAngle), sin(jointAngle)));
+    const double jointAngle = (tangent0 - tangent1).angle();
+    box.addPoint(currentPoint + miterLength * Vector2d(cos(jointAngle), sin(jointAngle)));
   }
 }
 
 Boxd PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const {
   UTILS_RELEASE_ASSERT(!empty());
+  assert(strokeWidth > 0.0);
+  assert(miterLimit >= 0.0);
 
   Boxd box = Boxd::CreateEmpty(points_.front());
   Vector2d current;
 
   static constexpr size_t kNPos = ~size_t(0);
   size_t lastIndex = kNPos;
+  size_t lastMoveToIndex = kNPos;
 
   for (size_t i = 0; i < commands_.size(); ++i) {
     const Command& command = commands_[i];
 
     switch (command.type) {
+      case CommandType::MoveTo: {
+        current = points_[command.point_index];
+        box.addPoint(current);
+
+        lastIndex = kNPos;
+        lastMoveToIndex = i;
+        break;
+      }
+      case CommandType::ClosePath: {
+        if (lastIndex != kNPos) {
+          // For ClosePath, start with a standard line segment.
+          const Vector2d lastTangent = tangentAt(lastIndex, 1.0);
+          const Vector2d tangent = tangentAt(i, 0.0);
+
+          ComputeMiter(box, current, lastTangent, tangent, strokeWidth, miterLimit);
+          current = points_[command.point_index];
+
+          // Then "join" it to the first segment of the subpath.
+          const Vector2d joinTangent = tangentAt(lastMoveToIndex, 0.0);
+          ComputeMiter(box, current, tangent, joinTangent, strokeWidth, miterLimit);
+        }
+
+        lastIndex = kNPos;
+        break;
+      }
       case CommandType::LineTo: {
         if (lastIndex != kNPos) {
           Vector2d lastTangent = tangentAt(lastIndex, 1.0);
@@ -151,7 +173,8 @@ Boxd PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const 
           ComputeMiter(box, current, lastTangent, tangent, strokeWidth, miterLimit);
         }
 
-        current = points_[command.index];
+        current = points_[command.point_index];
+        box.addPoint(current);
         lastIndex = i;
         break;
       }
@@ -163,7 +186,8 @@ Boxd PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const 
           ComputeMiter(box, current, lastTangent, tangent, strokeWidth, miterLimit);
         }
 
-        current = points_[command.index + 2];
+        current = points_[command.point_index + 2];
+        box.addPoint(current);
         lastIndex = i;
         break;
       }
@@ -177,38 +201,36 @@ Boxd PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const 
 
 Vector2d PathSpline::pointAt(size_t index, double t) const {
   assert(index < commands_.size() && "index out of range");
-  assert(t >= 0 && t <= 1.0 && "t out of range");
+  assert(t >= 0.0 && t <= 1.0 && "t out of range");
 
   const Command& command = commands_.at(index);
 
   switch (command.type) {
-    case CommandType::MoveTo: return points_[command.index];
-    case CommandType::LineTo: {
-      // Determine the current point, which is the last defined point.
-      assert(command.index > 0);
-      const Vector2d& currentPoint = points_[command.index - 1];
+    case CommandType::MoveTo: return points_[command.point_index];
+    case CommandType::LineTo:
+    case CommandType::ClosePath: {
+      const Vector2d start = startPoint(index);
       const double rev_t = 1.0 - t;
 
-      return rev_t * currentPoint + t * points_[command.index];
+      return rev_t * start + t * points_[command.point_index];
     }
     case CommandType::CurveTo: {
       // Determine the current point, which is the last defined point.
-      assert(command.index > 0);
-      const Vector2d& currentPoint = points_[command.index - 1];
+      const Vector2d start = startPoint(index);
       const double rev_t = 1.0 - t;
 
-      return rev_t * rev_t * rev_t * currentPoint                // (1 - t)^3 * p_0
-             + 3.0 * t * rev_t * rev_t * points_[command.index]  // + 3t(1 - t)^2 * p_1
-             + 3.0 * t * t * rev_t * points_[command.index + 1]  // + 3 t^2 (1 - t) * p_2
-             + t * t * t * points_[command.index + 2];           // + t^3 * p_3
+      return rev_t * rev_t * rev_t * start                             // (1 - t)^3 * p_0
+             + 3.0 * t * rev_t * rev_t * points_[command.point_index]  // + 3t(1 - t)^2 * p_1
+             + 3.0 * t * t * rev_t * points_[command.point_index + 1]  // + 3 t^2 (1 - t) * p_2
+             + t * t * t * points_[command.point_index + 2];           // + t^3 * p_3
     }
-    default: return Vector2d::Zero();
+    default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
   }
 }
 
 Vector2d PathSpline::tangentAt(size_t index, double t) const {
   assert(index < commands_.size() && "index out of range");
-  assert(t >= 0 && t <= 1.0 && "t out of range");
+  assert(t >= 0.0 && t <= 1.0 && "t out of range");
 
   const Command& command = commands_.at(index);
 
@@ -219,12 +241,12 @@ Vector2d PathSpline::tangentAt(size_t index, double t) const {
       } else {
         return Vector2d::Zero();
       }
-    case CommandType::LineTo: {
-      assert(command.index > 0);
-      return points_[command.index] - points_[command.index - 1];
+    case CommandType::LineTo:
+    case CommandType::ClosePath: {
+      return points_[command.point_index] - startPoint(index);
     }
     case CommandType::CurveTo: {
-      assert(command.index > 0);
+      assert(command.point_index > 0);
       const double rev_t = 1.0 - t;
 
       // The tangent of a bezier curve is proportional to its first derivative. The derivative is:
@@ -233,22 +255,22 @@ Vector2d PathSpline::tangentAt(size_t index, double t) const {
       //
       // Basically, the derivative of a cubic bezier curve is three times the
       // difference between two quadratic bezier curves.  See Bounds() for more details.
-      const Vector2d p_1_0 = (points_[command.index] - points_[command.index - 1]);
-      const Vector2d p_2_1 = (points_[command.index + 1] - points_[command.index]);
-      const Vector2d p_3_2 = (points_[command.index + 2] - points_[command.index + 1]);
+      const Vector2d p_1_0 = (points_[command.point_index] - startPoint(index));
+      const Vector2d p_2_1 = (points_[command.point_index + 1] - points_[command.point_index]);
+      const Vector2d p_3_2 = (points_[command.point_index + 2] - points_[command.point_index + 1]);
 
       return 3.0 * (rev_t * rev_t * p_1_0      // (1 - t)^2 * (P_1 - P_0)
                     + 2.0 * t * rev_t * p_2_1  // (1 - t) * t * (P_2 - P_1)
                     + t * t * p_3_2            // t^2 * (P_3 - P_2)
                    );
     }
-    default: return Vector2d::Zero();
+    default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
   }
 }
 
 Vector2d PathSpline::normalAt(size_t index, double t) const {
   assert(index < commands_.size() && "index out of range");
-  assert(t >= 0 && t <= 1.0 && "t out of range");
+  assert(t >= 0.0 && t <= 1.0 && "t out of range");
 
   const Command& command = commands_.at(index);
 
@@ -260,28 +282,53 @@ Vector2d PathSpline::normalAt(size_t index, double t) const {
         return Vector2d::Zero();
       }
 
-    case CommandType::LineTo: {
-      assert(command.index > 0);
-      const Vector2d tangent = (points_[command.index] - points_[command.index - 1]);
+    case CommandType::LineTo:
+    case CommandType::ClosePath: {
+      const Vector2d tangent = (points_[command.point_index] - startPoint(index));
       return Vector2d(-tangent.y, tangent.x);
     }
     case CommandType::CurveTo: {
-      assert(command.index > 0);
+      assert(command.point_index > 0);
       const double rev_t = 1.0 - t;
 
-      // The normal of a bezier curve is proportional to its second
-      // derivative.  The second derivative is:
+      // The normal of a bezier curve is proportional to its second derivative. The second
+      // derivative is:
       //
       // 6 [ (1 - t) * (P_2 - 2 P_1 + P_0) + t * (P_3 - 2 P_2 + P_1) ]
-      const Vector2d p_2_1_0 =
-          (points_[command.index + 1] - 2.0 * points_[command.index] + points_[command.index - 1]);
+      const Vector2d p_2_1_0 = (points_[command.point_index + 1] -
+                                2.0 * points_[command.point_index] + startPoint(index));
       const Vector2d p_3_2_1 =
-          (points_[command.index + 2] - 2.0 * points_[command.index + 1] + points_[command.index]);
+          (points_[command.point_index + 2] - 2.0 * points_[command.point_index + 1] +
+           points_[command.point_index]);
 
       return 6.0 * (rev_t * p_2_1_0 + t * p_3_2_1);
     }
 
-    default: return Vector2d::Zero();
+    default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+  }
+}
+
+Vector2d PathSpline::startPoint(size_t index) const {
+  assert(index < commands_.size() && "index out of range");
+
+  const Command& currentCommand = commands_[index];
+  if (currentCommand.type == CommandType::MoveTo) {
+    return points_[currentCommand.point_index];
+  } else {
+    assert(index > 0);  // First index should be a MoveTo, so this should not hit.
+    const Command& prevCommand = commands_[index - 1];
+
+    switch (prevCommand.type) {
+      case CommandType::MoveTo:
+      case CommandType::LineTo:
+      case CommandType::ClosePath: {
+        return points_[prevCommand.point_index];
+      }
+      case CommandType::CurveTo: {
+        return points_[prevCommand.point_index + 2];
+      }
+      default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+    }
   }
 }
 
@@ -290,20 +337,30 @@ PathSpline::Builder::Builder() = default;
 PathSpline::Builder& PathSpline::Builder::moveTo(const Vector2d& point) {
   // As an optimization, if the last command was a MoveTo replace it with the new point.
   if (!commands_.empty() && commands_.back().type == CommandType::MoveTo) {
-    points_[commands_.back().index] = point;
+    Command& command = commands_.back();
+
+    // If this is MoveTo has a unique point, overwrite it, otherwise insert a new point.
+    if (command.point_index + 1 == points_.size()) {
+      points_[command.point_index] = point;
+    } else {
+      const size_t point_index = points_.size();
+      points_.push_back(point);
+      command.point_index = point_index;
+
+      moveto_point_index_ = point_index;
+    }
   } else {
-    const size_t index = points_.size();
-
+    const size_t point_index = points_.size();
     points_.push_back(point);
-    commands_.push_back({CommandType::MoveTo, index});
+    commands_.push_back({CommandType::MoveTo, point_index});
 
-    moveto_index_ = index;
+    moveto_point_index_ = point_index;
   }
   return *this;
 }
 
 PathSpline::Builder& PathSpline::Builder::lineTo(const Vector2d& point) {
-  UTILS_RELEASE_ASSERT(moveto_index_ != kNPos && "LineTo without calling MoveTo first");
+  UTILS_RELEASE_ASSERT(moveto_point_index_ != kNPos && "LineTo without calling MoveTo first");
 
   const size_t index = points_.size();
 
@@ -314,7 +371,7 @@ PathSpline::Builder& PathSpline::Builder::lineTo(const Vector2d& point) {
 
 PathSpline::Builder& PathSpline::Builder::curveTo(const Vector2d& point1, const Vector2d& point2,
                                                   const Vector2d& point3) {
-  UTILS_RELEASE_ASSERT(moveto_index_ != kNPos && "CurveTo without calling MoveTo first");
+  UTILS_RELEASE_ASSERT(moveto_point_index_ != kNPos && "CurveTo without calling MoveTo first");
 
   const size_t index = points_.size();
   points_.push_back(point1);
@@ -462,12 +519,14 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
 }
 
 PathSpline::Builder& PathSpline::Builder::closePath() {
-  UTILS_RELEASE_ASSERT((moveto_index_ != kNPos || !commands_.empty()) &&
+  UTILS_RELEASE_ASSERT((moveto_point_index_ != kNPos || !commands_.empty()) &&
                        "ClosePath without an open path");
 
-  // Move back to the last MoveTo.
-  commands_.push_back({CommandType::MoveTo, commands_[moveto_index_].index});
-  moveto_index_ = commands_.size() - 1;
+  // Close the path, which will draw a line back to the start.
+  commands_.push_back({CommandType::ClosePath, moveto_point_index_});
+
+  // Start a MoveTo, which may be replaced if a new segment is started with a MoveTo.
+  commands_.push_back({CommandType::MoveTo, moveto_point_index_});
 
   return *this;
 }
@@ -509,6 +568,16 @@ PathSpline::Builder& PathSpline::Builder::circle(const Vector2d& center, double 
 PathSpline PathSpline::Builder::build() {
   UTILS_RELEASE_ASSERT(valid_ && "Builder can only be used once");
   valid_ = false;
+
+  // If the last command is a MoveTo, remove it.
+  if (commands_.size() > 1 && commands_.back().type == CommandType::MoveTo) {
+    if (commands_.back().point_index + 1 == points_.size()) {
+      // Remove point if it is not a deduped reference from earlier in the array.
+      points_.pop_back();
+    }
+    commands_.pop_back();
+  }
+
   return PathSpline(std::move(points_), std::move(commands_));
 }
 

@@ -9,11 +9,11 @@ namespace donner {
 
 class PathSpline {
 public:
-  enum class CommandType { MoveTo, CurveTo, LineTo };
+  enum class CommandType { MoveTo, CurveTo, LineTo, ClosePath };
 
   struct Command {
     CommandType type;
-    size_t index;
+    size_t point_index;
   };
 
   class Builder {
@@ -40,6 +40,9 @@ public:
                    bool sweep_flag, const Vector2d& endPoint);
 
     // Close the path.
+    //
+    // An automatic straight line is drawn from the current point back to the initial point of
+    // the current subpath.
     Builder& closePath();
 
     //
@@ -62,8 +65,8 @@ public:
     std::vector<Vector2d> points_;
     std::vector<Command> commands_;
 
-    // Index of last moveto command in the commands_ vector.
-    size_t moveto_index_ = kNPos;
+    // Index of last moveto point in the points_ vector.
+    size_t moveto_point_index_ = kNPos;
   };
 
   bool empty() const { return commands_.empty(); }
@@ -102,6 +105,11 @@ public:
 
 private:
   PathSpline(std::vector<Vector2d>&& points, std::vector<Command>&& commands);
+
+  // Get the start point of a command.
+  //
+  // @param idx Spline index.
+  Vector2d startPoint(size_t index) const;
 
   std::vector<Vector2d> points_;
   std::vector<Command> commands_;
