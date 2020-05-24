@@ -18,6 +18,20 @@ TEST(Vector2, Construct) {
   EXPECT_EQ(vec_int.y, 123);
 }
 
+TEST(Vector2, ConstructDefault) {
+  Vector2f vec_float;
+  EXPECT_EQ(vec_float.x, 0.0f);
+  EXPECT_EQ(vec_float.y, 0.0f);
+
+  Vector2d vec_double;
+  EXPECT_EQ(vec_double.x, 0.0);
+  EXPECT_EQ(vec_double.y, 0.0);
+
+  Vector2i vec_int;
+  EXPECT_EQ(vec_int.x, 0);
+  EXPECT_EQ(vec_int.y, 0);
+}
+
 TEST(Vector2, CastConstruct) {
   Vector2f float_vec(123.4f, 567.8f);
 

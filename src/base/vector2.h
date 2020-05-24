@@ -9,7 +9,7 @@ namespace donner {
 template <typename T>
 struct Vector2 {
   T x = T(0);
-  T y = T(1);
+  T y = T(0);
 
   static Vector2<T> Zero() { return Vector2(T(0), T(0)); }
   static Vector2<T> XAxis() { return Vector2(T(1), T(0)); }
