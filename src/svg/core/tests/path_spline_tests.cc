@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "src/svg/core/path_spline.h"
+#include "src/svg/core/tests/path_spline_test_utils.h"
 
 using testing::_;
 using testing::ElementsAre;
@@ -16,25 +17,6 @@ static constexpr Vector2d kVec1(123.0, 456.7);
 static constexpr Vector2d kVec2(78.9, 1011.12);
 static constexpr Vector2d kVec3(-1314.0, 1516.17);
 static constexpr Vector2d kVec4(1819.0, -2021.22);
-
-static bool operator==(const Command& lhs, const Command& rhs) {
-  return lhs.index == rhs.index && lhs.type == rhs.type;
-}
-
-std::ostream& operator<<(std::ostream& os, CommandType type) {
-  switch (type) {
-    case CommandType::MoveTo: os << "CommandType::MoveTo"; break;
-    case CommandType::LineTo: os << "CommandType::LineTo"; break;
-    case CommandType::CurveTo: os << "CommandType::CurveTo"; break;
-    default: UTILS_RELEASE_ASSERT(false && "Invalid command");
-  }
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const Command& command) {
-  os << "Command {" << command.type << ", " << command.index << "}";
-  return os;
-}
 
 static testing::Matcher<Vector2d> MatchVec2d(testing::Matcher<double> x,
                                              testing::Matcher<double> y) {

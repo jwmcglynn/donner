@@ -1,14 +1,32 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
 cc_library(
     name = "core",
-    hdrs = [
-        "core/path_spline.h",
-    ],
     srcs = [
         "core/path_spline.cc",
     ],
+    hdrs = [
+        "core/path_spline.h",
+    ],
     deps = [
         "//src/base",
-    ]
+    ],
+)
+
+cc_library(
+    name = "core_test_utils",
+    testonly = 1,
+    srcs = [
+        "core/tests/path_spline_test_utils.cc",
+    ],
+    hdrs = [
+        "core/tests/path_spline_test_utils.h",
+    ],
+    deps = [
+        ":core",
+        "//src/base",
+        "@gtest",
+    ],
 )
 
 cc_test(
@@ -17,8 +35,9 @@ cc_test(
         "core/tests/path_spline_tests.cc",
     ],
     deps = [
-        "@gtest//:gtest_main",
         ":core",
+        ":core_test_utils",
+        "@gtest//:gtest_main",
     ],
 )
 
