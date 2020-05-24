@@ -34,7 +34,7 @@ public:
         return ParseResult(spline_.build(), std::move(err));
       }
 
-      std::optional<ParseError> maybeError = processCommand(command);
+      std::optional<ParseError> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
         return ParseResult(spline_.build(), std::move(maybeError.value()));
       }
@@ -48,12 +48,11 @@ public:
         return ParseResult(spline_.build(), std::move(maybeCommand.error()));
       }
 
-      const TokenCommand command = std::move(maybeCommand.result());
-      std::optional<ParseError> maybeError = processCommand(command);
+      TokenCommand command = std::move(maybeCommand.result());
+      std::optional<ParseError> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
         return ParseResult(spline_.build(), std::move(maybeError.value()));
       }
-      skipWhitespace();
     }
 
     return spline_.build();
@@ -105,7 +104,7 @@ private:
 
   int currentOffset() { return remaining_.data() - d_.data(); }
 
-  ParseResult<TokenCommand> readCommand() {
+  std::optional<TokenCommand> peekCommand() {
     assert(!remaining_.empty());
 
     // Read one-character
@@ -129,15 +128,24 @@ private:
       case 't': token = Token::SmoothQuadBezierCurveTo; break;
       case 'a': token = Token::EllipticalArc; break;
       default: {
-        ParseError err;
-        err.reason = std::string("Unexpected token '") + ch + "' in path data";
-        err.offset = currentOffset();
-        return err;
+        return std::nullopt;
       }
     }
 
-    remaining_.remove_prefix(1);
     return TokenCommand{token, relative};
+  }
+
+  ParseResult<TokenCommand> readCommand() {
+    auto maybeCommand = peekCommand();
+    if (!maybeCommand) {
+      ParseError err;
+      err.reason = std::string("Unexpected token '") + remaining_[0] + "' in path data";
+      err.offset = currentOffset();
+      return err;
+    }
+
+    remaining_.remove_prefix(1);
+    return maybeCommand.value();
   }
 
   ParseResult<double> readNumber() {
@@ -153,15 +161,88 @@ private:
     return result.number;
   }
 
+  std::optional<ParseError> processUntilNextCommand(TokenCommand command) {
+    do {
+      auto maybeError = processCommand(command);
+      if (maybeError.has_value()) {
+        return std::move(maybeError.value());
+      }
+
+      // After MoveTo, subsequent commands are implicitly LineTo.
+      if (command.token == Token::MoveTo) {
+        command.token = Token::LineTo;
+      }
+
+      skipWhitespace();
+    } while (!remaining_.empty() && !peekCommand().has_value());
+
+    return std::nullopt;
+  }
+
+  Vector2d makeAbsolute(TokenCommand command, std::span<double, 2> coords) {
+    Vector2d point = Vector2d(coords[0], coords[1]);
+    if (command.relative) {
+      point += current_point_;
+    }
+
+    return point;
+  }
+
   std::optional<ParseError> processCommand(TokenCommand command) {
     if (command.token == Token::MoveTo) {
+      // 9.3.3 "moveto": https://www.w3.org/TR/SVG/paths.html#PathDataMovetoCommands
       double coords[2];
       auto maybeError = readNumbers(coords);
       if (maybeError) {
         return maybeError;
       }
 
-      spline_.moveTo(Vector2d(coords[0], coords[1]));
+      Vector2d point = makeAbsolute(command, coords);
+      spline_.moveTo(point);
+      initial_point_ = point;
+      current_point_ = point;
+    } else if (command.token == Token::ClosePath) {
+      // 9.3.4: "closepath": https://www.w3.org/TR/SVG/paths.html#PathDataClosePathCommand
+
+      spline_.closePath();
+      current_point_ = initial_point_;
+
+    } else if (command.token == Token::LineTo) {
+      // 9.3.5 "lineto": https://www.w3.org/TR/SVG/paths.html#PathDataLinetoCommands
+      double coords[2];
+      auto maybeError = readNumbers(coords);
+      if (maybeError) {
+        return maybeError;
+      }
+
+      const Vector2d point = makeAbsolute(command, coords);
+      spline_.lineTo(point);
+      current_point_ = point;
+
+    } else if (command.token == Token::HorizontalLineTo) {
+      // 9.3.5 "lineto": https://www.w3.org/TR/SVG/paths.html#PathDataLinetoCommands
+      auto maybeX = readNumber();
+      if (maybeX.hasError()) {
+        return std::move(maybeX.error());
+      }
+
+      const Vector2d point(maybeX.result() + (command.relative ? current_point_.x : 0.0),
+                           current_point_.y);
+      spline_.lineTo(point);
+      current_point_ = point;
+
+    } else if (command.token == Token::VerticalLineTo) {
+      // 9.3.5 "lineto": https://www.w3.org/TR/SVG/paths.html#PathDataLinetoCommands
+      auto maybeY = readNumber();
+      if (maybeY.hasError()) {
+        return std::move(maybeY.error());
+      }
+
+      const Vector2d point(current_point_.x,
+                           maybeY.result() + (command.relative ? current_point_.x : 0.0));
+      spline_.lineTo(point);
+      current_point_ = point;
+
     } else {
       ParseError err;
       err.reason = "Not implemented";
@@ -191,12 +272,14 @@ private:
   const std::string_view d_;
   std::string_view remaining_;
 
+  Vector2d initial_point_;     //!< Initial point, used for ClosePath operations.
   Vector2d current_point_;     //!< Current point.
   Vector2d reflection_point_;  //!< Reflection point, for s and t commands.
-};
+};                             // namespace donner
 
 ParseResult<PathSpline> PathParser::parse(std::string_view d) {
   PathParserImpl parser(d);
+  return parser.parse();
   return parser.parse();
 }
 
