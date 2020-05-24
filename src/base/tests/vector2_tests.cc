@@ -97,6 +97,22 @@ TEST(Vector2, Angle) {
   EXPECT_EQ(Vector2f(0.0f, 1.0f).angle(), +MathConstants<float>::kHalfPi);
 }
 
+TEST(Vector2, AngleWith) {
+  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f::XAxis()), 0.0f);
+  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f::YAxis()), MathConstants<float>::kHalfPi);
+  EXPECT_EQ(Vector2f::XAxis().angleWith(-Vector2f::XAxis()), MathConstants<float>::kPi);
+
+  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(1.0f, 1.0f)), MathConstants<float>::kPi / 4.0f);
+  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(1.0f, -1.0f)), MathConstants<float>::kPi / 4.0f);
+  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(-1.0f, 1.0f)),
+            MathConstants<float>::kPi * 3.0f / 4.0f);
+  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(-1.0f, -1.0f)),
+            MathConstants<float>::kPi * 3.0f / 4.0f);
+
+  // Edge case: Zero length.
+  EXPECT_EQ(Vector2f::Zero().angleWith(Vector2f::Zero()), 0.0f);
+}
+
 // Normalize
 TEST(Vector2, Normalize) {
   EXPECT_EQ(Vector2f(5.0f, 0.0).normalize(), Vector2f::XAxis());

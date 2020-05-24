@@ -56,7 +56,22 @@ struct Vector2 {
   }
 
   // Returns the angle that this vector makes with the +x axis, in radians.
+  // Result is returned in the range of [-pi, pi].
   UTILS_NO_DISCARD T angle() const { return (T)atan2(double(y), double(x)); }
+
+  // Returns the angle between this vector and the provided vector, or zero if one of the vectors
+  // has zero length.
+  //
+  // Result is returned in the range of [0, pi].
+  UTILS_NO_DISCARD T angleWith(const Vector2<T>& other) const {
+    const T magProduct = length() * other.length();
+    if (NearZero(magProduct)) {
+      return T(0);
+    }
+
+    const T cos_theta = dot(other) / magProduct;
+    return acos(cos_theta);
+  }
 
   // Returns the normalized vector.
   UTILS_NO_DISCARD Vector2<T> normalize() const {
