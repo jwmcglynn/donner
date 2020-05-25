@@ -449,66 +449,65 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
       centerNoRotation.rotate(cosRotation, sinRotation) + (currentPoint + endPoint) * 0.5;
 
   // Compute start angle.
-  const Vector2d intersect_start = (majorAxis - centerNoRotation) / ellipseRadius;
-  const Vector2d intersect_end = (-majorAxis - centerNoRotation) / ellipseRadius;
+  const Vector2d intersectionStart = (majorAxis - centerNoRotation) / ellipseRadius;
+  const Vector2d intersectionEnd = (-majorAxis - centerNoRotation) / ellipseRadius;
 
-  double k = intersect_start.length();
+  double k = intersectionStart.length();
   if (NearZero(k)) {
     return *this;
   }
 
-  k = Clamp(intersect_start.x / k, -1.0, 1.0);
+  k = Clamp(intersectionStart.x / k, -1.0, 1.0);
   double theta = acos(k);
-  if (intersect_start.y < 0.0) {
+  if (intersectionStart.y < 0.0) {
     theta = -theta;
   }
 
-  // Compute delta_theta.
-  k = sqrt(intersect_start.lengthSquared() * intersect_end.lengthSquared());
+  // Compute deltaTheta.
+  k = sqrt(intersectionStart.lengthSquared() * intersectionEnd.lengthSquared());
   if (NearZero(k)) {
     return *this;
   }
 
-  k = Clamp(intersect_start.dot(intersect_end) / k, -1.0, 1.0);
+  k = Clamp(intersectionStart.dot(intersectionEnd) / k, -1.0, 1.0);
 
-  double delta_theta = acos(k);
-  if (intersect_start.x * intersect_end.y - intersect_end.x * intersect_start.y < 0.0) {
-    delta_theta = -delta_theta;
+  double deltaTheta = acos(k);
+  if (intersectionStart.x * intersectionEnd.y - intersectionEnd.x * intersectionStart.y < 0.0) {
+    deltaTheta = -deltaTheta;
   }
 
-  if (sweepFlag && delta_theta < 0.0) {
-    delta_theta += MathConstants<double>::kPi * 2.0;
-  } else if (!sweepFlag && delta_theta > 0.0) {
-    delta_theta -= MathConstants<double>::kPi * 2.0;
+  if (sweepFlag && deltaTheta < 0.0) {
+    deltaTheta += MathConstants<double>::kPi * 2.0;
+  } else if (!sweepFlag && deltaTheta > 0.0) {
+    deltaTheta -= MathConstants<double>::kPi * 2.0;
   }
 
   // Now draw the arc.
-  size_t num_segs = (size_t)ceil(Abs(delta_theta / (MathConstants<double>::kPi * 0.5 + 0.001)));
+  const size_t numSegs = (size_t)ceil(Abs(deltaTheta / (MathConstants<double>::kPi * 0.5 + 0.001)));
   Vector2d dir(cosRotation, sinRotation);
-  double theta_increment = delta_theta / double(num_segs);
+  const double thetaIncrement = deltaTheta / double(numSegs);
 
-  // Draw num_segs segments.
-  for (size_t i = 0; i < num_segs; ++i) {
+  // Draw segments.
+  for (size_t i = 0; i < numSegs; ++i) {
     // Determine the properties of the current segment.
-    const double theta_start = theta + double(i) * theta_increment;
-    const double theta_end = theta + double(i + 1) * theta_increment;
+    const double thetaStart = theta + double(i) * thetaIncrement;
+    const double thetaEnd = theta + double(i + 1) * thetaIncrement;
 
-    const double theta_half = 0.5 * (theta_end - theta_start);
+    const double thetahalf = 0.5 * (thetaEnd - thetaStart);
 
-    const double sin_half_theta_half = sin(theta_half * 0.5);
-    const double t = (8.0 / 3.0) * sin_half_theta_half * sin_half_theta_half / sin(theta_half);
+    const double sinHalfThetaHalf = sin(thetahalf * 0.5);
+    const double t = (8.0 / 3.0) * sinHalfThetaHalf * sinHalfThetaHalf / sin(thetahalf);
 
-    const double cos_theta_start = cos(theta_start);
-    const double sin_theta_start = sin(theta_start);
-    const Vector2d point1 = ellipseRadius * Vector2d(cos_theta_start - t * sin_theta_start,
-                                                     sin_theta_start + t * cos_theta_start);
+    const double cos_thetaStart = cos(thetaStart);
+    const double sin_thetaStart = sin(thetaStart);
+    const Vector2d point1 = ellipseRadius * Vector2d(cos_thetaStart - t * sin_thetaStart,
+                                                     sin_thetaStart + t * cos_thetaStart);
 
-    const double cos_theta_end = cos(theta_end);
-    const double sin_theta_end = sin(theta_end);
-    const Vector2d point3 = ellipseRadius * Vector2d(cos_theta_end, sin_theta_end);
+    const double cos_thetaEnd = cos(thetaEnd);
+    const double sin_thetaEnd = sin(thetaEnd);
+    const Vector2d point3 = ellipseRadius * Vector2d(cos_thetaEnd, sin_thetaEnd);
 
-    const Vector2d point2 =
-        point3 + ellipseRadius * Vector2d(t * sin_theta_end, -t * cos_theta_end);
+    const Vector2d point2 = point3 + ellipseRadius * Vector2d(t * sin_thetaEnd, -t * cos_thetaEnd);
 
     // Draw a curve for this segment.
     curveTo(center + point1.rotate(dir.x, dir.y), center + point2.rotate(dir.x, dir.y),

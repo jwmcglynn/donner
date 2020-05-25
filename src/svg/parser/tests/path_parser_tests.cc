@@ -422,4 +422,112 @@ TEST(PathParser, VerticalLineTo) {
   }
 }
 
+TEST(PathParser, CurveTo) {
+  {
+    ParseResult<PathSpline> result =
+        PathParser::parse("M100,200 C100,100 250,100 250,200 S400,300 400,200");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(100.0, 200.0), Vector2d(100.0, 100.0),
+                                             Vector2d(250.0, 100.0), Vector2d(250.0, 200.0),
+                                             /* auto control point */ Vector2d(250.0, 300.0),
+                                             Vector2d(400.0, 300.0), Vector2d(400.0, 200.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
+                            Command{CommandType::CurveTo, 4}));
+  }
+}
+
+TEST(PathParser, QuadCurveTo) {
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M200,300 Q400,50 600,300 T1000,300");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2d(200.0, 300.0), Vector2Near(333.333, 133.333),
+                            Vector2Near(466.667, 133.333), Vector2d(600.0, 300.0),
+                            Vector2Near(733.333, 466.667), Vector2Near(866.667, 466.667),
+                            Vector2d(1000.0, 300.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
+                            Command{CommandType::CurveTo, 4}));
+  }
+}
+
+TEST(PathParser, EllipticalArc) {
+  {
+    /* Confirmed with:
+      <path d="M300,200 h-150 a150,150 0 1,0 150,-150 z" />
+      <path transform="translate(350 0)"
+            d="M300,200 h-150
+              C150,282 217,350 300,350
+              C382,350 450,282 450,200
+              C450,117 382,50 300,50 z" />
+    */
+
+    ParseResult<PathSpline> result = PathParser::parse("M300,200 h-150 a150,150 0 1,0 150,-150 z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(
+        spline.points(),
+        ElementsAre(Vector2Near(300, 200), Vector2Near(150, 200), Vector2Near(150, 282.843),
+                    Vector2Near(217.157, 350), Vector2Near(300, 350), Vector2Near(382.843, 350),
+                    Vector2Near(450, 282.843), Vector2Near(450, 200), Vector2Near(450, 117.157),
+                    Vector2Near(382.843, 50), Vector2Near(300, 50)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::CurveTo, 2}, Command{CommandType::CurveTo, 5},
+                            Command{CommandType::CurveTo, 8}, Command{CommandType::ClosePath, 0}));
+  }
+
+  {
+    /* Confirmed with:
+      <path d="M275,175 v-150 A150,150 0 0,0 125,175 z" />
+      <path transform="translate(350 0)"
+            d="M275,175 v-150 C192,25 125,92 125,175 z" />
+    */
+
+    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A150,150 0 0,0 125,175 z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(192.157, 25),
+                            Vector2Near(125, 92.1573), Vector2Near(125, 175)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::CurveTo, 2}, Command{CommandType::ClosePath, 0}));
+  }
+}
+
+TEST(PathParser, EllipticalArc_Parsing) {
+  // Missing rotation.
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150"),
+              ParseErrorIs(HasSubstr("Failed to parse number")));
+
+  // Missing flag.
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0"),
+              ParseErrorIs("Unexpected end of string when parsing flag"));
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0,"),
+              ParseErrorIs("Unexpected end of string when parsing flag"));
+
+  // Invalid flag.
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 a"),
+              ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 2"),
+              ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
+
+  // Missing end point.
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 0,0"),
+              ParseErrorIs(HasSubstr("Failed to parse number")));
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 0,0 150"),
+              ParseErrorIs(HasSubstr("Failed to parse number")));
+
+  // No whitespace.
+  EXPECT_THAT(PathParser::parse("M0,0 a150,150,0,0,0,150,150"), NoParseError());
+}
+
 }  // namespace donner
