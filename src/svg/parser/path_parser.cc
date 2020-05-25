@@ -92,6 +92,7 @@ private:
     }
   }
 
+  // Returns true if a comma was encountered.
   void skipCommaWhitespace() {
     bool foundComma = false;
     while (!remaining_.empty()) {
@@ -164,6 +165,8 @@ private:
   }
 
   ParseResult<double> readNumber() {
+    skipWhitespace();
+
     ParseResult<NumberParser::Result> maybeResult = NumberParser::parse(remaining_);
     if (maybeResult.hasError()) {
       ParseError err = std::move(maybeResult.error());
@@ -189,6 +192,24 @@ private:
       }
 
       skipWhitespace();
+      if (!remaining_.empty() && remaining_[0] == ',') {
+        // Skip a comma, but require the next non-whitespace to not be a command.
+        const int commaOffset = currentOffset();
+        remaining_.remove_prefix(1);
+        skipWhitespace();
+
+        if (!remaining_.empty() && peekCommand().has_value()) {
+          ParseError err;
+          err.reason = "Unexpected ',' before command";
+          err.offset = commaOffset;
+          return err;
+        } else if (remaining_.empty()) {
+          ParseError err;
+          err.reason = "Unexpected ',' at end of string";
+          err.offset = commaOffset;
+          return err;
+        }
+      }
     } while (!remaining_.empty() && !peekCommand().has_value());
 
     return std::nullopt;
@@ -254,7 +275,7 @@ private:
       }
 
       const Vector2d point(current_point_.x,
-                           maybeY.result() + (command.relative ? current_point_.x : 0.0));
+                           maybeY.result() + (command.relative ? current_point_.y : 0.0));
       spline_.lineTo(point);
       current_point_ = point;
 
@@ -269,9 +290,7 @@ private:
 
   std::optional<ParseError> readNumbers(std::span<double> resultStorage) {
     for (size_t i = 0; i < resultStorage.size(); ++i) {
-      if (i == 0) {
-        skipWhitespace();
-      } else {
+      if (i != 0) {
         skipCommaWhitespace();
       }
 

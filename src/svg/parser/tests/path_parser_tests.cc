@@ -104,6 +104,19 @@ TEST(PathParser, LineTo) {
                             Command{CommandType::LineTo, 2}));
   }
 
+  // Chain with commas.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M0,0L1,0,0,1");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2d::Zero(), Vector2d(1.0, 0.0), Vector2d(0.0, 1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}));
+  }
+
   // Chain switching relative/absolute
   {
     ParseResult<PathSpline> result = PathParser::parse("M 0 0 L 1 0 l 1 1 L 0 0");
@@ -119,6 +132,7 @@ TEST(PathParser, LineTo) {
 }
 
 TEST(PathParser, LineTo_Implicit) {
+  EXPECT_THAT(PathParser::parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
   EXPECT_THAT(PathParser::parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
   EXPECT_THAT(PathParser::parse("M0,0 1,"), ParseErrorIs(HasSubstr("Failed to parse number")));
   EXPECT_THAT(PathParser::parse("M0,0 1, "), ParseErrorIs(HasSubstr("Failed to parse number")));
@@ -155,7 +169,7 @@ TEST(PathParser, LineTo_PartialParse) {
                                                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
                                                 ElementsAre(Command{CommandType::MoveTo, 0},
                                                             Command{CommandType::LineTo, 1})),
-                                            ParseErrorIs(HasSubstr("Failed to parse number"))));
+                                            ParseErrorIs("Unexpected ',' at end of string")));
   }
 
   {
@@ -166,6 +180,166 @@ TEST(PathParser, LineTo_PartialParse) {
                                                 ElementsAre(Command{CommandType::MoveTo, 0},
                                                             Command{CommandType::LineTo, 1})),
                                             ParseErrorIs(HasSubstr("Failed to parse number"))));
+  }
+}
+
+TEST(PathParser, HorizontalLineTo) {
+  // Uppercase H -> absolute HorizontalLineTo
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 H 2");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
+  }
+
+  // Lowercase h -> relative HorizontalLineTo
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 h 2");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(3.0, 1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
+  }
+
+  // Chain between multiple types.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 h 1 h -6 H 0 H -2 h -1");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0), Vector2d(-4.0, 1.0),
+                            Vector2d(0.0, 1.0), Vector2d(-2.0, 1.0), Vector2d(-3.0, 1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3},
+                            Command{CommandType::LineTo, 4}, Command{CommandType::LineTo, 5}));
+  }
+
+  // Chain without additional letters.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 h 1 2 3");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0),
+                                             Vector2d(4.0, 1.0), Vector2d(7.0, 1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3}));
+  }
+
+  // Chain with commas.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M1,1h1,2,3");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0),
+                                             Vector2d(4.0, 1.0), Vector2d(7.0, 1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3}));
+  }
+}
+
+TEST(PathParser, HorizontalLineTo_ParseError) {
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M1,1 h1,");
+
+    EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
+                                                ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0)),
+                                                ElementsAre(Command{CommandType::MoveTo, 0},
+                                                            Command{CommandType::LineTo, 1})),
+                                            ParseErrorIs("Unexpected ',' at end of string")));
+  }
+
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M1 1 h");
+
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
+  }
+
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M1 1 h,");
+
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
+  }
+}
+
+TEST(PathParser, VerticalLineTo) {
+  // Uppercase V -> absolute VerticalLineTo
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 V 2");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
+  }
+
+  // Lowercase v -> relative VerticalLineTo
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 v 2");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 3.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
+  }
+
+  // Chain between multiple types.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 v 1 v -6 V 0 V -2 v -1");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0), Vector2d(1.0, -4.0),
+                            Vector2d(1.0, 0.0), Vector2d(1.0, -2.0), Vector2d(1.0, -3.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3},
+                            Command{CommandType::LineTo, 4}, Command{CommandType::LineTo, 5}));
+  }
+
+  // Chain without additional letters.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 1 1 v 1 2 3");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0),
+                                             Vector2d(1.0, 4.0), Vector2d(1.0, 7.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3}));
+  }
+
+  // Chain with commas.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M1,1v1,2,3");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0),
+                                             Vector2d(1.0, 4.0), Vector2d(1.0, 7.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3}));
   }
 }
 
