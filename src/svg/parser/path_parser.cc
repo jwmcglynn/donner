@@ -92,6 +92,21 @@ private:
     }
   }
 
+  void skipCommaWhitespace() {
+    bool foundComma = false;
+    while (!remaining_.empty()) {
+      const char ch = remaining_[0];
+      if (!foundComma && ch == ',') {
+        foundComma = true;
+        remaining_.remove_prefix(1);
+      } else if (isWhitespace(ch)) {
+        remaining_.remove_prefix(1);
+      } else {
+        break;
+      }
+    }
+  }
+
   bool isWhitespace(char ch) const {
     // Per https://www.w3.org/TR/SVG/paths.html#PathDataBNF, whitespace is defined as the following
     // characters:
@@ -254,7 +269,11 @@ private:
 
   std::optional<ParseError> readNumbers(std::span<double> resultStorage) {
     for (size_t i = 0; i < resultStorage.size(); ++i) {
-      skipWhitespace();
+      if (i == 0) {
+        skipWhitespace();
+      } else {
+        skipCommaWhitespace();
+      }
 
       auto maybeNumber = readNumber();
       if (maybeNumber.hasError()) {

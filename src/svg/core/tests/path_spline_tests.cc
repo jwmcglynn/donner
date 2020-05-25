@@ -36,8 +36,8 @@ TEST(PathSplineBuilder, MoveTo) {
   builder.moveTo(kVec1);
   PathSpline spline = builder.build();
 
-  EXPECT_THAT(spline.points(), ElementsAre(kVec1));
-  EXPECT_THAT(spline.commands(), ElementsAre(Command{CommandType::MoveTo, 0}));
+  EXPECT_THAT(spline, PointsAndCommandsAre(ElementsAre(kVec1),
+                                           ElementsAre(Command{CommandType::MoveTo, 0})));
 }
 
 TEST(PathSplineBuilder, MoveTo_Replace) {
@@ -47,8 +47,8 @@ TEST(PathSplineBuilder, MoveTo_Replace) {
   PathSpline spline = builder.build();
 
   // Only the last command remains.
-  EXPECT_THAT(spline.points(), ElementsAre(kVec2));
-  EXPECT_THAT(spline.commands(), ElementsAre(Command{CommandType::MoveTo, 0}));
+  EXPECT_THAT(spline, PointsAndCommandsAre(ElementsAre(kVec2),
+                                           ElementsAre(Command{CommandType::MoveTo, 0})));
 }
 
 TEST(PathSplineBuilder, MoveTo_MultipleSegments) {

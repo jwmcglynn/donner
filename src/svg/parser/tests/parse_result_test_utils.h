@@ -37,14 +37,14 @@ MATCHER(NoParseError, "") {
  * EXPECT_THAT(error, ParseErrorIs(StartsWith("Err")));
  * @endcode
  *
- * @param message Message to match with, either a string or a gmock matcher.
+ * @param errorMessageMatcher Message to match with, either a string or a gmock matcher.
  */
-MATCHER_P(ParseErrorIs, message, "") {
+MATCHER_P(ParseErrorIs, errorMessageMatcher, "") {
   if (!arg.hasError()) {
     return false;
   }
 
-  return testing::ExplainMatchResult(message, arg.error().reason, result_listener);
+  return testing::ExplainMatchResult(errorMessageMatcher, arg.error().reason, result_listener);
 }
 
 /**
@@ -65,14 +65,30 @@ MATCHER_P2(ParseErrorPos, line, offset, "") {
  * Matches if a ParseResult contains a result that matches the given value, and that it does not
  * contain an error.
  *
- * @param value Value to match with.
+ * @param resultMatcher Value to match with.
  */
-MATCHER_P(ParseResultIs, value, "") {
+MATCHER_P(ParseResultIs, resultMatcher, "") {
   if (!arg.hasResult() || arg.hasError()) {
     return false;
   }
 
-  return testing::ExplainMatchResult(value, arg.result(), result_listener);
+  return testing::ExplainMatchResult(resultMatcher, arg.result(), result_listener);
+}
+
+/**
+ * Matches if a ParseResult contains a result that matches the given value, and that it does not
+ * contain an error.
+ *
+ * @param resultMatcher Result to match with.
+ * @param errorMessageMatcher Parse error message to match with, either a string or a gmock matcher.
+ */
+MATCHER_P2(ParseResultAndError, resultMatcher, errorMessageMatcher, "") {
+  if (!arg.hasResult() || !arg.hasError()) {
+    return false;
+  }
+
+  return testing::ExplainMatchResult(resultMatcher, arg.result(), result_listener) &&
+         testing::ExplainMatchResult(errorMessageMatcher, arg, result_listener);
 }
 
 }  // namespace donner
