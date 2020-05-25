@@ -60,6 +60,8 @@ public:
 
 private:
   enum class Token {
+    InvalidCommand,
+
     //! Positioning.
     MoveTo,
     ClosePath,
@@ -186,9 +188,12 @@ private:
         return std::move(maybeError.value());
       }
 
-      // After MoveTo, subsequent commands are implicitly LineTo.
       if (command.token == Token::MoveTo) {
+      // After MoveTo, subsequent commands are implicitly LineTo.
         command.token = Token::LineTo;
+      } else if (command.token == Token::ClosePath) {
+        // A command is required after ClosePath, if it is not updated this will generate an error.
+        command.token = Token::InvalidCommand;
       }
 
       skipWhitespace();
@@ -225,7 +230,12 @@ private:
   }
 
   std::optional<ParseError> processCommand(TokenCommand command) {
-    if (command.token == Token::MoveTo) {
+    if (command.token == Token::InvalidCommand) {
+      ParseError err;
+      err.reason = "Expected command";
+      err.offset = currentOffset();
+      return err;
+    } else if (command.token == Token::MoveTo) {
       // 9.3.3 "moveto": https://www.w3.org/TR/SVG/paths.html#PathDataMovetoCommands
       double coords[2];
       auto maybeError = readNumbers(coords);

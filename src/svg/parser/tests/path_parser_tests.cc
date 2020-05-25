@@ -68,6 +68,85 @@ TEST(PathParser, MoveTo) {
   }
 }
 
+TEST(PathParser, ClosePath) {
+  // Use z and Z interchangeably, they should be equivalent.
+
+  // Immediate ClosePath.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 0 0 z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero()));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
+  }
+
+  // ClosePath without any additional commands should have the last MoveTo stripped.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 0 0 1 1 Z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::ClosePath, 0}));
+  }
+
+  // ClosePath followed by a line, contains a MoveTo then a LineTo.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 0 0 1 1 z L -1 -1");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0), Vector2d(-1.0, -1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 0},
+                            Command{CommandType::LineTo, 2}));
+  }
+
+  // ClosePath with the MoveTo overridden.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M 0 0 1 1 Z M -2 -2 -1 -1");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0),
+                                             Vector2d(-2.0, -2.0), Vector2d(-1.0, -1.0)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 2},
+                            Command{CommandType::LineTo, 3}));
+  }
+}
+
+TEST(PathParser, ClosePath_ParseErrors) {
+  // Comma at end is a parse error.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M0,0Z,");
+
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0},
+                                                             Command{CommandType::ClosePath, 0})),
+                            ParseErrorIs("Unexpected ',' at end of string")));
+  }
+
+  // No numbers at end, there is no implicit command after.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M0,0Z1");
+
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0},
+                                                             Command{CommandType::ClosePath, 0})),
+                            ParseErrorIs("Expected command")));
+  }
+}
+
 TEST(PathParser, LineTo) {
   // Uppercase L -> absolute LineTo
   {

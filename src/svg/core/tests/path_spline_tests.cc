@@ -188,6 +188,17 @@ TEST(PathSplineBuilder, ClosePath_FailsWithoutStart) {
   EXPECT_DEATH(builder.closePath(), "without an open path");
 }
 
+TEST(PathSplineBuilder, ClosePath_AfterMoveTo) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(kVec1);
+  builder.closePath();
+  PathSpline spline = builder.build();
+
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
+}
+
 TEST(PathSplineBuilder, ClosePath_MoveToReplace) {
   auto builder = PathSpline::Builder();
   builder.moveTo(kVec1);

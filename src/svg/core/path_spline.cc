@@ -570,12 +570,15 @@ PathSpline PathSpline::Builder::build() {
   valid_ = false;
 
   // If the last command is a MoveTo, remove it.
-  if (commands_.size() > 1 && commands_.back().type == CommandType::MoveTo) {
-    if (commands_.back().point_index + 1 == points_.size()) {
-      // Remove point if it is not a deduped reference from earlier in the array.
-      points_.pop_back();
+  if (commands_.size() > 1) {
+    const Command lastCommand = commands_.back();
+    if (lastCommand.type == CommandType::MoveTo) {
+      if (lastCommand.point_index > 0 && lastCommand.point_index + 1 == points_.size()) {
+        // Remove point if it is not a deduped reference from earlier in the array.
+        points_.pop_back();
+      }
+      commands_.pop_back();
     }
-    commands_.pop_back();
   }
 
   return PathSpline(std::move(points_), std::move(commands_));
