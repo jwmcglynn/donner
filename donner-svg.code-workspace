@@ -94,7 +94,8 @@
 			"bit": "cpp",
 			"charconv": "cpp",
 			"ios": "cpp",
-			"variant": "cpp"
+			"variant": "cpp",
+			"span": "cpp"
 		},
 		"files.exclude": {
 			"bazel-*": true
