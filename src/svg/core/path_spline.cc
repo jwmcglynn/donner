@@ -419,11 +419,14 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
                                                 const Vector2d& endPoint) {
   // See Appendix F.6 Elliptical arc implementation notes
   // http://www.w3.org/TR/SVG/implnote.html#ArcImplementationNotes
+  const double kDistanceSqEpsilon = 1e-14;  // Chosen unscientifically to avoid a NearZero assert
+                                            // in EllipseCenterForArc, should be sufficiently
+                                            // large so that x^4 > DBL_EPSILON.
 
   // Determine the current point, which is the last point defined.
   const Vector2d currentPoint = points_.back();
 
-  if (UTILS_PREDICT_FALSE(currentPoint == endPoint)) {
+  if (UTILS_PREDICT_FALSE(NearZero(currentPoint.distanceSquared(endPoint), kDistanceSqEpsilon))) {
     // No-op, the end point is the current position.
     return *this;
   }

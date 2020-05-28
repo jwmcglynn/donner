@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//build:rules.bzl", "donner_cc_fuzzer")
 
 cc_library(
     name = "core",
@@ -72,6 +73,17 @@ cc_test(
         ":core_test_utils",
         ":parser",
         "@gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "path_parser_fuzzer",
+    srcs = [
+        "parser/tests/path_parser_fuzzer.cc",
+    ],
+    corpus = "parser/tests/path_parser_corpus",
+    deps = [
+        ":parser",
     ],
 )
 

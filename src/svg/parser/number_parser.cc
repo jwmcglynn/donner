@@ -18,7 +18,7 @@ ParseResult<NumberParser::Result> NumberParser::parse(std::string_view str) {
   }
 
   bool foundPlus = false;
-  if (str[0] == '+') {
+  if (!str.empty() && str[0] == '+') {
     // from_chars does not support the '+' sign at the beginning, but the <number-token> spec
     // requires it. Detect and advance, but make sure that the result is positive to prevent
     // cases where both signs are supplied, for example "+-0".

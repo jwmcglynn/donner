@@ -16,3 +16,21 @@ build:libc++ --define force_libcpp=enabled
 build:c++20 --cxxopt=-std=c++20
 
 build --config=libc++ --config=c++20
+
+# Basic ASAN/UBSAN that works for gcc
+build:asan --linkopt -ldl
+build:asan --copt -fsanitize=address,undefined
+build:asan --linkopt -fsanitize=address,undefined
+build:asan --test_env=ASAN_SYMBOLIZER_PATH
+# These require libubsan, which is not linked properly by bazel, so disable.
+# See https://github.com/google/oss-fuzz/issues/713
+build:asan --copt -fno-sanitize=vptr,function
+build:asan --linkopt -fno-sanitize=vptr,function
+
+# Fuzzing builds
+build:asan-fuzzer --config=asan
+build:asan-fuzzer --define=FUZZING_ENGINE=libfuzzer
+build:asan-fuzzer --copt=-fsanitize=fuzzer-no-link
+build:asan-fuzzer --copt=-fno-omit-frame-pointer
+build:asan-fuzzer --copt=-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+build:asan-fuzzer --test_env=UBSAN_OPTIONS=print_stacktrace=1
