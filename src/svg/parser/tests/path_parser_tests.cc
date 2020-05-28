@@ -503,6 +503,57 @@ TEST(PathParser, EllipticalArc) {
   }
 }
 
+TEST(PathParser, EllipticalArt_OutOfRangeRadii) {
+  // Per https://www.w3.org/TR/SVG/implnote.html#ArcCorrectionOutOfRangeRadii, out-of-range radii
+  // should be corrected.
+
+  // Zero radii -> treat as straight line.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A150,0 0 0,0 125,175 z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(125, 175)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::LineTo, 2}, Command{CommandType::ClosePath, 0}));
+  }
+
+  // Negative radii -> take absolute value.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A-150,150 0 0,0 125,175 z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(192.157, 25),
+                            Vector2Near(125, 92.1573), Vector2Near(125, 175)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::CurveTo, 2}, Command{CommandType::ClosePath, 0}));
+  }
+
+  // Radii too small -> scale them up. Note that this produces a larger arc per the SVG algorithm
+  // than the original 150,150 radius, since it minimizes the radius the solution is closer to 2/3
+  // of a circle.
+  {
+    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A50,50 0 0,0 125,175 z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25),
+                            Vector2Near(233.579, -16.4214), Vector2Near(166.421, -16.4214),
+                            Vector2Near(125, 25), Vector2Near(83.5786, 66.4214),
+                            Vector2Near(83.5786, 133.579), Vector2Near(125, 175)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::CurveTo, 2}, Command{CommandType::CurveTo, 5},
+                            Command{CommandType::ClosePath, 0}));
+  }
+}
+
 TEST(PathParser, EllipticalArc_Parsing) {
   // Missing rotation.
   EXPECT_THAT(PathParser::parse("M0,0 a150,150"),
@@ -528,6 +579,30 @@ TEST(PathParser, EllipticalArc_Parsing) {
 
   // No whitespace.
   EXPECT_THAT(PathParser::parse("M0,0 a150,150,0,0,0,150,150"), NoParseError());
+}
+
+TEST(PathParser, NoWhitespace) {
+  EXPECT_THAT(PathParser::parse("M-5-5"),
+              ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(-5.0, -5.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0}))));
+
+  EXPECT_THAT(PathParser::parse("M10-20A5.5.3-4 110-.1"),
+              ParseResultIs(PointsAndCommandsAre(
+                  ElementsAre(Vector2d(10.0, -20.0), Vector2Near(28.2462, -40.6282),
+                              Vector2Near(40.7991, -52.8959), Vector2Near(38.0377, -47.4006),
+                              Vector2Near(35.2763, -41.9054), Vector2Near(18.2462, -20.7282),
+                              Vector2Near(0, -0.1)),
+                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
+                              Command{CommandType::CurveTo, 4}))));
+
+  EXPECT_THAT(
+      PathParser::parse("M10 20V30H40V50H60Z"),
+      ParseResultIs(PointsAndCommandsAre(
+          ElementsAre(Vector2d(10, 20), Vector2d(10, 30), Vector2d(40, 30), Vector2d(40, 50),
+                      Vector2d(60, 50)),
+          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                      Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3},
+                      Command{CommandType::LineTo, 4}, Command{CommandType::ClosePath, 0}))));
 }
 
 }  // namespace donner
