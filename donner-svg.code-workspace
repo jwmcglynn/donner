@@ -95,7 +95,9 @@
 			"charconv": "cpp",
 			"ios": "cpp",
 			"variant": "cpp",
-			"span": "cpp"
+			"span": "cpp",
+			"*.inc": "cpp",
+			"__functional_base_03": "cpp"
 		},
 		"files.exclude": {
 			"bazel-*": true
@@ -120,7 +122,7 @@
 				}
 			},
 			{
-				"pattern": "bazel-bin/src/svg/core_tests",
+				"pattern": "bazel-bin/src/svg/core/core_tests",
 				"runTask": {
 					"before": [
 						"core_tests"
@@ -128,7 +130,7 @@
 				}
 			},
 			{
-				"pattern": "bazel-bin/src/svg/parser_tests",
+				"pattern": "bazel-bin/src/svg/parser/parser_tests",
 				"runTask": {
 					"before": [
 						"parser_tests"
