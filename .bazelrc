@@ -2,7 +2,7 @@
 build:clang --action_env=CC=clang
 build:clang --action_env=CXX=clang++
 build:clang --action_env=BAZEL_COMPILER=clang
-build:clang --linkopt=-fuse-ld=lld
+#build:clang --linkopt=-fuse-ld=lld
 
 # Clang with libc++
 build:libc++ --config=clang
