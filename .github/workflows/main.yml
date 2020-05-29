@@ -34,12 +34,11 @@ jobs:
         sudo add-apt-repository "deb http://apt.llvm.org/bionic/ llvm-toolchain-bionic-10 main"
         sudo apt-get update
         sudo apt-get install -y clang-10 libc++-10-dev libc++abi-10-dev
-        export PATH=/usr/lib/llvm-10/bin:$PATH
 
     - name: Build
       run: |
-        "${GITHUB_WORKSPACE}/bin/bazel" build //...
+        "${GITHUB_WORKSPACE}/bin/bazel" --config=ci build //...
 
     - name: Test
       run: |
-        "${GITHUB_WORKSPACE}/bin/bazel" test //...
+        "${GITHUB_WORKSPACE}/bin/bazel" --config=ci test //...
