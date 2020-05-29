@@ -1,6 +1,6 @@
 # Common flags for Clang
-build:clang --action_env=CC=clang-10
-build:clang --action_env=CXX=clang++-10
+build:clang --action_env=CC=clang
+build:clang --action_env=CXX=clang++
 build:clang --action_env=BAZEL_COMPILER=clang
 build:clang --linkopt=-fuse-ld=lld
 
@@ -16,6 +16,10 @@ build:libc++ --define force_libcpp=enabled
 build:c++20 --cxxopt=-std=c++20
 
 build --config=libc++ --config=c++20
+
+# Build with CI
+build:ci --action_env=CC=/usr/lib/llvm-10/bin/clang
+build:ci --action_env=CXX=/usr/lib/llvm-10/bin/clang++
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --linkopt -ldl
