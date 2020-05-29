@@ -236,7 +236,7 @@ private:
       }
 
       skipWhitespace();
-      if (!remaining_.empty() && remaining_[0] == ',') {
+      if (remaining_.starts_with(',')) {
         // Skip a comma, but require the next non-whitespace to not be a command.
         const int commaOffset = currentOffset();
         remaining_.remove_prefix(1);
