@@ -48,12 +48,14 @@ cc_library(
         "parser/number_parser.cc",
         "parser/parse_error.cc",
         "parser/path_parser.cc",
+        "parser/transform_parser.cc",
     ],
     hdrs = [
         "parser/number_parser.h",
         "parser/parse_error.h",
         "parser/parse_result.h",
         "parser/path_parser.h",
+        "parser/transform_parser.h",
     ],
     deps = [
         ":core",
@@ -68,6 +70,7 @@ cc_test(
         "parser/tests/number_parser_tests.cc",
         "parser/tests/parse_result_test_utils.h",
         "parser/tests/path_parser_tests.cc",
+        "parser/tests/transform_parser_tests.cc",
     ],
     deps = [
         ":core_test_utils",
@@ -82,6 +85,17 @@ donner_cc_fuzzer(
         "parser/tests/path_parser_fuzzer.cc",
     ],
     corpus = "parser/tests/path_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "transform_parser_fuzzer",
+    srcs = [
+        "parser/tests/transform_parser_fuzzer.cc",
+    ],
+    corpus = "parser/tests/transform_parser_corpus",
     deps = [
         ":parser",
     ],

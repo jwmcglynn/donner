@@ -464,7 +464,6 @@ private:
 ParseResult<PathSpline> PathParser::parse(std::string_view d) {
   PathParserImpl parser(d);
   return parser.parse();
-  return parser.parse();
 }
 
 }  // namespace donner
