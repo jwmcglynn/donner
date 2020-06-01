@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cassert>
+
 #ifndef __has_cpp_attribute
 #define __has_cpp_attribute(x) 0
 #endif

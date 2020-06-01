@@ -136,6 +136,14 @@
 						"parser_tests"
 					],
 				}
+			},
+			{
+				"pattern": "bazel-bin/src/svg/components/components_tests",
+				"runTask": {
+					"before": [
+						"components_tests"
+					],
+				}
 			}
 		]
 	},
