@@ -1,0 +1,12 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "rapidxml_ns",
+    hdrs = [
+        "rapidxml_ns.hpp",
+    ],
+    copts = ["-isystem rapidxml_ns"],
+    
+    include_prefix = "rapidxml_ns",
+    visibility = ["//visibility:public"],
+)

@@ -85,6 +85,8 @@ private:
 };
 
 class SVGSVGElement : public SVGElement {
+  friend class SVGDocument;
+
 protected:
   SVGSVGElement(Registry& registry, Entity entity) : SVGElement(registry, entity) {}
 

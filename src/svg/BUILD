@@ -10,7 +10,10 @@ cc_library(
         "svg_document.h",
         "svg_element.h",
     ],
-    visibility = ["//:__pkg__"],
+    visibility = [
+        "//:__pkg__",
+        "//src/svg/xml:__pkg__",
+    ],
     deps = [
         "//src/svg/components",
         "//src/svg/core",

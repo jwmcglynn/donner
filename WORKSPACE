@@ -10,6 +10,12 @@ local_repository(
     path = "third_party/absl",
 )
 
+new_local_repository(
+    name = "rapidxml_ns",
+    build_file = "third_party/BUILD.rapidxml_ns",
+    path = "third_party/rapidxml_ns",
+)
+
 git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt.git",
