@@ -9,6 +9,7 @@
 namespace donner {
 
 class SVGSVGElement;
+struct ParseError;
 
 class SVGElement {
 protected:
@@ -79,7 +80,7 @@ public:
 
   bool operator==(const SVGElement& other) const { return entity_ == other.entity_; }
 
-private:
+protected:
   std::reference_wrapper<Registry> registry_;
   Entity entity_;
 };
@@ -91,10 +92,13 @@ protected:
   SVGSVGElement(Registry& registry, Entity entity) : SVGElement(registry, entity) {}
 
 public:
+  static constexpr ElementType Type = ElementType::SVG;
+  static constexpr std::string_view Tag = "svg";
+
   static SVGSVGElement Create(SVGDocument& document) {
     Registry& registry = document.registry();
     Entity entity = registry.create();
-    registry.emplace<TreeComponent>(entity, ElementType::SVG, entity);
+    registry.emplace<TreeComponent>(entity, Type, entity);
     return SVGSVGElement(registry, entity);
   }
 };
@@ -109,16 +113,35 @@ protected:
   SVGUnknownElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
 
 public:
+  static constexpr ElementType Type = ElementType::Unknown;
+
   static SVGUnknownElement Create(SVGDocument& document) {
     Registry& registry = document.registry();
     Entity entity = registry.create();
-    registry.emplace<TreeComponent>(entity, ElementType::Unknown, entity);
+    registry.emplace<TreeComponent>(entity, Type, entity);
     return SVGUnknownElement(registry, entity);
   }
 };
 
 class SVGGeometryElement : public SVGGraphicsElement {};
 
-class SVGPathElement : public SVGGraphicsElement {};
+class SVGPathElement : public SVGGraphicsElement {
+protected:
+  SVGPathElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
+
+public:
+  static constexpr ElementType Type = ElementType::Path;
+  static constexpr std::string_view Tag = "path";
+
+  static SVGPathElement Create(SVGDocument& document) {
+    Registry& registry = document.registry();
+    Entity entity = registry.create();
+    registry.emplace<TreeComponent>(entity, Type, entity);
+    return SVGPathElement(registry, entity);
+  }
+
+  std::string_view d() const;
+  std::optional<ParseError> setD(std::string_view d);
+};
 
 }  // namespace donner

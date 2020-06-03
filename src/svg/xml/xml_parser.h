@@ -9,7 +9,8 @@ namespace donner {
 
 class XMLParser {
 public:
-  static ParseResult<SVGDocument> parseSVG(std::span<char> str);
+  static ParseResult<SVGDocument> parseSVG(std::span<char> str,
+                                           std::vector<ParseError>* out_warnings);
 };
 
 }  // namespace donner

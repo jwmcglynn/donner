@@ -3,11 +3,13 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 cc_library(
     name = "components",
     srcs = [
+        "path_component.cc",
         "tree_component.cc",
     ],
     hdrs = [
         "class_component.h",
         "id_component.h",
+        "path_component.h",
         "registry.h",
         "transform_component.h",
         "tree_component.h",
@@ -15,6 +17,7 @@ cc_library(
     visibility = ["//src/svg:__subpackages__"],
     deps = [
         "//src/base",
+        "//src/svg/parser",
         "@entt",
     ],
 )

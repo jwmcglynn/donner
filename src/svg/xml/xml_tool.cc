@@ -44,10 +44,11 @@ extern "C" int main(int argc, char* argv[]) {
   const size_t fileLength = file.tellg();
   file.seekg(0);
 
-  std::vector<char> fileData(fileLength);
+  std::vector<char> fileData(fileLength + 1);
   file.read(fileData.data(), fileLength);
 
-  auto maybeResult = XMLParser::parseSVG(fileData);
+  std::vector<ParseError> warnings;
+  auto maybeResult = XMLParser::parseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
@@ -55,6 +56,13 @@ extern "C" int main(int argc, char* argv[]) {
   }
 
   std::cout << "Parsed successfully." << std::endl;
+
+  if (!warnings.empty()) {
+    std::cout << "Warnings:" << std::endl;
+    for (auto& w : warnings) {
+      std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << std::endl;
+    }
+  }
 
   std::cout << "Tree:" << std::endl;
   DumpTree(maybeResult.result().svgElement(), 0);
