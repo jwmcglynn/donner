@@ -3,6 +3,7 @@
 #include <functional>
 #include <string_view>
 
+#include "src/base/transform.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/svg_document.h"
 
@@ -24,6 +25,12 @@ public:
 
   std::string id() const;
   void setId(std::string_view id);
+
+  std::string className() const;
+  void setClassName(std::string_view name);
+
+  Transformd transform() const;
+  void setTransform(Transformd transform);
 
   std::optional<SVGElement> parentElement();
   std::optional<SVGElement> firstChild();

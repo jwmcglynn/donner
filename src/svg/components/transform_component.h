@@ -4,7 +4,7 @@
 
 namespace donner {
 
-class TransformComponent {
+struct TransformComponent {
   Transformd transform;
 };
 

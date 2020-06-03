@@ -2,8 +2,10 @@
 
 #include <string>
 
+#include "src/svg/components/class_component.h"
 #include "src/svg/components/id_component.h"
 #include "src/svg/components/path_component.h"
+#include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 
 namespace donner {
@@ -22,8 +24,8 @@ Entity SVGElement::entity() const {
 }
 
 std::string SVGElement::id() const {
-  if (const auto* idComponent = registry_.get().try_get<IdComponent>(entity_)) {
-    return idComponent->id;
+  if (const auto* component = registry_.get().try_get<IdComponent>(entity_)) {
+    return component->id;
   } else {
     return "";
   }
@@ -31,11 +33,41 @@ std::string SVGElement::id() const {
 
 void SVGElement::setId(std::string_view id) {
   if (!id.empty()) {
-    auto& idComponent = registry_.get().get_or_emplace<IdComponent>(entity_);
-    idComponent.id = id;
+    auto& component = registry_.get().get_or_emplace<IdComponent>(entity_);
+    component.id = id;
   } else {
     registry_.get().remove_if_exists<IdComponent>(entity_);
   }
+}
+
+std::string SVGElement::className() const {
+  if (const auto* component = registry_.get().try_get<ClassComponent>(entity_)) {
+    return component->className;
+  } else {
+    return "";
+  }
+}
+
+void SVGElement::setClassName(std::string_view name) {
+  if (!name.empty()) {
+    auto& component = registry_.get().get_or_emplace<ClassComponent>(entity_);
+    component.className = name;
+  } else {
+    registry_.get().remove_if_exists<ClassComponent>(entity_);
+  }
+}
+
+Transformd SVGElement::transform() const {
+  if (const auto* component = registry_.get().try_get<TransformComponent>(entity_)) {
+    return component->transform;
+  } else {
+    return Transformd();
+  }
+}
+
+void SVGElement::setTransform(Transformd transform) {
+  auto& component = registry_.get().get_or_emplace<TransformComponent>(entity_);
+  component.transform = transform;
 }
 
 std::optional<SVGElement> SVGElement::parentElement() {

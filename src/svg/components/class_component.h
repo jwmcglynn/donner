@@ -4,7 +4,7 @@
 
 namespace donner {
 
-class ClassComponent {
+struct ClassComponent {
   std::string className;
 };
 

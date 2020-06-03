@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "src/svg/parser/transform_parser.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/xml/details/xml_parser_context.h"
 
@@ -18,6 +19,16 @@ std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, SVGEle
                                                std::string_view name, std::string_view value) {
   if (name == "id") {
     element.setId(value);
+  } else if (name == "class") {
+    element.setClassName(value);
+  } else if (name == "transform") {
+    auto maybeTransform = TransformParser::parse(value);
+    if (maybeTransform.hasError()) {
+      context.addSubparserWarning(std::move(maybeTransform.error()),
+                                  context.parserOriginFrom(value));
+    } else {
+      element.setTransform(maybeTransform.result());
+    }
   }
   return std::nullopt;
 }
@@ -37,9 +48,21 @@ std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& conte
     if (auto warning = element.setD(value)) {
       context.addSubparserWarning(std::move(warning.value()), context.parserOriginFrom(value));
     }
-
-    std::cout << "d = " << element.d() << std::endl;
   }
+
+  return ParseCommonAttribute(context, element, name, value);
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& context,
+                                                        SVGSVGElement element,
+                                                        std::string_view name,
+                                                        std::string_view value) {
+  // TODO
+  // viewBox
+  // preserveAspectRatio
+  // x, y
+  // width, height
 
   return ParseCommonAttribute(context, element, name, value);
 }
