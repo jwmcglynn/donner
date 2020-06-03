@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 cc_library(
     name = "xml",
@@ -6,9 +6,44 @@ cc_library(
     hdrs = ["xml_parser.h"],
     visibility = ["//src/svg:__pkg__"],
     deps = [
+        ":xml_details",
         "//src/svg",
         "//src/svg/parser",
         "@rapidxml_ns",
+    ],
+)
+
+cc_test(
+    name = "xml_tests",
+    srcs = [
+        "tests/xml_parser_tests.cc",
+    ],
+    deps = [
+        ":xml",
+        "//src/svg/parser:parser_tests_utils",
+        "@gtest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "xml_details",
+    hdrs = [
+        "details/line_offsets.h",
+        "details/xml_parser_context.h",
+    ],
+    deps = [
+        "//src/svg/parser",
+    ],
+)
+
+cc_test(
+    name = "xml_details_tests",
+    srcs = [
+        "details/tests/line_offsets_tests.cc",
+    ],
+    deps = [
+        ":xml_details",
+        "@gtest//:gtest_main",
     ],
 )
 

@@ -152,6 +152,22 @@
 						"svg_tests"
 					],
 				}
+			},
+			{
+				"pattern": "bazel-bin/src/svg/xml/xml_tests",
+				"runTask": {
+					"before": [
+						"xml_tests"
+					],
+				}
+			},
+			{
+				"pattern": "bazel-bin/src/svg/xml/xml_details_tests",
+				"runTask": {
+					"before": [
+						"xml_details_tests"
+					],
+				}
 			}
 		]
 	},

@@ -6,6 +6,7 @@
 #include <tuple>
 
 #include "src/svg/svg_element.h"
+#include "src/svg/xml/details/xml_parser_context.h"
 
 namespace donner {
 
@@ -13,9 +14,8 @@ namespace {
 
 using SVGElements = entt::type_list<SVGSVGElement, SVGPathElement>;
 
-std::optional<ParseError> ParseCommonAttribute(SVGElement element, std::string_view name,
-                                               std::string_view value,
-                                               std::vector<ParseError>* out_warnings) {
+std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, SVGElement element,
+                                               std::string_view name, std::string_view value) {
   if (name == "id") {
     element.setId(value);
   }
@@ -23,36 +23,34 @@ std::optional<ParseError> ParseCommonAttribute(SVGElement element, std::string_v
 }
 
 template <typename T>
-std::optional<ParseError> ParseAttribute(T element, std::string_view name, std::string_view value,
-                                         std::vector<ParseError>* out_warnings) {
-  return ParseCommonAttribute(element, name, value, out_warnings);
+std::optional<ParseError> ParseAttribute(XMLParserContext& context, T element,
+                                         std::string_view name, std::string_view value) {
+  return ParseCommonAttribute(context, element, name, value);
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGPathElement>(SVGPathElement element,
+std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& context,
+                                                         SVGPathElement element,
                                                          std::string_view name,
-                                                         std::string_view value,
-                                                         std::vector<ParseError>* out_warnings) {
+                                                         std::string_view value) {
   if (name == "d") {
     if (auto warning = element.setD(value)) {
-      if (out_warnings) {
-        out_warnings->emplace_back(std::move(warning.value()));
-      }
+      context.addSubparserWarning(std::move(warning.value()), context.parserOriginFrom(value));
     }
 
     std::cout << "d = " << element.d() << std::endl;
   }
 
-  return ParseCommonAttribute(element, name, value, out_warnings);
+  return ParseCommonAttribute(context, element, name, value);
 }
 
 template <typename T>
-ParseResult<SVGElement> ParseAttributes(T element, rapidxml_ns::xml_node<>* node,
-                                        std::vector<ParseError>* out_warnings) {
+ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
+                                        rapidxml_ns::xml_node<>* node) {
   for (rapidxml_ns::xml_attribute<>* i = node->first_attribute(); i; i = i->next_attribute()) {
     const std::string_view name = std::string_view(i->name(), i->name_size());
     const std::string_view value = std::string_view(i->value(), i->value_size());
-    if (auto error = ParseAttribute(element, name, value, out_warnings)) {
+    if (auto error = ParseAttribute(context, element, name, value)) {
       return std::move(error.value());
     }
   }
@@ -61,19 +59,18 @@ ParseResult<SVGElement> ParseAttributes(T element, rapidxml_ns::xml_node<>* node
 }
 
 template <size_t I = 0, typename... Types>
-ParseResult<SVGElement> CreateElement(SVGDocument& svgDocument, std::string_view tagName,
-                                      rapidxml_ns::xml_node<>* node, entt::type_list<Types...>,
-                                      std::vector<ParseError>* out_warnings) {
+ParseResult<SVGElement> CreateElement(XMLParserContext& context, SVGDocument& svgDocument,
+                                      std::string_view tagName, rapidxml_ns::xml_node<>* node,
+                                      entt::type_list<Types...>) {
   if constexpr (I != sizeof...(Types)) {
     if (tagName == std::tuple_element<I, std::tuple<Types...>>::type::Tag) {
-      return ParseAttributes(std::tuple_element<I, std::tuple<Types...>>::type::Create(svgDocument),
-                             node, out_warnings);
+      return ParseAttributes(
+          context, std::tuple_element<I, std::tuple<Types...>>::type::Create(svgDocument), node);
     }
 
-    return CreateElement<I + 1>(svgDocument, tagName, node, entt::type_list<Types...>(),
-                                out_warnings);
+    return CreateElement<I + 1>(context, svgDocument, tagName, node, entt::type_list<Types...>());
   } else {
-    return ParseAttributes(SVGUnknownElement::Create(svgDocument), node, out_warnings);
+    return ParseAttributes(context, SVGUnknownElement::Create(svgDocument), node);
   }
 }
 
@@ -90,9 +87,9 @@ std::string_view TypeToString(rapidxml_ns::node_type type) {
   }
 }
 
-std::optional<ParseError> WalkChildren(SVGDocument& svgDocument, std::optional<SVGElement> element,
-                                       rapidxml_ns::xml_node<>* rootNode,
-                                       std::vector<ParseError>* out_warnings) {
+std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& svgDocument,
+                                       std::optional<SVGElement> element,
+                                       rapidxml_ns::xml_node<>* rootNode) {
   bool foundRootSvg = false;
 
   for (rapidxml_ns::xml_node<>* i = rootNode->first_node(); i; i = i->next_sibling()) {
@@ -102,25 +99,25 @@ std::optional<ParseError> WalkChildren(SVGDocument& svgDocument, std::optional<S
 
     if (i->type() == rapidxml_ns::node_element) {
       if (element) {
-        auto maybeNewElement = CreateElement(svgDocument, name, i, SVGElements(), out_warnings);
+        auto maybeNewElement = CreateElement(context, svgDocument, name, i, SVGElements());
         if (maybeNewElement.hasError()) {
           return std::move(maybeNewElement.error());
         }
 
         element->appendChild(maybeNewElement.result());
-        if (auto error = WalkChildren(svgDocument, maybeNewElement.result(), i, out_warnings)) {
+        if (auto error = WalkChildren(context, svgDocument, maybeNewElement.result(), i)) {
           return error;
         }
       } else {
         // First node must be SVG.
         if (name == "svg" && !foundRootSvg) {
-          auto maybeSvgElement = ParseAttributes(svgDocument.svgElement(), i, out_warnings);
+          auto maybeSvgElement = ParseAttributes(context, svgDocument.svgElement(), i);
           if (maybeSvgElement.hasError()) {
             return std::move(maybeSvgElement.error());
           }
           foundRootSvg = true;
 
-          if (auto error = WalkChildren(svgDocument, maybeSvgElement.result(), i, out_warnings)) {
+          if (auto error = WalkChildren(context, svgDocument, maybeSvgElement.result(), i)) {
             return error;
           }
         } else {
@@ -142,18 +139,23 @@ ParseResult<SVGDocument> XMLParser::parseSVG(std::span<char> str,
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;
 
+  XMLParserContext context(std::string_view(str.data(), str.size()), out_warnings);
+
   rapidxml_ns::xml_document<> xmlDocument;
   try {
     xmlDocument.parse<flags>(str.data());
   } catch (rapidxml_ns::parse_error& e) {
+    const size_t offset = e.where<char>() - str.data();
+
     ParseError err;
     err.reason = e.what();
-    err.offset = e.where<char>() - str.data();
+    err.line = context.offsetToLine(offset);
+    err.offset = offset - context.lineOffset(err.line);
     return err;
   }
 
   SVGDocument svgDocument;
-  if (auto error = WalkChildren(svgDocument, std::nullopt, &xmlDocument, out_warnings)) {
+  if (auto error = WalkChildren(context, svgDocument, std::nullopt, &xmlDocument)) {
     return std::move(error.value());
   }
 
