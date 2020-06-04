@@ -5,10 +5,12 @@ cc_library(
     srcs = [
         "svg_document.cc",
         "svg_element.cc",
+        "svg_path_element.cc",
     ],
     hdrs = [
         "svg_document.h",
         "svg_element.h",
+        "svg_path_element.h",
     ],
     visibility = [
         "//:__pkg__",

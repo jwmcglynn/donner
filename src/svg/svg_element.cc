@@ -4,7 +4,6 @@
 
 #include "src/svg/components/class_component.h"
 #include "src/svg/components/id_component.h"
-#include "src/svg/components/path_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 
@@ -130,17 +129,10 @@ void SVGElement::remove() {
   registry_.get().get<TreeComponent>(entity_).remove(registry_);
 }
 
-std::string_view SVGPathElement::d() const {
-  if (const auto* pathComponent = registry_.get().try_get<PathComponent>(entity_)) {
-    return pathComponent->d();
-  } else {
-    return "";
-  }
-}
-
-std::optional<ParseError> SVGPathElement::setD(std::string_view d) {
-  auto& pathComponent = registry_.get().get_or_emplace<PathComponent>(entity_);
-  return pathComponent.setD(d);
+Entity SVGElement::CreateEntity(Registry& registry, ElementType type) {
+  Entity entity = registry.create();
+  registry.emplace<TreeComponent>(entity, type, entity);
+  return entity;
 }
 
 }  // namespace donner

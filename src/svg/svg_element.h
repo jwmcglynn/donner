@@ -4,7 +4,6 @@
 #include <string_view>
 
 #include "src/base/transform.h"
-#include "src/svg/components/tree_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner {
@@ -88,6 +87,8 @@ public:
   bool operator==(const SVGElement& other) const { return entity_ == other.entity_; }
 
 protected:
+  static Entity CreateEntity(Registry& registry, ElementType Type);
+
   std::reference_wrapper<Registry> registry_;
   Entity entity_;
 };
@@ -104,9 +105,7 @@ public:
 
   static SVGSVGElement Create(SVGDocument& document) {
     Registry& registry = document.registry();
-    Entity entity = registry.create();
-    registry.emplace<TreeComponent>(entity, Type, entity);
-    return SVGSVGElement(registry, entity);
+    return SVGSVGElement(registry, CreateEntity(registry, Type));
   }
 };
 
@@ -124,31 +123,10 @@ public:
 
   static SVGUnknownElement Create(SVGDocument& document) {
     Registry& registry = document.registry();
-    Entity entity = registry.create();
-    registry.emplace<TreeComponent>(entity, Type, entity);
-    return SVGUnknownElement(registry, entity);
+    return SVGUnknownElement(registry, CreateEntity(registry, Type));
   }
 };
 
 class SVGGeometryElement : public SVGGraphicsElement {};
-
-class SVGPathElement : public SVGGraphicsElement {
-protected:
-  SVGPathElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
-
-public:
-  static constexpr ElementType Type = ElementType::Path;
-  static constexpr std::string_view Tag = "path";
-
-  static SVGPathElement Create(SVGDocument& document) {
-    Registry& registry = document.registry();
-    Entity entity = registry.create();
-    registry.emplace<TreeComponent>(entity, Type, entity);
-    return SVGPathElement(registry, entity);
-  }
-
-  std::string_view d() const;
-  std::optional<ParseError> setD(std::string_view d);
-};
 
 }  // namespace donner

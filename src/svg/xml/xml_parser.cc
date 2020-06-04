@@ -7,6 +7,7 @@
 
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/svg_element.h"
+#include "src/svg/svg_path_element.h"
 #include "src/svg/xml/details/xml_parser_context.h"
 
 namespace donner {
