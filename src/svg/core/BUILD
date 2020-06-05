@@ -40,6 +40,7 @@ cc_test(
     deps = [
         ":core",
         ":core_test_utils",
+        "//src/base:base_test_utils",
         "@gtest//:gtest_main",
     ],
 )

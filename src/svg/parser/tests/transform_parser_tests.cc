@@ -1,35 +1,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/base/tests/base_test_utils.h"
 #include "src/svg/parser/tests/parse_result_test_utils.h"
 #include "src/svg/parser/transform_parser.h"
 
-using testing::DoubleEq;
-using testing::ElementsAre;
-
 namespace donner {
-
-/**
- * Matches a transform.
- */
-MATCHER_P6(TransformIs, d0, d1, d2, d3, d4, d5, "") {
-  return testing::ExplainMatchResult(ElementsAre(DoubleEq(d0), DoubleEq(d1), DoubleEq(d2),
-                                                 DoubleEq(d3), DoubleEq(d4), DoubleEq(d5)),
-                                     arg.data, result_listener);
-}
-
-/**
- * Matches if a transform is identity.
- */
-MATCHER(TransformIsIdentity, "") {
-  return arg.isIdentity();
-}
-
-template <typename T>
-void PrintTo(const Transform<T>& t, std::ostream* os) {
-  *os << "Transform(" << t.data[0] << " " << t.data[1] << " " << t.data[2] << " " << t.data[3]
-      << " " << t.data[4] << " " << t.data[5] << ")";
-}
 
 TEST(TransformParser, Empty) {
   EXPECT_THAT(TransformParser::parse(""), ParseResultIs(TransformIsIdentity()));

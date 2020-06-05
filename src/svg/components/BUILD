@@ -32,7 +32,7 @@ cc_test(
     ],
     deps = [
         ":components",
-        "//src/svg/core:core_test_utils",
+        "//src/base:base_test_utils",
         "@gtest//:gtest_main",
     ],
 )

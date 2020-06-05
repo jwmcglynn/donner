@@ -2,6 +2,7 @@
 #include <gtest/gtest-death-test.h>
 #include <gtest/gtest.h>
 
+#include "src/base/tests/base_test_utils.h"
 #include "src/svg/core/path_spline.h"
 #include "src/svg/core/tests/path_spline_test_utils.h"
 
@@ -23,10 +24,6 @@ static constexpr Vector2d kVec1(123.0, 456.7);
 static constexpr Vector2d kVec2(78.9, 1011.12);
 static constexpr Vector2d kVec3(-1314.0, 1516.17);
 static constexpr Vector2d kVec4(1819.0, -2021.22);
-
-static Matcher<Boxd> MatchBoxd(Matcher<Vector2d> tl, Matcher<Vector2d> br) {
-  return AllOf(Field(&Boxd::top_left, tl), Field(&Boxd::bottom_right, br));
-}
 
 TEST(PathSplineBuilder, MoveTo) {
   auto builder = PathSpline::Builder();
@@ -274,7 +271,7 @@ TEST(PathSpline, Bounds_Curve) {
   builder.curveTo(Vector2d(8.0, 9.0), Vector2d(2.0, 0.0), Vector2d(0.0, 0.0));
   PathSpline spline = builder.build();
 
-  EXPECT_THAT(spline.bounds(), MatchBoxd(Vector2d(0.0, 0.0), Vector2Near(4.04307, 4.0)));
+  EXPECT_THAT(spline.bounds(), BoxEq(Vector2d(0.0, 0.0), Vector2Near(4.04307, 4.0)));
 }
 
 TEST(PathSpline, Bounds_Ellipse) {
@@ -321,11 +318,11 @@ TEST(PathSpline, StrokeMiterBounds) {
 
   // At a high cutoff, there is a joint.
   EXPECT_THAT(spline.strokeMiterBounds(5.0, 100.0),
-              MatchBoxd(kBottomLeft, Vector2Eq(kXHalfExtent, DoubleNear(110.0, 0.01))));
+              BoxEq(kBottomLeft, Vector2Eq(kXHalfExtent, DoubleNear(110.0, 0.01))));
 
   // Test right above the cutoff.
   EXPECT_THAT(spline.strokeMiterBounds(5.0, kExpectedCutoff + 0.1),
-              MatchBoxd(kBottomLeft, Vector2Eq(kXHalfExtent, DoubleNear(110.0, 0.01))));
+              BoxEq(kBottomLeft, Vector2Eq(kXHalfExtent, DoubleNear(110.0, 0.01))));
 
   // Test below the cutoff.
   EXPECT_THAT(spline.strokeMiterBounds(5.0, kExpectedCutoff - 0.1), kBoundsWithoutMiter);
@@ -368,8 +365,8 @@ TEST(PathSpline, StrokeMiterBounds_ClosePath) {
 
   // At a high cutoff, there is a joint for all three sides.
   const double kBottomMiterX = 8.66027;
-  auto matchSizeWithMiter = MatchBoxd(Vector2Near(-kXHalfExtent - kBottomMiterX, -5.0),
-                                      Vector2Near(kXHalfExtent + kBottomMiterX, 110.0));
+  auto matchSizeWithMiter = BoxEq(Vector2Near(-kXHalfExtent - kBottomMiterX, -5.0),
+                                  Vector2Near(kXHalfExtent + kBottomMiterX, 110.0));
 
   EXPECT_THAT(spline.strokeMiterBounds(5.0, 100.0), matchSizeWithMiter);
 

@@ -1,18 +1,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/base/tests/base_test_utils.h"
 #include "src/svg/components/viewbox_component.h"
-#include "src/svg/core/tests/path_spline_test_utils.h"
 
 using testing::DoubleNear;
 using testing::Pointwise;
 
 namespace donner {
-
-MATCHER_P(TransformEq, other, "") {
-  return testing::ExplainMatchResult(Pointwise(DoubleNear(0.01), other.data), arg.data,
-                                     result_listener);
-}
 
 TEST(ViewboxComponent, Defaults) {
   Boxd viewbox({0, 0}, {100, 100});
