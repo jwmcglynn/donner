@@ -12,6 +12,7 @@ cc_library(
         "id_component.h",
         "path_component.h",
         "registry.h",
+        "sized_element_component.h",
         "transform_component.h",
         "tree_component.h",
         "viewbox_component.h",

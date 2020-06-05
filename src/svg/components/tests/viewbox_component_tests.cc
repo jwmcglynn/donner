@@ -9,9 +9,15 @@ using testing::Pointwise;
 
 namespace donner {
 
+TEST(ViewboxComponent, OptionalNone) {
+  Boxd viewbox({0, 0}, {100, 100});
+  ViewboxComponent component{std::nullopt, PreserveAspectRatio()};
+  EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100})).isIdentity());
+}
+
 TEST(ViewboxComponent, Defaults) {
   Boxd viewbox({0, 0}, {100, 100});
-  ViewboxComponent component{viewbox, PreserveAspectRatio()};
+  ViewboxComponent component{std::make_optional(viewbox), PreserveAspectRatio()};
 
   EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100})).isIdentity());
 
@@ -55,7 +61,7 @@ TEST(ViewboxComponent, Defaults) {
 
 TEST(ViewboxComponent, None) {
   Boxd viewbox({0, 0}, {100, 100});
-  ViewboxComponent component{viewbox, PreserveAspectRatio::None()};
+  ViewboxComponent component{std::make_optional(viewbox), PreserveAspectRatio::None()};
 
   EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100})).isIdentity());
 
@@ -88,8 +94,9 @@ TEST(ViewboxComponent, None) {
 
 TEST(ViewboxComponent, Slice) {
   Boxd viewbox({0, 0}, {100, 100});
-  ViewboxComponent component{viewbox, PreserveAspectRatio{PreserveAspectRatio::Align::XMidYMid,
-                                                          PreserveAspectRatio::MeetOrSlice::Slice}};
+  ViewboxComponent component{std::make_optional(viewbox),
+                             PreserveAspectRatio{PreserveAspectRatio::Align::XMidYMid,
+                                                 PreserveAspectRatio::MeetOrSlice::Slice}};
 
   EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100})).isIdentity());
 
@@ -131,10 +138,10 @@ TEST(ViewboxComponent, Slice) {
 
 TEST(ViewboxComponent, MinMaxMeet) {
   Boxd viewbox({0, 0}, {100, 100});
-  ViewboxComponent componentMin{viewbox,
+  ViewboxComponent componentMin{std::make_optional(viewbox),
                                 PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMin,
                                                     PreserveAspectRatio::MeetOrSlice::Meet}};
-  ViewboxComponent componentMax{viewbox,
+  ViewboxComponent componentMax{std::make_optional(viewbox),
                                 PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMax,
                                                     PreserveAspectRatio::MeetOrSlice::Meet}};
 
@@ -170,10 +177,10 @@ TEST(ViewboxComponent, MinMaxMeet) {
 
 TEST(ViewboxComponent, MinMaxSlice) {
   Boxd viewbox({0, 0}, {100, 100});
-  ViewboxComponent componentMin{viewbox,
+  ViewboxComponent componentMin{std::make_optional(viewbox),
                                 PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMin,
                                                     PreserveAspectRatio::MeetOrSlice::Slice}};
-  ViewboxComponent componentMax{viewbox,
+  ViewboxComponent componentMax{std::make_optional(viewbox),
                                 PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMax,
                                                     PreserveAspectRatio::MeetOrSlice::Slice}};
 

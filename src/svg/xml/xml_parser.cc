@@ -6,6 +6,7 @@
 #include <tuple>
 
 #include "src/svg/parser/transform_parser.h"
+#include "src/svg/parser/viewbox_parser.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/svg_path_element.h"
 #include "src/svg/svg_svg_element.h"
@@ -61,8 +62,15 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
                                                         SVGSVGElement element,
                                                         std::string_view name,
                                                         std::string_view value) {
-  // TODO
-  // viewBox
+  if (name == "viewBox") {
+    auto maybeViewbox = ViewboxParser::parse(value);
+    if (maybeViewbox.hasError()) {
+      context.addSubparserWarning(std::move(maybeViewbox.error()), context.parserOriginFrom(value));
+    } else {
+      element.setViewbox(maybeViewbox.result());
+    }
+  }
+
   // preserveAspectRatio
   // x, y
   // width, height

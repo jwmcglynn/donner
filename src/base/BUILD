@@ -4,6 +4,7 @@ cc_library(
     name = "base",
     hdrs = [
         "box.h",
+        "length.h",
         "math_utils.h",
         "transform.h",
         "utils.h",

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "src/base/box.h"
 #include "src/base/transform.h"
 #include "src/svg/core/preserve_aspect_ratio.h"
@@ -7,7 +9,7 @@
 namespace donner {
 
 struct ViewboxComponent {
-  Boxd viewbox;
+  std::optional<Boxd> viewbox;
   PreserveAspectRatio preserveAspectRatio;
 
   /**

@@ -3,6 +3,7 @@
 #include <functional>
 #include <string_view>
 
+#include "src/base/utils.h"
 #include "src/base/transform.h"
 #include "src/svg/components/registry.h"
 
@@ -85,6 +86,13 @@ public:
   void remove();
 
   bool operator==(const SVGElement& other) const { return entity_ == other.entity_; }
+
+  template<typename Derived>
+  Derived cast() {
+    UTILS_RELEASE_ASSERT(Derived::Type == type());
+    static_assert(sizeof(SVGElement) == sizeof(Derived));
+    return *reinterpret_cast<Derived*>(this);
+  }
 
 protected:
   static Entity CreateEntity(Registry& registry, ElementType Type);
