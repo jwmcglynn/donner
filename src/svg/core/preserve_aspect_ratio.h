@@ -48,6 +48,10 @@ public:
       default: return 0.0;
     }
   }
+
+  bool operator==(const PreserveAspectRatio& other) const {
+    return align == other.align && meetOrSlice == other.meetOrSlice;
+  }
 };
 
 }  // namespace donner

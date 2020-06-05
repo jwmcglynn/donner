@@ -151,8 +151,7 @@ private:
         remaining_.remove_prefix(i + 1);
         return func;
       } else if (isWhitespace(remaining_[i])) {
-        std::string_view func = remaining_.substr(0, i);
-        remaining_.remove_prefix(i);
+        std::string_view func = take(i);
 
         // Skip whitespace between function name and '(', such as "matrix ("
         skipWhitespace();

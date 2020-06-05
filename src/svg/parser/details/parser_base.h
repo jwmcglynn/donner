@@ -9,6 +9,8 @@ public:
   ParserBase(std::string_view str);
 
 protected:
+  std::string_view take(size_t count);
+
   void skipWhitespace();
   void skipCommaWhitespace();
 

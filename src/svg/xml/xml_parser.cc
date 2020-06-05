@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "src/svg/parser/preserve_aspect_ratio_parser.h"
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
 #include "src/svg/svg_element.h"
@@ -71,7 +72,16 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
     }
   }
 
-  // preserveAspectRatio
+  if (name == "preserveAspectRatio") {
+    auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
+    if (maybeAspectRatio.hasError()) {
+      context.addSubparserWarning(std::move(maybeAspectRatio.error()),
+                                  context.parserOriginFrom(value));
+    } else {
+      element.setPreserveAspectRatio(maybeAspectRatio.result());
+    }
+  }
+
   // x, y
   // width, height
 

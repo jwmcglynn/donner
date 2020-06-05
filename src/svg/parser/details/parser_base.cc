@@ -4,6 +4,12 @@ namespace donner {
 
 ParserBase::ParserBase(std::string_view str) : str_(str), remaining_(str) {}
 
+std::string_view ParserBase::take(size_t count) {
+  std::string_view result = remaining_.substr(0, count);
+  remaining_.remove_prefix(count);
+  return result;
+}
+
 void ParserBase::skipWhitespace() {
   while (!remaining_.empty() && isWhitespace(remaining_[0])) {
     remaining_.remove_prefix(1);

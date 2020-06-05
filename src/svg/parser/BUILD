@@ -8,6 +8,7 @@ cc_library(
         "number_parser.cc",
         "parse_error.cc",
         "path_parser.cc",
+        "preserve_aspect_ratio_parser.cc",
         "transform_parser.cc",
         "viewbox_parser.cc",
     ],
@@ -17,6 +18,7 @@ cc_library(
         "parse_error.h",
         "parse_result.h",
         "path_parser.h",
+        "preserve_aspect_ratio_parser.h",
         "transform_parser.h",
         "viewbox_parser.h",
     ],
@@ -46,6 +48,7 @@ cc_test(
     srcs = [
         "tests/number_parser_tests.cc",
         "tests/path_parser_tests.cc",
+        "tests/preserve_aspect_ratio_parser_tests.cc",
         "tests/transform_parser_tests.cc",
         "tests/viewbox_parser_tests.cc",
     ],
