@@ -12,10 +12,7 @@ public:
   static constexpr ElementType Type = ElementType::Path;
   static constexpr std::string_view Tag = "path";
 
-  static SVGPathElement Create(SVGDocument& document) {
-    Registry& registry = document.registry();
-    return SVGPathElement(registry, CreateEntity(registry, Type));
-  }
+  static SVGPathElement Create(SVGDocument& document);
 
   std::string_view d() const;
   std::optional<ParseError> setD(std::string_view d);

@@ -6,11 +6,15 @@ cc_library(
         "svg_document.cc",
         "svg_element.cc",
         "svg_path_element.cc",
+        "svg_svg_element.cc",
+        "svg_unknown_element.cc",
     ],
     hdrs = [
         "svg_document.h",
         "svg_element.h",
         "svg_path_element.h",
+        "svg_svg_element.h",
+        "svg_unknown_element.h",
     ],
     visibility = [
         "//:__pkg__",

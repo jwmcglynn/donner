@@ -1,7 +1,7 @@
 #include "src/svg/svg_document.h"
 
 #include "src/svg/components/tree_component.h"
-#include "src/svg/svg_element.h"
+#include "src/svg/svg_svg_element.h"
 
 namespace donner {
 

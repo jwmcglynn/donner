@@ -4,11 +4,11 @@
 #include <string_view>
 
 #include "src/base/transform.h"
-#include "src/svg/svg_document.h"
+#include "src/svg/components/registry.h"
 
 namespace donner {
 
-class SVGSVGElement;
+class SVGDocument;
 struct ParseError;
 
 class SVGElement {
@@ -93,38 +93,9 @@ protected:
   Entity entity_;
 };
 
-class SVGSVGElement : public SVGElement {
-  friend class SVGDocument;
-
-protected:
-  SVGSVGElement(Registry& registry, Entity entity) : SVGElement(registry, entity) {}
-
-public:
-  static constexpr ElementType Type = ElementType::SVG;
-  static constexpr std::string_view Tag = "svg";
-
-  static SVGSVGElement Create(SVGDocument& document) {
-    Registry& registry = document.registry();
-    return SVGSVGElement(registry, CreateEntity(registry, Type));
-  }
-};
-
 class SVGGraphicsElement : public SVGElement {
 protected:
   SVGGraphicsElement(Registry& registry, Entity entity) : SVGElement(registry, entity) {}
-};
-
-class SVGUnknownElement : public SVGGraphicsElement {
-protected:
-  SVGUnknownElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
-
-public:
-  static constexpr ElementType Type = ElementType::Unknown;
-
-  static SVGUnknownElement Create(SVGDocument& document) {
-    Registry& registry = document.registry();
-    return SVGUnknownElement(registry, CreateEntity(registry, Type));
-  }
 };
 
 class SVGGeometryElement : public SVGGraphicsElement {};

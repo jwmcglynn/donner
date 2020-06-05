@@ -3,7 +3,9 @@
 
 #include <deque>
 
+#include "src/svg/svg_document.h"
 #include "src/svg/svg_element.h"
+#include "src/svg/svg_unknown_element.h"
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
