@@ -25,7 +25,7 @@ constexpr UninitializedTag uninitialized;
  */
 template <typename T>
 struct Transform {
-  T data[6];
+  T data[6];  // For the layout above, stores [a b c d e f]
 
   Transform() {
     data[0] = T(1);
@@ -106,11 +106,37 @@ struct Transform {
     return result;
   }
 
+  /**
+   * Transforms a column vector, applying rotations/scaling but not translation.
+   *
+   * Mathematically:
+   *
+   *         | v.x |
+   *  v' = M | v.y |
+   *         |  0  |
+   *         |  0  |
+   *
+   * @param v Vector to transform.
+   * @result Transformed vector.
+   */
   Vector2<T> transformVector(const Vector2<T>& v) const {
     return Vector2<T>(data[0] * v.x + data[2] * v.y,  //
                       data[1] * v.x + data[3] * v.y);
   }
 
+  /**
+   * Transforms a position given as a vector.
+   *
+   * Mathematically:
+   *
+   *         | v.x |
+   *  v' = M | v.y |
+   *         |  0  |
+   *         |  1  |
+   *
+   * @param v Vector to transform.
+   * @result Transformed vector.
+   */
   Vector2<T> transformPosition(const Vector2<T>& v) const {
     return Vector2<T>(data[0] * v.x + data[2] * v.y + data[4],
                       data[1] * v.x + data[3] * v.y + data[5]);
@@ -129,6 +155,15 @@ struct Transform {
     return result;
   }
 
+  /**
+   * Post-multiplies rhs with this transform.
+   *
+   * Example:
+   *  Take A, transform by T, transform by R is written as
+   *   R * T * A
+   *
+   * @param rhs Other transform.
+   */
   Transform<T> operator*(const Transform<T>& rhs) const {
     Transform<T> result(uninitialized);
     result.data[0] = data[0] * rhs.data[0] + data[1] * rhs.data[2];
@@ -140,6 +175,18 @@ struct Transform {
     return result;
   }
 
+  /**
+   * Post-multiplies rhs with this transform, equivalent to (*this * rhs).
+   *
+   * Note that when applying transformations, transformations typically need to be applied
+   * right-to-left so this operator may be backwards.
+   *
+   * Example:
+   *  Take A, transform by T, transform by R is written as
+   *   R * T * A
+   *
+   * @param rhs Other transform.
+   */
   Transform<T>& operator*=(const Transform<T>& rhs) {
     *this = (*this * rhs);
     return *this;
