@@ -6,7 +6,7 @@ local_repository(
 )
 
 local_repository(
-    name = "absl",
+    name = "com_google_absl",
     path = "third_party/absl",
 )
 

@@ -2,7 +2,6 @@
 build:clang --action_env=CC=clang
 build:clang --action_env=CXX=clang++
 build:clang --action_env=BAZEL_COMPILER=clang
-#build:clang --linkopt=-fuse-ld=lld
 
 # Clang with libc++
 build:libc++ --config=clang
@@ -15,7 +14,7 @@ build:libc++ --define force_libcpp=enabled
 # C++20
 build:c++20 --cxxopt=-std=c++20
 
-build --config=libc++ --config=c++20
+build --config=libc++ --config=c++20 --define absl=1
 
 # Build with CI
 build:ci --action_env=CC=/usr/lib/llvm-10/bin/clang

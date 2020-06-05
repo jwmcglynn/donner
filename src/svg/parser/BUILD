@@ -22,7 +22,7 @@ cc_library(
     deps = [
         "//src/base",
         "//src/svg/core",
-        "@absl//absl/strings",
+        "@com_google_absl//absl/strings",
     ],
 )
 
