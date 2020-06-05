@@ -151,7 +151,6 @@ private:
     }
   }
 
-  // Returns true if a comma was encountered.
   void skipCommaWhitespace() {
     bool foundComma = false;
     while (!remaining_.empty()) {

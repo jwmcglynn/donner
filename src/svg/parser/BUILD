@@ -8,6 +8,7 @@ cc_library(
         "parse_error.cc",
         "path_parser.cc",
         "transform_parser.cc",
+        "viewbox_parser.cc",
     ],
     hdrs = [
         "number_parser.h",
@@ -15,6 +16,7 @@ cc_library(
         "parse_result.h",
         "path_parser.h",
         "transform_parser.h",
+        "viewbox_parser.h",
     ],
     visibility = ["//src/svg:__subpackages__"],
     deps = [
@@ -43,6 +45,7 @@ cc_test(
         "tests/number_parser_tests.cc",
         "tests/path_parser_tests.cc",
         "tests/transform_parser_tests.cc",
+        "tests/viewbox_parser_tests.cc",
     ],
     deps = [
         ":parser",
