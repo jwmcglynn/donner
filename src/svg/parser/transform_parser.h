@@ -13,7 +13,7 @@ public:
   // See https://www.w3.org/TR/css-transforms-1/#svg-transform
   //
   // @param str String corresponding to the SVG transform attribute.
-  static ParseResult<Transformd> parse(std::string_view str);
+  static ParseResult<Transformd> Parse(std::string_view str);
 };
 
 }  // namespace donner

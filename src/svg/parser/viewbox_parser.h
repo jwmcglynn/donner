@@ -23,7 +23,7 @@ public:
    *
    * @return Parsed box.
    */
-  static ParseResult<Boxd> parse(std::string_view d);
+  static ParseResult<Boxd> Parse(std::string_view d);
 };
 
 }  // namespace donner

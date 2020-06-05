@@ -16,7 +16,7 @@ using Command = PathSpline::Command;
 using CommandType = PathSpline::CommandType;
 
 TEST(PathParser, Empty) {
-  ParseResult<PathSpline> result = PathParser::parse("");
+  ParseResult<PathSpline> result = PathParser::Parse("");
   EXPECT_TRUE(result.hasResult());
   EXPECT_FALSE(result.hasError());
 
@@ -24,20 +24,20 @@ TEST(PathParser, Empty) {
 }
 
 TEST(PathParser, InvalidInitialCommand) {
-  EXPECT_THAT(PathParser::parse("z"), ParseErrorIs(HasSubstr("Unexpected command")));
-  EXPECT_THAT(PathParser::parse(" \t\f\r\nz"),
+  EXPECT_THAT(PathParser::Parse("z"), ParseErrorIs(HasSubstr("Unexpected command")));
+  EXPECT_THAT(PathParser::Parse(" \t\f\r\nz"),
               AllOf(ParseErrorIs(HasSubstr("Unexpected command")), ParseErrorPos(0, 5)));
 }
 
 TEST(PathParser, InitialMoveTo) {
-  EXPECT_THAT(PathParser::parse("M"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::parse("M 0"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::parse("M0 0"), NoParseError());
-  EXPECT_THAT(PathParser::parse("M0,0"), NoParseError());
-  EXPECT_THAT(PathParser::parse("M0\n,\t0"), NoParseError());
+  EXPECT_THAT(PathParser::Parse("M"), ParseErrorIs(HasSubstr("Failed to parse number")));
+  EXPECT_THAT(PathParser::Parse("M 0"), ParseErrorIs(HasSubstr("Failed to parse number")));
+  EXPECT_THAT(PathParser::Parse("M0 0"), NoParseError());
+  EXPECT_THAT(PathParser::Parse("M0,0"), NoParseError());
+  EXPECT_THAT(PathParser::Parse("M0\n,\t0"), NoParseError());
 
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1.2 -5");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1.2 -5");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -46,7 +46,7 @@ TEST(PathParser, InitialMoveTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 1e2");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 1e2");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -57,7 +57,7 @@ TEST(PathParser, InitialMoveTo) {
 
 TEST(PathParser, MoveTo) {
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 0 1 1 M 2 2 0 0");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 M 2 2 0 0");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -74,7 +74,7 @@ TEST(PathParser, ClosePath) {
 
   // Immediate ClosePath.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 0 z");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 z");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -85,7 +85,7 @@ TEST(PathParser, ClosePath) {
 
   // ClosePath without any additional commands should have the last MoveTo stripped.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 0 1 1 Z");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 Z");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -97,7 +97,7 @@ TEST(PathParser, ClosePath) {
 
   // ClosePath followed by a line, contains a MoveTo then a LineTo.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 0 1 1 z L -1 -1");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 z L -1 -1");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -111,7 +111,7 @@ TEST(PathParser, ClosePath) {
 
   // ClosePath with the MoveTo overridden.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 0 1 1 Z M -2 -2 -1 -1");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 Z M -2 -2 -1 -1");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -127,7 +127,7 @@ TEST(PathParser, ClosePath) {
 TEST(PathParser, ClosePath_ParseErrors) {
   // Comma at end is a parse error.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M0,0Z,");
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z,");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
@@ -138,7 +138,7 @@ TEST(PathParser, ClosePath_ParseErrors) {
 
   // No numbers at end, there is no implicit command after.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M0,0Z1");
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z1");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
@@ -151,7 +151,7 @@ TEST(PathParser, ClosePath_ParseErrors) {
 TEST(PathParser, LineTo) {
   // Uppercase L -> absolute LineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 L 2 3");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 L 2 3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -162,7 +162,7 @@ TEST(PathParser, LineTo) {
 
   // Lowercase l -> relative LineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("m 1 1 l 2 3");
+    ParseResult<PathSpline> result = PathParser::Parse("m 1 1 l 2 3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -173,7 +173,7 @@ TEST(PathParser, LineTo) {
 
   // Chain without additional letters.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 0 L 1 0 0 1");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 L 1 0 0 1");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -186,7 +186,7 @@ TEST(PathParser, LineTo) {
 
   // Chain with commas.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M0,0L1,0,0,1");
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0L1,0,0,1");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -199,7 +199,7 @@ TEST(PathParser, LineTo) {
 
   // Chain switching relative/absolute
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 0 0 L 1 0 l 1 1 L 0 0");
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 L 1 0 l 1 1 L 0 0");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -212,15 +212,15 @@ TEST(PathParser, LineTo) {
 }
 
 TEST(PathParser, LineTo_Implicit) {
-  EXPECT_THAT(PathParser::parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::parse("M0,0 1,"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::parse("M0,0 1, "), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::parse("M0,0 1,1"), NoParseError());
+  EXPECT_THAT(PathParser::Parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
+  EXPECT_THAT(PathParser::Parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
+  EXPECT_THAT(PathParser::Parse("M0,0 1,"), ParseErrorIs(HasSubstr("Failed to parse number")));
+  EXPECT_THAT(PathParser::Parse("M0,0 1, "), ParseErrorIs(HasSubstr("Failed to parse number")));
+  EXPECT_THAT(PathParser::Parse("M0,0 1,1"), NoParseError());
 
   // Uppercase M -> absolute LineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 2 3");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -231,7 +231,7 @@ TEST(PathParser, LineTo_Implicit) {
 
   // Lowercase m -> relative LineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("m 1 1 2 3");
+    ParseResult<PathSpline> result = PathParser::Parse("m 1 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -243,7 +243,7 @@ TEST(PathParser, LineTo_Implicit) {
 
 TEST(PathParser, LineTo_PartialParse) {
   {
-    ParseResult<PathSpline> result = PathParser::parse("M1,1 2,3,");
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3,");
 
     EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
                                                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
@@ -253,7 +253,7 @@ TEST(PathParser, LineTo_PartialParse) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::parse("M1,1 2,3, 4,");
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3, 4,");
 
     EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
                                                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
@@ -266,7 +266,7 @@ TEST(PathParser, LineTo_PartialParse) {
 TEST(PathParser, HorizontalLineTo) {
   // Uppercase H -> absolute HorizontalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 H 2");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 H 2");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -277,7 +277,7 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Lowercase h -> relative HorizontalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 h 2");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 h 2");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -288,7 +288,7 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Chain between multiple types.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 h 1 h -6 H 0 H -2 h -1");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 h 1 h -6 H 0 H -2 h -1");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -303,7 +303,7 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Chain without additional letters.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 h 1 2 3");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 h 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -316,7 +316,7 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Chain with commas.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M1,1h1,2,3");
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1h1,2,3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -330,7 +330,7 @@ TEST(PathParser, HorizontalLineTo) {
 
 TEST(PathParser, HorizontalLineTo_ParseError) {
   {
-    ParseResult<PathSpline> result = PathParser::parse("M1,1 h1,");
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1 h1,");
 
     EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
                                                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0)),
@@ -340,7 +340,7 @@ TEST(PathParser, HorizontalLineTo_ParseError) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::parse("M1 1 h");
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
@@ -349,7 +349,7 @@ TEST(PathParser, HorizontalLineTo_ParseError) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::parse("M1 1 h,");
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h,");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
@@ -361,7 +361,7 @@ TEST(PathParser, HorizontalLineTo_ParseError) {
 TEST(PathParser, VerticalLineTo) {
   // Uppercase V -> absolute VerticalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 V 2");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 V 2");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -372,7 +372,7 @@ TEST(PathParser, VerticalLineTo) {
 
   // Lowercase v -> relative VerticalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 v 2");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 v 2");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -383,7 +383,7 @@ TEST(PathParser, VerticalLineTo) {
 
   // Chain between multiple types.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 v 1 v -6 V 0 V -2 v -1");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 v 1 v -6 V 0 V -2 v -1");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -398,7 +398,7 @@ TEST(PathParser, VerticalLineTo) {
 
   // Chain without additional letters.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M 1 1 v 1 2 3");
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 v 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -411,7 +411,7 @@ TEST(PathParser, VerticalLineTo) {
 
   // Chain with commas.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M1,1v1,2,3");
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1v1,2,3");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -426,7 +426,7 @@ TEST(PathParser, VerticalLineTo) {
 TEST(PathParser, CurveTo) {
   {
     ParseResult<PathSpline> result =
-        PathParser::parse("M100,200 C100,100 250,100 250,200 S400,300 400,200");
+        PathParser::Parse("M100,200 C100,100 250,100 250,200 S400,300 400,200");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -442,7 +442,7 @@ TEST(PathParser, CurveTo) {
 
 TEST(PathParser, QuadCurveTo) {
   {
-    ParseResult<PathSpline> result = PathParser::parse("M200,300 Q400,50 600,300 T1000,300");
+    ParseResult<PathSpline> result = PathParser::Parse("M200,300 Q400,50 600,300 T1000,300");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -468,7 +468,7 @@ TEST(PathParser, EllipticalArc) {
               C450,117 382,50 300,50 z" />
     */
 
-    ParseResult<PathSpline> result = PathParser::parse("M300,200 h-150 a150,150 0 1,0 150,-150 z");
+    ParseResult<PathSpline> result = PathParser::Parse("M300,200 h-150 a150,150 0 1,0 150,-150 z");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -491,7 +491,7 @@ TEST(PathParser, EllipticalArc) {
             d="M275,175 v-150 C192,25 125,92 125,175 z" />
     */
 
-    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A150,150 0 0,0 125,175 z");
+    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A150,150 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -510,7 +510,7 @@ TEST(PathParser, EllipticalArt_OutOfRangeRadii) {
 
   // Zero radii -> treat as straight line.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A150,0 0 0,0 125,175 z");
+    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A150,0 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -523,7 +523,7 @@ TEST(PathParser, EllipticalArt_OutOfRangeRadii) {
 
   // Negative radii -> take absolute value.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A-150,150 0 0,0 125,175 z");
+    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A-150,150 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -539,7 +539,7 @@ TEST(PathParser, EllipticalArt_OutOfRangeRadii) {
   // than the original 150,150 radius, since it minimizes the radius the solution is closer to 2/3
   // of a circle.
   {
-    ParseResult<PathSpline> result = PathParser::parse("M275,175 v-150 A50,50 0 0,0 125,175 z");
+    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A50,50 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
     PathSpline spline = result.result();
@@ -557,37 +557,37 @@ TEST(PathParser, EllipticalArt_OutOfRangeRadii) {
 
 TEST(PathParser, EllipticalArc_Parsing) {
   // Missing rotation.
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150"),
               ParseErrorIs(HasSubstr("Failed to parse number")));
 
   // Missing flag.
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0"),
               ParseErrorIs("Unexpected end of string when parsing flag"));
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0,"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0,"),
               ParseErrorIs("Unexpected end of string when parsing flag"));
 
   // Invalid flag.
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 a"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 a"),
               ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 2"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2"),
               ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
 
   // Missing end point.
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 0,0"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 0,0"),
               ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150 0 0,0 150"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 0,0 150"),
               ParseErrorIs(HasSubstr("Failed to parse number")));
 
   // No whitespace.
-  EXPECT_THAT(PathParser::parse("M0,0 a150,150,0,0,0,150,150"), NoParseError());
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150,0,0,0,150,150"), NoParseError());
 }
 
 TEST(PathParser, NoWhitespace) {
-  EXPECT_THAT(PathParser::parse("M-5-5"),
+  EXPECT_THAT(PathParser::Parse("M-5-5"),
               ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(-5.0, -5.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0}))));
 
-  EXPECT_THAT(PathParser::parse("M10-20A5.5.3-4 110-.1"),
+  EXPECT_THAT(PathParser::Parse("M10-20A5.5.3-4 110-.1"),
               ParseResultIs(PointsAndCommandsAre(
                   ElementsAre(Vector2d(10.0, -20.0), Vector2Near(28.2462, -40.6282),
                               Vector2Near(40.7991, -52.8959), Vector2Near(38.0377, -47.4006),
@@ -597,7 +597,7 @@ TEST(PathParser, NoWhitespace) {
                               Command{CommandType::CurveTo, 4}))));
 
   EXPECT_THAT(
-      PathParser::parse("M10 20V30H40V50H60Z"),
+      PathParser::Parse("M10 20V30H40V50H60Z"),
       ParseResultIs(PointsAndCommandsAre(
           ElementsAre(Vector2d(10, 20), Vector2d(10, 30), Vector2d(40, 30), Vector2d(40, 50),
                       Vector2d(60, 50)),

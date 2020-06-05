@@ -26,7 +26,7 @@ std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, SVGEle
   } else if (name == "class") {
     element.setClassName(value);
   } else if (name == "transform") {
-    auto maybeTransform = TransformParser::parse(value);
+    auto maybeTransform = TransformParser::Parse(value);
     if (maybeTransform.hasError()) {
       context.addSubparserWarning(std::move(maybeTransform.error()),
                                   context.parserOriginFrom(value));
@@ -63,7 +63,7 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
                                                         std::string_view name,
                                                         std::string_view value) {
   if (name == "viewBox") {
-    auto maybeViewbox = ViewboxParser::parse(value);
+    auto maybeViewbox = ViewboxParser::Parse(value);
     if (maybeViewbox.hasError()) {
       context.addSubparserWarning(std::move(maybeViewbox.error()), context.parserOriginFrom(value));
     } else {
@@ -168,7 +168,7 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
 }
 }  // namespace
 
-ParseResult<SVGDocument> XMLParser::parseSVG(std::span<char> str,
+ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
                                              std::vector<ParseError>* out_warnings) {
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;

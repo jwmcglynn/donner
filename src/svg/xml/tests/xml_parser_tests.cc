@@ -26,7 +26,7 @@ TEST(XmlParser, Simple) {
 </svg>)";
 
   std::vector<ParseError> warnings;
-  EXPECT_THAT(XMLParser::parseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
 
   EXPECT_THAT(warnings, ElementsAre());
 }
@@ -36,7 +36,7 @@ TEST(XmlParser, XmlParseErrors) {
     std::string badXml = R"(<!)";
 
     std::vector<ParseError> warnings;
-    EXPECT_THAT(XMLParser::parseSVG(spanFromString(badXml), &warnings),
+    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(badXml), &warnings),
                 AllOf(ParseErrorPos(1, 2), ParseErrorIs("unexpected end of data")));
   }
 
@@ -46,7 +46,7 @@ TEST(XmlParser, XmlParseErrors) {
 </svg>)";
 
     std::vector<ParseError> warnings;
-    EXPECT_THAT(XMLParser::parseSVG(spanFromString(badXml), &warnings),
+    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(badXml), &warnings),
                 AllOf(ParseErrorPos(2, 17), ParseErrorIs("invalid closing tag name")));
   }
 }
@@ -58,7 +58,7 @@ TEST(XmlParser, Warning) {
 </svg>)";
 
   std::vector<ParseError> warnings;
-  EXPECT_THAT(XMLParser::parseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
   EXPECT_THAT(warnings,
               ElementsAre(ParseWarningIs(2, 24, "Failed to parse number: Invalid argument")));
 }

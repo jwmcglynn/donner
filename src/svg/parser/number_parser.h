@@ -27,7 +27,7 @@ public:
    *
    * @return Result containing the number and the number of characters that were parsed.
    */
-  static ParseResult<Result> parse(std::string_view d);
+  static ParseResult<Result> Parse(std::string_view d);
 };
 
 }  // namespace donner

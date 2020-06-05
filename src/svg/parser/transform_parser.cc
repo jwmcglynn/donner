@@ -1,16 +1,15 @@
 #include "src/svg/parser/transform_parser.h"
 
-#include <span>
-
-#include "src/svg/parser/number_parser.h"
+#include "src/svg/parser/details/parser_base.h"
 
 namespace donner {
-
-class TransformParserImpl {
+class TransformParserImpl : public ParserBase {
 public:
-  TransformParserImpl(std::string_view str) : str_(str), remaining_(str) {}
+  TransformParserImpl(std::string_view str) : ParserBase(str) {}
 
   ParseResult<Transformd> parse() {
+    Transformd transform;
+
     skipWhitespace();
 
     while (!remaining_.empty()) {
@@ -21,7 +20,7 @@ public:
         return std::move(maybeFunc.error());
       }
 
-      // Skip whitespace between function name and '(', such as "matrix ("
+      // Skip whitespace after function open paren, '('.
       skipWhitespace();
 
       const std::string_view func = maybeFunc.result();
@@ -31,7 +30,7 @@ public:
           return std::move(error.value());
         }
 
-        transform_ *= t;
+        transform *= t;
 
       } else if (func == "translate") {
         // Accept either 1 or 2 numbers.
@@ -43,7 +42,7 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, so Ty is implicitly 0.0.
-          transform_ *= Transformd::Translate(Vector2d(maybeTx.result(), 0.0));
+          transform *= Transformd::Translate(Vector2d(maybeTx.result(), 0.0));
         } else {
           skipCommaWhitespace();
 
@@ -52,7 +51,7 @@ public:
             return std::move(maybeTy.error());
           }
 
-          transform_ *= Transformd::Translate(Vector2d(maybeTx.result(), maybeTy.result()));
+          transform *= Transformd::Translate(Vector2d(maybeTx.result(), maybeTy.result()));
         }
 
       } else if (func == "scale") {
@@ -65,7 +64,7 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, use Sx for both x and y.
-          transform_ *= Transformd::Translate(Vector2d(maybeSx.result(), maybeSx.result()));
+          transform *= Transformd::Translate(Vector2d(maybeSx.result(), maybeSx.result()));
         } else {
           skipCommaWhitespace();
 
@@ -74,7 +73,7 @@ public:
             return std::move(maybeSy.error());
           }
 
-          transform_ *= Transformd::Translate(Vector2d(maybeSx.result(), maybeSy.result()));
+          transform *= Transformd::Translate(Vector2d(maybeSx.result(), maybeSy.result()));
         }
 
       } else if (func == "rotate") {
@@ -87,8 +86,8 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, rotation around origin.
-          transform_ *= Transformd::Rotation(maybeRotationDegrees.result() *
-                                             MathConstants<double>::kDegToRad);
+          transform *= Transformd::Rotation(maybeRotationDegrees.result() *
+                                            MathConstants<double>::kDegToRad);
         } else {
           skipCommaWhitespace();
 
@@ -98,10 +97,10 @@ public:
           }
 
           const Vector2d offset(numbers[0], numbers[1]);
-          transform_ *= Transformd::Translate(offset) *
-                        Transformd::Rotation(maybeRotationDegrees.result() *
-                                             MathConstants<double>::kDegToRad) *
-                        Transformd::Translate(-offset);
+          transform *= Transformd::Translate(offset) *
+                       Transformd::Rotation(maybeRotationDegrees.result() *
+                                            MathConstants<double>::kDegToRad) *
+                       Transformd::Translate(-offset);
         }
 
       } else if (func == "skewX") {
@@ -110,7 +109,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform_ *= Transformd::ShearX(maybeNumber.result());
+        transform *= Transformd::ShearX(maybeNumber.result());
 
       } else if (func == "skewY") {
         auto maybeNumber = readNumber();
@@ -118,7 +117,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform_ *= Transformd::ShearY(maybeNumber.result());
+        transform *= Transformd::ShearY(maybeNumber.result());
 
       } else {
         ParseError err;
@@ -141,40 +140,10 @@ public:
       }
     }
 
-    return transform_;
+    return transform;
   }
 
 private:
-  void skipWhitespace() {
-    while (!remaining_.empty() && isWhitespace(remaining_[0])) {
-      remaining_.remove_prefix(1);
-    }
-  }
-
-  void skipCommaWhitespace() {
-    bool foundComma = false;
-    while (!remaining_.empty()) {
-      const char ch = remaining_[0];
-      if (!foundComma && ch == ',') {
-        foundComma = true;
-        remaining_.remove_prefix(1);
-      } else if (isWhitespace(ch)) {
-        remaining_.remove_prefix(1);
-      } else {
-        break;
-      }
-    }
-  }
-
-  bool isWhitespace(char ch) const {
-    // https://www.w3.org/TR/css-transforms-1/#svg-wsp
-    // Either a U+000A LINE FEED, U+000D CARRIAGE RETURN, U+0009 CHARACTER TABULATION, or U+0020
-    // SPACE.
-    return ch == '\t' || ch == ' ' || ch == '\n' || ch == '\r';
-  }
-
-  int currentOffset() { return remaining_.data() - str_.data(); }
-
   ParseResult<std::string_view> readFunction() {
     for (size_t i = 0; i < remaining_.size(); ++i) {
       if (remaining_[i] == '(') {
@@ -184,6 +153,8 @@ private:
       } else if (isWhitespace(remaining_[i])) {
         std::string_view func = remaining_.substr(0, i);
         remaining_.remove_prefix(i);
+
+        // Skip whitespace between function name and '(', such as "matrix ("
         skipWhitespace();
 
         if (remaining_.starts_with('(')) {
@@ -203,46 +174,9 @@ private:
     err.offset = currentOffset();
     return err;
   }
-
-  ParseResult<double> readNumber() {
-    skipWhitespace();
-
-    ParseResult<NumberParser::Result> maybeResult = NumberParser::parse(remaining_);
-    if (maybeResult.hasError()) {
-      ParseError err = std::move(maybeResult.error());
-      err.offset += currentOffset();
-      return err;
-    }
-
-    const NumberParser::Result& result = maybeResult.result();
-    remaining_.remove_prefix(result.consumed_chars);
-    return result.number;
-  }
-
-  std::optional<ParseError> readNumbers(std::span<double> resultStorage) {
-    for (size_t i = 0; i < resultStorage.size(); ++i) {
-      if (i != 0) {
-        skipCommaWhitespace();
-      }
-
-      auto maybeNumber = readNumber();
-      if (maybeNumber.hasError()) {
-        return std::move(maybeNumber.error());
-      }
-
-      resultStorage[i] = maybeNumber.result();
-    }
-
-    return std::nullopt;
-  }
-
-  Transformd transform_;
-
-  const std::string_view str_;
-  std::string_view remaining_;
 };
 
-ParseResult<Transformd> TransformParser::parse(std::string_view str) {
+ParseResult<Transformd> TransformParser::Parse(std::string_view str) {
   TransformParserImpl parser(str);
   return parser.parse();
 }

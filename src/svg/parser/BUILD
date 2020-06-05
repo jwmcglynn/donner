@@ -4,6 +4,7 @@ load("//build:rules.bzl", "donner_cc_fuzzer")
 cc_library(
     name = "parser",
     srcs = [
+        "details/parser_base.cc",
         "number_parser.cc",
         "parse_error.cc",
         "path_parser.cc",
@@ -11,6 +12,7 @@ cc_library(
         "viewbox_parser.cc",
     ],
     hdrs = [
+        "details/parser_base.h",
         "number_parser.h",
         "parse_error.h",
         "parse_result.h",

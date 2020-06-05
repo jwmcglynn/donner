@@ -6,7 +6,7 @@
 
 namespace donner {
 
-ParseResult<NumberParser::Result> NumberParser::parse(std::string_view str) {
+ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str) {
   NumberParser::Result result;
   auto begin = str.begin();
 

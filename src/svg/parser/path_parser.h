@@ -13,7 +13,7 @@ public:
   // See https://www.w3.org/TR/SVG/paths.html#PathData
   //
   // @param d String corresponding to the SVG <path d="..."> parameter.
-  static ParseResult<PathSpline> parse(std::string_view d);
+  static ParseResult<PathSpline> Parse(std::string_view d);
 };
 
 }  // namespace donner

@@ -54,7 +54,7 @@ extern "C" int main(int argc, char* argv[]) {
   file.read(fileData.data(), fileLength);
 
   std::vector<ParseError> warnings;
-  auto maybeResult = XMLParser::parseSVG(fileData, &warnings);
+  auto maybeResult = XMLParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;

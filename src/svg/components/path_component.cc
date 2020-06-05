@@ -9,7 +9,7 @@ std::string_view PathComponent::d() const {
 }
 
 std::optional<ParseError> PathComponent::setD(std::string_view d) {
-  auto maybePath = PathParser::parse(d);
+  auto maybePath = PathParser::Parse(d);
   if (maybePath.hasResult()) {
     d_ = d;
     spline_ = maybePath.result();

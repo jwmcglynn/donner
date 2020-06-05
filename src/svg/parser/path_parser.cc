@@ -6,6 +6,8 @@
 
 namespace donner {
 
+// Note that this doesn't inherit from ParserBase, since it has a slightly different interpretation
+// of isWhitespace per the spec.
 class PathParserImpl {
 public:
   PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}
@@ -168,7 +170,7 @@ private:
   ParseResult<double> readNumber() {
     skipWhitespace();
 
-    ParseResult<NumberParser::Result> maybeResult = NumberParser::parse(remaining_);
+    ParseResult<NumberParser::Result> maybeResult = NumberParser::Parse(remaining_);
     if (maybeResult.hasError()) {
       ParseError err = std::move(maybeResult.error());
       err.offset += currentOffset();
@@ -461,7 +463,7 @@ private:
   Vector2d prev_control_point_;  //!< Previous curve's control point, for use with smooth curves.
 };
 
-ParseResult<PathSpline> PathParser::parse(std::string_view d) {
+ParseResult<PathSpline> PathParser::Parse(std::string_view d) {
   PathParserImpl parser(d);
   return parser.parse();
 }
