@@ -7,6 +7,7 @@ cc_library(
     ],
     hdrs = [
         "path_spline.h",
+        "preserve_aspect_ratio.h",
     ],
     visibility = ["//src/svg:__subpackages__"],
     deps = [

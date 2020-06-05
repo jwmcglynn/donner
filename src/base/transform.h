@@ -113,7 +113,7 @@ struct Transform {
 
   Vector2<T> transformPosition(const Vector2<T>& v) const {
     return Vector2<T>(data[0] * v.x + data[2] * v.y + data[4],
-                      data[1] * v.x + data[3] * v.y + data[4]);
+                      data[1] * v.x + data[3] * v.y + data[5]);
   }
 
   Box<T> transformBox(const Box<T>& box) const {
@@ -151,6 +151,16 @@ struct Transform {
     }
 
     return *this;
+  }
+
+  // Output.
+  friend std::ostream& operator<<(std::ostream& os, const Transform<T>& t) {
+    os << std::endl
+       << "[ " << t.data[0] << "\t" << t.data[2] << "\t0\t" << t.data[4] << std::endl
+       << "  " << t.data[1] << "\t" << t.data[3] << "\t0\t" << t.data[5] << std::endl
+       << "  0\t0\t1\t0" << std::endl
+       << "  0\t0\t0\t1 ]" << std::endl;
+    return os;
   }
 };
 

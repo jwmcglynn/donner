@@ -1,9 +1,9 @@
 #pragma once
 
+#include <ostream>
+
 #include "src/base/math_utils.h"
 #include "src/base/vector2.h"
-
-#include <ostream>
 
 namespace donner {
 
@@ -33,6 +33,11 @@ struct Box {
     addPoint(box.top_left);
     addPoint(box.bottom_right);
   }
+
+  T width() const { return bottom_right.x - top_left.x; }
+  T height() const { return bottom_right.y - top_left.y; }
+
+  Vector2<T> size() const { return Vector2<T>(width(), height()); }
 
   Box<T> operator-(const Vector2<T>& vec) const {
     return Box<T>(top_left - vec, bottom_right - vec);

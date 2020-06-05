@@ -5,6 +5,7 @@ cc_library(
     srcs = [
         "path_component.cc",
         "tree_component.cc",
+        "viewbox_component.cc",
     ],
     hdrs = [
         "class_component.h",
@@ -13,6 +14,7 @@ cc_library(
         "registry.h",
         "transform_component.h",
         "tree_component.h",
+        "viewbox_component.h",
     ],
     visibility = ["//src/svg:__subpackages__"],
     deps = [
@@ -26,9 +28,11 @@ cc_test(
     name = "components_tests",
     srcs = [
         "tests/tree_component_tests.cc",
+        "tests/viewbox_component_tests.cc",
     ],
     deps = [
         ":components",
+        "//src/svg/core:core_test_utils",
         "@gtest//:gtest_main",
     ],
 )
