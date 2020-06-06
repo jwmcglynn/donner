@@ -9,25 +9,25 @@ namespace donner {
 using Align = PreserveAspectRatio::Align;
 using MeetOrSlice = PreserveAspectRatio::MeetOrSlice;
 
-static void PrintTo(PreserveAspectRatio::Align value, std::ostream* os) {
+static void PrintTo(Align value, std::ostream* os) {
   switch (value) {
-    case PreserveAspectRatio::Align::None: *os << "Align::None"; break;
-    case PreserveAspectRatio::Align::XMinYMin: *os << "Align::XMinYMin"; break;
-    case PreserveAspectRatio::Align::XMidYMin: *os << "Align::XMidYMin"; break;
-    case PreserveAspectRatio::Align::XMaxYMin: *os << "Align::XMaxYMin"; break;
-    case PreserveAspectRatio::Align::XMinYMid: *os << "Align::XMinYMid"; break;
-    case PreserveAspectRatio::Align::XMidYMid: *os << "Align::XMidYMid"; break;
-    case PreserveAspectRatio::Align::XMaxYMid: *os << "Align::XMaxYMid"; break;
-    case PreserveAspectRatio::Align::XMinYMax: *os << "Align::XMinYMax"; break;
-    case PreserveAspectRatio::Align::XMidYMax: *os << "Align::XMidYMax"; break;
-    case PreserveAspectRatio::Align::XMaxYMax: *os << "Align::XMaxYMax"; break;
+    case Align::None: *os << "Align::None"; break;
+    case Align::XMinYMin: *os << "Align::XMinYMin"; break;
+    case Align::XMidYMin: *os << "Align::XMidYMin"; break;
+    case Align::XMaxYMin: *os << "Align::XMaxYMin"; break;
+    case Align::XMinYMid: *os << "Align::XMinYMid"; break;
+    case Align::XMidYMid: *os << "Align::XMidYMid"; break;
+    case Align::XMaxYMid: *os << "Align::XMaxYMid"; break;
+    case Align::XMinYMax: *os << "Align::XMinYMax"; break;
+    case Align::XMidYMax: *os << "Align::XMidYMax"; break;
+    case Align::XMaxYMax: *os << "Align::XMaxYMax"; break;
   }
 }
 
-static void PrintTo(PreserveAspectRatio::MeetOrSlice value, std::ostream* os) {
+static void PrintTo(MeetOrSlice value, std::ostream* os) {
   switch (value) {
-    case PreserveAspectRatio::MeetOrSlice::Meet: *os << "MeetOrSlice::Meet"; break;
-    case PreserveAspectRatio::MeetOrSlice::Slice: *os << "MeetOrSlice::Slice"; break;
+    case MeetOrSlice::Meet: *os << "MeetOrSlice::Meet"; break;
+    case MeetOrSlice::Slice: *os << "MeetOrSlice::Slice"; break;
   }
 }
 

@@ -5,6 +5,7 @@ cc_library(
     name = "parser",
     srcs = [
         "details/parser_base.cc",
+        "length_parser.cc",
         "number_parser.cc",
         "parse_error.cc",
         "path_parser.cc",
@@ -14,6 +15,7 @@ cc_library(
     ],
     hdrs = [
         "details/parser_base.h",
+        "length_parser.h",
         "number_parser.h",
         "parse_error.h",
         "parse_result.h",
@@ -46,6 +48,7 @@ cc_library(
 cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/length_parser_tests.cc",
         "tests/number_parser_tests.cc",
         "tests/path_parser_tests.cc",
         "tests/preserve_aspect_ratio_parser_tests.cc",

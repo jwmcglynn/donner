@@ -17,7 +17,7 @@ public:
    * Parse an SVG number.
    *
    * This corresponds from the CSS3 <number-token> production:
-   * https: *www.w3.org/TR/css-syntax-3/#number-token-diagram
+   * https://www.w3.org/TR/css-syntax-3/#number-token-diagram
    *
    * It contains:
    *  * Optionally a sign, '-' or '+'
