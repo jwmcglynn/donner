@@ -63,8 +63,18 @@ TEST(LengthParser, Zero) {
 }
 
 TEST(LengthParser, InvalidUnit) {
+  EXPECT_THAT(LengthParser::Parse("1pp"), ParseErrorIs("Invalid unit"));
+  EXPECT_THAT(LengthParser::Parse("1"), ParseErrorIs("Unit expected"));
   EXPECT_THAT(LengthParser::Parse("0ia"), ParseResultIs(LengthResult(0, Unit::None, 1)));
   EXPECT_THAT(LengthParser::Parse("0pp"), ParseResultIs(LengthResult(0, Unit::None, 1)));
+}
+
+TEST(LengthParser, UnitOptional) {
+  LengthParser::Options options;
+  options.unit_optional = true;
+
+  EXPECT_THAT(LengthParser::Parse("1pp", options), ParseResultIs(LengthResult(1, Unit::None, 1)));
+  EXPECT_THAT(LengthParser::Parse("1", options), ParseResultIs(LengthResult(1, Unit::None, 1)));
 }
 
 TEST(LengthParser, Units) {

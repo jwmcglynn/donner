@@ -14,6 +14,16 @@ public:
     size_t consumed_chars;
   };
 
+  struct Options {
+    /**
+     * If set, the unit specifier is optional, enabling non-zero numbers to be parsed without a
+     * suffix, such as "100".
+     */
+    bool unit_optional = false;
+
+    Options() {}
+  };
+
   /**
    * Parse a CSS <length-percentage>
    *
@@ -33,14 +43,15 @@ public:
    *  <ident-token> = -?-? [ a-z A-Z _ or non-ASCII ] [ a-z A-Z _ - or non-ASCII ]
    *    However, LengthParser is limited to valid suffixes for length, as defined by Length::Unit.
    *
-   *  If the number is 0, the <ident-token> may be omitted since 0 is unitless.
+   * If the number is 0, the <ident-token> may be omitted since 0 is unitless. This can be extended
+   * to all numbers by setting Options::unit_optional=true.
    *
    * Note that this may not consume all input, the caller should handle the result of
    * Result::consumed_chars.
    *
    * @return Result containing the parsed Length and consumed characters.
    */
-  static ParseResult<Result> Parse(std::string_view d);
+  static ParseResult<Result> Parse(std::string_view d, Options options = Options());
 };
 
 }  // namespace donner

@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "src/svg/parser/length_parser.h"
 #include "src/svg/parser/preserve_aspect_ratio_parser.h"
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
@@ -20,8 +21,32 @@ namespace {
 
 using SVGElements = entt::type_list<SVGSVGElement, SVGPathElement>;
 
-std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, SVGElement element,
-                                               std::string_view name, std::string_view value) {
+static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
+                                                   std::string_view value) {
+  LengthParser::Options options;
+  options.unit_optional = true;
+
+  auto maybeLengthResult = LengthParser::Parse(value, options);
+  if (maybeLengthResult.hasError()) {
+    context.addSubparserWarning(std::move(maybeLengthResult.error()),
+                                context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  if (maybeLengthResult.result().consumed_chars != value.size()) {
+    ParseError err;
+    err.reason = "Unexpected data at end of attribute";
+    err.offset = maybeLengthResult.result().consumed_chars;
+    context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  return maybeLengthResult.result().length;
+}
+
+static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, SVGElement element,
+                                                      std::string_view name,
+                                                      std::string_view value) {
   if (name == "id") {
     element.setId(value);
   } else if (name == "class") {
@@ -70,9 +95,7 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
     } else {
       element.setViewbox(maybeViewbox.result());
     }
-  }
-
-  if (name == "preserveAspectRatio") {
+  } else if (name == "preserveAspectRatio") {
     auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
     if (maybeAspectRatio.hasError()) {
       context.addSubparserWarning(std::move(maybeAspectRatio.error()),
@@ -80,10 +103,23 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
     } else {
       element.setPreserveAspectRatio(maybeAspectRatio.result());
     }
+  } else if (name == "x") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == "y") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == "width") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setWidth(length.value());
+    }
+  } else if (name == "height") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setHeight(length.value());
+    }
   }
-
-  // x, y
-  // width, height
 
   return ParseCommonAttribute(context, element, name, value);
 }

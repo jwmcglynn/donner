@@ -6,7 +6,8 @@ namespace donner {
 
 class LengthParserImpl : public ParserBase {
 public:
-  LengthParserImpl(std::string_view str) : ParserBase(str) {}
+  LengthParserImpl(std::string_view str, LengthParser::Options options)
+      : ParserBase(str), options_(options) {}
 
   ParseResult<LengthParser::Result> parse() {
     LengthParser::Result result;
@@ -18,13 +19,14 @@ public:
 
     const double number = maybeNumber.result();
     if (remaining_.empty() || isWhitespace(remaining_[0])) {
-      if (number != 0.0) {
+      if (unitRequired(number)) {
         ParseError err;
         err.reason = "Unit expected";
         err.offset = currentOffset();
         return err;
       }
 
+      result.length.value = number;
       result.consumed_chars = currentOffset();
       return result;
     }
@@ -70,20 +72,27 @@ public:
       }
     }
 
-    if (number != 0.0) {
+    if (unitRequired(number)) {
       ParseError err;
       err.reason = "Invalid unit";
       err.offset = currentOffset();
       return err;
     } else {
+      result.length.value = number;
       result.consumed_chars = currentOffset();
       return result;
     }
   }
+
+  bool unitRequired(double number) const { return !(number == 0.0 || options_.unit_optional); }
+
+private:
+  LengthParser::Options options_;
 };
 
-ParseResult<LengthParser::Result> LengthParser::Parse(std::string_view str) {
-  LengthParserImpl parser(str);
+ParseResult<LengthParser::Result> LengthParser::Parse(std::string_view str,
+                                                      LengthParser::Options options) {
+  LengthParserImpl parser(str, options);
   return parser.parse();
 }
 
