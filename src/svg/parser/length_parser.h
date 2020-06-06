@@ -18,6 +18,12 @@ public:
     /**
      * If set, the unit specifier is optional, enabling non-zero numbers to be parsed without a
      * suffix, such as "100".
+     *
+     * When true, this is equivalent to parsing a [ <length-percentage> | <number> ]. If the unit
+     * specifier is not found, the Length returned will have Unit::None.
+     *
+     * This should be true when parsing presentation attributes, see
+     * https://www.w3.org/TR/SVG/types.html#syntax.
      */
     bool unit_optional = false;
 
