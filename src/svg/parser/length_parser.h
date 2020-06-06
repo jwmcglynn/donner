@@ -44,20 +44,22 @@ public:
    *
    *  <dimension-token> = <number-token> <ident-token>
    *  <percentage-token> = <number-token> %
-   *  <number-token> = The result of NumberParser, a real number in either fixed or scientific
+   *  <number-token> = The result of @ref NumberParser, a real number in either fixed or scientific
    *    notation, with optional '+' or '-' prefix.
    *  <ident-token> = -?-? [ a-z A-Z _ or non-ASCII ] [ a-z A-Z _ - or non-ASCII ]
    *    However, LengthParser is limited to valid suffixes for length, as defined by Length::Unit.
    *
    * If the number is 0, the <ident-token> may be omitted since 0 is unitless. This can be extended
-   * to all numbers by setting Options::unit_optional=true.
+   * to all numbers by setting Options::unit_optional to true.
    *
    * Note that this may not consume all input, the caller should handle the result of
    * Result::consumed_chars.
    *
-   * @return Result containing the parsed Length and consumed characters.
+   * @param str String to parse, not all characters may be consumed.
+   * @param option Parser options.
+   * @return Result containing the Length and the number of characters that were parsed.
    */
-  static ParseResult<Result> Parse(std::string_view d, Options options = Options());
+  static ParseResult<Result> Parse(std::string_view str, Options options = Options());
 };
 
 }  // namespace donner

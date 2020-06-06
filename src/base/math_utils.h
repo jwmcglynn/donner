@@ -1,13 +1,13 @@
 #pragma once
 
-#include "src/base/utils.h"
-
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
 #include <utility>
+
+#include "src/base/utils.h"
 
 namespace donner {
 namespace details {
@@ -75,39 +75,55 @@ struct MathConstants<double> {
   static constexpr double kRadToDeg = 180.0 / kPi;
 };
 
-/// Returns minimum of the provided values.
+/**
+ * Returns minimum of the provided values.
+ */
 template <typename T>
 inline const T& Min(const T& a, const T& b) {
   return a < b ? a : b;
 }
 
-/// Returns minimum of the provided values.
+/**
+ * Returns minimum of the provided values.
+ */
 template <typename T, typename... Args>
 inline const T& Min(const T& a, const T& b, Args&&... args) {
   return Min(Min(a, b), std::forward<Args>(args)...);
 }
 
-/// Returns maximum of the provided values.
+/**
+ * Returns maximum of the provided values.
+ */
 template <typename T>
 inline const T& Max(const T& a, const T& b) {
   return a < b ? b : a;
 }
 
-/// Returns maximum of the provided values.
+/**
+ * Returns maximum of the provided values.
+ */
 template <typename T, typename... Args>
 inline const T& Max(const T& a, const T& b, Args&&... args) {
   return Max(Max(a, b), std::forward<Args>(args)...);
 }
 
-/// Returns abs of two values.
+/**
+ * Returns the absolute value of the number.
+ */
 inline float Abs(float a) {
   return fabsf(a);
 }
 
+/**
+ * Returns the absolute value of the number.
+ */
 inline double Abs(double a) {
   return fabs(a);
 }
 
+/**
+ * Returns the absolute value of the number.
+ */
 template <typename T,
           typename = std::enable_if<std::is_integral<T>::value && std::is_signed<T>::value>>
 inline T Abs(T a) {
@@ -118,16 +134,18 @@ inline T Abs(T a) {
   return a < 0 ? -a : a;
 }
 
-// Rounds a floating point value to an integer.
+/**
+ * Round a floating point value to an integer.
+ */
 template <typename T, typename = std::enable_if<std::is_floating_point<T>::value>>
 inline T Round(T orig) {
   return static_cast<T>(floor(orig + 0.5));
 }
 
 /**
- * Returns linear interpolation of a and b with ratio t.
+ * Returns linear interpolation of @a a and @a b with ratio @a t.
  *
- * @return a if t == 0, b if t == 1, and the linear interpolation else.
+ * @return @a a if t == 0, @a b if t == 1, and the linear interpolation else.
  */
 template <typename T>
 inline T Lerp(T a, T b, const float t) {
@@ -135,19 +153,25 @@ inline T Lerp(T a, T b, const float t) {
   return T(a * (1.0f - t)) + (b * t);
 }
 
-/// Clamps a value between low and high.
+/**
+ * Clamps a value between low and high.
+ */
 template <typename T>
 inline const T Clamp(T value, T low, T high) {
   return Min(Max(value, low), high);
 }
 
-/// Returns if a equals b, taking possible rounding errors into account.
+/**
+ * Returns if @a a equals @a b, taking possible rounding errors into account.
+ */
 template <typename T>
 inline bool NearEquals(T a, T b, T tolerance = std::numeric_limits<T>::epsilon()) {
   return (b <= a + tolerance) && (a <= b + tolerance);
 }
 
-/// Returns if a equals zero, taking rounding errors into account.
+/**
+ * Returns if @a a equals zero, taking rounding errors into account.
+ */
 template <typename T>
 inline bool NearZero(T a, T tolerance = std::numeric_limits<T>::epsilon()) {
   return Abs(a) <= tolerance;
@@ -158,7 +182,9 @@ inline bool NearZero(T a, T tolerance = std::numeric_limits<T>::epsilon()) {
  * that requires only one branch.  Some compilers do this automatically.
  *
  * Example:
- * if (InRange(var, 'a', 'z')) // ...
+ * \code{.cpp}
+ *   if (InRange(var, 'a', 'z')) // ...
+ * \endcode
  */
 template <typename T, typename = std::enable_if<std::is_integral<T>::value>>
 inline bool InRange(T var, T start, T end) {
@@ -177,7 +203,7 @@ struct QuadraticSolution {
 /**
  * Solve a quadratic equation.
  *
- * a x^2 + b x + c = 0
+ * \f$ a x^2 + b x + c = 0 \f$
  *
  * @param a First coefficient.
  * @param b Second coefficient.

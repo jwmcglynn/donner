@@ -9,24 +9,24 @@ public:
   TreeComponent(ElementType type, Entity self) : type_(type), self_(self) {}
 
   /**
-   * Insert newNode as a child, before referenceNode. If referenceNode is entt::null, append the
-   * child.
+   * Insert @a newNode as a child, before @a referenceNode. If @a referenceNode is entt::null,
+   * append the child.
    *
-   * If newNode is already in the tree, it is first removed from its parent. However, if inserting
-   * the child will create a cycle, the behavior is undefined.
+   * If @a newNode is already in the tree, it is first removed from its parent. However, if
+   * inserting the child will create a cycle, the behavior is undefined.
    *
    * @param registry Entity registry.
    * @param newNode New node to insert.
-   * @param referenceNode Nullable, a child of this node to insert newNode before. Must be a child
-   *                      of the current node.
+   * @param referenceNode Nullable, a child of this node to insert @a newNode before. Must be a
+   *                      child of the current node.
    */
   void insertBefore(Registry& registry, Entity newNode, Entity referenceNode);
 
   /**
-   * Append child as a child of the current node.
+   * Append @a child as a child of the current node.
    *
-   * If child is already in the tree, it is first removed from its parent. However, if inserting
-   * the child will create a cycle, the behavior is undefined.
+   * If @a child is already in the tree, it is first removed from its parent. However, if inserting
+   * the @a child will create a cycle, the behavior is undefined.
    *
    * @param registry Entity registry.
    * @param child Node to append.
@@ -34,11 +34,11 @@ public:
   void appendChild(Registry& registry, Entity child);
 
   /**
-   * Replace oldChild with newChild in the tree, removing oldChild and inserting newChild in its
-   * place.
+   * Replace @a oldChild with @a newChild in the tree, removing @a oldChild and inserting @a
+   * newChild in its place.
    *
-   * If newChild is already in the tree, it is first removed from its parent. However, if inserting
-   * the child will create a cycle, the behavior is undefined.
+   * If @a newChild is already in the tree, it is first removed from its parent. However, if
+   * inserting the child will create a cycle, the behavior is undefined.
    *
    * @param registry Entity registry.
    * @param newChild New child to insert.
@@ -47,7 +47,7 @@ public:
   void replaceChild(Registry& registry, Entity newChild, Entity oldChild);
 
   /**
-   * Remove child from this node.
+   * Remove @a child from this node.
    *
    * @param registry Entity registry.
    * @param child Child to remove, must be a child of the current node.

@@ -109,7 +109,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform *= Transformd::ShearX(maybeNumber.result());
+        transform *= Transformd::SkewX(maybeNumber.result());
 
       } else if (func == "skewY") {
         auto maybeNumber = readNumber();
@@ -117,7 +117,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform *= Transformd::ShearY(maybeNumber.result());
+        transform *= Transformd::SkewY(maybeNumber.result());
 
       } else {
         ParseError err;

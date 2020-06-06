@@ -32,13 +32,13 @@ TEST(Transform, Inverse) {
   }
 
   {
-    Transformd t = Transformd::ShearX(0.5);
-    EXPECT_THAT(t.inversed(), TransformEq(Transformd::ShearX(-0.5)));
+    Transformd t = Transformd::SkewX(0.5);
+    EXPECT_THAT(t.inversed(), TransformEq(Transformd::SkewX(-0.5)));
   }
 
   {
-    Transformd t = Transformd::ShearY(0.2);
-    EXPECT_THAT(t.inversed(), TransformEq(Transformd::ShearY(-0.2)));
+    Transformd t = Transformd::SkewY(0.2);
+    EXPECT_THAT(t.inversed(), TransformEq(Transformd::SkewY(-0.2)));
   }
 
   {
@@ -90,7 +90,7 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::ShearX(MathConstants<double>::kHalfPi * 0.5);
+    Transformd t = Transformd::SkewX(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(100, 50));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(150, 100));
@@ -101,7 +101,7 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::ShearY(MathConstants<double>::kHalfPi * -0.5);
+    Transformd t = Transformd::SkewY(MathConstants<double>::kHalfPi * -0.5);
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(50, 0));
     EXPECT_THAT(t.transformVector({100, 50}), Vector2Near(100, -50));

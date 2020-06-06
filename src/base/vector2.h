@@ -28,41 +28,60 @@ struct Vector2 {
   template <typename S>
   Vector2(S x, S y) : x(x), y(y) {}
 
-  // Returns the length of the vector.
+  /** Returns the length of the vector. */
   UTILS_NO_DISCARD T length() const { return (T)sqrt(double(x * x + y * y)); }
-  // Returns the squared length of the vector.
+  /** Returns the squared length of the vector. */
   UTILS_NO_DISCARD T lengthSquared() const { return x * x + y * y; }
 
-  // Returns the distance between two vectors, assuming that each represents a
-  // point in space.
+  /** Returns the distance between two vectors, assuming that each represents a point in space. */
   UTILS_NO_DISCARD T distance(const Vector2<T>& other) const { return (other - *this).length(); }
-  // Returns the squared distance between two vectors, assuming that each
-  // represents a point in space.
+  /**
+   * Returns the squared distance between two vectors, assuming that each represents a point in
+   * space.
+   */
   UTILS_NO_DISCARD T distanceSquared(const Vector2<T>& other) const {
     return (other - *this).lengthSquared();
   }
 
-  // Returns the dot product.
+  /**
+   * Returns the dot product of this vector and @p other
+   */
   UTILS_NO_DISCARD T dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
 
-  // Rotate this vector.
+  /**
+   * Rotate this vector by @p radians
+   *
+   * @param radians Angle in radians.
+   */
   UTILS_NO_DISCARD Vector2<T> rotate(double radians) const {
     return rotate((T)cos(radians), (T)sin(radians));
   }
 
   // Rotate this vector given a pre-computed cosine/sine angle.
+  /**
+   * Rotate this vector by a given pre-computed cosine/sine angle.
+   *
+   * @param cos_result The result of cos(angle)
+   * @param sin_result The result of sin(angle)
+   */
   UTILS_NO_DISCARD Vector2<T> rotate(T cos_result, T sin_result) const {
     return Vector2<T>(x * cos_result - y * sin_result, x * sin_result + y * cos_result);
   }
 
-  // Returns the angle that this vector makes with the +x axis, in radians.
-  // Result is returned in the range of [-pi, pi].
+  /**
+   * Returns the angle that this vector makes with the +x axis, in radians.
+   *
+   * @return Angle in the range of [-pi, pi].
+   */
   UTILS_NO_DISCARD T angle() const { return (T)atan2(double(y), double(x)); }
 
-  // Returns the angle between this vector and the provided vector, or zero if one of the vectors
-  // has zero length.
-  //
-  // Result is returned in the range of [0, pi].
+  /**
+   * Returns the angle between this vector and the provided vector, or zero if one of the vectors
+   * has zero length.
+   *
+   * @param other Other vector.
+   * @return Angle in the range of [0, pi].
+   */
   UTILS_NO_DISCARD T angleWith(const Vector2<T>& other) const {
     const T magProduct = length() * other.length();
     if (NearZero(magProduct)) {
@@ -73,7 +92,9 @@ struct Vector2 {
     return acos(cos_theta);
   }
 
-  // Returns the normalized vector.
+  /**
+   * Returns the normalized form of this vector.
+   */
   UTILS_NO_DISCARD Vector2<T> normalize() const {
     const T len = length();
 

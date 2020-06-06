@@ -17,10 +17,14 @@ struct Box {
   Box(const Box<T>& other) = default;
   Box<T>& operator=(const Box<T>& other) = default;
 
-  // Create an empty box with the given point.
+  /**
+   * Create an empty box with the given point.
+   */
   static Box<T> CreateEmpty(const Vector2<T>& point) { return Box<T>(point, point); }
 
-  // Expand to include the provided point.
+  /**
+   * Expand to include the provided point.
+   */
   void addPoint(const Vector2<T>& point) {
     top_left.x = std::min(point.x, top_left.x);
     top_left.y = std::min(point.y, top_left.y);
@@ -28,7 +32,9 @@ struct Box {
     bottom_right.y = std::max(point.y, bottom_right.y);
   }
 
-  // Adds a bounding box inside this bounding box.
+  /**
+   * Adds a bounding box inside this bounding box.
+   */
   void addBox(const Box<T>& box) {
     addPoint(box.top_left);
     addPoint(box.bottom_right);

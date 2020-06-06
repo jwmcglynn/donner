@@ -21,9 +21,10 @@ public:
    * positive, but the caller must ensure that they are non-zero; a value of zero should disable
    * rendering of the element.
    *
-   * @return Parsed box.
+   * @param str Input string.
+   * @return Parsed box, or an error.
    */
-  static ParseResult<Boxd> Parse(std::string_view d);
+  static ParseResult<Boxd> Parse(std::string_view str);
 };
 
 }  // namespace donner

@@ -25,9 +25,10 @@ public:
    *    decimal digits
    *  * Optionally, an exponent composed of 'e' or 'E' followed by an integer.
    *
+   * @param str String to parse, not all characters may be consumed.
    * @return Result containing the number and the number of characters that were parsed.
    */
-  static ParseResult<Result> Parse(std::string_view d);
+  static ParseResult<Result> Parse(std::string_view str);
 };
 
 }  // namespace donner

@@ -24,10 +24,10 @@ public:
    *    | xMinYMax | xMidYMax | xMaxYMax
    *  <meetOrSlice> = meet | slice
    *
-   *
+   * @param str Input string.
    * @return Parsed PreserveAspectRatio.
    */
-  static ParseResult<PreserveAspectRatio> Parse(std::string_view d);
+  static ParseResult<PreserveAspectRatio> Parse(std::string_view str);
 };
 
 }  // namespace donner

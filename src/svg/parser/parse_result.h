@@ -9,24 +9,32 @@
 namespace donner {
 
 /**
- * A parser result, which may contain a result of type T, or an error, or both.
+ * A parser result, which may contain a result of type @a T, or an error, or both.
  *
  * @tparam T Result type.
  */
 template <typename T>
 class ParseResult {
 public:
-  // Construct from a successful result.
+  /**
+   * Construct from a successful result.
+   */
   ParseResult(T&& result) : result_(std::move(result)) {}
 
-  // Construct from a successful result.
+  /**
+   * Construct from a successful result.
+   */
   ParseResult(const T& result) : result_(result) {}
 
-  // Construct from an error.
+  /**
+   * Construct from an error.
+   */
   ParseResult(ParseError&& error) : error_(std::move(error)) {}
 
-  // Return a result, but also an error. Used in the case where partial parse results may be
-  // returned.
+  /**
+   * Return a result, but also an error. Used in the case where partial parse results may be
+   * returned.
+   */
   ParseResult(T&& result, ParseError&& error)
       : result_(std::move(result)), error_(std::move(error)) {}
 

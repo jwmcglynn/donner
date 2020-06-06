@@ -3,8 +3,8 @@
 #include <functional>
 #include <string_view>
 
-#include "src/base/utils.h"
 #include "src/base/transform.h"
+#include "src/base/utils.h"
 #include "src/svg/components/registry.h"
 
 namespace donner {
@@ -39,20 +39,20 @@ public:
   std::optional<SVGElement> nextSibling();
 
   /**
-   * Insert newNode as a child, before referenceNode. If referenceNode is std::nullopt, append the
-   * child.
+   * Insert @a newNode as a child, before @a referenceNode. If @a referenceNode is std::nullopt,
+   * append the child.
    *
-   * If newNode is already in the tree, it is first removed from its parent. However, if inserting
-   * the child will create a cycle, the behavior is undefined.
+   * If @a newNode is already in the tree, it is first removed from its parent. However, if
+   * inserting the child will create a cycle, the behavior is undefined.
    *
    * @param newNode New node to insert.
-   * @param referenceNode A child of this node to insert newNode before, or std::nullopt. Must be
+   * @param referenceNode A child of this node to insert @a newNode before, or std::nullopt. Must be
    *                      a child of the current node.
    */
   SVGElement insertBefore(SVGElement newNode, std::optional<SVGElement> referenceNode);
 
   /**
-   * Append child as a child of the current node.
+   * Append @a child as a child of the current node.
    *
    * If child is already in the tree, it is first removed from its parent. However, if inserting
    * the child will create a cycle, the behavior is undefined.
@@ -62,11 +62,11 @@ public:
   SVGElement appendChild(SVGElement child);
 
   /**
-   * Replace oldChild with newChild in the tree, removing oldChild and inserting newChild in its
-   * place.
+   * Replace @a oldChild with @a newChild in the tree, removing @a oldChild and inserting @a
+   * newChild in its place.
    *
-   * If newChild is already in the tree, it is first removed from its parent. However, if inserting
-   * the child will create a cycle, the behavior is undefined.
+   * If @a newChild is already in the tree, it is first removed from its parent. However, if
+   * inserting the child will create a cycle, the behavior is undefined.
    *
    * @param newChild New child to insert.
    * @param oldChild Old child to remove, must be a child of the current node.
@@ -74,7 +74,7 @@ public:
   SVGElement replaceChild(SVGElement newChild, SVGElement oldChild);
 
   /**
-   * Remove child from this node.
+   * Remove @a child from this node.
    *
    * @param child Child to remove, must be a child of the current node.
    */
@@ -87,7 +87,7 @@ public:
 
   bool operator==(const SVGElement& other) const { return entity_ == other.entity_; }
 
-  template<typename Derived>
+  template <typename Derived>
   Derived cast() {
     UTILS_RELEASE_ASSERT(Derived::Type == type());
     static_assert(sizeof(SVGElement) == sizeof(Derived));

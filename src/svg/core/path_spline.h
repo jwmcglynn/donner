@@ -20,42 +20,75 @@ public:
   public:
     Builder();
 
-    // Move the starting point of the spline to a new point.
+    /**
+     * Move the starting point of the spline to a new point, creating a new subpath. If this is
+     * called multiple times in a row, subsequent calls will replace the previous.
+     *
+     * @param point Point to move to.
+     */
     Builder& moveTo(const Vector2d& point);
 
-    // Draw a line from the current point to a new point.
+    /**
+     * Draw a line from the current point to a new point.
+     *
+     * @param point End point of the line.
+     */
     Builder& lineTo(const Vector2d& point);
 
-    // Draw a bezier curve from the current point to point3, using point1 and point2 as anchors.
+    /**
+     * Draw a bezier curve from the current point to @p point3, using @p point1 and @p point2 as
+     * anchors.
+     *
+     * @param point1 First control point.
+     * @param point2 Second control point.
+     * @param point3 End point of the curve.
+     * @return Builder&
+     */
     Builder& curveTo(const Vector2d& point1, const Vector2d& point2, const Vector2d& point3);
 
-    // Add an elliptical arc to the path.
-    //
-    // @param radius Radius before rotation.
-    // @param rotationRadians Rotation to the x-axis of the ellipse formed by the arc.
-    // @param largeArcFlag false for arc length <= 180, true for arc >= 180.
-    // @param sweep false for negative angle, true for positive angle.
-    // @param endPoint End point.
+    /**
+     * Add an elliptical arc to the path.
+     *
+     * @param radius Radius before rotation.
+     * @param rotationRadians Rotation to the x-axis of the ellipse formed by the arc.
+     * @param largeArcFlag false for arc length <= 180, true for arc >= 180.
+     * @param sweep false for negative angle, true for positive angle.
+     * @param endPoint End point.
+     */
     Builder& arcTo(const Vector2d& radius, double rotationRadians, bool largeArcFlag,
                    bool sweep_flag, const Vector2d& endPoint);
 
-    // Close the path.
-    //
-    // An automatic straight line is drawn from the current point back to the initial point of
-    // the current subpath.
+    /**
+     * Close the path.
+     *
+     * An automatic straight line is drawn from the current point back to the initial point of
+     * the current subpath.
+     */
     Builder& closePath();
 
     //
     // Complex drawing.
     //
 
-    // Draw an ellipse.
+    /**
+     * Draw an ellipse.
+     *
+     * @param center Center of the ellipse.
+     * @param radius Ellipse radius, for both the x and y axis.
+     */
     Builder& ellipse(const Vector2d& center, const Vector2d& radius);
 
-    // Draw a circle.
+    /**
+     * Draw a circle
+     *
+     * @param center Center of the circle.
+     * @param radius Radius.
+     */
     Builder& circle(const Vector2d& center, double radius);
 
-    // Construct the PathSpline.
+    /**
+     * @brief Construct the PathSpline.
+     */
     PathSpline build();
 
   private:
@@ -76,39 +109,52 @@ public:
 
   size_t size() const { return commands_.size(); }
 
-  // Returns the bounding box for this spline.
+  /**
+   * Returns the bounding box for this spline.
+   */
   Boxd bounds() const;
 
-  // Get the bounds of critical points created by miter joints when applying a stroke to this path.
-  //
-  // @param strokeWidth Width of stroke.
-  // @param miterLimit Miter limit of the stroke.
+  /**
+   * Get the bounds of critical points created by miter joints when applying a stroke to this path.
+   *
+   * @param strokeWidth Width of stroke.
+   * @param miterLimit Miter limit of the stroke.
+   */
   Boxd strokeMiterBounds(double strokeWidth, double miterLimit) const;
 
-  // Get a point on the spline.
-  //
-  // @param idx Spline index.
-  // @param t Position on spline, between 0.0 and 1.0.
+  /**
+   * Get a point on the spline.
+   *
+   * @param index Spline index.
+   * @param t Position on spline, between 0.0 and 1.0.
+   * @return Vector2d
+   */
   Vector2d pointAt(size_t index, double t) const;
 
-  // Get the tangent vector on the spline.
-  //
-  // @param idx Spline index.
-  // @param t Position on spline, between 0.0 and 1.0.
+  /**
+   * Get the tangent vector on the spline.
+   *
+   * @param index Spline index.
+   * @param t Position on spline, between 0.0 and 1.0.
+   */
   Vector2d tangentAt(size_t index, double t) const;
 
-  // Get the normal vector on the spline.
-  //
-  // @param idx Spline index.
-  // @param t Position on spline, between 0.0 and 1.0.
+  /**
+   * Get the normal vector on the spline.
+   *
+   * @param index Spline index.
+   * @param t Position on spline, between 0.0 and 1.0.
+   */
   Vector2d normalAt(size_t index, double t) const;
 
 private:
   PathSpline(std::vector<Vector2d>&& points, std::vector<Command>&& commands);
 
-  // Get the start point of a command.
-  //
-  // @param idx Spline index.
+  /**
+   * Get the start point of a command.
+   *
+   * @param index Spline index.
+   */
   Vector2d startPoint(size_t index) const;
 
   std::vector<Vector2d> points_;
