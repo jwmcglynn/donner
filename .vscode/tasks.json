@@ -1,0 +1,90 @@
+{
+  // See https://go.microsoft.com/fwlink/?LinkId=733558
+  // for the documentation about the tasks.json format
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "xml_tool",
+      "type": "shell",
+      "command": "bazel",
+      "problemMatcher": [],
+      "args": [
+        "run",
+        "-c",
+        "dbg",
+        "--config=asan",
+        "//src/svg/xml:xml_tool",
+        "--",
+        "${workspaceFolder}/src/svg/xml/testdata/e-path-034.svg"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+    },
+    {
+      "label": "svg",
+      "type": "shell",
+      "command": "bazel",
+      "problemMatcher": [],
+      "args": [
+        "build",
+        "//src/svg",
+      ],
+      "group": "build"
+    },
+    {
+      "label": "base_tests",
+      "type": "shell",
+      "command": "bazel build //src/base:base_tests -c dbg",
+      "problemMatcher": []
+    },
+    {
+      "label": "core_tests",
+      "type": "shell",
+      "command": "bazel build //src/svg/core:core_tests -c dbg",
+      "problemMatcher": []
+    },
+    {
+      "label": "parser_tests",
+      "type": "shell",
+      "command": "bazel build //src/svg/parser:parser_tests -c dbg",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "components_tests",
+      "type": "shell",
+      "command": "bazel build //src/svg/components:components_tests -c dbg",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "xml_tests",
+      "type": "shell",
+      "command": "bazel build //src/svg/xml:xml_tests -c dbg",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "xml_details_tests",
+      "type": "shell",
+      "command": "bazel build //src/svg/xml:xml_details_tests -c dbg",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "svg_tests",
+      "type": "shell",
+      "command": "bazel build //src/svg:svg_tests -c dbg",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+    }
+  ]
+}

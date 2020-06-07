@@ -1,0 +1,47 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Launch",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/core_tests",
+      "args": [
+        "--gtest_break_on_failure"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "xml_tool",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/xml/xml_tool",
+      "args": [
+        "${workspaceFolder}/src/svg/xml/testdata/e-path-034.svg"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "path_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/path_parser_fuzzer",
+      "args": [
+        "${workspaceFolder}/crash-f7da20280d80e3cdd3fa6b1d67e5cfc09ac4498a"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}
