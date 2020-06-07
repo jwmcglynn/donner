@@ -4,7 +4,7 @@ cc_library(
     name = "xml",
     srcs = ["xml_parser.cc"],
     hdrs = ["xml_parser.h"],
-    visibility = ["//src/svg:__pkg__"],
+    visibility = ["//visibility:public"],
     deps = [
         ":xml_details",
         "//src/svg",

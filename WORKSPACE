@@ -21,3 +21,27 @@ git_repository(
     remote = "https://github.com/skypjack/entt.git",
     tag = "v3.4.0",
 )
+
+git_repository(
+    name = "io_bazel_rules_rust",
+    commit = "ddd8dae62649980104ec0105a4e46d03f375cce8",
+    remote = "https://github.com/bazelbuild/rules_rust.git",
+)
+
+git_repository(
+    name = "bazel_skylib",
+    commit = "560d7b2359aecb066d81041cb532b82d7354561b",
+    remote = "https://github.com/bazelbuild/bazel-skylib.git",
+)
+
+load("@io_bazel_rules_rust//rust:repositories.bzl", "rust_repositories")
+
+rust_repositories(version = "1.44.0")
+
+load("@io_bazel_rules_rust//:workspace.bzl", "bazel_version")
+
+bazel_version(name = "bazel_version")
+
+load("//third_party/pathfinder:crates.bzl", "raze_fetch_remote_crates")
+
+raze_fetch_remote_crates()

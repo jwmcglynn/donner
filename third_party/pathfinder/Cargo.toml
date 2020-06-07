@@ -1,0 +1,64 @@
+[package]
+name = "pathfinder"
+version = "0.0.0"
+
+# Mandatory (or Cargo tooling is unhappy)
+[lib]
+path = "fake_lib.rs"
+
+[dependencies]
+pathfinder_c = { git = "https://github.com/servo/pathfinder.git", branch = "master" }
+
+[patch.crates-io]
+pathfinder_geometry = { git = "https://github.com/servo/pathfinder.git", branch = "master" }
+pathfinder_simd = { git = "https://github.com/servo/pathfinder.git", branch = "master" }
+font-kit = { git = "https://github.com/jwmcglynn/font-kit.git", branch = "v0.6.0" }
+
+[raze.crates.gl.'0.14.0']
+gen_buildrs = true
+
+[raze.crates.pathfinder_resources.'0.5.0']
+gen_buildrs = true
+buildrs_build_script_srcs_attr = "glob([\"resources/debug-fonts/*\", \"resources/shaders/**/*\", \"resources/textures/*\"]) + [\"resources/MANIFEST\", \"resources/Cargo.toml\"]"
+
+[raze.crates.pathfinder_c.'0.1.0']
+gen_buildrs = true
+patch_args = ["-p1"]
+patches = [
+  "//third_party/pathfinder:pathfinder_c.patch",
+]
+
+[raze.crates.khronos_api.'3.1.0']
+gen_buildrs = true
+data_attr = "glob([\"api*/**/*\"])"
+
+[raze.crates.syn.'1.0.30']
+gen_buildrs = true
+
+[raze.crates.servo-freetype-sys.'4.0.5']
+additional_build_file = "servo_freetype_sys_patch.BUILD"
+additional_deps = [
+  ":freetype2",
+]
+
+[raze.crates.proc-macro2.'1.0.18']
+additional_flags = [
+    "--cfg=use_proc_macro",
+]
+
+[raze.crates.harfbuzz-sys.'0.3.4']
+additional_build_file = "harfbuzz_sys_patch.BUILD"
+additional_deps = [
+  ":harfbuzz",
+]
+
+[raze.crates.image.'0.23.4']
+gen_buildrs = true
+data_attr = "[\"README.md\"]"
+
+[raze]
+# The WORKSPACE relative path to the Cargo.toml working directory.
+workspace_path = "//third_party/pathfinder"
+# The target to generate BUILD rules for.
+target = "x86_64-unknown-linux-gnu"
+genmode = "Remote"
