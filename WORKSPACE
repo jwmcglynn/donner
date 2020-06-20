@@ -24,8 +24,8 @@ git_repository(
 
 git_repository(
     name = "io_bazel_rules_rust",
-    commit = "ddd8dae62649980104ec0105a4e46d03f375cce8",
-    remote = "https://github.com/bazelbuild/rules_rust.git",
+    commit = "7cf9a3fc467f547b878f7d4065fcd8737da38803",
+    remote = "https://github.com/jwmcglynn/rules_rust.git",
 )
 
 git_repository(
@@ -36,7 +36,7 @@ git_repository(
 
 load("@io_bazel_rules_rust//rust:repositories.bzl", "rust_repositories")
 
-rust_repositories(version = "1.44.0")
+rust_repositories(version = "1.44.0", cargo_version = "0.45.0")
 
 load("@io_bazel_rules_rust//:workspace.bzl", "bazel_version")
 

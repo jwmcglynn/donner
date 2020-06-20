@@ -46,6 +46,8 @@ genrule(
     outs = ["pathfinder_c_out_dir_outputs.tar.gz"],
     tools = [
       ":pathfinder_c_build_script",
+      "@rust_linux_x86_64//:cargo",
+      "@rust_linux_x86_64//:rustc",
     ],
     tags = ["no-sandbox"],
     cmd = "mkdir -p $$(dirname $@)/pathfinder_c_out_dir_outputs/;"
@@ -57,7 +59,9 @@ genrule(
         + " export OUT_DIR=$$PWD/$$(dirname $@)/pathfinder_c_out_dir_outputs;"
         + " export BINARY_PATH=\"$$PWD/$(location :pathfinder_c_build_script)\";"
         + " export OUT_TAR=$$PWD/$@;"
-        + " cd $$(dirname $(location :c/Cargo.toml)) && $$BINARY_PATH && tar -czf $$OUT_TAR -C $$OUT_DIR .)"
+        + " export CARGO=\"$$PWD/$(location @rust_linux_x86_64//:cargo)\";"
+        + " export RUSTC=\"$$PWD/$(location @rust_linux_x86_64//:rustc)\";"
+        + " cd $$(dirname $(location :c/Cargo.toml)) && $$BINARY_PATH && tar -czf $$OUT_TAR -C $$OUT_DIR .)",
 )
 
 
