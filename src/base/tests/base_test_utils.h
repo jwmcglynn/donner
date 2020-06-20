@@ -44,8 +44,9 @@ MATCHER_P(TransformEq, other, "") {
  */
 MATCHER_P6(TransformIs, d0, d1, d2, d3, d4, d5, "") {
   return testing::ExplainMatchResult(
-      testing::ElementsAre(testing::DoubleEq(d0), testing::DoubleEq(d1), testing::DoubleEq(d2),
-                           testing::DoubleEq(d3), testing::DoubleEq(d4), testing::DoubleEq(d5)),
+      testing::ElementsAre(testing::DoubleNear(d0, 0.0001), testing::DoubleNear(d1, 0.0001),
+                           testing::DoubleNear(d2, 0.0001), testing::DoubleNear(d3, 0.0001),
+                           testing::DoubleNear(d4, 0.0001), testing::DoubleNear(d5, 0.0001)),
       arg.data, result_listener);
 }
 

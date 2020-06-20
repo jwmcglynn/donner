@@ -48,8 +48,8 @@ struct Transform {
    * @param theta Angle in radians.
    */
   static Transform Rotation(T theta) {
-    const T sin_val = (T)sin(theta);
-    const T cos_val = (T)cos(theta);
+    const T sin_val = std::sin(theta);
+    const T cos_val = std::cos(theta);
 
     Transform<T> result(uninitialized);
     result.data[0] = cos_val;
@@ -96,7 +96,7 @@ struct Transform {
    * @param theta Angle in radians.
    */
   static Transform SkewX(T theta) {
-    const T shear = (T)tan(theta);
+    const T shear = std::tan(theta);
 
     Transform<T> result;
     result.data[2] = shear;
@@ -110,7 +110,7 @@ struct Transform {
    * @param theta Angle in radians.
    */
   static Transform SkewY(T theta) {
-    const T shear = (T)tan(theta);
+    const T shear = std::tan(theta);
 
     Transform<T> result;
     result.data[1] = shear;
@@ -249,7 +249,8 @@ struct Transform {
 
   // Output.
   friend std::ostream& operator<<(std::ostream& os, const Transform<T>& t) {
-    os << std::endl
+    os << "matrix(" << t.data[0] << " " << t.data[1] << " " << t.data[2] << " " << t.data[3] << " "
+       << t.data[4] << " " << t.data[5] << ") => " << std::endl
        << "[ " << t.data[0] << "\t" << t.data[2] << "\t0\t" << t.data[4] << std::endl
        << "  " << t.data[1] << "\t" << t.data[3] << "\t0\t" << t.data[5] << std::endl
        << "  0\t0\t1\t0" << std::endl

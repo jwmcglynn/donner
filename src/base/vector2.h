@@ -54,7 +54,7 @@ struct Vector2 {
    * @param radians Angle in radians.
    */
   UTILS_NO_DISCARD Vector2<T> rotate(double radians) const {
-    return rotate((T)cos(radians), (T)sin(radians));
+    return rotate(std::cos(radians), std::sin(radians));
   }
 
   // Rotate this vector given a pre-computed cosine/sine angle.
@@ -89,7 +89,7 @@ struct Vector2 {
     }
 
     const T cos_theta = dot(other) / magProduct;
-    return acos(cos_theta);
+    return std::acos(cos_theta);
   }
 
   /**

@@ -116,11 +116,11 @@ static void ComputeMiter(Boxd& box, const Vector2d& currentPoint, const Vector2d
 
   // If we're under the miter limit, the miter applies. However, don't apply it if the tangents are
   // colinear, since it would not apply in a consistent direction.
-  const double miterLength = strokeWidth / sin(intersectionAngle * 0.5);
+  const double miterLength = strokeWidth / std::sin(intersectionAngle * 0.5);
   if (miterLength < miterLimit && !NearEquals(intersectionAngle, MathConstants<double>::kPi)) {
     // We haven't exceeded the miter limit, compute the extrema.
     const double jointAngle = (tangent0 - tangent1).angle();
-    box.addPoint(currentPoint + miterLength * Vector2d(cos(jointAngle), sin(jointAngle)));
+    box.addPoint(currentPoint + miterLength * Vector2d(std::cos(jointAngle), std::sin(jointAngle)));
   }
 }
 
@@ -437,8 +437,8 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
   }
 
   // X-axis of the arc.
-  const double sinRotation = sin(rotationRadians);
-  const double cosRotation = cos(rotationRadians);
+  const double sinRotation = std::sin(rotationRadians);
+  const double cosRotation = std::cos(rotationRadians);
 
   // Rotate the extent to find the major axis.
   const Vector2d extent = (currentPoint - endPoint) * 0.5;
@@ -461,7 +461,7 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
   }
 
   k = Clamp(intersectionStart.x / k, -1.0, 1.0);
-  double theta = acos(k);
+  double theta = std::acos(k);
   if (intersectionStart.y < 0.0) {
     theta = -theta;
   }
@@ -474,7 +474,7 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
 
   k = Clamp(intersectionStart.dot(intersectionEnd) / k, -1.0, 1.0);
 
-  double deltaTheta = acos(k);
+  double deltaTheta = std::acos(k);
   if (intersectionStart.x * intersectionEnd.y - intersectionEnd.x * intersectionStart.y < 0.0) {
     deltaTheta = -deltaTheta;
   }
@@ -501,13 +501,13 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
     const double sinHalfThetaHalf = sin(thetahalf * 0.5);
     const double t = (8.0 / 3.0) * sinHalfThetaHalf * sinHalfThetaHalf / sin(thetahalf);
 
-    const double cos_thetaStart = cos(thetaStart);
-    const double sin_thetaStart = sin(thetaStart);
+    const double cos_thetaStart = std::cos(thetaStart);
+    const double sin_thetaStart = std::sin(thetaStart);
     const Vector2d point1 = ellipseRadius * Vector2d(cos_thetaStart - t * sin_thetaStart,
                                                      sin_thetaStart + t * cos_thetaStart);
 
-    const double cos_thetaEnd = cos(thetaEnd);
-    const double sin_thetaEnd = sin(thetaEnd);
+    const double cos_thetaEnd = std::cos(thetaEnd);
+    const double sin_thetaEnd = std::sin(thetaEnd);
     const Vector2d point3 = ellipseRadius * Vector2d(cos_thetaEnd, sin_thetaEnd);
 
     const Vector2d point2 = point3 + ellipseRadius * Vector2d(t * sin_thetaEnd, -t * cos_thetaEnd);

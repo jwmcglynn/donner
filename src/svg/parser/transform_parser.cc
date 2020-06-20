@@ -8,11 +8,18 @@ public:
   TransformParserImpl(std::string_view str) : ParserBase(str) {}
 
   ParseResult<Transformd> parse() {
+    bool hasFunction = false;
     Transformd transform;
 
     skipWhitespace();
 
     while (!remaining_.empty()) {
+      if (hasFunction && remaining_[0] == ',') {
+        // Skip optional comma.
+        remaining_.remove_prefix(1);
+        skipWhitespace();
+      }
+
       const int functionStart = currentOffset();
 
       ParseResult<std::string_view> maybeFunc = readFunction();
@@ -64,7 +71,7 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, use Sx for both x and y.
-          transform *= Transformd::Translate(Vector2d(maybeSx.result(), maybeSx.result()));
+          transform *= Transformd::Scale(Vector2d(maybeSx.result(), maybeSx.result()));
         } else {
           skipCommaWhitespace();
 
@@ -73,7 +80,7 @@ public:
             return std::move(maybeSy.error());
           }
 
-          transform *= Transformd::Translate(Vector2d(maybeSx.result(), maybeSy.result()));
+          transform *= Transformd::Scale(Vector2d(maybeSx.result(), maybeSy.result()));
         }
 
       } else if (func == "rotate") {
@@ -97,10 +104,10 @@ public:
           }
 
           const Vector2d offset(numbers[0], numbers[1]);
-          transform *= Transformd::Translate(offset) *
+          transform *= Transformd::Translate(-offset) *
                        Transformd::Rotation(maybeRotationDegrees.result() *
                                             MathConstants<double>::kDegToRad) *
-                       Transformd::Translate(-offset);
+                       Transformd::Translate(offset);
         }
 
       } else if (func == "skewX") {
@@ -109,7 +116,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform *= Transformd::SkewX(maybeNumber.result());
+        transform *= Transformd::SkewX(maybeNumber.result() * MathConstants<double>::kDegToRad);
 
       } else if (func == "skewY") {
         auto maybeNumber = readNumber();
@@ -117,7 +124,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform *= Transformd::SkewY(maybeNumber.result());
+        transform *= Transformd::SkewY(maybeNumber.result() * MathConstants<double>::kDegToRad);
 
       } else {
         ParseError err;
@@ -132,6 +139,7 @@ public:
       if (remaining_.starts_with(')')) {
         remaining_.remove_prefix(1);
         skipWhitespace();
+        hasFunction = true;
       } else {
         ParseError err;
         err.reason = "Expected ')'";
