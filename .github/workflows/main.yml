@@ -35,6 +35,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y clang-10 libc++-10-dev libc++abi-10-dev
 
+    - name: Install OSMesa
+      run: |
+        sudo apt-get install -y libosmesa6-dev
+
     - name: Build
       run: |
         "${GITHUB_WORKSPACE}/bin/bazel" build --config=ci //...
