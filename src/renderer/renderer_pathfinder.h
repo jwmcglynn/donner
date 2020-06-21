@@ -16,15 +16,19 @@ public:
   RendererPathfinder(GetProcAddressFunction getProcAddressFunction, int width, int height);
   ~RendererPathfinder();
 
-  void draw(const SVGDocument& document);
-  void draw(const Registry& registry, Entity entity);
+  void draw(SVGDocument& document);
   void drawPath(const PathSpline& spline);
 
   void render();
 
 private:
+  void computePaths(Registry& registry);
+  void draw(Registry& registry, Entity entity);
+
   static const void* LoadGLFunction(const char* name, void* userdata);
 
+  int width_;
+  int height_;
   PFGLRendererRef renderer_;
   PFCanvasRef canvas_;
 };

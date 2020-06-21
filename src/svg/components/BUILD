@@ -3,14 +3,17 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 cc_library(
     name = "components",
     srcs = [
+        "computed_path_component.cc",
         "path_component.cc",
         "tree_component.cc",
         "viewbox_component.cc",
     ],
     hdrs = [
         "class_component.h",
+        "computed_path_component.h",
         "id_component.h",
         "path_component.h",
+        "rect_component.h",
         "registry.h",
         "sized_element_component.h",
         "transform_component.h",

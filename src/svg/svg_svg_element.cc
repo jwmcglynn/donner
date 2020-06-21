@@ -11,17 +11,17 @@ SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
   return SVGSVGElement(registry, CreateEntity(registry, Type));
 }
 
-void SVGSVGElement::setViewbox(Boxd viewbox) {
-  registry_.get().get_or_emplace<ViewboxComponent>(entity_).viewbox = viewbox;
+void SVGSVGElement::setViewbox(std::optional<Boxd> viewbox) {
+  if (viewbox) {
+    registry_.get().get_or_emplace<ViewboxComponent>(entity_).viewbox = viewbox;
+  } else {
+    registry_.get().remove_if_exists<ViewboxComponent>(entity_);
+  }
 }
 
 void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
   registry_.get().get_or_emplace<ViewboxComponent>(entity_).preserveAspectRatio =
       preserveAspectRatio;
-}
-
-void SVGSVGElement::clearViewbox() {
-  registry_.get().remove_if_exists<ViewboxComponent>(entity_);
 }
 
 void SVGSVGElement::setX(Lengthd value) {
@@ -32,11 +32,11 @@ void SVGSVGElement::setY(Lengthd value) {
   registry_.get().get_or_emplace<SizedElementComponent>(entity_).y = value;
 }
 
-void SVGSVGElement::setWidth(Lengthd value) {
+void SVGSVGElement::setWidth(std::optional<Lengthd> value) {
   registry_.get().get_or_emplace<SizedElementComponent>(entity_).width = value;
 }
 
-void SVGSVGElement::setHeight(Lengthd value) {
+void SVGSVGElement::setHeight(std::optional<Lengthd> value) {
   registry_.get().get_or_emplace<SizedElementComponent>(entity_).height = value;
 }
 
@@ -66,14 +66,14 @@ Lengthd SVGSVGElement::y() const {
   return component ? component->y : Lengthd();
 }
 
-Lengthd SVGSVGElement::width() const {
+std::optional<Lengthd> SVGSVGElement::width() const {
   const auto* component = registry_.get().try_get<SizedElementComponent>(entity_);
-  return component ? component->width : Lengthd();
+  return component ? component->width : std::nullopt;
 }
 
-Lengthd SVGSVGElement::height() const {
+std::optional<Lengthd> SVGSVGElement::height() const {
   const auto* component = registry_.get().try_get<SizedElementComponent>(entity_);
-  return component ? component->height : Lengthd();
+  return component ? component->height : std::nullopt;
 }
 
 }  // namespace donner

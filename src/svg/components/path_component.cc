@@ -8,22 +8,8 @@ std::string_view PathComponent::d() const {
   return d_;
 }
 
-std::optional<ParseError> PathComponent::setD(std::string_view d) {
-  auto maybePath = PathParser::Parse(d);
-  if (maybePath.hasResult()) {
-    d_ = d;
-    spline_ = maybePath.result();
-  }
-
-  if (maybePath.hasError()) {
-    return std::move(maybePath.error());
-  } else {
-    return std::nullopt;
-  }
-}
-
-const std::optional<PathSpline>& PathComponent::spline() const {
-  return spline_;
+void PathComponent::setD(std::string_view d) {
+  d_ = d;
 }
 
 }  // namespace donner

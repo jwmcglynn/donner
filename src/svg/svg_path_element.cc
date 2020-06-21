@@ -1,5 +1,6 @@
 #include "src/svg/svg_path_element.h"
 
+#include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/svg_document.h"
 
@@ -20,7 +21,10 @@ std::string_view SVGPathElement::d() const {
 
 std::optional<ParseError> SVGPathElement::setD(std::string_view d) {
   auto& pathComponent = registry_.get().get_or_emplace<PathComponent>(entity_);
-  return pathComponent.setD(d);
+  pathComponent.setD(d);
+
+  auto& computed = registry_.get().get_or_emplace<ComputedPathComponent>(entity_);
+  return computed.setFromDString(d);
 }
 
 }  // namespace donner

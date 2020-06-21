@@ -11,6 +11,7 @@ using Registry = entt::basic_registry<Entity>;
 enum class ElementType {
   SVG,
   Path,
+  Rect,
   Unknown,
 };
 

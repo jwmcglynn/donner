@@ -23,16 +23,15 @@ public:
 
   void setX(Lengthd value);
   void setY(Lengthd value);
-  void setWidth(Lengthd value);
-  void setHeight(Lengthd value);
-  void setViewbox(Boxd viewbox);
+  void setWidth(std::optional<Lengthd> value);
+  void setHeight(std::optional<Lengthd> value);
+  void setViewbox(std::optional<Boxd> viewbox);
   void setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio);
-  void clearViewbox();
 
   Lengthd x() const;
   Lengthd y() const;
-  Lengthd width() const;
-  Lengthd height() const;
+  std::optional<Lengthd> width() const;
+  std::optional<Lengthd> height() const;
   std::optional<Boxd> viewbox() const;
   std::optional<PreserveAspectRatio> preserveAspectRatio() const;
 };

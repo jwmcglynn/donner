@@ -11,6 +11,7 @@
 #include "src/svg/parser/viewbox_parser.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/svg_path_element.h"
+#include "src/svg/svg_rect_element.h"
 #include "src/svg/svg_svg_element.h"
 #include "src/svg/svg_unknown_element.h"
 #include "src/svg/xml/details/xml_parser_context.h"
@@ -19,7 +20,7 @@ namespace donner {
 
 namespace {
 
-using SVGElements = entt::type_list<SVGSVGElement, SVGPathElement>;
+using SVGElements = entt::type_list<SVGSVGElement, SVGPathElement, SVGRectElement>;
 
 static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
                                                    std::string_view value) {
@@ -118,6 +119,40 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
   } else if (name == "height") {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setHeight(length.value());
+    }
+  }
+
+  return ParseCommonAttribute(context, element, name, value);
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGRectElement>(XMLParserContext& context,
+                                                         SVGRectElement element,
+                                                         std::string_view name,
+                                                         std::string_view value) {
+  if (name == "x") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == "y") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == "width") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setWidth(length.value());
+    }
+  } else if (name == "height") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setHeight(length.value());
+    }
+  } else if (name == "rx") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setRx(length.value());
+    }
+  } else if (name == "ry") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setRy(length.value());
     }
   }
 

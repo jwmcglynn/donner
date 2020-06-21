@@ -6,6 +6,7 @@ Donner SVG is intended as a hobby project with the latest C++ spec, so it is lik
 
 * Bazel
 * Clang-10
+* OSMesa
 
 ### Installing Bazel
 
@@ -45,6 +46,14 @@ Verify this works with
 
 ```
 clang -v
+```
+
+### Installing OSMesa
+
+OSMesa is the Mesa OpenGL software renderer, which is used for building and running tests on machines without GPUs. For Ubuntu 18.04, it can be installed with:
+
+```
+sudo apt-get install libosmesa6-dev
 ```
 
 ## That's it!
