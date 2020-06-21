@@ -1,4 +1,9 @@
+#include <GL/gl.h>
+#include <GL/osmesa.h>
 #include <pathfinder/pathfinder.h>
+#undef None
+
+#include <stb/stb_image_write.h>
 
 #include <cstring>
 #include <fstream>
@@ -35,10 +40,14 @@ void DumpTree(SVGElement element, int depth) {
   }
 }
 
+static const void* LoadGLFunction(const char* name, void* userdata) {
+  return reinterpret_cast<const void*>(OSMesaGetProcAddress(name));
+}
+
 extern "C" int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::cerr << "Unexpected arg count." << std::endl;
-    std::cerr << "USAGE: renderer_test <filename>" << std::endl;
+    std::cerr << "USAGE: renderer_tool <filename>" << std::endl;
     return 1;
   }
 
@@ -46,6 +55,36 @@ extern "C" int main(int argc, char* argv[]) {
   if (!file) {
     std::cerr << "Could not open file " << argv[1] << std::endl;
     return 2;
+  }
+
+  const size_t kWidth = 800;
+  const size_t kHeight = 600;
+  static const int kAttribs[] = {OSMESA_FORMAT,
+                                 OSMESA_RGBA,
+                                 OSMESA_DEPTH_BITS,
+                                 32,
+                                 OSMESA_STENCIL_BITS,
+                                 0,
+                                 OSMESA_ACCUM_BITS,
+                                 0,
+                                 OSMESA_PROFILE,
+                                 OSMESA_CORE_PROFILE,
+                                 OSMESA_CONTEXT_MAJOR_VERSION,
+                                 3,
+                                 OSMESA_CONTEXT_MINOR_VERSION,
+                                 2,
+                                 0};
+
+  OSMesaContext ctx = OSMesaCreateContextAttribs(kAttribs, nullptr);
+  if (!ctx) {
+    std::cerr << "OSMesaCreateContextAttribs failed" << std::endl;
+    return 3;
+  }
+
+  std::vector<uint8_t> buffer(800 * 600 * 4);
+  if (!OSMesaMakeCurrent(ctx, buffer.data(), GL_UNSIGNED_BYTE, kWidth, kHeight)) {
+    std::cerr << "OSMesaCreateContextExt failed" << std::endl;
+    return 3;
   }
 
   file.seekg(0, std::ios::end);
@@ -76,9 +115,9 @@ extern "C" int main(int argc, char* argv[]) {
   DumpTree(maybeResult.result().svgElement(), 0);
 
   // Create a Pathfinder renderer.
-  PFGLLoadWith(nullptr, nullptr);
+  PFGLLoadWith(LoadGLFunction, nullptr);
   PFGLDestFramebufferRef dest_framebuffer =
-      PFGLDestFramebufferCreateFullWindow(&(PFVector2I){640, 480});
+      PFGLDestFramebufferCreateFullWindow(&(PFVector2I){kWidth, kHeight});
   PFGLRendererRef renderer = PFGLRendererCreate(
       PFGLDeviceCreate(PF_GL_VERSION_GL3, 0), PFFilesystemResourceLoaderLocate(), dest_framebuffer,
       &(PFRendererOptions){(PFColorF){1.0, 1.0, 1.0, 1.0},
@@ -109,6 +148,11 @@ extern "C" int main(int argc, char* argv[]) {
   PFSceneRef scene = PFCanvasCreateScene(canvas);
   PFSceneProxyRef scene_proxy = PFSceneProxyCreateFromSceneAndRayonExecutor(scene);
   PFSceneProxyBuildAndRenderGL(scene_proxy, renderer, PFBuildOptionsCreate());
+
+  stbi_write_png("offscreen.png", kWidth, kHeight, 4, buffer.data() + (kWidth * 4 * (kHeight - 1)),
+                 -int(kWidth) * 4);
+
+  OSMesaDestroyContext(ctx);
   return 0;
 }
 

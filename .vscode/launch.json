@@ -42,6 +42,24 @@
       "sourceMap": {
         "/proc/self/cwd": "${workspaceFolder}"
       }
-    }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "renderer_tool",
+      "program": "${workspaceFolder}/bazel-bin/src/renderer/renderer_tool",
+      "args": [
+        "${workspaceFolder}/src/svg/xml/testdata/e-path-034.svg"
+      ],
+      "cwd": "${workspaceFolder}/src/renderer",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      },
+      "env": {
+        "LIBGL_DEBUG": "verbose",
+        "LIBGL_ALWAYS_INDIRECT": "1",
+        "LIBGL_ALWAYS_SOFTWARE": "1",
+      }
+    },
   ]
 }

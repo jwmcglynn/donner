@@ -8,6 +8,11 @@ alias(
     actual = "@raze__pathfinder_c__0_1_0//:pathfinder_c_static",
 )
 
+alias(
+    name = "pathfinder_resources_filegroup",
+    actual = "@raze__pathfinder_resources__0_5_0//:resources_filegroup",
+)
+
 rust_library(
     name = "pathfinder_c_wrapper",
     srcs = ["lib.rs"],

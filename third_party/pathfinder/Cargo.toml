@@ -20,6 +20,7 @@ gen_buildrs = true
 [raze.crates.pathfinder_resources.'0.5.0']
 gen_buildrs = true
 buildrs_build_script_srcs_attr = "glob([\"resources/debug-fonts/*\", \"resources/shaders/**/*\", \"resources/textures/*\"]) + [\"resources/MANIFEST\", \"resources/Cargo.toml\"]"
+additional_build_file = "pathfinder_resources_patch.BUILD"
 
 [raze.crates.pathfinder_c.'0.1.0']
 gen_buildrs = true

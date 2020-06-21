@@ -34,6 +34,13 @@ git_repository(
     remote = "https://github.com/bazelbuild/bazel-skylib.git",
 )
 
+git_repository(
+    name = "stb",
+    init_submodules = True,
+    branch = "master",
+    remote = "https://github.com/nitronoid/rules_stb"
+)
+
 load("@io_bazel_rules_rust//rust:repositories.bzl", "rust_repositories")
 
 rust_repositories(version = "1.44.0", cargo_version = "0.45.0")
