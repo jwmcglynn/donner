@@ -1,15 +1,12 @@
 #include <GL/gl.h>
-#include <GL/osmesa.h>
 #include <pathfinder/pathfinder.h>
-#undef None
-
-#include <stb/stb_image_write.h>
 
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <vector>
 
+#include "src/renderer/render_context_osmesa.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/xml/xml_parser.h"
 
@@ -41,7 +38,7 @@ void DumpTree(SVGElement element, int depth) {
 }
 
 static const void* LoadGLFunction(const char* name, void* userdata) {
-  return reinterpret_cast<const void*>(OSMesaGetProcAddress(name));
+  return reinterpret_cast<const void*>(RenderContextOSMesa::getProcAddress(name));
 }
 
 extern "C" int main(int argc, char* argv[]) {
@@ -59,32 +56,14 @@ extern "C" int main(int argc, char* argv[]) {
 
   const size_t kWidth = 800;
   const size_t kHeight = 600;
-  static const int kAttribs[] = {OSMESA_FORMAT,
-                                 OSMESA_RGBA,
-                                 OSMESA_DEPTH_BITS,
-                                 32,
-                                 OSMESA_STENCIL_BITS,
-                                 0,
-                                 OSMESA_ACCUM_BITS,
-                                 0,
-                                 OSMESA_PROFILE,
-                                 OSMESA_CORE_PROFILE,
-                                 OSMESA_CONTEXT_MAJOR_VERSION,
-                                 3,
-                                 OSMESA_CONTEXT_MINOR_VERSION,
-                                 2,
-                                 0};
+  RenderContextOSMesa renderContext(kWidth, kHeight);
 
-  OSMesaContext ctx = OSMesaCreateContextAttribs(kAttribs, nullptr);
-  if (!ctx) {
-    std::cerr << "OSMesaCreateContextAttribs failed" << std::endl;
-    return 3;
-  }
-
-  std::vector<uint8_t> buffer(800 * 600 * 4);
-  if (!OSMesaMakeCurrent(ctx, buffer.data(), GL_UNSIGNED_BYTE, kWidth, kHeight)) {
-    std::cerr << "OSMesaCreateContextExt failed" << std::endl;
-    return 3;
+  {
+    std::string errors;
+    if (!renderContext.makeCurrent(&errors)) {
+      std::cerr << "RenderContext makeCurrent failure: " << errors << std::endl;
+      return 3;
+    }
   }
 
   file.seekg(0, std::ios::end);
@@ -149,10 +128,7 @@ extern "C" int main(int argc, char* argv[]) {
   PFSceneProxyRef scene_proxy = PFSceneProxyCreateFromSceneAndRayonExecutor(scene);
   PFSceneProxyBuildAndRenderGL(scene_proxy, renderer, PFBuildOptionsCreate());
 
-  stbi_write_png("offscreen.png", kWidth, kHeight, 4, buffer.data() + (kWidth * 4 * (kHeight - 1)),
-                 -int(kWidth) * 4);
-
-  OSMesaDestroyContext(ctx);
+  renderContext.savePNG("offscreen.png");
   return 0;
 }
 
