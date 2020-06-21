@@ -18,6 +18,7 @@ cc_library(
     ],
     visibility = [
         "//:__pkg__",
+        "//src/renderer:__subpackages__",
         "//src/svg/xml:__pkg__",
     ],
     deps = [

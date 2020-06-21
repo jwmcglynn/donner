@@ -11,6 +11,17 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "renderer_pathfinder",
+    srcs = ["renderer_pathfinder.cc"],
+    hdrs = ["renderer_pathfinder.h"],
+    deps = [
+        "//src/svg",
+        "//src/svg/core",
+        "//third_party/pathfinder_wrapper",
+    ],
+)
+
 copy_pathfinder_resources(
     name = "copy_resources",
 )
@@ -18,15 +29,12 @@ copy_pathfinder_resources(
 cc_binary(
     name = "renderer_tool",
     srcs = ["renderer_tool.cc"],
-    copts = [
-        "-Wno-address-of-temporary",
-    ],
     data = [
         ":copy_resources",
     ],
     deps = [
         ":render_context_osmesa",
+        ":renderer_pathfinder",
         "//src/svg/xml",
-        "//third_party/pathfinder_wrapper",
     ],
 )

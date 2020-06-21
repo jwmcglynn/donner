@@ -9,7 +9,10 @@ cc_library(
         "path_spline.h",
         "preserve_aspect_ratio.h",
     ],
-    visibility = ["//src/svg:__subpackages__"],
+    visibility = [
+        "//src/renderer:__subpackages__",
+        "//src/svg:__subpackages__",
+    ],
     deps = [
         "//src/base",
     ],

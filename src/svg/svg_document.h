@@ -13,11 +13,12 @@ public:
   SVGDocument();
 
   Registry& registry() { return registry_; }
+  const Registry& registry() const { return registry_; }
+  Entity rootEntity() const { return svg_element_; }
+
   SVGSVGElement svgElement();
 
 private:
-  friend class XMLParser;
-
   Registry registry_;
   Entity svg_element_;
 };

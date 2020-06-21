@@ -1,12 +1,10 @@
-#include <GL/gl.h>
-#include <pathfinder/pathfinder.h>
-
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <vector>
 
 #include "src/renderer/render_context_osmesa.h"
+#include "src/renderer/renderer_pathfinder.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/xml/xml_parser.h"
 
@@ -37,10 +35,6 @@ void DumpTree(SVGElement element, int depth) {
   }
 }
 
-static const void* LoadGLFunction(const char* name, void* userdata) {
-  return reinterpret_cast<const void*>(RenderContextOSMesa::getProcAddress(name));
-}
-
 extern "C" int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::cerr << "Unexpected arg count." << std::endl;
@@ -52,18 +46,6 @@ extern "C" int main(int argc, char* argv[]) {
   if (!file) {
     std::cerr << "Could not open file " << argv[1] << std::endl;
     return 2;
-  }
-
-  const size_t kWidth = 800;
-  const size_t kHeight = 600;
-  RenderContextOSMesa renderContext(kWidth, kHeight);
-
-  {
-    std::string errors;
-    if (!renderContext.makeCurrent(&errors)) {
-      std::cerr << "RenderContext makeCurrent failure: " << errors << std::endl;
-      return 3;
-    }
   }
 
   file.seekg(0, std::ios::end);
@@ -93,40 +75,21 @@ extern "C" int main(int argc, char* argv[]) {
   std::cout << "Tree:" << std::endl;
   DumpTree(maybeResult.result().svgElement(), 0);
 
-  // Create a Pathfinder renderer.
-  PFGLLoadWith(LoadGLFunction, nullptr);
-  PFGLDestFramebufferRef dest_framebuffer =
-      PFGLDestFramebufferCreateFullWindow(&(PFVector2I){kWidth, kHeight});
-  PFGLRendererRef renderer = PFGLRendererCreate(
-      PFGLDeviceCreate(PF_GL_VERSION_GL3, 0), PFFilesystemResourceLoaderLocate(), dest_framebuffer,
-      &(PFRendererOptions){(PFColorF){1.0, 1.0, 1.0, 1.0},
-                           PF_RENDERER_OPTIONS_FLAGS_HAS_BACKGROUND_COLOR});
+  const size_t kWidth = 800;
+  const size_t kHeight = 600;
+  RenderContextOSMesa renderContext(kWidth, kHeight);
 
-  // Make a canvas. We're going to draw a house.
-  PFCanvasRef canvas =
-      PFCanvasCreate(PFCanvasFontContextCreateWithSystemSource(), &(PFVector2F){640.0f, 480.0f});
+  {
+    std::string errors;
+    if (!renderContext.makeCurrent(&errors)) {
+      std::cerr << "RenderContext makeCurrent failure: " << errors << std::endl;
+      return 3;
+    }
+  }
 
-  // Set line width.
-  PFCanvasSetLineWidth(canvas, 10.0f);
-
-  // Draw walls.
-  PFCanvasStrokeRect(canvas, &(PFRectF){{75.0f, 140.0f}, {225.0f, 250.0f}});
-
-  // Draw door.
-  PFCanvasFillRect(canvas, &(PFRectF){{130.0f, 190.0f}, {170.0f, 250.0f}});
-
-  // Draw roof.
-  PFPathRef path = PFPathCreate();
-  PFPathMoveTo(path, &(PFVector2F){50.0, 140.0});
-  PFPathLineTo(path, &(PFVector2F){150.0, 60.0});
-  PFPathLineTo(path, &(PFVector2F){250.0, 140.0});
-  PFPathClosePath(path);
-  PFCanvasStrokePath(canvas, path);
-
-  // Render the canvas to screen.
-  PFSceneRef scene = PFCanvasCreateScene(canvas);
-  PFSceneProxyRef scene_proxy = PFSceneProxyCreateFromSceneAndRayonExecutor(scene);
-  PFSceneProxyBuildAndRenderGL(scene_proxy, renderer, PFBuildOptionsCreate());
+  RendererPathfinder renderer(&RenderContextOSMesa::getProcAddress, kWidth, kHeight);
+  renderer.draw(maybeResult.result());
+  renderer.render();
 
   renderContext.savePNG("offscreen.png");
   return 0;

@@ -51,7 +51,7 @@
       "args": [
         "${workspaceFolder}/src/svg/xml/testdata/e-path-034.svg"
       ],
-      "cwd": "${workspaceFolder}/src/renderer",
+      "cwd": "${workspaceFolder}/bazel-bin/src/renderer/renderer_tool.runfiles/__main__",
       "sourceMap": {
         "/proc/self/cwd": "${workspaceFolder}"
       },
