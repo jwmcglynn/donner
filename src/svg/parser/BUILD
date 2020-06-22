@@ -4,21 +4,12 @@ load("//build:rules.bzl", "donner_cc_fuzzer")
 cc_library(
     name = "parser",
     srcs = [
-        "details/parser_base.cc",
-        "length_parser.cc",
-        "number_parser.cc",
-        "parse_error.cc",
         "path_parser.cc",
         "preserve_aspect_ratio_parser.cc",
         "transform_parser.cc",
         "viewbox_parser.cc",
     ],
     hdrs = [
-        "details/parser_base.h",
-        "length_parser.h",
-        "number_parser.h",
-        "parse_error.h",
-        "parse_result.h",
         "path_parser.h",
         "preserve_aspect_ratio_parser.h",
         "transform_parser.h",
@@ -27,29 +18,14 @@ cc_library(
     visibility = ["//src/svg:__subpackages__"],
     deps = [
         "//src/base",
+        "//src/base/parser",
         "//src/svg/core",
-        "@com_google_absl//absl/strings",
-    ],
-)
-
-cc_library(
-    name = "parser_tests_utils",
-    testonly = 1,
-    hdrs = [
-        "tests/parse_result_test_utils.h",
-    ],
-    visibility = ["//src/svg:__subpackages__"],
-    deps = [
-        ":parser",
-        "@gtest",
     ],
 )
 
 cc_test(
     name = "parser_tests",
     srcs = [
-        "tests/length_parser_tests.cc",
-        "tests/number_parser_tests.cc",
         "tests/path_parser_tests.cc",
         "tests/preserve_aspect_ratio_parser_tests.cc",
         "tests/transform_parser_tests.cc",
@@ -57,8 +33,8 @@ cc_test(
     ],
     deps = [
         ":parser",
-        ":parser_tests_utils",
         "//src/base:base_test_utils",
+        "//src/base/parser:parser_test_utils",
         "//src/svg/core:core_test_utils",
         "@gtest//:gtest_main",
     ],

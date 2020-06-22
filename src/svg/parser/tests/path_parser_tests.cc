@@ -1,10 +1,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/base/tests/base_test_utils.h"
 #include "src/svg/core/tests/path_spline_test_utils.h"
 #include "src/svg/parser/path_parser.h"
-#include "src/svg/parser/tests/parse_result_test_utils.h"
 
 using testing::AllOf;
 using testing::ElementsAre;

@@ -122,6 +122,14 @@
 				}
 			},
 			{
+				"pattern": "bazel-bin/src/base/parser/parser_tests",
+				"runTask": {
+					"before": [
+						"base_parser_tests"
+					],
+				}
+			},
+			{
 				"pattern": "bazel-bin/src/svg/core/core_tests",
 				"runTask": {
 					"before": [
@@ -133,7 +141,7 @@
 				"pattern": "bazel-bin/src/svg/parser/parser_tests",
 				"runTask": {
 					"before": [
-						"parser_tests"
+						"svg_parser_tests"
 					],
 				}
 			},

@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "src/svg/parser/parse_error.h"
+#include "src/base/parser/parse_error.h"
 #include "src/svg/xml/details/line_offsets.h"
 
 namespace donner {

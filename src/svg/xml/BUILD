@@ -20,7 +20,7 @@ cc_test(
     ],
     deps = [
         ":xml",
-        "//src/svg/parser:parser_tests_utils",
+        "//src/base/parser:parser_test_utils",
         "@gtest//:gtest_main",
     ],
 )

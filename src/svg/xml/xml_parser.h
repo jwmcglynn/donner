@@ -2,7 +2,7 @@
 
 #include <span>
 
-#include "src/svg/parser/parse_result.h"
+#include "src/base/parser/parse_result.h"
 #include "src/svg/svg_document.h"
 
 namespace donner {

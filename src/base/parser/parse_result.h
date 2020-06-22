@@ -3,8 +3,8 @@
 #include <optional>
 #include <string>
 
+#include "src/base/parser/parse_error.h"
 #include "src/base/utils.h"
-#include "src/svg/parser/parse_error.h"
 
 namespace donner {
 

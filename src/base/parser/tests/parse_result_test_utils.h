@@ -5,7 +5,7 @@
 #include <ostream>
 #include <string>
 
-#include "src/svg/parser/parse_result.h"
+#include "src/base/parser/parse_result.h"
 
 namespace donner {
 

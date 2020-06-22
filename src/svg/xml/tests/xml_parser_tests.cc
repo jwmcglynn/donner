@@ -1,7 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "src/svg/parser/tests/parse_result_test_utils.h"
+#include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/svg/xml/xml_parser.h"
 
 using testing::AllOf;

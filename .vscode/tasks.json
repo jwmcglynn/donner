@@ -43,13 +43,20 @@
       "problemMatcher": []
     },
     {
+      "label": "base_parser_tests",
+      "type": "shell",
+      "command": "bazel build //src/base/parser:parser_tests -c dbg",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
       "label": "core_tests",
       "type": "shell",
       "command": "bazel build //src/svg/core:core_tests -c dbg",
       "problemMatcher": []
     },
     {
-      "label": "parser_tests",
+      "label": "svg_parser_tests",
       "type": "shell",
       "command": "bazel build //src/svg/parser:parser_tests -c dbg",
       "problemMatcher": [],

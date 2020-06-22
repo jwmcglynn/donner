@@ -3,8 +3,8 @@
 #include <optional>
 #include <string_view>
 
+#include "src/base/parser/parse_error.h"
 #include "src/svg/core/path_spline.h"
-#include "src/svg/parser/parse_error.h"
 
 namespace donner {
 
