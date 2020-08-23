@@ -4,8 +4,10 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "${workspaceFolder}/third_party/gtest/googletest/include",
-                "${workspaceFolder}/third_party/gtest/googlemock/include"
+                "${workspaceFolder}/bazel-donner-svg/external/entt/src",
+                "${workspaceFolder}/bazel-donner-svg/external/com_google_absl",
+                "${workspaceFolder}/bazel-donner-svg/external/stb/src",
+                "${workspaceFolder}/bazel-out/k8-fastbuild/bin/third_party/pathfinder_wrapper"
             ],
             "defines": [],
             "compilerPath": "/usr/lib/llvm-10/bin/clang",

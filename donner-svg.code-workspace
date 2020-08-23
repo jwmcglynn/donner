@@ -105,8 +105,6 @@
 		"editor.tabSize": 2,
 		"C_Cpp.default.includePath": [
 			".",
-			"third_party/gtest/googletest/include",
-			"third_party/gtest/googlemock/include",
 		],
 		"C_Cpp.clang_format_sortIncludes": true,
 		"editor.formatOnSave": true,
