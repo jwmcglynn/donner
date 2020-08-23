@@ -37,6 +37,6 @@ cc_test(
     deps = [
         ":components",
         "//src/base:base_test_utils",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )

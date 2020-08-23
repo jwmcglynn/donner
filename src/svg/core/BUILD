@@ -31,7 +31,7 @@ cc_library(
     deps = [
         ":core",
         "//src/base",
-        "@gtest",
+        "@com_google_gtest//:gtest",
     ],
 )
 
@@ -44,6 +44,6 @@ cc_test(
         ":core",
         ":core_test_utils",
         "//src/base:base_test_utils",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )

@@ -21,7 +21,7 @@ cc_library(
     ],
     visibility = ["//src:__subpackages__"],
     deps = [
-        "@gtest",
+        "@com_google_gtest//:gtest",
     ],
 )
 
@@ -36,6 +36,6 @@ cc_test(
     deps = [
         ":base",
         ":base_test_utils",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )

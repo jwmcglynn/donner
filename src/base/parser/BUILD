@@ -31,7 +31,7 @@ cc_library(
     visibility = ["//src/svg:__subpackages__"],
     deps = [
         ":parser",
-        "@gtest",
+        "@com_google_gtest//:gtest",
     ],
 )
 
@@ -45,6 +45,6 @@ cc_test(
         ":parser",
         ":parser_test_utils",
         "//src/base:base_test_utils",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )

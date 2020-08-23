@@ -37,6 +37,6 @@ cc_test(
     ],
     deps = [
         ":svg",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )

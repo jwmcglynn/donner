@@ -36,7 +36,7 @@ cc_test(
         "//src/base:base_test_utils",
         "//src/base/parser:parser_test_utils",
         "//src/svg/core:core_test_utils",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 

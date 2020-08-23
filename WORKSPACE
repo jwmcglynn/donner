@@ -1,13 +1,16 @@
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
-local_repository(
-    name = "gtest",
-    path = "third_party/gtest",
+git_repository(
+    name = "com_google_gtest",
+    remote = "https://github.com/google/googletest",
+    tag = "release-1.10.0",
 )
 
-local_repository(
+# Use absl at head.
+git_repository(
     name = "com_google_absl",
-    path = "third_party/absl",
+    branch = "master",
+    remote = "https://github.com/abseil/abseil-cpp",
 )
 
 new_local_repository(
@@ -36,14 +39,17 @@ git_repository(
 
 git_repository(
     name = "stb",
-    init_submodules = True,
     branch = "master",
-    remote = "https://github.com/nitronoid/rules_stb"
+    init_submodules = True,
+    remote = "https://github.com/nitronoid/rules_stb",
 )
 
 load("@io_bazel_rules_rust//rust:repositories.bzl", "rust_repositories")
 
-rust_repositories(version = "1.44.0", cargo_version = "0.45.0")
+rust_repositories(
+    cargo_version = "0.45.0",
+    version = "1.44.0",
+)
 
 load("@io_bazel_rules_rust//:workspace.bzl", "bazel_version")
 

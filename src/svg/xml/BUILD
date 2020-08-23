@@ -21,7 +21,7 @@ cc_test(
     deps = [
         ":xml",
         "//src/base/parser:parser_test_utils",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 
@@ -43,7 +43,7 @@ cc_test(
     ],
     deps = [
         ":xml_details",
-        "@gtest//:gtest_main",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 
