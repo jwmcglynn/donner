@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "bazelbuild.vscode-bazel",
+    "cschlosser.doxdocgen",
+    "hbenl.vscode-test-explorer",
+    "matepek.vscode-catch2-test-adapter",
+    "ms-vscode.cpptools",
+  ]
+}
