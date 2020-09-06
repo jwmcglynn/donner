@@ -6,6 +6,8 @@
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/bazel-donner-svg/external/entt/src",
                 "${workspaceFolder}/bazel-donner-svg/external/com_google_absl",
+                "${workspaceFolder}/bazel-donner-svg/external/com_google_gtest/googletest/include",
+                "${workspaceFolder}/bazel-donner-svg/external/com_google_gtest/googlemock/include",
                 "${workspaceFolder}/bazel-donner-svg/external/stb/src",
                 "${workspaceFolder}/bazel-out/k8-fastbuild/bin/third_party/pathfinder_wrapper"
             ],

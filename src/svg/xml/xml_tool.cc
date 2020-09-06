@@ -12,6 +12,7 @@ std::string_view TypeToString(ElementType type) {
   switch (type) {
     case ElementType::SVG: return "SVG";
     case ElementType::Path: return "Path";
+    case ElementType::Rect: return "Rect";
     case ElementType::Unknown: return "Unknown";
   }
 }
