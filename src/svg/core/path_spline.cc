@@ -255,9 +255,9 @@ Vector2d PathSpline::tangentAt(size_t index, double t) const {
       //
       // Basically, the derivative of a cubic bezier curve is three times the
       // difference between two quadratic bezier curves.  See Bounds() for more details.
-      const Vector2d p_1_0 = (points_[command.point_index] - startPoint(index));
-      const Vector2d p_2_1 = (points_[command.point_index + 1] - points_[command.point_index]);
-      const Vector2d p_3_2 = (points_[command.point_index + 2] - points_[command.point_index + 1]);
+      const Vector2d p_1_0 = points_[command.point_index] - startPoint(index);
+      const Vector2d p_2_1 = points_[command.point_index + 1] - points_[command.point_index];
+      const Vector2d p_3_2 = points_[command.point_index + 2] - points_[command.point_index + 1];
 
       return 3.0 * (rev_t * rev_t * p_1_0      // (1 - t)^2 * (P_1 - P_0)
                     + 2.0 * t * rev_t * p_2_1  // (1 - t) * t * (P_2 - P_1)
@@ -269,43 +269,8 @@ Vector2d PathSpline::tangentAt(size_t index, double t) const {
 }
 
 Vector2d PathSpline::normalAt(size_t index, double t) const {
-  assert(index < commands_.size() && "index out of range");
-  assert(t >= 0.0 && t <= 1.0 && "t out of range");
-
-  const Command& command = commands_.at(index);
-
-  switch (command.type) {
-    case CommandType::MoveTo:
-      if (index + 1 < commands_.size()) {
-        return normalAt(index + 1, 0.0);
-      } else {
-        return Vector2d::Zero();
-      }
-
-    case CommandType::LineTo:
-    case CommandType::ClosePath: {
-      const Vector2d tangent = (points_[command.point_index] - startPoint(index));
-      return Vector2d(-tangent.y, tangent.x);
-    }
-    case CommandType::CurveTo: {
-      assert(command.point_index > 0);
-      const double rev_t = 1.0 - t;
-
-      // The normal of a bezier curve is proportional to its second derivative. The second
-      // derivative is:
-      //
-      // 6 [ (1 - t) * (P_2 - 2 P_1 + P_0) + t * (P_3 - 2 P_2 + P_1) ]
-      const Vector2d p_2_1_0 = (points_[command.point_index + 1] -
-                                2.0 * points_[command.point_index] + startPoint(index));
-      const Vector2d p_3_2_1 =
-          (points_[command.point_index + 2] - 2.0 * points_[command.point_index + 1] +
-           points_[command.point_index]);
-
-      return 6.0 * (rev_t * p_2_1_0 + t * p_3_2_1);
-    }
-
-    default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
-  }
+  const Vector2d tangent = tangentAt(index, t);
+  return Vector2d(-tangent.y, tangent.x);
 }
 
 Vector2d PathSpline::startPoint(size_t index) const {

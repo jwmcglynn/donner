@@ -4,7 +4,8 @@
 
 namespace donner {
 
-/** Matches a Vector.
+/**
+ * Matches a Vector.
  *
  * @param xMatcher X coordinate matcher.
  * @param yMatcher Y coordinate matcher.
@@ -14,7 +15,8 @@ MATCHER_P2(Vector2Eq, xMatcher, yMatcher, "") {
          testing::ExplainMatchResult(yMatcher, arg.y, result_listener);
 }
 
-/** Matches a Vector2 with DoubleNear(0.01).
+/**
+ * Matches a Vector2 with DoubleNear(0.01).
  *
  * @param xValue X coordinate.
  * @param yValue Y coordinate.
@@ -22,6 +24,21 @@ MATCHER_P2(Vector2Eq, xMatcher, yMatcher, "") {
 MATCHER_P2(Vector2Near, xValue, yValue, "") {
   return testing::ExplainMatchResult(testing::DoubleNear(xValue, 0.01), arg.x, result_listener) &&
          testing::ExplainMatchResult(testing::DoubleNear(yValue, 0.01), arg.y, result_listener);
+}
+
+/**
+ * Matches if two vectors are equal when normalized.
+ *
+ * @param expectedVector Expected value vector.
+ */
+MATCHER_P(NormalizedEq, expectedVector, "") {
+  const auto normalized = arg.normalize();
+  const auto expected = expectedVector.normalize();
+
+  return testing::ExplainMatchResult(testing::DoubleNear(expected.x, 0.01), normalized.x,
+                                     result_listener) &&
+         testing::ExplainMatchResult(testing::DoubleNear(expected.y, 0.01), normalized.y,
+                                     result_listener);
 }
 
 /**
