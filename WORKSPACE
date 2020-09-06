@@ -1,4 +1,4 @@
-load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_repository")
 
 git_repository(
     name = "com_google_gtest",
@@ -23,6 +23,13 @@ git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt.git",
     tag = "v3.6.0",
+)
+
+new_git_repository(
+    name = "utfcpp",
+    build_file = "@//third_party:BUILD.utfcpp",
+    remote = "https://github.com/nemtrif/utfcpp.git",
+    tag = "v3.1.2",
 )
 
 git_repository(

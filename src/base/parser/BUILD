@@ -28,7 +28,7 @@ cc_library(
     hdrs = [
         "tests/parse_result_test_utils.h",
     ],
-    visibility = ["//src/svg:__subpackages__"],
+    visibility = ["//src:__subpackages__"],
     deps = [
         ":parser",
         "@com_google_gtest//:gtest",

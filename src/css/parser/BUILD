@@ -1,0 +1,31 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
+cc_library(
+    name = "parser",
+    srcs = [
+        "declaration_list_parser.cc",
+    ],
+    hdrs = [
+        "declaration_list_parser.h",
+        "details/tokenizer.h",
+    ],
+    visibility = ["//src/svg:__subpackages__"],
+    deps = [
+        "//src/base",
+        "//src/base/parser",
+        "//src/css",
+        "@utfcpp",
+    ],
+)
+
+cc_test(
+    name = "parser_tests",
+    srcs = [
+        "tests/tokenizer_tests.cc",
+    ],
+    deps = [
+        ":parser",
+        "//src/base/parser:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

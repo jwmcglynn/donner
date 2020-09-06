@@ -88,6 +88,13 @@
       "type": "shell",
       "command": "bazel build //src/svg:svg_tests -c dbg",
       "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "css_parser_tests",
+      "type": "shell",
+      "command": "bazel build //src/css/parser:parser_tests -c dbg",
+      "problemMatcher": [],
       "group": {
         "kind": "build",
         "isDefault": true

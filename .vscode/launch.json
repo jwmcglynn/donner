@@ -7,8 +7,21 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Launch",
+      "name": "core_tests",
       "program": "${workspaceFolder}/bazel-bin/src/svg/core_tests",
+      "args": [
+        "--gtest_break_on_failure"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "css_parser_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/css/parser/parser_tests",
       "args": [
         "--gtest_break_on_failure"
       ],

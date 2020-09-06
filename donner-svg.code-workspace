@@ -98,7 +98,8 @@
 			"span": "cpp",
 			"*.inc": "cpp",
 			"__functional_base_03": "cpp",
-			"regex": "cpp"
+			"regex": "cpp",
+			"__memory": "cpp"
 		},
 		"files.exclude": {
 			"bazel-*": true
@@ -173,6 +174,14 @@
 				"runTask": {
 					"before": [
 						"xml_details_tests"
+					],
+				}
+			},
+			{
+				"pattern": "bazel-bin/src/css/parser/parser_tests",
+				"runTask": {
+					"before": [
+						"css_parser_tests"
 					],
 				}
 			}
