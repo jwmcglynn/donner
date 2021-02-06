@@ -22,7 +22,7 @@ new_local_repository(
 git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt.git",
-    tag = "v3.4.0",
+    tag = "v3.6.0",
 )
 
 git_repository(

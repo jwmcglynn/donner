@@ -4,7 +4,7 @@
 
 namespace donner {
 
-ENTT_OPAQUE_TYPE(Entity, std::uint32_t);
+enum class Entity : std::uint32_t {};
 
 using Registry = entt::basic_registry<Entity>;
 

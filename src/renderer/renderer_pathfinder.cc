@@ -102,7 +102,7 @@ void RendererPathfinder::render() {
 void RendererPathfinder::computePaths(Registry& registry) {
   auto view = registry.view<RectComponent>();
   for (auto entity : view) {
-    auto& rect = view.get(entity);
+    auto [rect] = view.get(entity);
     rect.computePath(registry.get_or_emplace<ComputedPathComponent>(entity));
   }
 }
