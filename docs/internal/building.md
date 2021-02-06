@@ -12,7 +12,7 @@ Donner SVG is intended as a hobby project with the latest C++ spec, so it is lik
 
 The recommended way to use Bazel is to install **Bazelisk**, which will automatically download Bazel as required. To install:
 
-1. Navigate to the Bazelisk releases page: https://github.com/bazelbuild/bazelisk/releases/download/v1.5.0/bazelisk-linux-amd64
+1. Navigate to the Bazelisk releases page: https://github.com/bazelbuild/bazelisk/releases/download/v1.7.4/bazelisk-linux-amd64
 2. Download the latest releases, and install it as `~/bin/bazel`
 3. `chmod +x ~/bin/bazel`
 4. Update your `~/.bashrc` (or equivalent) to add this directory to your path:
