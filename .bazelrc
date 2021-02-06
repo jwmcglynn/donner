@@ -17,8 +17,8 @@ build:c++20 --cxxopt=-std=c++20
 build --config=libc++ --config=c++20 --define absl=1
 
 # Build with CI
-build:ci --action_env=CC=/usr/lib/llvm-10/bin/clang
-build:ci --action_env=CXX=/usr/lib/llvm-10/bin/clang++
+build:ci --action_env=CC=/usr/lib/llvm-11/bin/clang
+build:ci --action_env=CXX=/usr/lib/llvm-11/bin/clang++
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --linkopt -ldl

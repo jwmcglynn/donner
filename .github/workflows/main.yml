@@ -27,11 +27,12 @@ jobs:
         wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O "${GITHUB_WORKSPACE}/bin/bazel"
         chmod +x "${GITHUB_WORKSPACE}/bin/bazel"
 
-    - name: Install clang-10
+    - name: Install clang-11
       run: |
-        sudo add-apt-repository "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-10 main"
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-11 main"
         sudo apt-get update
-        sudo apt-get install -y clang-10 libc++-10-dev libc++abi-10-dev
+        sudo apt-get install -y clang-11 libc++-11-dev libc++abi-11-dev
 
     - name: Install OSMesa
       run: |

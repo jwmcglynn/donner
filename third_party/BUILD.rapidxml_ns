@@ -6,7 +6,6 @@ cc_library(
         "rapidxml_ns.hpp",
     ],
     copts = ["-isystem rapidxml_ns"],
-    
     include_prefix = "rapidxml_ns",
     visibility = ["//visibility:public"],
 )

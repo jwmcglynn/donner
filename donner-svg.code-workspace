@@ -97,7 +97,8 @@
 			"variant": "cpp",
 			"span": "cpp",
 			"*.inc": "cpp",
-			"__functional_base_03": "cpp"
+			"__functional_base_03": "cpp",
+			"regex": "cpp"
 		},
 		"files.exclude": {
 			"bazel-*": true

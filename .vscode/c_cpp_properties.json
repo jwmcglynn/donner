@@ -12,7 +12,7 @@
                 "${workspaceFolder}/bazel-out/k8-fastbuild/bin/third_party/pathfinder_wrapper"
             ],
             "defines": [],
-            "compilerPath": "/usr/lib/llvm-10/bin/clang",
+            "compilerPath": "/usr/lib/llvm-11/bin/clang",
             "cStandard": "gnu11",
             "cppStandard": "c++20",
             "intelliSenseMode": "clang-x64",
