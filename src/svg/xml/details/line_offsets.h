@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <span>
 #include <string_view>
 #include <vector>
 
@@ -29,7 +28,7 @@ public:
     }
   }
 
-  std::span<const size_t> offsets() const { return offsets_; }
+  const std::vector<size_t>& offsets() const { return offsets_; }
 
   /**
    * Return line numbers for the given offset.

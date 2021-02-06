@@ -330,9 +330,11 @@ private:
         return error;
       }
 
-      const Vector2d point1 = makeAbsolute(command, {coords, 2});
-      const Vector2d point2 = makeAbsolute(command, {coords + 2, 2});
-      const Vector2d end = makeAbsolute(command, {coords + 4, 2});
+      const std::span<double, 6> coordsSpan(coords);
+
+      const Vector2d point1 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
+      const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<2, 2>());
+      const Vector2d end = makeAbsolute(command, coordsSpan.subspan<4, 2>());
 
       spline_.curveTo(point1, point2, end);
 
@@ -346,9 +348,11 @@ private:
         return error;
       }
 
+      const std::span<double, 4> coordsSpan(coords);
+
       const Vector2 point1 = lastCommandWasCurveTo() ? reflectedControlPoint() : current_point_;
-      const Vector2d point2 = makeAbsolute(command, {coords, 2});
-      const Vector2d end = makeAbsolute(command, {coords + 2, 2});
+      const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
+      const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
       spline_.curveTo(point1, point2, end);
 
@@ -361,8 +365,10 @@ private:
         return error;
       }
 
-      const Vector2d point1 = makeAbsolute(command, {coords, 2});
-      const Vector2d end = makeAbsolute(command, {coords + 2, 2});
+      const std::span<double, 4> coordsSpan(coords);
+
+      const Vector2d point1 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
+      const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
       quadCurveTo(point1, end);
 

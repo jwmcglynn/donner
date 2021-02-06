@@ -15,16 +15,16 @@ RUN mkdir -p /tmp/llvm \
     && cd /tmp/llvm \
     && wget https://apt.llvm.org/llvm.sh \
     && chmod +x ./llvm.sh \
-    && ./llvm.sh 10 \
+    && ./llvm.sh 11 \
     && rm -rf /tmp/llvm
 
 # Install libc++
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends libc++-10-dev libc++abi-10-dev
+    && apt-get -y install --no-install-recommends libc++-11-dev libc++abi-11-dev
 
 # Update path so this clang is first.
-ENV PATH=/usr/lib/llvm-10/bin:${PATH}
+ENV PATH=/usr/lib/llvm-11/bin:${PATH}
 
 #
 # Install bazelisk
