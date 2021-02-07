@@ -1,15 +1,29 @@
 #pragma once
 
-#include <utfcpp/utf8.h>
+#include <utfcpp/source/utf8.h>
 
 #include <string_view>
 
 #include "src/base/parser/number_parser.h"
 #include "src/base/parser/parse_result.h"
-#include "src/css/parser/details/token.h"
+#include "src/css/token.h"
 
 namespace donner {
 namespace css {
+
+static bool stringLowercaseEq(std::string_view str, std::string_view matcher) {
+  if (str.size() != matcher.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < str.size(); ++i) {
+    if (std::tolower(str[i]) != matcher[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 class Tokenizer {
 public:
@@ -546,20 +560,6 @@ private:
     } else {
       return false;
     }
-  }
-
-  static bool stringLowercaseEq(std::string_view str, std::string_view matcher) {
-    if (str.size() != matcher.size()) {
-      return false;
-    }
-
-    for (size_t i = 0; i < str.size(); ++i) {
-      if (std::tolower(str[i]) != matcher[i]) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   /// U+FFFD REPLACEMENT CHARACTER (�)

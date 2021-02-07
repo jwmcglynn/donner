@@ -1,44 +1,56 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 
 #include "src/base/length.h"
+#include "src/css/token.h"
 
 namespace donner {
 namespace css {
 
-struct Color {
-  Color() : Color(0, 0, 0) {}
-  Color(uint8_t r, uint8_t g, uint8_t b) : r(r), g(g), b(b) {}
-  Color(uint8_t a, uint8_t r, uint8_t g, uint8_t b) : a(a), r(r), g(g), b(b) {}
-
-  uint8_t a = 0xFF;
-  uint8_t r;
-  uint8_t g;
-  uint8_t b;
-};
+struct SimpleBlock;
+struct Function;
+using ComponentValue = std::variant<Token, Function, SimpleBlock>;
 
 struct Function {
   std::string name;
-  std::string args;
+  std::vector<ComponentValue> values;
+
+  explicit Function(std::string name);
+  bool operator==(const Function& other) const;
+};
+
+struct SimpleBlock {
+  TokenIndex associatedToken;
+  std::vector<ComponentValue> values;
+
+  explicit SimpleBlock(TokenIndex associatedToken);
+  bool operator==(const SimpleBlock& other) const;
+};
+
+struct AtRule {
+  std::string name;
+  std::vector<ComponentValue> prelude;
+  std::optional<ComponentValue> block;
+
+  bool operator==(const AtRule& other) const = default;
 };
 
 struct Declaration {
-  // todo
-  // string
-  // color
-  // function
+  Declaration(std::string name, std::vector<ComponentValue> values = {}, bool important = false)
+      : name(std::move(name)), values(std::move(values)), important(important) {}
 
-  class Value {
-    std::variant<std::string, Color, Function> value_;
-  };
+  bool operator==(const Declaration& other) const = default;
 
-  std::string name_;
-  std::vector<Value> values_;
-  bool important_ = false;
+  std::string name;
+  std::vector<ComponentValue> values;
+  bool important = false;
 };
+
+using DeclarationOrAtRule = std::variant<Declaration, AtRule>;
 
 }  // namespace css
 }  // namespace donner

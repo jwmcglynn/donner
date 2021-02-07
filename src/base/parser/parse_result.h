@@ -71,6 +71,15 @@ public:
   bool hasResult() const { return result_.has_value(); }
   bool hasError() const { return error_.has_value(); }
 
+  template <typename Target, typename Functor>
+  ParseResult<Target> map(Functor&& functor) {
+    if (hasResult()) {
+      return ParseResult<Target>(functor(std::move(result_.value())));
+    } else {
+      return ParseResult<Target>(std::move(error_.value()));
+    }
+  }
+
 private:
   std::optional<T> result_;
   std::optional<ParseError> error_;

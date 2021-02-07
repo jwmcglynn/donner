@@ -3,18 +3,12 @@
 
 #include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/css/parser/details/tokenizer.h"
+#include "src/css/parser/tests/token_test_utils.h"
 
 using testing::ElementsAre;
 
 namespace donner {
 namespace css {
-
-void PrintTo(const Token& token, std::ostream* os) {
-  *os << "Token { ";
-  token.visit([&os](auto&& value) { *os << value; });
-  *os << " offset: " << token.offset();
-  *os << " }";
-}
 
 ParseResult<std::vector<Token>> AllTokens(Tokenizer&& tokenizer) {
   std::vector<Token> tokens;

@@ -99,7 +99,11 @@
 			"*.inc": "cpp",
 			"__functional_base_03": "cpp",
 			"regex": "cpp",
-			"__memory": "cpp"
+			"__memory": "cpp",
+			"shared_mutex": "cpp",
+			"compare": "cpp",
+			"__functional_03": "cpp",
+			"concepts": "cpp"
 		},
 		"files.exclude": {
 			"bazel-*": true

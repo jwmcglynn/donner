@@ -1,10 +1,13 @@
 #pragma once
 
+#include <ostream>
 #include <string_view>
 #include <variant>
 
 namespace donner {
 namespace css {
+
+using TokenIndex = size_t;
 
 struct Token {
   /// `<ident-token>`
@@ -298,7 +301,7 @@ struct Token {
 
   Token(TokenValue&& value, size_t offset) : value_(std::move(value)), offset_(offset) {}
 
-  size_t tokenIndex() const { return value_.index(); }
+  TokenIndex tokenIndex() const { return value_.index(); }
   size_t offset() const { return offset_; }
 
   template <typename T>
@@ -307,8 +310,18 @@ struct Token {
   }
 
   template <typename T>
-  const T& get() const {
+  T& get() & {
     return std::get<indexOf<T>()>(value_);
+  }
+
+  template <typename T>
+  const T& get() const& {
+    return std::get<indexOf<T>()>(value_);
+  }
+
+  template <typename T>
+  T&& get() && {
+    return std::move(std::get<indexOf<T>()>(value_));
   }
 
   template <typename Visitor>
@@ -321,8 +334,8 @@ struct Token {
     return std::visit(std::forward<Visitor>(visitor), value_);
   }
 
-  template <typename T, size_t index = 0>
-  static constexpr size_t indexOf() {
+  template <typename T, TokenIndex index = 0>
+  static constexpr TokenIndex indexOf() {
     if constexpr (index == std::variant_size_v<TokenValue>) {
       return index;
     } else if constexpr (std::is_same_v<std::variant_alternative_t<index, TokenValue>, T>) {

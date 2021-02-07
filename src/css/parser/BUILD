@@ -7,7 +7,6 @@ cc_library(
     ],
     hdrs = [
         "declaration_list_parser.h",
-        "details/token.h",
         "details/tokenizer.h",
     ],
     visibility = ["//src/svg:__subpackages__"],
@@ -22,6 +21,9 @@ cc_library(
 cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/declaration_list_parser_tests.cc",
+        "tests/token_test_utils.cc",
+        "tests/token_test_utils.h",
         "tests/tokenizer_tests.cc",
     ],
     deps = [

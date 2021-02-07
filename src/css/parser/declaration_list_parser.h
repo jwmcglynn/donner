@@ -17,7 +17,7 @@ public:
    * @param str Input string.
    * @return Parsed declaration list, or an error.
    */
-  static ParseResult<std::vector<Declaration>> Parse(std::string_view str);
+  static ParseResult<std::vector<DeclarationOrAtRule>> Parse(std::string_view str);
 };
 
 }  // namespace css

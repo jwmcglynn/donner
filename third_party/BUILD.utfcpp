@@ -5,7 +5,6 @@ cc_library(
     hdrs = glob([
       "source/**/*.h",
     ]),
-    strip_include_prefix = "source",
     include_prefix = "utfcpp",
     visibility = ["//visibility:public"],
 )
