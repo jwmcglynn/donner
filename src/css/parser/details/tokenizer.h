@@ -81,27 +81,32 @@ public:
           return token<Token::CDO>(4);
         }
 
-        ParseError err;
-        err.reason = "Not implemented";
-        err.offset = currentOffset();
-        return err;
-        // TODO
+        // Otherwise, return a <delim-token> with its value set to the current input code point.
+        return token<Token::Delim>(1, remaining_[0]);
       }
 
       case '@': {
-        ParseError err;
-        err.reason = "Not implemented";
-        err.offset = currentOffset();
-        return err;
-        // TODO
+        // If the next 3 input code points would start an identifier, consume a name, create an
+        // <at-keyword-token> with its value set to the returned value, and return it.
+        if (isIdentifierStart(remaining_.substr(1))) {
+          auto [name, nameCharsConsumed] = consumeName(remaining_.substr(1));
+          return token<Token::AtKeyword>(nameCharsConsumed + 1, std::move(name));
+        }
+
+        // Otherwise, return a <delim-token> with its value set to the current input code point.
+        return token<Token::Delim>(1, remaining_[0]);
       }
 
       case '\\': {
-        ParseError err;
-        err.reason = "Not implemented";
-        err.offset = currentOffset();
-        return err;
-        // TODO
+        // If the input stream starts with a valid escape, reconsume the current input code point,
+        // consume an ident-like token, and return it.
+        if (remaining_.size() > 1 && isValidEscape('\\', remaining_[1])) {
+          return consumeIdentLikeToken();
+        }
+
+        // Otherwise, this is a parse error. Return a <delim-token> with its value set to the
+        // current input code point.
+        return token<Token::Delim>(1, remaining_[0]);
       }
 
       case '(': return token<Token::Parenthesis>(1);
@@ -306,11 +311,118 @@ private:
   }
 
   /// Consume an ident-like token, per https://www.w3.org/TR/css-syntax-3/#consume-ident-like-token
-  ParseResult<Token> consumeIdentLikeToken() {
-    ParseError err;
-    err.reason = "Not implemented";
-    err.offset = currentOffset();
-    return err;
+  Token consumeIdentLikeToken() {
+    auto [name, nameCharsConsumed] = consumeName(remaining_);
+
+    const std::string_view afterName = remaining_.substr(nameCharsConsumed);
+    const bool hasParen = afterName.starts_with("(");
+
+    // If `name`'s value is an ASCII case-insensitive match for "url", and the next input code point
+    // is U+0028 LEFT PARENTHESIS ((), consume it.
+    if (stringLowercaseEq(name, "url") && hasParen) {
+      size_t i = 1;
+      size_t remainingSize = afterName.size();
+
+      // While the next two input code points are whitespace, consume the next input code point.
+      while (i + 1 < remainingSize && isWhitespace(afterName[i]) &&
+             isWhitespace(afterName[i + 1])) {
+        ++i;
+      }
+
+      // If the next one or two input code points are U+0022 QUOTATION MARK ("), U+0027 APOSTROPHE
+      // ('), or whitespace followed by U+0022 QUOTATION MARK (") or U+0027 APOSTROPHE ('), then
+      // create a <function-token> with its value set to `name` and return it.
+      if (isQuote(afterName[i]) ||
+          (i + 1 < remainingSize && isWhitespace(afterName[i]) && isQuote(afterName[i + 1]))) {
+        return token<Token::Function>(nameCharsConsumed + 1, std::move(name));
+      }
+
+      // Otherwise, consume a url token, and return it.
+      return consumeUrlToken(afterName.substr(1), nameCharsConsumed + 1);
+    } else if (hasParen) {
+      // Otherwise, if the next input code point is U+0028 LEFT PARENTHESIS ((), consume it. Create
+      // a <function-token> with its value set to `name` and return it.
+      return token<Token::Function>(nameCharsConsumed + 1, std::move(name));
+    } else {
+      // Otherwise, create an <ident-token> with its value set to `name` and return it.
+      return token<Token::Ident>(nameCharsConsumed, std::move(name));
+    }
+  }
+
+  /// Consume a url token, per https://www.w3.org/TR/css-syntax-3/#consume-url-token
+  Token consumeUrlToken(const std::string_view afterUrl, size_t charsConsumedBefore) {
+    // Consume as much whitespace as possible.
+    size_t i = 0;
+    while (i < afterUrl.size() && isWhitespace(afterUrl[i])) {
+      ++i;
+    }
+
+    // TODO: Introduce RefCountedString type.
+    std::vector<char> str;
+
+    while (i < afterUrl.size()) {
+      const char ch = afterUrl[i];
+
+      if (ch == ')') {
+        return token<Token::Url>(i + charsConsumedBefore + 1, std::string(str.begin(), str.end()));
+      } else if (isWhitespace(ch)) {
+        ++i;
+        while (i < afterUrl.size() && isWhitespace(afterUrl[i])) {
+          ++i;
+        }
+
+        // Consume as much whitespace as possible. If the next input code point is U+0029 RIGHT
+        // PARENTHESIS ()) or EOF, consume it and return the <url-token>.
+        if (i == afterUrl.size() || afterUrl[i] == ')') {
+          continue;
+        } else {
+          // Otherwise, consume the remnants of a bad url, create a <bad-url-token>, and return it.
+          return consumeRemnantsOfBadUrl(afterUrl.substr(i), charsConsumedBefore + i);
+        }
+      } else if (isQuote(ch) || ch == '(' || isNonPrintableCodepoint(ch)) {
+        // This is a parse error. Consume the remnants of a bad url, create a <bad-url-token>, and
+        // return it.
+        return consumeRemnantsOfBadUrl(afterUrl.substr(i), charsConsumedBefore + i);
+      } else if (i + 1 < afterUrl.size() && isValidEscape(afterUrl[i], afterUrl[i + 1])) {
+        // U+005C REVERSE SOLIDUS (\): If the stream starts with a valid escape, consume an escaped
+        // code point and append the returned code point to the <url-token>'s value.
+        auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(afterUrl.substr(i + 1));
+        utf8::append(codepoint, std::back_inserter(str));
+        i += bytesConsumed + 1;
+      } else {
+        // anything else: Append the current input code point to the <url-token>'s value.
+        str.push_back(afterUrl[i]);
+        ++i;
+      }
+    }
+
+    // EOF: This is a parse error. Return the <url-token>.
+    return token<Token::Url>(i + charsConsumedBefore, std::string(str.begin(), str.end()));
+  }
+
+  /// Consume the remnants of a bad url, per
+  /// https://www.w3.org/TR/css-syntax-3/#consume-remnants-of-bad-url
+  Token consumeRemnantsOfBadUrl(const std::string_view badUrl, size_t charsConsumedBefore) {
+    size_t i = 0;
+
+    while (i < badUrl.size()) {
+      const char ch = badUrl[i];
+
+      if (ch == ')') {
+        ++i;
+        break;
+      } else if (i + 1 < badUrl.size() && isValidEscape(badUrl[i], badUrl[i + 1])) {
+        // the input stream starts with a valid escape: Consume an escaped code point. This allows
+        // an escaped right parenthesis ("\)") to be encountered without ending the <bad-url-token>.
+        // This is otherwise identical to the "anything else" clause.
+        auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(badUrl.substr(i + 1));
+        i += bytesConsumed + 1;
+      } else {
+        ++i;
+      }
+    }
+
+    return token<Token::BadUrl>(i + charsConsumedBefore);
   }
 
   static bool isWhitespace(char ch) {
@@ -318,6 +430,8 @@ private:
   }
 
   static bool isNewline(char ch) { return ch == '\r' || ch == '\n'; }
+
+  static bool isQuote(char ch) { return ch == '"' || ch == '\''; }
 
   /// Returns true if the character is a valid name start codepoint, per
   /// https://www.w3.org/TR/css-syntax-3/#name-start-code-point
@@ -331,7 +445,13 @@ private:
 
   /// Returns true if the codepoint is a surrogate, per
   /// https://infra.spec.whatwg.org/#surrogate
-  static bool isSurrogateCodepoint(char32_t ch) { return (ch >= 0xD800 && ch <= 0xDFFF); }
+  static bool isSurrogateCodepoint(char32_t ch) { return ch >= 0xD800 && ch <= 0xDFFF; }
+
+  /// Returns true if the codepoint is non-printable, per
+  /// https://www.w3.org/TR/css-syntax-3/#non-printable-code-point
+  static bool isNonPrintableCodepoint(char ch) {
+    return (ch >= 0 && ch <= 0x08) || ch == 0x0B || (ch >= 0x0E && ch <= 0x1F) || ch == 0x7F;
+  }
 
   static uint8_t hexDigitToDecimal(char ch) {
     switch (ch) {
@@ -426,6 +546,20 @@ private:
     } else {
       return false;
     }
+  }
+
+  static bool stringLowercaseEq(std::string_view str, std::string_view matcher) {
+    if (str.size() != matcher.size()) {
+      return false;
+    }
+
+    for (size_t i = 0; i < str.size(); ++i) {
+      if (std::tolower(str[i]) != matcher[i]) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /// U+FFFD REPLACEMENT CHARACTER (�)

@@ -262,10 +262,15 @@ TEST(Tokenizer, NumberExponent) {
               ParseResultIs(ElementsAre(Token(Token::Number(.1), 0))));
 
   // Words for Inf and NaN should not be numbers.
-  EXPECT_THAT(AllTokens(Tokenizer("Inf")), ParseErrorIs("Not implemented"));
-  EXPECT_THAT(AllTokens(Tokenizer("+Inf")), ParseErrorIs("Not implemented"));
-  EXPECT_THAT(AllTokens(Tokenizer("-Inf")), ParseErrorIs("Not implemented"));
-  EXPECT_THAT(AllTokens(Tokenizer("NaN")), ParseErrorIs("Not implemented"));
+  EXPECT_THAT(AllTokens(Tokenizer("Inf")),
+              ParseResultIs(ElementsAre(Token(Token::Ident("Inf"), 0))));
+  EXPECT_THAT(
+      AllTokens(Tokenizer("+Inf")),
+      ParseResultIs(ElementsAre(Token(Token::Delim('+'), 0), Token(Token::Ident("Inf"), 1))));
+  EXPECT_THAT(AllTokens(Tokenizer("-Inf")),
+              ParseResultIs(ElementsAre(Token(Token::Ident("-Inf"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("NaN")),
+              ParseResultIs(ElementsAre(Token(Token::Ident("NaN"), 0))));
 
   // Infinite numbers should still parse.
   EXPECT_THAT(
@@ -310,6 +315,86 @@ TEST(Tokenizer, CDCAndCDO) {
   EXPECT_THAT(AllTokens(Tokenizer("<!-- -->")),
               ParseResultIs(ElementsAre(Token(Token::CDO(), 0), Token(Token::Whitespace(" "), 4),
                                         Token(Token::CDC(), 5))));
+  EXPECT_THAT(Tokenizer("<").next(), ParseResultIs(Token(Token::Delim('<'), 0)));
+}
+
+TEST(Tokenizer, AtKeyword) {
+  EXPECT_THAT(AllTokens(Tokenizer("@test")),
+              ParseResultIs(ElementsAre(Token(Token::AtKeyword("test"), 0))));
+  EXPECT_THAT(Tokenizer("@").next(), ParseResultIs(Token(Token::Delim('@'), 0)));
+}
+
+TEST(Tokenizer, IdentLikeToken) {
+  EXPECT_THAT(AllTokens(Tokenizer("ident")),
+              ParseResultIs(ElementsAre(Token(Token::Ident("ident"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("--ident")),
+              ParseResultIs(ElementsAre(Token(Token::Ident("--ident"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("\\20ident")),
+              ParseResultIs(ElementsAre(Token(Token::Ident(" ident"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("\\")), ParseResultIs(ElementsAre(Token(Token::Delim('\\'), 0))));
+
+  EXPECT_THAT(AllTokens(Tokenizer("func()")),
+              ParseResultIs(ElementsAre(Token(Token::Function("func"), 0),
+                                        Token(Token::CloseParenthesis(), 5))));
+  EXPECT_THAT(
+      AllTokens(Tokenizer("func('test')")),
+      ParseResultIs(ElementsAre(Token(Token::Function("func"), 0), Token(Token::String("test"), 5),
+                                Token(Token::CloseParenthesis(), 11))));
+  EXPECT_THAT(AllTokens(Tokenizer("func(  'test')")),
+              ParseResultIs(ElementsAre(
+                  Token(Token::Function("func"), 0), Token(Token::Whitespace("  "), 5),
+                  Token(Token::String("test"), 7), Token(Token::CloseParenthesis(), 13))));
+
+  EXPECT_THAT(AllTokens(Tokenizer("func ()")),
+              ParseResultIs(ElementsAre(
+                  Token(Token::Ident("func"), 0), Token(Token::Whitespace(" "), 4),
+                  Token(Token::Parenthesis(), 5), Token(Token::CloseParenthesis(), 6))));
+}
+
+TEST(Tokenizer, Url) {
+  EXPECT_THAT(AllTokens(Tokenizer("url()")), ParseResultIs(ElementsAre(Token(Token::Url(""), 0))));
+
+  EXPECT_THAT(AllTokens(Tokenizer("url(test)")),
+              ParseResultIs(ElementsAre(Token(Token::Url("test"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("uRL(mixed-case)")),
+              ParseResultIs(ElementsAre(Token(Token::Url("mixed-case"), 0))));
+
+  // If EOF is hit, returns the remaining data.
+  EXPECT_THAT(AllTokens(Tokenizer("url(")), ParseResultIs(ElementsAre(Token(Token::Url(""), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("url(asdf")),
+              ParseResultIs(ElementsAre(Token(Token::Url("asdf"), 0))));
+
+  // Whitespace is allowed, both before and after the argument.
+  EXPECT_THAT(AllTokens(Tokenizer("url( before)")),
+              ParseResultIs(ElementsAre(Token(Token::Url("before"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("url(after )")),
+              ParseResultIs(ElementsAre(Token(Token::Url("after"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("url( \t  both \n )")),
+              ParseResultIs(ElementsAre(Token(Token::Url("both"), 0))));
+
+  // Whitespace in the middle is not allowed.
+  EXPECT_THAT(AllTokens(Tokenizer("url(whitespace in middle)")),
+              ParseResultIs(ElementsAre(Token(Token::BadUrl(), 0))));
+
+  // Quotes in middle or non-printable characters are not allowed.
+  EXPECT_THAT(AllTokens(Tokenizer("url(mid'quotes)")),
+              ParseResultIs(ElementsAre(Token(Token::BadUrl(), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("url(not\u001Fprintable)")),
+              ParseResultIs(ElementsAre(Token(Token::BadUrl(), 0))));
+
+  // `(` is not allowed in the URL either.
+  EXPECT_THAT(AllTokens(Tokenizer("url(()")),
+              ParseResultIs(ElementsAre(Token(Token::BadUrl(), 0))));
+
+  // Escapes are allowed.
+  EXPECT_THAT(AllTokens(Tokenizer("url(\\20)")),
+              ParseResultIs(ElementsAre(Token(Token::Url(" "), 0))));
+
+  // Allow escaping a `)`.
+  EXPECT_THAT(AllTokens(Tokenizer("url(\\))")),
+              ParseResultIs(ElementsAre(Token(Token::Url(")"), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("url(bad url \\))")),
+              ParseResultIs(ElementsAre(Token(Token::BadUrl(), 0))));
 }
 
 TEST(Tokenizer, Delim) {
