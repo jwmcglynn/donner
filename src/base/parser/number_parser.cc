@@ -6,7 +6,7 @@
 
 namespace donner {
 
-ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str) {
+ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Options options) {
   NumberParser::Result result;
   auto begin = str.begin();
 
@@ -50,6 +50,16 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str) {
     // Ending with a period is out-of-spec, move the pointer backwards and so it is not consumed.
     if (str[result.consumed_chars - 1] == '.') {
       --result.consumed_chars;
+    }
+
+    return result;
+  } else if (!options.forbid_out_of_range && ec == std::errc::result_out_of_range) {
+    result.consumed_chars = strAdvance - str.begin();
+
+    if (str.starts_with('-')) {
+      result.number = -std::numeric_limits<double>::infinity();
+    } else {
+      result.number = std::numeric_limits<double>::infinity();
     }
 
     return result;

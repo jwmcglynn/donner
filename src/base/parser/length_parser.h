@@ -56,7 +56,7 @@ public:
    * Result::consumed_chars.
    *
    * @param str String to parse, not all characters may be consumed.
-   * @param option Parser options.
+   * @param options Parser options.
    * @return Result containing the Length and the number of characters that were parsed.
    */
   static ParseResult<Result> Parse(std::string_view str, Options options = Options());

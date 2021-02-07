@@ -5,6 +5,7 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/bazel-donner-svg/external/entt/src",
+                "${workspaceFolder}/bazel-donner-svg/external/utfcpp/source",
                 "${workspaceFolder}/bazel-donner-svg/external/com_google_absl",
                 "${workspaceFolder}/bazel-donner-svg/external/com_google_gtest/googletest/include",
                 "${workspaceFolder}/bazel-donner-svg/external/com_google_gtest/googlemock/include",

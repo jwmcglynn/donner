@@ -2,359 +2,14 @@
 
 #include <utfcpp/utf8.h>
 
-#include <span>
 #include <string_view>
-#include <variant>
 
+#include "src/base/parser/number_parser.h"
 #include "src/base/parser/parse_result.h"
+#include "src/css/parser/details/token.h"
 
 namespace donner {
 namespace css {
-
-struct Token {
-  /// `<ident-token>`
-  struct Ident {
-    bool operator==(const Ident& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Ident& obj) {
-      os << "Ident(" << obj.value << ")";
-      return os;
-    }
-
-    std::string_view value;
-  };
-
-  /// `<function-token>`
-  struct Function {
-    bool operator==(const Function& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Function& obj) {
-      os << "Function(" << obj.name << ")";
-      return os;
-    }
-
-    /// Does not include the '(' character.
-    std::string_view name;
-  };
-
-  /// `<at-keyword-token>`
-  struct AtKeyword {
-    bool operator==(const AtKeyword& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const AtKeyword& obj) {
-      os << "AtKeyword(" << obj.value << ")";
-      return os;
-    }
-
-    /// The value, not including the '@' character.
-    std::string_view value;
-  };
-
-  /// `<hash-token>`
-  struct Hash {
-    enum class Type { Unrestricted, Id };
-
-    Hash(Type type, std::string&& name) : type(type), name(name) {}
-
-    bool operator==(const Hash& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Hash& obj) {
-      os << "Hash(" << (obj.type == Hash::Type::Unrestricted ? "unrestricted" : "id") << ": "
-         << obj.name << ")";
-      return os;
-    }
-
-    /// Hash type, defaults to unrestricted if not otherwise set.
-    Type type;
-
-    /// The name, not including the '#' character.
-    std::string name;
-  };
-
-  /// `<string-token>`
-  struct String {
-    String(std::string&& value) : value(value) {}
-
-    bool operator==(const String& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const String& obj) {
-      os << "String(\"" << obj.value << "\")";
-      return os;
-    }
-
-    std::string value;
-  };
-
-  /// `<bad-string-token>`
-  struct BadString {
-    BadString(std::string&& value) : value(value) {}
-
-    bool operator==(const BadString& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const BadString& obj) {
-      os << "BadString(\"" << obj.value << "\")";
-      return os;
-    }
-
-    std::string value;
-  };
-
-  /// `<url-token>`
-  struct Url {
-    bool operator==(const Url& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Url& obj) {
-      os << "Url(" << obj.value << ")";
-      return os;
-    }
-
-    std::string_view value;
-  };
-
-  /// `<bad-url-token>`
-  struct BadUrl {
-    bool operator==(const BadUrl&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const BadUrl&) {
-      os << "BadUrl";
-      return os;
-    }
-  };
-
-  /// `<delim-token>`
-  struct Delim {
-    Delim(char value) : value(value) {}
-
-    bool operator==(const Delim&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const Delim& obj) {
-      os << "Delim(" << obj.value << ")";
-      return os;
-    }
-
-    char value;
-  };
-
-  /// `<number-token>`
-  struct Number {
-    bool operator==(const Number& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Number& obj) {
-      os << "Number(" << obj.value << ")";
-      return os;
-    }
-
-    // TODO: Store parsed value?
-    std::string value;
-  };
-
-  /// `<percentage-token>`
-  struct Percentage {
-    bool operator==(const Percentage& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Percentage& obj) {
-      os << "Percentage(" << obj.value << ")";
-      return os;
-    }
-
-    // TODO: Store parsed value?
-    std::string_view value;
-  };
-
-  /// `<dimension-token>`
-  struct Dimension {
-    bool operator==(const Dimension& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Dimension& obj) {
-      os << "Dimension(" << obj.number << obj.suffix << ")";
-      return os;
-    }
-
-    // TODO: Store parsed value?
-    std::string_view number;
-    std::string_view suffix;
-  };
-
-  /// `<whitespace-token>`
-  struct Whitespace {
-    Whitespace(std::string_view value) : value(value) {}
-
-    bool operator==(const Whitespace& other) const = default;
-    friend std::ostream& operator<<(std::ostream& os, const Whitespace& obj) {
-      os << "Whitespace('" << obj.value << "', len=" << obj.value.size() << ")";
-      return os;
-    }
-
-    std::string_view value;
-  };
-
-  /// `<CDO-token>`, '<!--'
-  struct CDO {
-    bool operator==(const CDO&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CDO&) {
-      os << "CDO";
-      return os;
-    }
-  };
-
-  /// `<CDC-token>`, '-->'
-  struct CDC {
-    bool operator==(const CDC&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CDC&) {
-      os << "CDC";
-      return os;
-    }
-  };
-
-  /// `<colon-token>`
-  struct Colon {
-    bool operator==(const Colon&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const Colon&) {
-      os << "Colon";
-      return os;
-    }
-  };
-
-  /// `<semicolon-token>`
-  struct Semicolon {
-    bool operator==(const Semicolon&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const Semicolon&) {
-      os << "Semicolon";
-      return os;
-    }
-  };
-
-  /// `<comma-token>`
-  struct Comma {
-    bool operator==(const Comma&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const Comma&) {
-      os << "Comma";
-      return os;
-    }
-  };
-
-  /// `<[-token>`
-  struct SquareBracket {
-    bool operator==(const SquareBracket&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const SquareBracket&) {
-      os << "SquareBracket";
-      return os;
-    }
-  };
-
-  /// `<(-token>`
-  struct Parenthesis {
-    bool operator==(const Parenthesis&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const Parenthesis&) {
-      os << "Parenthesis";
-      return os;
-    }
-  };
-
-  /// `<{-token>`
-  struct CurlyBracket {
-    bool operator==(const CurlyBracket&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CurlyBracket&) {
-      os << "CurlyBracket";
-      return os;
-    }
-  };
-
-  /// `<]-token>`
-  struct CloseSquareBracket {
-    bool operator==(const CloseSquareBracket&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CloseSquareBracket&) {
-      os << "CloseSquareBracket";
-      return os;
-    }
-  };
-
-  /// `<)-token>`
-  struct CloseParenthesis {
-    bool operator==(const CloseParenthesis&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CloseParenthesis&) {
-      os << "CloseParenthesis";
-      return os;
-    }
-  };
-
-  /// `<}-token>`
-  struct CloseCurlyBracket {
-    bool operator==(const CloseCurlyBracket&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CloseCurlyBracket&) {
-      os << "CloseCurlyBracket";
-      return os;
-    }
-  };
-
-  /// `<EOF-token>`, named differently to avoid a naming conflict.
-  struct EOFToken {
-    bool operator==(const EOFToken&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const EOFToken&) {
-      os << "EOFToken";
-      return os;
-    }
-  };
-
-  /// Placeholder for things not implemented.
-  struct NotImplemented {
-    bool operator==(const NotImplemented&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const NotImplemented&) {
-      os << "NotImplemented";
-      return os;
-    }
-  };
-
-  using TokenValue =
-      std::variant<Ident, Function, AtKeyword, Hash, String, BadString, Url, BadUrl, Delim, Number,
-                   Percentage, Dimension, Whitespace, CDO, CDC, Colon, Semicolon, Comma,
-                   SquareBracket, Parenthesis, CurlyBracket, CloseSquareBracket, CloseParenthesis,
-                   CloseCurlyBracket, EOFToken, NotImplemented>;
-
-  Token(TokenValue&& value, size_t offset) : value_(std::move(value)), offset_(offset) {}
-
-  size_t tokenIndex() const { return value_.index(); }
-  size_t offset() const { return offset_; }
-
-  template <typename T>
-  bool is() const {
-    return std::holds_alternative<T>(value_);
-  }
-
-  template <typename T>
-  const T& get() const {
-    return std::get<indexOf<T>()>(value_);
-  }
-
-  template <typename Visitor>
-  void visit(Visitor&& visitor) const {
-    return std::visit(std::forward<Visitor>(visitor), value_);
-  }
-
-  template <typename R, typename Visitor>
-  R visit(Visitor&& visitor) const {
-    return std::visit(std::forward<Visitor>(visitor), value_);
-  }
-
-  template <typename T, size_t index = 0>
-  static constexpr size_t indexOf() {
-    if constexpr (index == std::variant_size_v<TokenValue>) {
-      return index;
-    } else if constexpr (std::is_same_v<std::variant_alternative_t<index, TokenValue>, T>) {
-      return index;
-    } else {
-      return indexOf<T, index + 1>();
-    }
-  }
-
-  bool isParseError() const {
-    switch (value_.index()) {
-      case indexOf<BadUrl>():
-      case indexOf<BadString>():
-      case indexOf<CloseParenthesis>():
-      case indexOf<CloseSquareBracket>():
-      case indexOf<CloseCurlyBracket>(): return true;
-    }
-
-    return false;
-  }
-
-  bool operator==(const Token& other) const {
-    return value_ == other.value_ && offset_ == other.offset_;
-  }
-
-private:
-  TokenValue value_;
-  size_t offset_;
-};
 
 class Tokenizer {
 public:
@@ -397,9 +52,76 @@ public:
         }
         break;
       }
+
+      case '+':
+      case '.': {
+        if (isNumberStart(remaining_)) {
+          return consumeNumericToken();
+        } else {
+          return token<Token::Delim>(1, remaining_[0]);
+        }
+      }
+
+      case '-': {
+        if (isNumberStart(remaining_)) {
+          return consumeNumericToken();
+        } else if (remaining_.starts_with("-->")) {
+          return token<Token::CDC>(3);
+        } else if (isIdentifierStart(remaining_)) {
+          return consumeIdentLikeToken();
+        } else {
+          return token<Token::Delim>(1, '-');
+        }
+      }
+
+      case '<': {
+        // If the next 3 input code points are U+0021 EXCLAMATION MARK U+002D HYPHEN-MINUS U+002D
+        // HYPHEN-MINUS (!--), consume them and return a <CDO-token>.
+        if (remaining_.starts_with("<!--")) {
+          return token<Token::CDO>(4);
+        }
+
+        ParseError err;
+        err.reason = "Not implemented";
+        err.offset = currentOffset();
+        return err;
+        // TODO
+      }
+
+      case '@': {
+        ParseError err;
+        err.reason = "Not implemented";
+        err.offset = currentOffset();
+        return err;
+        // TODO
+      }
+
+      case '\\': {
+        ParseError err;
+        err.reason = "Not implemented";
+        err.offset = currentOffset();
+        return err;
+        // TODO
+      }
+
+      case '(': return token<Token::Parenthesis>(1);
+      case ')': return token<Token::CloseParenthesis>(1);
+      case '[': return token<Token::SquareBracket>(1);
+      case ']': return token<Token::CloseSquareBracket>(1);
+      case '{': return token<Token::CurlyBracket>(1);
+      case '}': return token<Token::CloseCurlyBracket>(1);
+      case ',': return token<Token::Comma>(1);
+      case ':': return token<Token::Colon>(1);
+      case ';': return token<Token::Semicolon>(1);
     }
 
-    return Token(Token::NotImplemented(), currentOffset());
+    if (std::isdigit(remaining_[0])) {
+      return consumeNumericToken();
+    } else if (isNameStartCodepoint(remaining_[0])) {
+      return consumeIdentLikeToken();
+    } else {
+      return token<Token::Delim>(1, remaining_[0]);
+    }
   }
 
   bool isEOF() const { return remaining_.empty(); }
@@ -439,11 +161,11 @@ private:
 
     for (size_t i = 1; i < remaining_.size(); ++i) {
       if (!isWhitespace(remaining_[i])) {
-        return token<Token::Whitespace>(i, remaining_.substr(0, i));
+        return token<Token::Whitespace>(i, std::string(remaining_.substr(0, i)));
       }
     }
 
-    return token<Token::Whitespace>(remaining_.size(), remaining_);
+    return token<Token::Whitespace>(remaining_.size(), std::string(remaining_));
   }
 
   /// Consume a string token per https://www.w3.org/TR/css-syntax-3/#consume-a-string-token
@@ -561,6 +283,36 @@ private:
     }
   }
 
+  /// Consume a numeric token, per https://www.w3.org/TR/css-syntax-3/#consume-numeric-token
+  Token consumeNumericToken() {
+    NumberParser::Options options;
+    options.forbid_out_of_range = false;
+
+    ParseResult<NumberParser::Result> numberResult = NumberParser::Parse(remaining_, options);
+    assert(numberResult.hasResult());  // Should not hit due to isNumberStart() precondition.
+
+    NumberParser::Result number = numberResult.result();
+
+    std::string_view remainingAfterNumber = remaining_.substr(number.consumed_chars);
+    if (isIdentifierStart(remainingAfterNumber)) {
+      auto [name, nameConsumedChars] = consumeName(remainingAfterNumber);
+      return token<Token::Dimension>(number.consumed_chars + nameConsumedChars, number.number,
+                                     name);
+    } else if (remainingAfterNumber.starts_with("%")) {
+      return token<Token::Percentage>(number.consumed_chars + 1, number.number);
+    } else {
+      return token<Token::Number>(number.consumed_chars, number.number);
+    }
+  }
+
+  /// Consume an ident-like token, per https://www.w3.org/TR/css-syntax-3/#consume-ident-like-token
+  ParseResult<Token> consumeIdentLikeToken() {
+    ParseError err;
+    err.reason = "Not implemented";
+    err.offset = currentOffset();
+    return err;
+  }
+
   static bool isWhitespace(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\f' || ch == '\r' || ch == '\n';
   }
@@ -610,7 +362,7 @@ private:
     assert(false && "Should be unreachable.");
   }
 
-  /// Check if two codepoints are a valid escape, per
+  /// Check if two code points are a valid escape, per
   /// https://www.w3.org/TR/css-syntax-3/#starts-with-a-valid-escape
   static bool isValidEscape(char first, char second) {
     // If the first code point is not U+005C REVERSE SOLIDUS (\), return false.
@@ -642,6 +394,38 @@ private:
     }
 
     return false;
+  }
+
+  /// Check if three code points would start a number, per
+  /// https://www.w3.org/TR/css-syntax-3/#starts-with-a-number
+  static bool isNumberStart(std::string_view remaining) {
+    if (remaining.empty()) {
+      return false;
+    }
+
+    const size_t remainingSize = remaining.size();
+    if (remaining[0] == '+' || remaining[0] == '-') {
+      // U+002B PLUS SIGN (+) or U+002D HYPHEN-MINUS (-): If the second code point is a digit,
+      // return true.
+      if (remainingSize > 1 && std::isdigit(remaining[1])) {
+        return true;
+      }
+
+      // Otherwise, if the second code point is a U+002E FULL STOP (.) and the third code point is a
+      // digit, return true.
+      if (remainingSize > 2 && remaining[1] == '.' && std::isdigit(remaining[2])) {
+        return true;
+      }
+
+      return false;
+    } else if (remaining[0] == '.') {
+      // If the second code point is a digit, return true. Otherwise, return false.
+      return (remainingSize > 1 && std::isdigit(remaining[1]));
+    } else if (std::isdigit(remaining[0])) {
+      return true;
+    } else {
+      return false;
+    }
   }
 
   /// U+FFFD REPLACEMENT CHARACTER (�)

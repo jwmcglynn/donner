@@ -13,6 +13,17 @@ public:
     size_t consumed_chars;
   };
 
+  struct Options {
+    /**
+     * If this is false and the number is out of range, returns an infinite value instead of
+     * returning an error.  With this set to false, assuming the input string starts with a number,
+     * all parses should return successful ParseResults.
+     */
+    bool forbid_out_of_range = true;
+
+    Options() {}
+  };
+
   /**
    * Parse an SVG number.
    *
@@ -26,9 +37,10 @@ public:
    *  * Optionally, an exponent composed of 'e' or 'E' followed by an integer.
    *
    * @param str String to parse, not all characters may be consumed.
+   * @param options Parser options.
    * @return Result containing the number and the number of characters that were parsed.
    */
-  static ParseResult<Result> Parse(std::string_view str);
+  static ParseResult<Result> Parse(std::string_view str, Options options = Options());
 };
 
 }  // namespace donner

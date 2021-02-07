@@ -104,6 +104,30 @@ TEST(NumberParser, InfAndNaN) {
   EXPECT_THAT(NumberParser::Parse("NaN"), ParseErrorIs(HasSubstr("Not finite")));
   EXPECT_THAT(NumberParser::Parse("+NaN"), ParseErrorIs(HasSubstr("Not finite")));
   EXPECT_THAT(NumberParser::Parse("-NaN"), ParseErrorIs(HasSubstr("Not finite")));
+
+  EXPECT_THAT(NumberParser::Parse("99e999999999999999"), ParseErrorIs(HasSubstr("Out of range")));
+  EXPECT_THAT(NumberParser::Parse("-99e999999999999999"), ParseErrorIs(HasSubstr("Out of range")));
+}
+
+TEST(NumberParser, AllowOutOfRange) {
+  NumberParser::Options options;
+  options.forbid_out_of_range = false;
+
+  // Still don't allow Inf/NaN.
+  EXPECT_THAT(NumberParser::Parse("Inf", options), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::Parse("+Inf", options), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::Parse("-Inf", options), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::Parse("NaN", options), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::Parse("+NaN", options), ParseErrorIs(HasSubstr("Not finite")));
+  EXPECT_THAT(NumberParser::Parse("-NaN", options), ParseErrorIs(HasSubstr("Not finite")));
+
+  // Allow large numbers that become inf.
+  EXPECT_THAT(NumberParser::Parse("99e999999999999999", options),
+              ParseResultIs(Result{std::numeric_limits<double>::infinity(), 18}));
+  EXPECT_THAT(NumberParser::Parse("+99e999999999999999", options),
+              ParseResultIs(Result{std::numeric_limits<double>::infinity(), 19}));
+  EXPECT_THAT(NumberParser::Parse("-99e999999999999999", options),
+              ParseResultIs(Result{-std::numeric_limits<double>::infinity(), 19}));
 }
 
 }  // namespace donner

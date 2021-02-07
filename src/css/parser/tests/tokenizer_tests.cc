@@ -4,6 +4,8 @@
 #include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/css/parser/details/tokenizer.h"
 
+using testing::ElementsAre;
+
 namespace donner {
 namespace css {
 
@@ -14,9 +16,29 @@ void PrintTo(const Token& token, std::ostream* os) {
   *os << " }";
 }
 
+ParseResult<std::vector<Token>> AllTokens(Tokenizer&& tokenizer) {
+  std::vector<Token> tokens;
+
+  while (!tokenizer.isEOF()) {
+    auto tokenResult = tokenizer.next();
+    if (tokenResult.hasError()) {
+      return std::move(tokenResult.error());
+    } else {
+      tokens.emplace_back(std::move(tokenResult.result()));
+    }
+  }
+
+  return tokens;
+}
+
 TEST(Tokenizer, Empty) {
   Tokenizer tokenizer("");
   EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::EOFToken(), 0)));
+}
+
+TEST(Tokenizer, Whitespace) {
+  Tokenizer tokenizer(" \t\f\r\n");
+  EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Whitespace(" \t\f\r\n"), 0)));
 }
 
 TEST(Tokenizer, Comment) {
@@ -30,15 +52,15 @@ TEST(Tokenizer, Comment) {
     EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::EOFToken(), 10)));
   }
 
-  {
-    Tokenizer tokenizer("/* test");
-    EXPECT_THAT(tokenizer.next(), ParseErrorIs("Unterminated comment"));
-  }
+  EXPECT_THAT(Tokenizer("/* test").next(), ParseErrorIs("Unterminated comment"));
+  EXPECT_THAT(Tokenizer("/*/").next(), ParseErrorIs("Unterminated comment"));
+}
 
-  {
-    Tokenizer tokenizer("/*/");
-    EXPECT_THAT(tokenizer.next(), ParseErrorIs("Unterminated comment"));
-  }
+TEST(Tokenizer, CommentAndWhitespace) {
+  Tokenizer tokenizer("/**/ /**/\f\r\n/*\n*/");
+  EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Whitespace(" "), 4)));
+  EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Whitespace("\f\r\n"), 9)));
+  EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::EOFToken(), 17)));
 }
 
 TEST(Tokenizer, String) {
@@ -178,6 +200,131 @@ TEST(Tokenizer, Hash) {
   // If there are two dashes, any name-qualified characters are considered an "id".
   EXPECT_THAT(Tokenizer("#--0start").next(),
               ParseResultIs(Token(Token::Hash(Token::Hash::Type::Id, "--0start"), 0)));
+}
+
+TEST(Tokenizer, Number) {
+  EXPECT_THAT(AllTokens(Tokenizer("0")), ParseResultIs(ElementsAre(Token(Token::Number(0.), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("01234")),
+              ParseResultIs(ElementsAre(Token(Token::Number(01234.), 0))));
+
+  EXPECT_THAT(
+      AllTokens(Tokenizer(".1234/* */987")),
+      ParseResultIs(ElementsAre(Token(Token::Number(.1234), 0), Token(Token::Number(987.), 10))));
+
+  EXPECT_THAT(AllTokens(Tokenizer("..1")),
+              ParseResultIs(ElementsAre(Token(Token::Delim('.'), 0), Token(Token::Number(.1), 1))));
+}
+
+TEST(Tokenizer, NumberSigns) {
+  EXPECT_THAT(Tokenizer("+").next(), ParseResultIs(Token(Token::Delim('+'), 0)));
+  EXPECT_THAT(Tokenizer("-").next(), ParseResultIs(Token(Token::Delim('-'), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("+-")),
+              ParseResultIs(ElementsAre(Token(Token::Delim('+'), 0), Token(Token::Delim('-'), 1))));
+  EXPECT_THAT(AllTokens(Tokenizer("+.")),
+              ParseResultIs(ElementsAre(Token(Token::Delim('+'), 0), Token(Token::Delim('.'), 1))));
+
+  EXPECT_THAT(Tokenizer("+0").next(), ParseResultIs(Token(Token::Number(0.), 0)));
+  EXPECT_THAT(Tokenizer("-0").next(), ParseResultIs(Token(Token::Number(-0.), 0)));
+
+  EXPECT_THAT(
+      AllTokens(Tokenizer("+-0")),
+      ParseResultIs(ElementsAre(Token(Token::Delim('+'), 0), Token(Token::Number(-0.), 1))));
+  EXPECT_THAT(AllTokens(Tokenizer("-+0")),
+              ParseResultIs(ElementsAre(Token(Token::Delim('.'), 0), Token(Token::Number(0.), 1))));
+}
+
+TEST(Tokenizer, NumberDecimal) {
+  EXPECT_THAT(AllTokens(Tokenizer(".")), ParseResultIs(ElementsAre(Token(Token::Delim('.'), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer(".+")),
+              ParseResultIs(ElementsAre(Token(Token::Delim('.'), 0), Token(Token::Delim('+'), 1))));
+
+  EXPECT_THAT(AllTokens(Tokenizer(".0")), ParseResultIs(ElementsAre(Token(Token::Number(0.), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("-.1")),
+              ParseResultIs(ElementsAre(Token(Token::Number(-.1), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("+.1")), ParseResultIs(ElementsAre(Token(Token::Number(.1), 0))));
+
+  // Numbers should not end with a dot, it should create two tokens.
+  EXPECT_THAT(AllTokens(Tokenizer("0.")),
+              ParseResultIs(ElementsAre(Token(Token::Number(0), 0), Token(Token::Delim('.'), 1))));
+
+  EXPECT_THAT(
+      AllTokens(Tokenizer("0.6.5")),
+      ParseResultIs(ElementsAre(Token(Token::Number(0.6), 0), Token(Token::Number(0.5), 3))));
+}
+
+TEST(Tokenizer, NumberExponent) {
+  EXPECT_THAT(AllTokens(Tokenizer("1e0")), ParseResultIs(ElementsAre(Token(Token::Number(1.), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("-1e0")),
+              ParseResultIs(ElementsAre(Token(Token::Number(-1.), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("-10e+2")),
+              ParseResultIs(ElementsAre(Token(Token::Number(-1000.), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("10e-2")),
+              ParseResultIs(ElementsAre(Token(Token::Number(.1), 0))));
+
+  // Words for Inf and NaN should not be numbers.
+  EXPECT_THAT(AllTokens(Tokenizer("Inf")), ParseErrorIs("Not implemented"));
+  EXPECT_THAT(AllTokens(Tokenizer("+Inf")), ParseErrorIs("Not implemented"));
+  EXPECT_THAT(AllTokens(Tokenizer("-Inf")), ParseErrorIs("Not implemented"));
+  EXPECT_THAT(AllTokens(Tokenizer("NaN")), ParseErrorIs("Not implemented"));
+
+  // Infinite numbers should still parse.
+  EXPECT_THAT(
+      AllTokens(Tokenizer("99e999999999999999")),
+      ParseResultIs(ElementsAre(Token(Token::Number(std::numeric_limits<double>::infinity()), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("-99e999999999999999")),
+              ParseResultIs(
+                  ElementsAre(Token(Token::Number(-std::numeric_limits<double>::infinity()), 0))));
+}
+
+TEST(Tokenizer, CharTokens) {
+  EXPECT_THAT(Tokenizer("(").next(), ParseResultIs(Token(Token::Parenthesis(), 0)));
+  EXPECT_THAT(Tokenizer(")").next(), ParseResultIs(Token(Token::CloseParenthesis(), 0)));
+  EXPECT_THAT(Tokenizer("[").next(), ParseResultIs(Token(Token::SquareBracket(), 0)));
+  EXPECT_THAT(Tokenizer("]").next(), ParseResultIs(Token(Token::CloseSquareBracket(), 0)));
+  EXPECT_THAT(Tokenizer("{").next(), ParseResultIs(Token(Token::CurlyBracket(), 0)));
+  EXPECT_THAT(Tokenizer("}").next(), ParseResultIs(Token(Token::CloseCurlyBracket(), 0)));
+  EXPECT_THAT(Tokenizer(",").next(), ParseResultIs(Token(Token::Comma(), 0)));
+  EXPECT_THAT(Tokenizer(":").next(), ParseResultIs(Token(Token::Colon(), 0)));
+  EXPECT_THAT(Tokenizer(";").next(), ParseResultIs(Token(Token::Semicolon(), 0)));
+
+  {
+    Tokenizer tokenizer("()[]{},:;");
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Parenthesis(), 0)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::CloseParenthesis(), 1)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::SquareBracket(), 2)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::CloseSquareBracket(), 3)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::CurlyBracket(), 4)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::CloseCurlyBracket(), 5)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Comma(), 6)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Colon(), 7)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Semicolon(), 8)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::EOFToken(), 9)));
+  }
+}
+
+TEST(Tokenizer, CDCAndCDO) {
+  EXPECT_THAT(AllTokens(Tokenizer("<!--")), ParseResultIs(ElementsAre(Token(Token::CDO(), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("-->")), ParseResultIs(ElementsAre(Token(Token::CDC(), 0))));
+  EXPECT_THAT(AllTokens(Tokenizer("<!---->")),
+              ParseResultIs(ElementsAre(Token(Token::CDO(), 0), Token(Token::CDC(), 4))));
+  EXPECT_THAT(AllTokens(Tokenizer("<!-- -->")),
+              ParseResultIs(ElementsAre(Token(Token::CDO(), 0), Token(Token::Whitespace(" "), 4),
+                                        Token(Token::CDC(), 5))));
+}
+
+TEST(Tokenizer, Delim) {
+  EXPECT_THAT(Tokenizer("!").next(), ParseResultIs(Token(Token::Delim('!'), 0)));
+  EXPECT_THAT(Tokenizer("$").next(), ParseResultIs(Token(Token::Delim('$'), 0)));
+  EXPECT_THAT(Tokenizer("%").next(), ParseResultIs(Token(Token::Delim('%'), 0)));
+  EXPECT_THAT(Tokenizer("^").next(), ParseResultIs(Token(Token::Delim('^'), 0)));
+  EXPECT_THAT(Tokenizer("&").next(), ParseResultIs(Token(Token::Delim('&'), 0)));
+
+  {
+    Tokenizer tokenizer("!$");
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Delim('!'), 0)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::Delim('$'), 1)));
+    EXPECT_THAT(tokenizer.next(), ParseResultIs(Token(Token::EOFToken(), 2)));
+  }
 }
 
 }  // namespace css
