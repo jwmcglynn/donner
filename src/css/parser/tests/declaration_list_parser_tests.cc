@@ -10,81 +10,47 @@ using testing::ElementsAre;
 namespace donner {
 namespace css {
 
-void PrintTo(const AtRule& rule, std::ostream* os) {
-  *os << "AtRule {\n";
-  *os << "  " << rule.name << "\n";
-  for (auto& value : rule.prelude) {
-    *os << "  " << testing::PrintToString(value) << "\n";
-  }
-  if (rule.block) {
-    *os << "  { " << testing::PrintToString(*rule.block) << " }\n";
-  }
-  *os << "}";
-}
-
-void PrintTo(const Function& func, std::ostream* os) {
-  *os << "Function { ";
-  *os << func.name << "(";
-  for (auto& value : func.values) {
-    *os << " " << testing::PrintToString(value);
-  }
-  *os << " ) }";
-}
-
-void PrintTo(const SimpleBlock& block, std::ostream* os) {
-  *os << "SimpleBlock {\n";
-  *os << "  token=";
-  switch (block.associatedToken) {
-    case Token::indexOf<Token::CurlyBracket>(): *os << "'{'"; break;
-    case Token::indexOf<Token::SquareBracket>(): *os << "'['"; break;
-    case Token::indexOf<Token::Parenthesis>(): *os << "'('"; break;
-    default: *os << "<unknown>"; break;
-  }
-  *os << "\n";
-  for (auto& value : block.values) {
-    *os << "  " << testing::PrintToString(value) << "\n";
-  }
-  *os << "}";
-}
-
-void PrintTo(const ComponentValue& value, std::ostream* os) {
-  std::visit([os](auto&& v) { *os << testing::PrintToString(v); }, value);
-}
-
-void PrintTo(const Declaration& declaration, std::ostream* os) {
-  *os << "Declaration { \n";
-  *os << "  " << declaration.name << "\n";
-  for (auto& value : declaration.values) {
-    *os << "  " << testing::PrintToString(value) << "\n";
-  }
-  if (declaration.important) {
-    *os << "  !important\n";
-  }
-  *os << "}";
-}
-
 TEST(DeclarationListParser, Empty) {
-  EXPECT_THAT(DeclarationListParser::Parse(""), ParseResultIs(ElementsAre()));
+  EXPECT_THAT(DeclarationListParser::Parse(""), DeclarationListIs());
 }
 
 TEST(DeclarationListParser, Simple) {
   EXPECT_THAT(DeclarationListParser::Parse("test: test"),
-              ParseResultIs(ElementsAre(DeclarationIs("test", ElementsAre(TokenIsIdent("test"))))));
+              DeclarationListIs(DeclarationIs("test", ElementsAre(TokenIsIdent("test")))));
 }
 
 TEST(DeclarationListParser, Important) {
-  EXPECT_THAT(
-      DeclarationListParser::Parse("name: value !important"),
-      ParseResultIs(ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")), true))));
+  EXPECT_THAT(DeclarationListParser::Parse("name: value !important"),
+              DeclarationListIs(DeclarationIs("name", ElementsAre(TokenIsIdent("value")), true)));
   EXPECT_THAT(DeclarationListParser::Parse("test: !important value"),
-              ParseResultIs(ElementsAre(
+              DeclarationListIs(
                   DeclarationIs("test", ElementsAre(TokenIsDelim('!'), TokenIsIdent("important"),
-                                                    TokenIsIdent("value"))))));
+                                                    TokenIsIdent("value")))));
 }
 
-TEST(DISABLED_DeclarationListParser, AtRule) {
-  // TODO
-  EXPECT_THAT(DeclarationListParser::Parse("@test test; @thing {}"), ParseResultIs(ElementsAre()));
+TEST(DeclarationListParser, AtRule) {
+  EXPECT_THAT(DeclarationListParser::Parse("@atrule"),
+              DeclarationListIs(AtRuleIs("atrule", ElementsAre())));
+
+  EXPECT_THAT(
+      DeclarationListParser::Parse("@import url(https://example.com) supports(test)"),
+      DeclarationListIs(AtRuleIs(
+          "import", ElementsAre(TokenIsWhitespace(" "), TokenIsUrl("https://example.com"),
+                                TokenIsWhitespace(" "),
+                                FunctionIs("supports", ElementsAre(TokenIsIdent("test")))))));
+
+  EXPECT_THAT(DeclarationListParser::Parse("@with-block { rule: value }"),
+              DeclarationListIs(AtRuleIs(
+                  "with-block", ElementsAre(TokenIsWhitespace(" ")),
+                  SimpleBlockIsCurly(ElementsAre(TokenIsWhitespace(" "), TokenIsIdent("rule"),
+                                                 TokenIsColon(), TokenIsWhitespace(" "),
+                                                 TokenIsIdent("value"), TokenIsWhitespace(" "))))));
+
+  EXPECT_THAT(
+      DeclarationListParser::Parse("@test test; @thing {}"),
+      DeclarationListIs(AtRuleIs("test", ElementsAre(TokenIsWhitespace(" "), TokenIsIdent("test"))),
+                        AtRuleIs("thing", ElementsAre(TokenIsWhitespace(" ")),
+                                 SimpleBlockIsCurly(ElementsAre()))));
 }
 
 }  // namespace css

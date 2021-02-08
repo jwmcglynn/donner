@@ -5,6 +5,7 @@
 #include <ostream>
 #include <type_traits>
 
+#include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/css/declaration.h"
 #include "src/css/token.h"
 
@@ -22,6 +23,11 @@ struct is_variant<std::variant<Ts...>> : std::true_type {};
 }  // namespace details
 
 void PrintTo(const Token& token, std::ostream* os);
+void PrintTo(const AtRule& rule, std::ostream* os);
+void PrintTo(const Function& func, std::ostream* os);
+void PrintTo(const SimpleBlock& block, std::ostream* os);
+void PrintTo(const ComponentValue& value, std::ostream* os);
+void PrintTo(const Declaration& declaration, std::ostream* os);
 
 MATCHER_P(TokenIsImpl, token, "") {
   using TokenType = std::remove_cvref_t<decltype(token)>;
@@ -203,7 +209,90 @@ auto DeclarationIs(NameMatcher nameMatcher, ValuesMatcher valuesMatcher,
 
 template <typename NameMatcher, typename ValuesMatcher>
 auto DeclarationIs(NameMatcher nameMatcher, ValuesMatcher valuesMatcher) {
-  return DeclarationIs(nameMatcher, valuesMatcher, false);
+  return DeclarationIsImpl(nameMatcher, valuesMatcher, false);
+}
+
+MATCHER_P3(AtRuleIsImpl, nameMatcher, preludeMatcher, blockMatcher, "") {
+  const AtRule* rule = nullptr;
+
+  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
+    rule = std::get_if<AtRule>(&arg);
+  } else {
+    rule = &arg;
+  }
+
+  if (!rule) {
+    return false;
+  }
+
+  return testing::ExplainMatchResult(nameMatcher, rule->name, result_listener) &&
+         testing::ExplainMatchResult(preludeMatcher, rule->prelude, result_listener) &&
+         testing::ExplainMatchResult(blockMatcher, rule->block, result_listener);
+}
+
+template <typename NameMatcher, typename PreludeMatcher, typename BlockMatcher>
+auto AtRuleIs(NameMatcher nameMatcher, PreludeMatcher preludeMatcher, BlockMatcher blockMatcher) {
+  return AtRuleIsImpl(nameMatcher, preludeMatcher, testing::Optional(blockMatcher));
+}
+
+template <typename NameMatcher, typename PreludeMatcher>
+auto AtRuleIs(NameMatcher nameMatcher, PreludeMatcher preludeMatcher) {
+  return AtRuleIsImpl(nameMatcher, preludeMatcher, testing::Eq(std::nullopt));
+}
+
+template <typename... Args>
+auto DeclarationListIs(Args... args) {
+  return ParseResultIs(testing::ElementsAre(std::forward<Args>(args)...));
+}
+
+MATCHER_P2(FunctionIs, nameMatcher, valuesMatcher, "") {
+  const Function* func = nullptr;
+
+  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
+    func = std::get_if<Function>(&arg);
+  } else {
+    func = &arg;
+  }
+
+  if (!func) {
+    return false;
+  }
+
+  return testing::ExplainMatchResult(nameMatcher, func->name, result_listener) &&
+         testing::ExplainMatchResult(valuesMatcher, func->values, result_listener);
+}
+
+MATCHER_P2(SimpleBlockIs, associatedTokenMatcher, valuesMatcher, "") {
+  const SimpleBlock* block = nullptr;
+
+  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
+    block = std::get_if<SimpleBlock>(&arg);
+  } else {
+    block = &arg;
+  }
+
+  if (!block) {
+    return false;
+  }
+
+  return testing::ExplainMatchResult(associatedTokenMatcher, block->associatedToken,
+                                     result_listener) &&
+         testing::ExplainMatchResult(valuesMatcher, block->values, result_listener);
+}
+
+template <typename ValuesMatcher>
+auto SimpleBlockIsCurly(ValuesMatcher valuesMatcher) {
+  return SimpleBlockIs(Token::indexOf<Token::CurlyBracket>(), valuesMatcher);
+}
+
+template <typename ValuesMatcher>
+auto SimpleBlockIsSquare(ValuesMatcher valuesMatcher) {
+  return SimpleBlockIs(Token::indexOf<Token::SquareBracket>(), valuesMatcher);
+}
+
+template <typename ValuesMatcher>
+auto SimpleBlockIsParenthesis(ValuesMatcher valuesMatcher) {
+  return SimpleBlockIs(Token::indexOf<Token::Parenthesis>(), valuesMatcher);
 }
 
 }  // namespace css
