@@ -23,17 +23,21 @@ struct is_variant<std::variant<Ts...>> : std::true_type {};
 }  // namespace details
 
 void PrintTo(const Token& token, std::ostream* os);
-void PrintTo(const AtRule& rule, std::ostream* os);
 void PrintTo(const Function& func, std::ostream* os);
 void PrintTo(const SimpleBlock& block, std::ostream* os);
-void PrintTo(const ComponentValue& value, std::ostream* os);
+void PrintTo(const ComponentValue& component, std::ostream* os);
+
 void PrintTo(const Declaration& declaration, std::ostream* os);
+void PrintTo(const AtRule& rule, std::ostream* os);
+void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os);
 
 MATCHER_P(TokenIsImpl, token, "") {
   using TokenType = std::remove_cvref_t<decltype(token)>;
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
-    if (const Token* argToken = std::get_if<Token>(&arg)) {
+  if constexpr (std::is_same_v<ArgType, ComponentValue> ||
+                std::is_same_v<ArgType, DeclarationOrAtRule>) {
+    if (const Token* argToken = std::get_if<Token>(&arg.value)) {
       if (argToken->is<TokenType>()) {
         return argToken->get<TokenType>() == token;
       }
@@ -184,10 +188,11 @@ auto TokenIsEOFToken(Args... args) {
 }
 
 MATCHER_P3(DeclarationIsImpl, nameMatcher, valuesMatcher, importantMatcher, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
   const Declaration* decl = nullptr;
 
-  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
-    decl = std::get_if<Declaration>(&arg);
+  if constexpr (std::is_same_v<ArgType, DeclarationOrAtRule>) {
+    decl = std::get_if<Declaration>(&arg.value);
   } else {
     decl = &arg;
   }
@@ -213,10 +218,11 @@ auto DeclarationIs(NameMatcher nameMatcher, ValuesMatcher valuesMatcher) {
 }
 
 MATCHER_P3(AtRuleIsImpl, nameMatcher, preludeMatcher, blockMatcher, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
   const AtRule* rule = nullptr;
 
-  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
-    rule = std::get_if<AtRule>(&arg);
+  if constexpr (std::is_same_v<ArgType, DeclarationOrAtRule>) {
+    rule = std::get_if<AtRule>(&arg.value);
   } else {
     rule = &arg;
   }
@@ -246,10 +252,11 @@ auto DeclarationListIs(Args... args) {
 }
 
 MATCHER_P2(FunctionIs, nameMatcher, valuesMatcher, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
   const Function* func = nullptr;
 
-  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
-    func = std::get_if<Function>(&arg);
+  if constexpr (std::is_same_v<ArgType, ComponentValue>) {
+    func = std::get_if<Function>(&arg.value);
   } else {
     func = &arg;
   }
@@ -263,10 +270,11 @@ MATCHER_P2(FunctionIs, nameMatcher, valuesMatcher, "") {
 }
 
 MATCHER_P2(SimpleBlockIs, associatedTokenMatcher, valuesMatcher, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
   const SimpleBlock* block = nullptr;
 
-  if constexpr (details::is_variant<std::remove_cvref_t<decltype(arg)>>::value) {
-    block = std::get_if<SimpleBlock>(&arg);
+  if constexpr (std::is_same_v<ArgType, ComponentValue>) {
+    block = std::get_if<SimpleBlock>(&arg.value);
   } else {
     block = &arg;
   }

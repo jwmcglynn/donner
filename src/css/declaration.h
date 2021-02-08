@@ -11,9 +11,7 @@
 namespace donner {
 namespace css {
 
-struct SimpleBlock;
-struct Function;
-using ComponentValue = std::variant<Token, Function, SimpleBlock>;
+struct ComponentValue;
 
 struct Function {
   std::string name;
@@ -31,12 +29,21 @@ struct SimpleBlock {
   bool operator==(const SimpleBlock& other) const;
 };
 
+struct ComponentValue {
+  using Type = std::variant<Token, Function, SimpleBlock>;
+  Type value;
+
+  /* implicit */ ComponentValue(Type&& value);
+  bool operator==(const ComponentValue& other) const;
+};
+
 struct AtRule {
   std::string name;
   std::vector<ComponentValue> prelude;
   std::optional<ComponentValue> block;
 
-  bool operator==(const AtRule& other) const = default;
+  explicit AtRule(std::string name);
+  bool operator==(const AtRule& other) const;
 };
 
 struct Declaration {
@@ -50,7 +57,13 @@ struct Declaration {
   bool important = false;
 };
 
-using DeclarationOrAtRule = std::variant<Declaration, AtRule>;
+struct DeclarationOrAtRule {
+  using Type = std::variant<Declaration, AtRule>;
+  Type value;
+
+  /* implicit */ DeclarationOrAtRule(Type&& value);
+  bool operator==(const DeclarationOrAtRule& other) const;
+};
 
 }  // namespace css
 }  // namespace donner

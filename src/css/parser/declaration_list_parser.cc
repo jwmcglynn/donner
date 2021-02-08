@@ -115,8 +115,7 @@ public:
 
   /// Consume an at-rule, per https://www.w3.org/TR/css-syntax-3/#consume-at-rule
   ParseResult<AtRule> consumeAtRule(Token::AtKeyword&& atKeyword) {
-    AtRule result;
-    result.name = std::move(atKeyword.value);
+    AtRule result(std::move(atKeyword.value));
 
     while (!tokenizer_.isEOF()) {
       auto tokenResult = tokenizer_.next();
@@ -137,7 +136,7 @@ public:
           return std::move(blockResult.error());
         }
 
-        result.block = std::move(blockResult.result());
+        result.block = ComponentValue(std::move(blockResult.result()));
         return result;
       } else {
         // anything else: Reconsume the current input token. Consume a component value. Append the
@@ -271,7 +270,7 @@ public:
 
         auto componentValue = std::move(componentValueResult.result());
         // Scan for important.
-        if (Token* valueToken = std::get_if<Token>(&componentValue)) {
+        if (Token* valueToken = std::get_if<Token>(&componentValue.value)) {
           if (lastWasImportantBang && valueToken->is<Token::Ident>() &&
               stringLowercaseEq(valueToken->get<Token::Ident>().value, "important")) {
             declaration.important = true;

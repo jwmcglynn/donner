@@ -14,18 +14,6 @@ void PrintTo(const Token& token, std::ostream* os) {
   *os << " }";
 }
 
-void PrintTo(const AtRule& rule, std::ostream* os) {
-  *os << "AtRule {\n";
-  *os << "  " << rule.name << "\n";
-  for (auto& value : rule.prelude) {
-    *os << "  " << testing::PrintToString(value) << "\n";
-  }
-  if (rule.block) {
-    *os << "  { " << testing::PrintToString(*rule.block) << " }\n";
-  }
-  *os << "}";
-}
-
 void PrintTo(const Function& func, std::ostream* os) {
   *os << "Function { ";
   *os << func.name << "(";
@@ -51,8 +39,8 @@ void PrintTo(const SimpleBlock& block, std::ostream* os) {
   *os << "}";
 }
 
-void PrintTo(const ComponentValue& value, std::ostream* os) {
-  std::visit([os](auto&& v) { *os << testing::PrintToString(v); }, value);
+void PrintTo(const ComponentValue& component, std::ostream* os) {
+  std::visit([os](auto&& v) { *os << testing::PrintToString(v); }, component.value);
 }
 
 void PrintTo(const Declaration& declaration, std::ostream* os) {
@@ -65,6 +53,22 @@ void PrintTo(const Declaration& declaration, std::ostream* os) {
     *os << "  !important\n";
   }
   *os << "}";
+}
+
+void PrintTo(const AtRule& rule, std::ostream* os) {
+  *os << "AtRule {\n";
+  *os << "  " << rule.name << "\n";
+  for (auto& value : rule.prelude) {
+    *os << "  " << testing::PrintToString(value) << "\n";
+  }
+  if (rule.block) {
+    *os << "  { " << testing::PrintToString(*rule.block) << " }\n";
+  }
+  *os << "}";
+}
+
+void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os) {
+  std::visit([os](auto&& v) { *os << testing::PrintToString(v); }, declOrAt.value);
 }
 
 }  // namespace css
