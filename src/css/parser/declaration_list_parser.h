@@ -18,6 +18,15 @@ public:
    * @return Parsed declaration list, or an error.
    */
   static ParseResult<std::vector<DeclarationOrAtRule>> Parse(std::string_view str);
+
+  /**
+   * Parse a HTML/SVG style attribute, corresponding to a CSS <declaration-list>, but only returns
+   * the list of declarations, skipping any at-rules when parsing.
+   *
+   * @param str Input string.
+   * @return Parsed declaration list, or an error.
+   */
+  static ParseResult<std::vector<Declaration>> ParseOnlyDeclarations(std::string_view str);
 };
 
 }  // namespace css
