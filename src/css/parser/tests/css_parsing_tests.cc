@@ -35,6 +35,27 @@ std::optional<ComponentValue> tryConsumeComponentValue(std::string_view css) {
   return details::consumeComponentValue(tokenizer, tokenizer.next(), details::ParseMode::Keep);
 }
 
+std::vector<ComponentValue> consumeComponentValueList(std::string_view css) {
+  Tokenizer tokenizer(css);
+  return details::parseListOfComponentValues(tokenizer);
+}
+
+std::vector<ComponentValue> removeUntestedTokens(const std::vector<ComponentValue>& vec) {
+  std::vector<ComponentValue> result;
+  for (const auto& cv : vec) {
+    if (const Token* token = std::get_if<Token>(&cv.value)) {
+      if (token->is<Token::ErrorToken>() &&
+          token->get<Token::ErrorToken>().type == Token::ErrorToken::Type::EofInComment) {
+        continue;
+      }
+    }
+
+    result.push_back(cv);
+  }
+
+  return result;
+}
+
 // Forward declaration.
 nlohmann::json componentValueToJson(const ComponentValue& value);
 
@@ -88,14 +109,22 @@ nlohmann::json tokenToJson(const Token& token) {
     } else if constexpr (std::is_same_v<Type, Token::CurlyBracket>) {
       return "(";
     } else if constexpr (std::is_same_v<Type, Token::CloseSquareBracket>) {
-      return "]";
+      return {"error", "]"};
     } else if constexpr (std::is_same_v<Type, Token::CloseParenthesis>) {
-      return ")";
+      return {"error", ")"};
     } else if constexpr (std::is_same_v<Type, Token::CloseCurlyBracket>) {
-      return "}";
+      return {"error", "}"};
     } else if constexpr (std::is_same_v<Type, Token::ErrorToken>) {
-      return {"error",
-              t.type == Token::ErrorToken::Type::EofInString ? "eof-in-string" : "eof-in-comment"};
+      if (t.type == Token::ErrorToken::Type::EofInString) {
+        return {"error", "eof-in-string"};
+      } else if (t.type == Token::ErrorToken::Type::EofInComment) {
+        return {"error", "eof-in-comment"};
+      } else if (t.type == Token::ErrorToken::Type::EofInUrl) {
+        return {"error", "eof-in-url"};
+      } else {
+        ADD_FAILURE() << "Unexpected error type";
+        return "<unexpected error>";
+      }
     } else if constexpr (std::is_same_v<Type, Token::EofToken>) {
       return "<eof>";
     }
@@ -164,6 +193,31 @@ TEST(CssParsingTests, ComponentValue) {
       EXPECT_EQ(expectedTokens[0], componentValueToJson(componentValue));
     } else {
       EXPECT_THAT(expectedTokens, testing::IsEmpty());
+    }
+  }
+}
+
+TEST(CssParsingTests, ComponentValueList) {
+  auto json = loadJson(kTestDataDirectory / "component_value_list.json");
+
+  for (auto it = json.begin(); it != json.end(); ++it) {
+    const std::string css = *it++;
+    const nlohmann::json expectedTokens = *it;
+
+    SCOPED_TRACE(testing::Message() << "CSS: " << css);
+
+    auto cvList = consumeComponentValueList(css);
+    nlohmann::json componentValueList = nlohmann::json::array();
+    for (const auto& componentValue : removeUntestedTokens(cvList)) {
+      componentValueList.push_back(componentValueToJson(componentValue));
+    }
+
+    EXPECT_EQ(expectedTokens, componentValueList);
+    if (testing::Test::HasFailure()) {
+      const size_t minSharedElements = std::min(expectedTokens.size(), componentValueList.size());
+      for (size_t i = 0; i < minSharedElements; ++i) {
+        ASSERT_EQ(expectedTokens[i], componentValueList[i]) << "At index " << i;
+      }
     }
   }
 }

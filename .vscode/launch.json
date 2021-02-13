@@ -33,6 +33,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "css_parsing_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/css/parser/css_parsing_tests",
+      "args": [
+        "--gtest_break_on_failure"
+      ],
+      "cwd": "${workspaceFolder}/bazel-bin/src/css/parser/css_parsing_tests.runfiles/__main__",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      },
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "xml_tool",
       "program": "${workspaceFolder}/bazel-bin/src/svg/xml/xml_tool",
       "args": [
@@ -49,7 +62,7 @@
       "name": "declaration_list_parser_fuzzer",
       "program": "${workspaceFolder}/bazel-bin/src/css/parser/declaration_list_parser_fuzzer",
       "args": [
-        "${workspaceFolder}/crash-768f16fc5711c4d3ec2a5566917b6cf3072e117f"
+        "${workspaceFolder}/src/css/parser/tests/declaration_list_parser_corpus/unicode.txt"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {

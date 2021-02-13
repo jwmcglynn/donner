@@ -300,14 +300,19 @@ struct Token {
 
   /// Special error token, used to mark named parsing errors.
   struct ErrorToken {
-    enum class Type { EofInString, EofInComment };
+    enum class Type { EofInString, EofInComment, EofInUrl };
 
     explicit ErrorToken(Type type) : type(type) {}
 
     bool operator==(const ErrorToken& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const ErrorToken& obj) {
-      os << "ErrorToken(" << (obj.type == Type::EofInString ? "EofInString" : "EofInComment")
-         << ")";
+      os << "ErrorToken(";
+      switch (obj.type) {
+        case Type::EofInString: os << "EofInString"; break;
+        case Type::EofInComment: os << "EofInComment"; break;
+        case Type::EofInUrl: os << "EofInUrl"; break;
+      }
+      os << ")";
       return os;
     }
 

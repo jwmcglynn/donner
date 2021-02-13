@@ -100,6 +100,9 @@ TEST(Tokenizer, String) {
   EXPECT_THAT(AllTokens(Tokenizer("'bad\n'good'")),
               ElementsAre(Token(Token::BadString("bad"), 0), Token(Token::Whitespace("\n"), 4),
                           Token(Token::String("good"), 5)));
+
+  // Embedded NULs are replaced.
+  EXPECT_THAT(AllTokens(Tokenizer("'nul\0'"sv)), ElementsAre(Token(Token::String("nul\uFFFD"), 0)));
 }
 
 TEST(Tokenizer, StringEscapedCodepoint) {
@@ -149,7 +152,7 @@ TEST(Tokenizer, StringEscapedCodepoint) {
 
   // Whitespace at the end is skipped.
   EXPECT_THAT(Tokenizer("'\\A \\BB\r \\CCC\\D000 abc'").next(),
-              Token(Token::String("\u000A\u00BB \u0CCC\uD000abc"), 0));
+              Token(Token::String("\u000A\u00BB\u0CCC\uD000abc"), 0));
 }
 
 TEST(Tokenizer, Hash) {
@@ -324,8 +327,6 @@ TEST(Tokenizer, AtKeyword) {
 TEST(Tokenizer, IdentLikeToken) {
   EXPECT_THAT(AllTokens(Tokenizer("ident")), ElementsAre(Token(Token::Ident("ident"), 0)));
   EXPECT_THAT(AllTokens(Tokenizer("--ident")), ElementsAre(Token(Token::Ident("--ident"), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("\\20ident")), ElementsAre(Token(Token::Ident(" ident"), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("\\")), ElementsAre(Token(Token::Delim('\\'), 0)));
 
   EXPECT_THAT(AllTokens(Tokenizer("func()")),
               ElementsAre(Token(Token::Function("func"), 0), Token(Token::CloseParenthesis(), 5)));
@@ -341,6 +342,21 @@ TEST(Tokenizer, IdentLikeToken) {
                           Token(Token::Parenthesis(), 5), Token(Token::CloseParenthesis(), 6)));
 }
 
+TEST(Tokenizer, Escapes) {
+  EXPECT_THAT(AllTokens(Tokenizer("\\20ident")), ElementsAre(Token(Token::Ident(" ident"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("\\")), ElementsAre(Token(Token::Delim('\\'), 0)));
+
+  EXPECT_THAT(AllTokens(Tokenizer("r\\êd")), ElementsAre(Token(Token::Ident("rêd"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("nul\0"sv)), ElementsAre(Token(Token::Ident("nul\uFFFD"), 0)));
+
+  EXPECT_THAT(AllTokens(Tokenizer("\\30red")), ElementsAre(Token(Token::Ident("0red"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("\\30 red")), ElementsAre(Token(Token::Ident("0red"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("\\00030 red")), ElementsAre(Token(Token::Ident("0red"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("\\30\r\nred")), ElementsAre(Token(Token::Ident("0red"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("\\376\\37 6\\000376\\0000376\\")),
+              ElementsAre(Token(Token::Ident("Ͷ76Ͷ76\uFFFD"), 0)));
+}
+
 TEST(Tokenizer, Url) {
   EXPECT_THAT(AllTokens(Tokenizer("url()")), ElementsAre(Token(Token::Url(""), 0)));
 
@@ -349,8 +365,12 @@ TEST(Tokenizer, Url) {
               ElementsAre(Token(Token::Url("mixed-case"), 0)));
 
   // If EOF is hit, returns the remaining data.
-  EXPECT_THAT(AllTokens(Tokenizer("url(")), ElementsAre(Token(Token::Url(""), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("url(asdf")), ElementsAre(Token(Token::Url("asdf"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("url(")),
+              ElementsAre(Token(Token::Url(""), 0),
+                          Token(Token::ErrorToken(Token::ErrorToken::Type::EofInUrl), 4)));
+  EXPECT_THAT(AllTokens(Tokenizer("url(asdf")),
+              ElementsAre(Token(Token::Url("asdf"), 0),
+                          Token(Token::ErrorToken(Token::ErrorToken::Type::EofInUrl), 8)));
 
   // Whitespace is allowed, both before and after the argument.
   EXPECT_THAT(AllTokens(Tokenizer("url( before)")), ElementsAre(Token(Token::Url("before"), 0)));
@@ -366,7 +386,7 @@ TEST(Tokenizer, Url) {
   EXPECT_THAT(AllTokens(Tokenizer("url(mid'quotes)")), ElementsAre(Token(Token::BadUrl(), 0)));
   EXPECT_THAT(AllTokens(Tokenizer("url(not\u001Fprintable)")),
               ElementsAre(Token(Token::BadUrl(), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("url(\u0000)"s)), ElementsAre(Token(Token::BadUrl(), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("url(\u0000)"s)), ElementsAre(Token(Token::Url("\uFFFD"), 0)));
 
   // `(` is not allowed in the URL either.
   EXPECT_THAT(AllTokens(Tokenizer("url(()")), ElementsAre(Token(Token::BadUrl(), 0)));
@@ -384,11 +404,13 @@ TEST(Tokenizer, Url) {
           Tokenizer("url(!#$%&*+,-./"
                     "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"
                     "\u0080\u0081\u009e\u009f\u00a0\u00a1\u00a2")),
-      ElementsAre(Token(
-          Token::Url("!#$%&*+,-./"
-                     "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}"
-                     "~\u0080\u0081\u009e\u009f\u00a0\u00a1\u00a2"),
-          0)));
+      ElementsAre(
+          Token(Token::Url(
+                    "!#$%&*+,-./"
+                    "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}"
+                    "~\u0080\u0081\u009e\u009f\u00a0\u00a1\u00a2"),
+                0),
+          Token(Token::ErrorToken(Token::ErrorToken::Type::EofInUrl), 107)));
 }
 
 TEST(Tokenizer, Delim) {

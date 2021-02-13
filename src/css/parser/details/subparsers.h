@@ -1,5 +1,7 @@
 #pragma once
 
+#include <concepts>
+
 #include "src/css/declaration.h"
 #include "src/css/parser/details/tokenizer.h"
 #include "src/css/token.h"
@@ -52,6 +54,21 @@ ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode
   } else {
     return ComponentValue(token);
   }
+}
+
+/// Parse a list of component values, per
+/// https://www.w3.org/TR/css-syntax-3/#parse-list-of-component-values
+template <TokenizerLike T>
+std::vector<ComponentValue> parseListOfComponentValues(T& tokenizer) {
+  std::vector<ComponentValue> result;
+  while (!tokenizer.isEOF()) {
+    Token token = tokenizer.next();
+    if (!token.is<Token::EofToken>()) {
+      result.emplace_back(consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep));
+    }
+  }
+
+  return result;
 }
 
 /// Consume a simple block, per https://www.w3.org/TR/css-syntax-3/#consume-simple-block

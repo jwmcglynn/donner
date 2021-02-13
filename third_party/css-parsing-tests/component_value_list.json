@@ -198,12 +198,8 @@
 	["url", "a\uFFFD"], ["error", "eof-in-url"]
 ],
 
-"url(\u0000", [
-	["error", "bad-url"]
-],
-
-"url(!#$%&*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~\u0080\u0081\u009e\u009f\u00a0\u00a1\u00a2", [
-	["url", "!#$%&*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~\u0080\u0081\u009e\u009f\u00a0¡¢"],
+"url(\u0000!#$%&*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~\u0080\u0081\u009e\u009f\u00a0\u00a1\u00a2", [
+	["url", "\uFFFD!#$%&*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~\u0080\u0081\u009e\u009f\u00a0¡¢"],
 	["error", "eof-in-url"]
 ],
 
@@ -354,9 +350,9 @@
 "a:not([href^=http\\:],  [href ^=\t'https\\:'\n]) { color: rgba(0%, 100%, 50%); }", [
 	["ident", "a"], ":", ["function", "not",
 		["[]",
-			["ident", "href"], "^=", ["ident", "http:"]
+			["ident", "href"], "^", "=", ["ident", "http:"]
 		], ",", " ", ["[]",
-			["ident", "href"], " ", "^=", " ", ["string", "https:"], " "
+			["ident", "href"], " ", "^", "=", " ", ["string", "https:"], " "
 		]
 	], " ", ["{}",
 		" ", ["ident", "color"], ":", " ", ["function", "rgba",

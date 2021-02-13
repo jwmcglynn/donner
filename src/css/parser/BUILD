@@ -24,6 +24,7 @@ cc_library(
 cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/common_tests.cc",
         "tests/declaration_list_parser_tests.cc",
         "tests/token_test_utils.cc",
         "tests/token_test_utils.h",

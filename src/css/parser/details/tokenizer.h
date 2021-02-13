@@ -215,6 +215,8 @@ private:
           utf8::append(codepoint, std::back_inserter(str));
           i += bytesConsumed;
         }
+      } else if (ch == '\0') {
+        utf8::append(kUnicodeReplacementCharacter, std::back_inserter(str));
       } else {
         // anything else: Append the current input code point to the <string-token>'s value.
         str.push_back(ch);
@@ -240,9 +242,13 @@ private:
 
       if (isNameCodepoint(ch)) {
         // name code point: Append the code point to result.
-        str.push_back(ch);
+        if (ch != '\0') {
+          str.push_back(ch);
+        } else {
+          utf8::append(kUnicodeReplacementCharacter, std::back_inserter(str));
+        }
         ++i;
-      } else if (i + 1 < remainingSize && isValidEscape(ch, remaining[i + 1])) {
+      } else if (isValidEscape(remaining.substr(i))) {
         // the stream starts with a valid escape: Consume an escaped code point. Append the returned
         // code point to result.
         const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining.substr(i + 1));
@@ -261,7 +267,7 @@ private:
   /// https://www.w3.org/TR/css-syntax-3/#consume-an-escaped-code-point
   ///
   /// @return A tuple containing the parsed codepoint and the number of bytes consumed.
-  static std::tuple<char32_t, size_t> consumeEscapedCodepoint(std::string_view remaining) {
+  static std::tuple<char32_t, int> consumeEscapedCodepoint(std::string_view remaining) {
     if (remaining.empty()) {
       // EOF: This is a parse error. Return U+FFFD REPLACEMENT CHARACTER (�).
       return {kUnicodeReplacementCharacter, 0};
@@ -277,7 +283,7 @@ private:
       }
 
       // If the next input codepoint is whitespace, consume it as well.
-      if (i < remaining.size() && isWhitespace(remaining[i])) {
+      while (i < remaining.size() && isWhitespace(remaining[i])) {
         ++i;
       }
 
@@ -290,7 +296,13 @@ private:
       // Otherwise, return the code point with that value.
       return {number, i};
     } else {
-      return {static_cast<unsigned char>(remaining[0]), 1};
+      if (remaining[0] != '\0') {
+        return details::utf8NextCodepoint(remaining);
+      } else {
+        // Transform \0 to the unicode replacement character, since the proprocess step has been
+        // skipped.
+        return {kUnicodeReplacementCharacter, 1};
+      }
     }
   }
 
@@ -396,11 +408,14 @@ private:
           // Otherwise, consume the remnants of a bad url, create a <bad-url-token>, and return it.
           return consumeRemnantsOfBadUrl(afterUrl.substr(i), charsConsumedBefore + i);
         }
+      } else if (ch == '\0') {
+        utf8::append(kUnicodeReplacementCharacter, std::back_inserter(str));
+        ++i;
       } else if (isQuote(ch) || ch == '(' || isNonPrintableCodepoint(ch)) {
         // This is a parse error. Consume the remnants of a bad url, create a <bad-url-token>, and
         // return it.
         return consumeRemnantsOfBadUrl(afterUrl.substr(i), charsConsumedBefore + i);
-      } else if (i + 1 < afterUrl.size() && isValidEscape(afterUrl[i], afterUrl[i + 1])) {
+      } else if (isValidEscape(afterUrl.substr(i))) {
         // U+005C REVERSE SOLIDUS (\): If the stream starts with a valid escape, consume an escaped
         // code point and append the returned code point to the <url-token>'s value.
         const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(afterUrl.substr(i + 1));
@@ -414,7 +429,10 @@ private:
     }
 
     // EOF: This is a parse error. Return the <url-token>.
-    return token<Token::Url>(i + charsConsumedBefore, std::string(str.begin(), str.end()));
+
+    auto result = token<Token::Url>(i + charsConsumedBefore, std::string(str.begin(), str.end()));
+    nextToken_ = token<Token::ErrorToken>(0, Token::ErrorToken::Type::EofInUrl);
+    return result;
   }
 
   /// Consume the remnants of a bad url, per
@@ -453,7 +471,10 @@ private:
   /// Returns true if the character is a valid name start codepoint, per
   /// https://www.w3.org/TR/css-syntax-3/#name-start-code-point
   static bool isNameStartCodepoint(char ch) {
-    return std::isalpha(ch) || static_cast<unsigned char>(ch) >= 0x80 || ch == '_';
+    // Also include \0, since this tokenizer postpones the preprocessing step at
+    // https://www.w3.org/TR/css-syntax-3/#input-preprocessing which transforms \u0000 to \uFFFD,
+    // which would pass this check.
+    return std::isalpha(ch) || static_cast<unsigned char>(ch) >= 0x80 || ch == '_' || ch == '\0';
   }
 
   static bool isNameCodepoint(char ch) {
@@ -506,6 +527,12 @@ private:
     // Otherwise, if the second code point is a newline, return false.
     // Otherwise, return true.
     return (first == '\\' && !isNewline(second));
+  }
+
+  /// Check if up to two code points are a valid escape.
+  static bool isValidEscape(std::string_view str) {
+    assert(!str.empty());
+    return (str[0] == '\\' && (str.size() == 1 || !isNewline(str[1])));
   }
 
   /// Check if three code points would start an identifier, per
@@ -564,9 +591,6 @@ private:
       return false;
     }
   }
-
-  /// U+FFFD REPLACEMENT CHARACTER (�)
-  static constexpr char32_t kUnicodeReplacementCharacter = 0xFFFD;
 
   /// The greatest codepoint defined by unicode, per
   /// https://www.w3.org/TR/css-syntax-3/#maximum-allowed-code-point
