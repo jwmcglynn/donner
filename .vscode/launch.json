@@ -46,10 +46,10 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "path_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/path_parser_fuzzer",
+      "name": "declaration_list_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/src/css/parser/declaration_list_parser_fuzzer",
       "args": [
-        "${workspaceFolder}/crash-f7da20280d80e3cdd3fa6b1d67e5cfc09ac4498a"
+        "${workspaceFolder}/crash-768f16fc5711c4d3ec2a5566917b6cf3072e117f"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {

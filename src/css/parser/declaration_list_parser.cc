@@ -56,6 +56,7 @@ public:
     while (!tokenizer_.isEOF()) {
       auto tokenResult = tokenizer_.next();
       if (tokenResult.hasError()) {
+        // TODO: Return current result and this error as a warning.
         return std::move(tokenResult.error());
       }
 

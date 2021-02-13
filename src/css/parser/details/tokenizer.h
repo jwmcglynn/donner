@@ -218,7 +218,7 @@ private:
         } else {
           // Otherwise, (the stream starts with a valid escape) consume an escaped code point and
           // append the returned code point to the <string-token>'s value.
-          auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining_.substr(i + 1));
+          const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining_.substr(i + 1));
           utf8::append(codepoint, std::back_inserter(str));
           i += bytesConsumed;
         }
@@ -253,7 +253,7 @@ private:
       } else if (i + 1 < remainingSize && isValidEscape(ch, remaining[i + 1])) {
         // the stream starts with a valid escape: Consume an escaped code point. Append the returned
         // code point to result.
-        auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining.substr(i + 1));
+        const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining.substr(i + 1));
         utf8::append(codepoint, std::back_inserter(str));
         i += 1 + bytesConsumed;
       } else {
@@ -298,7 +298,7 @@ private:
       // Otherwise, return the code point with that value.
       return {number, i};
     } else {
-      return {remaining[0], 1};
+      return {static_cast<unsigned char>(remaining[0]), 1};
     }
   }
 
@@ -400,7 +400,7 @@ private:
       } else if (i + 1 < afterUrl.size() && isValidEscape(afterUrl[i], afterUrl[i + 1])) {
         // U+005C REVERSE SOLIDUS (\): If the stream starts with a valid escape, consume an escaped
         // code point and append the returned code point to the <url-token>'s value.
-        auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(afterUrl.substr(i + 1));
+        const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(afterUrl.substr(i + 1));
         utf8::append(codepoint, std::back_inserter(str));
         i += bytesConsumed + 1;
       } else {
@@ -429,7 +429,7 @@ private:
         // the input stream starts with a valid escape: Consume an escaped code point. This allows
         // an escaped right parenthesis ("\)") to be encountered without ending the <bad-url-token>.
         // This is otherwise identical to the "anything else" clause.
-        auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(badUrl.substr(i + 1));
+        const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(badUrl.substr(i + 1));
         i += bytesConsumed + 1;
       } else {
         ++i;
