@@ -9,6 +9,8 @@ namespace css {
 
 using TokenIndex = size_t;
 
+enum class NumberType { Integer, Number };
+
 struct Token {
   /// `<ident-token>`
   struct Ident {
@@ -123,7 +125,7 @@ struct Token {
   struct Delim {
     explicit Delim(char value) : value(value) {}
 
-    bool operator==(const Delim&) const { return true; }
+    bool operator==(const Delim& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Delim& obj) {
       os << "Delim(" << obj.value << ")";
       return os;
@@ -134,42 +136,54 @@ struct Token {
 
   /// `<number-token>`
   struct Number {
-    explicit Number(double value) : value(value) {}
+    Number(double value, std::string&& valueString, NumberType type)
+        : value(value), valueString(valueString), type(type) {}
 
     bool operator==(const Number& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Number& obj) {
-      os << "Number(" << obj.value << ")";
+      os << "Number(" << obj.value << ", str='" << obj.valueString << "', "
+         << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
       return os;
     }
 
     double value;
+    std::string valueString;
+    NumberType type;
   };
 
   /// `<percentage-token>`
   struct Percentage {
-    explicit Percentage(double value) : value(value) {}
+    Percentage(double value, std::string&& valueString, NumberType type)
+        : value(value), valueString(valueString), type(type) {}
 
     bool operator==(const Percentage& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Percentage& obj) {
-      os << "Percentage(" << obj.value << ")";
+      os << "Percentage(" << obj.value << ", str='" << obj.valueString << "', "
+         << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
       return os;
     }
 
     double value;
+    std::string valueString;
+    NumberType type;
   };
 
   /// `<dimension-token>`
   struct Dimension {
-    Dimension(double value, std::string&& suffix) : value(value), suffix(suffix) {}
+    Dimension(double value, std::string&& suffix, std::string&& valueString, NumberType type)
+        : value(value), suffix(suffix), valueString(valueString), type(type) {}
 
     bool operator==(const Dimension& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Dimension& obj) {
-      os << "Dimension(" << obj.value << obj.suffix << ")";
+      os << "Dimension(" << obj.value << obj.suffix << ", str='" << obj.valueString << "', "
+         << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
       return os;
     }
 
     double value;
     std::string suffix;
+    std::string valueString;
+    NumberType type;
   };
 
   /// `<whitespace-token>`
@@ -292,7 +306,8 @@ struct Token {
 
     bool operator==(const ErrorToken& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const ErrorToken& obj) {
-      os << "ErrorToken(" << (obj.type == Type::EofInString ? "EofInString" : "EofInComment") << ")";
+      os << "ErrorToken(" << (obj.type == Type::EofInString ? "EofInString" : "EofInComment")
+         << ")";
       return os;
     }
 

@@ -11,6 +11,7 @@ namespace donner {
 namespace css {
 
 using details::Tokenizer;
+using namespace std::literals;
 
 std::vector<Token> AllTokens(Tokenizer&& tokenizer) {
   std::vector<Token> tokens;
@@ -93,18 +94,12 @@ TEST(Tokenizer, String) {
   EXPECT_THAT(Tokenizer("'skip\\\nnewline'").next(), Token(Token::String("skipnewline"), 0));
 
   // String containing newlines are considered bad.
-  {
-    Tokenizer tokenizer("'newline\n");
-    EXPECT_THAT(tokenizer.next(), Token(Token::BadString("newline"), 0));
-    EXPECT_THAT(tokenizer.next(), Token(Token::EofToken(), 9));
-  }
+  EXPECT_THAT(AllTokens(Tokenizer("'newline\n")), ElementsAre(Token(Token::BadString("newline"), 0),
+                                                              Token(Token::Whitespace("\n"), 8)));
 
-  {
-    Tokenizer tokenizer("'bad\n'good'");
-    EXPECT_THAT(tokenizer.next(), Token(Token::BadString("bad"), 0));
-    EXPECT_THAT(tokenizer.next(), Token(Token::String("good"), 5));
-    EXPECT_THAT(tokenizer.next(), Token(Token::EofToken(), 11));
-  }
+  EXPECT_THAT(AllTokens(Tokenizer("'bad\n'good'")),
+              ElementsAre(Token(Token::BadString("bad"), 0), Token(Token::Whitespace("\n"), 4),
+                          Token(Token::String("good"), 5)));
 }
 
 TEST(Tokenizer, StringEscapedCodepoint) {
@@ -201,14 +196,18 @@ TEST(Tokenizer, Hash) {
 }
 
 TEST(Tokenizer, Number) {
-  EXPECT_THAT(AllTokens(Tokenizer("0")), ElementsAre(Token(Token::Number(0.), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("01234")), ElementsAre(Token(Token::Number(01234.), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("0")),
+              ElementsAre(Token(Token::Number(0., "0", NumberType::Integer), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("01234")),
+              ElementsAre(Token(Token::Number(01234., "01234", NumberType::Integer), 0)));
 
   EXPECT_THAT(AllTokens(Tokenizer(".1234/* */987")),
-              ElementsAre(Token(Token::Number(.1234), 0), Token(Token::Number(987.), 10)));
+              ElementsAre(Token(Token::Number(.1234, ".1234", NumberType::Number), 0),
+                          Token(Token::Number(987., "987", NumberType::Integer), 10)));
 
   EXPECT_THAT(AllTokens(Tokenizer("..1")),
-              ElementsAre(Token(Token::Delim('.'), 0), Token(Token::Number(.1), 1)));
+              ElementsAre(Token(Token::Delim('.'), 0),
+                          Token(Token::Number(.1, ".1", NumberType::Number), 1)));
 }
 
 TEST(Tokenizer, NumberSigns) {
@@ -219,13 +218,15 @@ TEST(Tokenizer, NumberSigns) {
   EXPECT_THAT(AllTokens(Tokenizer("+.")),
               ElementsAre(Token(Token::Delim('+'), 0), Token(Token::Delim('.'), 1)));
 
-  EXPECT_THAT(Tokenizer("+0").next(), Token(Token::Number(0.), 0));
-  EXPECT_THAT(Tokenizer("-0").next(), Token(Token::Number(-0.), 0));
+  EXPECT_THAT(Tokenizer("+0").next(), Token(Token::Number(0., "+0", NumberType::Integer), 0));
+  EXPECT_THAT(Tokenizer("-0").next(), Token(Token::Number(-0., "-0", NumberType::Integer), 0));
 
   EXPECT_THAT(AllTokens(Tokenizer("+-0")),
-              ElementsAre(Token(Token::Delim('+'), 0), Token(Token::Number(-0.), 1)));
+              ElementsAre(Token(Token::Delim('+'), 0),
+                          Token(Token::Number(-0., "-0", NumberType::Integer), 1)));
   EXPECT_THAT(AllTokens(Tokenizer("-+0")),
-              ElementsAre(Token(Token::Delim('.'), 0), Token(Token::Number(0.), 1)));
+              ElementsAre(Token(Token::Delim('-'), 0),
+                          Token(Token::Number(0., "+0", NumberType::Integer), 1)));
 }
 
 TEST(Tokenizer, NumberDecimal) {
@@ -233,23 +234,32 @@ TEST(Tokenizer, NumberDecimal) {
   EXPECT_THAT(AllTokens(Tokenizer(".+")),
               ElementsAre(Token(Token::Delim('.'), 0), Token(Token::Delim('+'), 1)));
 
-  EXPECT_THAT(AllTokens(Tokenizer(".0")), ElementsAre(Token(Token::Number(0.), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("-.1")), ElementsAre(Token(Token::Number(-.1), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("+.1")), ElementsAre(Token(Token::Number(.1), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer(".0")),
+              ElementsAre(Token(Token::Number(0., ".0", NumberType::Number), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("-.1")),
+              ElementsAre(Token(Token::Number(-.1, "-.1", NumberType::Number), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("+.1")),
+              ElementsAre(Token(Token::Number(.1, "+.1", NumberType::Number), 0)));
 
   // Numbers should not end with a dot, it should create two tokens.
   EXPECT_THAT(AllTokens(Tokenizer("0.")),
-              ElementsAre(Token(Token::Number(0), 0), Token(Token::Delim('.'), 1)));
+              ElementsAre(Token(Token::Number(0, "0", NumberType::Integer), 0),
+                          Token(Token::Delim('.'), 1)));
 
   EXPECT_THAT(AllTokens(Tokenizer("0.6.5")),
-              ElementsAre(Token(Token::Number(0.6), 0), Token(Token::Number(0.5), 3)));
+              ElementsAre(Token(Token::Number(0.6, "0.6", NumberType::Number), 0),
+                          Token(Token::Number(0.5, ".5", NumberType::Number), 3)));
 }
 
 TEST(Tokenizer, NumberExponent) {
-  EXPECT_THAT(AllTokens(Tokenizer("1e0")), ElementsAre(Token(Token::Number(1.), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("-1e0")), ElementsAre(Token(Token::Number(-1.), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("-10e+2")), ElementsAre(Token(Token::Number(-1000.), 0)));
-  EXPECT_THAT(AllTokens(Tokenizer("10e-2")), ElementsAre(Token(Token::Number(.1), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("1e0")),
+              ElementsAre(Token(Token::Number(1., "1e0", NumberType::Number), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("-1e0")),
+              ElementsAre(Token(Token::Number(-1., "-1e0", NumberType::Number), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("-10e+2")),
+              ElementsAre(Token(Token::Number(-1000., "-10e+2", NumberType::Number), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("10e-2")),
+              ElementsAre(Token(Token::Number(.1, "10e-2", NumberType::Number), 0)));
 
   // Words for Inf and NaN should not be numbers.
   EXPECT_THAT(AllTokens(Tokenizer("Inf")), ElementsAre(Token(Token::Ident("Inf"), 0)));
@@ -260,9 +270,13 @@ TEST(Tokenizer, NumberExponent) {
 
   // Infinite numbers should still parse.
   EXPECT_THAT(AllTokens(Tokenizer("99e999999999999999")),
-              ElementsAre(Token(Token::Number(std::numeric_limits<double>::infinity()), 0)));
+              ElementsAre(Token(Token::Number(std::numeric_limits<double>::infinity(),
+                                              "99e999999999999999", NumberType::Number),
+                                0)));
   EXPECT_THAT(AllTokens(Tokenizer("-99e999999999999999")),
-              ElementsAre(Token(Token::Number(-std::numeric_limits<double>::infinity()), 0)));
+              ElementsAre(Token(Token::Number(-std::numeric_limits<double>::infinity(),
+                                              "-99e999999999999999", NumberType::Number),
+                                0)));
 }
 
 TEST(Tokenizer, CharTokens) {
@@ -352,6 +366,7 @@ TEST(Tokenizer, Url) {
   EXPECT_THAT(AllTokens(Tokenizer("url(mid'quotes)")), ElementsAre(Token(Token::BadUrl(), 0)));
   EXPECT_THAT(AllTokens(Tokenizer("url(not\u001Fprintable)")),
               ElementsAre(Token(Token::BadUrl(), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("url(\u0000)"s)), ElementsAre(Token(Token::BadUrl(), 0)));
 
   // `(` is not allowed in the URL either.
   EXPECT_THAT(AllTokens(Tokenizer("url(()")), ElementsAre(Token(Token::BadUrl(), 0)));
@@ -362,6 +377,18 @@ TEST(Tokenizer, Url) {
   // Allow escaping a `)`.
   EXPECT_THAT(AllTokens(Tokenizer("url(\\))")), ElementsAre(Token(Token::Url(")"), 0)));
   EXPECT_THAT(AllTokens(Tokenizer("url(bad url \\))")), ElementsAre(Token(Token::BadUrl(), 0)));
+
+  // Test a variety of codepoints including unicode.
+  EXPECT_THAT(
+      AllTokens(
+          Tokenizer("url(!#$%&*+,-./"
+                    "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+                    "\u0080\u0081\u009e\u009f\u00a0\u00a1\u00a2")),
+      ElementsAre(Token(
+          Token::Url("!#$%&*+,-./"
+                     "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}"
+                     "~\u0080\u0081\u009e\u009f\u00a0\u00a1\u00a2"),
+          0)));
 }
 
 TEST(Tokenizer, Delim) {

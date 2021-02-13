@@ -197,7 +197,7 @@ private:
       } else if (isNewline(ch)) {
         // newline: This is a parse error. Reconsume the current input code point, create a
         // <bad-string-token>, and return it.
-        return token<Token::BadString>(i + 1, std::string(str.begin(), str.end()));
+        return token<Token::BadString>(i, std::string(str.begin(), str.end()));
       } else if (ch == '\\') {
         // U+005C REVERSE SOLIDUS (\): If the next input code point is EOF, do nothing.
         if (i + 1 == remainingSize) {
@@ -304,15 +304,26 @@ private:
 
     NumberParser::Result number = numberResult.result();
 
+    std::string numberString(remaining_.substr(0, number.consumed_chars));
+    NumberType type = NumberType::Integer;
+    for (char ch : numberString) {
+      if (ch == '.' || ch == 'E' || ch == 'e') {
+        type = NumberType::Number;
+        break;
+      }
+    }
+
     std::string_view remainingAfterNumber = remaining_.substr(number.consumed_chars);
     if (isIdentifierStart(remainingAfterNumber)) {
       auto [name, nameConsumedChars] = consumeName(remainingAfterNumber);
-      return token<Token::Dimension>(number.consumed_chars + nameConsumedChars, number.number,
-                                     name);
+      return token<Token::Dimension>(number.consumed_chars + nameConsumedChars, number.number, name,
+                                     std::move(numberString), type);
     } else if (remainingAfterNumber.starts_with("%")) {
-      return token<Token::Percentage>(number.consumed_chars + 1, number.number);
+      return token<Token::Percentage>(number.consumed_chars + 1, number.number,
+                                      std::move(numberString), type);
     } else {
-      return token<Token::Number>(number.consumed_chars, number.number);
+      return token<Token::Number>(number.consumed_chars, number.number, std::move(numberString),
+                                  type);
     }
   }
 

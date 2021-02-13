@@ -61,11 +61,14 @@ nlohmann::json tokenToJson(const Token& token) {
     } else if constexpr (std::is_same_v<Type, Token::Delim>) {
       return std::string(&t.value, 1);
     } else if constexpr (std::is_same_v<Type, Token::Number>) {
-      return {"number", t.value};  // TODO, this needs more values
+      return {"number", t.valueString, t.value,
+              t.type == NumberType::Integer ? "integer" : "number"};
     } else if constexpr (std::is_same_v<Type, Token::Percentage>) {
-      return {"percentage", t.value};  // TODO, this needs more values
+      return {"percentage", t.valueString, t.value,
+              t.type == NumberType::Integer ? "integer" : "number"};
     } else if constexpr (std::is_same_v<Type, Token::Dimension>) {
-      return {"dimension", t.value, t.suffix};  // TODO, this needs more values
+      return {"dimension", t.valueString, t.value,
+              t.type == NumberType::Integer ? "integer" : "number", t.suffix};
     } else if constexpr (std::is_same_v<Type, Token::Whitespace>) {
       return " ";
     } else if constexpr (std::is_same_v<Type, Token::CDO>) {
@@ -148,10 +151,7 @@ nlohmann::json componentValueToJson(const ComponentValue& value) {
 TEST(CssParsingTests, ComponentValue) {
   auto json = loadJson(kTestDataDirectory / "component_value_list.json");
 
-  int i = 0;
-  int limit = 20;
-
-  for (auto it = json.begin(); i < limit && it != json.end(); ++it, ++i) {
+  for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
     const nlohmann::json expectedTokens = *it;
 
