@@ -14,6 +14,12 @@ git_repository(
 )
 
 new_local_repository(
+    name = "css-parsing-tests",
+    build_file = "third_party/BUILD.css-parsing-tests",
+    path = "third_party/css-parsing-tests",
+)
+
+new_local_repository(
     name = "rapidxml_ns",
     build_file = "third_party/BUILD.rapidxml_ns",
     path = "third_party/rapidxml_ns",
@@ -23,6 +29,13 @@ git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt.git",
     tag = "v3.6.0",
+)
+
+new_git_repository(
+    name = "nlohmann_json",
+    build_file = "@//third_party:BUILD.nlohmann_json",
+    remote = "https://github.com/nlohmann/json.git",
+    tag = "v3.9.1",
 )
 
 new_git_repository(

@@ -1,1 +1,4 @@
-exports_files(["BUILD.utfcpp"])
+exports_files([
+    "BUILD.utfcpp",
+    "BUILD.nlohmann_json",
+])

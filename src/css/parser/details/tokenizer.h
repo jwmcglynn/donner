@@ -5,7 +5,6 @@
 #include <string_view>
 
 #include "src/base/parser/number_parser.h"
-#include "src/base/parser/parse_result.h"
 #include "src/css/parser/details/common.h"
 #include "src/css/token.h"
 
@@ -17,13 +16,19 @@ class Tokenizer {
 public:
   Tokenizer(std::string_view str) : str_(str), remaining_(str) {}
 
-  ParseResult<Token> next() {
-    if (auto error = tryConsumeComment()) {
-      return std::move(error.value());
+  Token next() {
+    if (nextToken_) {
+      auto result = std::move(nextToken_.value());
+      nextToken_ = std::nullopt;
+      return result;
+    }
+
+    if (auto errorToken = consumeComments()) {
+      return token<Token::ErrorToken>(remaining_.size(), errorToken.value());
     }
 
     if (isEOF()) {
-      return Token(Token::EOFToken(), currentOffset());
+      return Token(Token::EofToken(), currentOffset());
     }
 
     switch (remaining_[0]) {
@@ -131,7 +136,7 @@ public:
     }
   }
 
-  bool isEOF() const { return remaining_.empty(); }
+  bool isEOF() const { return remaining_.empty() && !nextToken_; }
 
 private:
   size_t currentOffset() { return remaining_.data() - str_.data(); }
@@ -143,24 +148,24 @@ private:
     return Token(T(std::forward<Args>(args)...), offset);
   }
 
-  std::optional<ParseError> tryConsumeComment() {
-    if (!remaining_.starts_with("/*")) {
-      return std::nullopt;
-    }
+  std::optional<Token::ErrorToken> consumeComments() {
+    while (remaining_.starts_with("/*")) {
+      bool foundEnd = false;
 
-    for (size_t i = 2; i + 1 < remaining_.size(); ++i) {
-      if (remaining_[i] == '*' && remaining_[i + 1] == '/') {
-        remaining_.remove_prefix(i + 2);
-        return std::nullopt;
+      for (size_t i = 2; i + 1 < remaining_.size(); ++i) {
+        if (remaining_[i] == '*' && remaining_[i + 1] == '/') {
+          remaining_.remove_prefix(i + 2);
+          foundEnd = true;
+          break;
+        }
+      }
+
+      if (!foundEnd) {
+        return Token::ErrorToken(Token::ErrorToken::Type::EofInComment);
       }
     }
 
-    ParseError err;
-    err.reason = "Unterminated comment";
-    err.offset = currentOffset();
-
-    remaining_.remove_prefix(remaining_.size());
-    return err;
+    return std::nullopt;
   }
 
   Token consumeWhitespace() {
@@ -176,7 +181,7 @@ private:
   }
 
   /// Consume a string token per https://www.w3.org/TR/css-syntax-3/#consume-a-string-token
-  ParseResult<Token> consumeQuotedString() {
+  Token consumeQuotedString() {
     const char quote = remaining_[0];
     assert(quote == '"' || quote == '\'');
 
@@ -216,10 +221,9 @@ private:
       }
     }
 
-    ParseError err;
-    err.reason = "Unterminated string";
-    err.offset = currentOffset() + remaining_.size() - 1;
-    return err;
+    auto result = token<Token::String>(remaining_.size(), std::string(str.begin(), str.end()));
+    nextToken_ = token<Token::ErrorToken>(0, Token::ErrorToken::Type::EofInString);
+    return result;
   }
 
   /// Consume a name, per https://www.w3.org/TR/css-syntax-3/#consume-name
@@ -559,6 +563,8 @@ private:
 
   const std::string_view str_;
   std::string_view remaining_;
+
+  std::optional<Token> nextToken_;
 };
 
 }  // namespace details

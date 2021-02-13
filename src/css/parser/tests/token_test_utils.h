@@ -183,8 +183,13 @@ auto TokenIsCloseCurlyBracket(Args... args) {
 }
 
 template <typename... Args>
-auto TokenIsEOFToken(Args... args) {
-  return TokenIsImpl(Token::EOFToken(std::forward<Args>(args)...));
+auto TokenIsErrorToken(Args... args) {
+  return TokenIsImpl(Token::ErrorToken(std::forward<Args>(args)...));
+}
+
+template <typename... Args>
+auto TokenIsEofToken(Args... args) {
+  return TokenIsImpl(Token::EofToken(std::forward<Args>(args)...));
 }
 
 MATCHER_P3(DeclarationIsImpl, nameMatcher, valuesMatcher, importantMatcher, "") {
@@ -244,11 +249,6 @@ auto AtRuleIs(NameMatcher nameMatcher, PreludeMatcher preludeMatcher, BlockMatch
 template <typename NameMatcher, typename PreludeMatcher>
 auto AtRuleIs(NameMatcher nameMatcher, PreludeMatcher preludeMatcher) {
   return AtRuleIsImpl(nameMatcher, preludeMatcher, testing::Eq(std::nullopt));
-}
-
-template <typename... Args>
-auto DeclarationListIs(Args... args) {
-  return ParseResultIs(testing::ElementsAre(std::forward<Args>(args)...));
 }
 
 MATCHER_P2(FunctionIs, nameMatcher, valuesMatcher, "") {

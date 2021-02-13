@@ -1,9 +1,8 @@
 #pragma once
 
 #include <string_view>
+#include <vector>
 
-#include "src/base/box.h"
-#include "src/base/parser/parse_result.h"
 #include "src/css/declaration.h"
 
 namespace donner {
@@ -17,7 +16,7 @@ public:
    * @param str Input string.
    * @return Parsed declaration list, or an error.
    */
-  static ParseResult<std::vector<DeclarationOrAtRule>> Parse(std::string_view str);
+  static std::vector<DeclarationOrAtRule> Parse(std::string_view str);
 
   /**
    * Parse a HTML/SVG style attribute, corresponding to a CSS <declaration-list>, but only returns
@@ -26,7 +25,7 @@ public:
    * @param str Input string.
    * @return Parsed declaration list, or an error.
    */
-  static ParseResult<std::vector<Declaration>> ParseOnlyDeclarations(std::string_view str);
+  static std::vector<Declaration> ParseOnlyDeclarations(std::string_view str);
 };
 
 }  // namespace css

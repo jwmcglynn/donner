@@ -36,6 +36,21 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "css_parsing_tests",
+    srcs = [
+        "tests/css_parsing_tests.cc",
+    ],
+    data = [
+        "@css-parsing-tests//:component_value_list.json",
+    ],
+    deps = [
+        ":parser",
+        "@com_google_gtest//:gtest_main",
+        "@nlohmann_json",
+    ],
+)
+
 donner_cc_fuzzer(
     name = "declaration_list_parser_fuzzer",
     srcs = [

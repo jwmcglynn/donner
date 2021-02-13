@@ -284,11 +284,26 @@ struct Token {
     }
   };
 
-  /// `<EOF-token>`, named differently to avoid a naming conflict.
-  struct EOFToken {
-    bool operator==(const EOFToken&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const EOFToken&) {
-      os << "EOFToken";
+  /// Special error token, used to mark named parsing errors.
+  struct ErrorToken {
+    enum class Type { EofInString, EofInComment };
+
+    explicit ErrorToken(Type type) : type(type) {}
+
+    bool operator==(const ErrorToken& other) const = default;
+    friend std::ostream& operator<<(std::ostream& os, const ErrorToken& obj) {
+      os << "ErrorToken(" << (obj.type == Type::EofInString ? "EofInString" : "EofInComment") << ")";
+      return os;
+    }
+
+    Type type;
+  };
+
+  /// `<EOF-token>`.
+  struct EofToken {
+    bool operator==(const EofToken&) const { return true; }
+    friend std::ostream& operator<<(std::ostream& os, const EofToken&) {
+      os << "EofToken";
       return os;
     }
   };
@@ -297,7 +312,7 @@ struct Token {
       std::variant<Ident, Function, AtKeyword, Hash, String, BadString, Url, BadUrl, Delim, Number,
                    Percentage, Dimension, Whitespace, CDO, CDC, Colon, Semicolon, Comma,
                    SquareBracket, Parenthesis, CurlyBracket, CloseSquareBracket, CloseParenthesis,
-                   CloseCurlyBracket, EOFToken>;
+                   CloseCurlyBracket, ErrorToken, EofToken>;
 
   Token(TokenValue&& value, size_t offset) : value_(std::move(value)), offset_(offset) {}
 
@@ -325,12 +340,7 @@ struct Token {
   }
 
   template <typename Visitor>
-  void visit(Visitor&& visitor) const {
-    return std::visit(std::forward<Visitor>(visitor), value_);
-  }
-
-  template <typename R, typename Visitor>
-  R visit(Visitor&& visitor) const {
+  auto visit(Visitor&& visitor) const {
     return std::visit(std::forward<Visitor>(visitor), value_);
   }
 

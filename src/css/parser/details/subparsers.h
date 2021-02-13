@@ -1,6 +1,5 @@
 #pragma once
 
-#include "src/base/parser/parse_result.h"
 #include "src/css/declaration.h"
 #include "src/css/parser/details/tokenizer.h"
 #include "src/css/token.h"
@@ -14,12 +13,12 @@ enum class ParseMode { Keep, Discard };
 template <typename T>
 concept TokenizerLike = requires(T t) {
   // clang-format off
-  { t.next() } -> std::same_as<ParseResult<Token>>;
+  { t.next() } -> std::same_as<Token>;
   { t.isEOF() } -> std::same_as<bool>;
   // clang-format on
 };
 
-static TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
+static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
   if (startTokenIndex == Token::indexOf<Token::CurlyBracket>()) {
     return Token::indexOf<Token::CloseCurlyBracket>();
   } else if (startTokenIndex == Token::indexOf<Token::SquareBracket>()) {
@@ -33,27 +32,23 @@ static TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
 
 // Forward declarations.
 template <TokenizerLike T>
-ParseResult<SimpleBlock> consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode);
+SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode);
 template <TokenizerLike T>
-ParseResult<Function> consumeFunction(T& tokenizer, Token::Function&& functionToken,
-                                      ParseMode mode);
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken, ParseMode mode);
 
 /// Consume a component value, per https://www.w3.org/TR/css-syntax-3/#consume-component-value
 template <TokenizerLike T>
-ParseResult<ComponentValue> consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode) {
+ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode) {
   if (token.is<Token::CurlyBracket>() || token.is<Token::SquareBracket>() ||
       token.is<Token::Parenthesis>()) {
     // If the current input token is a <{-token>, <[-token>, or <(-token>, consume a simple
     // block and return it.
-    return consumeSimpleBlock(tokenizer, std::move(token), mode)
-        .template map<ComponentValue>(
-            [](SimpleBlock&& block) { return ComponentValue(std::move(block)); });
+    return ComponentValue(consumeSimpleBlock(tokenizer, std::move(token), mode));
   } else if (token.is<Token::Function>()) {
     // Otherwise, if the current input token is a <function-token>, consume a function and
     // return it.
-    return consumeFunction(tokenizer, std::move(token.get<Token::Function>()), mode)
-        .template map<ComponentValue>(
-            [](Function&& func) { return ComponentValue(std::move(func)); });
+    return ComponentValue(
+        consumeFunction(tokenizer, std::move(token.get<Token::Function>()), mode));
   } else {
     return ComponentValue(token);
   }
@@ -61,29 +56,20 @@ ParseResult<ComponentValue> consumeComponentValue(T& tokenizer, Token&& token, P
 
 /// Consume a simple block, per https://www.w3.org/TR/css-syntax-3/#consume-simple-block
 template <TokenizerLike T>
-ParseResult<SimpleBlock> consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode) {
+SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode) {
   const TokenIndex endingTokenIndex = simpleBlockEnding(firstToken.tokenIndex());
   SimpleBlock result(firstToken.tokenIndex());
 
   while (!tokenizer.isEOF()) {
-    auto tokenResult = tokenizer.next();
-    if (tokenResult.hasError()) {
-      return std::move(tokenResult.error());
-    }
-
-    auto token = std::move(tokenResult.result());
+    auto token = tokenizer.next();
     if (token.tokenIndex() == endingTokenIndex) {
       return result;
     } else {
       // anything else: Reconsume the current input token. Consume a component value and append
       // it to the value of the block.
-      auto componentResult = consumeComponentValue(tokenizer, std::move(token), mode);
-      if (componentResult.hasError()) {
-        return std::move(componentResult.error());
-      }
-
+      auto component = consumeComponentValue(tokenizer, std::move(token), mode);
       if (mode == ParseMode::Keep) {
-        result.values.emplace_back(std::move(componentResult.result()));
+        result.values.emplace_back(std::move(component));
       }
     }
   }
@@ -94,29 +80,20 @@ ParseResult<SimpleBlock> consumeSimpleBlock(T& tokenizer, Token&& firstToken, Pa
 
 /// Consume a function, per https://www.w3.org/TR/css-syntax-3/#consume-function
 template <TokenizerLike T>
-ParseResult<Function> consumeFunction(T& tokenizer, Token::Function&& functionToken,
-                                      ParseMode mode) {
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken, ParseMode mode) {
   Function result(std::move(functionToken.name));
 
   while (!tokenizer.isEOF()) {
-    auto tokenResult = tokenizer.next();
-    if (tokenResult.hasError()) {
-      return std::move(tokenResult.error());
-    }
-
-    Token token = std::move(tokenResult.result());
+    Token token = tokenizer.next();
     if (token.is<Token::CloseParenthesis>()) {
       return result;
     } else {
       // anything else: Reconsume the current input token. Consume a component value and append
       // the returned value to the function's value.
-      auto componentValueResult = consumeComponentValue(tokenizer, std::move(token), mode);
-      if (componentValueResult.hasError()) {
-        return std::move(componentValueResult.error());
-      }
+      auto componentValue = consumeComponentValue(tokenizer, std::move(token), mode);
 
       if (mode == ParseMode::Keep) {
-        result.values.emplace_back(std::move(componentValueResult.result()));
+        result.values.emplace_back(std::move(componentValue));
       }
     }
   }
@@ -133,12 +110,7 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
   std::vector<ComponentValue> rawValues;
 
   while (!tokenizer.isEOF()) {
-    auto tokenResult = tokenizer.next();
-    if (tokenResult.hasError()) {
-      return std::nullopt;
-    }
-
-    Token token = std::move(tokenResult.result());
+    Token token = tokenizer.next();
 
     if (token.is<Token::Whitespace>()) {
       // While the next input token is a <whitespace-token>, consume the next input token.
@@ -154,12 +126,7 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
 
   bool lastWasImportantBang = false;
   while (!tokenizer.isEOF()) {
-    auto tokenResult = tokenizer.next();
-    if (tokenResult.hasError()) {
-      return std::nullopt;
-    }
-
-    Token token = std::move(tokenResult.result());
+    Token token = tokenizer.next();
 
     if (token.is<Token::Whitespace>()) {
       // While the next input token is a <whitespace-token>, consume the next input token.
@@ -167,11 +134,8 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
     } else {
       // As long as the next input token is anything other than an <EOF-token>, consume a
       // component value and append it to the declaration's value.
-      auto componentValueResult =
-          consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep);
-      assert(!componentValueResult.hasError());
+      auto componentValue = consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep);
 
-      auto componentValue = std::move(componentValueResult.result());
       // Scan for important.
       if (Token* valueToken = std::get_if<Token>(&componentValue.value)) {
         if (lastWasImportantBang && valueToken->is<Token::Ident>() &&
