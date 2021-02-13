@@ -8,6 +8,8 @@ cc_library(
     ],
     hdrs = [
         "declaration_list_parser.h",
+        "details/common.h",
+        "details/subparsers.h",
         "details/tokenizer.h",
     ],
     visibility = ["//src/svg:__subpackages__"],

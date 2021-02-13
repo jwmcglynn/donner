@@ -6,24 +6,12 @@
 
 #include "src/base/parser/number_parser.h"
 #include "src/base/parser/parse_result.h"
+#include "src/css/parser/details/common.h"
 #include "src/css/token.h"
 
 namespace donner {
 namespace css {
-
-static bool stringLowercaseEq(std::string_view str, std::string_view matcher) {
-  if (str.size() != matcher.size()) {
-    return false;
-  }
-
-  for (size_t i = 0; i < str.size(); ++i) {
-    if (std::tolower(str[i]) != matcher[i]) {
-      return false;
-    }
-  }
-
-  return true;
-}
+namespace details {
 
 class Tokenizer {
 public:
@@ -573,5 +561,6 @@ private:
   std::string_view remaining_;
 };
 
+}  // namespace details
 }  // namespace css
 }  // namespace donner

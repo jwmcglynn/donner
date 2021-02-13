@@ -10,6 +10,8 @@ using testing::ElementsAre;
 namespace donner {
 namespace css {
 
+using details::Tokenizer;
+
 ParseResult<std::vector<Token>> AllTokens(Tokenizer&& tokenizer) {
   std::vector<Token> tokens;
 
