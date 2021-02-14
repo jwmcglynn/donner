@@ -24,12 +24,23 @@ TEST(DeclarationListParser, Simple) {
 
 TEST(DeclarationListParser, Important) {
   EXPECT_THAT(DeclarationListParser::Parse("name: value !important"),
-              ElementsAre(DeclarationIs(
-                  "name", ElementsAre(TokenIsIdent("value"), TokenIsWhitespace(" ")), true)));
+              ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")), true)));
   EXPECT_THAT(DeclarationListParser::Parse("test: !important value"),
               ElementsAre(DeclarationIs(
                   "test", ElementsAre(TokenIsDelim('!'), TokenIsIdent("important"),
                                       TokenIsWhitespace(" "), TokenIsIdent("value")))));
+
+  EXPECT_THAT(DeclarationListParser::Parse("name: value ! /* */ imporTant"),
+              ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")), true)));
+  EXPECT_THAT(DeclarationListParser::Parse("name: value!/**/\r\nimportant  "),
+              ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")), true)));
+
+  EXPECT_THAT(DeclarationListParser::Parse("name: value !important!  "),
+              ElementsAre(DeclarationIs(
+                  "name",
+                  ElementsAre(TokenIsIdent("value"), TokenIsWhitespace(" "), TokenIsDelim('!'),
+                              TokenIsIdent("important"), TokenIsDelim('!')),
+                  false)));
 }
 
 // Declaration: When hit ident, read all tokens until EOF
@@ -94,12 +105,10 @@ TEST(DeclarationListParser, OnlyDeclarations) {
               ElementsAre());
   EXPECT_THAT(DeclarationListParser::ParseOnlyDeclarations("@test test; @thing {}"), ElementsAre());
 
-  EXPECT_THAT(
-      DeclarationListParser::ParseOnlyDeclarations(
-          "@with-block { rule: value } name: value; name2: value2 !important"),
-      ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value"))),
-                  DeclarationIs(
-                      "name2", ElementsAre(TokenIsIdent("value2"), TokenIsWhitespace(" ")), true)));
+  EXPECT_THAT(DeclarationListParser::ParseOnlyDeclarations(
+                  "@with-block { rule: value } name: value; name2: value2 !important"),
+              ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value"))),
+                          DeclarationIs("name2", ElementsAre(TokenIsIdent("value2")), true)));
 }
 
 }  // namespace css

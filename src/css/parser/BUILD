@@ -45,6 +45,7 @@ cc_test(
     data = [
         "@css-parsing-tests//:component_value_list.json",
         "@css-parsing-tests//:declaration_list.json",
+        "@css-parsing-tests//:one_declaration.json",
     ],
     deps = [
         ":parser",

@@ -211,6 +211,27 @@ nlohmann::json declarationOrAtRuleToJson(const DeclarationOrAtRule& value) {
       value.value);
 }
 
+nlohmann::json testParseDeclarationJson(std::string_view css) {
+  Tokenizer tokenizer(css);
+  while (!tokenizer.isEOF()) {
+    Token token = tokenizer.next();
+    if (token.is<Token::Whitespace>()) {
+      continue;
+    } else if (!token.is<Token::Ident>()) {
+      return {"error", "invalid"};
+    } else {
+      if (auto declaration =
+              details::consumeDeclaration(tokenizer, std::move(token.get<Token::Ident>()))) {
+        return declarationToJson(declaration.value());
+      } else {
+        return {"error", "invalid"};
+      }
+    }
+  }
+
+  return {"error", "empty"};
+}
+
 }  // namespace
 
 TEST(CssParsingTests, ComponentValue) {
@@ -278,6 +299,20 @@ TEST(CssParsingTests, DeclarationList) {
         ASSERT_EQ(expectedTokens[i], declarationList[i]) << "At index " << i;
       }
     }
+  }
+}
+
+TEST(CssParsingTests, OneDeclaration) {
+  auto json = loadJson(kTestDataDirectory / "one_declaration.json");
+
+  for (auto it = json.begin(); it != json.end(); ++it) {
+    const std::string css = *it++;
+    const nlohmann::json expectedTokens = *it;
+
+    SCOPED_TRACE(testing::Message() << "CSS: " << css);
+
+    nlohmann::json declaration = testParseDeclarationJson(css);
+    EXPECT_EQ(expectedTokens, declaration);
   }
 }
 

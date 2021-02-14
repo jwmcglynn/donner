@@ -123,7 +123,9 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, ParseMod
 template <TokenizerLike T>
 std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident) {
   {
-    while (!tokenizer.isEOF()) {
+    bool hadColon = false;
+
+    while (!tokenizer.isEOF() && !hadColon) {
       Token token = tokenizer.next();
 
       if (token.is<Token::Whitespace>()) {
@@ -134,11 +136,11 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
         // Return nothing.
         return std::nullopt;
       } else {
-        break;
+        hadColon = true;
       }
     }
 
-    if (tokenizer.isEOF()) {
+    if (!hadColon) {
       return std::nullopt;
     }
   }
@@ -147,14 +149,16 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
 
   bool lastWasImportantBang = false;
   bool hitNonWhitespace = false;
+  int trailingWhitespace = 0;
+
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
 
     if (token.is<Token::Whitespace>()) {
       // While the next input token is a <whitespace-token>, consume the next input token.
-      lastWasImportantBang = false;
       if (hitNonWhitespace) {
         declaration.values.emplace_back(ComponentValue(std::move(token)));
+        ++trailingWhitespace;
       }
     } else {
       hitNonWhitespace = true;
@@ -172,11 +176,15 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
         } else {
           lastWasImportantBang =
               (valueToken->is<Token::Delim>() && valueToken->get<Token::Delim>().value == '!');
+          if (!lastWasImportantBang || declaration.important) {
+            trailingWhitespace = 0;
+          }
           declaration.important = false;
         }
       } else {
         lastWasImportantBang = false;
         declaration.important = false;
+        trailingWhitespace = 0;
       }
 
       declaration.values.emplace_back(std::move(componentValue));
@@ -186,6 +194,11 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
   if (declaration.important) {
     assert(declaration.values.size() >= 2);
     declaration.values.pop_back();
+    declaration.values.pop_back();
+  }
+
+  while (trailingWhitespace > 0) {
+    --trailingWhitespace;
     declaration.values.pop_back();
   }
 
