@@ -27,15 +27,6 @@ nlohmann::json loadJson(std::filesystem::path file) {
   return result;
 }
 
-std::optional<ComponentValue> tryConsumeComponentValue(std::string_view css) {
-  Tokenizer tokenizer(css);
-  if (tokenizer.isEOF()) {
-    return std::nullopt;
-  }
-
-  return details::consumeComponentValue(tokenizer, tokenizer.next(), details::ParseMode::Keep);
-}
-
 std::vector<ComponentValue> consumeComponentValueList(std::string_view css) {
   Tokenizer tokenizer(css);
   return details::parseListOfComponentValues(tokenizer);
@@ -211,6 +202,26 @@ nlohmann::json declarationOrAtRuleToJson(const DeclarationOrAtRule& value) {
       value.value);
 }
 
+nlohmann::json testConsumeComponentValue(std::string_view css) {
+  Tokenizer tokenizer(css);
+  while (!tokenizer.isEOF()) {
+    Token token = tokenizer.next();
+    if (token.is<Token::Whitespace>() || token.is<Token::EofToken>()) {
+      continue;
+    } else {
+      auto result = componentValueToJson(
+          details::consumeComponentValue(tokenizer, std::move(token), details::ParseMode::Keep));
+      if (!tokenizer.isEOF()) {
+        return {"error", "extra-input"};
+      }
+
+      return result;
+    }
+  }
+
+  return {"error", "empty"};
+}
+
 nlohmann::json testParseDeclarationJson(std::string_view css) {
   Tokenizer tokenizer(css);
   while (!tokenizer.isEOF()) {
@@ -235,7 +246,7 @@ nlohmann::json testParseDeclarationJson(std::string_view css) {
 }  // namespace
 
 TEST(CssParsingTests, ComponentValue) {
-  auto json = loadJson(kTestDataDirectory / "component_value_list.json");
+  auto json = loadJson(kTestDataDirectory / "one_component_value.json");
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
@@ -243,14 +254,8 @@ TEST(CssParsingTests, ComponentValue) {
 
     SCOPED_TRACE(testing::Message() << "CSS: " << css);
 
-    if (auto maybeComponentValue = tryConsumeComponentValue(css)) {
-      const auto componentValue = std::move(maybeComponentValue.value());
-
-      ASSERT_TRUE(!expectedTokens.empty());
-      EXPECT_EQ(expectedTokens[0], componentValueToJson(componentValue));
-    } else {
-      EXPECT_THAT(expectedTokens, testing::IsEmpty());
-    }
+    const auto componentValue = testConsumeComponentValue(css);
+    EXPECT_EQ(expectedTokens, componentValue);
   }
 }
 
