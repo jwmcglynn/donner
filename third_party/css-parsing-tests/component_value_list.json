@@ -111,18 +111,24 @@
 	]
 ],
 
-"'' 'Lorem \"îpsum\"' 'a\\\nb' 'a\nb 'eof", [
+"'' 'Lorem \"îpsum\"' 'a\\\nb' 'a\nb 'a\r\nb 'a\rb 'a\fb 'eof", [
 	["string", ""], " ",
 	["string", "Lorem \"îpsum\""], " ",
 	["string", "ab"], " ",
 	["error", "bad-string"], " ", ["ident", "b"], " ",
+	["error", "bad-string"], " ", ["ident", "b"], " ",
+	["error", "bad-string"], " ", ["ident", "b"], " ",
+	["error", "bad-string"], " ", ["ident", "b"], " ",
 	["string", "eof"], ["error", "eof-in-string"]
 ],
 
-"\"\" \"Lorem 'îpsum'\" \"a\\\nb\" \"a\nb \"eof", [
+"\"\" \"Lorem 'îpsum'\" \"a\\\nb\" \"a\nb \"a\r\nb \"a\rb \"a\fb \"eof", [
 	["string", ""], " ",
 	["string", "Lorem 'îpsum'"], " ",
 	["string", "ab"], " ",
+	["error", "bad-string"], " ", ["ident", "b"], " ",
+	["error", "bad-string"], " ", ["ident", "b"], " ",
+	["error", "bad-string"], " ", ["ident", "b"], " ",
 	["error", "bad-string"], " ", ["ident", "b"], " ",
 	["string", "eof"], ["error", "eof-in-string"]
 ],

@@ -207,7 +207,7 @@ private:
         const char nextCh = remaining_[i + 1];
         // Otherwise, if the next input code point is a newline, consume it.
         if (isNewline(nextCh)) {
-          ++i;
+          i += isTwoCharacterNewline(remaining_.substr(i + 1)) ? 2 : 1;
         } else {
           // Otherwise, (the stream starts with a valid escape) consume an escaped code point and
           // append the returned code point to the <string-token>'s value.
@@ -464,7 +464,13 @@ private:
     return ch == ' ' || ch == '\t' || ch == '\f' || ch == '\r' || ch == '\n';
   }
 
-  static bool isNewline(char ch) { return ch == '\r' || ch == '\n'; }
+  /// Returns if a character is a newline. Since this tokenizer skips the preprocessing step also
+  /// consider U+000D CARRIAGE RETURN (CR) and U+000C FORM FEED (FF) as newlines.
+  static bool isNewline(char ch) { return ch == '\r' || ch == '\n' || ch == '\f'; }
+
+  /// Returns if the string starts with a \r\n, which should be treated as one character instead of
+  /// two. Normally these are collapsed during the preprocessing step.
+  static bool isTwoCharacterNewline(std::string_view str) { return str.starts_with("\r\n"); }
 
   static bool isQuote(char ch) { return ch == '"' || ch == '\''; }
 

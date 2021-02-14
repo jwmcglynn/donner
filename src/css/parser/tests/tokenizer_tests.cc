@@ -96,6 +96,12 @@ TEST(Tokenizer, String) {
   // String containing newlines are considered bad.
   EXPECT_THAT(AllTokens(Tokenizer("'newline\n")), ElementsAre(Token(Token::BadString("newline"), 0),
                                                               Token(Token::Whitespace("\n"), 8)));
+  EXPECT_THAT(AllTokens(Tokenizer("'newline\r\nafter")),
+              ElementsAre(Token(Token::BadString("newline"), 0),
+                          Token(Token::Whitespace("\r\n"), 8), Token(Token::Ident("after"), 10)));
+  EXPECT_THAT(AllTokens(Tokenizer("'newline\fafter")),
+              ElementsAre(Token(Token::BadString("newline"), 0), Token(Token::Whitespace("\f"), 8),
+                          Token(Token::Ident("after"), 9)));
 
   EXPECT_THAT(AllTokens(Tokenizer("'bad\n'good'")),
               ElementsAre(Token(Token::BadString("bad"), 0), Token(Token::Whitespace("\n"), 4),
@@ -153,6 +159,16 @@ TEST(Tokenizer, StringEscapedCodepoint) {
   // Whitespace at the end is skipped.
   EXPECT_THAT(Tokenizer("'\\A \\BB\r \\CCC\\D000 abc'").next(),
               Token(Token::String("\u000A\u00BB\u0CCC\uD000abc"), 0));
+
+  // Newlines are allowed if they are escaped, character is not added.
+  EXPECT_THAT(AllTokens(Tokenizer("'newline\\\nafter'")),
+              ElementsAre(Token(Token::String("newlineafter"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("'newline\\\rafter'")),
+              ElementsAre(Token(Token::String("newlineafter"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("'newline\\\r\nafter'")),
+              ElementsAre(Token(Token::String("newlineafter"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("'newline\\\fafter'")),
+              ElementsAre(Token(Token::String("newlineafter"), 0)));
 }
 
 TEST(Tokenizer, Hash) {
