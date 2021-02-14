@@ -50,6 +50,9 @@ cc_test(
         "@css-parsing-tests//:declaration_list.json",
         "@css-parsing-tests//:one_component_value.json",
         "@css-parsing-tests//:one_declaration.json",
+        "@css-parsing-tests//:one_rule.json",
+        "@css-parsing-tests//:rule_list.json",
+        "@css-parsing-tests//:stylesheet.json",
     ],
     deps = [
         ":parser",

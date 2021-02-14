@@ -69,10 +69,26 @@ void PrintTo(const AtRule& rule, std::ostream* os) {
 
 void PrintTo(const InvalidRule& invalidRule, std::ostream* os) {
   *os << "InvalidRule";
+  if (invalidRule.type == InvalidRule::Type::ExtraInput) {
+    *os << "(ExtraInput)";
+  }
 }
 
 void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os) {
   std::visit([os](auto&& v) { *os << testing::PrintToString(v); }, declOrAt.value);
+}
+
+void PrintTo(const QualifiedRule& qualifiedRule, std::ostream* os) {
+  *os << "QualifiedRule {\n";
+  for (auto& value : qualifiedRule.prelude) {
+    *os << "  " << testing::PrintToString(value) << "\n";
+  }
+  *os << "  { " << testing::PrintToString(qualifiedRule.block) << " }\n";
+  *os << "}";
+}
+
+void PrintTo(const Rule& rule, std::ostream* os) {
+  std::visit([os](auto&& v) { *os << testing::PrintToString(v); }, rule.value);
 }
 
 }  // namespace css

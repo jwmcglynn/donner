@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "src/css/declaration.h"
+#include "src/css/stylesheet.h"
 #include "src/css/token.h"
 
 namespace donner {
@@ -30,6 +31,8 @@ void PrintTo(const Declaration& declaration, std::ostream* os);
 void PrintTo(const AtRule& rule, std::ostream* os);
 void PrintTo(const InvalidRule& invalidRule, std::ostream* os);
 void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os);
+void PrintTo(const QualifiedRule& qualifiedRule, std::ostream* os);
+void PrintTo(const Rule& rule, std::ostream* os);
 
 MATCHER_P(TokenIsImpl, token, "") {
   using TokenType = std::remove_cvref_t<decltype(token)>;
@@ -226,7 +229,7 @@ MATCHER_P3(AtRuleIsImpl, nameMatcher, preludeMatcher, blockMatcher, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
   const AtRule* rule = nullptr;
 
-  if constexpr (std::is_same_v<ArgType, DeclarationOrAtRule>) {
+  if constexpr (std::is_same_v<ArgType, DeclarationOrAtRule> || std::is_same_v<ArgType, Rule>) {
     rule = std::get_if<AtRule>(&arg.value);
   } else {
     rule = &arg;

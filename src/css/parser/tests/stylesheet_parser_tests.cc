@@ -13,5 +13,10 @@ TEST(StylesheetParser, Empty) {
   EXPECT_THAT(StylesheetParser::Parse("").rules, ElementsAre());
 }
 
+TEST(StylesheetParser, Charset) {
+  EXPECT_THAT(StylesheetParser::Parse("@charset \"4\"; @foo").rules,
+              ElementsAre(AtRuleIs("foo", ElementsAre())));
+}
+
 }  // namespace css
 }  // namespace donner

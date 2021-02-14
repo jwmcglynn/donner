@@ -10,12 +10,19 @@ namespace css {
 
 struct QualifiedRule {
   std::vector<ComponentValue> prelude;
-  std::optional<SimpleBlock> block;
+  SimpleBlock block;
+
+  QualifiedRule(std::vector<ComponentValue>&& prelude, SimpleBlock&& block)
+      : prelude(prelude), block(block) {}
+  bool operator==(const QualifiedRule& other) const = default;
 };
 
 struct Rule {
-  using Type = std::variant<AtRule, QualifiedRule>;
+  using Type = std::variant<AtRule, QualifiedRule, InvalidRule>;
   Type value;
+
+  /* implicit */ Rule(Type&& value) : value(value) {}
+  bool operator==(const Rule& other) const = default;
 };
 
 struct Stylesheet {

@@ -119,6 +119,37 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, ParseMod
   return result;
 }
 
+/// Consume an at-rule, per https://www.w3.org/TR/css-syntax-3/#consume-at-rule
+template <TokenizerLike T>
+AtRule consumeAtRule(T& tokenizer, Token::AtKeyword&& atKeyword, ParseMode mode) {
+  AtRule result(std::move(atKeyword.value));
+
+  while (!tokenizer.isEOF()) {
+    Token token = tokenizer.next();
+
+    if (token.template is<Token::Semicolon>()) {
+      // Return the at-rule.
+      return result;
+    } else if (token.template is<Token::CurlyBracket>()) {
+      // <{-token>: Consume a simple block and assign it to the at-rule's block. Return the
+      // at-rule.
+      result.block = consumeSimpleBlock(tokenizer, std::move(token), mode);
+      return result;
+    } else {
+      // anything else: Reconsume the current input token. Consume a component value. Append the
+      // returned value to the at-rule's prelude.
+      auto component = consumeComponentValue(tokenizer, std::move(token), mode);
+
+      if (mode == ParseMode::Keep) {
+        result.prelude.emplace_back(std::move(component));
+      }
+    }
+  }
+
+  // <EOF-token>: This is a parse error. Return the at-rule.
+  return result;
+}
+
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <TokenizerLike T>
 std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident) {

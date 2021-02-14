@@ -51,7 +51,8 @@ public:
       if (token.is<Token::AtKeyword>()) {
         // <at-keyword-token>: Reconsume the current input token. Consume an at-rule. Append the
         // returned rule to the list of declarations.
-        auto atRule = consumeAtRule(std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
+        auto atRule =
+            consumeAtRule(tokenizer_, std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
         result.emplace_back(std::move(atRule));
       } else if (token.is<Token::Whitespace>() || token.is<Token::Semicolon>()) {
         // Skip.
@@ -79,7 +80,8 @@ public:
         // <at-keyword-token>: Reconsume the current input token. Consume an at-rule. Append the
         // returned rule to the list of declarations.
         // In this case we ignore the result since only declarations are desired.
-        std::ignore = consumeAtRule(std::move(token.get<Token::AtKeyword>()), ParseMode::Discard);
+        std::ignore =
+            consumeAtRule(tokenizer_, std::move(token.get<Token::AtKeyword>()), ParseMode::Discard);
       } else if (token.is<Token::Whitespace>() || token.is<Token::Semicolon>()) {
         // Skip.
       } else {
@@ -133,36 +135,6 @@ public:
 
       return std::nullopt;
     }
-  }
-
-  /// Consume an at-rule, per https://www.w3.org/TR/css-syntax-3/#consume-at-rule
-  AtRule consumeAtRule(Token::AtKeyword&& atKeyword, ParseMode mode) {
-    AtRule result(std::move(atKeyword.value));
-
-    while (!tokenizer_.isEOF()) {
-      auto token = tokenizer_.next();
-
-      if (token.is<Token::Semicolon>()) {
-        // Return the at-rule.
-        return result;
-      } else if (token.is<Token::CurlyBracket>()) {
-        // <{-token>: Consume a simple block and assign it to the at-rule's block. Return the
-        // at-rule.
-        result.block = consumeSimpleBlock(tokenizer_, std::move(token), mode);
-        return result;
-      } else {
-        // anything else: Reconsume the current input token. Consume a component value. Append the
-        // returned value to the at-rule's prelude.
-        auto component = consumeComponentValue(tokenizer_, std::move(token), mode);
-
-        if (mode == ParseMode::Keep) {
-          result.prelude.emplace_back(std::move(component));
-        }
-      }
-    }
-
-    // <EOF-token>: This is a parse error. Return the at-rule.
-    return result;
   }
 
 private:

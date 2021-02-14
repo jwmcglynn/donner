@@ -8,6 +8,7 @@
 #include "src/css/parser/declaration_list_parser.h"
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
+#include "src/css/parser/stylesheet_parser.h"
 
 namespace donner {
 namespace css {
@@ -202,6 +203,35 @@ nlohmann::json declarationOrAtRuleToJson(const DeclarationOrAtRule& value) {
       value.value);
 }
 
+nlohmann::json qualifiedRuleToJson(const QualifiedRule& r) {
+  nlohmann::json prelude = nlohmann::json::array();
+  for (const auto& p : r.prelude) {
+    prelude.push_back(componentValueToJson(p));
+  }
+
+  return {"qualified rule", prelude, simpleBlockToJson(r.block)};
+}
+
+nlohmann::json ruleToJson(const Rule& value) {
+  return std::visit(
+      [](auto&& v) -> nlohmann::json {
+        using Type = std::remove_cvref_t<decltype(v)>;
+
+        if constexpr (std::is_same_v<Type, AtRule>) {
+          return atRuleToJson(v);
+        } else if constexpr (std::is_same_v<Type, QualifiedRule>) {
+          return qualifiedRuleToJson(v);
+        } else if constexpr (std::is_same_v<Type, InvalidRule>) {
+          if (v.type == InvalidRule::Type::ExtraInput) {
+            return {"error", "extra-input"};
+          } else {
+            return {"error", "invalid"};
+          }
+        }
+      },
+      value.value);
+}
+
 nlohmann::json testConsumeComponentValue(std::string_view css) {
   Tokenizer tokenizer(css);
   while (!tokenizer.isEOF()) {
@@ -318,6 +348,72 @@ TEST(CssParsingTests, OneDeclaration) {
 
     nlohmann::json declaration = testParseDeclarationJson(css);
     EXPECT_EQ(expectedTokens, declaration);
+  }
+}
+
+TEST(CssParsingTests, OneRule) {
+  auto json = loadJson(kTestDataDirectory / "one_rule.json");
+
+  for (auto it = json.begin(); it != json.end(); ++it) {
+    const std::string css = *it++;
+    const nlohmann::json expectedTokens = *it;
+
+    SCOPED_TRACE(testing::Message() << "CSS: " << css);
+
+    if (auto maybeRule = StylesheetParser::ParseRule(css)) {
+      nlohmann::json rule = ruleToJson(maybeRule.value());
+      EXPECT_EQ(expectedTokens, rule);
+    } else {
+      EXPECT_EQ(expectedTokens, nlohmann::json::array({"error", "empty"}));
+    }
+  }
+}
+
+TEST(CssParsingTests, RuleList) {
+  auto json = loadJson(kTestDataDirectory / "rule_list.json");
+
+  for (auto it = json.begin(); it != json.end(); ++it) {
+    const std::string css = *it++;
+    const nlohmann::json expectedTokens = *it;
+
+    SCOPED_TRACE(testing::Message() << "CSS: " << css);
+
+    nlohmann::json ruleList = nlohmann::json::array();
+    for (const auto& rule : StylesheetParser::ParseListOfRules(css)) {
+      ruleList.push_back(ruleToJson(rule));
+    }
+
+    EXPECT_EQ(expectedTokens, ruleList);
+    if (testing::Test::HasFailure()) {
+      const size_t minSharedElements = std::min(expectedTokens.size(), ruleList.size());
+      for (size_t i = 0; i < minSharedElements; ++i) {
+        ASSERT_EQ(expectedTokens[i], ruleList[i]) << "At index " << i;
+      }
+    }
+  }
+}
+
+TEST(CssParsingTests, Stylesheet) {
+  auto json = loadJson(kTestDataDirectory / "stylesheet.json");
+
+  for (auto it = json.begin(); it != json.end(); ++it) {
+    const std::string css = *it++;
+    const nlohmann::json expectedTokens = *it;
+
+    SCOPED_TRACE(testing::Message() << "CSS: " << css);
+
+    nlohmann::json ruleList = nlohmann::json::array();
+    for (const auto& rule : StylesheetParser::Parse(css).rules) {
+      ruleList.push_back(ruleToJson(rule));
+    }
+
+    EXPECT_EQ(expectedTokens, ruleList);
+    if (testing::Test::HasFailure()) {
+      const size_t minSharedElements = std::min(expectedTokens.size(), ruleList.size());
+      for (size_t i = 0; i < minSharedElements; ++i) {
+        ASSERT_EQ(expectedTokens[i], ruleList[i]) << "At index " << i;
+      }
+    }
   }
 }
 

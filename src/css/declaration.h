@@ -58,7 +58,12 @@ struct Declaration {
 };
 
 struct InvalidRule {
-  bool operator==(const InvalidRule& other) const { return true; }
+  enum class Type { Default, ExtraInput };
+
+  explicit InvalidRule(Type type = Type::Default) : type(type) {}
+  bool operator==(const InvalidRule& other) const { return type == other.type; }
+
+  Type type;
 };
 
 struct DeclarationOrAtRule {
