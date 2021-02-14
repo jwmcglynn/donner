@@ -1,7 +1,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/css/parser/details/tokenizer.h"
 #include "src/css/parser/tests/token_test_utils.h"
 

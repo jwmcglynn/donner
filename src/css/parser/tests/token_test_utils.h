@@ -5,7 +5,6 @@
 #include <ostream>
 #include <type_traits>
 
-#include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/css/declaration.h"
 #include "src/css/token.h"
 

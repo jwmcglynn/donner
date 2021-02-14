@@ -14,7 +14,7 @@ public:
    * Parse a HTML/SVG style attribute, corresponding to a CSS <declaration-list>.
    *
    * @param str Input string.
-   * @return Parsed declaration list, or an error.
+   * @return Parsed declaration list.
    */
   static std::vector<DeclarationOrAtRule> Parse(std::string_view str);
 
@@ -23,7 +23,7 @@ public:
    * the list of declarations, skipping any at-rules when parsing.
    *
    * @param str Input string.
-   * @return Parsed declaration list, or an error.
+   * @return Parsed declaration list.
    */
   static std::vector<Declaration> ParseOnlyDeclarations(std::string_view str);
 };
