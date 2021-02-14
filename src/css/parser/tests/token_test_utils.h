@@ -29,6 +29,7 @@ void PrintTo(const ComponentValue& component, std::ostream* os);
 
 void PrintTo(const Declaration& declaration, std::ostream* os);
 void PrintTo(const AtRule& rule, std::ostream* os);
+void PrintTo(const InvalidRule& invalidRule, std::ostream* os);
 void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os);
 
 MATCHER_P(TokenIsImpl, token, "") {
@@ -249,6 +250,23 @@ auto AtRuleIs(NameMatcher nameMatcher, PreludeMatcher preludeMatcher, BlockMatch
 template <typename NameMatcher, typename PreludeMatcher>
 auto AtRuleIs(NameMatcher nameMatcher, PreludeMatcher preludeMatcher) {
   return AtRuleIsImpl(nameMatcher, preludeMatcher, testing::Eq(std::nullopt));
+}
+
+MATCHER(InvalidRuleTypeImpl, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
+  const InvalidRule* rule = nullptr;
+
+  if constexpr (std::is_same_v<ArgType, DeclarationOrAtRule>) {
+    rule = std::get_if<InvalidRule>(&arg.value);
+  } else {
+    rule = &arg;
+  }
+
+  return rule != nullptr;
+}
+
+inline auto InvalidRuleType() {
+  return InvalidRuleTypeImpl();
 }
 
 MATCHER_P2(FunctionIs, nameMatcher, valuesMatcher, "") {

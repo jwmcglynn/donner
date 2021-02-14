@@ -53,11 +53,15 @@ public:
         // returned rule to the list of declarations.
         auto atRule = consumeAtRule(std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
         result.emplace_back(std::move(atRule));
+      } else if (token.is<Token::Whitespace>() || token.is<Token::Semicolon>()) {
+        // Skip.
       } else {
         auto maybeDeclaration = parseCommon(std::move(token));
 
         if (maybeDeclaration.has_value()) {
           result.emplace_back(std::move(maybeDeclaration.value()));
+        } else {
+          result.emplace_back(InvalidRule());
         }
       }
     }
@@ -76,6 +80,8 @@ public:
         // returned rule to the list of declarations.
         // In this case we ignore the result since only declarations are desired.
         std::ignore = consumeAtRule(std::move(token.get<Token::AtKeyword>()), ParseMode::Discard);
+      } else if (token.is<Token::Whitespace>() || token.is<Token::Semicolon>()) {
+        // Skip.
       } else {
         auto maybeDeclaration = parseCommon(std::move(token));
         if (maybeDeclaration.has_value()) {
@@ -88,9 +94,7 @@ public:
   }
 
   std::optional<Declaration> parseCommon(Token&& token) {
-    if (token.is<Token::Whitespace>() || token.is<Token::Semicolon>()) {
-      return std::nullopt;
-    } else if (token.is<Token::Ident>()) {
+    if (token.is<Token::Ident>()) {
       // <ident-token>: Initialize a temporary list initially filled with the current input token.
       Token::Ident ident = std::move(token.get<Token::Ident>());
       std::vector<Token> declarationInput;
@@ -144,7 +148,7 @@ public:
       } else if (token.is<Token::CurlyBracket>()) {
         // <{-token>: Consume a simple block and assign it to the at-rule's block. Return the
         // at-rule.
-        result.block = ComponentValue(consumeSimpleBlock(tokenizer_, std::move(token), mode));
+        result.block = consumeSimpleBlock(tokenizer_, std::move(token), mode);
         return result;
       } else {
         // anything else: Reconsume the current input token. Consume a component value. Append the

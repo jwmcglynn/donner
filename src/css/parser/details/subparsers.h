@@ -122,33 +122,43 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, ParseMod
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <TokenizerLike T>
 std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident) {
-  Declaration declaration(std::move(ident.value));
+  {
+    while (!tokenizer.isEOF()) {
+      Token token = tokenizer.next();
 
-  std::vector<ComponentValue> rawValues;
+      if (token.is<Token::Whitespace>()) {
+        // While the next input token is a <whitespace-token>, consume the next input token.
+        continue;
+      } else if (!token.is<Token::Colon>()) {
+        // If the next input token is anything other than a <colon-token>, this is a parse error.
+        // Return nothing.
+        return std::nullopt;
+      } else {
+        break;
+      }
+    }
 
-  while (!tokenizer.isEOF()) {
-    Token token = tokenizer.next();
-
-    if (token.is<Token::Whitespace>()) {
-      // While the next input token is a <whitespace-token>, consume the next input token.
-      continue;
-    } else if (!token.is<Token::Colon>()) {
-      // If the next input token is anything other than a <colon-token>, this is a parse error.
-      // Return nothing.
+    if (tokenizer.isEOF()) {
       return std::nullopt;
-    } else {
-      break;
     }
   }
 
+  Declaration declaration(std::move(ident.value));
+
   bool lastWasImportantBang = false;
+  bool hitNonWhitespace = false;
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
 
     if (token.is<Token::Whitespace>()) {
       // While the next input token is a <whitespace-token>, consume the next input token.
       lastWasImportantBang = false;
+      if (hitNonWhitespace) {
+        declaration.values.emplace_back(ComponentValue(std::move(token)));
+      }
     } else {
+      hitNonWhitespace = true;
+
       // As long as the next input token is anything other than an <EOF-token>, consume a
       // component value and append it to the declaration's value.
       auto componentValue = consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep);

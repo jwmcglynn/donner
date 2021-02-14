@@ -5,6 +5,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "src/css/parser/declaration_list_parser.h"
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 
@@ -175,6 +176,41 @@ nlohmann::json componentValueToJson(const ComponentValue& value) {
       value.value);
 }
 
+nlohmann::json atRuleToJson(const AtRule& r) {
+  nlohmann::json prelude = nlohmann::json::array();
+  for (const auto& p : r.prelude) {
+    prelude.push_back(componentValueToJson(p));
+  }
+
+  return {"at-rule", r.name, prelude,
+          r.block ? simpleBlockToJson(r.block.value()) : nlohmann::json()};
+}
+
+nlohmann::json declarationToJson(const Declaration& d) {
+  nlohmann::json values = nlohmann::json::array();
+  for (const auto& v : d.values) {
+    values.push_back(componentValueToJson(v));
+  }
+
+  return {"declaration", d.name, values, d.important};
+}
+
+nlohmann::json declarationOrAtRuleToJson(const DeclarationOrAtRule& value) {
+  return std::visit(
+      [](auto&& v) -> nlohmann::json {
+        using Type = std::remove_cvref_t<decltype(v)>;
+
+        if constexpr (std::is_same_v<Type, Declaration>) {
+          return declarationToJson(v);
+        } else if constexpr (std::is_same_v<Type, AtRule>) {
+          return atRuleToJson(v);
+        } else {
+          return {"error", "invalid"};
+        }
+      },
+      value.value);
+}
+
 }  // namespace
 
 TEST(CssParsingTests, ComponentValue) {
@@ -206,9 +242,8 @@ TEST(CssParsingTests, ComponentValueList) {
 
     SCOPED_TRACE(testing::Message() << "CSS: " << css);
 
-    auto cvList = consumeComponentValueList(css);
     nlohmann::json componentValueList = nlohmann::json::array();
-    for (const auto& componentValue : removeUntestedTokens(cvList)) {
+    for (const auto& componentValue : removeUntestedTokens(consumeComponentValueList(css))) {
       componentValueList.push_back(componentValueToJson(componentValue));
     }
 
@@ -217,6 +252,30 @@ TEST(CssParsingTests, ComponentValueList) {
       const size_t minSharedElements = std::min(expectedTokens.size(), componentValueList.size());
       for (size_t i = 0; i < minSharedElements; ++i) {
         ASSERT_EQ(expectedTokens[i], componentValueList[i]) << "At index " << i;
+      }
+    }
+  }
+}
+
+TEST(CssParsingTests, DeclarationList) {
+  auto json = loadJson(kTestDataDirectory / "declaration_list.json");
+
+  for (auto it = json.begin(); it != json.end(); ++it) {
+    const std::string css = *it++;
+    const nlohmann::json expectedTokens = *it;
+
+    SCOPED_TRACE(testing::Message() << "CSS: " << css);
+
+    nlohmann::json declarationList = nlohmann::json::array();
+    for (const auto& declOrAtRule : DeclarationListParser::Parse(css)) {
+      declarationList.push_back(declarationOrAtRuleToJson(declOrAtRule));
+    }
+
+    EXPECT_EQ(expectedTokens, declarationList);
+    if (testing::Test::HasFailure()) {
+      const size_t minSharedElements = std::min(expectedTokens.size(), declarationList.size());
+      for (size_t i = 0; i < minSharedElements; ++i) {
+        ASSERT_EQ(expectedTokens[i], declarationList[i]) << "At index " << i;
       }
     }
   }

@@ -22,21 +22,21 @@
     ["error", "invalid"]
 ],
 
-"@import 'foo.css'; a:b; @import 'bar.css'", [
+"@import 'foo.css'; a:b/**/; @import 'bar.css'", [
     ["at-rule", "import", [" ", ["string", "foo.css"]], null],
     ["declaration", "a", [["ident", "b"]], false],
     ["at-rule", "import", [" ", ["string", "bar.css"]], null]
 ],
 
 "@media screen { div{;}} a:b;; @media print{div{", [
-    ["at-rule", "media", [" ", ["ident", "screen"], " "], [" ", ["ident", "div"], ["{}", ";"]]],
+    ["at-rule", "media", [" ", ["ident", "screen"], " "], ["{}", " ", ["ident", "div"], ["{}", ";"]]],
     ["declaration", "a", [["ident", "b"]], false],
-    ["at-rule", "media", [" ", ["ident", "print"]], [["ident", "div"], ["{}"]]]
+    ["at-rule", "media", [" ", ["ident", "print"]], ["{}", ["ident", "div"], ["{}"]]]
 ],
 
 "@ media screen { div{;}} a:b;; @media print{div{", [
     ["error", "invalid"],
-    ["at-rule", "media", [" ", ["ident", "print"]], [["ident", "div"], ["{}"]]]
+    ["at-rule", "media", [" ", ["ident", "print"]], ["{}", ["ident", "div"], ["{}"]]]
 ],
 
 "", []

@@ -24,11 +24,12 @@ TEST(DeclarationListParser, Simple) {
 
 TEST(DeclarationListParser, Important) {
   EXPECT_THAT(DeclarationListParser::Parse("name: value !important"),
-              ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")), true)));
-  EXPECT_THAT(
-      DeclarationListParser::Parse("test: !important value"),
-      ElementsAre(DeclarationIs("test", ElementsAre(TokenIsDelim('!'), TokenIsIdent("important"),
-                                                    TokenIsIdent("value")))));
+              ElementsAre(DeclarationIs(
+                  "name", ElementsAre(TokenIsIdent("value"), TokenIsWhitespace(" ")), true)));
+  EXPECT_THAT(DeclarationListParser::Parse("test: !important value"),
+              ElementsAre(DeclarationIs(
+                  "test", ElementsAre(TokenIsDelim('!'), TokenIsIdent("important"),
+                                      TokenIsWhitespace(" "), TokenIsIdent("value")))));
 }
 
 // Declaration: When hit ident, read all tokens until EOF
@@ -37,12 +38,17 @@ TEST(DeclarationListParser, Important) {
 // Invalid, read all component values until next semicolon
 // Component value: read block, function, or return token
 TEST(DeclarationListParser, InvalidTokens) {
-  EXPECT_THAT(DeclarationListParser::Parse("< this should be ignored"), ElementsAre());
-  EXPECT_THAT(DeclarationListParser::Parse("< ignored { ; key: value }"), ElementsAre());
-  EXPECT_THAT(DeclarationListParser::Parse("< ignored { ; key: value }; now: valid"),
-              ElementsAre(DeclarationIs("now", ElementsAre(TokenIsIdent("valid")))));
-  EXPECT_THAT(DeclarationListParser::Parse("! ok: test; { a: a }; [ b: b ]; ( c: c ); now: valid"),
-              ElementsAre(DeclarationIs("now", ElementsAre(TokenIsIdent("valid")))));
+  EXPECT_THAT(DeclarationListParser::Parse("< this should be ignored"),
+              ElementsAre(InvalidRuleType()));
+  EXPECT_THAT(DeclarationListParser::Parse("< ignored { ; key: value }"),
+              ElementsAre(InvalidRuleType()));
+  EXPECT_THAT(
+      DeclarationListParser::Parse("< ignored { ; key: value }; now: valid"),
+      ElementsAre(InvalidRuleType(), DeclarationIs("now", ElementsAre(TokenIsIdent("valid")))));
+  EXPECT_THAT(
+      DeclarationListParser::Parse("! ok: test; { a: a }; [ b: b ]; ( c: c ); now: valid"),
+      ElementsAre(InvalidRuleType(), InvalidRuleType(), InvalidRuleType(), InvalidRuleType(),
+                  DeclarationIs("now", ElementsAre(TokenIsIdent("valid")))));
 }
 
 TEST(DeclarationListParser, AtRule) {
@@ -88,10 +94,12 @@ TEST(DeclarationListParser, OnlyDeclarations) {
               ElementsAre());
   EXPECT_THAT(DeclarationListParser::ParseOnlyDeclarations("@test test; @thing {}"), ElementsAre());
 
-  EXPECT_THAT(DeclarationListParser::ParseOnlyDeclarations(
-                  "@with-block { rule: value } name: value; name2: value2 !important"),
-              ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value"))),
-                          DeclarationIs("name2", ElementsAre(TokenIsIdent("value2")), true)));
+  EXPECT_THAT(
+      DeclarationListParser::ParseOnlyDeclarations(
+          "@with-block { rule: value } name: value; name2: value2 !important"),
+      ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value"))),
+                  DeclarationIs(
+                      "name2", ElementsAre(TokenIsIdent("value2"), TokenIsWhitespace(" ")), true)));
 }
 
 }  // namespace css

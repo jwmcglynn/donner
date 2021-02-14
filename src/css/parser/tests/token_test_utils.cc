@@ -67,6 +67,10 @@ void PrintTo(const AtRule& rule, std::ostream* os) {
   *os << "}";
 }
 
+void PrintTo(const InvalidRule& invalidRule, std::ostream* os) {
+  *os << "InvalidRule";
+}
+
 void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os) {
   std::visit([os](auto&& v) { *os << testing::PrintToString(v); }, declOrAt.value);
 }

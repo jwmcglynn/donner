@@ -40,7 +40,7 @@ struct ComponentValue {
 struct AtRule {
   std::string name;
   std::vector<ComponentValue> prelude;
-  std::optional<ComponentValue> block;
+  std::optional<SimpleBlock> block;
 
   explicit AtRule(std::string name);
   bool operator==(const AtRule& other) const;
@@ -57,8 +57,12 @@ struct Declaration {
   bool important = false;
 };
 
+struct InvalidRule {
+  bool operator==(const InvalidRule& other) const { return true; }
+};
+
 struct DeclarationOrAtRule {
-  using Type = std::variant<Declaration, AtRule>;
+  using Type = std::variant<Declaration, AtRule, InvalidRule>;
   Type value;
 
   /* implicit */ DeclarationOrAtRule(Type&& value);
