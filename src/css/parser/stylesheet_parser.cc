@@ -43,7 +43,7 @@ public:
         // rule be the return value.
         auto atRule =
             consumeAtRule(tokenizer_, std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
-        if (!details::stringLowercaseEq(atRule.name, "charset")) {
+        if (!details::StringLowercaseEq(atRule.name, "charset")) {
           result = Rule(std::move(atRule));
           break;
         } else {
@@ -130,7 +130,7 @@ public:
         // returned value to the list of rules.
         auto atRule =
             consumeAtRule(tokenizer, std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
-        if (!details::stringLowercaseEq(atRule.name, "charset")) {
+        if (!details::StringLowercaseEq(atRule.name, "charset")) {
           result.emplace_back(std::move(atRule));
         } else {
           result.emplace_back(InvalidRule());

@@ -38,13 +38,6 @@ new_git_repository(
     tag = "v3.9.1",
 )
 
-new_git_repository(
-    name = "utfcpp",
-    build_file = "@//third_party:BUILD.utfcpp",
-    remote = "https://github.com/nemtrif/utfcpp.git",
-    tag = "v3.1.2",
-)
-
 git_repository(
     name = "io_bazel_rules_rust",
     commit = "7cf9a3fc467f547b878f7d4065fcd8737da38803",

@@ -19,7 +19,6 @@ cc_library(
         "//src/base",
         "//src/base/parser",
         "//src/css",
-        "@utfcpp",
     ],
 )
 

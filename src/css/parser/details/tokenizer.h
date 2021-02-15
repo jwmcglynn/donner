@@ -1,7 +1,5 @@
 #pragma once
 
-#include <utfcpp/source/utf8.h>
-
 #include <string_view>
 
 #include "src/base/parser/number_parser.h"
@@ -212,11 +210,11 @@ private:
           // Otherwise, (the stream starts with a valid escape) consume an escaped code point and
           // append the returned code point to the <string-token>'s value.
           const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining_.substr(i + 1));
-          utf8::append(codepoint, std::back_inserter(str));
+          details::Utf8Append(codepoint, std::back_inserter(str));
           i += bytesConsumed;
         }
       } else if (ch == '\0') {
-        utf8::append(kUnicodeReplacementCharacter, std::back_inserter(str));
+        details::Utf8Append(kUnicodeReplacementCharacter, std::back_inserter(str));
       } else {
         // anything else: Append the current input code point to the <string-token>'s value.
         str.push_back(ch);
@@ -245,14 +243,14 @@ private:
         if (ch != '\0') {
           str.push_back(ch);
         } else {
-          utf8::append(kUnicodeReplacementCharacter, std::back_inserter(str));
+          details::Utf8Append(kUnicodeReplacementCharacter, std::back_inserter(str));
         }
         ++i;
       } else if (isValidEscape(remaining.substr(i))) {
         // the stream starts with a valid escape: Consume an escaped code point. Append the returned
         // code point to result.
         const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining.substr(i + 1));
-        utf8::append(codepoint, std::back_inserter(str));
+        details::Utf8Append(codepoint, std::back_inserter(str));
         i += 1 + bytesConsumed;
       } else {
         // anything else: Reconsume the current input code point. Return result.
@@ -289,7 +287,7 @@ private:
 
       // If this number is zero, or is for a surrogate, or is greater than the maximum allowed code
       // point, return U+FFFD REPLACEMENT CHARACTER (�).
-      if (number == 0 || isSurrogateCodepoint(number) || number > kMaximumAllowedCodepoint) {
+      if (number == 0 || !IsValidCodepoint(number)) {
         return {kUnicodeReplacementCharacter, i};
       }
 
@@ -297,7 +295,7 @@ private:
       return {number, i};
     } else {
       if (remaining[0] != '\0') {
-        return details::utf8NextCodepoint(remaining);
+        return details::Utf8NextCodepoint(remaining);
       } else {
         // Transform \0 to the unicode replacement character, since the proprocess step has been
         // skipped.
@@ -348,7 +346,7 @@ private:
 
     // If `name`'s value is an ASCII case-insensitive match for "url", and the next input code point
     // is U+0028 LEFT PARENTHESIS ((), consume it.
-    if (stringLowercaseEq(name, "url") && hasParen) {
+    if (StringLowercaseEq(name, "url") && hasParen) {
       size_t i = 1;
       size_t remainingSize = afterName.size();
 
@@ -409,7 +407,7 @@ private:
           return consumeRemnantsOfBadUrl(afterUrl.substr(i), charsConsumedBefore + i);
         }
       } else if (ch == '\0') {
-        utf8::append(kUnicodeReplacementCharacter, std::back_inserter(str));
+        details::Utf8Append(kUnicodeReplacementCharacter, std::back_inserter(str));
         ++i;
       } else if (isQuote(ch) || ch == '(' || isNonPrintableCodepoint(ch)) {
         // This is a parse error. Consume the remnants of a bad url, create a <bad-url-token>, and
@@ -419,7 +417,7 @@ private:
         // U+005C REVERSE SOLIDUS (\): If the stream starts with a valid escape, consume an escaped
         // code point and append the returned code point to the <url-token>'s value.
         const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(afterUrl.substr(i + 1));
-        utf8::append(codepoint, std::back_inserter(str));
+        details::Utf8Append(codepoint, std::back_inserter(str));
         i += bytesConsumed + 1;
       } else {
         // anything else: Append the current input code point to the <url-token>'s value.
@@ -597,10 +595,6 @@ private:
       return false;
     }
   }
-
-  /// The greatest codepoint defined by unicode, per
-  /// https://www.w3.org/TR/css-syntax-3/#maximum-allowed-code-point
-  static constexpr char32_t kMaximumAllowedCodepoint = 0x10FFFF;
 
   const std::string_view str_;
   std::string_view remaining_;
