@@ -116,7 +116,7 @@ associated with the expected result.
     the output as one of:
 
     * null if the input is not a valid color in CSS syntax
-    * The string "currentColor" for the currentColor keyword
+    * The string "currentcolor" for the currentcolor keyword
     * An array of length 4 for every other values:
       four (floating point) numbers for the Red, Green, Blue and Alpha channel.
       Each value is between 0 and 1.
@@ -141,6 +141,13 @@ associated with the expected result.
     The Unicode input is represented by a JSON string,
     the output as null for invalid syntax,
     or an array of two integers ``[A, B]``.
+
+``urange.json``
+    Tests the `urange <https://www.w3.org/TR/css-syntax-3/#urange>`_
+    syntax defined in CSS Syntax Level 3.
+    The Unicode input is represented by a JSON string,
+    the output as null for invalid syntax,
+    or an array of two integers ``[start, end]``.
 
 
 Result representation
