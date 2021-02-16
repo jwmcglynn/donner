@@ -1,7 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "src/css/parser/stylesheet_parser.h"
+#include "src/css/parser/rule_parser.h"
 #include "src/css/parser/tests/token_test_utils.h"
 
 using testing::ElementsAre;
@@ -9,12 +9,12 @@ using testing::ElementsAre;
 namespace donner {
 namespace css {
 
-TEST(StylesheetParser, Empty) {
-  EXPECT_THAT(StylesheetParser::Parse("").rules, ElementsAre());
+TEST(RuleParser, Empty) {
+  EXPECT_THAT(RuleParser::ParseStylesheet(""), ElementsAre());
 }
 
-TEST(StylesheetParser, Charset) {
-  EXPECT_THAT(StylesheetParser::Parse("@charset \"4\"; @foo").rules,
+TEST(RuleParser, Charset) {
+  EXPECT_THAT(RuleParser::ParseStylesheet("@charset \"4\"; @foo"),
               ElementsAre(AtRuleIs("foo", ElementsAre())));
 }
 

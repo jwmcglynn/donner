@@ -6,7 +6,7 @@
 #include <type_traits>
 
 #include "src/css/declaration.h"
-#include "src/css/stylesheet.h"
+#include "src/css/rule.h"
 #include "src/css/token.h"
 
 namespace donner {

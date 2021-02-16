@@ -25,9 +25,5 @@ struct Rule {
   bool operator==(const Rule& other) const = default;
 };
 
-struct Stylesheet {
-  std::vector<Rule> rules;
-};
-
 }  // namespace css
 }  // namespace donner

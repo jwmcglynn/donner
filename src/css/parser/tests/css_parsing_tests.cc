@@ -8,7 +8,7 @@
 #include "src/css/parser/declaration_list_parser.h"
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
-#include "src/css/parser/stylesheet_parser.h"
+#include "src/css/parser/rule_parser.h"
 
 namespace donner {
 namespace css {
@@ -360,7 +360,7 @@ TEST(CssParsingTests, OneRule) {
 
     SCOPED_TRACE(testing::Message() << "CSS: " << css);
 
-    if (auto maybeRule = StylesheetParser::ParseRule(css)) {
+    if (auto maybeRule = RuleParser::ParseRule(css)) {
       nlohmann::json rule = ruleToJson(maybeRule.value());
       EXPECT_EQ(expectedTokens, rule);
     } else {
@@ -379,7 +379,7 @@ TEST(CssParsingTests, RuleList) {
     SCOPED_TRACE(testing::Message() << "CSS: " << css);
 
     nlohmann::json ruleList = nlohmann::json::array();
-    for (const auto& rule : StylesheetParser::ParseListOfRules(css)) {
+    for (const auto& rule : RuleParser::ParseListOfRules(css)) {
       ruleList.push_back(ruleToJson(rule));
     }
 
@@ -403,7 +403,7 @@ TEST(CssParsingTests, Stylesheet) {
     SCOPED_TRACE(testing::Message() << "CSS: " << css);
 
     nlohmann::json ruleList = nlohmann::json::array();
-    for (const auto& rule : StylesheetParser::Parse(css).rules) {
+    for (const auto& rule : RuleParser::ParseStylesheet(css)) {
       ruleList.push_back(ruleToJson(rule));
     }
 

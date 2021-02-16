@@ -2,20 +2,21 @@
 
 #include <string_view>
 
-#include "src/css/stylesheet.h"
+#include "src/css/rule.h"
 
 namespace donner {
 namespace css {
 
-class StylesheetParser {
+class RuleParser {
 public:
   /**
-   * Parse a CSS stylesheet, per https://www.w3.org/TR/css-syntax-3/#parse-stylesheet
+   * Parse a CSS stylesheet into a list of rules, per
+   * https://www.w3.org/TR/css-syntax-3/#parse-stylesheet
    *
    * @param str Input stylesheet string.
-   * @return Parsed stylesheet.
+   * @return Parsed stylesheet as a list of rules.
    */
-  static Stylesheet Parse(std::string_view str);
+  static std::vector<Rule> ParseStylesheet(std::string_view str);
 
   /**
    * Parse a list of rules, per https://www.w3.org/TR/css-syntax-3/#parse-list-of-rules

@@ -7,7 +7,7 @@ cc_library(
     ],
     hdrs = [
         "declaration.h",
-        "stylesheet.h",
+        "rule.h",
         "token.h",
     ],
     visibility = ["//src/css:__subpackages__"],

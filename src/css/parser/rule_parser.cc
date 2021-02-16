@@ -1,4 +1,4 @@
-#include "src/css/parser/stylesheet_parser.h"
+#include "src/css/parser/rule_parser.h"
 
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
@@ -13,15 +13,11 @@ enum class ListOfRulesFlags { None, TopLevel };
 using details::consumeAtRule;
 using details::ParseMode;
 
-class StylesheetParserImpl {
+class RuleParserImpl {
 public:
-  StylesheetParserImpl(std::string_view str) : tokenizer_(str) {}
+  RuleParserImpl(std::string_view str) : tokenizer_(str) {}
 
-  Stylesheet parse() {
-    Stylesheet result;
-    result.rules = parseListOfRules(ListOfRulesFlags::TopLevel);
-    return result;
-  }
+  std::vector<Rule> parseStylesheet() { return parseListOfRules(ListOfRulesFlags::TopLevel); }
 
   std::vector<Rule> parseListOfRules(ListOfRulesFlags flags) {
     return consumeListOfRules(tokenizer_, flags);
@@ -180,18 +176,18 @@ private:
 
 }  // namespace
 
-Stylesheet StylesheetParser::Parse(std::string_view str) {
-  StylesheetParserImpl parser(StylesheetParserImpl::maybeRemoveCharset(str));
-  return parser.parse();
+std::vector<Rule> RuleParser::ParseStylesheet(std::string_view str) {
+  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str));
+  return parser.parseStylesheet();
 }
 
-std::vector<Rule> StylesheetParser::ParseListOfRules(std::string_view str) {
-  StylesheetParserImpl parser(StylesheetParserImpl::maybeRemoveCharset(str));
+std::vector<Rule> RuleParser::ParseListOfRules(std::string_view str) {
+  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str));
   return parser.parseListOfRules(ListOfRulesFlags::None);
 }
 
-std::optional<Rule> StylesheetParser::ParseRule(std::string_view str) {
-  StylesheetParserImpl parser(str);
+std::optional<Rule> RuleParser::ParseRule(std::string_view str) {
+  RuleParserImpl parser(str);
   return parser.parseRule();
 }
 
