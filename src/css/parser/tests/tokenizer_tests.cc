@@ -170,6 +170,11 @@ TEST(Tokenizer, StringEscapedCodepoint) {
               ElementsAre(Token(Token::String("newlineafter"), 0)));
 }
 
+TEST(Tokenizer, Unicode) {
+  EXPECT_THAT(AllTokens(Tokenizer("\\\xed\xed\xed")),
+              ElementsAre(Token(Token::Ident("\uFFFD"), 0)));
+}
+
 TEST(Tokenizer, Hash) {
   {
     Tokenizer tokenizer("#a");

@@ -295,7 +295,9 @@ private:
       return {number, i};
     } else {
       if (remaining[0] != '\0') {
-        return details::Utf8NextCodepoint(remaining);
+        const auto [codepoint, bytesConsumed] = details::Utf8NextCodepoint(remaining);
+        return {IsValidCodepoint(codepoint) ? codepoint : kUnicodeReplacementCharacter,
+                bytesConsumed};
       } else {
         // Transform \0 to the unicode replacement character, since the proprocess step has been
         // skipped.
