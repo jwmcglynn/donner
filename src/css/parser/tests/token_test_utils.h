@@ -258,7 +258,7 @@ MATCHER(InvalidRuleTypeImpl, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
   const InvalidRule* rule = nullptr;
 
-  if constexpr (std::is_same_v<ArgType, DeclarationOrAtRule>) {
+  if constexpr (std::is_same_v<ArgType, DeclarationOrAtRule> || std::is_same_v<ArgType, Rule>) {
     rule = std::get_if<InvalidRule>(&arg.value);
   } else {
     rule = &arg;

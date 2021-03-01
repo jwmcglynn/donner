@@ -90,7 +90,7 @@ public:
     for (size_t i = kCharsetStart.size(); i < charsetRegion; ++i) {
       if (str.substr(i).starts_with("\";")) {
         return str.substr(i + 2);
-      } else if (str[i] == 0x22 || str[i] > 0x7F) {
+      } else if (str[i] == 0x22 || static_cast<uint8_t>(str[i]) > 0x7F) {
         break;
       }
     }

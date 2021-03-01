@@ -1,3 +1,4 @@
 bazel-*
 .vs
 .vscode
+coverage-report
