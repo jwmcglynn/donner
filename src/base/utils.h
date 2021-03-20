@@ -31,6 +31,12 @@
 #define UTILS_NO_DISCARD
 #endif
 
+#if __has_builtin(__builtin_unreachable)
+#define UTILS_UNREACHABLE() __builtin_unreachable()
+#else
+#define UTILS_UNREACHABLE()
+#endif
+
 #ifdef NDEBUG
 #define UTILS_RELEASE_ASSERT(x)                                        \
   do {                                                                 \

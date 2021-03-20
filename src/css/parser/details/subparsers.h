@@ -28,7 +28,7 @@ static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
   } else if (startTokenIndex == Token::indexOf<Token::Parenthesis>()) {
     return Token::indexOf<Token::CloseParenthesis>();
   } else {
-    assert(false && "Should be unreachable");
+    UTILS_UNREACHABLE();
   }
 }
 

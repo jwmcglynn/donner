@@ -323,5 +323,28 @@ auto SimpleBlockIsParenthesis(ValuesMatcher valuesMatcher) {
   return SimpleBlockIs(Token::indexOf<Token::Parenthesis>(), valuesMatcher);
 }
 
+MATCHER_P2(QualifiedRuleIsImpl, preludeMatcher, blockMatcher, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
+  const QualifiedRule* rule = nullptr;
+
+  if constexpr (std::is_same_v<ArgType, Rule>) {
+    rule = std::get_if<QualifiedRule>(&arg.value);
+  } else {
+    rule = &arg;
+  }
+
+  if (!rule) {
+    return false;
+  }
+
+  return testing::ExplainMatchResult(preludeMatcher, rule->prelude, result_listener) &&
+         testing::ExplainMatchResult(blockMatcher, rule->block, result_listener);
+}
+
+template <typename PreludeMatcher, typename BlockMatcher>
+auto QualifiedRuleIs(PreludeMatcher preludeMatcher, BlockMatcher blockMatcher) {
+  return QualifiedRuleIsImpl(preludeMatcher, blockMatcher);
+}
+
 }  // namespace css
 }  // namespace donner
