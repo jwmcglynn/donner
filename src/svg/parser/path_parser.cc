@@ -45,9 +45,8 @@ public:
     // Read remaining commands.
     while (!remaining_.empty()) {
       ParseResult<TokenCommand> maybeCommand = readCommand();
-      if (maybeCommand.hasError()) {
-        return ParseResult(spline_.build(), std::move(maybeCommand.error()));
-      }
+      assert(maybeCommand.hasResult());  // processUntilNextCommand guarantees that the next read
+                                         // contains a command.
 
       TokenCommand command = std::move(maybeCommand.result());
       std::optional<ParseError> maybeError = processUntilNextCommand(command);

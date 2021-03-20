@@ -69,6 +69,25 @@ TEST(PathParser, MoveTo) {
   }
 }
 
+TEST(PathParser, ParseErrors) {
+  // Comma before a command is a parse error.
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0,Z");
+
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Unexpected ',' before command")));
+  }
+
+  // Unexpected tokens.
+  EXPECT_THAT(PathParser::Parse("b"), ParseErrorIs("Unexpected token 'b' in path data"));
+
+  // Until a valid command is received, the next argument is interpreted as a number.
+  EXPECT_THAT(PathParser::Parse("M 0 0 b"),
+              ParseErrorIs("Failed to parse number: Invalid argument"));
+}
+
 TEST(PathParser, ClosePath) {
   // Use z and Z interchangeably, they should be equivalent.
 
@@ -381,6 +400,24 @@ TEST(PathParser, VerticalLineTo) {
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
   }
 
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v");
+
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
+  }
+
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v,");
+
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
+  }
+
   // Chain between multiple types.
   {
     ParseResult<PathSpline> result = PathParser::Parse("M 1 1 v 1 v -6 V 0 V -2 v -1");
@@ -438,6 +475,22 @@ TEST(PathParser, CurveTo) {
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
                             Command{CommandType::CurveTo, 4}));
   }
+
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M100,200 C100");
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
+  }
+
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M100,200 S100");
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
+  }
 }
 
 TEST(PathParser, QuadCurveTo) {
@@ -454,6 +507,22 @@ TEST(PathParser, QuadCurveTo) {
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
                             Command{CommandType::CurveTo, 4}));
+  }
+
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M200,300 Q400,50 600,");
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
+  }
+
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M200,300 T400");
+    EXPECT_THAT(result, ParseResultAndError(
+                            PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
+                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
+                            ParseErrorIs("Failed to parse number: Invalid argument")));
   }
 }
 
@@ -570,6 +639,8 @@ TEST(PathParser, EllipticalArc_Parsing) {
   EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 a"),
               ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
   EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2"),
+              ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2 a"),
               ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
 
   // Missing end point.
