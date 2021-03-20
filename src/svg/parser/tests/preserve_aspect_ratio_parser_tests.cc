@@ -92,4 +92,9 @@ TEST(PreserveAspectRatioParser, AlignOnly) {
               ParseResultIs(PreserveAspectRatio{Align::XMaxYMax, MeetOrSlice::Meet}));
 }
 
+TEST(PreserveAspectRatioParser, InvalidMeetOrSlice) {
+  EXPECT_THAT(PreserveAspectRatioParser::Parse("none badtoken"),
+              ParseErrorIs("Invalid meetOrSlice: 'badtoken'"));
+}
+
 }  // namespace donner

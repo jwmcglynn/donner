@@ -12,12 +12,7 @@ public:
     PreserveAspectRatio result;
 
     {
-      auto maybeAlign = readToken();
-      if (maybeAlign.hasError()) {
-        return std::move(maybeAlign.error());
-      }
-
-      std::string_view align = maybeAlign.result();
+      const std::string_view align = readToken();
       if (align == "none") {
         result.align = PreserveAspectRatio::Align::None;
       } else if (align == "xMinYMin") {
@@ -50,12 +45,7 @@ public:
     skipWhitespace();
 
     if (!remaining_.empty()) {
-      auto maybeMeetOrSlice = readToken();
-      if (maybeMeetOrSlice.hasError()) {
-        return std::move(maybeMeetOrSlice.error());
-      }
-
-      std::string_view meetOrSlice = maybeMeetOrSlice.result();
+      const std::string_view meetOrSlice = readToken();
       if (meetOrSlice == "meet") {
         result.meetOrSlice = PreserveAspectRatio::MeetOrSlice::Meet;
       } else if (meetOrSlice == "slice") {
@@ -79,7 +69,7 @@ public:
   }
 
 protected:
-  ParseResult<std::string_view> readToken() {
+  std::string_view readToken() {
     for (size_t i = 0; i < remaining_.size(); ++i) {
       if (isWhitespace(remaining_[i])) {
         return take(i);
