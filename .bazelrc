@@ -2,6 +2,7 @@
 build:clang --action_env=CC=clang
 build:clang --action_env=CXX=clang++
 build:clang --action_env=BAZEL_COMPILER=clang
+build:clang --incompatible_linkopts_to_linklibs=false
 
 # Clang with libc++
 build:libc++ --config=clang
@@ -16,9 +17,15 @@ build:c++20 --cxxopt=-std=c++20
 
 build --config=libc++ --config=c++20 --define absl=1
 
-# Build with CI
-build:ci --action_env=CC=/usr/lib/llvm-11/bin/clang
-build:ci --action_env=CXX=/usr/lib/llvm-11/bin/clang++
+# Coverage builds
+coverage --config=coverage
+build:coverage --action_env=BAZEL_USE_LLVM_NATIVE_COVERAGE=1
+build:coverage --action_env=GCOV=llvm-profdata
+build:coverage --action_env=BAZEL_LLVM_COV=llvm-cov
+build:coverage --experimental_generate_llvm_lcov
+build:coverage --collect_code_coverage
+build:coverage --combined_report=lcov
+build:coverage --instrumentation_filter="//src[:/]"
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --linkopt -ldl

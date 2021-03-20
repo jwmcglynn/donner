@@ -4,13 +4,9 @@ cd "$(dirname "$0")/.."
 JAVA_HOME=$(dirname $(dirname $(which java)))
 
 bazel coverage -s \
-    --instrument_test_targets \
-    --experimental_cc_coverage \
-    --instrumentation_filter="//src[:/]" \
-    --combined_report=lcov \
     --local_test_jobs=1 \
     --nocache_test_results \
-    //src/...
+    //src/css/...
 
 genhtml bazel-out/_coverage/_coverage_report.dat \
     --highlight \

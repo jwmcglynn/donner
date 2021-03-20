@@ -27,6 +27,12 @@ RUN apt-get update \
 ENV PATH=/usr/lib/llvm-11/bin:${PATH}
 
 #
+# Install java
+#
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get -y install --no-install-recommends openjdk-11-jdk
+
+#
 # Install bazelisk
 #
 RUN wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O /usr/local/bin/bazel \
