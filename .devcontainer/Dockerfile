@@ -27,10 +27,10 @@ RUN apt-get update \
 ENV PATH=/usr/lib/llvm-11/bin:${PATH}
 
 #
-# Install java
+# Install dependencies for coverage: gcov-7 (from gcc), lcov, java
 #
 RUN export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends openjdk-11-jdk
+    && apt-get -y install --no-install-recommends gcc-7 lcov openjdk-11-jdk
 
 #
 # Install bazelisk

@@ -34,18 +34,20 @@ jobs:
         sudo apt-get install -y clang-11 libc++-11-dev libc++abi-11-dev
         echo "/usr/lib/llvm-11/bin" >> $GITHUB_PATH
 
+    - name: Install gcc-7 for gcov-7
+      run: |
+        sudo apt-get install -y gcc-7
+
     - name: Install OSMesa
       run: |
         sudo apt-get install -y libosmesa6-dev
 
     - name: Generate coverage
       run: |
-        "${GITHUB_WORKSPACE}/bin/bazel" coverage -s \
+        "${GITHUB_WORKSPACE}/bin/bazel" coverage \
           --local_test_jobs=1 \
           --nocache_test_results \
-          //src/css/...
-        ls -l bazel-out/_coverage/
-        cat bazel-out/_coverage/lcov_files.tmp | xargs ls -l
+          //src/...
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v1
