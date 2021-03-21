@@ -18,6 +18,26 @@ static void PrintTo(const Result& result, std::ostream* os) {
   *os << "(" << result.number << ", consumed: " << result.consumed_chars << ")";
 }
 
+TEST(NumberParser, TestHelpers) {
+  NumberParser::Result result;
+  result.consumed_chars = 1;
+  result.number = 2.0;
+
+  EXPECT_EQ(testing::PrintToString(result), "(2, consumed: 1)");
+
+  NumberParser::Result other;
+  other.consumed_chars = 1;
+  other.number = 2.0;
+  EXPECT_EQ(result, other);
+
+  other.consumed_chars = 2;
+  EXPECT_NE(result, other);
+
+  other.consumed_chars = 1;
+  other.number = -2.0;
+  EXPECT_NE(result, other);
+}
+
 TEST(NumberParser, Empty) {
   EXPECT_THAT(NumberParser::Parse(""), ParseErrorIs(HasSubstr("Invalid argument")));
 }

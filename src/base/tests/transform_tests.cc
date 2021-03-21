@@ -145,4 +145,21 @@ TEST(Transform, TransformBox) {
   }
 }
 
+TEST(Transform, Output) {
+  Transformd t(uninitialized);
+  t.data[0] = 1.0;
+  t.data[1] = -2.0;
+  t.data[2] = 3.0;
+  t.data[3] = -4.0;
+  t.data[4] = 5.0;
+  t.data[5] = -6.0;
+
+  EXPECT_EQ((std::ostringstream() << t).str(),
+            "matrix(1 -2 3 -4 5 -6) =>\n"
+            "[ 1\t3\t0\t5\n"
+            "  -2\t-4\t0\t-6\n"
+            "  0\t0\t1\t0\n"
+            "  0\t0\t0\t1 ]\n");
+}
+
 }  // namespace donner

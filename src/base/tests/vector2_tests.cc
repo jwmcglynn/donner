@@ -211,4 +211,24 @@ TEST(Vector2, Equals) {
   EXPECT_FALSE(Vector2i(123, 456) == Vector2i(123, 567));
 }
 
+TEST(Vector2, Output) {
+  EXPECT_EQ((std::ostringstream() << Vector2i(1, 2)).str(), "(1, 2)");
+  EXPECT_EQ((std::ostringstream() << Vector2i(-3, -4)).str(), "(-3, -4)");
+
+  EXPECT_EQ((std::ostringstream() << Vector2d(1.0, 2.0)).str(), "(1, 2)");
+  EXPECT_EQ((std::ostringstream() << Vector2d(-1.5, -10)).str(), "(-1.5, -10)");
+
+  EXPECT_EQ((std::ostringstream() << Vector2d(std::numeric_limits<double>::infinity(),
+                                              -std::numeric_limits<double>::infinity()))
+                .str(),
+            "(inf, -inf)");
+
+  EXPECT_EQ((std::ostringstream() << Vector2d(std::numeric_limits<double>::quiet_NaN(),
+                                              -std::numeric_limits<double>::quiet_NaN()))
+                .str(),
+            "(nan, -nan)");
+
+  EXPECT_EQ((std::ostringstream() << Vector2d(0.0, -0.0)).str(), "(0, -0)");
+}
+
 }  // namespace donner

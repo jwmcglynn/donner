@@ -250,7 +250,7 @@ struct Transform {
   // Output.
   friend std::ostream& operator<<(std::ostream& os, const Transform<T>& t) {
     os << "matrix(" << t.data[0] << " " << t.data[1] << " " << t.data[2] << " " << t.data[3] << " "
-       << t.data[4] << " " << t.data[5] << ") => " << std::endl
+       << t.data[4] << " " << t.data[5] << ") =>" << std::endl
        << "[ " << t.data[0] << "\t" << t.data[2] << "\t0\t" << t.data[4] << std::endl
        << "  " << t.data[1] << "\t" << t.data[3] << "\t0\t" << t.data[5] << std::endl
        << "  0\t0\t1\t0" << std::endl

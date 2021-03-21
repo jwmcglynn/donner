@@ -40,6 +40,7 @@ cc_test(
     srcs = [
         "tests/length_parser_tests.cc",
         "tests/number_parser_tests.cc",
+        "tests/parse_error_tests.cc",
     ],
     deps = [
         ":parser",

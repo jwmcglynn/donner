@@ -640,7 +640,7 @@ TEST(PathParser, EllipticalArc_Parsing) {
               ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
   EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2"),
               ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2 a"),
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 1 a"),
               ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
 
   // Missing end point.

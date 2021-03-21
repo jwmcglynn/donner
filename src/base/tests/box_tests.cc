@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <sstream>
+
 #include "src/base/box.h"
 
 namespace donner {
@@ -90,6 +92,20 @@ TEST(Box, Equals) {
               Boxd(Vector2d(1.0, 0.0), Vector2d(1.0, 1.0)));
   EXPECT_FALSE(Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)) !=
                Boxd(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
+}
+
+TEST(Box, Output) {
+  {
+    std::ostringstream ss;
+    ss << Boxd(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));
+    EXPECT_EQ(ss.str(), "(1, 2) => (3, 4)");
+  }
+
+  {
+    std::ostringstream ss;
+    ss << Boxd(Vector2d(-0.5, -1), Vector2d(-2, -2.5));
+    EXPECT_EQ(ss.str(), "(-0.5, -1) => (-2, -2.5)");
+  }
 }
 
 }  // namespace donner
