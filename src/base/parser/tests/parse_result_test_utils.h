@@ -40,11 +40,17 @@ MATCHER(NoParseError, "") {
  * @param errorMessageMatcher Message to match with, either a string or a gmock matcher.
  */
 MATCHER_P(ParseErrorIs, errorMessageMatcher, "") {
-  if (!arg.hasError()) {
-    return false;
-  }
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  return testing::ExplainMatchResult(errorMessageMatcher, arg.error().reason, result_listener);
+  if constexpr (std::is_same_v<ArgType, ParseError>) {
+    return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener);
+  } else {
+    if (!arg.hasError()) {
+      return false;
+    }
+
+    return testing::ExplainMatchResult(errorMessageMatcher, arg.error().reason, result_listener);
+  }
 }
 
 /**
@@ -54,11 +60,19 @@ MATCHER_P(ParseErrorIs, errorMessageMatcher, "") {
  * @param offset Column offset of the error.
  */
 MATCHER_P2(ParseErrorPos, line, offset, "") {
-  if (!arg.hasError()) {
-    return false;
-  }
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  return arg.error().line == line && arg.error().offset == offset;
+  if constexpr (std::is_same_v<ArgType, ParseError>) {
+    return testing::ExplainMatchResult(line, arg.line, result_listener) &&
+           testing::ExplainMatchResult(offset, arg.offset, result_listener);
+  } else {
+    if (!arg.hasError()) {
+      return false;
+    }
+
+    return testing::ExplainMatchResult(line, arg.error().line, result_listener) &&
+           testing::ExplainMatchResult(offset, arg.error().offset, result_listener);
+  }
 }
 
 /**
@@ -88,7 +102,7 @@ MATCHER_P2(ParseResultAndError, resultMatcher, errorMessageMatcher, "") {
   }
 
   return testing::ExplainMatchResult(resultMatcher, arg.result(), result_listener) &&
-         testing::ExplainMatchResult(errorMessageMatcher, arg, result_listener);
+         testing::ExplainMatchResult(errorMessageMatcher, arg.error(), result_listener);
 }
 
 }  // namespace donner
