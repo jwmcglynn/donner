@@ -4,10 +4,12 @@ load("//build:rules.bzl", "donner_cc_fuzzer")
 cc_library(
     name = "parser",
     srcs = [
+        "color_parser.cc",
         "declaration_list_parser.cc",
         "rule_parser.cc",
     ],
     hdrs = [
+        "color_parser.h",
         "declaration_list_parser.h",
         "details/common.h",
         "details/subparsers.h",
@@ -25,6 +27,7 @@ cc_library(
 cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/color_parser_tests.cc",
         "tests/common_tests.cc",
         "tests/declaration_list_parser_tests.cc",
         "tests/rule_parser_tests.cc",

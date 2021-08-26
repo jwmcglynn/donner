@@ -31,6 +31,12 @@ git_repository(
     remote = "https://github.com/skypjack/entt.git",
 )
 
+new_local_repository(
+    name = "frozen",
+    build_file = "third_party/BUILD.frozen",
+    path = "third_party/frozen",
+)
+
 new_git_repository(
     name = "nlohmann_json",
     build_file = "@//third_party:BUILD.nlohmann_json",
