@@ -17,7 +17,7 @@ void PrintTo(const Token& token, std::ostream* os) {
 void PrintTo(const Function& func, std::ostream* os) {
   *os << "Function { ";
   *os << func.name << "(";
-  for (auto& value : func.values) {
+  for (const auto& value : func.values) {
     *os << " " << testing::PrintToString(value);
   }
   *os << " ) }";
@@ -33,7 +33,7 @@ void PrintTo(const SimpleBlock& block, std::ostream* os) {
     default: *os << "<unknown>"; break;
   }
   *os << "\n";
-  for (auto& value : block.values) {
+  for (const auto& value : block.values) {
     *os << "  " << testing::PrintToString(value) << "\n";
   }
   *os << "}";
@@ -46,7 +46,7 @@ void PrintTo(const ComponentValue& component, std::ostream* os) {
 void PrintTo(const Declaration& declaration, std::ostream* os) {
   *os << "Declaration { \n";
   *os << "  " << declaration.name << "\n";
-  for (auto& value : declaration.values) {
+  for (const auto& value : declaration.values) {
     *os << "  " << testing::PrintToString(value) << "\n";
   }
   if (declaration.important) {
@@ -80,7 +80,7 @@ void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os) {
 
 void PrintTo(const QualifiedRule& qualifiedRule, std::ostream* os) {
   *os << "QualifiedRule {\n";
-  for (auto& value : qualifiedRule.prelude) {
+  for (const auto& value : qualifiedRule.prelude) {
     *os << "  " << testing::PrintToString(value) << "\n";
   }
   *os << "  { " << testing::PrintToString(qualifiedRule.block) << " }\n";

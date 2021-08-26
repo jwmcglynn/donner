@@ -391,6 +391,14 @@ struct Token {
     return value_ == other.value_ && offset_ == other.offset_;
   }
 
+  friend std::ostream& operator<<(std::ostream& os, const Token& token) {
+    os << "Token { ";
+    token.visit([&os](auto&& value) { os << value; });
+    os << " offset: " << token.offset();
+    os << " }";
+    return os;
+  }
+
 private:
   TokenValue value_;
   size_t offset_;

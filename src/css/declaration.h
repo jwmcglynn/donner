@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iostream>
 #include <optional>
 #include <string>
 #include <variant>
@@ -19,6 +20,8 @@ struct Function {
 
   explicit Function(std::string name);
   bool operator==(const Function& other) const;
+
+  friend std::ostream& operator<<(std::ostream& os, const Function& func);
 };
 
 struct SimpleBlock {
@@ -27,6 +30,8 @@ struct SimpleBlock {
 
   explicit SimpleBlock(TokenIndex associatedToken);
   bool operator==(const SimpleBlock& other) const;
+
+  friend std::ostream& operator<<(std::ostream& os, const SimpleBlock& block);
 };
 
 struct ComponentValue {
@@ -35,6 +40,42 @@ struct ComponentValue {
 
   /* implicit */ ComponentValue(Type&& value);
   bool operator==(const ComponentValue& other) const;
+
+  template <typename T>
+  bool is() const {
+    return std::holds_alternative<T>(value);
+  }
+
+  template <typename T>
+  T& get() & {
+    return std::get<indexOf<T>()>(value);
+  }
+
+  template <typename T>
+  const T& get() const& {
+    return std::get<indexOf<T>()>(value);
+  }
+
+  template <typename T>
+  T&& get() && {
+    return std::move(std::get<indexOf<T>()>(value));
+  }
+
+  template <typename T, TokenIndex index = 0>
+  static constexpr TokenIndex indexOf() {
+    if constexpr (index == std::variant_size_v<Type>) {
+      return index;
+    } else if constexpr (std::is_same_v<std::variant_alternative_t<index, Type>, T>) {
+      return index;
+    } else {
+      return indexOf<T, index + 1>();
+    }
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const ComponentValue& component) {
+    std::visit([&os](auto&& v) { os << v; }, component.value);
+    return os;
+  }
 };
 
 struct AtRule {
