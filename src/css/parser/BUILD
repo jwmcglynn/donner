@@ -73,3 +73,14 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "color_parser_fuzzer",
+    srcs = [
+        "tests/color_parser_fuzzer.cc",
+    ],
+    corpus = "tests/color_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)
