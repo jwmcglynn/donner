@@ -47,7 +47,25 @@ public:
     } else {
       ParseError err;
       err.reason = "Unexpected EOF when parsing function '" + functionName_ + "'";
-      // TODO: Plumb offset.
+      err.offset = lastOffset_;
+      return err;
+    }
+  }
+
+  template <typename TokenType>
+  ParseResult<TokenType> nextAs() {
+    auto result = next();
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+
+    const auto& resultToken = result.result();
+    if (resultToken.is<TokenType>()) {
+      return resultToken.get<TokenType>();
+    } else {
+      ParseError err;
+      err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
+      err.offset = resultToken.offset();
       return err;
     }
   }
@@ -63,37 +81,43 @@ public:
     return foundComma;
   }
 
-  /// @return true if a slash was skipped.
-  bool trySkipSlash() {
-    if (!next_ || !next_.value().hasResult()) {
-      return false;
-    }
-
-    const auto& nextResult = next_.value().result();
-    if (nextResult.is<Token::Delim>() && nextResult.get<Token::Delim>().value == '/') {
-      next_.reset();
-      advance();
-      return true;
-    }
-
-    return false;
-  }
-
-  template <typename TokenType>
-  ParseResult<TokenType> nextAs() {
-    auto result = next();
-    if (result.hasError()) {
-      return std::move(result.error());
-    }
-
-    if (result.result().is<TokenType>()) {
-      return result.result().get<TokenType>();
-    } else {
+  std::optional<ParseError> requireComma() {
+    if (!trySkipComma()) {
       ParseError err;
-      err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
-      // TODO: Plumb offset.
+      err.reason = "Missing comma when parsing function '" + functionName_ + "'";
+      err.offset = lastOffset_;
       return err;
     }
+
+    return std::nullopt;
+  }
+
+  /// @return true if a slash was skipped.
+  std::optional<ParseError> requireSlash() {
+    if (next_ && next_.value().hasResult()) {
+      const auto& nextResult = next_.value().result();
+      if (nextResult.is<Token::Delim>() && nextResult.get<Token::Delim>().value == '/') {
+        next_.reset();
+        advance();
+        return std::nullopt;
+      }
+    }
+
+    ParseError err;
+    err.reason = "Missing delimiter for alpha when parsing function '" + functionName_ + "'";
+    err.offset = lastOffset_;
+    return err;
+  }
+
+  std::optional<ParseError> requireEOF() {
+    if (!isEOF()) {
+      ParseError err;
+      err.reason = "Additional tokens when parsing function '" + functionName_ + "'";
+      err.offset = lastOffset_;
+      return err;
+    }
+
+    return std::nullopt;
   }
 
   bool isEOF() const { return !next_; }
@@ -104,6 +128,7 @@ private:
       const css::ComponentValue& component(components_.front());
       if (component.is<Token>()) {
         const auto& token = component.get<Token>();
+        lastOffset_ = token.offset();
 
         if (token.is<Token::Whitespace>()) {
           // Skip.
@@ -117,7 +142,7 @@ private:
       } else {
         ParseError err;
         err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
-        // TODO: Plumb offset.
+        err.offset = component.sourceOffset();
         next_ = std::move(err);
         break;
       }
@@ -127,6 +152,7 @@ private:
   const std::string& functionName_;
   std::span<const css::ComponentValue> components_;
   std::optional<ParseResult<css::Token>> next_;
+  size_t lastOffset_ = 0;
 };
 
 class ColorParserImpl {
@@ -192,21 +218,20 @@ public:
         } else {
           ParseError err;
           err.reason = "Unsupported color function '" + name + "'";
-          // TODO: Plumb offset?
+          err.offset = f.sourceOffset;
           return err;
         }
 
       } else {
         ParseError err;
         err.reason = "Unexpected block when parsing color";
-        // TODO: Plumb offset?
+        err.offset = component.sourceOffset();
         return err;
       }
     }
 
     ParseError err;
     err.reason = "No color found";
-    // TODO: Plumb offset?
     return err;
   }
 
@@ -286,11 +311,10 @@ public:
       return std::move(greenResult.error());
     }
 
-    if (requiresCommas && !rgbParams.trySkipComma()) {
-      ParseError err;
-      err.reason = "Missing comma when parsing function '" + rgbParams.functionName() + "'";
-      // TODO: Offset?
-      return err;
+    if (requiresCommas) {
+      if (auto error = rgbParams.requireComma()) {
+        return std::move(error.value());
+      }
     }
 
     auto blueResult = rgbParams.nextAs<TokenType>();
@@ -365,11 +389,10 @@ public:
       return std::move(saturationResult.error());
     }
 
-    if (requiresCommas && !hslParams.trySkipComma()) {
-      ParseError err;
-      err.reason = "Missing comma when parsing function '" + functionName + "'";
-      // TODO: Offset?
-      return err;
+    if (requiresCommas) {
+      if (auto error = hslParams.requireComma()) {
+        return std::move(error.value());
+      }
     }
 
     auto lightnessResult = hslParams.nextAs<Token::Percentage>();
@@ -394,12 +417,8 @@ public:
     }
 
     // Parse alpha, but first skip either a comma if commas are used, or a '/' if not.
-    if (!(requiresCommas ? params.trySkipComma() : params.trySkipSlash())) {
-      ParseError err;
-      err.reason =
-          "Missing delimiter for alpha when parsing function '" + params.functionName() + "'";
-      // TODO: Offset?
-      return err;
+    if (auto error = (requiresCommas ? params.requireComma() : params.requireSlash())) {
+      return std::move(error.value());
     }
 
     auto alphaResult = parseAlpha(params);
@@ -407,8 +426,8 @@ public:
       return std::move(alphaResult.error());
     }
 
-    if (!params.isEOF()) {
-      return additionalTokensError(params.functionName());
+    if (auto error = params.requireEOF()) {
+      return std::move(error.value());
     }
 
     return alphaResult.result();
@@ -473,13 +492,6 @@ private:
     ParseError err;
     err.reason = "Unexpected token when parsing function '" + functionName + "'";
     err.offset = token.offset();
-    return err;
-  }
-
-  ParseError additionalTokensError(const std::string& functionName) {
-    ParseError err;
-    err.reason = "Additional tokens when parsing function '" + functionName + "'";
-    // TODO: Plumb offset?
     return err;
   }
 

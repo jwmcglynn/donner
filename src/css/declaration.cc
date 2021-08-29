@@ -3,7 +3,8 @@
 namespace donner {
 namespace css {
 
-Function::Function(std::string name) : name(std::move(name)) {}
+Function::Function(std::string name, size_t sourceOffset)
+    : name(std::move(name)), sourceOffset(sourceOffset) {}
 
 bool Function::operator==(const Function& other) const {
   return name == other.name && values == other.values;
@@ -19,7 +20,8 @@ std::ostream& operator<<(std::ostream& os, const Function& func) {
   return os;
 }
 
-SimpleBlock::SimpleBlock(TokenIndex associatedToken) : associatedToken(associatedToken) {}
+SimpleBlock::SimpleBlock(TokenIndex associatedToken, size_t sourceOffset)
+    : associatedToken(associatedToken), sourceOffset(sourceOffset) {}
 
 bool SimpleBlock::operator==(const SimpleBlock& other) const {
   return associatedToken == other.associatedToken && values == other.values;

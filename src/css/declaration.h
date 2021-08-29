@@ -17,8 +17,9 @@ struct ComponentValue;
 struct Function {
   std::string name;
   std::vector<ComponentValue> values;
+  size_t sourceOffset;
 
-  explicit Function(std::string name);
+  Function(std::string name, size_t sourceOffset);
   bool operator==(const Function& other) const;
 
   friend std::ostream& operator<<(std::ostream& os, const Function& func);
@@ -27,8 +28,9 @@ struct Function {
 struct SimpleBlock {
   TokenIndex associatedToken;
   std::vector<ComponentValue> values;
+  size_t sourceOffset;
 
-  explicit SimpleBlock(TokenIndex associatedToken);
+  explicit SimpleBlock(TokenIndex associatedToken, size_t sourceOffset);
   bool operator==(const SimpleBlock& other) const;
 
   friend std::ostream& operator<<(std::ostream& os, const SimpleBlock& block);
@@ -70,6 +72,20 @@ struct ComponentValue {
     } else {
       return indexOf<T, index + 1>();
     }
+  }
+
+  size_t sourceOffset() const {
+    return std::visit(
+        [](auto&& v) -> size_t {
+          using T = std::remove_cvref_t<decltype(v)>;
+
+          if constexpr (std::is_same_v<Token, T>) {
+            return v.offset();
+          } else {
+            return v.sourceOffset;
+          }
+        },
+        value);
   }
 
   friend std::ostream& operator<<(std::ostream& os, const ComponentValue& component) {

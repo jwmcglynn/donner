@@ -49,8 +49,7 @@ ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode
   } else if (token.is<Token::Function>()) {
     // Otherwise, if the current input token is a <function-token>, consume a function and
     // return it.
-    return ComponentValue(
-        consumeFunction(tokenizer, std::move(token.get<Token::Function>()), mode));
+    return ComponentValue(consumeFunction(tokenizer, std::move(token), mode));
   } else {
     return ComponentValue(token);
   }
@@ -75,7 +74,7 @@ std::vector<ComponentValue> parseListOfComponentValues(T& tokenizer) {
 template <TokenizerLike T>
 SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode) {
   const TokenIndex endingTokenIndex = simpleBlockEnding(firstToken.tokenIndex());
-  SimpleBlock result(firstToken.tokenIndex());
+  SimpleBlock result(firstToken.tokenIndex(), firstToken.offset());
 
   while (!tokenizer.isEOF()) {
     auto token = tokenizer.next();
@@ -97,8 +96,8 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode)
 
 /// Consume a function, per https://www.w3.org/TR/css-syntax-3/#consume-function
 template <TokenizerLike T>
-Function consumeFunction(T& tokenizer, Token::Function&& functionToken, ParseMode mode) {
-  Function result(std::move(functionToken.name));
+Function consumeFunction(T& tokenizer, Token&& functionToken, ParseMode mode) {
+  Function result(std::move(functionToken.get<Token::Function>().name), functionToken.offset());
 
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
