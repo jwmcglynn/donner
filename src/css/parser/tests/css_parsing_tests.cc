@@ -261,8 +261,8 @@ nlohmann::json testParseDeclarationJson(std::string_view css) {
     } else if (!token.is<Token::Ident>()) {
       return {"error", "invalid"};
     } else {
-      if (auto declaration =
-              details::consumeDeclaration(tokenizer, std::move(token.get<Token::Ident>()))) {
+      if (auto declaration = details::consumeDeclaration(
+              tokenizer, std::move(token.get<Token::Ident>()), token.offset())) {
         return declarationToJson(declaration.value());
       } else {
         return {"error", "invalid"};

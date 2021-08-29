@@ -36,7 +36,8 @@ static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
 template <TokenizerLike T>
 SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode);
 template <TokenizerLike T>
-Function consumeFunction(T& tokenizer, Token::Function&& functionToken, ParseMode mode);
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken, size_t offset,
+                         ParseMode mode);
 
 /// Consume a component value, per https://www.w3.org/TR/css-syntax-3/#consume-component-value
 template <TokenizerLike T>
@@ -49,7 +50,8 @@ ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode
   } else if (token.is<Token::Function>()) {
     // Otherwise, if the current input token is a <function-token>, consume a function and
     // return it.
-    return ComponentValue(consumeFunction(tokenizer, std::move(token), mode));
+    return ComponentValue(
+        consumeFunction(tokenizer, std::move(token.get<Token::Function>()), token.offset(), mode));
   } else {
     return ComponentValue(token);
   }
@@ -96,8 +98,9 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode)
 
 /// Consume a function, per https://www.w3.org/TR/css-syntax-3/#consume-function
 template <TokenizerLike T>
-Function consumeFunction(T& tokenizer, Token&& functionToken, ParseMode mode) {
-  Function result(std::move(functionToken.get<Token::Function>().name), functionToken.offset());
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken, size_t offset,
+                         ParseMode mode) {
+  Function result(std::move(functionToken.name), offset);
 
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
@@ -151,7 +154,7 @@ AtRule consumeAtRule(T& tokenizer, Token::AtKeyword&& atKeyword, ParseMode mode)
 
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <TokenizerLike T>
-std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident) {
+std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident, size_t offset) {
   {
     bool hadColon = false;
 
@@ -175,7 +178,7 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
     }
   }
 
-  Declaration declaration(std::move(ident.value));
+  Declaration declaration(std::move(ident.value), {}, offset);
 
   bool lastWasImportantBang = false;
   bool hitNonWhitespace = false;

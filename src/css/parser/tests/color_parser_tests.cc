@@ -11,18 +11,6 @@ using testing::Optional;
 namespace donner {
 namespace css {
 
-void PrintTo(const Color& color, std::ostream* os) {
-  *os << "Color(";
-  if (color.isCurrentColor()) {
-    *os << "currentColor";
-  } else {
-    const RGBA rgba = color.rgba();
-    *os << static_cast<int>(rgba.r) << ", " << static_cast<int>(rgba.g) << ", "
-        << static_cast<int>(rgba.b) << ", " << static_cast<int>(rgba.a);
-  }
-  *os << ")";
-}
-
 TEST(Color, ColorPrintTo) {
   using namespace string_literals;
 

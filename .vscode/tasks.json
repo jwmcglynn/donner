@@ -70,6 +70,13 @@
       "group": "build"
     },
     {
+      "label": "properties_tests",
+      "type": "shell",
+      "command": "bazel build //src/svg/properties:properties_tests -c dbg",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
       "label": "xml_tests",
       "type": "shell",
       "command": "bazel build //src/svg/xml:xml_tests -c dbg",

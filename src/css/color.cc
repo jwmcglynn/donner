@@ -179,4 +179,17 @@ std::optional<Color> Color::ByName(std::string_view name) {
   return it->second;
 }
 
+std::ostream& operator<<(std::ostream& os, const Color& color) {
+  os << "Color(";
+  if (color.isCurrentColor()) {
+    os << "currentColor";
+  } else {
+    const RGBA rgba = color.rgba();
+    os << static_cast<int>(rgba.r) << ", " << static_cast<int>(rgba.g) << ", "
+       << static_cast<int>(rgba.b) << ", " << static_cast<int>(rgba.a);
+  }
+  os << ")";
+  return os;
+}
+
 }  // namespace donner::css

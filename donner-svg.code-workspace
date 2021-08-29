@@ -158,6 +158,14 @@
 				}
 			},
 			{
+				"pattern": "bazel-bin/src/svg/properties/properties_tests",
+				"runTask": {
+					"before": [
+						"properties_tests"
+					],
+				}
+			},
+			{
 				"pattern": "bazel-bin/src/svg/svg_tests",
 				"runTask": {
 					"before": [

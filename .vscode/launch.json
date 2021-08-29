@@ -33,6 +33,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "properties_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/properties/properties_tests",
+      "args": [
+        "--gtest_break_on_failure"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "css_parsing_tests",
       "program": "${workspaceFolder}/bazel-bin/src/css/parser/css_parsing_tests",
       "args": [

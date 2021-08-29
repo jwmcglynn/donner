@@ -117,7 +117,7 @@ public:
       }
 
       SubTokenizer subTokenizer(declarationInput, eofOffset);
-      return consumeDeclaration(subTokenizer, std::move(ident));
+      return consumeDeclaration(subTokenizer, std::move(ident), token.offset());
     } else {
       // anything else: This is a parse error. Reconsume the current input token. As long as the
       // next input token is anything other than a <semicolon-token> or <EOF-token>, consume a

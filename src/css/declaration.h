@@ -104,13 +104,18 @@ struct AtRule {
 };
 
 struct Declaration {
-  Declaration(std::string name, std::vector<ComponentValue> values = {}, bool important = false)
-      : name(std::move(name)), values(std::move(values)), important(important) {}
+  Declaration(std::string name, std::vector<ComponentValue> values = {}, size_t sourceOffset = 0,
+              bool important = false)
+      : name(std::move(name)),
+        values(std::move(values)),
+        sourceOffset(sourceOffset),
+        important(important) {}
 
   bool operator==(const Declaration& other) const = default;
 
   std::string name;
   std::vector<ComponentValue> values;
+  size_t sourceOffset;
   bool important = false;
 };
 

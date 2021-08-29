@@ -31,9 +31,7 @@ struct Color {
   using Type = std::variant<RGBA, CurrentColor>;
   Type value;
 
-  /* implicit */ constexpr Color(Type&& value) : value(std::move(value)) {}
-  // Helper to prevent an IntelliSense compiler error.
-  /* implicit */ constexpr Color(CurrentColor&& value) : value(std::move(value)) {}
+  /* implicit */ constexpr Color(Type value) : value(std::move(value)) {}
 
   bool operator==(const Color& other) const;
 
@@ -43,6 +41,8 @@ struct Color {
   bool hasRGBA() const { return std::holds_alternative<RGBA>(value); }
 
   RGBA rgba() const { return std::get<RGBA>(value); }
+
+  friend std::ostream& operator<<(std::ostream& os, const Color& color);
 };
 
 namespace string_literals {

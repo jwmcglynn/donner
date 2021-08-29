@@ -2,12 +2,21 @@
 
 #include <gmock/gmock.h>
 
+#include <concepts>
 #include <ostream>
 #include <string>
 
 #include "src/base/parser/parse_result.h"
 
 namespace donner {
+
+template <typename T>
+concept IsOptionalLike = requires(T t) {
+  // clang-format off
+  { t.has_value() } -> std::same_as<bool>;
+  t.value();
+  // clang-format on
+};
 
 template <typename T>
 void PrintTo(const ParseResult<T>& result, std::ostream* os) {
@@ -44,6 +53,12 @@ MATCHER_P(ParseErrorIs, errorMessageMatcher, "") {
 
   if constexpr (std::is_same_v<ArgType, ParseError>) {
     return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener);
+  } else if constexpr (IsOptionalLike<ArgType>) {
+    if (!arg.has_value()) {
+      return false;
+    }
+
+    return testing::ExplainMatchResult(errorMessageMatcher, arg.value().reason, result_listener);
   } else {
     if (!arg.hasError()) {
       return false;
