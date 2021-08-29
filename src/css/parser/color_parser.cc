@@ -1,7 +1,8 @@
 #include "src/css/parser/color_parser.h"
 
-#include <iostream>
+#include <numeric>
 
+#include "src/base/math_utils.h"
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 
@@ -14,9 +15,9 @@ public:
   explicit ComponentParser(std::span<const css::ComponentValue> components)
       : components_(components) {}
 
-  css::ComponentValue next() {
+  const css::ComponentValue& next() {
     assert(!components_.empty());
-    css::ComponentValue result(components_.front());
+    const css::ComponentValue& result(components_.front());
     components_ = components_.subspan(1);
     return result;
   }
@@ -27,13 +28,114 @@ private:
   std::span<const css::ComponentValue> components_;
 };
 
+class FunctionParameterParser {
+public:
+  explicit FunctionParameterParser(const std::string& functionName,
+                                   std::span<const css::ComponentValue> components)
+      : functionName_(functionName), components_(components) {
+    advance();
+  }
+
+  const std::string& functionName() const { return functionName_; }
+
+  ParseResult<css::Token> next() {
+    if (next_) {
+      auto result = std::move(next_.value());
+      next_.reset();
+      advance();
+      return result;
+    } else {
+      ParseError err;
+      err.reason = "Unexpected EOF when parsing function '" + functionName_ + "'";
+      // TODO: Plumb offset.
+      return err;
+    }
+  }
+
+  /// @return true if a comma was found and skipped.
+  bool trySkipComma() {
+    const bool foundComma =
+        next_ && next_.value().hasResult() && next_.value().result().is<Token::Comma>();
+    if (foundComma) {
+      next_.reset();
+      advance();
+    }
+    return foundComma;
+  }
+
+  /// @return true if a slash was skipped.
+  bool trySkipSlash() {
+    if (!next_ || !next_.value().hasResult()) {
+      return false;
+    }
+
+    const auto& nextResult = next_.value().result();
+    if (nextResult.is<Token::Delim>() && nextResult.get<Token::Delim>().value == '/') {
+      next_.reset();
+      advance();
+      return true;
+    }
+
+    return false;
+  }
+
+  template <typename TokenType>
+  ParseResult<TokenType> nextAs() {
+    auto result = next();
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+
+    if (result.result().is<TokenType>()) {
+      return result.result().get<TokenType>();
+    } else {
+      ParseError err;
+      err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
+      // TODO: Plumb offset.
+      return err;
+    }
+  }
+
+  bool isEOF() const { return !next_; }
+
+private:
+  void advance() {
+    while (!components_.empty()) {
+      const css::ComponentValue& component(components_.front());
+      if (component.is<Token>()) {
+        const auto& token = component.get<Token>();
+
+        if (token.is<Token::Whitespace>()) {
+          // Skip.
+          components_ = components_.subspan(1);
+        } else {
+          next_ = std::move(token);
+          components_ = components_.subspan(1);
+          break;
+        }
+
+      } else {
+        ParseError err;
+        err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
+        // TODO: Plumb offset.
+        next_ = std::move(err);
+        break;
+      }
+    }
+  }
+
+  const std::string& functionName_;
+  std::span<const css::ComponentValue> components_;
+  std::optional<ParseResult<css::Token>> next_;
+};
+
 class ColorParserImpl {
 public:
   ColorParserImpl(std::span<const css::ComponentValue> components) : components_(components) {}
 
   ParseResult<Color> parseColor() {
     while (!components_.isEOF()) {
-      auto component = components_.next();
+      const auto& component = components_.next();
 
       if (component.is<Token>()) {
         auto token = std::move(component.get<Token>());
@@ -47,6 +149,7 @@ public:
           std::transform(name.begin(), name.end(), name.begin(),
                          [](unsigned char c) { return std::tolower(c); });
 
+          // TODO: <system-color>
           if (auto color = Color::ByName(name)) {
             return color.value();
           } else {
@@ -65,11 +168,34 @@ public:
           return err;
         }
       } else if (component.is<css::Function>()) {
-        // TODO
+        const auto& f = component.get<css::Function>();
 
-        ParseError err;
-        err.reason = "Not implemented";
-        return err;
+        // Comparisons are case-insensitive, convert token to lowercase.
+        std::string name = f.name;
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+
+        if (name == "rgb" || name == "rgba") {
+          return parseRgb(name, f.values);
+        } else if (name == "hsl" || name == "hsla") {
+          return parseHsl(name, f.values);
+        } else if (name == "hwb") {
+          return parseHwb(name, f.values);
+        } else if (name == "lab") {
+          return parseLab(name, f.values);
+        } else if (name == "lch") {
+          return parseLch(name, f.values);
+        } else if (name == "color") {
+          return parseColorFunction(name, f.values);
+        } else if (name == "device-cmyk") {
+          return parseDeviceCmyk(name, f.values);
+        } else {
+          ParseError err;
+          err.reason = "Unsupported color function '" + name + "'";
+          // TODO: Plumb offset?
+          return err;
+        }
+
       } else {
         ParseError err;
         err.reason = "Unexpected block when parsing color";
@@ -117,8 +243,290 @@ public:
     }
   }
 
+  ParseResult<Color> parseRgb(const std::string& functionName,
+                              std::span<const css::ComponentValue> components) {
+    FunctionParameterParser rgbParams(functionName, components);
+
+    auto firstTokenResult = rgbParams.next();
+    if (firstTokenResult.hasError()) {
+      return std::move(firstTokenResult.error());
+    }
+
+    auto firstToken = std::move(firstTokenResult.result());
+    const bool requiresCommas = rgbParams.trySkipComma();
+    if (!firstToken.is<Token::Number>() && !firstToken.is<Token::Percentage>()) {
+      return unexpectedTokenError(functionName, firstToken);
+    }
+
+    // Parse the RGB components first.
+    auto rgbResult =
+        firstToken.is<Token::Number>()
+            ? parseGreenBlueAs<Token::Number>(firstToken, rgbParams, requiresCommas)
+            : parseGreenBlueAs<Token::Percentage>(firstToken, rgbParams, requiresCommas);
+    if (rgbResult.hasError()) {
+      return std::move(rgbResult.error());
+    }
+
+    const RGBA rgb = rgbResult.result();
+    auto alphaResult = tryParseOptionalAlpha(rgbParams, requiresCommas);
+    if (alphaResult.hasError()) {
+      return std::move(alphaResult.error());
+    }
+
+    return Color(RGBA(rgb.r, rgb.g, rgb.b, alphaResult.result()));
+  }
+
+  template <typename TokenType>
+  ParseResult<RGBA> parseGreenBlueAs(const Token& firstToken, FunctionParameterParser& rgbParams,
+                                     bool requiresCommas) {
+    const double red = firstToken.get<TokenType>().value;
+
+    auto greenResult = rgbParams.nextAs<TokenType>();
+    if (greenResult.hasError()) {
+      return std::move(greenResult.error());
+    }
+
+    if (requiresCommas && !rgbParams.trySkipComma()) {
+      ParseError err;
+      err.reason = "Missing comma when parsing function '" + rgbParams.functionName() + "'";
+      // TODO: Offset?
+      return err;
+    }
+
+    auto blueResult = rgbParams.nextAs<TokenType>();
+    if (blueResult.hasError()) {
+      return std::move(blueResult.error());
+    }
+
+    if constexpr (std::is_same_v<TokenType, Token::Number>) {
+      return RGBA::RGB(numberToChannel(red), numberToChannel(greenResult.result().value),
+                       numberToChannel(blueResult.result().value));
+    } else {
+      return RGBA::RGB(percentageToChannel(red), percentageToChannel(greenResult.result().value),
+                       percentageToChannel(blueResult.result().value));
+    }
+  }
+
+  // Returns the hue in degrees if set.
+  // Based on https://www.w3.org/TR/2021/WD-css-color-4-20210601/#hue-syntax and
+  // https://www.w3.org/TR/css-values-3/#angles
+  ParseResult<double> parseHue(FunctionParameterParser& params) {
+    auto angleResult = params.next();
+    if (angleResult.hasError()) {
+      return std::move(angleResult.error());
+    }
+
+    auto angleToken = std::move(angleResult.result());
+    if (angleToken.is<Token::Number>()) {
+      return angleToken.get<Token::Number>().value;
+    } else if (angleToken.is<Token::Dimension>()) {
+      // TODO: Factor this out into a DimensionUtils or Angle type.
+      const auto& dimension = angleToken.get<Token::Dimension>();
+      std::string suffix = dimension.suffix;
+      std::transform(suffix.begin(), suffix.end(), suffix.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+
+      if (suffix == "deg") {
+        return dimension.value;
+      } else if (suffix == "grad") {
+        return dimension.value / 400.0 * 360.0;
+      } else if (suffix == "rad") {
+        return dimension.value * MathConstants<double>::kRadToDeg;
+      } else if (suffix == "turn") {
+        return dimension.value * 360.0;
+      } else {
+        ParseError err;
+        err.reason = "Angle has unexpected dimension '" + dimension.suffix + "'";
+        err.offset = angleToken.offset();
+        return err;
+      }
+    }
+
+    ParseError err;
+    err.reason = "Unexpected token when parsing angle";
+    err.offset = angleToken.offset();
+    return err;
+  }
+
+  ParseResult<Color> parseHsl(const std::string& functionName,
+                              std::span<const css::ComponentValue> components) {
+    FunctionParameterParser hslParams(functionName, components);
+
+    ParseResult<double> hueResult = parseHue(hslParams);
+    if (hueResult.hasError()) {
+      return std::move(hueResult.error());
+    }
+
+    const bool requiresCommas = hslParams.trySkipComma();
+
+    // Parse the RGB components first.
+    auto saturationResult = hslParams.nextAs<Token::Percentage>();
+    if (saturationResult.hasError()) {
+      return std::move(saturationResult.error());
+    }
+
+    if (requiresCommas && !hslParams.trySkipComma()) {
+      ParseError err;
+      err.reason = "Missing comma when parsing function '" + functionName + "'";
+      // TODO: Offset?
+      return err;
+    }
+
+    auto lightnessResult = hslParams.nextAs<Token::Percentage>();
+    if (lightnessResult.hasError()) {
+      return std::move(lightnessResult.error());
+    }
+
+    const RGBA rgb = hslToRgb(normalizeAngleDegrees(hueResult.result()) * 6.0 / 360.0,
+                              Clamp(saturationResult.result().value / 100.0, 0.0, 1.0),
+                              Clamp(lightnessResult.result().value / 100.0, 0.0, 1.0));
+    auto alphaResult = tryParseOptionalAlpha(hslParams, requiresCommas);
+    if (alphaResult.hasError()) {
+      return std::move(alphaResult.error());
+    }
+
+    return Color(RGBA(rgb.r, rgb.g, rgb.b, alphaResult.result()));
+  }
+
+  ParseResult<uint8_t> tryParseOptionalAlpha(FunctionParameterParser& params, bool requiresCommas) {
+    if (params.isEOF()) {
+      return 0xFF;
+    }
+
+    // Parse alpha, but first skip either a comma if commas are used, or a '/' if not.
+    if (!(requiresCommas ? params.trySkipComma() : params.trySkipSlash())) {
+      ParseError err;
+      err.reason =
+          "Missing delimiter for alpha when parsing function '" + params.functionName() + "'";
+      // TODO: Offset?
+      return err;
+    }
+
+    auto alphaResult = parseAlpha(params);
+    if (alphaResult.hasError()) {
+      return std::move(alphaResult.error());
+    }
+
+    if (!params.isEOF()) {
+      return additionalTokensError(params.functionName());
+    }
+
+    return alphaResult.result();
+  }
+
+  ParseResult<Color> parseHwb(const std::string& functionName,
+                              std::span<const css::ComponentValue> components) {
+    ParseError err;
+    err.reason = "Not implemented";
+    return err;
+  }
+
+  ParseResult<Color> parseLab(const std::string& functionName,
+                              std::span<const css::ComponentValue> components) {
+    ParseError err;
+    err.reason = "Not implemented";
+    return err;
+  }
+
+  ParseResult<Color> parseLch(const std::string& functionName,
+                              std::span<const css::ComponentValue> components) {
+    ParseError err;
+    err.reason = "Not implemented";
+    return err;
+  }
+
+  ParseResult<Color> parseColorFunction(const std::string& functionName,
+                                        std::span<const css::ComponentValue> components) {
+    ParseError err;
+    err.reason = "Not implemented";
+    return err;
+  }
+
+  ParseResult<Color> parseDeviceCmyk(const std::string& functionName,
+                                     std::span<const css::ComponentValue> components) {
+    ParseError err;
+    err.reason = "Not implemented";
+    return err;
+  }
+
+  ParseResult<uint8_t> parseAlpha(FunctionParameterParser& params) {
+    auto alphaResult = params.next();
+    if (alphaResult.hasError()) {
+      return std::move(alphaResult.error());
+    }
+
+    auto alphaToken = std::move(alphaResult.result());
+    if (alphaToken.is<Token::Number>()) {
+      return numberToChannel(alphaToken.get<Token::Number>().value);
+    } else if (alphaToken.is<Token::Percentage>()) {
+      return percentageToChannel(alphaToken.get<Token::Percentage>().value);
+    } else {
+      ParseError err;
+      err.reason = "Unexpected alpha value";
+      err.offset = alphaToken.offset();
+      return err;
+    }
+  }
+
 private:
-  unsigned int fromHex(unsigned char ch) {
+  ParseError unexpectedTokenError(const std::string& functionName, const Token& token) {
+    ParseError err;
+    err.reason = "Unexpected token when parsing function '" + functionName + "'";
+    err.offset = token.offset();
+    return err;
+  }
+
+  ParseError additionalTokensError(const std::string& functionName) {
+    ParseError err;
+    err.reason = "Additional tokens when parsing function '" + functionName + "'";
+    // TODO: Plumb offset?
+    return err;
+  }
+
+  // https://www.w3.org/TR/2021/WD-css-color-4-20210601/#hsl-to-rgb
+  static RGBA hslToRgb(double hue, double saturation, double lightness) {
+    const double t2 = (lightness <= 0.5) ? lightness * (saturation + 1.0)
+                                         : lightness + saturation - (lightness * saturation);
+    const double t1 = lightness * 2.0 - t2;
+    return RGBA::RGB(numberToChannel(hueToRgb(t1, t2, hue + 2.0) * 255.0),
+                     numberToChannel(hueToRgb(t1, t2, hue) * 255.0),
+                     numberToChannel(hueToRgb(t1, t2, hue - 2.0) * 255.0));
+  }
+
+  static double hueToRgb(double t1, double t2, double hue) {
+    if (hue < 0.0) {
+      hue += 6.0;
+    }
+
+    if (hue >= 6.0) {
+      hue -= 6.0;
+    }
+
+    if (hue < 1.0) {
+      return (t2 - t1) * hue + t1;
+    } else if (hue < 3.0) {
+      return t2;
+    } else if (hue < 4.0) {
+      return (t2 - t1) * (4.0 - hue) + t1;
+    } else {
+      return t1;
+    }
+  }
+
+  static double normalizeAngleDegrees(double angleDegrees) {
+    return angleDegrees - std::floor(angleDegrees / 360.0) * 360.0;
+  }
+
+  static uint8_t numberToChannel(double number) {
+    return static_cast<uint8_t>(Clamp(Round(number), 0.0, 255.0));
+  }
+
+  static uint8_t percentageToChannel(double number) {
+    // Convert 100 -> 255.
+    return numberToChannel(number * 2.55);
+  }
+
+  static unsigned int fromHex(unsigned char ch) {
     assert(std::isxdigit(ch));
 
     if (ch >= 'a' && ch <= 'f') {

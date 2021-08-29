@@ -32,6 +32,8 @@ struct Color {
   Type value;
 
   /* implicit */ constexpr Color(Type&& value) : value(std::move(value)) {}
+  // Helper to prevent an IntelliSense compiler error.
+  /* implicit */ constexpr Color(CurrentColor&& value) : value(std::move(value)) {}
 
   bool operator==(const Color& other) const;
 

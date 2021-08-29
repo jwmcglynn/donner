@@ -163,7 +163,7 @@ struct Token {
       return os;
     }
 
-    double value;
+    double value;  //< The percentage multiplied by 100, 100% -> 100.0
     std::string valueString;
     NumberType type;
   };
