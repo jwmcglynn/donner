@@ -6,6 +6,7 @@ cc_library(
         "box.h",
         "length.h",
         "math_utils.h",
+        "rc_string.h",
         "transform.h",
         "utils.h",
         "vector2.h",
@@ -30,6 +31,7 @@ cc_test(
     srcs = [
         "tests/box_tests.cc",
         "tests/math_utils_tests.cc",
+        "tests/rc_string_tests.cc",
         "tests/transform_tests.cc",
         "tests/vector2_tests.cc",
     ],
