@@ -123,4 +123,9 @@ TEST(RcString, Duplicate) {
   }
 }
 
+TEST(RcString, Output) {
+  EXPECT_EQ((std::ostringstream() << RcString("")).str(), "");
+  EXPECT_EQ((std::ostringstream() << RcString("hello world")).str(), "hello world");
+}
+
 }  // namespace donner

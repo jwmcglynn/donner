@@ -61,6 +61,10 @@ public:
   constexpr auto operator!=(const char* other) const { return str_ != other; }
   constexpr auto operator!=(std::string_view other) const { return str_ != other; }
 
+  friend std::ostream& operator<<(std::ostream& os, const RcString& self) {
+    return os << self.str_;
+  }
+
   /**
    * @return a pointer to the string data.
    */
