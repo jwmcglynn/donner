@@ -26,7 +26,7 @@ TEST(RcString, Construct) {
   }
 
   {
-    RcString str("world\0with\0nulls\0");
+    RcString str("world\0with\0nulls\0", 17);
     EXPECT_EQ(str, std::string_view("world\0with\0nulls\0", 17));
   }
 
@@ -36,7 +36,7 @@ TEST(RcString, Construct) {
   }
 
   {
-    RcString str("test STRING that is longer than 30 characters\0with\0nulls");
+    RcString str("test STRING that is longer than 30 characters\0with\0nulls", 56);
     EXPECT_EQ(str,
               std::string_view("test STRING that is longer than 30 characters\0with\0nulls", 56));
   }

@@ -28,14 +28,21 @@ public:
   static_assert(std::endian::native == std::endian::little, "Only little-endian is supported");
 
   static constexpr size_t npos = std::string_view::npos;
+  using iterator = std::string_view::iterator;
+  using const_iterator = std::string_view::const_iterator;
 
   constexpr RcString() = default;
   explicit RcString(std::string_view data) { initializeStorage(data); }
 
-  template <size_t size>
-  explicit RcString(const char (&data)[size]) {
-    initializeStorage(validateNullTerminatedString(data));
-  }
+  /**
+   * Constructs a new RcString object from a C-style string and optional length.
+   *
+   * @param data C-style string.
+   * @param len Length of the string, or npos to automatically measure, which requires that \ref
+   *   data is null-terminated.
+   */
+  /* implicit */ RcString(const char* data, size_t len = npos)
+      : RcString(len == npos ? std::string_view(data) : std::string_view(data, len)) {}
 
   /**
    * Constructs an RcString by consuming an existing vector.
@@ -67,6 +74,9 @@ public:
   constexpr friend auto operator<=>(const RcString& lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
+  constexpr friend auto operator<=>(const RcString& lhs, const char* rhs) {
+    return compareStringViews(lhs, rhs);
+  }
   constexpr friend auto operator<=>(const RcString& lhs, std::string_view rhs) {
     return compareStringViews(lhs, rhs);
   }
@@ -83,7 +93,13 @@ public:
   constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
+  constexpr friend bool operator==(const RcString& lhs, const char* rhs) {
+    return (lhs <=> rhs) == std::strong_ordering::equal;
+  }
   constexpr friend bool operator==(const RcString& lhs, std::string_view rhs) {
+    return (lhs <=> rhs) == std::strong_ordering::equal;
+  }
+  constexpr friend bool operator==(const char* lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
   constexpr friend bool operator==(std::string_view lhs, const RcString& rhs) {
@@ -98,10 +114,16 @@ public:
   friend std::string operator+(const RcString& lhs, const RcString& rhs) {
     return concatStringViews(lhs, rhs);
   }
+  friend std::string operator+(const RcString& lhs, const char* rhs) {
+    return concatStringViews(lhs, rhs);
+  }
   friend std::string operator+(const RcString& lhs, std::string_view rhs) {
     return concatStringViews(lhs, rhs);
   }
   friend std::string operator+(std::string_view lhs, const RcString& rhs) {
+    return concatStringViews(lhs, rhs);
+  }
+  friend std::string operator+(const char* lhs, const RcString& rhs) {
     return concatStringViews(lhs, rhs);
   }
 
@@ -119,6 +141,17 @@ public:
    * @return the length of the string.
    */
   size_t size() const { return data_.isLong() ? data_.long_.size() : data_.short_.size(); }
+
+  /**
+   * @return the string as a std::string.
+   */
+  std::string str() const { return std::string(data(), size()); }
+
+  // Iterators.
+  constexpr const_iterator begin() const noexcept { return cbegin(); }
+  constexpr const_iterator end() const noexcept { return cend(); }
+  constexpr const_iterator cbegin() const noexcept { return data(); }
+  constexpr const_iterator cend() const noexcept { return data() + size(); }
 
   /**
    * Returns true if the string equals another all-lowercase string, with a case insensitive
@@ -226,20 +259,6 @@ private:
   }
 
   /**
-   * Validates if a given string literal buffer is null-terminated, and then returns a string_view
-   * to its contents.
-   *
-   * @param data Buffer array.
-   * @param size Buffer size, including the null terminator.
-   * @return std::string_view to the string contents, or an assert.
-   */
-  template <size_t size>
-  static std::string_view validateNullTerminatedString(const char (&data)[size]) {
-    assert(size > 0 && data[size - 1] == '\0');
-    return std::string_view(data, size - 1);
-  }
-
-  /**
    * Since libc++ does not support std::basic_string_view::operator<=> yet, we need to implement it.
    * Provides similar functionality to operator<=> using two std::string_views, so that it can be
    * used to implement flavors for RcString, std::string, and std::string_view.
@@ -312,8 +331,8 @@ private:
 
     ~Storage() { clear(); }
 
-    Storage(const Storage& other) { *this = other; }
-    Storage(Storage&& other) { *this = std::move(other); }
+    Storage(const Storage& other) : Storage() { *this = other; }
+    Storage(Storage&& other) : Storage() { *this = std::move(other); }
 
     Storage& operator=(const Storage& other) {
       if (this != &other) {

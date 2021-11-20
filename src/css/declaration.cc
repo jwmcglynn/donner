@@ -3,7 +3,7 @@
 namespace donner {
 namespace css {
 
-Function::Function(std::string name, size_t sourceOffset)
+Function::Function(RcString name, size_t sourceOffset)
     : name(std::move(name)), sourceOffset(sourceOffset) {}
 
 bool Function::operator==(const Function& other) const {
@@ -44,7 +44,7 @@ std::ostream& operator<<(std::ostream& os, const SimpleBlock& block) {
   return os;
 }
 
-AtRule::AtRule(std::string name) : name(std::move(name)) {}
+AtRule::AtRule(RcString name) : name(std::move(name)) {}
 
 bool AtRule::operator==(const AtRule& other) const {
   return name == other.name && prelude == other.prelude && block == other.block;

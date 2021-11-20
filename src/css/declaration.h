@@ -2,11 +2,11 @@
 
 #include <iostream>
 #include <optional>
-#include <string>
 #include <variant>
 #include <vector>
 
 #include "src/base/length.h"
+#include "src/base/rc_string.h"
 #include "src/css/token.h"
 
 namespace donner {
@@ -15,11 +15,11 @@ namespace css {
 struct ComponentValue;
 
 struct Function {
-  std::string name;
+  RcString name;
   std::vector<ComponentValue> values;
   size_t sourceOffset;
 
-  Function(std::string name, size_t sourceOffset);
+  Function(RcString name, size_t sourceOffset);
   bool operator==(const Function& other) const;
 
   friend std::ostream& operator<<(std::ostream& os, const Function& func);
@@ -95,16 +95,16 @@ struct ComponentValue {
 };
 
 struct AtRule {
-  std::string name;
+  RcString name;
   std::vector<ComponentValue> prelude;
   std::optional<SimpleBlock> block;
 
-  explicit AtRule(std::string name);
+  explicit AtRule(RcString name);
   bool operator==(const AtRule& other) const;
 };
 
 struct Declaration {
-  Declaration(std::string name, std::vector<ComponentValue> values = {}, size_t sourceOffset = 0,
+  Declaration(RcString name, std::vector<ComponentValue> values = {}, size_t sourceOffset = 0,
               bool important = false)
       : name(std::move(name)),
         values(std::move(values)),
@@ -113,7 +113,7 @@ struct Declaration {
 
   bool operator==(const Declaration& other) const = default;
 
-  std::string name;
+  RcString name;
   std::vector<ComponentValue> values;
   size_t sourceOffset;
   bool important = false;

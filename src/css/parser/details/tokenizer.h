@@ -3,6 +3,7 @@
 #include <string_view>
 
 #include "src/base/parser/number_parser.h"
+#include "src/base/rc_string.h"
 #include "src/css/parser/details/common.h"
 #include "src/css/token.h"
 
@@ -171,11 +172,11 @@ private:
 
     for (size_t i = 1; i < remaining_.size(); ++i) {
       if (!isWhitespace(remaining_[i])) {
-        return token<Token::Whitespace>(i, std::string(remaining_.substr(0, i)));
+        return token<Token::Whitespace>(i, RcString(remaining_.substr(0, i)));
       }
     }
 
-    return token<Token::Whitespace>(remaining_.size(), std::string(remaining_));
+    return token<Token::Whitespace>(remaining_.size(), RcString(remaining_));
   }
 
   /// Consume a string token per https://www.w3.org/TR/css-syntax-3/#consume-a-string-token
@@ -183,19 +184,17 @@ private:
     const char quote = remaining_[0];
     assert(quote == '"' || quote == '\'');
 
-    // TODO: Introduce RefCountedString type.
     std::vector<char> str;
-
     const size_t remainingSize = remaining_.size();
     for (size_t i = 1; i < remainingSize; ++i) {
       const char ch = remaining_[i];
       if (ch == quote) {
         // ending code point: Return the <string-token>.
-        return token<Token::String>(i + 1, std::string(str.begin(), str.end()));
+        return token<Token::String>(i + 1, RcString::fromVector(std::move(str)));
       } else if (isNewline(ch)) {
         // newline: This is a parse error. Reconsume the current input code point, create a
         // <bad-string-token>, and return it.
-        return token<Token::BadString>(i, std::string(str.begin(), str.end()));
+        return token<Token::BadString>(i, RcString::fromVector(std::move(str)));
       } else if (ch == '\\') {
         // U+005C REVERSE SOLIDUS (\): If the next input code point is EOF, do nothing.
         if (i + 1 == remainingSize) {
@@ -221,7 +220,7 @@ private:
       }
     }
 
-    auto result = token<Token::String>(remaining_.size(), std::string(str.begin(), str.end()));
+    auto result = token<Token::String>(remaining_.size(), RcString::fromVector(std::move(str)));
     nextToken_ = token<Token::ErrorToken>(0, Token::ErrorToken::Type::EofInString);
     return result;
   }
@@ -229,8 +228,7 @@ private:
   /// Consume a name, per https://www.w3.org/TR/css-syntax-3/#consume-name
   ///
   /// @return A tuple containing the parsed name and the number of bytes consumed.
-  static std::tuple<std::string, size_t> consumeName(std::string_view remaining) {
-    // TODO: Introduce RefCountedString type.
+  static std::tuple<RcString, size_t> consumeName(std::string_view remaining) {
     std::vector<char> str;
 
     const size_t remainingSize = remaining.size();
@@ -258,7 +256,7 @@ private:
       }
     }
 
-    return {std::string(str.begin(), str.end()), i};
+    return {RcString::fromVector(std::move(str)), i};
   }
 
   /// Consume an escaped code point, per
@@ -316,7 +314,7 @@ private:
 
     NumberParser::Result number = numberResult.result();
 
-    std::string numberString(remaining_.substr(0, number.consumed_chars));
+    RcString numberString(remaining_.substr(0, number.consumed_chars));
     NumberType type = NumberType::Integer;
     for (char ch : numberString) {
       if (ch == '.' || ch == 'E' || ch == 'e') {
@@ -386,14 +384,12 @@ private:
       ++i;
     }
 
-    // TODO: Introduce RefCountedString type.
     std::vector<char> str;
-
     while (i < afterUrl.size()) {
       const char ch = afterUrl[i];
 
       if (ch == ')') {
-        return token<Token::Url>(i + charsConsumedBefore + 1, std::string(str.begin(), str.end()));
+        return token<Token::Url>(i + charsConsumedBefore + 1, RcString::fromVector(std::move(str)));
       } else if (isWhitespace(ch)) {
         ++i;
         while (i < afterUrl.size() && isWhitespace(afterUrl[i])) {
@@ -429,8 +425,7 @@ private:
     }
 
     // EOF: This is a parse error. Return the <url-token>.
-
-    auto result = token<Token::Url>(i + charsConsumedBefore, std::string(str.begin(), str.end()));
+    auto result = token<Token::Url>(i + charsConsumedBefore, RcString::fromVector(std::move(str)));
     nextToken_ = token<Token::ErrorToken>(0, Token::ErrorToken::Type::EofInUrl);
     return result;
   }

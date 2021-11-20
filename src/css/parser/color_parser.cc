@@ -30,13 +30,13 @@ private:
 
 class FunctionParameterParser {
 public:
-  explicit FunctionParameterParser(const std::string& functionName,
+  explicit FunctionParameterParser(const RcString& functionName,
                                    std::span<const css::ComponentValue> components)
       : functionName_(functionName), components_(components) {
     advance();
   }
 
-  const std::string& functionName() const { return functionName_; }
+  const RcString& functionName() const { return functionName_; }
 
   ParseResult<css::Token> next() {
     if (next_) {
@@ -149,7 +149,7 @@ private:
     }
   }
 
-  const std::string& functionName_;
+  const RcString& functionName_;
   std::span<const css::ComponentValue> components_;
   std::optional<ParseResult<css::Token>> next_;
   size_t lastOffset_ = 0;
@@ -171,7 +171,7 @@ public:
           auto ident = std::move(token.get<Token::Ident>());
 
           // Comparisons are case-insensitive, convert token to lowercase.
-          std::string name = ident.value;
+          std::string name = ident.value.str();
           std::transform(name.begin(), name.end(), name.begin(),
                          [](unsigned char c) { return std::tolower(c); });
 
@@ -195,25 +195,21 @@ public:
         }
       } else if (component.is<css::Function>()) {
         const auto& f = component.get<css::Function>();
+        const RcString& name = f.name;
 
-        // Comparisons are case-insensitive, convert token to lowercase.
-        std::string name = f.name;
-        std::transform(name.begin(), name.end(), name.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-
-        if (name == "rgb" || name == "rgba") {
+        if (name.equalsLowercase("rgb") || name.equalsLowercase("rgba")) {
           return parseRgb(name, f.values);
-        } else if (name == "hsl" || name == "hsla") {
+        } else if (name.equalsLowercase("hsl") || name.equalsLowercase("hsla")) {
           return parseHsl(name, f.values);
-        } else if (name == "hwb") {
+        } else if (name.equalsLowercase("hwb")) {
           return parseHwb(name, f.values);
-        } else if (name == "lab") {
+        } else if (name.equalsLowercase("lab")) {
           return parseLab(name, f.values);
-        } else if (name == "lch") {
+        } else if (name.equalsLowercase("lch")) {
           return parseLch(name, f.values);
-        } else if (name == "color") {
+        } else if (name.equalsLowercase("color")) {
           return parseColorFunction(name, f.values);
-        } else if (name == "device-cmyk") {
+        } else if (name.equalsLowercase("device-cmyk")) {
           return parseDeviceCmyk(name, f.values);
         } else {
           ParseError err;
@@ -268,7 +264,7 @@ public:
     }
   }
 
-  ParseResult<Color> parseRgb(const std::string& functionName,
+  ParseResult<Color> parseRgb(const RcString& functionName,
                               std::span<const css::ComponentValue> components) {
     FunctionParameterParser rgbParams(functionName, components);
 
@@ -346,17 +342,15 @@ public:
     } else if (angleToken.is<Token::Dimension>()) {
       // TODO: Factor this out into a DimensionUtils or Angle type.
       const auto& dimension = angleToken.get<Token::Dimension>();
-      std::string suffix = dimension.suffix;
-      std::transform(suffix.begin(), suffix.end(), suffix.begin(),
-                     [](unsigned char c) { return std::tolower(c); });
+      const RcString suffix = dimension.suffix;
 
-      if (suffix == "deg") {
+      if (suffix.equalsLowercase("deg")) {
         return dimension.value;
-      } else if (suffix == "grad") {
+      } else if (suffix.equalsLowercase("grad")) {
         return dimension.value / 400.0 * 360.0;
-      } else if (suffix == "rad") {
+      } else if (suffix.equalsLowercase("rad")) {
         return dimension.value * MathConstants<double>::kRadToDeg;
-      } else if (suffix == "turn") {
+      } else if (suffix.equalsLowercase("turn")) {
         return dimension.value * 360.0;
       } else {
         ParseError err;
@@ -372,7 +366,7 @@ public:
     return err;
   }
 
-  ParseResult<Color> parseHsl(const std::string& functionName,
+  ParseResult<Color> parseHsl(const RcString& functionName,
                               std::span<const css::ComponentValue> components) {
     FunctionParameterParser hslParams(functionName, components);
 
@@ -433,35 +427,35 @@ public:
     return alphaResult.result();
   }
 
-  ParseResult<Color> parseHwb(const std::string& functionName,
+  ParseResult<Color> parseHwb(const RcString& functionName,
                               std::span<const css::ComponentValue> components) {
     ParseError err;
     err.reason = "Not implemented";
     return err;
   }
 
-  ParseResult<Color> parseLab(const std::string& functionName,
+  ParseResult<Color> parseLab(const RcString& functionName,
                               std::span<const css::ComponentValue> components) {
     ParseError err;
     err.reason = "Not implemented";
     return err;
   }
 
-  ParseResult<Color> parseLch(const std::string& functionName,
+  ParseResult<Color> parseLch(const RcString& functionName,
                               std::span<const css::ComponentValue> components) {
     ParseError err;
     err.reason = "Not implemented";
     return err;
   }
 
-  ParseResult<Color> parseColorFunction(const std::string& functionName,
+  ParseResult<Color> parseColorFunction(const RcString& functionName,
                                         std::span<const css::ComponentValue> components) {
     ParseError err;
     err.reason = "Not implemented";
     return err;
   }
 
-  ParseResult<Color> parseDeviceCmyk(const std::string& functionName,
+  ParseResult<Color> parseDeviceCmyk(const RcString& functionName,
                                      std::span<const css::ComponentValue> components) {
     ParseError err;
     err.reason = "Not implemented";
@@ -488,7 +482,7 @@ public:
   }
 
 private:
-  ParseError unexpectedTokenError(const std::string& functionName, const Token& token) {
+  ParseError unexpectedTokenError(const RcString& functionName, const Token& token) {
     ParseError err;
     err.reason = "Unexpected token when parsing function '" + functionName + "'";
     err.offset = token.offset();

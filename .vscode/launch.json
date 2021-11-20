@@ -99,6 +99,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "color_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/src/css/parser/color_parser_fuzzer",
+      "args": [
+        "${workspaceFolder}/src/css/parser/tests/color_parser_corpus/function.txt"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "renderer_tool",
       "program": "${workspaceFolder}/bazel-bin/src/renderer/renderer_tool",
       "args": [

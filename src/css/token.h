@@ -4,6 +4,8 @@
 #include <string_view>
 #include <variant>
 
+#include "src/base/rc_string.h"
+
 namespace donner {
 namespace css {
 
@@ -14,7 +16,7 @@ enum class NumberType { Integer, Number };
 struct Token {
   /// `<ident-token>`
   struct Ident {
-    explicit Ident(std::string&& value) : value(value) {}
+    explicit Ident(RcString value) : value(std::move(value)) {}
 
     bool operator==(const Ident& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Ident& obj) {
@@ -22,12 +24,12 @@ struct Token {
       return os;
     }
 
-    std::string value;
+    RcString value;
   };
 
   /// `<function-token>`
   struct Function {
-    explicit Function(std::string&& name) : name(name) {}
+    explicit Function(RcString name) : name(std::move(name)) {}
 
     bool operator==(const Function& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Function& obj) {
@@ -36,12 +38,12 @@ struct Token {
     }
 
     /// Does not include the '(' character.
-    std::string name;
+    RcString name;
   };
 
   /// `<at-keyword-token>`
   struct AtKeyword {
-    explicit AtKeyword(std::string&& value) : value(value) {}
+    explicit AtKeyword(RcString value) : value(std::move(value)) {}
 
     bool operator==(const AtKeyword& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const AtKeyword& obj) {
@@ -50,14 +52,14 @@ struct Token {
     }
 
     /// The value, not including the '@' character.
-    std::string value;
+    RcString value;
   };
 
   /// `<hash-token>`
   struct Hash {
     enum class Type { Unrestricted, Id };
 
-    Hash(Type type, std::string&& name) : type(type), name(name) {}
+    Hash(Type type, RcString name) : type(type), name(std::move(name)) {}
 
     bool operator==(const Hash& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Hash& obj) {
@@ -70,12 +72,12 @@ struct Token {
     Type type;
 
     /// The name, not including the '#' character.
-    std::string name;
+    RcString name;
   };
 
   /// `<string-token>`
   struct String {
-    explicit String(std::string&& value) : value(value) {}
+    explicit String(RcString value) : value(std::move(value)) {}
 
     bool operator==(const String& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const String& obj) {
@@ -83,12 +85,12 @@ struct Token {
       return os;
     }
 
-    std::string value;
+    RcString value;
   };
 
   /// `<bad-string-token>`
   struct BadString {
-    explicit BadString(std::string&& value) : value(value) {}
+    explicit BadString(RcString value) : value(std::move(value)) {}
 
     bool operator==(const BadString& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const BadString& obj) {
@@ -96,12 +98,12 @@ struct Token {
       return os;
     }
 
-    std::string value;
+    RcString value;
   };
 
   /// `<url-token>`
   struct Url {
-    explicit Url(std::string&& value) : value(value) {}
+    explicit Url(RcString value) : value(std::move(value)) {}
 
     bool operator==(const Url& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Url& obj) {
@@ -109,7 +111,7 @@ struct Token {
       return os;
     }
 
-    std::string value;
+    RcString value;
   };
 
   /// `<bad-url-token>`
@@ -136,8 +138,8 @@ struct Token {
 
   /// `<number-token>`
   struct Number {
-    Number(double value, std::string&& valueString, NumberType type)
-        : value(value), valueString(valueString), type(type) {}
+    Number(double value, RcString valueString, NumberType type)
+        : value(value), valueString(std::move(valueString)), type(type) {}
 
     bool operator==(const Number& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Number& obj) {
@@ -147,14 +149,14 @@ struct Token {
     }
 
     double value;
-    std::string valueString;
+    RcString valueString;
     NumberType type;
   };
 
   /// `<percentage-token>`
   struct Percentage {
-    Percentage(double value, std::string&& valueString, NumberType type)
-        : value(value), valueString(valueString), type(type) {}
+    Percentage(double value, RcString valueString, NumberType type)
+        : value(value), valueString(std::move(valueString)), type(type) {}
 
     bool operator==(const Percentage& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Percentage& obj) {
@@ -164,14 +166,17 @@ struct Token {
     }
 
     double value;  //< The percentage multiplied by 100, 100% -> 100.0
-    std::string valueString;
+    RcString valueString;
     NumberType type;
   };
 
   /// `<dimension-token>`
   struct Dimension {
-    Dimension(double value, std::string&& suffix, std::string&& valueString, NumberType type)
-        : value(value), suffix(suffix), valueString(valueString), type(type) {}
+    Dimension(double value, RcString suffix, RcString valueString, NumberType type)
+        : value(value),
+          suffix(std::move(suffix)),
+          valueString(std::move(valueString)),
+          type(type) {}
 
     bool operator==(const Dimension& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Dimension& obj) {
@@ -181,14 +186,14 @@ struct Token {
     }
 
     double value;
-    std::string suffix;
-    std::string valueString;
+    RcString suffix;
+    RcString valueString;
     NumberType type;
   };
 
   /// `<whitespace-token>`
   struct Whitespace {
-    explicit Whitespace(std::string&& value) : value(value) {}
+    explicit Whitespace(RcString value) : value(std::move(value)) {}
 
     bool operator==(const Whitespace& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Whitespace& obj) {
@@ -196,7 +201,7 @@ struct Token {
       return os;
     }
 
-    std::string value;
+    RcString value;
   };
 
   /// `<CDO-token>`, '<!--'
