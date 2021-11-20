@@ -115,6 +115,9 @@
 		"C_Cpp.clang_format_sortIncludes": true,
 		"editor.formatOnSave": true,
 		"bazel.buildifierFixOnFormat": true,
+		"lldb.launch.initCommands": [
+			"command source ${workspaceRoot}/.lldbinit"
+		],
 		"testMate.cpp.test.executables": "bazel-bin/**/*{test,Test,TEST}*",
 		"testMate.cpp.test.advancedExecutables": [
 			{

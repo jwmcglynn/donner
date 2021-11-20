@@ -1,32 +1,35 @@
 #pragma once
 
+#include <bit>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "src/base/utils.h"
-
 namespace donner {
-
-namespace details {
-
-struct RcStringStorage {
-  std::vector<char> data;
-};
-
-}  // namespace details
 
 /**
  * A reference counted string, that is copy-on-write.
+ *
+ * Implements a short-string optimization similar to the libc++ std::string class, see
+ * https://joellaity.com/2020/01/31/string.html for details.
  */
 class RcString {
 public:
+  /**
+   * Since we use the low bit to indicate whether the string is a short or long string, aliasing the
+   * one-byte size in the first field of ShortStringData with size_t size of LongStringData.
+   *
+   * On big-endian architectures, we would need to use the high bit instead. Since I don't have a
+   * big-endian machine to test, only little-endian is currently supported.
+   */
+  static_assert(std::endian::native == std::endian::little, "Only little-endian is supported");
+
   static constexpr size_t npos = std::string_view::npos;
 
-  constexpr RcString() {}
+  constexpr RcString() = default;
   explicit RcString(std::string_view data) { initializeStorage(data); }
-  explicit RcString(std::string data) {
+  explicit RcString(const std::string& data) {
     initializeStorage(std::string_view(data.data(), data.size()));
   }
 
@@ -35,50 +38,52 @@ public:
     initializeStorage(validateNullTerminatedString(data));
   }
 
-  RcString(const RcString& other) : storage_(other.storage_), str_(other.str_) {}
-  RcString(RcString&& other) : storage_(std::move(other.storage_)), str_(std::move(other.str_)) {
-    other.str_ = std::string_view();
-  }
+  RcString(const RcString& other) : data_(other.data_) {}
+  RcString(RcString&& other) : data_(std::move(other.data_)) {}
 
   RcString& operator=(const RcString& other) {
-    storage_ = other.storage_;
-    str_ = other.str_;
+    data_ = other.data_;
     return *this;
   }
 
   RcString& operator=(RcString&& other) {
-    storage_ = std::move(other.storage_);
-    str_ = std::move(other.str_);
-    other.str_ = std::string_view();
+    data_ = std::move(other.data_);
     return *this;
   }
 
-  operator std::string_view() const { return str_; }
+  operator std::string_view() const {
+    return data_.isLong() ? std::string_view(data_.long_.data, data_.long_.size())
+                          : std::string_view(data_.short_.data, data_.short_.size());
+  }
 
   // Comparison operators.
-  constexpr auto operator==(const char* other) const { return str_ == other; }
-  constexpr auto operator==(std::string_view other) const { return str_ == other; }
-  constexpr auto operator!=(const char* other) const { return str_ != other; }
-  constexpr auto operator!=(std::string_view other) const { return str_ != other; }
+  constexpr auto operator==(const char* other) const { return std::string_view(*this) == other; }
+  constexpr auto operator==(std::string_view other) const {
+    return std::string_view(*this) == other;
+  }
+  constexpr auto operator!=(const char* other) const { return std::string_view(*this) != other; }
+  constexpr auto operator!=(std::string_view other) const {
+    return std::string_view(*this) != other;
+  }
 
   friend std::ostream& operator<<(std::ostream& os, const RcString& self) {
-    return os << self.str_;
+    return os << std::string_view(self);
   }
 
   /**
    * @return a pointer to the string data.
    */
-  const char* data() const { return str_.data(); }
+  const char* data() const { return data_.isLong() ? data_.long_.data : data_.short_.data; }
 
   /**
    * @return if the string is empty.
    */
-  bool empty() const { return str_.empty(); }
+  bool empty() const { return data_.short_.size() == 0; }
 
   /**
    * @return the length of the string.
    */
-  size_t size() const { return str_.size(); }
+  size_t size() const { return data_.isLong() ? data_.long_.size() : data_.short_.size(); }
 
   /**
    * Returns true if the string equals another all-lowercase string, with a case insensitive
@@ -88,11 +93,11 @@ public:
    * @return true If the strings are equal (case insensitive).
    */
   bool equalsLowercase(std::string_view other) const {
-    if (other.size() != str_.size()) {
+    if (other.size() != size()) {
       return false;
     }
 
-    const std::string_view self = str_;
+    const std::string_view self = std::string_view(*this);
     for (size_t i = 0; i < other.size(); ++i) {
       if (std::tolower(self[i]) != other[i]) {
         return false;
@@ -103,28 +108,71 @@ public:
   }
 
   /**
-   * Returns a substring of the string, returning a reference to the original string's data.
-   *
-   * To copy the data, call `substr(pos, len).duplicate()`.
+   * Returns a substring of the string, returning a reference to the original string's data. Note
+   * that due to the short-string optimization, this may not always reference the original data and
+   * may contain a copy if the string is below the short-string threshold.
    *
    * @param pos The position to start the substring.
    * @param len The length of the substring, or `RcString::npos` to return the whole string.
    */
   RcString substr(size_t pos, size_t len = npos) const {
-    return RcString(storage_, str_.substr(pos, len));
+    const std::string_view slice = std::string_view(*this).substr(pos, len);
+
+    if (data_.isLong() && slice.size() > kShortStringCapacity) {
+      return RcString(data_.long_.storage, slice);
+    } else {
+      return RcString(slice);
+    }
   }
 
   /**
-   * Duplicates the string, returning a unique reference to the underlying contents. This can be
-   * used to reduce memory usage whe taking a substring.
+   * Deduplicates the string, updating its underlying storage to ensure that it has a unique
+   * reference to the underlying contents. This can be used to reduce memory usage whe taking a
+   * substring.
    *
-   * @return an RcString with only one owner.
+   * Has no effect if the string is short due to the short-string optimization.
    */
-  RcString duplicate() const { return RcString(str_); }
+  void dedup() {
+    if (data_.isLong()) {
+      *this = RcString(std::string_view(*this));
+    }
+  }
 
 private:
-  RcString(std::shared_ptr<details::RcStringStorage> storage, std::string_view str)
-      : storage_(std::move(storage)), str_(str) {}
+  struct LongStringData {
+    LongStringData() : storage(nullptr) {}
+    LongStringData(std::shared_ptr<std::vector<char>> storage, std::string_view view)
+        : shiftedSize((view.size() << 1) | 1), data(view.data()), storage(std::move(storage)) {}
+
+    ~LongStringData() { storage = nullptr; }
+
+    size_t shiftedSize;
+    const char* data;
+    std::shared_ptr<std::vector<char>> storage;
+
+    size_t size() const { return shiftedSize >> 1; }
+    std::string_view view() const { return std::string_view(data, size()); }
+  };
+
+  static constexpr size_t kShortStringCapacity = sizeof(LongStringData) - 1;
+  static_assert(kShortStringCapacity < 128,
+                "Short string capacity must leave one bit for long string flag.");
+
+  struct ShortStringData {
+    constexpr ShortStringData() : shiftedSizeByte(0) {}
+
+    uint8_t shiftedSizeByte;
+    char data[kShortStringCapacity];
+
+    size_t size() const { return shiftedSizeByte >> 1; }
+    std::string_view view() const { return std::string_view(data, size()); }
+  };
+
+  static_assert(sizeof(LongStringData) == sizeof(ShortStringData),
+                "Long and short string data must be the same size.");
+
+  explicit RcString(std::shared_ptr<std::vector<char>> storage, std::string_view view)
+      : data_(std::move(storage), view) {}
 
   /**
    * Validates if a given string literal buffer is null-terminated, and then returns a string_view
@@ -141,23 +189,88 @@ private:
   }
 
   void initializeStorage(std::string_view data) {
-    if (UTILS_PREDICT_FALSE(data.empty())) {
-      storage_ = nullptr;
-      str_ = std::string_view();
+    const size_t size = data.size();
+
+    if (size <= kShortStringCapacity) {
+      data_.short_.shiftedSizeByte = static_cast<uint8_t>(size) << 1;
+      std::copy(data.begin(), data.end(), &data_.short_.data[0]);
     } else {
-      const size_t size = data.size();
+      // One bit is reserved.
+      constexpr size_t kMaxSize = size_t(1) << ((sizeof(size_t) * 8) - 1);
+      assert(size < kMaxSize);
 
-      storage_ = std::make_unique<details::RcStringStorage>();
-      storage_->data.resize(size + 1);
-      std::copy(data.begin(), data.end(), storage_->data.begin());
-      storage_->data[size] = '\0';
+      data_.long_.shiftedSize = (size << 1) | 1;
+      data_.long_.storage = std::make_shared<std::vector<char>>(size);
 
-      str_ = std::string_view(storage_->data.data(), size);
+      std::vector<char>& vec = *data_.long_.storage.get();
+      std::copy(data.begin(), data.end(), vec.begin());
+      data_.long_.data = vec.data();
     }
   }
 
-  std::shared_ptr<details::RcStringStorage> storage_;
-  std::string_view str_;
+  union Storage {
+    LongStringData long_;
+    ShortStringData short_;
+
+    constexpr Storage() : short_() {
+      // Call the empty LongStringData constructor, to clear the field containing the shared_ptr so
+      // we don't need to zero the entrire short_ buffer.
+      new (&long_) LongStringData();
+    }
+    explicit Storage(std::shared_ptr<std::vector<char>> storage, std::string_view view)
+        : long_(std::move(storage), view) {}
+
+    ~Storage() { clear(); }
+
+    Storage(const Storage& other) { *this = other; }
+    Storage(Storage&& other) { *this = std::move(other); }
+
+    Storage& operator=(const Storage& other) {
+      if (this != &other) {
+        clear();
+
+        if (other.isLong()) {
+          long_ = other.long_;
+        } else {
+          short_ = other.short_;
+        }
+      }
+
+      return *this;
+    }
+
+    Storage& operator=(Storage&& other) {
+      if (this != &other) {
+        clear();
+
+        if (other.isLong()) {
+          long_ = std::move(other.long_);
+          other.long_.storage = nullptr;
+
+          // Set length to zero, which also switches this to a short string.
+          other.short_.shiftedSizeByte = 0;
+        } else {
+          short_ = other.short_;
+          other.short_.shiftedSizeByte = 0;
+        }
+      }
+
+      return *this;
+    }
+
+    void clear() {
+      if (isLong()) {
+        long_.~LongStringData();
+      }
+
+      // Initialize empty long string, to clear the shared_ptr.
+      new (&long_) LongStringData();
+    }
+
+    bool isLong() const { return (short_.shiftedSizeByte & 1) == 1; }
+  };
+
+  Storage data_;
 };
 
 }  // namespace donner

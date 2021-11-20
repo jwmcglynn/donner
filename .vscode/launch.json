@@ -7,6 +7,20 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "base_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/base/base_tests",
+      "args": [
+        "--gtest_break_on_failure",
+        "--gtest_filter=*Dedup",
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "core_tests",
       "program": "${workspaceFolder}/bazel-bin/src/svg/core_tests",
       "args": [
