@@ -1,6 +1,8 @@
 #pragma once
 
 #include <bit>
+#include <cassert>
+#include <compare>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -29,9 +31,6 @@ public:
 
   constexpr RcString() = default;
   explicit RcString(std::string_view data) { initializeStorage(data); }
-  explicit RcString(const std::string& data) {
-    initializeStorage(std::string_view(data.data(), data.size()));
-  }
 
   template <size_t size>
   explicit RcString(const char (&data)[size]) {
@@ -57,17 +56,45 @@ public:
   }
 
   // Comparison operators.
-  constexpr auto operator==(const char* other) const { return std::string_view(*this) == other; }
-  constexpr auto operator==(std::string_view other) const {
-    return std::string_view(*this) == other;
+  constexpr friend auto operator<=>(const RcString& lhs, const RcString& rhs) {
+    return compareStringViews(lhs, rhs);
   }
-  constexpr auto operator!=(const char* other) const { return std::string_view(*this) != other; }
-  constexpr auto operator!=(std::string_view other) const {
-    return std::string_view(*this) != other;
+  constexpr friend auto operator<=>(const RcString& lhs, std::string_view rhs) {
+    return compareStringViews(lhs, rhs);
+  }
+
+  // Reversed comparison operators.
+  constexpr friend auto operator<=>(const char* lhs, const RcString& rhs) {
+    return compareStringViews(lhs, rhs);
+  }
+  constexpr friend auto operator<=>(std::string_view lhs, const RcString& rhs) {
+    return compareStringViews(lhs, rhs);
+  }
+
+  // For gtest, also implement operator== in terms of operator<=>.
+  constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
+    return (lhs <=> rhs) == std::strong_ordering::equal;
+  }
+  constexpr friend bool operator==(const RcString& lhs, std::string_view rhs) {
+    return (lhs <=> rhs) == std::strong_ordering::equal;
+  }
+  constexpr friend bool operator==(std::string_view lhs, const RcString& rhs) {
+    return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
   friend std::ostream& operator<<(std::ostream& os, const RcString& self) {
     return os << std::string_view(self);
+  }
+
+  // Concatenation operators.
+  friend std::string operator+(const RcString& lhs, const RcString& rhs) {
+    return concatStringViews(lhs, rhs);
+  }
+  friend std::string operator+(const RcString& lhs, std::string_view rhs) {
+    return concatStringViews(lhs, rhs);
+  }
+  friend std::string operator+(std::string_view lhs, const RcString& rhs) {
+    return concatStringViews(lhs, rhs);
   }
 
   /**
@@ -188,6 +215,47 @@ private:
     return std::string_view(data, size - 1);
   }
 
+  /**
+   * Since libc++ does not support std::basic_string_view::operator<=> yet, we need to implement it.
+   * Provides similar functionality to operator<=> using two std::string_views, so that it can be
+   * used to implement flavors for RcString, std::string, and std::string_view.
+   *
+   * @param lhs Left-hand side of the comparison.
+   * @param rhs Right-hand side of the comparison.
+   * @return std::strong_ordering representing the comparison result, similar to
+   *   std::string_view::compare but returning a std::strong_ordering instead of an int.
+   */
+  constexpr static std::strong_ordering compareStringViews(std::string_view lhs,
+                                                           std::string_view rhs) {
+    const size_t lhsSize = lhs.size();
+    const size_t rhsSize = rhs.size();
+    const size_t sharedSize = std::min(lhsSize, rhsSize);
+
+    const int retval = std::char_traits<char>::compare(lhs.data(), rhs.data(), sharedSize);
+    if (retval == 0) {
+      // The shared region matched, return a result based on which string is longer.
+      if (lhsSize == rhsSize) {
+        return std::strong_ordering::equal;
+      } else if (lhsSize < rhsSize) {
+        return std::strong_ordering::less;
+      } else {
+        return std::strong_ordering::greater;
+      }
+    } else if (retval < 0) {
+      return std::strong_ordering::less;
+    } else {
+      return std::strong_ordering::greater;
+    }
+  }
+
+  static std::string concatStringViews(std::string_view lhs, std::string_view rhs) {
+    std::string result;
+    result.reserve(lhs.size() + rhs.size());
+    result.append(lhs);
+    result.append(rhs);
+    return result;
+  }
+
   void initializeStorage(std::string_view data) {
     const size_t size = data.size();
 
@@ -214,7 +282,7 @@ private:
 
     constexpr Storage() : short_() {
       // Call the empty LongStringData constructor, to clear the field containing the shared_ptr so
-      // we don't need to zero the entrire short_ buffer.
+      // we don't need to zero the entire short_ buffer.
       new (&long_) LongStringData();
     }
     explicit Storage(std::shared_ptr<std::vector<char>> storage, std::string_view view)

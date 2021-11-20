@@ -150,6 +150,46 @@ TEST(RcString, Move) {
   }
 }
 
+TEST(RcString, Comparison) {
+  // operator==
+  EXPECT_EQ(RcString("hello"), RcString("hello"));
+  EXPECT_EQ(RcString("world"), "world");
+  EXPECT_EQ(RcString("the"), "the");
+  EXPECT_EQ(RcString("quick"), std::string_view("quick"));
+  EXPECT_EQ(RcString("brown"), std::string("brown"));
+  EXPECT_TRUE(RcString("fox") == RcString("fox"));
+  EXPECT_TRUE(RcString("jumps") == "jumps");
+  EXPECT_TRUE(RcString("over") == std::string_view("over"));
+  EXPECT_TRUE(RcString("the") == std::string("the"));
+  EXPECT_TRUE("test" == RcString("test"));
+  EXPECT_TRUE(std::string_view("comparison") == RcString("comparison"));
+  EXPECT_TRUE(std::string("please") == RcString("please"));
+
+  // operator!= (implicitly using spaceship operator)
+  EXPECT_NE(RcString("ignore"), RcString(""));
+  EXPECT_NE(RcString(""), "empty");
+  EXPECT_TRUE(RcString("how") != RcString("vexingly"));
+  EXPECT_TRUE(RcString("quick") != "daft");
+  EXPECT_TRUE(RcString("zebras") != std::string_view("jump"));
+  EXPECT_TRUE(RcString("zebras") != std::string("jump"));
+  EXPECT_TRUE("daft" != RcString("quick"));
+  EXPECT_TRUE(std::string_view("jump") != RcString("zebras"));
+  EXPECT_TRUE(std::string("jump") != RcString("zebras"));
+
+  // Relative comparisons.
+  EXPECT_TRUE(RcString("aaa") < RcString("bbb"));
+  EXPECT_TRUE("ccc" < RcString("ddd"));
+  EXPECT_TRUE(RcString("a") < "b");
+}
+
+TEST(RcString, Concat) {
+  EXPECT_EQ(RcString("hello") + RcString(" world"), "hello world");
+  EXPECT_EQ(RcString("the") + " quick", "the quick");
+  EXPECT_EQ(RcString("brown") + std::string(" fox"), "brown fox");
+  EXPECT_EQ("jumps" + RcString(" over"), "jumps over");
+  EXPECT_EQ(std::string_view("the") + RcString(" lazy") + std::string(" dog"), "the lazy dog");
+}
+
 TEST(RcString, Size) {
   {
     RcString str;
