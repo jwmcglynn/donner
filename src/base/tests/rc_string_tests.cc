@@ -42,6 +42,13 @@ TEST(RcString, Construct) {
   }
 }
 
+TEST(RcString, Construct_FromVector) {
+  std::vector<char> vec = {'h', 'e', 'l', 'l', 'o'};
+  RcString str = RcString::fromVector(std::move(vec));
+
+  EXPECT_EQ(str, "hello");
+}
+
 TEST(RcString, Copy) {
   // Copy from short.
   {

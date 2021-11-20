@@ -37,6 +37,14 @@ public:
     initializeStorage(validateNullTerminatedString(data));
   }
 
+  /**
+   * Constructs an RcString by consuming an existing vector.
+   *
+   * @param data Input data to consume, moved into the RcString storage.
+   * @return RcString using the input data.
+   */
+  static RcString fromVector(std::vector<char>&& data) { return RcString(std::move(data)); }
+
   RcString(const RcString& other) : data_(other.data_) {}
   RcString(RcString&& other) : data_(std::move(other.data_)) {}
 
@@ -136,8 +144,8 @@ public:
 
   /**
    * Returns a substring of the string, returning a reference to the original string's data. Note
-   * that due to the short-string optimization, this may not always reference the original data and
-   * may contain a copy if the string is below the short-string threshold.
+   * that due to the short-string optimization, this may not always reference the original data
+   * and may contain a copy if the string is below the short-string threshold.
    *
    * @param pos The position to start the substring.
    * @param len The length of the substring, or `RcString::npos` to return the whole string.
@@ -166,6 +174,9 @@ public:
   }
 
 private:
+  // One bit is reserved.
+  static constexpr size_t kMaxSize = size_t(1) << ((sizeof(size_t) * 8) - 1);
+
   struct LongStringData {
     LongStringData() : storage(nullptr) {}
     LongStringData(std::shared_ptr<std::vector<char>> storage, std::string_view view)
@@ -200,6 +211,19 @@ private:
 
   explicit RcString(std::shared_ptr<std::vector<char>> storage, std::string_view view)
       : data_(std::move(storage), view) {}
+
+  /**
+   * Construct an RcString from an existing vector.
+   *
+   * @param data Vector to move into the RcString.
+   */
+  explicit RcString(std::vector<char>&& data) {
+    assert(data.size() <= kMaxSize);
+
+    data_.long_.shiftedSize = (data.size() << 1) | 1;
+    data_.long_.data = data.data();
+    data_.long_.storage = std::make_shared<std::vector<char>>(std::move(data));
+  }
 
   /**
    * Validates if a given string literal buffer is null-terminated, and then returns a string_view
@@ -263,8 +287,6 @@ private:
       data_.short_.shiftedSizeByte = static_cast<uint8_t>(size) << 1;
       std::copy(data.begin(), data.end(), &data_.short_.data[0]);
     } else {
-      // One bit is reserved.
-      constexpr size_t kMaxSize = size_t(1) << ((sizeof(size_t) * 8) - 1);
       assert(size < kMaxSize);
 
       data_.long_.shiftedSize = (size << 1) | 1;
