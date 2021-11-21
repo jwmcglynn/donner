@@ -11,9 +11,22 @@ namespace donner::svg {
 
 class PropertyRegistry;
 
+enum class PropertyState {
+  NotSet = 0,
+  Set = 1,             //!< If the property has a value set.
+  Inherit = 2,         //!< If the property's value is "inherit".
+  ExplicitInitial = 3, /**< If the property's value is "initial", explicitly set by the user. Sets
+                        *   the property to its initial value with a specificity. */
+  ExplicitUnset = 4,   /**< If the property's value is "unset", explicitly set by the user. Resolves
+                        *   to either inherit or initial, depending on if the property is inheritable.
+                        *
+                        * @see https://www.w3.org/TR/css-cascade-3/#inherit-initial
+                        */
+};
+
 struct PropertyParseFnParams {
   std::span<const css::ComponentValue> components;
-  bool inherit = false;
+  PropertyState explicitState = PropertyState::NotSet;
   uint32_t specificity = 0;
 };
 
@@ -30,22 +43,31 @@ public:
     Property(GetInitialFn<T> getInitialFn = []() -> std::optional<T> { return std::nullopt; })
         : getInitialFn(getInitialFn) {}
 
-    std::optional<T> get() { return isSet ? value : getInitialFn(); }
+    /**
+     * Get the property value, without considering inheritance. Returns the initial value if the
+     * property has not been set.
+     */
+    std::optional<T> get() { return state == PropertyState::Set ? value : getInitialFn(); }
     void set(std::optional<T> newValue, uint32_t newSpecificity) {
-      isSet = true;
       value = std::move(newValue);
+      state = PropertyState::Set;
       specificity = newSpecificity;
     }
 
-    void reset(uint32_t newSpecificity = 0) {
-      isSet = false;
+    void set(PropertyState newState, uint32_t newSpecificity) {
       value.reset();
+      state = newState;
       specificity = newSpecificity;
     }
+
+    /**
+     * @return true if the property has any value set, including CSS built-in values.
+     */
+    bool hasValue() const { return state != PropertyState::NotSet; }
 
     std::optional<T> value;
+    PropertyState state = PropertyState::NotSet;
     uint32_t specificity = 0;
-    bool isSet = false;
 
     GetInitialFn<T> getInitialFn;
   };

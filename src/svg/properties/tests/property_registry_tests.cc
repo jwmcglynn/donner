@@ -51,13 +51,50 @@ TEST(PropertyRegistry, UnsupportedProperty) {
   EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
 }
 
-TEST(PropertyRegistry, ParseErrorsInvalidate) {
-  PropertyRegistry registry;
-  registry.parseStyle("color: red");
-  EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
+TEST(PropertyRegistry, ParseErrorsAreIgnored) {
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("color: red");
+    EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
 
-  registry.parseStyle("color: invalid");
-  EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    // If an invalid value is set, the previous value is retained and the new property is ignored.
+    registry.parseStyle("color: invalid");
+    EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))))
+        << "Invalid property should be ignored";
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("color: invalid");
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+  }
+}
+
+TEST(PropertyRegistry, BuiltinKeywords) {
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("color: initial");
+    EXPECT_EQ(registry.color.state, PropertyState::ExplicitInitial);
+    EXPECT_TRUE(registry.color.hasValue());
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+
+    registry.parseStyle("color: inherit");
+    EXPECT_EQ(registry.color.state, PropertyState::Inherit);
+    EXPECT_TRUE(registry.color.hasValue());
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+
+    registry.parseStyle("color: unset");
+    EXPECT_EQ(registry.color.state, PropertyState::ExplicitUnset);
+    EXPECT_TRUE(registry.color.hasValue());
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("color: inherit invalid");
+    EXPECT_FALSE(registry.color.hasValue());
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+  }
 }
 
 TEST(PropertyRegistry, ParseColor) {
@@ -67,89 +104,131 @@ TEST(PropertyRegistry, ParseColor) {
 }
 
 TEST(PropertyRegistry, Fill) {
-  PropertyRegistry registry;
-
   // Initial value of fill is black.
   const PaintServer kInitialFill(PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))));
 
-  EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
+  {
+    PropertyRegistry registry;
+    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
 
-  registry.parseStyle("fill: none");
-  EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::None())));
+    registry.parseStyle("fill: none");
+    EXPECT_TRUE(registry.fill.hasValue());
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::None())));
 
-  registry.parseStyle("fill: red  ");
-  EXPECT_THAT(registry.fill.get(),
-              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0xFF, 0, 0, 0xFF))))));
+    registry.parseStyle("fill: red  ");
+    EXPECT_THAT(registry.fill.get(),
+                Optional(PaintServer(PaintServer::Solid(Color(RGBA(0xFF, 0, 0, 0xFF))))));
+  }
 
-  registry.parseStyle("fill: red asdf");
-  EXPECT_THAT(registry.fill.get(), Eq(std::nullopt));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("fill: red asdf");
+    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
 
-  registry.parseStyle("fill: asdf");
-  EXPECT_THAT(registry.fill.get(), Eq(std::nullopt));
+    registry.parseStyle("fill: asdf");
+    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
+  }
 
-  registry.parseStyle("fill: context-fill");
-  EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ContextFill())));
-  registry.parseStyle("fill: \t context-stroke");
-  EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ContextStroke())));
-  registry.parseStyle("fill: context-stroke invalid");
-  EXPECT_THAT(registry.fill.get(), Eq(std::nullopt));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("fill: context-fill");
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ContextFill())));
+    registry.parseStyle("fill: \t context-stroke");
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ContextStroke())));
+  }
 
-  registry.parseStyle("fill: url(#test)");
-  EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("fill: context-stroke invalid");
+    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
+  }
 
-  registry.parseStyle("fill: url(#test) none");
-  EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("fill: url(#test)");
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
 
-  registry.parseStyle("fill: url(#test) green");
-  EXPECT_THAT(registry.fill.get(),
-              Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 128, 0, 0xFF))))));
+    registry.parseStyle("fill: url(#test) none");
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
 
-  registry.parseStyle("fill: url(#test)   lime\t  ");
-  EXPECT_THAT(
-      registry.fill.get(),
-      Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
+    registry.parseStyle("fill: url(#test) green");
+    EXPECT_THAT(
+        registry.fill.get(),
+        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 128, 0, 0xFF))))));
+
+    registry.parseStyle("fill: url(#test)   lime\t  ");
+    EXPECT_THAT(
+        registry.fill.get(),
+        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
+  }
 }
 
 TEST(PropertyRegistry, Stroke) {
-  PropertyRegistry registry;
-
   // Initial value of stroke is none.
-  EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::None())));
+  const PaintServer kInitialFill(PaintServer::None{});
 
-  registry.parseStyle("stroke: none");
-  EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::None())));
+  {
+    PropertyRegistry registry;
+    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
 
-  registry.parseStyle("stroke: red  ");
-  EXPECT_THAT(registry.stroke.get(),
-              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0xFF, 0, 0, 0xFF))))));
+    registry.parseStyle("stroke: none");
+    EXPECT_TRUE(registry.stroke.hasValue());
+    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::None())));
 
-  registry.parseStyle("stroke: red asdf");
-  EXPECT_THAT(registry.stroke.get(), Eq(std::nullopt));
+    registry.parseStyle("stroke: red  ");
+    EXPECT_THAT(registry.stroke.get(),
+                Optional(PaintServer(PaintServer::Solid(Color(RGBA(0xFF, 0, 0, 0xFF))))));
+  }
 
-  registry.parseStyle("stroke: asdf");
-  EXPECT_THAT(registry.stroke.get(), Eq(std::nullopt));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("stroke: red asdf");
+    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
 
-  registry.parseStyle("stroke: context-stroke");
-  EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::ContextStroke())));
-  registry.parseStyle("stroke: \t context-stroke");
-  EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::ContextStroke())));
-  registry.parseStyle("stroke: context-stroke invalid");
-  EXPECT_THAT(registry.stroke.get(), Eq(std::nullopt));
+    registry.parseStyle("stroke: asdf");
+    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
+  }
 
-  registry.parseStyle("stroke: url(#test)");
-  EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("stroke: context-stroke");
+    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::ContextStroke())));
+    registry.parseStyle("stroke: \t context-stroke");
+    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::ContextStroke())));
+  }
 
-  registry.parseStyle("stroke: url(#test) none");
-  EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("stroke: context-stroke invalid");
+    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
+  }
 
-  registry.parseStyle("stroke: url(#test) green");
-  EXPECT_THAT(registry.stroke.get(),
-              Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 128, 0, 0xFF))))));
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("stroke: url(#test)");
+    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
 
-  registry.parseStyle("stroke: url(#test)   lime\t  ");
-  EXPECT_THAT(
-      registry.stroke.get(),
-      Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
+    registry.parseStyle("stroke: url(#test) none");
+    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+
+    registry.parseStyle("stroke: url(#test) green");
+    EXPECT_THAT(
+        registry.stroke.get(),
+        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 128, 0, 0xFF))))));
+
+    registry.parseStyle("stroke: url(#test)   lime\t  ");
+    EXPECT_THAT(
+        registry.stroke.get(),
+        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
+  }
 }
 
 }  // namespace donner::svg

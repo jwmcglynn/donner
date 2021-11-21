@@ -26,15 +26,18 @@ std::span<const css::ComponentValue> trimTrailingWhitespace(
 template <typename T, typename ParseCallbackFn>
 std::optional<ParseError> parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
                                 PropertyRegistry::Property<T>* destination) {
-  if (params.inherit) {
-    destination->reset(params.specificity);
+  // If the property is set to a built-in keyword, such as "inherit", the property has already been
+  // parsed so we can just set based on the value of explicitState.
+  if (params.explicitState != PropertyState::NotSet) {
+    destination->set(params.explicitState, params.specificity);
     return std::nullopt;
   }
 
   ParseResult<T> result = callbackFn(params);
   if (result.hasError()) {
-    // TODO: What specificity should we use here?
-    destination->set(std::nullopt, 0);
+    // If there is a parse error, the CSS specification requires user agents to ignore the
+    // declaration, and not modify the existing value.
+    // See https://www.w3.org/TR/CSS2/syndata.html#ignore.
     return std::move(result.error());
   }
 
@@ -157,11 +160,17 @@ std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration
   PropertyParseFnParams params;
   params.components = trimTrailingWhitespace(declaration.values);
 
-  // Detect if this is inherit.
-  if (params.components.size() == 1 && params.components.front().isToken<css::Token::Ident>() &&
-      params.components.front().get<css::Token>().get<css::Token::Ident>().value.equalsLowercase(
-          "inherit")) {
-    params.inherit = true;
+  // Detect CSS-wide keywords, see https://www.w3.org/TR/css-cascade-3/#defaulting-keywords.
+  if (params.components.size() == 1 && params.components.front().isToken<css::Token::Ident>()) {
+    const RcString& ident =
+        params.components.front().get<css::Token>().get<css::Token::Ident>().value;
+    if (ident.equalsLowercase("initial")) {
+      params.explicitState = PropertyState::ExplicitInitial;
+    } else if (ident.equalsLowercase("inherit")) {
+      params.explicitState = PropertyState::Inherit;
+    } else if (ident.equalsLowercase("unset")) {
+      params.explicitState = PropertyState::ExplicitUnset;
+    }
   }
 
   params.specificity = declaration.important ? kSpecificityImportant : specificity;
