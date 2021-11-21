@@ -1,16 +1,11 @@
 #pragma once
 
-#include <frozen/string.h>
-#include <frozen/unordered_map.h>
-
-#include <variant>
-#include <vector>
-
 #include "src/base/parser/parse_result.h"
 #include "src/css/color.h"
 #include "src/css/declaration.h"
+#include "src/svg/properties/paint_server.h"
 
-namespace donner {
+namespace donner::svg {
 
 class PropertyRegistry;
 
@@ -20,6 +15,7 @@ using ParseFunction = std::optional<ParseError> (*)(PropertyRegistry& registry,
 class PropertyRegistry {
 public:
   std::optional<css::Color> color;
+  std::optional<PaintServer> fill;
 
   /**
    * Parse a single declaration, adding it to the property registry.
@@ -38,4 +34,4 @@ public:
   void parseStyle(std::string_view str);
 };
 
-}  // namespace donner
+}  // namespace donner::svg
