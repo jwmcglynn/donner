@@ -52,8 +52,8 @@ public:
    */
   static RcString fromVector(std::vector<char>&& data) { return RcString(std::move(data)); }
 
-  RcString(const RcString& other) : data_(other.data_) {}
-  RcString(RcString&& other) : data_(std::move(other.data_)) {}
+  constexpr RcString(const RcString& other) : data_(other.data_) {}
+  constexpr RcString(RcString&& other) : data_(std::move(other.data_)) {}
 
   RcString& operator=(const RcString& other) {
     data_ = other.data_;
@@ -211,7 +211,7 @@ private:
   static constexpr size_t kMaxSize = size_t(1) << ((sizeof(size_t) * 8) - 1);
 
   struct LongStringData {
-    LongStringData() : storage(nullptr) {}
+    constexpr LongStringData() : storage(nullptr) {}
     LongStringData(std::shared_ptr<std::vector<char>> storage, std::string_view view)
         : shiftedSize((view.size() << 1) | 1), data(view.data()), storage(std::move(storage)) {}
 
@@ -331,8 +331,28 @@ private:
 
     ~Storage() { clear(); }
 
-    Storage(const Storage& other) : Storage() { *this = other; }
-    Storage(Storage&& other) : Storage() { *this = std::move(other); }
+    constexpr Storage(const Storage& other) {
+      if (other.isLong()) {
+        // Specifically use the placement new operator since long_ has not been initialized yet.
+        new (&long_) LongStringData(other.long_);
+      } else {
+        short_ = other.short_;
+      }
+    }
+
+    constexpr Storage(Storage&& other) {
+      if (other.isLong()) {
+        // Specifically use the placement new operator since long_ has not been initialized yet.
+        new (&long_) LongStringData(std::move(other.long_));
+        other.long_.storage = nullptr;
+
+        // Set length to zero, which also switches this to a short string.
+        other.short_.shiftedSizeByte = 0;
+      } else {
+        short_ = other.short_;
+        other.short_.shiftedSizeByte = 0;
+      }
+    }
 
     Storage& operator=(const Storage& other) {
       if (this != &other) {
@@ -376,7 +396,7 @@ private:
       new (&long_) LongStringData();
     }
 
-    bool isLong() const { return (short_.shiftedSizeByte & 1) == 1; }
+    constexpr bool isLong() const { return (short_.shiftedSizeByte & 1) == 1; }
   };
 
   Storage data_;
