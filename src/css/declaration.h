@@ -50,28 +50,17 @@ struct ComponentValue {
 
   template <typename T>
   T& get() & {
-    return std::get<indexOf<T>()>(value);
+    return std::get<T>(value);
   }
 
   template <typename T>
   const T& get() const& {
-    return std::get<indexOf<T>()>(value);
+    return std::get<T>(value);
   }
 
   template <typename T>
   T&& get() && {
-    return std::move(std::get<indexOf<T>()>(value));
-  }
-
-  template <typename T, TokenIndex index = 0>
-  static constexpr TokenIndex indexOf() {
-    if constexpr (index == std::variant_size_v<Type>) {
-      return index;
-    } else if constexpr (std::is_same_v<std::variant_alternative_t<index, Type>, T>) {
-      return index;
-    } else {
-      return indexOf<T, index + 1>();
-    }
+    return std::move(std::get<T>(value));
   }
 
   size_t sourceOffset() const {

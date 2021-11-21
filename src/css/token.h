@@ -351,17 +351,17 @@ struct Token {
 
   template <typename T>
   T& get() & {
-    return std::get<indexOf<T>()>(value_);
+    return std::get<T>(value_);
   }
 
   template <typename T>
   const T& get() const& {
-    return std::get<indexOf<T>()>(value_);
+    return std::get<T>(value_);
   }
 
   template <typename T>
   T&& get() && {
-    return std::move(std::get<indexOf<T>()>(value_));
+    return std::move(std::get<T>(value_));
   }
 
   template <typename Visitor>
