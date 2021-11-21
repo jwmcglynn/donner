@@ -10,6 +10,10 @@ namespace donner::svg {
 
 namespace {
 
+static constexpr uint32_t kSpecificityImportant = ~static_cast<uint32_t>(1);
+// The style attribute can only be overridden by !important.
+static constexpr uint32_t kSpecificityStyleAttribute = kSpecificityImportant - 1;
+
 std::span<const css::ComponentValue> trimTrailingWhitespace(
     std::span<const css::ComponentValue> components) {
   while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
@@ -19,20 +23,26 @@ std::span<const css::ComponentValue> trimTrailingWhitespace(
   return components;
 }
 
-template <typename T>
-std::optional<ParseError> unwrap(ParseResult<T>&& result, std::optional<T>* destination) {
+template <typename T, typename ParseCallbackFn>
+std::optional<ParseError> parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
+                                PropertyRegistry::Property<T>* destination) {
+  if (params.inherit) {
+    destination->reset(params.specificity);
+    return std::nullopt;
+  }
+
+  ParseResult<T> result = callbackFn(params);
   if (result.hasError()) {
-    *destination = std::nullopt;
+    // TODO: What specificity should we use here?
+    destination->set(std::nullopt, 0);
     return std::move(result.error());
   }
 
-  *destination = std::move(result.result());
+  destination->set(std::move(result.result()), params.specificity);
   return std::nullopt;
 }
 
 ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
-  components = trimTrailingWhitespace(components);
-
   if (components.empty()) {
     ParseError err;
     err.reason = "Invalid paint server value";
@@ -114,24 +124,51 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
   return err;
 }
 
-static constexpr frozen::unordered_map<frozen::string, ParseFunction, 2> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 3> kProperties = {
     {"color",
-     [](PropertyRegistry& registry, const css::Declaration& declaration) {
-       return unwrap(css::ColorParser::Parse(declaration.values), &registry.color);
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) {
+             return css::ColorParser::Parse(params.components);
+           },
+           &registry.color);
      }},  //
     {"fill",
-     [](PropertyRegistry& registry, const css::Declaration& declaration) {
-       return unwrap(ParsePaintServer(declaration.values), &registry.fill);
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
+           &registry.fill);
+     }},  //
+    {"stroke",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
+           &registry.stroke);
      }}  //
 };
 
 }  // namespace
 
-std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration) {
-  // TODO: Add support for "inherit" values.
+std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
+                                                          uint32_t specificity) {
+  PropertyParseFnParams params;
+  params.components = trimTrailingWhitespace(declaration.values);
+
+  // Detect if this is inherit.
+  if (params.components.size() == 1 && params.components.front().isToken<css::Token::Ident>() &&
+      params.components.front().get<css::Token>().get<css::Token::Ident>().value.equalsLowercase(
+          "inherit")) {
+    params.inherit = true;
+  }
+
+  params.specificity = declaration.important ? kSpecificityImportant : specificity;
+
   const auto it = kProperties.find(frozen::string(declaration.name));
   if (it != kProperties.end()) {
-    return it->second(*this, declaration);
+    return it->second(*this, params);
   }
 
   ParseError err;
@@ -144,7 +181,7 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   const std::vector<css::Declaration> declarations =
       css::DeclarationListParser::ParseOnlyDeclarations(str);
   for (const auto& declaration : declarations) {
-    [[maybe_unused]] auto error = parseProperty(declaration);
+    [[maybe_unused]] auto error = parseProperty(declaration, kSpecificityStyleAttribute);
     // Ignore errors.
   }
 }

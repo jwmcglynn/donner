@@ -45,6 +45,10 @@ struct PaintServer {
 
   /* implicit */ PaintServer(Type value) : value(std::move(value)) {}
 
+  // Allow constexpr construction for None and Solid.
+  /* implicit */ constexpr PaintServer(None) : value(None{}) {}
+  /* implicit */ constexpr PaintServer(Solid solid) : value(std::move(solid)) {}
+
   bool operator==(const PaintServer& other) const;
 
   template <typename T>
