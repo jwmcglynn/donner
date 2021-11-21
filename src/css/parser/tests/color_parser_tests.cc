@@ -84,6 +84,11 @@ TEST(ColorParser, Whitespace) {
   EXPECT_THAT(ColorParser::ParseString("\nblue"), ParseResultIs(Color(RGBA(0, 0, 255, 255))));
 }
 
+TEST(ColorParser, ExtraTokens) {
+  EXPECT_THAT(ColorParser::ParseString(" \t  #FF0000  abc "),
+              ParseErrorIs("Expected a single color"));
+}
+
 TEST(ColorParser, InvalidHash) {
   EXPECT_THAT(ColorParser::ParseString("#"), ParseErrorIs("Unexpected token when parsing color"));
   EXPECT_THAT(ColorParser::ParseString("#G"), ParseErrorIs("'#G' is not a hex number"));

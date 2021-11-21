@@ -49,6 +49,11 @@ struct ComponentValue {
   }
 
   template <typename T>
+  bool isToken() const {
+    return is<Token>() && get<Token>().is<T>();
+  }
+
+  template <typename T>
   T& get() & {
     return std::get<T>(value);
   }

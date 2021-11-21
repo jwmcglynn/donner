@@ -10,23 +10,18 @@ namespace donner::css {
 
 namespace {
 
-class ComponentParser {
-public:
-  explicit ComponentParser(std::span<const css::ComponentValue> components)
-      : components_(components) {}
-
-  const css::ComponentValue& next() {
-    assert(!components_.empty());
-    const css::ComponentValue& result(components_.front());
-    components_ = components_.subspan(1);
-    return result;
+std::span<const css::ComponentValue> trimWhitespace(
+    std::span<const css::ComponentValue> components) {
+  while (!components.empty() && components.front().isToken<Token::Whitespace>()) {
+    components = components.subspan(1);
   }
 
-  bool isEOF() const { return components_.empty(); }
+  while (!components.empty() && components.back().isToken<Token::Whitespace>()) {
+    components = components.subspan(0, components.size() - 1);
+  }
 
-private:
-  std::span<const css::ComponentValue> components_;
-};
+  return components;
+}
 
 class FunctionParameterParser {
 public:
@@ -157,78 +152,82 @@ private:
 
 class ColorParserImpl {
 public:
-  ColorParserImpl(std::span<const css::ComponentValue> components) : components_(components) {}
+  ColorParserImpl(std::span<const css::ComponentValue> components)
+      : components_(trimWhitespace(components)) {}
 
   ParseResult<Color> parseColor() {
-    while (!components_.isEOF()) {
-      const auto& component = components_.next();
+    if (components_.empty()) {
+      ParseError err;
+      err.reason = "No color found";
+      return err;
+    } else if (components_.size() != 1) {
+      ParseError err;
+      err.reason = "Expected a single color";
+      err.offset = components_.front().sourceOffset();
+      return err;
+    }
 
-      if (component.is<Token>()) {
-        auto token = std::move(component.get<Token>());
-        if (token.is<Token::Hash>()) {
-          return parseHash(token.get<Token::Hash>().name);
-        } else if (token.is<Token::Ident>()) {
-          auto ident = std::move(token.get<Token::Ident>());
+    const auto& component = components_.front();
 
-          // Comparisons are case-insensitive, convert token to lowercase.
-          std::string name = ident.value.str();
-          std::transform(name.begin(), name.end(), name.begin(),
-                         [](unsigned char c) { return std::tolower(c); });
+    if (component.is<Token>()) {
+      auto token = std::move(component.get<Token>());
+      if (token.is<Token::Hash>()) {
+        return parseHash(token.get<Token::Hash>().name);
+      } else if (token.is<Token::Ident>()) {
+        auto ident = std::move(token.get<Token::Ident>());
 
-          // TODO: <system-color>
-          if (auto color = Color::ByName(name)) {
-            return color.value();
-          } else {
-            ParseError err;
-            err.reason = "Invalid color '" + name + "'";
-            err.offset = token.offset();
-            return err;
-          }
+        // Comparisons are case-insensitive, convert token to lowercase.
+        std::string name = ident.value.str();
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
 
-        } else if (token.is<Token::Whitespace>()) {
-          // Skip.
+        // TODO: <system-color>
+        if (auto color = Color::ByName(name)) {
+          return color.value();
         } else {
           ParseError err;
-          err.reason = "Unexpected token when parsing color";
+          err.reason = "Invalid color '" + name + "'";
           err.offset = token.offset();
-          return err;
-        }
-      } else if (component.is<css::Function>()) {
-        const auto& f = component.get<css::Function>();
-        const RcString& name = f.name;
-
-        if (name.equalsLowercase("rgb") || name.equalsLowercase("rgba")) {
-          return parseRgb(name, f.values);
-        } else if (name.equalsLowercase("hsl") || name.equalsLowercase("hsla")) {
-          return parseHsl(name, f.values);
-        } else if (name.equalsLowercase("hwb")) {
-          return parseHwb(name, f.values);
-        } else if (name.equalsLowercase("lab")) {
-          return parseLab(name, f.values);
-        } else if (name.equalsLowercase("lch")) {
-          return parseLch(name, f.values);
-        } else if (name.equalsLowercase("color")) {
-          return parseColorFunction(name, f.values);
-        } else if (name.equalsLowercase("device-cmyk")) {
-          return parseDeviceCmyk(name, f.values);
-        } else {
-          ParseError err;
-          err.reason = "Unsupported color function '" + name + "'";
-          err.offset = f.sourceOffset;
           return err;
         }
 
       } else {
         ParseError err;
-        err.reason = "Unexpected block when parsing color";
-        err.offset = component.sourceOffset();
+        err.reason = "Unexpected token when parsing color";
+        err.offset = token.offset();
         return err;
       }
-    }
+    } else if (component.is<css::Function>()) {
+      const auto& f = component.get<css::Function>();
+      const RcString& name = f.name;
 
-    ParseError err;
-    err.reason = "No color found";
-    return err;
+      if (name.equalsLowercase("rgb") || name.equalsLowercase("rgba")) {
+        return parseRgb(name, f.values);
+      } else if (name.equalsLowercase("hsl") || name.equalsLowercase("hsla")) {
+        return parseHsl(name, f.values);
+      } else if (name.equalsLowercase("hwb")) {
+        return parseHwb(name, f.values);
+      } else if (name.equalsLowercase("lab")) {
+        return parseLab(name, f.values);
+      } else if (name.equalsLowercase("lch")) {
+        return parseLch(name, f.values);
+      } else if (name.equalsLowercase("color")) {
+        return parseColorFunction(name, f.values);
+      } else if (name.equalsLowercase("device-cmyk")) {
+        return parseDeviceCmyk(name, f.values);
+      } else {
+        ParseError err;
+        err.reason = "Unsupported color function '" + name + "'";
+        err.offset = f.sourceOffset;
+        return err;
+      }
+
+    } else {
+      ParseError err;
+      err.reason = "Unexpected block when parsing color";
+      err.offset = component.sourceOffset();
+      return err;
+    }
   }
 
   ParseResult<Color> parseHash(std::string_view value) {
@@ -544,7 +543,7 @@ private:
     }
   }
 
-  ComponentParser components_;
+  std::span<const css::ComponentValue> components_;
 };
 
 }  // namespace
