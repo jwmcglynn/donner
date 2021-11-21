@@ -100,7 +100,37 @@ TEST(PropertyRegistry, BuiltinKeywords) {
 TEST(PropertyRegistry, ParseColor) {
   PropertyRegistry registry;
   registry.parseStyle("color: red");
+  EXPECT_TRUE(registry.color.hasValue());
   EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
+}
+
+TEST(PropertyRegistry, ParsePresentationAttribute) {
+  {
+    PropertyRegistry registry;
+    registry.parsePresentationAttribute("color", "red");
+    EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parsePresentationAttribute("color", "invalid");
+    EXPECT_FALSE(registry.color.hasValue());
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parsePresentationAttribute("color", "red !important");
+    EXPECT_FALSE(registry.color.hasValue()) << "!important is not supported";
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parsePresentationAttribute("color", " /*comment*/ red ");
+    EXPECT_TRUE(registry.color.hasValue()) << "Comments and whitespace should be ignored";
+    EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
+  }
 }
 
 TEST(PropertyRegistry, Fill) {

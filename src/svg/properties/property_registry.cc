@@ -5,6 +5,7 @@
 
 #include "src/css/parser/color_parser.h"
 #include "src/css/parser/declaration_list_parser.h"
+#include "src/css/parser/value_parser.h"
 
 namespace donner::svg {
 
@@ -13,9 +14,15 @@ namespace {
 static constexpr uint32_t kSpecificityImportant = ~static_cast<uint32_t>(1);
 // The style attribute can only be overridden by !important.
 static constexpr uint32_t kSpecificityStyleAttribute = kSpecificityImportant - 1;
+// Presentation attributes have a specificity of 0.
+static constexpr uint32_t kSpecificityPresentationAttribute = 0;
 
-std::span<const css::ComponentValue> trimTrailingWhitespace(
+std::span<const css::ComponentValue> trimWhitespace(
     std::span<const css::ComponentValue> components) {
+  while (!components.empty() && components.front().isToken<css::Token::Whitespace>()) {
+    components = components.subspan(1);
+  }
+
   while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
     components = components.subspan(0, components.size() - 1);
   }
@@ -158,7 +165,9 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 3> kProp
 std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                           uint32_t specificity) {
   PropertyParseFnParams params;
-  params.components = trimTrailingWhitespace(declaration.values);
+  // Note that we only need to trim the trailing whitespace here, but trimWhitespace actually trims
+  // both.
+  params.components = trimWhitespace(declaration.values);
 
   // Detect CSS-wide keywords, see https://www.w3.org/TR/css-cascade-3/#defaulting-keywords.
   if (params.components.size() == 1 && params.components.front().isToken<css::Token::Ident>()) {
@@ -190,8 +199,32 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   const std::vector<css::Declaration> declarations =
       css::DeclarationListParser::ParseOnlyDeclarations(str);
   for (const auto& declaration : declarations) {
-    [[maybe_unused]] auto error = parseProperty(declaration, kSpecificityStyleAttribute);
-    // Ignore errors.
+    std::ignore = parseProperty(declaration, kSpecificityStyleAttribute);
+  }
+}
+
+void PropertyRegistry::parsePresentationAttribute(std::string_view name, std::string_view value) {
+  /* TODO: The SVG2 spec says the name may be similar to the attribute, not necessarily the same.
+   * There may need to be a second mapping.
+   */
+  /* TODO: For attributes, fields may be unitless, in which case they are specified in "user units",
+   * see https://www.w3.org/TR/SVG2/coords.html#TermUserUnits. For this case, the spec says to
+   * adjust the grammar to modify things like <length> to [<length> | <number>], see
+   * https://www.w3.org/TR/SVG2/types.html#syntax.
+   *
+   * In practice, we should propagate an "allowUserUnits" flag. "User units" are specified as being
+   * equivalent to pixels.
+   */
+  const auto it = kProperties.find(frozen::string(name));
+  if (it != kProperties.end()) {
+    std::vector<css::ComponentValue> components = css::ValueParser::Parse(value);
+
+    PropertyParseFnParams params;
+    // Trim both leading and trailing whitespace.
+    params.components = trimWhitespace(components);
+    params.specificity = kSpecificityPresentationAttribute;
+
+    std::ignore = it->second(*this, params);
   }
 }
 

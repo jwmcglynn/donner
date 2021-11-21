@@ -95,6 +95,15 @@ public:
    * @param str Input string.
    */
   void parseStyle(std::string_view str);
+
+  /**
+   * Parse a presentation attribute, which can contain a CSS value.
+   *
+   * @see https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
+   * @param name Name of the attribute.
+   * @param value Value of the attribute, parsed as a CSS value.
+   */
+  void parsePresentationAttribute(std::string_view name, std::string_view value);
 };
 
 }  // namespace donner::svg
