@@ -63,4 +63,83 @@ TEST(XmlParser, Warning) {
               ElementsAre(ParseWarningIs(2, 24, "Failed to parse number: Invalid argument")));
 }
 
+TEST(XmlParser, InvalidXmlns) {
+  std::string simpleXml =
+      R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="invalid">
+</svg>)";
+
+  std::vector<ParseError> warnings;
+  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+
+  EXPECT_THAT(warnings, ElementsAre(ParseErrorIs("Unexpected namespace 'invalid'")));
+}
+
+TEST(XmlParser, PrefixedXmlns) {
+  std::string xmlnsXml =
+      R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+  <svg:path d="M 100 100 h 2" />
+</svg:svg>)";
+
+  std::vector<ParseError> warnings;
+  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(xmlnsXml), &warnings), NoParseError());
+
+  EXPECT_THAT(warnings, ElementsAre());
+}
+
+TEST(XmlParser, MismatchedNamespace) {
+  {
+    std::string mismatchedSvgXmlnsXml =
+        R"(<svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+  <svg:path d="M 100 100 h 2" />
+</svg>)";
+
+    std::vector<ParseError> warnings;
+    EXPECT_THAT(
+        XMLParser::ParseSVG(spanFromString(mismatchedSvgXmlnsXml), &warnings),
+        AllOf(ParseErrorPos(1, 1), ParseErrorIs("<svg> has a mismatched namespace prefix")));
+  }
+
+  {
+    std::string mismatchedXmlnsXml =
+        R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+  <path d="M 100 100 h 2" />
+</svg:svg>)";
+
+    std::vector<ParseError> warnings;
+    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(mismatchedXmlnsXml), &warnings), NoParseError());
+
+    EXPECT_THAT(
+        warnings,
+        ElementsAre(AllOf(ParseErrorPos(2, 3),
+                          ParseErrorIs("Ignored element <path> with an unsupported namespace"))));
+  }
+
+  {
+    std::string invalidNsXml =
+        R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+  <other:path d="M 100 100 h 2" />
+</svg:svg>)";
+
+    std::vector<ParseError> warnings;
+    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(invalidNsXml), &warnings),
+                AllOf(ParseErrorPos(2, 3), ParseErrorIs("No namespace definition found")));
+  }
+
+  {
+    std::string invalidAttributeNsXml =
+        R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+  <svg:path svg:d="M 100 100 h 2" />
+</svg:svg>)";
+
+    std::vector<ParseError> warnings;
+    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(invalidAttributeNsXml), &warnings),
+                NoParseError());
+
+    EXPECT_THAT(warnings,
+                ElementsAre(AllOf(
+                    ParseErrorPos(2, 12),
+                    ParseErrorIs("Ignored attribute 'svg:d' with an unsupported namespace"))));
+  }
+}
+
 }  // namespace donner

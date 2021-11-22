@@ -16,14 +16,18 @@ struct ParserOrigin {
 class XMLParserContext {
 public:
   XMLParserContext(std::string_view input, std::vector<ParseError>* warningsStorage)
-      : input_(input), line_offsets_(input), warnings_(warningsStorage) {}
+      : input_(input), lineOffsets_(input), warnings_(warningsStorage) {}
+
+  void setNamespacePrefix(std::string_view namespacePrefix) { namespacePrefix_ = namespacePrefix; }
+
+  std::string_view namespacePrefix() const { return namespacePrefix_; }
 
   ParseError fromSubparser(ParseError&& error, ParserOrigin origin) {
-    const size_t line = line_offsets_.offsetToLine(origin.startOffset);
+    const size_t line = lineOffsets_.offsetToLine(origin.startOffset);
 
     ParseError newError = std::move(error);
     if (newError.line == 0) {
-      newError.offset += origin.startOffset - line_offsets_.lineOffset(line);
+      newError.offset += origin.startOffset - lineOffsets_.lineOffset(line);
     }
     newError.line += line;
     return newError;
@@ -57,17 +61,19 @@ public:
    * @param offset Character index.
    * @return size_t Line number, 1-indexed.
    */
-  size_t offsetToLine(size_t offset) const { return line_offsets_.offsetToLine(offset); }
+  size_t offsetToLine(size_t offset) const { return lineOffsets_.offsetToLine(offset); }
 
   /**
    * Returns the offset of a given 1-indexed line number.
    */
-  size_t lineOffset(size_t line) const { return line_offsets_.lineOffset(line); }
+  size_t lineOffset(size_t line) const { return lineOffsets_.lineOffset(line); }
 
 private:
   std::string_view input_;
-  LineOffsets line_offsets_;
+  LineOffsets lineOffsets_;
   std::vector<ParseError>* warnings_;
+
+  std::string_view namespacePrefix_;
 };
 
 }  // namespace donner

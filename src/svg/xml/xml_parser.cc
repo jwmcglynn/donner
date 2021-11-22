@@ -46,6 +46,7 @@ static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
 }
 
 static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, SVGElement element,
+                                                      std::string_view namespacePrefix,
                                                       std::string_view name,
                                                       std::string_view value) {
   if (name == "id") {
@@ -66,27 +67,32 @@ static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context,
 
 template <typename T>
 std::optional<ParseError> ParseAttribute(XMLParserContext& context, T element,
-                                         std::string_view name, std::string_view value) {
-  return ParseCommonAttribute(context, element, name, value);
+                                         std::string_view namespacePrefix, std::string_view name,
+                                         std::string_view value) {
+  return ParseCommonAttribute(context, element, namespacePrefix, name, value);
 }
 
 template <>
 std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& context,
                                                          SVGPathElement element,
+                                                         std::string_view namespacePrefix,
                                                          std::string_view name,
                                                          std::string_view value) {
   if (name == "d") {
     if (auto warning = element.setD(value)) {
       context.addSubparserWarning(std::move(warning.value()), context.parserOriginFrom(value));
     }
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
   }
 
-  return ParseCommonAttribute(context, element, name, value);
+  return std::nullopt;
 }
 
 template <>
 std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& context,
                                                         SVGSVGElement element,
+                                                        std::string_view namespacePrefix,
                                                         std::string_view name,
                                                         std::string_view value) {
   if (name == "viewBox") {
@@ -120,14 +126,19 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setHeight(length.value());
     }
+  } else if (namespacePrefix == "xmlns" || name == "xmlns") {
+    // This was already parsed by @ref ParseXmlNsAttribute.
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
   }
 
-  return ParseCommonAttribute(context, element, name, value);
+  return std::nullopt;
 }
 
 template <>
 std::optional<ParseError> ParseAttribute<SVGRectElement>(XMLParserContext& context,
                                                          SVGRectElement element,
+                                                         std::string_view namespacePrefix,
                                                          std::string_view name,
                                                          std::string_view value) {
   if (name == "x") {
@@ -154,18 +165,54 @@ std::optional<ParseError> ParseAttribute<SVGRectElement>(XMLParserContext& conte
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setRy(length.value());
     }
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
   }
 
-  return ParseCommonAttribute(context, element, name, value);
+  return std::nullopt;
+}
+
+void ParseXmlNsAttribute(XMLParserContext& context, rapidxml_ns::xml_node<>* node) {
+  for (rapidxml_ns::xml_attribute<>* i = node->first_attribute(); i; i = i->next_attribute()) {
+    const std::string_view name = std::string_view(i->local_name(), i->local_name_size());
+    const std::string_view namespacePrefix = std::string_view(i->prefix(), i->prefix_size());
+    const std::string_view value = std::string_view(i->value(), i->value_size());
+
+    if (name == "xmlns" || namespacePrefix == "xmlns") {
+      // We need to handle the namespacePrefix special for handling for xmlns, which may be in the
+      // format of `xmlns:namespace`, swapping the name with the namespace.
+      if (value != "http://www.w3.org/2000/svg") {
+        ParseError err;
+        err.reason = "Unexpected namespace '" + std::string(value) + "'";
+        context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+      }
+
+      if (namespacePrefix == "xmlns") {
+        context.setNamespacePrefix(name);
+      }
+
+      break;
+    }
+  }
 }
 
 template <typename T>
 ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
                                         rapidxml_ns::xml_node<>* node) {
   for (rapidxml_ns::xml_attribute<>* i = node->first_attribute(); i; i = i->next_attribute()) {
-    const std::string_view name = std::string_view(i->name(), i->name_size());
+    const std::string_view namespacePrefix = std::string_view(i->prefix(), i->prefix_size());
+    const std::string_view name = std::string_view(i->local_name(), i->local_name_size());
     const std::string_view value = std::string_view(i->value(), i->value_size());
-    if (auto error = ParseAttribute(context, element, name, value)) {
+
+    if (!namespacePrefix.empty() && namespacePrefix != "xmlns") {
+      ParseError err;
+      err.reason = "Ignored attribute '" + std::string(i->name(), i->name_size()) +
+                   "' with an unsupported namespace";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(namespacePrefix));
+      continue;
+    }
+
+    if (auto error = ParseAttribute(context, element, namespacePrefix, name, value)) {
       return std::move(error.value());
     }
   }
@@ -208,12 +255,22 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
   bool foundRootSvg = false;
 
   for (rapidxml_ns::xml_node<>* i = rootNode->first_node(); i; i = i->next_sibling()) {
-    const std::string_view name = std::string_view(i->name(), i->name_size());
-    std::cout << TypeToString(i->type()) << ": " << std::string_view(i->prefix(), i->prefix_size())
-              << name << std::endl;
+    const std::string_view name = std::string_view(i->local_name(), i->local_name_size());
+    const std::string_view namespacePrefix = std::string_view(i->prefix(), i->prefix_size());
+    std::cout << TypeToString(i->type()) << ": " << std::string_view(i->name(), i->name_size())
+              << std::endl;
 
     if (i->type() == rapidxml_ns::node_element) {
       if (element) {
+        // TODO: Create an SVGUnknownElement if the namespace doesn't match?
+        if (namespacePrefix != context.namespacePrefix()) {
+          ParseError err;
+          err.reason = "Ignored element <" + std::string(i->name(), i->name_size()) +
+                       "> with an unsupported namespace";
+          context.addSubparserWarning(std::move(err), context.parserOriginFrom(namespacePrefix));
+          continue;
+        }
+
         auto maybeNewElement = CreateElement(context, svgDocument, name, i, SVGElements());
         if (maybeNewElement.hasError()) {
           return std::move(maybeNewElement.error());
@@ -226,19 +283,28 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
       } else {
         // First node must be SVG.
         if (name == "svg" && !foundRootSvg) {
+          ParseXmlNsAttribute(context, i);
+
           auto maybeSvgElement = ParseAttributes(context, svgDocument.svgElement(), i);
           if (maybeSvgElement.hasError()) {
             return std::move(maybeSvgElement.error());
           }
-          foundRootSvg = true;
 
+          if (namespacePrefix != context.namespacePrefix()) {
+            ParseError err;
+            err.reason = "<" + std::string(i->name(), i->name_size()) +
+                         "> has a mismatched namespace prefix";
+            return context.fromSubparser(std::move(err), context.parserOriginFrom(namespacePrefix));
+          }
+
+          foundRootSvg = true;
           if (auto error = WalkChildren(context, svgDocument, maybeSvgElement.result(), i)) {
             return error;
           }
         } else {
           ParseError err;
-          err.reason = foundRootSvg ? ("Unexpected element <" + std::string(name) + "> at root")
-                                    : "First element must be <svg>";
+          err.reason =
+              "Unexpected element <" + std::string(name) + "> at root, first element must be <svg>";
           return err;
         }
       }
