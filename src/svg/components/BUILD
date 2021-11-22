@@ -16,6 +16,7 @@ cc_library(
         "rect_component.h",
         "registry.h",
         "sized_element_component.h",
+        "style_component.h",
         "transform_component.h",
         "tree_component.h",
         "viewbox_component.h",
@@ -24,6 +25,7 @@ cc_library(
     deps = [
         "//src/base",
         "//src/svg/parser",
+        "//src/svg/properties",
         "@entt",
     ],
 )

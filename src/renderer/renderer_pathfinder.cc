@@ -3,6 +3,7 @@
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/sized_element_component.h"
+#include "src/svg/components/style_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
@@ -19,6 +20,11 @@ static PFTransform2F toPF(const Transformd& transform) {
   return PFTransform2F{PFMatrix2x2F{float(transform.data[0]), float(transform.data[2]),
                                     float(transform.data[1]), float(transform.data[3])},
                        PFVector2F{float(transform.data[4]), float(transform.data[5])}};
+}
+
+static PFColorU toPF(const css::Color color) {
+  // TODO: We need to resolve currentColor before getting here.
+  return PFColorU{color.rgba().r, color.rgba().g, color.rgba().b, color.rgba().a};
 }
 
 }  // namespace
@@ -56,7 +62,7 @@ void RendererPathfinder::draw(SVGDocument& document) {
   draw(document.registry(), document.rootEntity());
 }
 
-void RendererPathfinder::drawPath(const PathSpline& spline) {
+void RendererPathfinder::drawPath(const PathSpline& spline, bool fill, bool stroke) {
   PFPathRef path = PFPathCreate();
   const std::vector<Vector2d>& points = spline.points();
 
@@ -87,7 +93,21 @@ void RendererPathfinder::drawPath(const PathSpline& spline) {
   }
 
   PFCanvasSetLineWidth(canvas_, 1.0f);
-  PFCanvasStrokePath(canvas_, path);
+
+  if (fill) {
+    PFPathRef clonedPath = nullptr;
+
+    if (stroke) {
+      clonedPath = PFPathClone(path);
+    }
+
+    PFCanvasFillPath(canvas_, path);
+    path = clonedPath;
+  }
+
+  if (stroke) {
+    PFCanvasStrokePath(canvas_, path);
+  }
 }
 
 void RendererPathfinder::render() {
@@ -116,9 +136,59 @@ void RendererPathfinder::draw(Registry& registry, Entity root) {
     PFTransform2F pfTransform = toPF(transform);
     PFCanvasSetTransform(canvas_, &pfTransform);
 
-    if (const auto* path = registry.try_get<ComputedPathComponent>(entity)) {
-      if (auto maybeSpline = path->spline()) {
-        drawPath(*maybeSpline);
+    bool paintFill = true;
+    bool paintStroke = true;
+
+    const StyleComponent& style = registry.get_or_emplace<StyleComponent>(entity);
+    {
+      std::optional<svg::PaintServer> fill = style.properties.fill.get();
+
+      if (fill.has_value()) {
+        if (fill.value().is<svg::PaintServer::Solid>()) {
+          const svg::PaintServer::Solid& solid = fill.value().get<svg::PaintServer::Solid>();
+
+          PFColorU solidColor = toPF(solid.color);
+          PFFillStyleRef fillStyle = PFFillStyleCreateColor(&solidColor);
+          PFCanvasSetFillStyle(canvas_, fillStyle);
+          PFFillStyleDestroy(fillStyle);
+        } else if (fill.value().is<svg::PaintServer::None>()) {
+          paintFill = false;
+        } else {
+          // TODO: Other paint types.
+          paintFill = false;
+        }
+      } else {
+        paintFill = false;
+      }
+    }
+
+    {
+      std::optional<svg::PaintServer> stroke = style.properties.stroke.get();
+
+      if (stroke.has_value()) {
+        if (stroke.value().is<svg::PaintServer::Solid>()) {
+          const svg::PaintServer::Solid& solid = stroke.value().get<svg::PaintServer::Solid>();
+
+          PFColorU solidColor = toPF(solid.color);
+          PFFillStyleRef fillStyle = PFFillStyleCreateColor(&solidColor);
+          PFCanvasSetStrokeStyle(canvas_, fillStyle);
+          PFFillStyleDestroy(fillStyle);
+        } else if (stroke.value().is<svg::PaintServer::None>()) {
+          paintStroke = false;
+        } else {
+          // TODO: Other paint types.
+          paintStroke = false;
+        }
+      } else {
+        paintStroke = false;
+      }
+    }
+
+    if (paintFill || paintStroke) {
+      if (const auto* path = registry.try_get<ComputedPathComponent>(entity)) {
+        if (auto maybeSpline = path->spline()) {
+          drawPath(*maybeSpline, paintFill, paintStroke);
+        }
       }
     }
 

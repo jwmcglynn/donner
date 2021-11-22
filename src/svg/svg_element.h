@@ -32,6 +32,9 @@ public:
   Transformd transform() const;
   void setTransform(Transformd transform);
 
+  void setStyle(std::string_view style);
+  bool trySetPresentationAttribute(std::string_view name, std::string_view value);
+
   std::optional<SVGElement> parentElement();
   std::optional<SVGElement> firstChild();
   std::optional<SVGElement> lastChild();

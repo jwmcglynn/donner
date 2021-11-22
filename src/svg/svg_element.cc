@@ -4,6 +4,7 @@
 
 #include "src/svg/components/class_component.h"
 #include "src/svg/components/id_component.h"
+#include "src/svg/components/style_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 
@@ -67,6 +68,15 @@ Transformd SVGElement::transform() const {
 void SVGElement::setTransform(Transformd transform) {
   auto& component = registry_.get().get_or_emplace<TransformComponent>(entity_);
   component.transform = transform;
+}
+
+void SVGElement::setStyle(std::string_view style) {
+  registry_.get().get_or_emplace<StyleComponent>(entity_).setStyle(style);
+}
+
+bool SVGElement::trySetPresentationAttribute(std::string_view name, std::string_view value) {
+  return registry_.get().get_or_emplace<StyleComponent>(entity_).trySetPresentationAttribute(name,
+                                                                                             value);
 }
 
 std::optional<SVGElement> SVGElement::parentElement() {

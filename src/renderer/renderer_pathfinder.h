@@ -17,7 +17,7 @@ public:
   ~RendererPathfinder();
 
   void draw(SVGDocument& document);
-  void drawPath(const PathSpline& spline);
+  void drawPath(const PathSpline& spline, bool fill, bool stroke);
 
   void render();
 

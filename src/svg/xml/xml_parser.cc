@@ -61,6 +61,15 @@ static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context,
     } else {
       element.setTransform(maybeTransform.result());
     }
+  } else if (name == "style") {
+    element.setStyle(value);
+  } else {
+    // Try to parse as a presentation attribute.
+    if (!element.trySetPresentationAttribute(name, value)) {
+      ParseError err;
+      err.reason = "Unknown attribute '" + std::string(name) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
   }
   return std::nullopt;
 }

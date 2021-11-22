@@ -31,6 +31,19 @@ TEST(XmlParser, Simple) {
   EXPECT_THAT(warnings, ElementsAre());
 }
 
+TEST(XmlParser, Style) {
+  std::string simpleXml =
+      R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <rect x="5" y="5" width="90" height="90" stroke="red" />
+  <rect x="10" y="10" width="80" height="80" fill="green" />
+</svg>)";
+
+  std::vector<ParseError> warnings;
+  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+
+  EXPECT_THAT(warnings, ElementsAre());
+}
+
 TEST(XmlParser, XmlParseErrors) {
   {
     std::string badXml = R"(<!)";
