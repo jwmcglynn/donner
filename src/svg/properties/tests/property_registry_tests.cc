@@ -118,6 +118,13 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
 
   {
     PropertyRegistry registry;
+    EXPECT_TRUE(registry.parsePresentationAttribute("color", ""));
+    EXPECT_FALSE(registry.color.hasValue());
+    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+  }
+
+  {
+    PropertyRegistry registry;
     EXPECT_TRUE(registry.parsePresentationAttribute("color", "invalid"));
     EXPECT_FALSE(registry.color.hasValue());
     EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
@@ -154,6 +161,13 @@ TEST(PropertyRegistry, Fill) {
     registry.parseStyle("fill: red  ");
     EXPECT_THAT(registry.fill.get(),
                 Optional(PaintServer(PaintServer::Solid(Color(RGBA(0xFF, 0, 0, 0xFF))))));
+  }
+
+  {
+    PropertyRegistry registry;
+    EXPECT_TRUE(registry.parsePresentationAttribute("fill", ""));
+    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
   }
 
   {
@@ -199,6 +213,13 @@ TEST(PropertyRegistry, Fill) {
     EXPECT_THAT(
         registry.fill.get(),
         Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("fill: url(#test) invalid");
+    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
   }
 }
 
