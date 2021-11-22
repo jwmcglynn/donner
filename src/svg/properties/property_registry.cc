@@ -203,7 +203,7 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-void PropertyRegistry::parsePresentationAttribute(std::string_view name, std::string_view value) {
+bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::string_view value) {
   /* TODO: The SVG2 spec says the name may be similar to the attribute, not necessarily the same.
    * There may need to be a second mapping.
    */
@@ -225,7 +225,10 @@ void PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
     params.specificity = kSpecificityPresentationAttribute;
 
     std::ignore = it->second(*this, params);
+    return true;
   }
+
+  return false;  // Attribute was not supported.
 }
 
 }  // namespace donner::svg

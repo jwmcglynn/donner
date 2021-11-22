@@ -47,7 +47,7 @@ public:
      * Get the property value, without considering inheritance. Returns the initial value if the
      * property has not been set.
      */
-    std::optional<T> get() { return state == PropertyState::Set ? value : getInitialFn(); }
+    std::optional<T> get() const { return state == PropertyState::Set ? value : getInitialFn(); }
     void set(std::optional<T> newValue, uint32_t newSpecificity) {
       value = std::move(newValue);
       state = PropertyState::Set;
@@ -102,8 +102,9 @@ public:
    * @see https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
    * @param name Name of the attribute.
    * @param value Value of the attribute, parsed as a CSS value.
+   * @return true if the attribute name was supported.
    */
-  void parsePresentationAttribute(std::string_view name, std::string_view value);
+  bool parsePresentationAttribute(std::string_view name, std::string_view value);
 };
 
 }  // namespace donner::svg
