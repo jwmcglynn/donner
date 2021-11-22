@@ -515,7 +515,7 @@ namespace rapidxml_ns
                             node->namespace_uri((*it)->value(), (*it)->value_size());
                             return;
                         }
-                    RAPIDXML_PARSE_ERROR("No namespace definition found", 0);
+                    RAPIDXML_PARSE_ERROR("No namespace definition found", const_cast<Ch *>(prefix));
                 }
 
             private:
@@ -868,8 +868,8 @@ namespace rapidxml_ns
         xml_base()
             : m_local_name(0)
             , m_name(0)
-            , m_namespace_uri(0)
             , m_value(0)
+            , m_namespace_uri(0)
             , m_parent(0)
         {
         }
