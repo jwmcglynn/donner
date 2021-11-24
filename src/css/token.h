@@ -20,8 +20,7 @@ struct Token {
 
     bool operator==(const Ident& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Ident& obj) {
-      os << "Ident(" << obj.value << ")";
-      return os;
+      return os << "Ident(" << obj.value << ")";
     }
 
     RcString value;
@@ -33,8 +32,7 @@ struct Token {
 
     bool operator==(const Function& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Function& obj) {
-      os << "Function(" << obj.name << ")";
-      return os;
+      return os << "Function(" << obj.name << ")";
     }
 
     /// Does not include the '(' character.
@@ -47,8 +45,7 @@ struct Token {
 
     bool operator==(const AtKeyword& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const AtKeyword& obj) {
-      os << "AtKeyword(" << obj.value << ")";
-      return os;
+      return os << "AtKeyword(" << obj.value << ")";
     }
 
     /// The value, not including the '@' character.
@@ -63,9 +60,8 @@ struct Token {
 
     bool operator==(const Hash& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Hash& obj) {
-      os << "Hash(" << (obj.type == Hash::Type::Unrestricted ? "unrestricted" : "id") << ": "
-         << obj.name << ")";
-      return os;
+      return os << "Hash(" << (obj.type == Hash::Type::Unrestricted ? "unrestricted" : "id") << ": "
+                << obj.name << ")";
     }
 
     /// Hash type, defaults to unrestricted if not otherwise set.
@@ -81,8 +77,7 @@ struct Token {
 
     bool operator==(const String& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const String& obj) {
-      os << "String(\"" << obj.value << "\")";
-      return os;
+      return os << "String(\"" << obj.value << "\")";
     }
 
     RcString value;
@@ -94,8 +89,7 @@ struct Token {
 
     bool operator==(const BadString& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const BadString& obj) {
-      os << "BadString(\"" << obj.value << "\")";
-      return os;
+      return os << "BadString(\"" << obj.value << "\")";
     }
 
     RcString value;
@@ -107,8 +101,7 @@ struct Token {
 
     bool operator==(const Url& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Url& obj) {
-      os << "Url(" << obj.value << ")";
-      return os;
+      return os << "Url(" << obj.value << ")";
     }
 
     RcString value;
@@ -117,10 +110,7 @@ struct Token {
   /// `<bad-url-token>`
   struct BadUrl {
     bool operator==(const BadUrl&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const BadUrl&) {
-      os << "BadUrl";
-      return os;
-    }
+    friend std::ostream& operator<<(std::ostream& os, const BadUrl&) { return os << "BadUrl"; }
   };
 
   /// `<delim-token>`
@@ -129,8 +119,7 @@ struct Token {
 
     bool operator==(const Delim& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Delim& obj) {
-      os << "Delim(" << obj.value << ")";
-      return os;
+      return os << "Delim(" << obj.value << ")";
     }
 
     char value;
@@ -143,9 +132,8 @@ struct Token {
 
     bool operator==(const Number& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Number& obj) {
-      os << "Number(" << obj.value << ", str='" << obj.valueString << "', "
-         << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
-      return os;
+      return os << "Number(" << obj.value << ", str='" << obj.valueString << "', "
+                << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
     }
 
     double value;
@@ -160,9 +148,8 @@ struct Token {
 
     bool operator==(const Percentage& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Percentage& obj) {
-      os << "Percentage(" << obj.value << ", str='" << obj.valueString << "', "
-         << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
-      return os;
+      return os << "Percentage(" << obj.value << ", str='" << obj.valueString << "', "
+                << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
     }
 
     double value;  //< The percentage multiplied by 100, 100% -> 100.0
@@ -180,9 +167,8 @@ struct Token {
 
     bool operator==(const Dimension& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Dimension& obj) {
-      os << "Dimension(" << obj.value << obj.suffix << ", str='" << obj.valueString << "', "
-         << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
-      return os;
+      return os << "Dimension(" << obj.value << obj.suffix << ", str='" << obj.valueString << "', "
+                << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
     }
 
     double value;
@@ -197,8 +183,7 @@ struct Token {
 
     bool operator==(const Whitespace& other) const = default;
     friend std::ostream& operator<<(std::ostream& os, const Whitespace& obj) {
-      os << "Whitespace('" << obj.value << "', len=" << obj.value.size() << ")";
-      return os;
+      return os << "Whitespace('" << obj.value << "', len=" << obj.value.size() << ")";
     }
 
     RcString value;
@@ -208,8 +193,7 @@ struct Token {
   struct CDO {
     bool operator==(const CDO&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const CDO&) {
-      os << "CDO";
-      return os;
+      return os << "CDO";
     }
   };
 
@@ -217,8 +201,7 @@ struct Token {
   struct CDC {
     bool operator==(const CDC&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const CDC&) {
-      os << "CDC";
-      return os;
+      return os << "CDC";
     }
   };
 
@@ -226,8 +209,7 @@ struct Token {
   struct Colon {
     bool operator==(const Colon&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const Colon&) {
-      os << "Colon";
-      return os;
+      return os << "Colon";
     }
   };
 
@@ -235,8 +217,7 @@ struct Token {
   struct Semicolon {
     bool operator==(const Semicolon&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const Semicolon&) {
-      os << "Semicolon";
-      return os;
+      return os << "Semicolon";
     }
   };
 
@@ -253,8 +234,7 @@ struct Token {
   struct SquareBracket {
     bool operator==(const SquareBracket&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const SquareBracket&) {
-      os << "SquareBracket";
-      return os;
+      return os << "SquareBracket";
     }
   };
 
@@ -262,8 +242,7 @@ struct Token {
   struct Parenthesis {
     bool operator==(const Parenthesis&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const Parenthesis&) {
-      os << "Parenthesis";
-      return os;
+      return os << "Parenthesis";
     }
   };
 
@@ -271,8 +250,7 @@ struct Token {
   struct CurlyBracket {
     bool operator==(const CurlyBracket&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const CurlyBracket&) {
-      os << "CurlyBracket";
-      return os;
+      return os << "CurlyBracket";
     }
   };
 
@@ -280,8 +258,7 @@ struct Token {
   struct CloseSquareBracket {
     bool operator==(const CloseSquareBracket&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const CloseSquareBracket&) {
-      os << "CloseSquareBracket";
-      return os;
+      return os << "CloseSquareBracket";
     }
   };
 
@@ -289,8 +266,7 @@ struct Token {
   struct CloseParenthesis {
     bool operator==(const CloseParenthesis&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const CloseParenthesis&) {
-      os << "CloseParenthesis";
-      return os;
+      return os << "CloseParenthesis";
     }
   };
 
@@ -298,8 +274,7 @@ struct Token {
   struct CloseCurlyBracket {
     bool operator==(const CloseCurlyBracket&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const CloseCurlyBracket&) {
-      os << "CloseCurlyBracket";
-      return os;
+      return os << "CloseCurlyBracket";
     }
   };
 
@@ -317,8 +292,7 @@ struct Token {
         case Type::EofInComment: os << "EofInComment"; break;
         case Type::EofInUrl: os << "EofInUrl"; break;
       }
-      os << ")";
-      return os;
+      return os << ")";
     }
 
     Type type;
@@ -328,8 +302,7 @@ struct Token {
   struct EofToken {
     bool operator==(const EofToken&) const { return true; }
     friend std::ostream& operator<<(std::ostream& os, const EofToken&) {
-      os << "EofToken";
-      return os;
+      return os << "EofToken";
     }
   };
 
