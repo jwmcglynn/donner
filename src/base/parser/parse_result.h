@@ -80,6 +80,15 @@ public:
     }
   }
 
+  template <typename Target, typename Functor>
+  ParseResult<Target> mapError(Functor&& functor) {
+    if (hasError()) {
+      return ParseResult<Target>(functor(std::move(error_.value())));
+    } else {
+      return ParseResult<Target>(std::move(result_.value()));
+    }
+  }
+
 private:
   std::optional<T> result_;
   std::optional<ParseError> error_;

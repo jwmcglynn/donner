@@ -90,6 +90,24 @@ TEST(ParseResult, Map) {
               ParseErrorIs("Test error please ignore"));
 }
 
+TEST(ParseResult, MapError) {
+  auto mapFn = [](ParseError&& error) {
+    error.reason = "Updated message";
+    return std::move(error);
+  };
+
+  ParseResult<int> withResult = 42;
+  EXPECT_THAT(withResult.mapError<int>(mapFn), ParseResultIs(42));
+
+  ParseResult<int> withError = []() -> ParseResult<int> {
+    ParseError error;
+    error.reason = "Test error please ignore";
+    return error;
+  }();
+
+  EXPECT_THAT(withError.mapError<int>(mapFn), ParseErrorIs("Updated message"));
+}
+
 TEST(ParseResultTestUtils, PrintTo) {
   ParseResult<int> withResult = 42;
   EXPECT_EQ(testing::PrintToString(withResult), "ParseResult { result: 42 }");
