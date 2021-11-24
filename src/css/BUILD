@@ -10,6 +10,7 @@ cc_library(
         "color.h",
         "declaration.h",
         "rule.h",
+        "selector.h",
         "token.h",
     ],
     visibility = [

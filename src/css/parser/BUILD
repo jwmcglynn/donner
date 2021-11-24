@@ -7,6 +7,7 @@ cc_library(
         "color_parser.cc",
         "declaration_list_parser.cc",
         "rule_parser.cc",
+        "selector_parser.cc",
         "value_parser.cc",
     ],
     hdrs = [
@@ -16,6 +17,7 @@ cc_library(
         "details/subparsers.h",
         "details/tokenizer.h",
         "rule_parser.h",
+        "selector_parser.h",
         "value_parser.h",
     ],
     visibility = ["//src/svg:__subpackages__"],
@@ -33,6 +35,7 @@ cc_test(
         "tests/common_tests.cc",
         "tests/declaration_list_parser_tests.cc",
         "tests/rule_parser_tests.cc",
+        "tests/selector_parser_tests.cc",
         "tests/token_test_utils.cc",
         "tests/token_test_utils.h",
         "tests/tokenizer_tests.cc",
