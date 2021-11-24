@@ -5,6 +5,14 @@
 
 namespace donner {
 
+TEST(ParseError, ResolveOffset) {
+  ParseError err;
+  err.offset = ParseError::kEndOfString;
+
+  std::string_view sourceString = "abcdef";
+  EXPECT_EQ(err.resolveOffset(sourceString), 6);
+}
+
 TEST(ParseError, Output) {
   ParseError err;
   err.reason = "Test reason";
