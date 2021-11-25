@@ -90,3 +90,14 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "selector_parser_fuzzer",
+    srcs = [
+        "tests/selector_parser_fuzzer.cc",
+    ],
+    corpus = "tests/selector_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)

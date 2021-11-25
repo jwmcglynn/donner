@@ -1,0 +1,190 @@
+(* Base Grammar *)
+
+<selector-list> = <complex-selector-list>
+<relative-selector-list> = <relative-selector> [<whitespace-token>? <comma-token> <whitespace-token>? <relative-selector>]*
+<compound-selector-list> = <compound-selector> [<whitespace-token>? <comma-token> <whitespace-token>? <compound-selector>]*
+<simple-selector-list> = <simple-selector> [<whitespace-token>? <comma-token> <whitespace-token>? <simple-selector>]*
+
+<complex-selector-list> = <complex-selector> [<whitespace-token>? <comma-token> <whitespace-token>? <complex-selector>]*
+
+<complex-selector> = <compound-selector> [ <whitespace-token>? <combinator>? <whitespace-token>? <compound-selector> ]*
+
+<relative-selector> = <combinator>? <whitespace-token>? <complex-selector>
+<compound-selector> = [ <type-selector>? <subclass-selector>*
+                        [ <pseudo-element-selector> <pseudo-class-selector>* ]* ]!
+
+<simple-selector> = <type-selector> | <subclass-selector>
+
+<combinator> = '>' | '+' | '~' | [ '|' '|' ]
+
+<type-selector> = <wq-name> | <ns-prefix>? '*'
+
+<ns-prefix> = [ <ident-token> | '*' ]? '|'
+
+<wq-name> = <ns-prefix>? <ident-token>
+
+<subclass-selector> = <id-selector> | <class-selector> |
+                      <attribute-selector> | <pseudo-class-selector>
+
+<id-selector> = <hash-token>
+
+<class-selector> = '.' <ident-token>
+
+(* This this resolves to a simple block with a '[' first token *)
+<attribute-selector> = '[' <whitespace-token>? <wq-name> <whitespace-token>? ']' |
+                       '[' <whitespace-token>? <wq-name> <whitespace-token>? <attr-matcher> <whitespace-token>? [ <string-token> | <ident-token> ] <whitespace-token>? <attr-modifier>? <whitespace-token>? ']'
+
+<attr-matcher> = [ '~' | '|' | '^' | '$' | '*' ]? '='
+
+(* Note that this is a new feature in CSS Selectors Level 4 *)
+<attr-modifier> = i
+
+<pseudo-class-selector> = ':' <ident-token> |
+                          ':' <function-token> <any-value> ')'
+
+<pseudo-element-selector> = ':' <pseudo-class-selector>
+
+
+FIRSTS table
+
+<selector-list> = <complex-selector-list>
+
+<complex-selector-list> = <complex-selector>#
+
+<compound-selector-list> = <compound-selector>#
+<simple-selector-list> = <simple-selector>#
+<relative-selector-list> = <relative-selector>#
+
+<complex-selector> = <ident-token> | '*' | '|' | <hash-token> | '.' | <[-token> | ':'
+<relative-selector> = '>' | '+' | '~' | '|' | <ident-token> | '*' | <hash-token> | '.' | <[-token> | ':' | <whitespace-token>
+<compound-selector> = <ident-token> | '*' | '|' | <hash-token> | '.' | <[-token> | ':'
+<simple-selector> = <ident-token> | '*' | '|' | <hash-token> | '.' | <[-token> | ':'
+<combinator> = '>' | '+' | '~' | '|'
+<type-selector> = <ident-token> | '*' | '|'
+<ns-prefix> = <ident-token> | '*' | '|'
+<wq-name> = <ident-token> | '*' | '|'
+<subclass-selector> = <hash-token> | '.' | <[-token> | ':'
+<id-selector> = <hash-token>
+<class-selector> = '.'
+<attribute-selector> = <[-token>
+<attr-matcher> = '~' | '|' | '^' | '$' | '*' | '='
+<attr-modifier> = i
+<pseudo-class-selector> = ':'
+<pseudo-element-selector> = ':'
+
+(* ---------------- *)
+
+(* PREDICT table *)
+
+<selector-list> = <complex-selector-list>
+<relative-selector-list> = <relative-selector> [<whitespace-token>? <comma-token> <whitespace-token>? <relative-selector>]*
+<compound-selector-list> = <compound-selector> [<whitespace-token>? <comma-token> <whitespace-token>? <compound-selector>]*
+<simple-selector-list> = <simple-selector> [<whitespace-token>? <comma-token> <whitespace-token>? <simple-selector>]*
+
+<complex-selector-list> = <complex-selector>
+<complex-selector-list> = <complex-selector> <whitespace-token> <complex-selector-list>
+<complex-selector-list> = <complex-selector> <whitespace-token> <combinator> <complex-selector-list>
+<complex-selector-list> = <complex-selector> <combinator> <complex-selector-list>
+<complex-selector-list> = <complex-selector> <combinator> <whitespace-token> <complex-selector-list>
+
+<complex-selector> = <compound-selector>
+<complex-selector> = <compound-selector> <whitespace-token> <complex-selector>
+<complex-selector> = <compound-selector> <whitespace-token> <combinator> <complex-selector>
+<complex-selector> = <compound-selector> <combinator> <complex-selector>
+<complex-selector> = <compound-selector> <combinator> <whitespace-token> <complex-selector>
+
+<relative-selector> = <complex-selector>
+<relative-selector> = <combinator> <complex-selector>
+<relative-selector> = <whitespace-token> <complex-selector>
+<relative-selector> = <combinator> <whitespace-token> <complex-selector>
+
+<compound-selector> = <type-selector>
+<compound-selector> = <subclass-selector>+
+<compound-selector> = [ <pseudo-element-selector> <pseudo-class-selector>* ]+
+<compound-selector> = <subclass-selector>+ [ <pseudo-element-selector> <pseudo-class-selector>* ]+
+<compound-selector> = <type-selector> [ <pseudo-element-selector> <pseudo-class-selector>* ]+
+<compound-selector> = <type-selector> <subclass-selector>+
+                        [ <pseudo-element-selector> <pseudo-class-selector>* ]+
+  <ident-token> | '|' | '*' -> PREDICT <type-selector>
+  <hash-token> | '.' | <simple-block> | ':' -> PREDICT <subclass-selector>
+  ':' then ':' -> PREDICT <pseudo-element-selector>
+
+<simple-selector>
+  <ident-token> | '|' | '*' -> PREDICT <type-selector>
+  <hash-token> | '.' | <simple-block> | ':' -> PREDICT <subclass-selector>
+
+<combinator> = '>' | '+' | '~' | [ '|' '|' ]
+
+<type-selector>
+  <ident-token> | '|' | [ '*' '|' ] then <ident-token> -> PREDICT <wq-name>
+  <ident-token> | '|' | [ '*' '|' ] then '*' -> PREDICT <ns-prefix> '*'
+  '*' -> PREDICT '*'
+
+<ns-prefix> = '|'
+<ns-prefix> = <ident-token> '|'
+<ns-prefix> = '*' '|'
+
+<wq-name>
+  <ident-token> then '|' -> PREDICT <ns-prefix> <ident-token>
+  '|' -> PREDICT <ns-prefix> <ident-token>
+  '*' -> PREDICT <ns-prefix> <ident-token>
+  <ident-token>  -> PREDICT <ident-token>
+
+<subclass-selector>
+  <hash-token> -> PREDICT <id-selector>
+  '.' -> PREDICT <class-selector>
+  <simple-block> -> PREDICT <attribute-selector>
+  ':' -> PREDICT <pseudo-class-selector>
+
+<id-selector>
+  <hash-token> -> PREDICT <hash-token>
+
+<class-selector>
+  '.' -> PREDICT '.' <ident-token>
+
+(* This this resolves to a simple block with a '[' first token *)
+<attribute-selector> = '[' <whitespace-token>? <wq-name> <whitespace-token>? ']'
+<attribute-selector> = '[' <whitespace-token>? <wq-name> <whitespace-token>? <attr-matcher> <whitespace-token>? [ <string-token> | <ident-token> ] <whitespace-token>? <attr-modifier>? <whitespace-token>? ']'
+  <simple-block> -> PREDICT either, then parse inside
+
+<attr-matcher>
+  '~' | '|' | '^' | '$' | '*' | '=' -> PREDICT [ '~' | '|' | '^' | '$' | '*' ]? '='
+
+(* Note that this is a new feature in CSS Selectors Level 4 *)
+<attr-modifier>
+  i -> PREDICT 'i'
+
+<pseudo-class-selector>
+  ':' <ident-token> -> PREDICT ':' <ident-token>
+  ':' <function-token> -> PREDICT ':' <function-token> <any-value> ')'
+
+<pseudo-element-selector>
+  ':' -> PREDICT ':' <pseudo-class-selector>
+
+(* ---------------- *)
+
+FOLLOWS table
+
+<selector-list> = <complex-selector-list> #EOS
+<relative-selector-list> = #EOS
+<simple-selector-list> = #EOS
+
+<complex-selector-list> = #EOS
+<compound-selector-list> = #EOS
+
+<complex-selector> = <whitespace-token> | <comma-token> | #EOS
+<relative-selector> = <whitespace-token> | <comma-token> | #EOS
+<compound-selector> = <whitespace-token> | FIRSTS(<combinator>) | FIRSTS(<compound-selector>) | <comma-token> | #EOS
+<simple-selector> = <whitespace-token> | <comma-token> | #EOS
+<combinator> = <whitespace-token> | FIRSTS(<complex-selector>) | FIRSTS(<compound-selector>)
+<type-selector> = FIRSTS(<subclass-selector>) | FIRSTS(<pseudo-element-selector>) | <whitespace-token> | FIRSTS(<combinator>) | FIRSTS(<compound-selector>) | <comma-token> | #EOS
+<ns-prefix> = '*' | <ident-token>
+<wq-name> = FOLLOWS(<type-selector>)
+<subclass-selector> = FIRSTS(<pseudo-element-selector>) | FIRSTS(<combinator>) | FIRSTS(<compound-selector>) | <whitespace-token> | <comma-token> | #EOS
+<id-selector> = FOLLOWS(<subclass-selector>)
+<class-selector> = FOLLOWS(<subclass-selector>)
+<attribute-selector> = FOLLOWS(<subclass-selector>)
+<attr-matcher> = FIRSTS(<string-token>) | FIRSTS(<ident-token>)
+<attr-modifier> = <whitespace-token> | ']'
+<pseudo-class-selector> = FIRSTS(<pseudo-element-selector>) | FIRSTS(<combinator>) | FIRSTS(<compound-selector>) | <whitespace-token> | <comma-token> | #EOS
+<pseudo-element-selector> = FOLLOWS(<pseudo-class-selector>)

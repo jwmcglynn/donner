@@ -258,7 +258,8 @@ public:
       size_t prefixLength = 0;  // Invalid if prefixLength is zero.
 
       if (token->is<Token::Ident>()) {
-        prefixLength = 1;
+        // 2 since this would need to be <ident-token> '|' for a <ns-prefix>.
+        prefixLength = 2;
       } else if (token->is<Token::Delim>()) {
         switch (token->get<Token::Delim>().value) {
           case '|': prefixLength = 1; break;
@@ -274,11 +275,13 @@ public:
       }
 
       if (prefixLength > 0) {
-        // To disambiguate between <wq-name> and <ns-prefix>, we need to look ahead for a '*'.
+        // To disambiguate between <wq-name> and <ns-prefix>, we need to look ahead for a '*' after
+        // the <ns-prefix>.
         if (nextDelimIs('*', prefixLength)) {
           auto maybeNsPrefix = handleNsPrefix();
-          assert(maybeNsPrefix.has_value());
-          return TypeSelector{std::move(maybeNsPrefix.value()), "*"};
+          if (maybeNsPrefix.has_value()) {
+            return TypeSelector{std::move(maybeNsPrefix.value()), "*"};
+          }
         } else {
           // Just a <wq-name>.
           auto maybeWqName = handleWqName();
@@ -358,16 +361,33 @@ public:
      *  <ident-token> then '|' -> PREDICT <ns-prefix> <ident-token>
      *  '|' -> PREDICT <ns-prefix> <ident-token>
      *  '*' -> PREDICT <ns-prefix> <ident-token>
-     *  <ident-token>  -> PREDICT <ident-token>
+     *  <ident-token> -> PREDICT <ident-token>
      */
+    static constexpr const char* kInvalidTokenError =
+        "Expected ident, '*' or '|' or '*' when parsing name";
+
     const Token* token = next<Token>();
-    assert(token && "Next entry must be an <ident-token> or <delim-token> as a precondition.");
+    if (!token) {
+      setError(kInvalidTokenError);
+      return std::nullopt;
+    }
+
+    const bool isIdent = token->is<Token::Ident>();
+    const bool isDelim = token->is<Token::Delim>();
+
+    if (!isIdent && !isDelim) {
+      setError(kInvalidTokenError);
+      return std::nullopt;
+    }
 
     RcString ns;
-    if ((token->is<Token::Ident>() && nextDelimIs('|', 1)) || token->is<Token::Delim>()) {
+    if ((isIdent && nextDelimIs('|', 1)) || isDelim) {
       // If the next token is a delim, as a precondition it is either '|' or '*'.
-      assert(!token->is<Token::Delim>() || token->get<Token::Delim>().value == '|' ||
-             token->get<Token::Delim>().value == '*');
+      if (isDelim && token->get<Token::Delim>().value != '|' &&
+          token->get<Token::Delim>().value != '*') {
+        setError(kInvalidTokenError);
+        return std::nullopt;
+      }
 
       auto maybeNsPrefix = handleNsPrefix();
       if (!maybeNsPrefix) {
@@ -383,8 +403,8 @@ public:
       return WqName{std::move(ns), secondToken->get<Token::Ident>().value};
     }
 
-    assert(!ns.empty() && "This parse error should only happen after we've parsed a namespace");
-    setError("Expected ident after namespace prefix");
+    setError(ns.empty() ? "Expected ident when parsing name"
+                        : "Expected ident after namespace prefix when parsing name");
     return std::nullopt;
   }
 
@@ -467,6 +487,7 @@ public:
     AttributeSelector result(std::move(wqName.value()));
 
     if (subparser.isEOF()) {
+      advance();
       return std::move(result);
     }
 
@@ -499,7 +520,9 @@ public:
     }
 
     if (!foundValue) {
-      setError("Expected string or ident after matcher ('~=', '|=', '^=', '$=', '*=', or '=')");
+      subparser.setError(
+          "Expected string or ident after matcher ('~=', '|=', '^=', '$=', '*=', or '=')");
+      setError(std::move(subparser).getError().value());
       return std::nullopt;
     }
 
@@ -516,6 +539,14 @@ public:
     }
 
     subparser.skipWhitespace();
+
+    if (!subparser.isEOF()) {
+      subparser.setError("Expected end of attribute selector");
+      setError(std::move(subparser).getError().value());
+      return std::nullopt;
+    }
+
+    advance();
 
     result.matcher = std::move(matcher);
     return result;

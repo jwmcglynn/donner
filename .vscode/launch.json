@@ -11,7 +11,6 @@
       "program": "${workspaceFolder}/bazel-bin/src/base/base_tests",
       "args": [
         "--gtest_break_on_failure",
-        "--gtest_filter=*Dedup",
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -103,6 +102,19 @@
       "program": "${workspaceFolder}/bazel-bin/src/css/parser/color_parser_fuzzer",
       "args": [
         "${workspaceFolder}/src/css/parser/tests/color_parser_corpus/function.txt"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "selector_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/src/css/parser/selector_parser_fuzzer",
+      "args": [
+        "${workspaceFolder}/src/css/parser/tests/selector_parser_corpus/infinite-loop-handleComplexSelector.txt"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
