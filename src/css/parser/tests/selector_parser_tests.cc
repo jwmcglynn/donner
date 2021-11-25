@@ -54,7 +54,7 @@ TEST(SelectorParser, CombinatorTypes) {
                   "Selector(ComplexSelector(TypeSelector(one) '||' TypeSelector(two)))")));
 }
 
-TEST(SelectorParser, WqName) {
+TEST(SelectorParser, TypeSelector) {
   EXPECT_THAT(SelectorParser::Parse("ns|name"),
               ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(ns|name)))")));
   EXPECT_THAT(SelectorParser::Parse("*|name"),
@@ -63,10 +63,8 @@ TEST(SelectorParser, WqName) {
               ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(name)))")));
 
   // Putting the name as a wildcard is invalid.
-  // TODO: This seems wrong
   EXPECT_THAT(SelectorParser::Parse("ns|*"),
-              ParseResultIs(
-                  ToStringIs("Selector(ComplexSelector(TypeSelector(ns|*) ' ' TypeSelector(*)))")));
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(ns|*)))")));
 
   // Invalid WqNames with a namespace but no name.
   EXPECT_THAT(SelectorParser::Parse("*|"),

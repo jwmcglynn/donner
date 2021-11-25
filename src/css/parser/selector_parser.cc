@@ -281,6 +281,7 @@ public:
         if (!nextTokenIs<Token::Whitespace>(1) && nextDelimIs('*', prefixLength)) {
           auto maybeNsPrefix = handleNsPrefix();
           if (maybeNsPrefix.has_value()) {
+            expectAndConsumeDelim('*');
             return TypeSelector{std::move(maybeNsPrefix.value()), "*"};
           }
         } else {
