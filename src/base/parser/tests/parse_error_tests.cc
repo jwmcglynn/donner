@@ -6,11 +6,25 @@
 namespace donner {
 
 TEST(ParseError, ResolveOffset) {
-  ParseError err;
-  err.offset = ParseError::kEndOfString;
+  {
+    // Base case: Regular offset is left unchanged.
+    ParseError err;
+    err.offset = 1;
 
-  std::string_view sourceString = "abcdef";
-  EXPECT_EQ(err.resolveOffset(sourceString), 6);
+    EXPECT_EQ(err.resolveOffset("abcdef"), 1);
+
+    err.offset = 5;
+    EXPECT_EQ(err.resolveOffset("abcdef"), 5);
+  }
+
+  {
+    // kEndOfString is resolved based on the input string.
+    ParseError err;
+    err.offset = ParseError::kEndOfString;
+
+    EXPECT_EQ(err.resolveOffset("abcdef"), 6);
+    EXPECT_EQ(err.resolveOffset("test string please ignore"), 25);
+  }
 }
 
 TEST(ParseError, Output) {
