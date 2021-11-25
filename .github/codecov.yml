@@ -1,0 +1,6 @@
+coverage:
+  # Only report failure if pull requests regress coverage, not for commits.
+  status:
+    project:
+      default:
+        only_pulls: true
