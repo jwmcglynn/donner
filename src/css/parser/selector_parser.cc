@@ -92,15 +92,16 @@ public:
   std::optional<Selector> handleComplexSelectorList() {
     skipWhitespace();
 
+    if (isEOF()) {
+      setError("No selectors found");
+      return std::nullopt;
+    }
+
     Selector result;
     if (auto complexSelector = handleComplexSelector()) {
       result.complexSelectors.emplace_back(std::move(*complexSelector));
     } else {
-      // Error has already been set inside handleComplexSelector, but override if we're at the end
-      // of string.
-      if (isEOF()) {
-        setError("No selectors found");
-      }
+      // Error has already been set inside handleComplexSelector.
       return std::nullopt;
     }
 
@@ -277,7 +278,7 @@ public:
       if (prefixLength > 0) {
         // To disambiguate between <wq-name> and <ns-prefix>, we need to look ahead for a '*' after
         // the <ns-prefix>.
-        if (nextDelimIs('*', prefixLength)) {
+        if (!nextTokenIs<Token::Whitespace>(1) && nextDelimIs('*', prefixLength)) {
           auto maybeNsPrefix = handleNsPrefix();
           if (maybeNsPrefix.has_value()) {
             return TypeSelector{std::move(maybeNsPrefix.value()), "*"};

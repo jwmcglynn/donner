@@ -18,6 +18,8 @@ MATCHER_P(ToStringIs, expected, "") {
 TEST(SelectorParser, Empty) {
   EXPECT_THAT(SelectorParser::Parse(""),
               AllOf(ParseErrorPos(0, 0), ParseErrorIs("No selectors found")));
+  EXPECT_THAT(SelectorParser::Parse(" \t "),
+              AllOf(ParseErrorPos(0, 3), ParseErrorIs("No selectors found")));
 }
 
 TEST(SelectorParser, Simple) {
@@ -50,6 +52,31 @@ TEST(SelectorParser, CombinatorTypes) {
   EXPECT_THAT(SelectorParser::Parse("one || two"),
               ParseResultIs(ToStringIs(
                   "Selector(ComplexSelector(TypeSelector(one) '||' TypeSelector(two)))")));
+}
+
+TEST(SelectorParser, WqName) {
+  EXPECT_THAT(SelectorParser::Parse("ns|name"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(ns|name)))")));
+  EXPECT_THAT(SelectorParser::Parse("*|name"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(*|name)))")));
+  EXPECT_THAT(SelectorParser::Parse("|name"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(name)))")));
+
+  // Putting the name as a wildcard is invalid.
+  // TODO: This seems wrong
+  EXPECT_THAT(SelectorParser::Parse("ns|*"),
+              ParseResultIs(
+                  ToStringIs("Selector(ComplexSelector(TypeSelector(ns|*) ' ' TypeSelector(*)))")));
+
+  // Invalid WqNames with a namespace but no name.
+  EXPECT_THAT(SelectorParser::Parse("*|"),
+              ParseErrorIs("Expected ident after namespace prefix when parsing name"));
+  EXPECT_THAT(SelectorParser::Parse("first *|"),
+              ParseErrorIs("Expected ident after namespace prefix when parsing name"));
+  EXPECT_THAT(SelectorParser::Parse("ns|"),
+              ParseErrorIs("Expected ident after namespace prefix when parsing name"));
+  EXPECT_THAT(SelectorParser::Parse("first ns|"),
+              ParseErrorIs("Expected ident after namespace prefix when parsing name"));
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm
