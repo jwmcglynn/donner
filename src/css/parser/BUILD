@@ -36,7 +36,6 @@ cc_test(
         "tests/declaration_list_parser_tests.cc",
         "tests/rule_parser_tests.cc",
         "tests/selector_parser_tests.cc",
-        "tests/token_test_utils.cc",
         "tests/token_test_utils.h",
         "tests/tokenizer_tests.cc",
         "tests/value_parser_tests.cc",

@@ -63,5 +63,29 @@ bool DeclarationOrAtRule::operator==(const DeclarationOrAtRule& other) const {
   return value == other.value;
 }
 
+std::ostream& operator<<(std::ostream& os, const AtRule& rule) {
+  os << "AtRule {\n";
+  os << "  " << rule.name << "\n";
+  for (auto& value : rule.prelude) {
+    os << "  " << value << "\n";
+  }
+  if (rule.block) {
+    os << "  { " << *rule.block << " }\n";
+  }
+  return os << "}";
+}
+
+std::ostream& operator<<(std::ostream& os, const Declaration& declaration) {
+  os << "Declaration { \n";
+  os << "  " << declaration.name << "\n";
+  for (const auto& value : declaration.values) {
+    os << "  " << value << "\n";
+  }
+  if (declaration.important) {
+    os << "  !important\n";
+  }
+  return os << "}";
+}
+
 }  // namespace css
 }  // namespace donner

@@ -95,6 +95,8 @@ struct AtRule {
 
   explicit AtRule(RcString name);
   bool operator==(const AtRule& other) const;
+
+  friend std::ostream& operator<<(std::ostream& os, const AtRule& rule);
 };
 
 struct Declaration {
@@ -106,6 +108,8 @@ struct Declaration {
         important(important) {}
 
   bool operator==(const Declaration& other) const = default;
+
+  friend std::ostream& operator<<(std::ostream& os, const Declaration& declaration);
 
   RcString name;
   std::vector<ComponentValue> values;
@@ -119,6 +123,14 @@ struct InvalidRule {
   explicit InvalidRule(Type type = Type::Default) : type(type) {}
   bool operator==(const InvalidRule& other) const { return type == other.type; }
 
+  friend std::ostream& operator<<(std::ostream& os, const InvalidRule& invalidRule) {
+    os << "InvalidRule";
+    if (invalidRule.type == InvalidRule::Type::ExtraInput) {
+      os << "(ExtraInput)";
+    }
+    return os;
+  }
+
   Type type;
 };
 
@@ -128,6 +140,11 @@ struct DeclarationOrAtRule {
 
   /* implicit */ DeclarationOrAtRule(Type&& value);
   bool operator==(const DeclarationOrAtRule& other) const;
+
+  friend std::ostream& operator<<(std::ostream& os, const DeclarationOrAtRule& declOrAt) {
+    std::visit([&os](auto&& v) { os << v; }, declOrAt.value);
+    return os;
+  }
 };
 
 }  // namespace css

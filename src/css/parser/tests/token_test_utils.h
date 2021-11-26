@@ -22,18 +22,6 @@ struct is_variant<std::variant<Ts...>> : std::true_type {};
 
 }  // namespace details
 
-void PrintTo(const Token& token, std::ostream* os);
-void PrintTo(const Function& func, std::ostream* os);
-void PrintTo(const SimpleBlock& block, std::ostream* os);
-void PrintTo(const ComponentValue& component, std::ostream* os);
-
-void PrintTo(const Declaration& declaration, std::ostream* os);
-void PrintTo(const AtRule& rule, std::ostream* os);
-void PrintTo(const InvalidRule& invalidRule, std::ostream* os);
-void PrintTo(const DeclarationOrAtRule& declOrAt, std::ostream* os);
-void PrintTo(const QualifiedRule& qualifiedRule, std::ostream* os);
-void PrintTo(const Rule& rule, std::ostream* os);
-
 MATCHER_P(TokenIsImpl, token, "") {
   using TokenType = std::remove_cvref_t<decltype(token)>;
   using ArgType = std::remove_cvref_t<decltype(arg)>;
