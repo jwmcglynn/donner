@@ -3,9 +3,11 @@
 
 #include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/css/parser/selector_parser.h"
+#include "src/css/parser/tests/selector_test_utils.h"
 #include "src/css/parser/tests/token_test_utils.h"
 
 using testing::AllOf;
+using testing::ElementsAre;
 
 namespace donner {
 namespace css {
@@ -24,47 +26,59 @@ TEST(SelectorParser, Empty) {
 
 TEST(SelectorParser, Simple) {
   EXPECT_THAT(SelectorParser::Parse("test"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(test)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("test")))));
   EXPECT_THAT(SelectorParser::Parse(".class-test"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(ClassSelector(class-test)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(ClassSelectorIs("class-test")))));
   EXPECT_THAT(SelectorParser::Parse("#hash-test"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(IdSelector(hash-test)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(IdSelectorIs("hash-test")))));
 
   // Using a `\` to escape cancels out the special meaning, see
   // https://www.w3.org/TR/2018/WD-selectors-4-20181121/#case-sensitive.
   EXPECT_THAT(SelectorParser::Parse("#foo\\>a"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(IdSelector(foo>a)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(IdSelectorIs("foo>a")))));
+}
+
+TEST(SelectorParser, Multiple) {
+  EXPECT_THAT(SelectorParser::Parse("test, .class"),
+              ParseResultIs(SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("test"))),
+                                         ComplexSelectorIs(EntryIs(ClassSelectorIs("class"))))));
+
+  EXPECT_THAT(SelectorParser::Parse("test, .class invalid|"),
+              ParseErrorIs("Expected ident after namespace prefix when parsing name"));
 }
 
 TEST(SelectorParser, CombinatorTypes) {
-  EXPECT_THAT(SelectorParser::Parse("one two"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(TypeSelector(one) ' ' TypeSelector(two)))")));
+  EXPECT_THAT(
+      SelectorParser::Parse("one two"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("one")),
+                                      EntryIs(Combinator::Descendant, TypeSelectorIs("two")))));
   EXPECT_THAT(SelectorParser::Parse("one > two"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(TypeSelector(one) '>' TypeSelector(two)))")));
-  EXPECT_THAT(SelectorParser::Parse("one + two"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(TypeSelector(one) '+' TypeSelector(two)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("one")),
+                                              EntryIs(Combinator::Child, TypeSelectorIs("two")))));
+  EXPECT_THAT(
+      SelectorParser::Parse("one + two"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("one")),
+                                      EntryIs(Combinator::NextSibling, TypeSelectorIs("two")))));
   EXPECT_THAT(SelectorParser::Parse("one ~ two"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(TypeSelector(one) '~' TypeSelector(two)))")));
+              ParseResultIs(ComplexSelectorIs(
+                  EntryIs(TypeSelectorIs("one")),
+                  EntryIs(Combinator::SubsequentSibling, TypeSelectorIs("two")))));
   EXPECT_THAT(SelectorParser::Parse("one || two"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(TypeSelector(one) '||' TypeSelector(two)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("one")),
+                                              EntryIs(Combinator::Column, TypeSelectorIs("two")))));
 }
 
 TEST(SelectorParser, TypeSelector) {
   EXPECT_THAT(SelectorParser::Parse("ns|name"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(ns|name)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("ns", "name")))));
   EXPECT_THAT(SelectorParser::Parse("*|name"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(*|name)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("*", "name")))));
   EXPECT_THAT(SelectorParser::Parse("|name"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(name)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("name")))));
 
-  // Putting the name as a wildcard is invalid.
+  // Putting the name as a wildcard is invalid for a <wq-name>, but valid for a TypeSelector.
   EXPECT_THAT(SelectorParser::Parse("ns|*"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(TypeSelector(ns|*)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("ns", "*")))));
 
   // Invalid WqNames with a namespace but no name.
   EXPECT_THAT(SelectorParser::Parse("*|"),
@@ -75,6 +89,32 @@ TEST(SelectorParser, TypeSelector) {
               ParseErrorIs("Expected ident after namespace prefix when parsing name"));
   EXPECT_THAT(SelectorParser::Parse("first ns|"),
               ParseErrorIs("Expected ident after namespace prefix when parsing name"));
+}
+
+TEST(SelectorParser, PseudoElementSelector) {
+  EXPECT_THAT(SelectorParser::Parse("::after"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoElementSelectorIs("after")))));
+  EXPECT_THAT(
+      SelectorParser::Parse("::after()"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(PseudoElementSelectorIs("after", ElementsAre())))));
+
+  EXPECT_THAT(SelectorParser::Parse("::after(one two)"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoElementSelectorIs(
+                  "after", ElementsAre(TokenIsIdent("one"), TokenIsWhitespace(" "),
+                                       TokenIsIdent("two")))))));
+}
+
+TEST(SelectorParser, PseudoClassSelector) {
+  EXPECT_THAT(SelectorParser::Parse(":after"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs("after")))));
+  EXPECT_THAT(
+      SelectorParser::Parse(":after()"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs("after", ElementsAre())))));
+
+  EXPECT_THAT(SelectorParser::Parse(":after(one two)"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
+                  "after", ElementsAre(TokenIsIdent("one"), TokenIsWhitespace(" "),
+                                       TokenIsIdent("two")))))));
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm

@@ -25,12 +25,21 @@ struct WqName {
 };
 
 struct PseudoElementSelector {
-  RcString value;
+  RcString ident;
+  std::optional<std::vector<ComponentValue>> argsIfFunction;
 
-  PseudoElementSelector(RcString value) : value(std::move(value)) {}
+  PseudoElementSelector(RcString ident) : ident(std::move(ident)) {}
 
   friend std::ostream& operator<<(std::ostream& os, const PseudoElementSelector& obj) {
-    os << "PseudoElementSelector(" << obj.value << ")";
+    os << "PseudoElementSelector(" << obj.ident;
+    if (obj.argsIfFunction.has_value()) {
+      os << " args[";
+      for (auto& arg : obj.argsIfFunction.value()) {
+        os << arg << ", ";
+      }
+      os << "]";
+    }
+    os << ")";
     return os;
   }
 };
@@ -76,15 +85,15 @@ struct ClassSelector {
 
 struct PseudoClassSelector {
   RcString ident;
-  std::vector<ComponentValue> argsIfFunction;
+  std::optional<std::vector<ComponentValue>> argsIfFunction;
 
   PseudoClassSelector(RcString ident) : ident(std::move(ident)) {}
 
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj) {
     os << "PseudoClassSelector(" << obj.ident;
-    if (!obj.argsIfFunction.empty()) {
+    if (obj.argsIfFunction.has_value()) {
       os << " args[";
-      for (auto& arg : obj.argsIfFunction) {
+      for (auto& arg : obj.argsIfFunction.value()) {
         os << arg << ", ";
       }
       os << "]";
@@ -138,15 +147,8 @@ struct AttributeSelector {
   }
 };
 
-using SubclassSelector =
-    std::variant<IdSelector, ClassSelector, PseudoClassSelector, AttributeSelector>;
-
-inline std::ostream& operator<<(std::ostream& os, const SubclassSelector& obj) {
-  std::visit([&os](auto&& value) { os << value; }, obj);
-  return os;
-}
-
-using CompoundSelector = std::variant<PseudoElementSelector, TypeSelector, SubclassSelector>;
+using CompoundSelector = std::variant<PseudoElementSelector, TypeSelector, IdSelector,
+                                      ClassSelector, PseudoClassSelector, AttributeSelector>;
 
 inline std::ostream& operator<<(std::ostream& os, const CompoundSelector& obj) {
   std::visit([&os](auto&& value) { os << value; }, obj);
@@ -202,7 +204,13 @@ struct Selector {
 
   friend std::ostream& operator<<(std::ostream& os, const Selector& obj) {
     os << "Selector(";
+    bool first = true;
     for (auto& complexSelector : obj.complexSelectors) {
+      if (first) {
+        first = false;
+      } else {
+        os << ", ";
+      }
       os << complexSelector;
     }
     return os << ")";

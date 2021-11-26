@@ -75,6 +75,9 @@ Note that this has some slight modifications to remove spec-specific syntax.
 // TODO: Plumb in @namespace directives to detect valid namespaces. Enable tests such as
 // http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is-default-ns-001.htm.
 
+using SubclassSelector =
+    std::variant<IdSelector, ClassSelector, PseudoClassSelector, AttributeSelector>;
+
 class SelectorParserImpl {
 public:
   SelectorParserImpl(std::span<const ComponentValue> components) : components_(components) {}
@@ -160,9 +163,10 @@ public:
     while (!isEOF()) {
       if (nextTokenIs<Token::Whitespace>()) {
         advance();  // It's okay to advance here, because the upper scope will skip it anyway.
-        if (isEOF() || nextTokenIs<Token::Comma>()) {
-          break;
-        }
+      }
+
+      if (isEOF() || nextTokenIs<Token::Comma>()) {
+        break;
       }
 
       const auto maybeCombinator = handleCombinator();
@@ -197,23 +201,23 @@ public:
         if (delim == '|' || delim == '*') {
           return handleTypeSelector();
         } else if (delim == '.') {
-          return handleSubclassSelector();
+          return subclassToCompound(handleSubclassSelector());
         }
       } else if (token->is<Token::Colon>()) {
         // If there is a second <colon-token>, then it's a <pseudo-element-selector>.
         if (nextTokenIs<Token::Colon>(1)) {
           return handlePseudoElementSelector();
         } else {
-          return handleSubclassSelector();
+          return subclassToCompound(handleSubclassSelector());
         }
       } else if (token->is<Token::Hash>()) {
-        return handleSubclassSelector();
+        return subclassToCompound(handleSubclassSelector());
       }
     } else if (nextIs<SimpleBlock>()) {
-      return handleSubclassSelector();
+      return subclassToCompound(handleSubclassSelector());
     }
 
-    setError("Expected token when parsing compound selector");
+    setError("Unexpected token when parsing compound selector");
     return std::nullopt;
   }
 
@@ -323,16 +327,18 @@ public:
   }
 
   std::optional<PseudoElementSelector> handlePseudoElementSelector() {
-    // <pseudo-element-selector> = ':' <ident-token>
+    // <pseudo-element-selector> = ':' <pseudo-class-selector>
     expectAndConsumeToken<Token::Colon>();
-    if (const Token* token = next<Token>()) {
-      if (token->is<Token::Ident>()) {
-        return PseudoElementSelector{token->get<Token::Ident>().value};
-      }
-    }
 
-    setError("Expected ident when parsing pseudo element selector");
-    return std::nullopt;
+    auto maybePseudoClass = handlePseudoClassSelector();
+    if (maybePseudoClass.has_value()) {
+      PseudoElementSelector result(std::move(maybePseudoClass.value().ident));
+      result.argsIfFunction = std::move(maybePseudoClass.value().argsIfFunction);
+      return result;
+    } else {
+      // Error is set by handlePseudoClassSelector.
+      return std::nullopt;
+    }
   }
 
   std::optional<RcString> handleNsPrefix() {
@@ -659,6 +665,15 @@ private:
   }
 
   void setError(ParseError&& error) { error_ = std::move(error); }
+
+  std::optional<CompoundSelector> subclassToCompound(std::optional<SubclassSelector>&& subclass) {
+    if (!subclass) {
+      return std::nullopt;
+    }
+
+    return std::visit([](auto&& arg) -> CompoundSelector { return std::move(arg); },
+                      std::move(subclass.value()));
+  }
 
   std::span<const ComponentValue> components_;
   std::optional<ParseError> error_;
