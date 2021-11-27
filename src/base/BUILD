@@ -29,6 +29,7 @@ cc_library(
 cc_test(
     name = "base_tests",
     srcs = [
+        "tests/base_test_utils_tests.cc",
         "tests/box_tests.cc",
         "tests/math_utils_tests.cc",
         "tests/rc_string_tests.cc",

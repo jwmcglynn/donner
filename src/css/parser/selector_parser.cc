@@ -110,11 +110,8 @@ public:
 
     while (!isEOF()) {
       skipWhitespace();
-      if (!tryConsumeToken<Token::Comma>()) {
-        setError("Expected ',' when parsing selector list");
-        return std::nullopt;
-      }
-
+      expectAndConsumeToken<Token::Comma>();  // Complex selectors should only end when there is a
+                                              // comma or EOF.
       skipWhitespace();
 
       if (auto complexSelector = handleComplexSelector()) {
@@ -354,8 +351,7 @@ public:
       return handleAttributeSelector();
     }
 
-    setError("Unexpected token when parsing subclass selector");
-    return std::nullopt;
+    UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
   }
 
   std::optional<PseudoElementSelector> handlePseudoElementSelector() {
@@ -582,7 +578,7 @@ public:
     subparser.skipWhitespace();
 
     if (!subparser.isEOF()) {
-      subparser.setError("Expected end of attribute selector");
+      subparser.setError("Expected end of attribute selector, but found more items");
       setError(std::move(subparser).getError().value());
       return std::nullopt;
     }
@@ -627,16 +623,6 @@ public:
 private:
   bool isEOF() const { return components_.empty(); }
 
-  template <typename TokenType>
-  bool tryConsumeToken() {
-    if (components_.empty() || !components_.front().isToken<TokenType>()) {
-      return false;
-    }
-
-    advance();
-    return true;
-  }
-
   bool tryConsumeDelim(char value) {
     if (nextDelimIs(value)) {
       advance();
@@ -648,7 +634,8 @@ private:
 
   template <typename TokenType>
   void expectAndConsumeToken() {
-    assert(tryConsumeToken<TokenType>());
+    assert(!components_.empty() && components_.front().isToken<TokenType>());
+    advance();
   }
   void expectAndConsumeDelim(char value) { assert(tryConsumeDelim(value)); }
 

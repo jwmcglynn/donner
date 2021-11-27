@@ -43,6 +43,7 @@ cc_test(
     ],
     deps = [
         ":parser",
+        "//src/base:base_test_utils",
         "//src/base/parser:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],

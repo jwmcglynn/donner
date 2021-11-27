@@ -4,6 +4,24 @@
 
 namespace donner {
 
+MATCHER_P(ToStringIs, expected, "") {
+  const std::string argString = testing::PrintToString(arg);
+  const std::string expectedString = expected;
+
+  const bool result = argString == expected;
+  if (!result) {
+    *result_listener << "\nExpected string: " << expected;
+
+    *result_listener << "\nMatching subset: "
+                     << std::string(argString.begin(),
+                                    std::mismatch(argString.begin(), argString.end(),
+                                                  expectedString.begin(), expectedString.end())
+                                        .first);
+  }
+
+  return result;
+}
+
 /**
  * Matches a Vector.
  *

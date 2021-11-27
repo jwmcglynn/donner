@@ -114,7 +114,7 @@ enum class AttrMatcher {
 
 inline std::ostream& operator<<(std::ostream& os, AttrMatcher matcher) {
   switch (matcher) {
-    case AttrMatcher::Includes: return os << "Includes(=~)";
+    case AttrMatcher::Includes: return os << "Includes(~=)";
     case AttrMatcher::DashMatch: return os << "DashMatch(|=)";
     case AttrMatcher::PrefixMatch: return os << "PrefixMatch(^=)";
     case AttrMatcher::SuffixMatch: return os << "SuffixMatch($=)";
@@ -141,6 +141,9 @@ struct AttributeSelector {
     os << "AttributeSelector(" << obj.name;
     if (obj.matcher) {
       os << " " << obj.matcher->op << " " << obj.matcher->value;
+      if (obj.matcher->caseInsensitive) {
+        os << " (case-insensitive)";
+      }
     }
     os << ")";
     return os;
