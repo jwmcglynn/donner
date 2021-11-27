@@ -74,6 +74,9 @@ Note that this has some slight modifications to remove spec-specific syntax.
 //
 // TODO: Plumb in @namespace directives to detect valid namespaces. Enable tests such as
 // http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is-default-ns-001.htm.
+//
+// TODO: Support for pseudo-elements and pseudo-classes, which need custom handling defined by the
+// caller.
 
 using SubclassSelector =
     std::variant<IdSelector, ClassSelector, PseudoClassSelector, AttributeSelector>;

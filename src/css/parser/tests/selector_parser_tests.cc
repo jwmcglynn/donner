@@ -333,6 +333,28 @@ TEST(SelectorParser, InvalidAttributeSelector) {
               ParseErrorIs("Expected end of attribute selector, but found more items"));
 }
 
+TEST(SelectorParser, Specificity) {
+  EXPECT_THAT(SelectorParser::Parse("test"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 0, 1))));
+  EXPECT_THAT(SelectorParser::Parse(".test"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 1, 0))));
+  EXPECT_THAT(SelectorParser::Parse("#test"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(1, 0, 0))));
+  EXPECT_THAT(SelectorParser::Parse("::after"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 0, 1))));
+  EXPECT_THAT(SelectorParser::Parse(":after(one)"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 1, 0))));
+  EXPECT_THAT(SelectorParser::Parse("a[attr=value]"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 1, 1))));
+
+  EXPECT_THAT(SelectorParser::Parse("*"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 0, 0))))
+      << "Universal selectors are ignored";
+
+  EXPECT_THAT(SelectorParser::Parse("* > a#b.class::after"),
+              ParseResultIs(SpecificityIs(Specificity::FromABC(1, 1, 2))));
+}
+
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm
 TEST(SelectorParser, CssTestSuite_Is) {
   // Simple selector arguments

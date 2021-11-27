@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "src/css/declaration.h"
+#include "src/css/specificity.h"
 
 namespace donner {
 namespace css {
@@ -49,6 +50,8 @@ struct TypeSelector {
   RcString name;
 
   TypeSelector(RcString ns, RcString name) : ns(std::move(ns)), name(std::move(name)) {}
+
+  bool isUniversal() const { return name == "*"; }
 
   friend std::ostream& operator<<(std::ostream& os, const TypeSelector& obj) {
     os << "TypeSelector(";
@@ -200,6 +203,44 @@ struct ComplexSelector {
   };
 
   std::vector<Entry> entries;
+
+  /**
+   * Compute specificity of the ComplexSelector, see
+   * https://www.w3.org/TR/selectors-4/#specificity-rules.
+   */
+  Specificity computeSpecificity() const {
+    uint32_t a = 0;
+    uint32_t b = 0;
+    uint32_t c = 0;
+    for (const auto& entry : entries) {
+      for (const auto& subEntry : entry.compoundSelector.entries) {
+        std::visit(
+            [&a, &b, &c](auto&& v) {
+              using Type = std::remove_cvref_t<decltype(v)>;
+
+              if constexpr (std::is_same_v<Type, IdSelector>) {
+                ++a;
+              } else if constexpr (std::is_same_v<Type, ClassSelector> ||
+                                   std::is_same_v<Type, AttributeSelector> ||
+                                   std::is_same_v<Type, PseudoClassSelector>) {
+                // TODO: Handle pseudo-classes that have their specificity defined specially.
+                ++b;
+              } else if constexpr (std::is_same_v<Type, TypeSelector>) {
+                // Ignore the universal selector.
+                if (!v.isUniversal()) {
+                  ++c;
+                }
+              } else {
+                static_assert(std::is_same_v<Type, PseudoElementSelector>);
+                ++c;
+              }
+            },
+            subEntry);
+      }
+    }
+
+    return Specificity::FromABC(a, b, c);
+  }
 
   friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj) {
     os << "ComplexSelector(";

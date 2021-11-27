@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
     name = "css",
@@ -11,6 +11,7 @@ cc_library(
         "declaration.h",
         "rule.h",
         "selector.h",
+        "specificity.h",
         "token.h",
     ],
     visibility = [
@@ -20,5 +21,17 @@ cc_library(
     deps = [
         "//src/base",
         "@frozen",
+    ],
+)
+
+cc_test(
+    name = "css_tests",
+    srcs = [
+        "tests/specificity_tests.cc",
+    ],
+    deps = [
+        ":css",
+        "//src/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
     ],
 )

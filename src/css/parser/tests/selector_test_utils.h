@@ -185,6 +185,30 @@ auto ComplexSelectorIs(const Args&... matchers) {
   return testing::MakePolymorphicMatcher(ComplexSelectorIsImpl(std::move(matchersVector)));
 }
 
+MATCHER_P(SpecificityIs, specificity, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
+
+  const ComplexSelector* selector = nullptr;
+  if constexpr (std::is_same_v<ArgType, Selector>) {
+    if (arg.entries.size() != 1) {
+      *result_listener << "which has " << arg.entries.size() << " entries, when one was expected";
+      return false;
+    }
+
+    selector = &arg.entries[0];
+  } else {
+    selector = &arg;
+  }
+
+  const Specificity actual = selector->computeSpecificity();
+  if (!testing::ExplainMatchResult(specificity, actual, result_listener)) {
+    *result_listener << "whose specificity is " << actual;
+    return false;
+  }
+
+  return true;
+}
+
 template <typename... Args>
 auto EntryIs(Combinator combinator, const Args&... matchers) {
   std::tuple<typename std::decay<const Args&>::type...> matchersTuple =
