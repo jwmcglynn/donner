@@ -12,9 +12,22 @@ using testing::ElementsAre;
 namespace donner {
 namespace css {
 
-// TODO: Replace this with actual value matchers.
 MATCHER_P(ToStringIs, expected, "") {
-  return testing::PrintToString(arg) == expected;
+  const std::string argString = testing::PrintToString(arg);
+  const std::string expectedString = expected;
+
+  const bool result = argString == expected;
+  if (!result) {
+    *result_listener << "\nExpected string: " << expected;
+
+    *result_listener << "\nMatching subset: "
+                     << std::string(argString.begin(),
+                                    std::mismatch(argString.begin(), argString.end(),
+                                                  expectedString.begin(), expectedString.end())
+                                        .first);
+  }
+
+  return result;
 }
 
 TEST(SelectorParser, Empty) {
@@ -170,16 +183,67 @@ TEST(SelectorParser, PseudoClassSelector_ToString) {
                                "len=1) offset: 10 }, Token { Ident(two) offset: 11 }, ]))))")));
 }
 
-TEST(SelectorParser, AttrMatcher) {
+TEST(SelectorParser, AttributeSelector) {
   EXPECT_THAT(
       SelectorParser::Parse("a[test]"),
       ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("a"), AttributeSelectorIs("test")))));
+  EXPECT_THAT(
+      SelectorParser::Parse("a[test=\"value\"]"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(
+          TypeSelectorIs("a"), AttributeSelectorIs("test", MatcherIs(AttrMatcher::Eq, "value"))))));
+  EXPECT_THAT(
+      SelectorParser::Parse("a[test=ident]"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(
+          TypeSelectorIs("a"), AttributeSelectorIs("test", MatcherIs(AttrMatcher::Eq, "ident"))))));
+
+  EXPECT_THAT(SelectorParser::Parse("a[one|=two]"),
+              ParseResultIs(ComplexSelectorIs(
+                  EntryIs(TypeSelectorIs("a"),
+                          AttributeSelectorIs("one", MatcherIs(AttrMatcher::DashMatch, "two"))))));
+  EXPECT_THAT(SelectorParser::Parse("a[three^=four]"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(
+                  TypeSelectorIs("a"),
+                  AttributeSelectorIs("three", MatcherIs(AttrMatcher::PrefixMatch, "four"))))));
+  EXPECT_THAT(SelectorParser::Parse("a[five$=six]"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(
+                  TypeSelectorIs("a"),
+                  AttributeSelectorIs("five", MatcherIs(AttrMatcher::SuffixMatch, "six"))))));
+  EXPECT_THAT(SelectorParser::Parse("a[seven*=eight]"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(
+                  TypeSelectorIs("a"),
+                  AttributeSelectorIs("seven", MatcherIs(AttrMatcher::SubstringMatch, "eight"))))));
+
+  // With whitespace.
+  EXPECT_THAT(SelectorParser::Parse("a[ key |= value ]"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(
+                  TypeSelectorIs("a"),
+                  AttributeSelectorIs("key", MatcherIs(AttrMatcher::DashMatch, "value"))))));
 }
 
-TEST(SelectorParser, AttrMatcher_ToString) {
+TEST(SelectorParser, AttributeSelector_ToString) {
   EXPECT_THAT(SelectorParser::Parse("a[test]"),
               ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
                                        "AttributeSelector(test))))")));
+
+  EXPECT_THAT(SelectorParser::Parse("a[test=\"value\"]"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
+                                       "AttributeSelector(test Eq(=) value))))")));
+  EXPECT_THAT(SelectorParser::Parse("a[test=ident]"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
+                                       "AttributeSelector(test Eq(=) ident))))")));
+
+  EXPECT_THAT(SelectorParser::Parse("a[one|=two]"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
+                                       "AttributeSelector(one DashMatch(|=) two))))")));
+  EXPECT_THAT(SelectorParser::Parse("a[three^=four]"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
+                                       "AttributeSelector(three PrefixMatch(^=) four))))")));
+  EXPECT_THAT(SelectorParser::Parse("a[five$=six]"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
+                                       "AttributeSelector(five SuffixMatch($=) six))))")));
+  EXPECT_THAT(SelectorParser::Parse("a[seven*=eight]"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
+                                       "AttributeSelector(seven SubstringMatch(*=) eight))))")));
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm

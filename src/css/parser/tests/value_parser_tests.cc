@@ -38,5 +38,29 @@ TEST(ValueParser, SupportsComments) {
   EXPECT_THAT(ValueParser::Parse("/*comment*/red"), ElementsAre(TokenIsIdent("red")));
 }
 
+TEST(ValueParser, Selector) {
+  // Due to a quirk of CSS error handling, this is valid. If we reach the EOF before we reach an end
+  // token when parsing a simple block, it is a parser error but the block is returned.
+  // This can be confirmed with Javascript which lets parsing single selectors, for example:
+  //
+  // ```
+  // document.querySelector("div[class=cls").style.color = "red";
+  // ```
+  EXPECT_THAT(ValueParser::Parse("a[ key |= value "),
+              ElementsAre(TokenIsIdent("a"),
+                          SimpleBlockIsSquare(ElementsAre(
+                              TokenIsWhitespace(" "), TokenIsIdent("key"), TokenIsWhitespace(" "),
+                              TokenIsDelim('|'), TokenIsDelim('='), TokenIsWhitespace(" "),
+                              TokenIsIdent("value"), TokenIsWhitespace(" ")))));
+
+  // The parsed values match both with and without the closing "]" token.
+  EXPECT_THAT(ValueParser::Parse("a[ key |= value ]"),
+              ElementsAre(TokenIsIdent("a"),
+                          SimpleBlockIsSquare(ElementsAre(
+                              TokenIsWhitespace(" "), TokenIsIdent("key"), TokenIsWhitespace(" "),
+                              TokenIsDelim('|'), TokenIsDelim('='), TokenIsWhitespace(" "),
+                              TokenIsIdent("value"), TokenIsWhitespace(" ")))));
+}
+
 }  // namespace css
 }  // namespace donner

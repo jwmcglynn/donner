@@ -114,12 +114,12 @@ enum class AttrMatcher {
 
 inline std::ostream& operator<<(std::ostream& os, AttrMatcher matcher) {
   switch (matcher) {
-    case AttrMatcher::Includes: return os << "=~";
-    case AttrMatcher::DashMatch: return os << "|=";
-    case AttrMatcher::PrefixMatch: return os << "^=";
-    case AttrMatcher::SuffixMatch: return os << "$=";
-    case AttrMatcher::SubstringMatch: return os << "*=";
-    case AttrMatcher::Eq: return os << "=";
+    case AttrMatcher::Includes: return os << "Includes(=~)";
+    case AttrMatcher::DashMatch: return os << "DashMatch(|=)";
+    case AttrMatcher::PrefixMatch: return os << "PrefixMatch(^=)";
+    case AttrMatcher::SuffixMatch: return os << "SuffixMatch($=)";
+    case AttrMatcher::SubstringMatch: return os << "SubstringMatch(*=)";
+    case AttrMatcher::Eq: return os << "Eq(=)";
   }
 
   assert(false && "Unreachable");
@@ -140,7 +140,7 @@ struct AttributeSelector {
   friend std::ostream& operator<<(std::ostream& os, const AttributeSelector& obj) {
     os << "AttributeSelector(" << obj.name;
     if (obj.matcher) {
-      os << obj.matcher->op << obj.matcher->value;
+      os << " " << obj.matcher->op << " " << obj.matcher->value;
     }
     os << ")";
     return os;

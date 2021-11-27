@@ -421,7 +421,8 @@ public:
     }
 
     RcString ns;
-    if ((isIdent && nextDelimIs('|', 1)) || isDelim) {
+    // Check for `ident|`, but exclude `ident|=` for attribute selectors, like `a[attr|=value]`.
+    if ((isIdent && nextDelimIs('|', 1) && !nextDelimIs('=', 2)) || isDelim) {
       // If the next token is a delim, as a precondition it is either '|' or '*'.
       if (isDelim && token->get<Token::Delim>().value != '|' &&
           token->get<Token::Delim>().value != '*') {
@@ -551,11 +552,11 @@ public:
       if (token->is<Token::Ident>()) {
         foundValue = true;
         matcher.value = token->get<Token::Ident>().value;
-        advance();
+        subparser.advance();
       } else if (token->is<Token::String>()) {
         foundValue = true;
         matcher.value = token->get<Token::String>().value;
-        advance();
+        subparser.advance();
       }
     }
 
@@ -573,7 +574,7 @@ public:
       if (token->is<Token::Ident>()) {
         if (token->get<Token::Ident>().value.equalsLowercase("i")) {
           matcher.caseInsensitive = true;
-          advance();
+          subparser.advance();
         }
       }
     }

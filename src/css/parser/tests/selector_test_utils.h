@@ -93,7 +93,7 @@ public:
     return true;
   }
 
-  virtual void DescribeTo(::std::ostream* os) const {
+  virtual void DescribeTo(std::ostream* os) const {
     if (matchers_.empty()) {
       *os << "is empty";
     } else if (matchers_.size() == 1) {
@@ -111,7 +111,7 @@ public:
     }
   }
 
-  virtual void DescribeNegationTo(::std::ostream* os) const {
+  virtual void DescribeNegationTo(std::ostream* os) const {
     if (matchers_.empty()) {
       *os << "isn't empty";
     } else {
