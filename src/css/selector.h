@@ -147,13 +147,27 @@ struct AttributeSelector {
   }
 };
 
-using CompoundSelector = std::variant<PseudoElementSelector, TypeSelector, IdSelector,
-                                      ClassSelector, PseudoClassSelector, AttributeSelector>;
+struct CompoundSelector {
+  using Entry = std::variant<PseudoElementSelector, TypeSelector, IdSelector, ClassSelector,
+                             PseudoClassSelector, AttributeSelector>;
 
-inline std::ostream& operator<<(std::ostream& os, const CompoundSelector& obj) {
-  std::visit([&os](auto&& value) { os << value; }, obj);
-  return os;
-}
+  std::vector<Entry> entries;
+
+  friend std::ostream& operator<<(std::ostream& os, const CompoundSelector& obj) {
+    os << "CompoundSelector(";
+    bool first = true;
+    for (auto& entry : obj.entries) {
+      if (first) {
+        first = false;
+      } else {
+        os << ", ";
+      }
+
+      std::visit([&os](auto&& value) { os << value; }, entry);
+    }
+    return os << ")";
+  }
+};
 
 enum class Combinator {
   Descendant,         //!< No token.
@@ -200,18 +214,18 @@ struct ComplexSelector {
 };
 
 struct Selector {
-  std::vector<ComplexSelector> complexSelectors;
+  std::vector<ComplexSelector> entries;
 
   friend std::ostream& operator<<(std::ostream& os, const Selector& obj) {
     os << "Selector(";
     bool first = true;
-    for (auto& complexSelector : obj.complexSelectors) {
+    for (auto& entry : obj.entries) {
       if (first) {
         first = false;
       } else {
         os << ", ";
       }
-      os << complexSelector;
+      os << entry;
     }
     return os << ")";
   }

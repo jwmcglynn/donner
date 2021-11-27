@@ -69,6 +69,8 @@ TEST(SelectorParser, CombinatorTypes) {
 }
 
 TEST(SelectorParser, TypeSelector) {
+  EXPECT_THAT(SelectorParser::Parse("name"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("name")))));
   EXPECT_THAT(SelectorParser::Parse("ns|name"),
               ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("ns", "name")))));
   EXPECT_THAT(SelectorParser::Parse("*|name"),
@@ -91,6 +93,25 @@ TEST(SelectorParser, TypeSelector) {
               ParseErrorIs("Expected ident after namespace prefix when parsing name"));
 }
 
+TEST(SelectorParser, TypeSelector_ToString) {
+  EXPECT_THAT(
+      SelectorParser::Parse("name"),
+      ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(name))))")));
+
+  EXPECT_THAT(SelectorParser::Parse("ns|name"),
+              ParseResultIs(ToStringIs(
+                  "Selector(ComplexSelector(CompoundSelector(TypeSelector(ns|name))))")));
+  EXPECT_THAT(SelectorParser::Parse("*|name"),
+              ParseResultIs(
+                  ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(*|name))))")));
+  EXPECT_THAT(
+      SelectorParser::Parse("|name"),
+      ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(name))))")));
+  EXPECT_THAT(
+      SelectorParser::Parse("ns|*"),
+      ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(ns|*))))")));
+}
+
 TEST(SelectorParser, PseudoElementSelector) {
   EXPECT_THAT(SelectorParser::Parse("::after"),
               ParseResultIs(ComplexSelectorIs(EntryIs(PseudoElementSelectorIs("after")))));
@@ -102,6 +123,22 @@ TEST(SelectorParser, PseudoElementSelector) {
               ParseResultIs(ComplexSelectorIs(EntryIs(PseudoElementSelectorIs(
                   "after", ElementsAre(TokenIsIdent("one"), TokenIsWhitespace(" "),
                                        TokenIsIdent("two")))))));
+}
+
+TEST(SelectorParser, PseudoElementSelector_ToString) {
+  EXPECT_THAT(SelectorParser::Parse("::after"),
+              ParseResultIs(ToStringIs(
+                  "Selector(ComplexSelector(CompoundSelector(PseudoElementSelector(after))))")));
+  EXPECT_THAT(
+      SelectorParser::Parse("::after()"),
+      ParseResultIs(ToStringIs(
+          "Selector(ComplexSelector(CompoundSelector(PseudoElementSelector(after args[]))))")));
+
+  EXPECT_THAT(
+      SelectorParser::Parse("::after(one two)"),
+      ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(PseudoElementSelector("
+                               "after args[Token { Ident(one) offset: 8 }, Token { Whitespace(' ', "
+                               "len=1) offset: 11 }, Token { Ident(two) offset: 12 }, ]))))")));
 }
 
 TEST(SelectorParser, PseudoClassSelector) {
@@ -117,66 +154,112 @@ TEST(SelectorParser, PseudoClassSelector) {
                                        TokenIsIdent("two")))))));
 }
 
+TEST(SelectorParser, PseudoClassSelector_ToString) {
+  EXPECT_THAT(SelectorParser::Parse(":after"),
+              ParseResultIs(ToStringIs(
+                  "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(after))))")));
+  EXPECT_THAT(
+      SelectorParser::Parse(":after()"),
+      ParseResultIs(ToStringIs(
+          "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(after args[]))))")));
+
+  EXPECT_THAT(
+      SelectorParser::Parse(":after(one two)"),
+      ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(PseudoClassSelector("
+                               "after args[Token { Ident(one) offset: 7 }, Token { Whitespace(' ', "
+                               "len=1) offset: 10 }, Token { Ident(two) offset: 11 }, ]))))")));
+}
+
+TEST(SelectorParser, AttrMatcher) {
+  EXPECT_THAT(
+      SelectorParser::Parse("a[test]"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(TypeSelectorIs("a"), AttributeSelectorIs("test")))));
+}
+
+TEST(SelectorParser, AttrMatcher_ToString) {
+  EXPECT_THAT(SelectorParser::Parse("a[test]"),
+              ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
+                                       "AttributeSelector(test))))")));
+}
+
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm
 TEST(SelectorParser, CssTestSuite_Is) {
   // Simple selector arguments
   EXPECT_THAT(SelectorParser::Parse(".a :is(.b, .c)"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(ClassSelector(a) ' ' PseudoClassSelector(is args[Token "
-                  "{ Delim(.) offset: 7 }, Token { Ident(b) offset: 8 }, Token { Comma offset: 9 "
-                  "}, Token { Whitespace(' ', len=1) offset: 10 }, Token { Delim(.) offset: 11 }, "
-                  "Token { Ident(c) offset: 12 }, ])))")));
+              ParseResultIs(ComplexSelectorIs(
+                  EntryIs(ClassSelectorIs("a")),
+                  EntryIs(Combinator::Descendant,
+                          PseudoClassSelectorIs(
+                              "is", ElementsAre(TokenIsDelim('.'), TokenIsIdent("b"),
+                                                TokenIsComma(), TokenIsWhitespace(" "),
+                                                TokenIsDelim('.'), TokenIsIdent("c")))))));
 
   // Compound selector arguments
   EXPECT_THAT(SelectorParser::Parse(".a :is(.c#d, .e)"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(ClassSelector(a) ' ' PseudoClassSelector(is args[Token "
-                  "{ Delim(.) offset: 7 }, Token { Ident(c) offset: 8 }, Token { Hash(id: d) "
-                  "offset: 9 }, Token { Comma offset: 11 }, Token { Whitespace(' ', len=1) offset: "
-                  "12 }, Token { Delim(.) offset: 13 }, Token { Ident(e) offset: 14 }, ])))")));
+              ParseResultIs(ComplexSelectorIs(
+                  EntryIs(ClassSelectorIs("a")),
+                  EntryIs(Combinator::Descendant,
+                          PseudoClassSelectorIs(
+                              "is", ElementsAre(TokenIsDelim('.'), TokenIsIdent("c"),
+                                                TokenIsHash(Token::Hash::Type::Id, "d"),
+                                                TokenIsComma(), TokenIsWhitespace(" "),
+                                                TokenIsDelim('.'), TokenIsIdent("e")))))));
 
   // Complex selector arguments
   EXPECT_THAT(SelectorParser::Parse(".a .g>.b"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(ClassSelector(a) ' ' "
-                                       "ClassSelector(g) '>' ClassSelector(b)))")));
-  EXPECT_THAT(SelectorParser::Parse(".a :is(.e+.f, .g>.b, .h)"),
-              ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(ClassSelector(a) ' ' PseudoClassSelector(is args[Token "
-                  "{ Delim(.) offset: 7 }, Token { Ident(e) offset: 8 }, Token { Delim(+) offset: "
-                  "9 }, Token { Delim(.) offset: 10 }, Token { Ident(f) offset: 11 }, Token { "
-                  "Comma offset: 12 }, Token { Whitespace(' ', len=1) offset: 13 }, Token { "
-                  "Delim(.) offset: 14 }, Token { Ident(g) offset: 15 }, Token { Delim(>) offset: "
-                  "16 }, Token { Delim(.) offset: 17 }, Token { Ident(b) offset: 18 }, Token { "
-                  "Comma offset: 19 }, Token { Whitespace(' ', len=1) offset: 20 }, Token { "
-                  "Delim(.) offset: 21 }, Token { Ident(h) offset: 22 }, ])))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(ClassSelectorIs("a")),
+                                              EntryIs(Combinator::Descendant, ClassSelectorIs("g")),
+                                              EntryIs(Combinator::Child, ClassSelectorIs("b")))));
+
+  EXPECT_THAT(
+      SelectorParser::Parse(".a :is(.e+.f, .g>.b, .h)"),
+      ParseResultIs(ComplexSelectorIs(
+          EntryIs(ClassSelectorIs("a")),
+          EntryIs(Combinator::Descendant,
+                  PseudoClassSelectorIs(
+                      "is", ElementsAre(TokenIsDelim('.'), TokenIsIdent("e"), TokenIsDelim('+'),
+                                        TokenIsDelim('.'), TokenIsIdent("f"), TokenIsComma(),
+                                        TokenIsWhitespace(" "), TokenIsDelim('.'),
+                                        TokenIsIdent("g"), TokenIsDelim('>'), TokenIsDelim('.'),
+                                        TokenIsIdent("b"), TokenIsComma(), TokenIsWhitespace(" "),
+                                        TokenIsDelim('.'), TokenIsIdent("h")))))));
   EXPECT_THAT(SelectorParser::Parse(".g>.b"),
-              ParseResultIs(
-                  ToStringIs("Selector(ComplexSelector(ClassSelector(g) '>' ClassSelector(b)))")));
-  EXPECT_THAT(SelectorParser::Parse(".a .h"),
-              ParseResultIs(
-                  ToStringIs("Selector(ComplexSelector(ClassSelector(a) ' ' ClassSelector(h)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(ClassSelectorIs("g")),
+                                              EntryIs(Combinator::Child, ClassSelectorIs("b")))));
+  EXPECT_THAT(
+      SelectorParser::Parse(".a .h"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(ClassSelectorIs("a")),
+                                      EntryIs(Combinator::Descendant, ClassSelectorIs("h")))));
 
   // Nested
-  EXPECT_THAT(SelectorParser::Parse(".a+.c>.e"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(ClassSelector(a) '+' "
-                                       "ClassSelector(c) '>' ClassSelector(e)))")));
+  EXPECT_THAT(
+      SelectorParser::Parse(".a+.c>.e"),
+      ParseResultIs(ComplexSelectorIs(EntryIs(ClassSelectorIs("a")),
+                                      EntryIs(Combinator::NextSibling, ClassSelectorIs("c")),
+                                      EntryIs(Combinator::Child, ClassSelectorIs("e")))));
   EXPECT_THAT(SelectorParser::Parse(".c>.a+.e"),
-              ParseResultIs(ToStringIs("Selector(ComplexSelector(ClassSelector(c) '>' "
-                                       "ClassSelector(a) '+' ClassSelector(e)))")));
+              ParseResultIs(ComplexSelectorIs(
+                  EntryIs(ClassSelectorIs("c")), EntryIs(Combinator::Child, ClassSelectorIs("a")),
+                  EntryIs(Combinator::NextSibling, ClassSelectorIs("e")))));
   EXPECT_THAT(
       SelectorParser::Parse(".a+:is(.b+.f, :is(.c>.e, .g))"),
-      ParseResultIs(ToStringIs(
-          "Selector(ComplexSelector(ClassSelector(a) '+' PseudoClassSelector(is args[Token { "
-          "Delim(.) offset: 7 }, Token { Ident(b) offset: 8 }, Token { Delim(+) offset: 9 }, Token "
-          "{ Delim(.) offset: 10 }, Token { Ident(f) offset: 11 }, Token { Comma offset: 12 }, "
-          "Token { Whitespace(' ', len=1) offset: 13 }, Token { Colon offset: 14 }, Function { is( "
-          "Token { Delim(.) offset: 18 } Token { Ident(c) offset: 19 } Token { Delim(>) offset: 20 "
-          "} Token { Delim(.) offset: 21 } Token { Ident(e) offset: 22 } Token { Comma offset: 23 "
-          "} Token { Whitespace(' ', len=1) offset: 24 } Token { Delim(.) offset: 25 } Token { "
-          "Ident(g) offset: 26 } ) }, ])))")));
+      ParseResultIs(ComplexSelectorIs(
+          EntryIs(ClassSelectorIs("a")),
+          EntryIs(
+              Combinator::NextSibling,
+              PseudoClassSelectorIs(
+                  "is",
+                  ElementsAre(
+                      TokenIsDelim('.'), TokenIsIdent("b"), TokenIsDelim('+'), TokenIsDelim('.'),
+                      TokenIsIdent("f"), TokenIsComma(), TokenIsWhitespace(" "), TokenIsColon(),
+                      FunctionIs(
+                          "is", ElementsAre(TokenIsDelim('.'), TokenIsIdent("c"), TokenIsDelim('>'),
+                                            TokenIsDelim('.'), TokenIsIdent("e"), TokenIsComma(),
+                                            TokenIsWhitespace(" "), TokenIsDelim('.'),
+                                            TokenIsIdent("g")))))))));
   EXPECT_THAT(SelectorParser::Parse(".c>.e"),
-              ParseResultIs(
-                  ToStringIs("Selector(ComplexSelector(ClassSelector(c) '>' ClassSelector(e)))")));
+              ParseResultIs(ComplexSelectorIs(EntryIs(ClassSelectorIs("c")),
+                                              EntryIs(Combinator::Child, ClassSelectorIs("e")))));
 }
 
 // TODO: Add more tests from

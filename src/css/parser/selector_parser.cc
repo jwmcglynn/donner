@@ -102,7 +102,7 @@ public:
 
     Selector result;
     if (auto complexSelector = handleComplexSelector()) {
-      result.complexSelectors.emplace_back(std::move(*complexSelector));
+      result.entries.emplace_back(std::move(*complexSelector));
     } else {
       // Error has already been set inside handleComplexSelector.
       return std::nullopt;
@@ -118,7 +118,7 @@ public:
       skipWhitespace();
 
       if (auto complexSelector = handleComplexSelector()) {
-        result.complexSelectors.emplace_back(std::move(*complexSelector));
+        result.entries.emplace_back(std::move(*complexSelector));
       } else {
         // Error has already been set inside handleComplexSelector.
         return std::nullopt;
@@ -193,32 +193,64 @@ public:
      *  <hash-token> | '.' | <simple-block> | ':' -> PREDICT <subclass-selector>
      *  ':' then ':' -> PREDICT <pseudo-element-selector>
      */
-    if (const Token* token = next<Token>()) {
-      if (token->is<Token::Ident>()) {
-        return handleTypeSelector();
-      } else if (token->is<Token::Delim>()) {
-        const char delim = token->get<Token::Delim>().value;
-        if (delim == '|' || delim == '*') {
-          return handleTypeSelector();
-        } else if (delim == '.') {
-          return subclassToCompound(handleSubclassSelector());
-        }
-      } else if (token->is<Token::Colon>()) {
-        // If there is a second <colon-token>, then it's a <pseudo-element-selector>.
-        if (nextTokenIs<Token::Colon>(1)) {
-          return handlePseudoElementSelector();
-        } else {
-          return subclassToCompound(handleSubclassSelector());
-        }
-      } else if (token->is<Token::Hash>()) {
-        return subclassToCompound(handleSubclassSelector());
+    CompoundSelector result;
+
+    bool hadError = false;
+    bool addedEntry = false;
+    auto handleResult = [&](auto&& value) {
+      if (value.has_value()) {
+        result.entries.emplace_back(std::move(value.value()));
+        addedEntry = true;
+      } else {
+        hadError = true;
       }
-    } else if (nextIs<SimpleBlock>()) {
-      return subclassToCompound(handleSubclassSelector());
+    };
+
+    for (bool first = true; true; first = false) {
+      hadError = false;
+      addedEntry = false;
+
+      if (const Token* token = next<Token>()) {
+        if (token->is<Token::Ident>()) {
+          handleResult(handleTypeSelector());
+        } else if (token->is<Token::Delim>()) {
+          const char delim = token->get<Token::Delim>().value;
+          if (delim == '|' || delim == '*') {
+            handleResult(handleTypeSelector());
+          } else if (delim == '.') {
+            handleResult(subclassToCompoundEntry(handleSubclassSelector()));
+          }
+        } else if (token->is<Token::Colon>()) {
+          // If there is a second <colon-token>, then it's a <pseudo-element-selector>.
+          if (nextTokenIs<Token::Colon>(1)) {
+            handleResult(handlePseudoElementSelector());
+          } else {
+            handleResult(subclassToCompoundEntry(handleSubclassSelector()));
+          }
+        } else if (token->is<Token::Hash>()) {
+          handleResult(subclassToCompoundEntry(handleSubclassSelector()));
+        }
+      } else if (nextIs<SimpleBlock>()) {
+        handleResult(subclassToCompoundEntry(handleSubclassSelector()));
+      }
+
+      if (hadError) {
+        return std::nullopt;
+      }
+
+      if (!addedEntry) {
+        // If we get here, then we've reached the end of the compound selector. If we failed on the
+        // first iteration, generate an error. Otherwise silently exit.
+        if (first) {
+          setError("Unexpected token when parsing compound selector");
+          return std::nullopt;
+        } else {
+          break;
+        }
+      }
     }
 
-    setError("Unexpected token when parsing compound selector");
-    return std::nullopt;
+    return result;
   }
 
   std::optional<Combinator> handleCombinator() {
@@ -666,12 +698,13 @@ private:
 
   void setError(ParseError&& error) { error_ = std::move(error); }
 
-  std::optional<CompoundSelector> subclassToCompound(std::optional<SubclassSelector>&& subclass) {
+  std::optional<CompoundSelector::Entry> subclassToCompoundEntry(
+      std::optional<SubclassSelector>&& subclass) {
     if (!subclass) {
       return std::nullopt;
     }
 
-    return std::visit([](auto&& arg) -> CompoundSelector { return std::move(arg); },
+    return std::visit([](auto&& arg) -> CompoundSelector::Entry { return std::move(arg); },
                       std::move(subclass.value()));
   }
 

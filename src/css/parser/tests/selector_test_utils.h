@@ -16,33 +16,21 @@ namespace css {
  *
  * @param complexSelectorsMatcher Matcher against a ComplexSelector array.
  */
-MATCHER_P(SelectorsAre, complexSelectorsMatcher, "") {
-  return testing::ExplainMatchResult(complexSelectorsMatcher, arg.values, result_listener);
-}
 template <typename... Args>
 auto SelectorsAre(const Args&... matchers) {
-  return testing::Field("complexSelectors", &Selector::complexSelectors,
-                        testing::ElementsAre(matchers...));
+  return testing::Field("entries", &Selector::entries, testing::ElementsAre(matchers...));
 }
 
-class ComplexSelectorIsImpl {
+template <typename SelectorType>
+class MultiSelectorMatcher {
 public:
   using is_gtest_matcher = void;
+  using EntryType = typename SelectorType::Entry;
 
-  explicit ComplexSelectorIsImpl(
-      std::vector<testing::Matcher<const ComplexSelector::Entry&>>&& matchers)
+  explicit MultiSelectorMatcher(std::vector<testing::Matcher<const EntryType&>>&& matchers)
       : matchers_(std::move(matchers)) {}
 
-  bool MatchAndExplain(const Selector& selector,
-                       testing::MatchResultListener* result_listener) const {
-    if (selector.complexSelectors.size() != 1) {
-      return false;
-    }
-
-    return MatchAndExplain(selector.complexSelectors[0], result_listener);
-  }
-
-  bool MatchAndExplain(const ComplexSelector& selector,
+  bool MatchAndExplain(const SelectorType& selector,
                        testing::MatchResultListener* result_listener) const {
     const bool listenerInterested = result_listener->IsInterested();
 
@@ -143,7 +131,30 @@ private:
     return testing::Message() << count << (count == 1 ? " element" : " elements");
   }
 
-  std::vector<testing::Matcher<const ComplexSelector::Entry&>> matchers_;
+  std::vector<testing::Matcher<const EntryType&>> matchers_;
+};
+
+class ComplexSelectorIsImpl : public MultiSelectorMatcher<ComplexSelector> {
+public:
+  using is_gtest_matcher = void;
+  using Base = MultiSelectorMatcher<ComplexSelector>;
+
+  explicit ComplexSelectorIsImpl(
+      std::vector<testing::Matcher<const ComplexSelector::Entry&>>&& matchers)
+      : MultiSelectorMatcher(std::move(matchers)) {}
+
+  bool MatchAndExplain(const Selector& selector,
+                       testing::MatchResultListener* result_listener) const {
+    if (selector.entries.size() != 1) {
+      return false;
+    }
+
+    return Base::MatchAndExplain(selector.entries[0], result_listener);
+  }
+
+  using Base::DescribeNegationTo;
+  using Base::DescribeTo;
+  using Base::MatchAndExplain;
 };
 
 /**
@@ -174,25 +185,36 @@ auto ComplexSelectorIs(const Args&... matchers) {
   return testing::MakePolymorphicMatcher(ComplexSelectorIsImpl(std::move(matchersVector)));
 }
 
-template <typename CompoundSelectorMatcher>
-auto EntryIs(CompoundSelectorMatcher matcher) {
-  return testing::AllOf(
-      testing::Field("combinator", &ComplexSelector::Entry::combinator, Combinator::Descendant),
-      testing::Field("compoundSelector", &ComplexSelector::Entry::compoundSelector, matcher));
-}
+template <typename... Args>
+auto EntryIs(Combinator combinator, const Args&... matchers) {
+  std::tuple<typename std::decay<const Args&>::type...> matchersTuple =
+      std::make_tuple(matchers...);
 
-template <typename CompoundSelectorMatcher>
-auto EntryIs(Combinator combinator, CompoundSelectorMatcher matcher) {
+  std::vector<testing::Matcher<const CompoundSelector::Entry&>> matchersVector;
+  std::apply(
+      [&matchersVector](auto&&... args) {
+        (matchersVector.emplace_back(testing::MatcherCast<const CompoundSelector::Entry&>(args)),
+         ...);
+      },
+      matchersTuple);
+
   return testing::AllOf(
       testing::Field("combinator", &ComplexSelector::Entry::combinator, combinator),
-      testing::Field("compoundSelector", &ComplexSelector::Entry::compoundSelector, matcher));
+      testing::Field("compoundSelector", &ComplexSelector::Entry::compoundSelector,
+                     testing::MakePolymorphicMatcher(
+                         MultiSelectorMatcher<CompoundSelector>(std::move(matchersVector)))));
+}
+
+template <typename... Args>
+auto EntryIs(const Args&... matchers) {
+  return EntryIs(Combinator::Descendant, matchers...);
 }
 
 MATCHER_P2(PseudoElementSelectorIsImpl, ident, argsMatcher, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
   const PseudoElementSelector* selector = nullptr;
-  if constexpr (std::is_same_v<ArgType, CompoundSelector>) {
+  if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
     selector = std::get_if<PseudoElementSelector>(&arg);
   } else {
     selector = &arg;
@@ -214,7 +236,7 @@ auto PseudoElementSelectorIs(const char* ident, ArgsMatcher argsMatcher) {
 MATCHER_P2(TypeSelectorIsImpl, ns, name, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  if constexpr (std::is_same_v<ArgType, CompoundSelector>) {
+  if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
     if (const TypeSelector* selector = std::get_if<TypeSelector>(&arg)) {
       return selector->ns == ns && selector->name == name;
     }
@@ -236,7 +258,7 @@ auto TypeSelectorIs(const char* ns, const char* name) {
 MATCHER_P(IdSelectorIs, name, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  if constexpr (std::is_same_v<ArgType, CompoundSelector>) {
+  if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
     if (const IdSelector* selector = std::get_if<IdSelector>(&arg)) {
       return selector->name == name;
     }
@@ -250,7 +272,7 @@ MATCHER_P(IdSelectorIs, name, "") {
 MATCHER_P(ClassSelectorIs, name, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  if constexpr (std::is_same_v<ArgType, CompoundSelector>) {
+  if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
     if (const ClassSelector* selector = std::get_if<ClassSelector>(&arg)) {
       return selector->name == name;
     }
@@ -265,7 +287,7 @@ MATCHER_P2(PseudoClassSelectorIsImpl, ident, argsMatcher, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
   const PseudoClassSelector* selector = nullptr;
-  if constexpr (std::is_same_v<ArgType, CompoundSelector>) {
+  if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
     selector = std::get_if<PseudoClassSelector>(&arg);
   } else {
     selector = &arg;
@@ -284,7 +306,48 @@ auto PseudoClassSelectorIs(const char* ident, ArgsMatcher argsMatcher) {
   return PseudoClassSelectorIsImpl(ident, testing::Optional(argsMatcher));
 }
 
-// TODO: AttributeSelector
+MATCHER_P3(AttributeSelectorIsImpl, ns, name, matcherMatcher, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
+
+  const AttributeSelector* selector = nullptr;
+  if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
+    selector = std::get_if<AttributeSelector>(&arg);
+  } else {
+    selector = &arg;
+  }
+
+  return selector && selector->name.ns == ns && selector->name.name == name &&
+         testing::ExplainMatchResult(matcherMatcher, selector->matcher, result_listener);
+}
+
+auto AttributeSelectorIs(const char* name) {
+  return AttributeSelectorIsImpl("", name, testing::Eq(std::nullopt));
+}
+
+auto AttributeSelectorIs(const char* ns, const char* name) {
+  return AttributeSelectorIsImpl(ns, name, testing::Eq(std::nullopt));
+}
+
+template <typename MatcherMatcher>
+auto AttributeSelectorIs(const char* name, MatcherMatcher matcherMatcher) {
+  return AttributeSelectorIsImpl("", name, testing::Optional(matcherMatcher));
+}
+
+template <typename MatcherMatcher>
+auto AttributeSelectorIs(const char* ns, const char* name, MatcherMatcher matcherMatcher) {
+  return AttributeSelectorIsImpl(ns, name, testing::Optional(matcherMatcher));
+}
+
+enum class MatcherOptions { Default, CaseInsensitive };
+
+auto MatcherIs(AttrMatcher op, const char* value,
+               MatcherOptions options = MatcherOptions::Default) {
+  return testing::AllOf(
+      testing::Field("op", &AttributeSelector::Matcher::op, testing::Eq(op)),
+      testing::Field("value", &AttributeSelector::Matcher::value, testing::Eq(value)),
+      testing::Field("caseInsensitive", &AttributeSelector::Matcher::caseInsensitive,
+                     options == MatcherOptions::CaseInsensitive));
+}
 
 }  // namespace css
 }  // namespace donner
