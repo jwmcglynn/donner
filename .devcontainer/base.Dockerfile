@@ -1,5 +1,5 @@
 # Update the VARIANT arg in devcontainer.json to pick an Ubuntu version: focal, bionic
-ARG VARIANT="focal"
+ARG VARIANT="hirsute"
 FROM buildpack-deps:${VARIANT}-curl
 
 # Options for setup script

@@ -1,5 +1,14 @@
-ARG VARIANT=focal
+ARG VARIANT=hirsute
 FROM mcr.microsoft.com/vscode/devcontainers/base:${VARIANT}
+
+ARG TARGETPLATFORM
+ARG TARGETARCH
+
+RUN case "${TARGETPLATFORM}" in \
+      linux/amd64) break;; \
+      linux/arm64) break;; \
+      *) echo "unsupported platform '${TARGETPLATFORM}'"; exit 1;; \
+    esac
 
 #
 # Install base dependencies
@@ -35,13 +44,13 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 #
 # Install bazelisk
 #
-RUN wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O /usr/local/bin/bazel \
+RUN wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-$TARGETARCH -O /usr/local/bin/bazel \
     && chmod +x /usr/local/bin/bazel
 
 #
 # Install buildifier
 #
-RUN wget https://github.com/bazelbuild/buildtools/releases/latest/download/buildifier -O /usr/local/bin/buildifier \
+RUN wget https://github.com/bazelbuild/buildtools/releases/latest/download/buildifier-linux-$TARGETARCH -O /usr/local/bin/buildifier \
     && chmod +x /usr/local/bin/buildifier
 
 #
