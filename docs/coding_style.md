@@ -30,11 +30,11 @@ STL and third-party dependencies do not use this, and use angle brackets:
 * **Class methods**: lowerCamelCase, aligning with the SVG standard.
   * Constructors, and constructor-like static methods continue to use UpperCamelCase.
 * **Free functions**: UpperCamelCase.
-* **Member variables**: lower_snake_case_with_trailing_underscore_
+* **Member variables**: lowerCamelCaseWithTrailingUnderscore_.
 * **Parameters and local variables**: lowerCamelCase
 * **Constants**: `k` prefix, and then UpperCamelCase: kExampleConstant
 
-`path/to_the/ExampleClass.h`:
+`path/to_the/example_class.h`:
 ```
 #pragma once
 
@@ -54,11 +54,11 @@ public:
   ExampleClass() = default;
 
   int getMember() const {
-    return some_member_;
+    return someMember_;
   }
 
 private:
-  int some_member_ = 1;
+  int someMember_ = 1;
 };
 ```
 
