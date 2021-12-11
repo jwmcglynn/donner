@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("//build:rules.bzl", "donner_cc_fuzzer")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer")
 
 cc_library(
     name = "parser",

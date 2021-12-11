@@ -1,5 +1,4 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
-load("//build:rules.bzl", "copy_pathfinder_resources")
 
 cc_library(
     name = "render_context_osmesa",
@@ -12,29 +11,32 @@ cc_library(
 )
 
 cc_library(
-    name = "renderer_pathfinder",
-    srcs = ["renderer_pathfinder.cc"],
-    hdrs = ["renderer_pathfinder.h"],
+    name = "renderer_utils",
+    srcs = ["renderer_utils.cc"],
+    hdrs = ["renderer_utils.h"],
     deps = [
         "//src/svg",
-        "//src/svg/core",
-        "//third_party/pathfinder_wrapper",
+        "@stb//:image_write",
     ],
 )
 
-copy_pathfinder_resources(
-    name = "copy_resources",
+cc_library(
+    name = "renderer_skia",
+    srcs = ["renderer_skia.cc"],
+    hdrs = ["renderer_skia.h"],
+    deps = [
+        ":renderer_utils",
+        "//src/svg",
+        "//src/svg/core",
+        "@skia//:skia_core",
+    ],
 )
 
 cc_binary(
     name = "renderer_tool",
     srcs = ["renderer_tool.cc"],
-    data = [
-        ":copy_resources",
-    ],
     deps = [
-        ":render_context_osmesa",
-        ":renderer_pathfinder",
+        ":renderer_skia",
         "//src/svg/xml",
     ],
 )

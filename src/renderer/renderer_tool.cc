@@ -1,10 +1,10 @@
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <vector>
 
-#include "src/renderer/render_context_osmesa.h"
-#include "src/renderer/renderer_pathfinder.h"
+#include "src/renderer/renderer_skia.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/xml/xml_parser.h"
 
@@ -78,22 +78,19 @@ extern "C" int main(int argc, char* argv[]) {
 
   const size_t kWidth = 800;
   const size_t kHeight = 600;
-  RenderContextOSMesa renderContext(kWidth, kHeight);
 
-  {
-    std::string errors;
-    if (!renderContext.makeCurrent(&errors)) {
-      std::cerr << "RenderContext makeCurrent failure: " << errors << std::endl;
-      return 3;
-    }
-  }
-
-  RendererPathfinder renderer(&RenderContextOSMesa::getProcAddress, kWidth, kHeight);
+  RendererSkia renderer(kWidth, kHeight);
   renderer.draw(maybeResult.result());
-  renderer.render();
 
-  renderContext.savePNG("offscreen.png");
-  return 0;
+  constexpr const char* kOutputFilename = "output.png";
+  if (renderer.save(kOutputFilename)) {
+    std::cout << "Saved to file: " << std::filesystem::absolute(kOutputFilename) << std::endl;
+    return 0;
+  } else {
+    std::cerr << "Failed to save to file: " << std::filesystem::absolute(kOutputFilename)
+              << std::endl;
+    return 1;
+  }
 }
 
 }  // namespace donner

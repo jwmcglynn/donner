@@ -1,4 +1,5 @@
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_repository")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 git_repository(
     name = "com_google_gtest",
@@ -45,12 +46,6 @@ new_git_repository(
 )
 
 git_repository(
-    name = "io_bazel_rules_rust",
-    commit = "7cf9a3fc467f547b878f7d4065fcd8737da38803",
-    remote = "https://github.com/jwmcglynn/rules_rust.git",
-)
-
-git_repository(
     name = "bazel_skylib",
     commit = "560d7b2359aecb066d81041cb532b82d7354561b",
     remote = "https://github.com/bazelbuild/bazel-skylib.git",
@@ -63,17 +58,43 @@ git_repository(
     remote = "https://github.com/nitronoid/rules_stb",
 )
 
-load("@io_bazel_rules_rust//rust:repositories.bzl", "rust_repositories")
-
-rust_repositories(
-    cargo_version = "0.45.0",
-    version = "1.44.0",
+git_repository(
+    name = "skia",
+    branch = "main",
+    remote = "https://github.com/jwmcglynn/skia",
 )
 
-load("@io_bazel_rules_rust//:workspace.bzl", "bazel_version")
+# Skia dependencies
 
-bazel_version(name = "bazel_version")
+http_archive(
+    name = "rules_python",
+    sha256 = "cd6730ed53a002c56ce4e2f396ba3b3be262fd7cb68339f0377a45e8227fe332",
+    url = "https://github.com/bazelbuild/rules_python/releases/download/0.5.0/rules_python-0.5.0.tar.gz",
+)
 
-load("//third_party/pathfinder:crates.bzl", "raze_fetch_remote_crates")
+http_archive(
+    name = "io_bazel_rules_go",
+    sha256 = "2b1641428dff9018f9e85c0384f03ec6c10660d935b750e3fa1492a281a53b0f",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.29.0/rules_go-v0.29.0.zip",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.29.0/rules_go-v0.29.0.zip",
+    ],
+)
 
-raze_fetch_remote_crates()
+http_archive(
+    name = "bazel_gazelle",
+    sha256 = "de69a09dc70417580aabf20a28619bb3ef60d038470c7cf8442fafcf627c21cb",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.24.0/bazel-gazelle-v0.24.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.24.0/bazel-gazelle-v0.24.0.tar.gz",
+    ],
+)
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+
+go_rules_dependencies()
+
+go_register_toolchains(version = "1.17.2")
+
+gazelle_dependencies(go_repository_default_config = "//:WORKSPACE.bazel")
