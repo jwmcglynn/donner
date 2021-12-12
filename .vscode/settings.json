@@ -115,7 +115,6 @@
   "lldb.launch.initCommands": [
     "command source ${workspaceRoot}/.lldbinit"
   ],
-  "testMate.cpp.test.executables": "bazel-bin/**/*{test,Test,TEST}*",
   "testMate.cpp.test.advancedExecutables": [
     {
       "pattern": "bazel-bin/src/base/base_tests",
