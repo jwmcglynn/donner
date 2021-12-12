@@ -34,10 +34,6 @@ jobs:
         sudo apt-get install -y clang-11 libc++-11-dev libc++abi-11-dev
         echo "/usr/lib/llvm-11/bin" >> $GITHUB_PATH
 
-    - name: Install gcc-7 for gcov-7
-      run: |
-        sudo apt-get install -y gcc-7
-
     - name: Generate coverage
       run: |
         "${GITHUB_WORKSPACE}/bin/bazel" coverage \
