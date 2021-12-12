@@ -1,13 +1,14 @@
 ARG VARIANT=hirsute
 FROM mcr.microsoft.com/vscode/devcontainers/base:${VARIANT}
 
+ARG USERNAME=vscode
 ARG TARGETPLATFORM
 ARG TARGETARCH
 
 RUN case "${TARGETPLATFORM}" in \
-      linux/amd64) break;; \
-      linux/arm64) break;; \
-      *) echo "unsupported platform '${TARGETPLATFORM}'"; exit 1;; \
+    linux/amd64) break;; \
+    linux/arm64) break;; \
+    *) echo "unsupported platform '${TARGETPLATFORM}'"; exit 1;; \
     esac
 
 #
@@ -58,3 +59,10 @@ RUN wget https://github.com/bazelbuild/buildtools/releases/latest/download/build
 #
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends libosmesa6-dev
+
+#
+# Set up command history volume
+# See https://code.visualstudio.com/remote/advancedcontainers/persist-bash-history
+#
+RUN mkdir /commandhistory \
+    && chown -R $USERNAME /commandhistory
