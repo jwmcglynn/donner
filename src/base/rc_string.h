@@ -65,6 +65,16 @@ public:
     return *this;
   }
 
+  RcString& operator=(const char* data) {
+    initializeStorage(std::string_view(data));
+    return *this;
+  }
+
+  RcString& operator=(std::string_view data) {
+    initializeStorage(data);
+    return *this;
+  }
+
   operator std::string_view() const {
     return data_.isLong() ? std::string_view(data_.long_.data, data_.long_.size())
                           : std::string_view(data_.short_.data, data_.short_.size());
@@ -168,6 +178,27 @@ public:
     const std::string_view self = std::string_view(*this);
     for (size_t i = 0; i < other.size(); ++i) {
       if (std::tolower(self[i]) != other[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Returns true if the string equals another string with a case-insensitive comparison.
+   *
+   * @param other string to compare to.
+   * @return true If the strings are equal (case insensitive).
+   */
+  bool equalsIgnoreCase(std::string_view other) const {
+    if (other.size() != size()) {
+      return false;
+    }
+
+    const std::string_view self = std::string_view(*this);
+    for (size_t i = 0; i < other.size(); ++i) {
+      if (std::tolower(self[i]) != std::tolower(other[i])) {
         return false;
       }
     }

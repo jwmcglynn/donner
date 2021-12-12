@@ -157,6 +157,22 @@ TEST(RcString, Move) {
   }
 }
 
+TEST(RcString, Assign) {
+  // Assign from a `const char*`,
+  {
+    RcString str("hello");
+    str = "world";
+    EXPECT_EQ(str, "world");
+  }
+
+  // Assign from std::string_view.
+  {
+    RcString str("hello");
+    str = std::string_view("new world");
+    EXPECT_EQ(str, "new world");
+  }
+}
+
 TEST(RcString, Comparison) {
   // operator==
   EXPECT_EQ(RcString("hello"), RcString("hello"));
@@ -231,6 +247,21 @@ TEST(RcString, EqualsLowercase) {
   EXPECT_FALSE(RcString("test").equalsLowercase("invalid-length"));
   EXPECT_FALSE(
       RcString("test STRING that is longer than 30 characters").equalsLowercase("other string"));
+}
+
+TEST(RcString, EqualsIgnoreCase) {
+  EXPECT_TRUE(RcString().equalsIgnoreCase(""));
+  EXPECT_TRUE(RcString("heLlo").equalsIgnoreCase("hello"));
+  EXPECT_TRUE(RcString("none").equalsIgnoreCase("NONE"));
+  EXPECT_TRUE(RcString("test-STRING").equalsIgnoreCase("TEST-string"));
+  EXPECT_TRUE(RcString("test string that is LONGER than 30 characters")
+                  .equalsIgnoreCase("test STRING that is longer than 30 characters"));
+
+  EXPECT_FALSE(RcString("test-STRING").equalsIgnoreCase("string"));
+  EXPECT_TRUE(RcString("test-STRING").equalsIgnoreCase("test-STRING"));
+  EXPECT_FALSE(RcString("test").equalsIgnoreCase("invalid-length"));
+  EXPECT_FALSE(
+      RcString("test STRING that is longer than 30 characters").equalsIgnoreCase("other string"));
 }
 
 TEST(RcString, Substr) {
