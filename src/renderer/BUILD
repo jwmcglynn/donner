@@ -1,16 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
 cc_library(
-    name = "render_context_osmesa",
-    srcs = ["render_context_osmesa.cc"],
-    hdrs = ["render_context_osmesa.h"],
-    linkopts = ["-lOSMesa"],
-    deps = [
-        "@stb//:image_write",
-    ],
-)
-
-cc_library(
     name = "renderer_utils",
     srcs = ["renderer_utils.cc"],
     hdrs = ["renderer_utils.h"],
