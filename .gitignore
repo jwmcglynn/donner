@@ -1,4 +1,13 @@
 bazel-*
 .vs
-.vscode
 coverage-report
+
+# VS Code
+# See https://www.toptal.com/developers/gitignore/api/visualstudiocode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
