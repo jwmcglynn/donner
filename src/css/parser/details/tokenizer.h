@@ -4,6 +4,7 @@
 
 #include "src/base/parser/number_parser.h"
 #include "src/base/rc_string.h"
+#include "src/base/utils.h"
 #include "src/css/parser/details/common.h"
 #include "src/css/token.h"
 
@@ -518,7 +519,7 @@ private:
       case 'F': return 15;
     }
 
-    assert(false && "Should be unreachable.");
+    UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
   }
 
   /// Check if two code points are a valid escape, per
