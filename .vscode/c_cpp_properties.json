@@ -10,7 +10,6 @@
                 "${workspaceFolder}/bazel-donner-svg/external/com_google_gtest/googletest/include",
                 "${workspaceFolder}/bazel-donner-svg/external/com_google_gtest/googlemock/include",
                 "${workspaceFolder}/bazel-donner-svg/external/stb/src",
-                "${workspaceFolder}/bazel-out/k8-fastbuild/bin/third_party/pathfinder_wrapper",
                 "${workspaceFolder}/bazel-out/k8-fastbuild/bin/external/nlohmann_json/_virtual_includes/nlohmann_json"
             ],
             "defines": [],
