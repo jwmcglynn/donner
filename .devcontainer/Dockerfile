@@ -55,12 +55,6 @@ RUN wget https://github.com/bazelbuild/buildtools/releases/latest/download/build
     && chmod +x /usr/local/bin/buildifier
 
 #
-# Install repository deps
-#
-RUN export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends libosmesa6-dev
-
-#
 # Set up command history volume
 # See https://code.visualstudio.com/remote/advancedcontainers/persist-bash-history
 #

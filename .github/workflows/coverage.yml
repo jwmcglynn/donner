@@ -38,10 +38,6 @@ jobs:
       run: |
         sudo apt-get install -y gcc-7
 
-    - name: Install OSMesa
-      run: |
-        sudo apt-get install -y libosmesa6-dev
-
     - name: Generate coverage
       run: |
         "${GITHUB_WORKSPACE}/bin/bazel" coverage \
