@@ -1,5 +1,6 @@
 bazel-*
 .vs
+compile_commands.json
 coverage-report
 
 # VS Code

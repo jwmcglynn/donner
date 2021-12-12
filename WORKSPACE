@@ -1,6 +1,28 @@
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+##
+## Bazel and IntelliSense
+##
+
+# Hedron's Compile Commands Extractor for Bazel
+# https://github.com/hedronvision/bazel-compile-commands-extractor
+git_repository(
+    name = "hedron_compile_commands",
+    # branch = "main",
+    commit = "e085566bf35e020402a2e32258360b16446fbad8",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+    shallow_since = "1638167585 -0800",
+)
+
+load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
+
+hedron_compile_commands_setup()
+
+##
+## Third-party dependencies.
+##
+
 git_repository(
     name = "com_google_gtest",
     remote = "https://github.com/google/googletest",

@@ -20,6 +20,7 @@
     "bazelbuild.vscode-bazel",
     "cschlosser.doxdocgen",
     "hbenl.vscode-test-explorer",
+    "github.copilot",
     "matepek.vscode-catch2-test-adapter",
     "ms-vscode.cpptools",
     "vadimcn.vscode-lldb",

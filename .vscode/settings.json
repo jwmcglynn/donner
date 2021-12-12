@@ -106,15 +106,21 @@
     "bazel-*": true
   },
   "editor.tabSize": 2,
+  // C++ extension settings
+  "C_Cpp.autocompleteAddParentheses": true,
   "C_Cpp.default.includePath": [
     ".",
   ],
   "C_Cpp.clang_format_sortIncludes": true,
+  "C_Cpp.intelliSenseEngineFallback": "Enabled",
+  // Code formatting
   "editor.formatOnSave": true,
   "bazel.buildifierFixOnFormat": true,
+  // LLDB
   "lldb.launch.initCommands": [
     "command source ${workspaceRoot}/.lldbinit"
   ],
+  // Tests
   "testMate.cpp.test.advancedExecutables": [
     {
       "pattern": "bazel-bin/src/base/base_tests",
@@ -196,5 +202,5 @@
         ],
       }
     }
-  ]
+  ],
 }

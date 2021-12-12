@@ -2,9 +2,12 @@
   "recommendations": [
     "bazelbuild.vscode-bazel",
     "cschlosser.doxdocgen",
+    "cssho.vscode-svgviewer",
+    "github.copilot",
     "hbenl.vscode-test-explorer",
     "matepek.vscode-catch2-test-adapter",
     "ms-vscode.cpptools",
+    "tyriar.luna-paint",
     "vadimcn.vscode-lldb",
   ]
 }
