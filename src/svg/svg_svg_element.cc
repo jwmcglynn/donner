@@ -8,7 +8,7 @@ namespace donner {
 
 SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGSVGElement(registry, CreateEntity(registry, Type));
+  return SVGSVGElement(registry, CreateEntity(registry, "svg", Type));
 }
 
 void SVGSVGElement::setViewbox(std::optional<Boxd> viewbox) {

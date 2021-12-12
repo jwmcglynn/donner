@@ -19,6 +19,10 @@ ElementType SVGElement::type() const {
   return registry_.get().get<TreeComponent>(entity_).type();
 }
 
+RcString SVGElement::typeString() const {
+  return registry_.get().get<TreeComponent>(entity_).typeString();
+}
+
 Entity SVGElement::entity() const {
   return entity_;
 }
@@ -139,9 +143,9 @@ void SVGElement::remove() {
   registry_.get().get<TreeComponent>(entity_).remove(registry_);
 }
 
-Entity SVGElement::CreateEntity(Registry& registry, ElementType type) {
+Entity SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
   Entity entity = registry.create();
-  registry.emplace<TreeComponent>(entity, type, entity);
+  registry.emplace<TreeComponent>(entity, type, std::move(typeString), entity);
   return entity;
 }
 

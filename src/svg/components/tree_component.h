@@ -1,12 +1,14 @@
 #pragma once
 
+#include "src/base/rc_string.h"
 #include "src/svg/components/registry.h"
 
 namespace donner {
 
 class TreeComponent {
 public:
-  TreeComponent(ElementType type, Entity self) : type_(type), self_(self) {}
+  TreeComponent(ElementType type, RcString typeString, Entity self)
+      : type_(type), typeString_(typeString), self_(self) {}
 
   /**
    * Insert @a newNode as a child, before @a referenceNode. If @a referenceNode is entt::null,
@@ -63,6 +65,8 @@ public:
 
   ElementType type() const { return type_; }
 
+  RcString typeString() const { return typeString_; }
+
   Entity parent() const { return parent_; }
   Entity firstChild() const { return first_child_; }
   Entity lastChild() const { return last_child_; }
@@ -71,6 +75,8 @@ public:
 
 private:
   ElementType type_;
+  RcString typeString_;
+
   Entity self_{entt::null};
 
   Entity parent_{entt::null};

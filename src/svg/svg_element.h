@@ -3,6 +3,7 @@
 #include <functional>
 #include <string_view>
 
+#include "src/base/rc_string.h"
 #include "src/base/transform.h"
 #include "src/base/utils.h"
 #include "src/svg/components/registry.h"
@@ -21,6 +22,8 @@ public:
   SVGElement& operator=(const SVGElement& other);
 
   ElementType type() const;
+  RcString typeString() const;
+
   Entity entity() const;
 
   std::string id() const;
@@ -98,7 +101,7 @@ public:
   }
 
 protected:
-  static Entity CreateEntity(Registry& registry, ElementType Type);
+  static Entity CreateEntity(Registry& registry, RcString typeString, ElementType Type);
 
   std::reference_wrapper<Registry> registry_;
   Entity entity_;

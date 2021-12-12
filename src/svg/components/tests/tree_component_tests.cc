@@ -15,7 +15,7 @@ class TreeComponentTests : public testing::Test {
 protected:
   Entity createEntity() {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, entity);
+    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, "unknown", entity);
     return entity;
   }
 
@@ -292,6 +292,32 @@ TEST_F(TreeComponentTests, Remove) {
   // Remove last.
   tree(child2).remove(registry_);
   EXPECT_THAT(children(root), ElementsAre(child3));
+}
+
+TEST_F(TreeComponentTests, Type) {
+  {
+    auto entity = createEntity();
+    EXPECT_EQ(tree(entity).type(), ElementType::Unknown);
+  }
+
+  {
+    auto entity = registry_.create();
+    registry_.emplace<TreeComponent>(entity, ElementType::SVG, "svg", entity);
+    EXPECT_EQ(tree(entity).type(), ElementType::SVG);
+  }
+}
+
+TEST_F(TreeComponentTests, TypeString) {
+  {
+    auto entity = createEntity();
+    EXPECT_EQ(tree(entity).typeString(), "unknown");
+  }
+
+  {
+    auto entity = registry_.create();
+    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, "test-entity", entity);
+    EXPECT_EQ(tree(entity).typeString(), "test-entity");
+  }
 }
 
 }  // namespace donner

@@ -241,7 +241,8 @@ ParseResult<SVGElement> CreateElement(XMLParserContext& context, SVGDocument& sv
 
     return CreateElement<I + 1>(context, svgDocument, tagName, node, entt::type_list<Types...>());
   } else {
-    return ParseAttributes(context, SVGUnknownElement::Create(svgDocument), node);
+    return ParseAttributes(context, SVGUnknownElement::Create(svgDocument, RcString(tagName)),
+                           node);
   }
 }
 

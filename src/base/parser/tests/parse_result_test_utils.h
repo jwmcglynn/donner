@@ -12,10 +12,8 @@ namespace donner {
 
 template <typename T>
 concept IsOptionalLike = requires(T t) {
-  // clang-format off
   { t.has_value() } -> std::same_as<bool>;
   t.value();
-  // clang-format on
 };
 
 template <typename T>

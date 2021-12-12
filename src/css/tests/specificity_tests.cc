@@ -4,8 +4,7 @@
 #include "src/base/tests/base_test_utils.h"
 #include "src/css/specificity.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 static constexpr uint32_t kMaxValue = std::numeric_limits<uint32_t>::max();
 
@@ -36,5 +35,4 @@ TEST(Specificity, SpecialTypes) {
   EXPECT_GT(Specificity::Important(), Specificity::StyleAttribute());
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

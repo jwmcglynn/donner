@@ -1,5 +1,8 @@
 #pragma once
 
+#include <concepts>
+#include <experimental/coroutine>
+#include <functional>
 #include <variant>
 #include <vector>
 
@@ -8,6 +11,135 @@
 
 namespace donner {
 namespace css {
+
+template <typename T>
+concept ElementLike = requires(T t, std::string_view name) {
+  { t.parentElement() } -> std::same_as<std::optional<T>>;
+  { t.previousSibling() } -> std::same_as<std::optional<T>>;
+  { t.typeString() } -> std::same_as<RcString>;
+  { t.id() } -> std::same_as<RcString>;
+  { t.className() } -> std::same_as<RcString>;
+  { t.hasAttribute(name) } -> std::same_as<bool>;
+  { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;
+};
+
+namespace details {
+
+  template <typename T>
+  class Generator {
+  public:
+    class Promise;
+    using Handle = std::experimental::coroutine_handle<Promise>;
+    using promise_type = Promise;
+
+  public:
+    explicit Generator(Handle h) : coroutine_(h) {}
+    Generator(const Generator&) = delete;
+    Generator(Generator&& oth) noexcept : coroutine_(oth.coroutine_) { oth.coroutine_ = nullptr; }
+    Generator& operator=(const Generator&) = delete;
+    Generator& operator=(Generator&& other) noexcept {
+      coroutine_ = other.coroutine_;
+      other.coroutine_ = nullptr;
+      return *this;
+    }
+
+    ~Generator() {
+      if (coroutine_) {
+        coroutine_.destroy();
+      }
+    }
+
+    bool next() {
+      if (coroutine_) {
+        coroutine_.resume();
+      }
+
+      return !coroutine_.done();
+    }
+
+    T getValue() { return coroutine_.promise().currentValue_.value(); }
+
+    class Promise {
+    public:
+      Promise() = default;
+      ~Promise() = default;
+      Promise(const Promise&) = delete;
+      Promise(Promise&&) = delete;
+      Promise& operator=(const Promise&) = delete;
+      Promise& operator=(Promise&&) = delete;
+
+      auto initial_suspend() noexcept { return std::experimental::suspend_always{}; }
+
+      auto final_suspend() noexcept { return std::experimental::suspend_always{}; }
+
+      auto get_return_object() noexcept { return Generator{Handle::from_promise(*this)}; }
+
+      auto return_void() noexcept { return std::experimental::suspend_never{}; }
+
+      auto yield_value(T value) {
+        currentValue_ = value;
+        return std::experimental::suspend_always{};
+      }
+
+      [[noreturn]] void unhandled_exception() { std::exit(1); }
+
+    private:
+      std::optional<T> currentValue_;
+      friend class Generator;
+    };
+
+  private:
+    Handle coroutine_;
+  };
+
+  template <typename T>
+  Generator<T> singleElementGenerator(const std::optional<T> element) {
+    if (element.has_value()) {
+      co_yield element.value();
+    }
+  }
+
+  template <typename T>
+  Generator<T> parentsGenerator(const T& element) {
+    T currentElement = element;
+
+    while (auto parent = currentElement.parentElement()) {
+      currentElement = parent.value();
+      co_yield currentElement;
+    }
+  }
+
+  template <typename T>
+  Generator<T> previousSiblingsGenerator(const T& element) {
+    T currentElement = element;
+
+    while (auto previousSibling = currentElement.previousSibling()) {
+      currentElement = previousSibling.value();
+      co_yield currentElement;
+    }
+  }
+
+}  // namespace details
+
+struct SelectorMatchResult {
+  bool matched = false;
+  Specificity specificity;
+
+  static constexpr SelectorMatchResult None() { return SelectorMatchResult(); }
+
+  static constexpr SelectorMatchResult Match(Specificity specificity) {
+    return SelectorMatchResult(true, specificity);
+  }
+
+  explicit operator bool() const { return matched; }
+
+private:
+  // Use the static methods above to construct.
+  constexpr SelectorMatchResult() = default;
+
+  constexpr SelectorMatchResult(bool matched, Specificity specificity)
+      : matched(matched), specificity(specificity) {}
+};
 
 struct WqName {
   RcString ns;
@@ -31,6 +163,12 @@ struct PseudoElementSelector {
 
   PseudoElementSelector(RcString ident) : ident(std::move(ident)) {}
 
+  template <ElementLike T>
+  bool matches(const T& element) const {
+    // TODO
+    return false;
+  }
+
   friend std::ostream& operator<<(std::ostream& os, const PseudoElementSelector& obj) {
     os << "PseudoElementSelector(" << obj.ident;
     if (obj.argsIfFunction.has_value()) {
@@ -53,6 +191,16 @@ struct TypeSelector {
 
   bool isUniversal() const { return name == "*"; }
 
+  template <ElementLike T>
+  bool matches(const T& element) const {
+    // TODO: Also check the namespace.
+    if (UTILS_PREDICT_FALSE(isUniversal())) {
+      return true;
+    } else {
+      return element.typeString().equalsIgnoreCase(name);
+    }
+  }
+
   friend std::ostream& operator<<(std::ostream& os, const TypeSelector& obj) {
     os << "TypeSelector(";
     if (!obj.ns.empty()) {
@@ -69,6 +217,11 @@ struct IdSelector {
 
   IdSelector(RcString name) : name(std::move(name)) {}
 
+  template <ElementLike T>
+  bool matches(const T& element) const {
+    return element.id().equalsIgnoreCase(name);
+  }
+
   friend std::ostream& operator<<(std::ostream& os, const IdSelector& obj) {
     os << "IdSelector(" << obj.name << ")";
     return os;
@@ -79,6 +232,11 @@ struct ClassSelector {
   RcString name;
 
   ClassSelector(RcString name) : name(std::move(name)) {}
+
+  template <ElementLike T>
+  bool matches(const T& element) const {
+    return element.className().equalsIgnoreCase(name);
+  }
 
   friend std::ostream& operator<<(std::ostream& os, const ClassSelector& obj) {
     os << "ClassSelector(" << obj.name << ")";
@@ -91,6 +249,12 @@ struct PseudoClassSelector {
   std::optional<std::vector<ComponentValue>> argsIfFunction;
 
   PseudoClassSelector(RcString ident) : ident(std::move(ident)) {}
+
+  template <ElementLike T>
+  bool matches(const T& element) const {
+    // TODO
+    return false;
+  }
 
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj) {
     os << "PseudoClassSelector(" << obj.ident;
@@ -140,6 +304,12 @@ struct AttributeSelector {
 
   AttributeSelector(WqName name) : name(std::move(name)) {}
 
+  template <ElementLike T>
+  bool matches(const T& element) const {
+    // TODO
+    return false;
+  }
+
   friend std::ostream& operator<<(std::ostream& os, const AttributeSelector& obj) {
     os << "AttributeSelector(" << obj.name;
     if (obj.matcher) {
@@ -158,6 +328,18 @@ struct CompoundSelector {
                              PseudoClassSelector, AttributeSelector>;
 
   std::vector<Entry> entries;
+
+  template <ElementLike T>
+  bool matches(const T& element) const {
+    for (const auto& entry : entries) {
+      if (!std::visit([&element](auto&& selector) -> bool { return selector.matches(element); },
+                      entry)) {
+        return false;
+      }
+    }
+
+    return !entries.empty();
+  }
 
   friend std::ostream& operator<<(std::ostream& os, const CompoundSelector& obj) {
     os << "CompoundSelector(";
@@ -242,6 +424,76 @@ struct ComplexSelector {
     return Specificity::FromABC(a, b, c);
   }
 
+  /**
+   * Match a selector against an element, following the rules in the spec:
+   * https://www.w3.org/TR/selectors-4/#match-against-element
+   *
+   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to match
+   *           the selector.
+   * @param element Element to match against.
+   * @return true if the element matches the selector, within a SelectorMatchResult which also
+   *              contains the specificity.
+   */
+  template <ElementLike T>
+  SelectorMatchResult matches(const T& targetElement) const {
+    // TODO: Accept :scope elements.
+    using GeneratorCreator = std::function<details::Generator<T>()>;
+    GeneratorCreator elementsGenerator =
+        std::bind(&details::singleElementGenerator<T>, targetElement);
+
+    // "To match a complex selector against an element, process it compound selector at a time, in
+    // right-to-left order."
+    for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+      const auto& entry = *it;
+
+      // "If any simple selectors in the rightmost compound selector does not match the element,
+      // return failure."
+      std::optional<T> currentElement;
+      details::Generator<T> elements = elementsGenerator();
+      while (elements.next()) {
+        const T element = elements.getValue();
+        if (entry.compoundSelector.matches(element)) {
+          currentElement = element;
+          break;
+        }
+      }
+
+      if (!currentElement) {
+        return SelectorMatchResult::None();
+      }
+
+      // "Otherwise, if there is only one compound selector in the complex selector, return
+      // success."
+      // In this case, return success once we've reached the leftmost compound selector.
+      if (it + 1 == entries.rend()) {
+        return SelectorMatchResult::Match(computeSpecificity());
+      }
+
+      // "Otherwise, consider all possible elements that could be related to this element by the
+      // rightmost combinator. If the operation of matching the selector consisting of this selector
+      // with the rightmost compound selector and rightmost combinator removed against any one of
+      // these elements returns success, then return success. Otherwise, return failure."
+      if (entry.combinator == Combinator::Descendant) {
+        elementsGenerator = std::bind(&details::parentsGenerator<T>, currentElement.value());
+      } else if (entry.combinator == Combinator::Child) {
+        elementsGenerator =
+            std::bind(&details::singleElementGenerator<T>, currentElement->parentElement());
+      } else if (entry.combinator == Combinator::NextSibling) {
+        elementsGenerator =
+            std::bind(&details::singleElementGenerator<T>, currentElement->previousSibling());
+      } else if (entry.combinator == Combinator::SubsequentSibling) {
+        elementsGenerator =
+            std::bind(&details::previousSiblingsGenerator<T>, currentElement.value());
+      } else {
+        // TODO: Combinator::Column
+        return SelectorMatchResult::None();
+      }
+    }
+
+    // Default to not match.
+    return SelectorMatchResult::None();
+  }
+
   friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj) {
     os << "ComplexSelector(";
     bool first = true;
@@ -259,6 +511,25 @@ struct ComplexSelector {
 
 struct Selector {
   std::vector<ComplexSelector> entries;
+
+  /**
+   * Match an element against a Selector.
+   *
+   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to match
+   * the selector.
+   * @param element Element to match against.
+   * @returns true if any ComplexSelector in the Selector matches the given element.
+   */
+  template <ElementLike T>
+  SelectorMatchResult matches(const T& targetElement) const {
+    for (const auto& entry : entries) {
+      if (auto result = entry.matches(targetElement)) {
+        return result;
+      }
+    }
+
+    return SelectorMatchResult::None();
+  }
 
   friend std::ostream& operator<<(std::ostream& os, const Selector& obj) {
     os << "Selector(";

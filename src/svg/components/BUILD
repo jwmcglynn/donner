@@ -21,7 +21,10 @@ cc_library(
         "tree_component.h",
         "viewbox_component.h",
     ],
-    visibility = ["//src/svg:__subpackages__"],
+    visibility = [
+        "//src/css:__pkg__",
+        "//src/svg:__subpackages__",
+    ],
     deps = [
         "//src/base",
         "//src/svg/parser",

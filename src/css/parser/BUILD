@@ -20,7 +20,10 @@ cc_library(
         "selector_parser.h",
         "value_parser.h",
     ],
-    visibility = ["//src/svg:__subpackages__"],
+    visibility = [
+        "//src/css:__subpackages__",
+        "//src/svg:__subpackages__",
+    ],
     deps = [
         "//src/base",
         "//src/base/parser",

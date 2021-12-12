@@ -27,11 +27,15 @@ cc_library(
 cc_test(
     name = "css_tests",
     srcs = [
+        "tests/selector_tests.cc",
         "tests/specificity_tests.cc",
     ],
     deps = [
         ":css",
         "//src/base:base_test_utils",
+        "//src/base/parser:parser_test_utils",
+        "//src/css/parser",
+        "//src/svg/components",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -14,10 +14,8 @@ enum class ParseMode { Keep, Discard };
 
 template <typename T>
 concept TokenizerLike = requires(T t) {
-  // clang-format off
   { t.next() } -> std::same_as<Token>;
   { t.isEOF() } -> std::same_as<bool>;
-  // clang-format on
 };
 
 static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {

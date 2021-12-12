@@ -15,7 +15,7 @@ namespace donner {
 
 class SVGElementTests : public testing::Test {
 protected:
-  SVGElement create() { return SVGUnknownElement::Create(document_); }
+  SVGElement create() { return SVGUnknownElement::Create(document_, "unknown"); }
 
   std::vector<SVGElement> children(SVGElement element) {
     std::vector<SVGElement> result;
