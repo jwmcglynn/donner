@@ -13,7 +13,7 @@
                 "${workspaceFolder}/external/nlohmann_json/include"
             ],
             "defines": [],
-            "compilerPath": "/usr/lib/llvm-11/bin/clang",
+            "compilerPath": "/usr/lib/llvm-13/bin/clang",
             "cStandard": "gnu11",
             "cppStandard": "c++20",
             "intelliSenseMode": "linux-clang-arm64",

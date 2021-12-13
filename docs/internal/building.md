@@ -5,7 +5,6 @@ Donner SVG is intended as a hobby project with the latest C++ spec, so it is lik
 ## Requirements
 
 * Bazel
-* Clang-10
 
 ### Installing Bazel
 
@@ -18,34 +17,6 @@ The recommended way to use Bazel is to install **Bazelisk**, which will automati
    ```
    export PATH=$PATH:$HOME/bin
    ```
-
-### Installing Clang-11
-
-To install Clang-11, follow the instructions to install it on the main LLVM site. For Ubuntu 18.04, the instructions are at https://apt.llvm.org/
-
-```
-wget https://apt.llvm.org/llvm.sh
-chmod +x llvm.sh
-sudo ./llvm.sh 11
-```
-
-You'll also need to manually install `libc++-11`, which should now work with apt after running `llvm.sh`:
-
-```
-sudo apt-get install libc++-11-dev libc++abi-11-dev
-```
-
-Then update your path so that clang-11 is at the start, again in `~/.bashrc` or equivalent:
-
-```
-export PATH=/usr/lib/llvm-11/bin:$PATH
-```
-
-Verify this works with
-
-```
-clang -v
-```
 
 ## That's it!
 

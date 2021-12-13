@@ -2,6 +2,31 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_r
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 ##
+## Toolchain
+
+##
+git_repository(
+    name = "com_grail_bazel_toolchain",
+    branch = "master",
+    remote = "https://github.com/jwmcglynn/bazel-toolchain",
+)
+
+load("@com_grail_bazel_toolchain//toolchain:deps.bzl", "bazel_toolchain_dependencies")
+
+bazel_toolchain_dependencies()
+
+load("@com_grail_bazel_toolchain//toolchain:rules.bzl", "llvm_toolchain")
+
+llvm_toolchain(
+    name = "llvm_toolchain",
+    llvm_version = "13.0.0",
+)
+
+load("@llvm_toolchain//:toolchains.bzl", "llvm_register_toolchains")
+
+llvm_register_toolchains()
+
+##
 ## Bazel and IntelliSense
 ##
 
@@ -26,7 +51,7 @@ hedron_compile_commands_setup()
 git_repository(
     name = "com_google_gtest",
     remote = "https://github.com/google/googletest",
-    tag = "release-1.10.0",
+    tag = "release-1.11.0",
 )
 
 # Use absl at head.
@@ -51,7 +76,7 @@ new_local_repository(
 git_repository(
     name = "entt",
     commit = "9d72ffb9fe0ce4a15bab3729b52fcb0adace4d7f",
-    remote = "https://github.com/skypjack/entt.git",
+    remote = "https://github.com/skypjack/entt",
 )
 
 new_local_repository(
@@ -63,14 +88,20 @@ new_local_repository(
 new_git_repository(
     name = "nlohmann_json",
     build_file = "@//third_party:BUILD.nlohmann_json",
-    remote = "https://github.com/nlohmann/json.git",
+    remote = "https://github.com/nlohmann/json",
     tag = "v3.9.1",
 )
 
 git_repository(
     name = "bazel_skylib",
     commit = "560d7b2359aecb066d81041cb532b82d7354561b",
-    remote = "https://github.com/bazelbuild/bazel-skylib.git",
+    remote = "https://github.com/bazelbuild/bazel-skylib",
+)
+
+git_repository(
+    name = "range-v3",
+    branch = "master",
+    remote = "https://github.com/ericniebler/range-v3",
 )
 
 git_repository(

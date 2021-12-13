@@ -4,7 +4,7 @@
     "dockerfile": "Dockerfile",
     // Update 'VARIANT' to pick an Ubuntu version: focal, bionic
     "args": {
-      "VARIANT": "hirsute"
+      "VARIANT": "bionic"
     }
   },
   "settings": {

@@ -1,11 +1,7 @@
-# Common flags for Clang
-build:clang --action_env=CC=clang
-build:clang --action_env=CXX=clang++
-build:clang --action_env=BAZEL_COMPILER=clang
-build:clang --incompatible_linkopts_to_linklibs=false
+# Use registered clang toolchain.
+build --incompatible_enable_cc_toolchain_resolution
 
 # Clang with libc++
-build:libc++ --config=clang
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
 build:libc++ --action_env=LDFLAGS=-stdlib=libc++
 build:libc++ --action_env=BAZEL_CXXOPTS=-stdlib=libc++

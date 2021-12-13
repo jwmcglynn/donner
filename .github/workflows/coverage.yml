@@ -11,7 +11,7 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-18.04
 
     steps:
     - uses: actions/checkout@v2
@@ -25,14 +25,6 @@ jobs:
         mkdir -p "${GITHUB_WORKSPACE}/bin/"
         wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O "${GITHUB_WORKSPACE}/bin/bazel"
         chmod +x "${GITHUB_WORKSPACE}/bin/bazel"
-
-    - name: Install clang-11
-      run: |
-        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-        sudo add-apt-repository "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-11 main"
-        sudo apt-get update
-        sudo apt-get install -y clang-11 libc++-11-dev libc++abi-11-dev
-        echo "/usr/lib/llvm-11/bin" >> $GITHUB_PATH
 
     - name: Generate coverage
       run: |

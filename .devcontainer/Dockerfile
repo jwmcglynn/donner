@@ -1,4 +1,4 @@
-ARG VARIANT=hirsute
+ARG VARIANT=bionic
 FROM mcr.microsoft.com/vscode/devcontainers/base:${VARIANT}
 
 ARG USERNAME=vscode
@@ -25,16 +25,16 @@ RUN mkdir -p /tmp/llvm \
     && cd /tmp/llvm \
     && wget https://apt.llvm.org/llvm.sh \
     && chmod +x ./llvm.sh \
-    && ./llvm.sh 11 \
+    && ./llvm.sh 13 \
     && rm -rf /tmp/llvm
 
 # Install libc++
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends libc++-11-dev libc++abi-11-dev
+    && apt-get -y install --no-install-recommends libc++-13-dev libc++abi-13-dev
 
 # Update path so this clang is first.
-ENV PATH=/usr/lib/llvm-11/bin:${PATH}
+ENV PATH=/usr/lib/llvm-13/bin:${PATH}
 
 #
 # Install java
