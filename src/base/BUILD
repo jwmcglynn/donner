@@ -7,11 +7,15 @@ cc_library(
         "length.h",
         "math_utils.h",
         "rc_string.h",
+        "string_utils.h",
         "transform.h",
         "utils.h",
         "vector2.h",
     ],
     visibility = ["//:__subpackages__"],
+    deps = [
+        "@range-v3",
+    ],
 )
 
 cc_library(

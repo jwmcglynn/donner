@@ -104,6 +104,12 @@ git_repository(
 )
 
 git_repository(
+    name = "range-v3",
+    branch = "master",
+    remote = "https://github.com/ericniebler/range-v3.git",
+)
+
+git_repository(
     name = "stb",
     branch = "master",
     init_submodules = True,

@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "src/base/string_utils.h"
+
 namespace donner {
 
 /**
@@ -171,18 +173,7 @@ public:
    * @return true If the strings are equal (case insensitive).
    */
   bool equalsLowercase(std::string_view other) const {
-    if (other.size() != size()) {
-      return false;
-    }
-
-    const std::string_view self = std::string_view(*this);
-    for (size_t i = 0; i < other.size(); ++i) {
-      if (std::tolower(self[i]) != other[i]) {
-        return false;
-      }
-    }
-
-    return true;
+    return StringUtils::EqualsLowercase(*this, other);
   }
 
   /**
@@ -192,18 +183,7 @@ public:
    * @return true If the strings are equal (case insensitive).
    */
   bool equalsIgnoreCase(std::string_view other) const {
-    if (other.size() != size()) {
-      return false;
-    }
-
-    const std::string_view self = std::string_view(*this);
-    for (size_t i = 0; i < other.size(); ++i) {
-      if (std::tolower(self[i]) != std::tolower(other[i])) {
-        return false;
-      }
-    }
-
-    return true;
+    return StringUtils::Equals<StringComparison::IgnoreCase>(*this, other);
   }
 
   /**

@@ -10,7 +10,8 @@
                 "${workspaceFolder}/external/com_google_gtest/googletest/include",
                 "${workspaceFolder}/external/com_google_gtest/googlemock/include",
                 "${workspaceFolder}/external/stb/src",
-                "${workspaceFolder}/external/nlohmann_json/include"
+                "${workspaceFolder}/external/nlohmann_json/include",
+                "${workspaceFolder}/external/range-v3/include"
             ],
             "defines": [],
             "compilerPath": "/usr/lib/llvm-13/bin/clang",
