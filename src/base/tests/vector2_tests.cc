@@ -1,35 +1,38 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "src/base/vector2.h"
+
+using testing::AnyOf;
 
 namespace donner {
 
 TEST(Vector2, Construct) {
   Vector2f vec_float(5.0f, -1.0f);
-  EXPECT_EQ(vec_float.x, 5.0f);
-  EXPECT_EQ(vec_float.y, -1.0f);
+  EXPECT_FLOAT_EQ(vec_float.x, 5.0f);
+  EXPECT_FLOAT_EQ(vec_float.y, -1.0f);
 
   Vector2d vec_double(-50.0, 123.0);
-  EXPECT_EQ(vec_double.x, -50.0);
-  EXPECT_EQ(vec_double.y, 123.0);
+  EXPECT_FLOAT_EQ(vec_double.x, -50.0);
+  EXPECT_FLOAT_EQ(vec_double.y, 123.0);
 
   Vector2i vec_int(-123, 123);
-  EXPECT_EQ(vec_int.x, -123);
-  EXPECT_EQ(vec_int.y, 123);
+  EXPECT_FLOAT_EQ(vec_int.x, -123);
+  EXPECT_FLOAT_EQ(vec_int.y, 123);
 }
 
 TEST(Vector2, ConstructDefault) {
   Vector2f vec_float;
-  EXPECT_EQ(vec_float.x, 0.0f);
-  EXPECT_EQ(vec_float.y, 0.0f);
+  EXPECT_FLOAT_EQ(vec_float.x, 0.0f);
+  EXPECT_FLOAT_EQ(vec_float.y, 0.0f);
 
   Vector2d vec_double;
-  EXPECT_EQ(vec_double.x, 0.0);
-  EXPECT_EQ(vec_double.y, 0.0);
+  EXPECT_FLOAT_EQ(vec_double.x, 0.0);
+  EXPECT_FLOAT_EQ(vec_double.y, 0.0);
 
   Vector2i vec_int;
-  EXPECT_EQ(vec_int.x, 0);
-  EXPECT_EQ(vec_int.y, 0);
+  EXPECT_FLOAT_EQ(vec_int.x, 0);
+  EXPECT_FLOAT_EQ(vec_int.y, 0);
 }
 
 TEST(Vector2, CastConstruct) {
@@ -66,20 +69,20 @@ TEST(Vector2, Constants) {
 }
 
 TEST(Vector2, Length) {
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).length(), 1.0f);
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).lengthSquared(), 1.0f);
-  EXPECT_EQ(Vector2f(3.0f, 4.0f).length(), 5.0f);
-  EXPECT_EQ(Vector2f(3.0f, 4.0f).lengthSquared(), 25.0f);
+  EXPECT_FLOAT_EQ(Vector2f(0.0f, 1.0f).length(), 1.0f);
+  EXPECT_FLOAT_EQ(Vector2f(0.0f, 1.0f).lengthSquared(), 1.0f);
+  EXPECT_FLOAT_EQ(Vector2f(3.0f, 4.0f).length(), 5.0f);
+  EXPECT_FLOAT_EQ(Vector2f(3.0f, 4.0f).lengthSquared(), 25.0f);
 
-  EXPECT_EQ(Vector2f::Zero().length(), 0.0f);
-  EXPECT_EQ(Vector2f::Zero().lengthSquared(), 0.0f);
-  EXPECT_EQ(Vector2f(-3.0f, 4.0f).length(), 5.0f);
-  EXPECT_EQ(Vector2f(-3.0f, 4.0f).lengthSquared(), 25.0f);
+  EXPECT_FLOAT_EQ(Vector2f::Zero().length(), 0.0f);
+  EXPECT_FLOAT_EQ(Vector2f::Zero().lengthSquared(), 0.0f);
+  EXPECT_FLOAT_EQ(Vector2f(-3.0f, 4.0f).length(), 5.0f);
+  EXPECT_FLOAT_EQ(Vector2f(-3.0f, 4.0f).lengthSquared(), 25.0f);
 }
 
 TEST(Vector2, Distance) {
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).distanceSquared(Vector2f(1.0f, 1.0f)), 1.0f);
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).distanceSquared(Vector2f(5.0f, 1.0f)), 25.0f);
+  EXPECT_FLOAT_EQ(Vector2f(0.0f, 1.0f).distanceSquared(Vector2f(1.0f, 1.0f)), 1.0f);
+  EXPECT_FLOAT_EQ(Vector2f(0.0f, 1.0f).distanceSquared(Vector2f(5.0f, 1.0f)), 25.0f);
 
   EXPECT_EQ(Vector2i(0, 5).distance(Vector2i(0, -5)), 10);
   EXPECT_EQ(Vector2i(0, 5).distanceSquared(Vector2i(0, -5)), 100);
@@ -103,28 +106,30 @@ TEST(Vector2, Rotate) {
 }
 
 TEST(Vector2, Angle) {
-  EXPECT_EQ(Vector2f::XAxis().angle(), 0.0f);
-  EXPECT_EQ(Vector2f(-1.0f, 0.0f).angle(), +MathConstants<float>::kPi);
-  EXPECT_EQ(Vector2f(0.0f, -1.0f).angle(), -MathConstants<float>::kHalfPi);
-  EXPECT_EQ(Vector2f(sqrt(2.0f) * 0.5f, sqrt(2.0f) * 0.5f).angle(),
-            MathConstants<float>::kPi * 0.25f);
-  EXPECT_EQ(Vector2f(0.0f, 1.0f).angle(), +MathConstants<float>::kHalfPi);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angle(), 0.0f);
+  EXPECT_FLOAT_EQ(Vector2f(-1.0f, 0.0f).angle(), +MathConstants<float>::kPi);
+  EXPECT_FLOAT_EQ(Vector2f(0.0f, -1.0f).angle(), -MathConstants<float>::kHalfPi);
+  EXPECT_FLOAT_EQ(Vector2f(sqrt(2.0f) * 0.5f, sqrt(2.0f) * 0.5f).angle(),
+                  MathConstants<float>::kPi * 0.25f);
+  EXPECT_FLOAT_EQ(Vector2f(0.0f, 1.0f).angle(), +MathConstants<float>::kHalfPi);
 }
 
 TEST(Vector2, AngleWith) {
-  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f::XAxis()), 0.0f);
-  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f::YAxis()), MathConstants<float>::kHalfPi);
-  EXPECT_EQ(Vector2f::XAxis().angleWith(-Vector2f::XAxis()), MathConstants<float>::kPi);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angleWith(Vector2f::XAxis()), 0.0f);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angleWith(Vector2f::YAxis()), MathConstants<float>::kHalfPi);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angleWith(-Vector2f::XAxis()), MathConstants<float>::kPi);
 
-  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(1.0f, 1.0f)), MathConstants<float>::kPi / 4.0f);
-  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(1.0f, -1.0f)), MathConstants<float>::kPi / 4.0f);
-  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(-1.0f, 1.0f)),
-            MathConstants<float>::kPi * 3.0f / 4.0f);
-  EXPECT_EQ(Vector2f::XAxis().angleWith(Vector2f(-1.0f, -1.0f)),
-            MathConstants<float>::kPi * 3.0f / 4.0f);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angleWith(Vector2f(1.0f, 1.0f)),
+                  MathConstants<float>::kPi / 4.0f);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angleWith(Vector2f(1.0f, -1.0f)),
+                  MathConstants<float>::kPi / 4.0f);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angleWith(Vector2f(-1.0f, 1.0f)),
+                  MathConstants<float>::kPi * 3.0f / 4.0f);
+  EXPECT_FLOAT_EQ(Vector2f::XAxis().angleWith(Vector2f(-1.0f, -1.0f)),
+                  MathConstants<float>::kPi * 3.0f / 4.0f);
 
   // Edge case: Zero length.
-  EXPECT_EQ(Vector2f::Zero().angleWith(Vector2f::Zero()), 0.0f);
+  EXPECT_FLOAT_EQ(Vector2f::Zero().angleWith(Vector2f::Zero()), 0.0f);
 }
 
 // Normalize
@@ -223,10 +228,10 @@ TEST(Vector2, Output) {
                 .str(),
             "(inf, -inf)");
 
-  EXPECT_EQ((std::ostringstream() << Vector2d(std::numeric_limits<double>::quiet_NaN(),
-                                              -std::numeric_limits<double>::quiet_NaN()))
-                .str(),
-            "(nan, -nan)");
+  EXPECT_THAT((std::ostringstream() << Vector2d(std::numeric_limits<double>::quiet_NaN(),
+                                                -std::numeric_limits<double>::quiet_NaN()))
+                  .str(),
+              AnyOf("(nan, -nan)", "(nan, nan)"));
 
   EXPECT_EQ((std::ostringstream() << Vector2d(0.0, -0.0)).str(), "(0, -0)");
 }

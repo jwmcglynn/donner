@@ -1,5 +1,7 @@
+build --enable_platform_specific_config
+
 # Use registered clang toolchain.
-build --incompatible_enable_cc_toolchain_resolution
+build:linux --incompatible_enable_cc_toolchain_resolution
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++

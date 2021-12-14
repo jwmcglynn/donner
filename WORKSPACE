@@ -3,7 +3,6 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 ##
 ## Toolchain
-
 ##
 git_repository(
     name = "com_grail_bazel_toolchain",
