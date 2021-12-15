@@ -7,15 +7,24 @@
 
 // TODO(toolchain): Switch to <ranges> once libc++ supports std::views::split and
 // std::views::transform.
+#include <range/v3/range/conversion.hpp>
+#include <range/v3/view/filter.hpp>
 #include <range/v3/view/split.hpp>
 #include <range/v3/view/transform.hpp>
 
 namespace donner {
 
+namespace details {
+
+template <typename T>
+concept IsCStr = std::is_same_v<T, const char*> || std::is_same_v<T, char*>;
+
+}  // namespace details
+
 template <typename T>
 concept StringLike = requires(T t, size_t i) {
   { t.size() } -> std::same_as<size_t>;
-  { t.data() } -> std::same_as<const char*>;
+  { t.data() } -> details::IsCStr;
 };
 
 enum class StringComparison { Default, IgnoreCase };
@@ -165,7 +174,7 @@ public:
    *
    * Example:
    * @code{.cpp}
-   * for (auto&& str : Split("a,b,c", ',')) {
+   * for (auto&& str : StringUtils::Split("a,b,c", ',')) {
    *   // ...
    * }
    * @endcode
@@ -173,14 +182,18 @@ public:
    * @tparam T The string type to split.
    * @param str The string to split.
    * @param ch The character to split by.
-   * @return auto Range containing split string views.
+   * @return A vector of the split string views.
    */
   template <StringLike T>
-  static auto Split(const T& str, char ch = ' ') {
+  static std::vector<std::string_view> Split(const T& str, char ch = ' ') {
+    // Ideally this would return a range directly, but if we try to move the ranges::to_vector call
+    // outside this function, it results in a compile error since the `.begin()` method cannot be
+    // resolved.
     const std::string_view strView(str.data(), str.size());
-    return strView | ranges::views::split(ch) | ranges::views::transform([](auto&& rng) {
-             return std::string_view(&*rng.begin(), ranges::distance(rng));
-           });
+    return strView | ranges::cpp20::views::split(ch) |
+           ranges::cpp20::views::transform(
+               [](auto&& rng) { return std::string_view(&*rng.begin(), ranges::distance(rng)); }) |
+           ranges::cpp20::views::filter(StringViewIsNonEmpty) | ranges::to_vector;
   }
 
 private:
@@ -203,6 +216,9 @@ private:
       return std::char_traits<char>::compare(lhs, rhs, sizeToCompare) == 0;
     }
   }
+
+  // Helper to filter out empty std::string_views.
+  static bool StringViewIsNonEmpty(std::string_view str) { return !str.empty(); }
 };
 
 }  // namespace donner

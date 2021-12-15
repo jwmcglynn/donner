@@ -101,6 +101,9 @@
     "valarray": "cpp",
     "variant": "cpp",
     "vector": "cpp",
+    "complex": "cpp",
+    "coroutine": "cpp",
+    "__bits": "cpp"
   },
   "files.exclude": {
     "bazel-*": true

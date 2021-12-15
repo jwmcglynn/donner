@@ -37,6 +37,7 @@ cc_test(
         "tests/box_tests.cc",
         "tests/math_utils_tests.cc",
         "tests/rc_string_tests.cc",
+        "tests/string_utils_tests.cc",
         "tests/transform_tests.cc",
         "tests/vector2_tests.cc",
     ],
