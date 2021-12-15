@@ -11,6 +11,56 @@ using testing::ElementsAre;
 
 namespace donner {
 
+TEST(CaseInsensitiveCharTraits, Eq) {
+  EXPECT_TRUE(CaseInsensitiveCharTraits::eq('a', 'A'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::eq('A', 'a'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::eq('a', 'a'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::eq('A', 'A'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::eq('a', 'b'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::eq('b', 'a'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::eq('a', 'B'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::eq('B', 'a'));
+}
+
+TEST(CaseInsensitiveCharTraits, Ne) {
+  EXPECT_FALSE(CaseInsensitiveCharTraits::ne('a', 'A'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::ne('A', 'a'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::ne('a', 'a'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::ne('A', 'A'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::ne('a', 'b'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::ne('b', 'a'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::ne('a', 'B'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::ne('B', 'a'));
+}
+
+TEST(CaseInsensitiveCharTraits, Lt) {
+  EXPECT_FALSE(CaseInsensitiveCharTraits::lt('a', 'A'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::lt('A', 'a'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::lt('a', 'a'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::lt('A', 'A'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::lt('a', 'b'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::lt('b', 'a'));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::lt('a', 'B'));
+  EXPECT_FALSE(CaseInsensitiveCharTraits::lt('B', 'a'));
+}
+
+TEST(CaseInsensitiveCharTraits, Compare) {
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("abc", "ABC", 3), 0);
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("AbC", "aBc", 3), 0);
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("abc", "abd", 3), -1);
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("xyz", "abc", 3), 1);
+}
+
+TEST(CaseInsensitiveCharTraits, Find) {
+  const char* kStr = "aBc";
+
+  EXPECT_EQ(CaseInsensitiveCharTraits::find(kStr, 3, 'a'), kStr);
+  EXPECT_EQ(CaseInsensitiveCharTraits::find(kStr, 3, 'A'), kStr);
+  EXPECT_EQ(CaseInsensitiveCharTraits::find(kStr, 3, 'b'), kStr + 1);
+  EXPECT_EQ(CaseInsensitiveCharTraits::find(kStr, 3, 'B'), kStr + 1);
+  EXPECT_EQ(CaseInsensitiveCharTraits::find(kStr, 3, 'd'), nullptr);
+}
+
 TEST(StringUtils, EqualsLowercase) {
   EXPECT_TRUE(StringUtils::EqualsLowercase(""sv, ""sv));
   EXPECT_TRUE(StringUtils::EqualsLowercase("heLlo"sv, "hello"sv));
