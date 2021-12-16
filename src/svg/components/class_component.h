@@ -1,11 +1,11 @@
 #pragma once
 
-#include <string>
+#include "src/base/rc_string.h"
 
 namespace donner {
 
 struct ClassComponent {
-  std::string className;
+  RcString className;
 };
 
 }  // namespace donner

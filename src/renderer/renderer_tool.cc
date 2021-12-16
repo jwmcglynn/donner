@@ -74,13 +74,21 @@ extern "C" int main(int argc, char* argv[]) {
   }
 
   std::cout << "Tree:" << std::endl;
-  DumpTree(maybeResult.result().svgElement(), 0);
+
+  SVGDocument document = std::move(maybeResult.result());
+  DumpTree(document.svgElement(), 0);
+
+  if (auto path1 = document.svgElement().querySelector("#path1")) {
+    std::cout << "Found path1" << std::endl;
+    path1->setStyle("fill: red");
+    path1->setStyle("stroke: white");
+  }
 
   const size_t kWidth = 800;
   const size_t kHeight = 600;
 
   RendererSkia renderer(kWidth, kHeight);
-  renderer.draw(maybeResult.result());
+  renderer.draw(document);
 
   constexpr const char* kOutputFilename = "output.png";
   if (renderer.save(kOutputFilename)) {

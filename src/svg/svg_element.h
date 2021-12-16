@@ -26,10 +26,10 @@ public:
 
   Entity entity() const;
 
-  std::string id() const;
+  RcString id() const;
   void setId(std::string_view id);
 
-  std::string className() const;
+  RcString className() const;
   void setClassName(std::string_view name);
 
   Transformd transform() const;
@@ -37,6 +37,9 @@ public:
 
   void setStyle(std::string_view style);
   bool trySetPresentationAttribute(std::string_view name, std::string_view value);
+
+  bool hasAttribute(std::string_view name) const;
+  std::optional<RcString> getAttribute(std::string_view name) const;
 
   std::optional<SVGElement> parentElement();
   std::optional<SVGElement> firstChild();
@@ -96,9 +99,13 @@ public:
   template <typename Derived>
   Derived cast() {
     UTILS_RELEASE_ASSERT(Derived::Type == type());
+    // Derived must inherit from SVGElement, and have no additional members.
+    static_assert(std::is_base_of_v<SVGElement, Derived>);
     static_assert(sizeof(SVGElement) == sizeof(Derived));
     return *reinterpret_cast<Derived*>(this);
   }
+
+  std::optional<SVGElement> querySelector(std::string_view selector);
 
 protected:
   static Entity CreateEntity(Registry& registry, RcString typeString, ElementType Type);

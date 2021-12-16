@@ -1,10 +1,12 @@
 #pragma once
 
+#include "src/base/rc_string.h"
+
 namespace donner {
 
 class IdComponent {
 public:
-  std::string id;
+  RcString id;
 };
 
 }  // namespace donner

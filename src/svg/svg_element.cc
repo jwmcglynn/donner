@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "src/css/parser/selector_parser.h"
 #include "src/svg/components/class_component.h"
 #include "src/svg/components/id_component.h"
 #include "src/svg/components/style_component.h"
@@ -9,6 +10,27 @@
 #include "src/svg/components/tree_component.h"
 
 namespace donner {
+
+namespace {
+
+static std::optional<SVGElement> querySelectorSearch(const css::Selector& selector,
+                                                     SVGElement element) {
+  // TODO: Add a proper iterator for all children.
+  if (selector.matches(element)) {
+    return element;
+  }
+
+  for (std::optional<SVGElement> child = element.firstChild(); child;
+       child = child->nextSibling()) {
+    if (auto result = querySelectorSearch(selector, *child)) {
+      return *result;
+    }
+  }
+
+  return std::nullopt;
+}
+
+}  // namespace
 
 SVGElement::SVGElement(Registry& registry, Entity entity) : registry_(registry), entity_(entity) {}
 
@@ -27,7 +49,7 @@ Entity SVGElement::entity() const {
   return entity_;
 }
 
-std::string SVGElement::id() const {
+RcString SVGElement::id() const {
   if (const auto* component = registry_.get().try_get<IdComponent>(entity_)) {
     return component->id;
   } else {
@@ -44,7 +66,7 @@ void SVGElement::setId(std::string_view id) {
   }
 }
 
-std::string SVGElement::className() const {
+RcString SVGElement::className() const {
   if (const auto* component = registry_.get().try_get<ClassComponent>(entity_)) {
     return component->className;
   } else {
@@ -81,6 +103,16 @@ void SVGElement::setStyle(std::string_view style) {
 bool SVGElement::trySetPresentationAttribute(std::string_view name, std::string_view value) {
   return registry_.get().get_or_emplace<StyleComponent>(entity_).trySetPresentationAttribute(name,
                                                                                              value);
+}
+
+bool SVGElement::hasAttribute(std::string_view name) const {
+  // TODO
+  return false;
+}
+
+std::optional<RcString> SVGElement::getAttribute(std::string_view name) const {
+  // TODO
+  return std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::parentElement() {
@@ -141,6 +173,16 @@ SVGElement SVGElement::removeChild(SVGElement child) {
 
 void SVGElement::remove() {
   registry_.get().get<TreeComponent>(entity_).remove(registry_);
+}
+
+std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
+  const ParseResult<css::Selector> selectorResult = css::SelectorParser::Parse(str);
+  if (selectorResult.hasError()) {
+    return std::nullopt;
+  }
+
+  const css::Selector selector = std::move(selectorResult.result());
+  return querySelectorSearch(selector, *this);
 }
 
 Entity SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
