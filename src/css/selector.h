@@ -6,6 +6,7 @@
 #include <variant>
 #include <vector>
 
+#include "src/base/utils.h"
 #include "src/css/declaration.h"
 #include "src/css/specificity.h"
 
