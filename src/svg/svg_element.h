@@ -41,6 +41,7 @@ public:
   bool hasAttribute(std::string_view name) const;
   std::optional<RcString> getAttribute(std::string_view name) const;
 
+  SVGDocument& ownerDocument();
   std::optional<SVGElement> parentElement();
   std::optional<SVGElement> firstChild();
   std::optional<SVGElement> lastChild();

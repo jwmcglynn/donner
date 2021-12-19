@@ -14,13 +14,15 @@ public:
 
   Registry& registry() { return registry_; }
   const Registry& registry() const { return registry_; }
-  Entity rootEntity() const { return svg_element_; }
+  Entity rootEntity() const { return svgElement_; }
 
   SVGSVGElement svgElement();
 
+  bool operator==(const SVGDocument& other) const;
+
 private:
   Registry registry_;
-  Entity svg_element_;
+  Entity svgElement_;
 };
 
 }  // namespace donner

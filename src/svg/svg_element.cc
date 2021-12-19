@@ -1,13 +1,13 @@
 #include "src/svg/svg_element.h"
 
-#include <string>
-
 #include "src/css/parser/selector_parser.h"
 #include "src/svg/components/class_component.h"
+#include "src/svg/components/document_context.h"
 #include "src/svg/components/id_component.h"
 #include "src/svg/components/style_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
+#include "src/svg/svg_document.h"
 
 namespace donner {
 
@@ -113,6 +113,10 @@ bool SVGElement::hasAttribute(std::string_view name) const {
 std::optional<RcString> SVGElement::getAttribute(std::string_view name) const {
   // TODO
   return std::nullopt;
+}
+
+SVGDocument& SVGElement::ownerDocument() {
+  return registry_.get().ctx<DocumentContext>().document;
 }
 
 std::optional<SVGElement> SVGElement::parentElement() {

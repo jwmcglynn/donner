@@ -11,6 +11,7 @@ cc_library(
     hdrs = [
         "class_component.h",
         "computed_path_component.h",
+        "document_context.h",
         "id_component.h",
         "path_component.h",
         "rect_component.h",

@@ -67,6 +67,12 @@ TEST_F(SVGElementTests, TreeOperations) {
 
   child2.remove();
   EXPECT_THAT(children(root), ElementsAre(child4));
+
+  EXPECT_EQ(root.ownerDocument(), document_);
+  EXPECT_EQ(child1.ownerDocument(), document_);
+  EXPECT_EQ(child2.ownerDocument(), document_);
+  EXPECT_EQ(child3.ownerDocument(), document_);
+  EXPECT_EQ(child4.ownerDocument(), document_);
 }
 
 TEST_F(SVGElementTests, Id) {
