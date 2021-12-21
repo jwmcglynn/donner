@@ -8,15 +8,6 @@
 
 namespace donner {
 
-std::string_view TypeToString(ElementType type) {
-  switch (type) {
-    case ElementType::SVG: return "SVG";
-    case ElementType::Path: return "Path";
-    case ElementType::Rect: return "Rect";
-    case ElementType::Unknown: return "Unknown";
-  }
-}
-
 void DumpTree(SVGElement element, int depth) {
   for (int i = 0; i < depth; ++i) {
     std::cout << "  ";

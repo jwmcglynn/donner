@@ -4,19 +4,25 @@
 
 #include <fstream>
 
+#include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/registry.h"
+#include "src/svg/components/tree_component.h"
 
 namespace donner {
 
 void RendererUtils::prepareDocumentForRendering(SVGDocument& document) {
   Registry& registry = document.registry();
 
-  auto view = registry.view<RectComponent>();
-  for (auto entity : view) {
+  for (auto view = registry.view<RectComponent>(); auto entity : view) {
     auto [rect] = view.get(entity);
     rect.computePath(registry.get_or_emplace<ComputedPathComponent>(entity));
+  }
+
+  for (auto view = registry.view<TreeComponent>(); auto entity : view) {
+    registry.get_or_emplace<ComputedStyleComponent>(entity).compute(
+        SVGElement::fromEntityUnchecked(registry, entity), registry, entity);
   }
 }
 

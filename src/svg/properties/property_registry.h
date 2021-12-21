@@ -5,6 +5,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/css/color.h"
 #include "src/css/declaration.h"
+#include "src/css/stylesheet.h"
 #include "src/svg/properties/paint_server.h"
 
 namespace donner::svg {
@@ -27,7 +28,7 @@ enum class PropertyState {
 struct PropertyParseFnParams {
   std::span<const css::ComponentValue> components;
   PropertyState explicitState = PropertyState::NotSet;
-  uint32_t specificity = 0;
+  css::Specificity specificity;
 };
 
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
@@ -48,13 +49,13 @@ public:
      * property has not been set.
      */
     std::optional<T> get() const { return state == PropertyState::Set ? value : getInitialFn(); }
-    void set(std::optional<T> newValue, uint32_t newSpecificity) {
+    void set(std::optional<T> newValue, css::Specificity newSpecificity) {
       value = std::move(newValue);
       state = PropertyState::Set;
       specificity = newSpecificity;
     }
 
-    void set(PropertyState newState, uint32_t newSpecificity) {
+    void set(PropertyState newState, css::Specificity newSpecificity) {
       value.reset();
       state = newState;
       specificity = newSpecificity;
@@ -67,7 +68,7 @@ public:
 
     std::optional<T> value;
     PropertyState state = PropertyState::NotSet;
-    uint32_t specificity = 0;
+    css::Specificity specificity;
 
     GetInitialFn<T> getInitialFn;
   };
@@ -86,7 +87,7 @@ public:
    * @return Error if the declaration had errors parsing or the property is not supported.
    */
   std::optional<ParseError> parseProperty(const css::Declaration& declaration,
-                                          uint32_t specificity = 0);
+                                          css::Specificity specificity);
 
   /**
    * Parse a HTML/SVG style attribute, corresponding to a CSS <declaration-list>, ignoring any parse

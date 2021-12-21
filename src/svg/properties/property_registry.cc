@@ -11,11 +11,9 @@ namespace donner::svg {
 
 namespace {
 
-static constexpr uint32_t kSpecificityImportant = ~static_cast<uint32_t>(1);
-// The style attribute can only be overridden by !important.
-static constexpr uint32_t kSpecificityStyleAttribute = kSpecificityImportant - 1;
 // Presentation attributes have a specificity of 0.
-static constexpr uint32_t kSpecificityPresentationAttribute = 0;
+static constexpr css::Specificity kSpecificityPresentationAttribute =
+    css::Specificity::FromABC(0, 0, 0);
 
 std::span<const css::ComponentValue> trimWhitespace(
     std::span<const css::ComponentValue> components) {
@@ -163,7 +161,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 3> kProp
 }  // namespace
 
 std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
-                                                          uint32_t specificity) {
+                                                          css::Specificity specificity) {
   PropertyParseFnParams params;
   // Note that we only need to trim the trailing whitespace here, but trimWhitespace actually trims
   // both.
@@ -182,7 +180,7 @@ std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration
     }
   }
 
-  params.specificity = declaration.important ? kSpecificityImportant : specificity;
+  params.specificity = declaration.important ? css::Specificity::Important() : specificity;
 
   const auto it = kProperties.find(frozen::string(declaration.name));
   if (it != kProperties.end()) {
@@ -199,7 +197,7 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   const std::vector<css::Declaration> declarations =
       css::DeclarationListParser::ParseOnlyDeclarations(str);
   for (const auto& declaration : declarations) {
-    std::ignore = parseProperty(declaration, kSpecificityStyleAttribute);
+    std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
   }
 }
 

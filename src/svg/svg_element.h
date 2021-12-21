@@ -21,6 +21,10 @@ public:
   SVGElement(const SVGElement& other);
   SVGElement& operator=(const SVGElement& other);
 
+  static SVGElement fromEntityUnchecked(Registry& registry, Entity entity) {
+    return SVGElement(registry, entity);
+  }
+
   ElementType type() const;
   RcString typeString() const;
 

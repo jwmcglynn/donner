@@ -10,6 +10,7 @@ using css::Color;
 using css::ComponentValue;
 using css::Declaration;
 using css::RGBA;
+using css::Specificity;
 using css::Token;
 
 using testing::Eq;
@@ -20,7 +21,7 @@ TEST(PropertyRegistry, ParseDeclaration) {
   css::Declaration declaration("color", {ComponentValue(Token(Token::Ident("lime"), 0))});
 
   PropertyRegistry registry;
-  EXPECT_THAT(registry.parseProperty(declaration), Eq(std::nullopt));
+  EXPECT_THAT(registry.parseProperty(declaration, Specificity()), Eq(std::nullopt));
   EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0, 0xFF, 0, 0xFF))));
 }
 
@@ -30,7 +31,8 @@ TEST(PropertyRegistry, ParseDeclarationError) {
   css::Declaration declaration("color", {ComponentValue(Token(Token::Ident("invalid-color"), 0))});
 
   PropertyRegistry registry;
-  EXPECT_THAT(registry.parseProperty(declaration), ParseErrorIs("Invalid color 'invalid-color'"));
+  EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+              ParseErrorIs("Invalid color 'invalid-color'"));
 }
 
 TEST(PropertyRegistry, ParseDeclarationHash) {
@@ -38,7 +40,7 @@ TEST(PropertyRegistry, ParseDeclarationHash) {
       "color", {ComponentValue(Token(Token::Hash(Token::Hash::Type::Id, "FFF"), 0))});
 
   PropertyRegistry registry;
-  EXPECT_THAT(registry.parseProperty(declaration), Eq(std::nullopt));
+  EXPECT_THAT(registry.parseProperty(declaration, Specificity()), Eq(std::nullopt));
   EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0xFF, 0xFF, 0xFF))));
 }
 
@@ -46,7 +48,7 @@ TEST(PropertyRegistry, UnsupportedProperty) {
   css::Declaration declaration("not-supported", {ComponentValue(Token(Token::Ident("test"), 0))});
 
   PropertyRegistry registry;
-  EXPECT_THAT(registry.parseProperty(declaration),
+  EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
               Optional(ParseErrorIs("Unknown property 'not-supported'")));
   EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
 }

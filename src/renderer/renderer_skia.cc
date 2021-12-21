@@ -3,10 +3,10 @@
 #include "include/core/SkPath.h"
 #include "include/core/SkStream.h"
 #include "src/renderer/renderer_utils.h"
+#include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/sized_element_component.h"
-#include "src/svg/components/style_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
@@ -16,23 +16,6 @@ namespace donner {
 namespace {
 
 SkM44 toSkia(const Transformd& transform) {
-#if 0
-    /**
-     *  The constructor parameters are in row-major order.
-     */
-    a c 0 e
-    b d 0 f
-    constexpr SkM44(SkScalar m0, SkScalar m4, SkScalar m8,  SkScalar m12,
-                    SkScalar m1, SkScalar m5, SkScalar m9,  SkScalar m13,
-                    SkScalar m2, SkScalar m6, SkScalar m10, SkScalar m14,
-                    SkScalar m3, SkScalar m7, SkScalar m11, SkScalar m15)
-        // fMat is column-major order in memory.
-        : fMat{m0,  m1,  m2,  m3,
-               m4,  m5,  m6,  m7,
-               m8,  m9,  m10, m11,
-               m12, m13, m14, m15}
-    {}
-#endif
   return SkM44{float(transform.data[0]),
                float(transform.data[2]),
                0.0f,
@@ -121,7 +104,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
     if (const auto* path = registry.try_get<ComputedPathComponent>(entity)) {
       if (auto maybeSpline = path->spline()) {
-        const StyleComponent& style = registry.get_or_emplace<StyleComponent>(entity);
+        const ComputedStyleComponent& style = registry.get<ComputedStyleComponent>(entity);
         if (auto fill = style.properties.fill.get()) {
           if (fill.value().is<svg::PaintServer::Solid>()) {
             const svg::PaintServer::Solid& solid = fill.value().get<svg::PaintServer::Solid>();

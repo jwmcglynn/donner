@@ -5,12 +5,14 @@ cc_library(
     srcs = [
         "computed_path_component.cc",
         "path_component.cc",
+        "registry.cc",
         "tree_component.cc",
         "viewbox_component.cc",
     ],
     hdrs = [
         "class_component.h",
         "computed_path_component.h",
+        "computed_style_component.h",
         "document_context.h",
         "id_component.h",
         "path_component.h",
@@ -18,6 +20,7 @@ cc_library(
         "registry.h",
         "sized_element_component.h",
         "style_component.h",
+        "stylesheet_component.h",
         "transform_component.h",
         "tree_component.h",
         "viewbox_component.h",

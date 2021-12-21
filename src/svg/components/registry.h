@@ -1,6 +1,7 @@
 #pragma once
 
 #include <entt/entt.hpp>
+#include <string_view>
 
 namespace donner {
 
@@ -12,7 +13,10 @@ enum class ElementType {
   SVG,
   Path,
   Rect,
+  Style,
   Unknown,
 };
+
+std::string_view TypeToString(ElementType type);
 
 }  // namespace donner

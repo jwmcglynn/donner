@@ -12,6 +12,7 @@
 #include "src/svg/svg_element.h"
 #include "src/svg/svg_path_element.h"
 #include "src/svg/svg_rect_element.h"
+#include "src/svg/svg_style_element.h"
 #include "src/svg/svg_svg_element.h"
 #include "src/svg/svg_unknown_element.h"
 #include "src/svg/xml/details/xml_parser_context.h"
@@ -20,7 +21,20 @@ namespace donner {
 
 namespace {
 
-using SVGElements = entt::type_list<SVGSVGElement, SVGPathElement, SVGRectElement>;
+using SVGElements = entt::type_list<SVGSVGElement, SVGPathElement, SVGRectElement, SVGStyleElement>;
+
+std::string_view TypeToString(rapidxml_ns::node_type type) {
+  switch (type) {
+    case rapidxml_ns::node_document: return "node_document";
+    case rapidxml_ns::node_element: return "node_element";
+    case rapidxml_ns::node_data: return "node_data";
+    case rapidxml_ns::node_cdata: return "node_cdata";
+    case rapidxml_ns::node_comment: return "node_comment";
+    case rapidxml_ns::node_declaration: return "node_declaration";
+    case rapidxml_ns::node_doctype: return "node_doctype";
+    case rapidxml_ns::node_pi: return "node_pi";
+  }
+}
 
 static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
                                                    std::string_view value) {
@@ -71,6 +85,12 @@ static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context,
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
   }
+  return std::nullopt;
+}
+
+template <typename T>
+std::optional<ParseError> ParseNodeContents(XMLParserContext& context, T element,
+                                            rapidxml_ns::xml_node<>* node) {
   return std::nullopt;
 }
 
@@ -181,6 +201,53 @@ std::optional<ParseError> ParseAttribute<SVGRectElement>(XMLParserContext& conte
   return std::nullopt;
 }
 
+template <>
+std::optional<ParseError> ParseAttribute<SVGStyleElement>(XMLParserContext& context,
+                                                          SVGStyleElement element,
+                                                          std::string_view namespacePrefix,
+                                                          std::string_view name,
+                                                          std::string_view value) {
+  if (name == "type") {
+    if (value.empty() ||
+        StringUtils::Equals<StringComparison::IgnoreCase>(value, std::string_view("text/css"))) {
+      // The value is valid.
+    } else {
+      ParseError err;
+      err.reason = "Invalid <style> element type '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+
+    element.setType(RcString(value));
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseNodeContents<SVGStyleElement>(XMLParserContext& context,
+                                                             SVGStyleElement element,
+                                                             rapidxml_ns::xml_node<>* node) {
+  if (element.isCssType()) {
+    for (rapidxml_ns::xml_node<>* i = node->first_node(); i; i = i->next_sibling()) {
+      if (i->type() == rapidxml_ns::node_data || i->type() == rapidxml_ns::node_cdata) {
+        element.setContents(std::string_view(i->value(), i->value_size()));
+      } else {
+        ParseError err;
+        err.reason =
+            std::string("Unexpected <style> element contents, expected text or CDATA, found '") +
+            std::string(TypeToString(i->type())) + "'";
+        err.offset =
+            context.parserOriginFrom(std::string_view(node->name(), node->name_size())).startOffset;
+        return err;
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
 void ParseXmlNsAttribute(XMLParserContext& context, rapidxml_ns::xml_node<>* node) {
   for (rapidxml_ns::xml_attribute<>* i = node->first_attribute(); i; i = i->next_attribute()) {
     const std::string_view name = std::string_view(i->local_name(), i->local_name_size());
@@ -226,6 +293,10 @@ ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
     }
   }
 
+  if (auto error = ParseNodeContents(context, element, node)) {
+    return std::move(error.value());
+  }
+
   return std::move(element);
 }
 
@@ -243,19 +314,6 @@ ParseResult<SVGElement> CreateElement(XMLParserContext& context, SVGDocument& sv
   } else {
     return ParseAttributes(context, SVGUnknownElement::Create(svgDocument, RcString(tagName)),
                            node);
-  }
-}
-
-std::string_view TypeToString(rapidxml_ns::node_type type) {
-  switch (type) {
-    case rapidxml_ns::node_document: return "node_document";
-    case rapidxml_ns::node_element: return "node_element";
-    case rapidxml_ns::node_data: return "node_data";
-    case rapidxml_ns::node_cdata: return "node_cdata";
-    case rapidxml_ns::node_comment: return "node_comment";
-    case rapidxml_ns::node_declaration: return "node_declaration";
-    case rapidxml_ns::node_doctype: return "node_doctype";
-    case rapidxml_ns::node_pi: return "node_pi";
   }
 }
 
