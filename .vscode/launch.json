@@ -111,6 +111,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "stylesheet_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/src/css/parser/stylesheet_parser_fuzzer",
+      "args": [
+        "${workspaceFolder}/bazel-bin/src/css/parser/stylesheet_parser_corpus/eof.txt"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "color_parser_fuzzer",
       "program": "${workspaceFolder}/bazel-bin/src/css/parser/color_parser_fuzzer",
       "args": [

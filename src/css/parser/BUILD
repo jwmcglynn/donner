@@ -8,6 +8,7 @@ cc_library(
         "declaration_list_parser.cc",
         "rule_parser.cc",
         "selector_parser.cc",
+        "stylesheet_parser.cc",
         "value_parser.cc",
     ],
     hdrs = [
@@ -18,6 +19,7 @@ cc_library(
         "details/tokenizer.h",
         "rule_parser.h",
         "selector_parser.h",
+        "stylesheet_parser.h",
         "value_parser.h",
     ],
     visibility = [
@@ -40,6 +42,7 @@ cc_test(
         "tests/rule_parser_tests.cc",
         "tests/selector_parser_tests.cc",
         "tests/selector_test_utils.h",
+        "tests/stylesheet_parser_tests.cc",
         "tests/token_test_utils.h",
         "tests/tokenizer_tests.cc",
         "tests/value_parser_tests.cc",
@@ -101,6 +104,17 @@ donner_cc_fuzzer(
         "tests/selector_parser_fuzzer.cc",
     ],
     corpus = "tests/selector_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "stylesheet_parser_fuzzer",
+    srcs = [
+        "tests/stylesheet_parser_fuzzer.cc",
+    ],
+    corpus = "tests/stylesheet_parser_corpus",
     deps = [
         ":parser",
     ],

@@ -1,3 +1,7 @@
+"""
+Bazel workspace rules.
+"""
+
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
@@ -49,8 +53,8 @@ hedron_compile_commands_setup()
 
 git_repository(
     name = "com_google_gtest",
+    branch = "main",
     remote = "https://github.com/google/googletest",
-    tag = "release-1.11.0",
 )
 
 # Use absl at head.
@@ -101,12 +105,6 @@ git_repository(
     name = "range-v3",
     branch = "master",
     remote = "https://github.com/ericniebler/range-v3",
-)
-
-git_repository(
-    name = "range-v3",
-    branch = "master",
-    remote = "https://github.com/ericniebler/range-v3.git",
 )
 
 git_repository(

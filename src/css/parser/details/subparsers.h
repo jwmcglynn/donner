@@ -6,15 +6,13 @@
 #include "src/css/parser/details/tokenizer.h"
 #include "src/css/token.h"
 
-namespace donner {
-namespace css {
-namespace details {
+namespace donner::css::details {
 
 enum class ParseMode { Keep, Discard };
 
-template <typename T>
+template <typename T, typename TokenType = Token>
 concept TokenizerLike = requires(T t) {
-  { t.next() } -> std::same_as<Token>;
+  { t.next() } -> std::same_as<TokenType>;
   { t.isEOF() } -> std::same_as<bool>;
 };
 
@@ -31,14 +29,14 @@ static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
 }
 
 // Forward declarations.
-template <TokenizerLike T>
+template <TokenizerLike<Token> T>
 SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode);
-template <TokenizerLike T>
+template <TokenizerLike<Token> T>
 Function consumeFunction(T& tokenizer, Token::Function&& functionToken, size_t offset,
                          ParseMode mode);
 
 /// Consume a component value, per https://www.w3.org/TR/css-syntax-3/#consume-component-value
-template <TokenizerLike T>
+template <TokenizerLike<Token> T>
 ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode) {
   if (token.is<Token::CurlyBracket>() || token.is<Token::SquareBracket>() ||
       token.is<Token::Parenthesis>()) {
@@ -57,7 +55,7 @@ ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode
 
 /// Parse a list of component values, per
 /// https://www.w3.org/TR/css-syntax-3/#parse-list-of-component-values
-template <TokenizerLike T>
+template <TokenizerLike<Token> T>
 std::vector<ComponentValue> parseListOfComponentValues(T& tokenizer) {
   std::vector<ComponentValue> result;
   while (!tokenizer.isEOF()) {
@@ -71,7 +69,7 @@ std::vector<ComponentValue> parseListOfComponentValues(T& tokenizer) {
 }
 
 /// Consume a simple block, per https://www.w3.org/TR/css-syntax-3/#consume-simple-block
-template <TokenizerLike T>
+template <TokenizerLike<Token> T>
 SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode) {
   const TokenIndex endingTokenIndex = simpleBlockEnding(firstToken.tokenIndex());
   SimpleBlock result(firstToken.tokenIndex(), firstToken.offset());
@@ -95,7 +93,7 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode)
 }
 
 /// Consume a function, per https://www.w3.org/TR/css-syntax-3/#consume-function
-template <TokenizerLike T>
+template <TokenizerLike<Token> T>
 Function consumeFunction(T& tokenizer, Token::Function&& functionToken, size_t offset,
                          ParseMode mode) {
   Function result(std::move(functionToken.name), offset);
@@ -120,7 +118,7 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, size_t o
 }
 
 /// Consume an at-rule, per https://www.w3.org/TR/css-syntax-3/#consume-at-rule
-template <TokenizerLike T>
+template <TokenizerLike<Token> T>
 AtRule consumeAtRule(T& tokenizer, Token::AtKeyword&& atKeyword, ParseMode mode) {
   AtRule result(std::move(atKeyword.value));
 
@@ -150,19 +148,93 @@ AtRule consumeAtRule(T& tokenizer, Token::AtKeyword&& atKeyword, ParseMode mode)
   return result;
 }
 
+template <typename T, typename U>
+concept DecayedSameAs = std::is_same_v<std::decay_t<T>, U>;
+
+template <typename T, typename ItemType>
+concept DeclarationTokenizerItem = requires(T t, ParseMode parseMode) {
+  { t.value } -> DecayedSameAs<ItemType>;
+  { t.offset() } -> std::same_as<size_t>;
+  { t.asComponentValue(parseMode) } -> std::same_as<ComponentValue>;
+};
+
+template <typename T>
+concept DeclarationTokenizer = requires(T t) {
+  { t.next() } -> DeclarationTokenizerItem<typename T::ItemType>;
+  { t.isEOF() } -> std::same_as<bool>;
+};
+
+template <TokenizerLike<Token> T>
+struct DeclarationTokenTokenizer {
+  struct Item {
+    Token value;
+    T& tokenizer;
+
+    template <typename TokenType>
+    bool isToken() const {
+      return value.is<TokenType>();
+    }
+
+    size_t offset() const { return value.offset(); }
+
+    ComponentValue asComponentValue(ParseMode parseMode = ParseMode::Keep) {
+      return consumeComponentValue(tokenizer, std::move(value), parseMode);
+    }
+  };
+
+  using ItemType = Token;
+
+  explicit DeclarationTokenTokenizer(T& tokenizer) : tokenizer_(tokenizer) {}
+
+  bool isEOF() const { return tokenizer_.isEOF(); }
+  Item next() { return Item{tokenizer_.next(), tokenizer_}; }
+
+private:
+  T& tokenizer_;
+};
+
+template <TokenizerLike<ComponentValue> T>
+struct DeclarationComponentValueTokenizer {
+  struct Item {
+    ComponentValue value;
+
+    template <typename TokenType>
+    bool isToken() const {
+      return value.isToken<TokenType>();
+    }
+
+    size_t offset() const { return value.sourceOffset(); }
+
+    ComponentValue asComponentValue(ParseMode parseMode = ParseMode::Keep) {
+      return std::move(value);
+    }
+  };
+
+  using ItemType = ComponentValue;
+
+  explicit DeclarationComponentValueTokenizer(T& tokenizer) : tokenizer_(tokenizer) {}
+
+  bool isEOF() const { return tokenizer_.isEOF(); }
+  Item next() { return Item{tokenizer_.next()}; }
+
+private:
+  T& tokenizer_;
+};
+
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
-template <TokenizerLike T>
-std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident, size_t offset) {
+template <DeclarationTokenizer T>
+std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&& ident,
+                                                     size_t offset) {
   {
     bool hadColon = false;
 
     while (!tokenizer.isEOF() && !hadColon) {
-      Token token = tokenizer.next();
+      typename T::Item item = tokenizer.next();
 
-      if (token.is<Token::Whitespace>()) {
+      if (item.template isToken<Token::Whitespace>()) {
         // While the next input token is a <whitespace-token>, consume the next input token.
         continue;
-      } else if (!token.is<Token::Colon>()) {
+      } else if (!item.template isToken<Token::Colon>()) {
         // If the next input token is anything other than a <colon-token>, this is a parse error.
         // Return nothing.
         return std::nullopt;
@@ -183,12 +255,12 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
   int trailingWhitespace = 0;
 
   while (!tokenizer.isEOF()) {
-    Token token = tokenizer.next();
+    typename T::Item token = tokenizer.next();
 
-    if (token.is<Token::Whitespace>()) {
+    if (token.template isToken<Token::Whitespace>()) {
       // While the next input token is a <whitespace-token>, consume the next input token.
       if (hitNonWhitespace) {
-        declaration.values.emplace_back(ComponentValue(std::move(token)));
+        declaration.values.emplace_back(std::move(token.asComponentValue()));
         ++trailingWhitespace;
       }
     } else {
@@ -196,7 +268,7 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
 
       // As long as the next input token is anything other than an <EOF-token>, consume a
       // component value and append it to the declaration's value.
-      auto componentValue = consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep);
+      auto componentValue = token.asComponentValue();
 
       // Scan for important.
       if (Token* valueToken = std::get_if<Token>(&componentValue.value)) {
@@ -236,6 +308,18 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
   return declaration;
 }
 
-}  // namespace details
-}  // namespace css
-}  // namespace donner
+/// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
+template <TokenizerLike<Token> T>
+std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident, size_t offset) {
+  DeclarationTokenTokenizer declarationTokenizer(tokenizer);
+  return consumeDeclarationGeneric(declarationTokenizer, std::move(ident), offset);
+}
+
+/// Consume a declaration, starting with an partially parsed set of ComponentValues.
+template <TokenizerLike<ComponentValue> T>
+std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident, size_t offset) {
+  DeclarationComponentValueTokenizer declarationTokenizer(tokenizer);
+  return consumeDeclarationGeneric(declarationTokenizer, std::move(ident), offset);
+}
+
+}  // namespace donner::css::details

@@ -26,6 +26,15 @@ public:
    * @return Parsed declaration list.
    */
   static std::vector<Declaration> ParseOnlyDeclarations(std::string_view str);
+
+  /**
+   * Parse a list of component values, from a Rule definition, corresponding to a CSS
+   * <declaration-list>.
+   *
+   * @param components List of component values.
+   * @return Parsed declaration list.
+   */
+  static std::vector<Declaration> ParseRuleDeclarations(std::span<ComponentValue> components);
 };
 
 }  // namespace css

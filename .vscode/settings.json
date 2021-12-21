@@ -103,7 +103,8 @@
     "vector": "cpp",
     "complex": "cpp",
     "coroutine": "cpp",
-    "__bits": "cpp"
+    "__bits": "cpp",
+    "cassert": "cpp"
   },
   "files.exclude": {
     "bazel-*": true

@@ -248,7 +248,7 @@ MATCHER_P2(PseudoElementSelectorIsImpl, ident, argsMatcher, "") {
          testing::ExplainMatchResult(argsMatcher, selector->argsIfFunction, result_listener);
 }
 
-auto PseudoElementSelectorIs(const char* ident) {
+inline auto PseudoElementSelectorIs(const char* ident) {
   return PseudoElementSelectorIsImpl(ident, testing::Eq(std::nullopt));
 }
 
@@ -271,11 +271,11 @@ MATCHER_P2(TypeSelectorIsImpl, ns, name, "") {
   }
 }
 
-auto TypeSelectorIs(const char* name) {
+inline auto TypeSelectorIs(const char* name) {
   return TypeSelectorIsImpl("", name);
 }
 
-auto TypeSelectorIs(const char* ns, const char* name) {
+inline auto TypeSelectorIs(const char* ns, const char* name) {
   return TypeSelectorIsImpl(ns, name);
 }
 
@@ -321,7 +321,7 @@ MATCHER_P2(PseudoClassSelectorIsImpl, ident, argsMatcher, "") {
          testing::ExplainMatchResult(argsMatcher, selector->argsIfFunction, result_listener);
 }
 
-auto PseudoClassSelectorIs(const char* ident) {
+inline auto PseudoClassSelectorIs(const char* ident) {
   return PseudoClassSelectorIsImpl(ident, testing::Eq(std::nullopt));
 }
 
@@ -344,11 +344,11 @@ MATCHER_P3(AttributeSelectorIsImpl, ns, name, matcherMatcher, "") {
          testing::ExplainMatchResult(matcherMatcher, selector->matcher, result_listener);
 }
 
-auto AttributeSelectorIs(const char* name) {
+inline auto AttributeSelectorIs(const char* name) {
   return AttributeSelectorIsImpl("", name, testing::Eq(std::nullopt));
 }
 
-auto AttributeSelectorIs(const char* ns, const char* name) {
+inline auto AttributeSelectorIs(const char* ns, const char* name) {
   return AttributeSelectorIsImpl(ns, name, testing::Eq(std::nullopt));
 }
 
@@ -364,8 +364,8 @@ auto AttributeSelectorIs(const char* ns, const char* name, MatcherMatcher matche
 
 enum class MatcherOptions { Default, CaseInsensitive };
 
-auto MatcherIs(AttrMatcher op, const char* value,
-               MatcherOptions options = MatcherOptions::Default) {
+inline auto MatcherIs(AttrMatcher op, const char* value,
+                      MatcherOptions options = MatcherOptions::Default) {
   return testing::AllOf(
       testing::Field("op", &AttributeSelector::Matcher::op, testing::Eq(op)),
       testing::Field("value", &AttributeSelector::Matcher::value, testing::Eq(value)),

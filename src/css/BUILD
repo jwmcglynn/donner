@@ -12,6 +12,7 @@ cc_library(
         "rule.h",
         "selector.h",
         "specificity.h",
+        "stylesheet.h",
         "token.h",
     ],
     visibility = [
