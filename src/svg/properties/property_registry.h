@@ -25,6 +25,8 @@ enum class PropertyState {
                         */
 };
 
+enum class PropertyCascade { None, Inherit };
+
 struct PropertyParseFnParams {
   std::span<const css::ComponentValue> components;
   PropertyState explicitState = PropertyState::NotSet;
@@ -39,7 +41,7 @@ public:
   template <typename T>
   using GetInitialFn = std::optional<T> (*)();
 
-  template <typename T>
+  template <typename T, PropertyCascade kCascade = PropertyCascade::None>
   struct Property {
     Property(GetInitialFn<T> getInitialFn = []() -> std::optional<T> { return std::nullopt; })
         : getInitialFn(getInitialFn) {}
@@ -61,6 +63,31 @@ public:
       specificity = newSpecificity;
     }
 
+    [[nodiscard]] Property<T, kCascade> inheritFrom(const Property<T, kCascade>& parent) const {
+      Property<T, kCascade> result = *this;
+
+      if constexpr (kCascade == PropertyCascade::Inherit) {
+        assert(parent.state != PropertyState::Inherit && "Parent should already be resolved");
+
+        if (state == PropertyState::NotSet || state == PropertyState::Inherit ||
+            state == PropertyState::ExplicitUnset) {
+          // Inherit from parent.
+          result.value = parent.get();
+          // Keep current specificity.
+          result.state = PropertyState::Set;
+        }
+      } else {
+        // Inherit only if the state is Inherit.
+        if (state == PropertyState::Inherit) {
+          result.value = parent.get();
+          // Keep current specificity.
+          result.state = PropertyState::Set;
+        }
+      }
+
+      return result;
+    }
+
     /**
      * @return true if the property has any value set, including CSS built-in values.
      */
@@ -73,11 +100,24 @@ public:
     GetInitialFn<T> getInitialFn;
   };
 
-  Property<css::Color> color;
-  Property<PaintServer> fill{[]() -> std::optional<PaintServer> {
+  Property<css::Color, PropertyCascade::Inherit> color;
+  Property<PaintServer, PropertyCascade::Inherit> fill{[]() -> std::optional<PaintServer> {
     return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));
   }};
-  Property<PaintServer> stroke{[]() -> std::optional<PaintServer> { return PaintServer::None(); }};
+  Property<PaintServer, PropertyCascade::Inherit> stroke{
+      []() -> std::optional<PaintServer> { return PaintServer::None(); }};
+
+  /**
+   * Inherit the value of each element in the stylesheet.
+   */
+  [[nodiscard]] PropertyRegistry inheritFrom(const PropertyRegistry& parent) const {
+    PropertyRegistry result;
+    result.color = color.inheritFrom(parent.color);
+    result.fill = fill.inheritFrom(parent.fill);
+    result.stroke = stroke.inheritFrom(parent.stroke);
+
+    return result;
+  }
 
   /**
    * Parse a single declaration, adding it to the property registry.

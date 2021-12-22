@@ -46,11 +46,11 @@ public:
   std::optional<RcString> getAttribute(std::string_view name) const;
 
   SVGDocument& ownerDocument();
-  std::optional<SVGElement> parentElement();
-  std::optional<SVGElement> firstChild();
-  std::optional<SVGElement> lastChild();
-  std::optional<SVGElement> previousSibling();
-  std::optional<SVGElement> nextSibling();
+  std::optional<SVGElement> parentElement() const;
+  std::optional<SVGElement> firstChild() const;
+  std::optional<SVGElement> lastChild() const;
+  std::optional<SVGElement> previousSibling() const;
+  std::optional<SVGElement> nextSibling() const;
 
   /**
    * Insert @a newNode as a child, before @a referenceNode. If @a referenceNode is std::nullopt,

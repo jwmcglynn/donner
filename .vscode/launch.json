@@ -159,11 +159,6 @@
       "sourceMap": {
         "/proc/self/cwd": "${workspaceFolder}"
       },
-      "env": {
-        "LIBGL_DEBUG": "verbose",
-        "LIBGL_ALWAYS_INDIRECT": "1",
-        "LIBGL_ALWAYS_SOFTWARE": "1",
-      }
     },
   ]
 }

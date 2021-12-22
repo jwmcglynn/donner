@@ -104,8 +104,9 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
     if (const auto* path = registry.try_get<ComputedPathComponent>(entity)) {
       if (auto maybeSpline = path->spline()) {
-        const ComputedStyleComponent& style = registry.get<ComputedStyleComponent>(entity);
-        if (auto fill = style.properties.fill.get()) {
+        const svg::PropertyRegistry& style =
+            registry.get<ComputedStyleComponent>(entity).properties();
+        if (auto fill = style.fill.get()) {
           if (fill.value().is<svg::PaintServer::Solid>()) {
             const svg::PaintServer::Solid& solid = fill.value().get<svg::PaintServer::Solid>();
 
@@ -121,7 +122,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
           }
         }
 
-        if (auto stroke = style.properties.stroke.get()) {
+        if (auto stroke = style.stroke.get()) {
           if (stroke.value().is<svg::PaintServer::Solid>()) {
             const svg::PaintServer::Solid& solid = stroke.value().get<svg::PaintServer::Solid>();
 

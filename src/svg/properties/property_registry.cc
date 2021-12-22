@@ -28,9 +28,9 @@ std::span<const css::ComponentValue> trimWhitespace(
   return components;
 }
 
-template <typename T, typename ParseCallbackFn>
+template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
 std::optional<ParseError> parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
-                                PropertyRegistry::Property<T>* destination) {
+                                PropertyRegistry::Property<T, kCascade>* destination) {
   // If the property is set to a built-in keyword, such as "inherit", the property has already been
   // parsed so we can just set based on the value of explicitState.
   if (params.explicitState != PropertyState::NotSet) {

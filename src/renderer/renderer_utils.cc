@@ -21,8 +21,14 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document) {
   }
 
   for (auto view = registry.view<TreeComponent>(); auto entity : view) {
-    registry.get_or_emplace<ComputedStyleComponent>(entity).compute(
-        SVGElement::fromEntityUnchecked(registry, entity), registry, entity);
+    // TODO: Can this be done in one step, or do the two loops need to be separate?
+    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
+  }
+
+  for (auto view = registry.view<ComputedStyleComponent>(); auto entity : view) {
+    auto [styleComponent] = view.get(entity);
+    styleComponent.computeProperties(SVGElement::fromEntityUnchecked(registry, entity), registry,
+                                     entity);
   }
 }
 

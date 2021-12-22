@@ -119,35 +119,35 @@ SVGDocument& SVGElement::ownerDocument() {
   return registry_.get().ctx<DocumentContext>().document;
 }
 
-std::optional<SVGElement> SVGElement::parentElement() {
-  auto& tree = registry_.get().get<TreeComponent>(entity_);
+std::optional<SVGElement> SVGElement::parentElement() const {
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
   return tree.parent() != entt::null ? std::make_optional(SVGElement(registry_, tree.parent()))
                                      : std::nullopt;
 }
 
-std::optional<SVGElement> SVGElement::firstChild() {
-  auto& tree = registry_.get().get<TreeComponent>(entity_);
+std::optional<SVGElement> SVGElement::firstChild() const {
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
   return tree.firstChild() != entt::null
              ? std::make_optional(SVGElement(registry_, tree.firstChild()))
              : std::nullopt;
 }
 
-std::optional<SVGElement> SVGElement::lastChild() {
-  auto& tree = registry_.get().get<TreeComponent>(entity_);
+std::optional<SVGElement> SVGElement::lastChild() const {
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
   return tree.lastChild() != entt::null
              ? std::make_optional(SVGElement(registry_, tree.lastChild()))
              : std::nullopt;
 }
 
-std::optional<SVGElement> SVGElement::previousSibling() {
-  auto& tree = registry_.get().get<TreeComponent>(entity_);
+std::optional<SVGElement> SVGElement::previousSibling() const {
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
   return tree.previousSibling() != entt::null
              ? std::make_optional(SVGElement(registry_, tree.previousSibling()))
              : std::nullopt;
 }
 
-std::optional<SVGElement> SVGElement::nextSibling() {
-  auto& tree = registry_.get().get<TreeComponent>(entity_);
+std::optional<SVGElement> SVGElement::nextSibling() const {
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
   return tree.nextSibling() != entt::null
              ? std::make_optional(SVGElement(registry_, tree.nextSibling()))
              : std::nullopt;
