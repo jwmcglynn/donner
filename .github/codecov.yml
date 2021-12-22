@@ -2,7 +2,6 @@ coverage:
   status:
     patch:
       default:
-        only_pulls: true
         informational: true
     project:
       default:
