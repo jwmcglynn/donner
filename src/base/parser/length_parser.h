@@ -25,7 +25,7 @@ public:
      * This should be true when parsing presentation attributes, see
      * https://www.w3.org/TR/SVG/types.html#syntax.
      */
-    bool unit_optional = false;
+    bool unitOptional = false;
 
     Options() {}
   };
@@ -50,7 +50,7 @@ public:
    *    However, LengthParser is limited to valid suffixes for length, as defined by Length::Unit.
    *
    * If the number is 0, the <ident-token> may be omitted since 0 is unitless. This can be extended
-   * to all numbers by setting Options::unit_optional to true.
+   * to all numbers by setting Options::unitOptional to true.
    *
    * Note that this may not consume all input, the caller should handle the result of
    * Result::consumed_chars.
@@ -60,6 +60,15 @@ public:
    * @return Result containing the Length and the number of characters that were parsed.
    */
   static ParseResult<Result> Parse(std::string_view str, Options options = Options());
+
+  /**
+   * Parse a unit suffix from a string, such as "px" or "em".
+   *
+   * @param str String containing the unit suffix, which must be a complete case-insensitive match
+   *            for a supported <dimension-token> suffix, or '%' for <percentage-token>.
+   * @return Lengthd::Unit corresponding to the suffix, or std::nullopt if there was no match.
+   */
+  static std::optional<Lengthd::Unit> ParseUnit(std::string_view str);
 };
 
 }  // namespace donner

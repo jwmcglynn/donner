@@ -2,14 +2,14 @@
 
 #include <string_view>
 
+#include "src/base/parser/length_parser.h"
 #include "src/base/parser/number_parser.h"
 #include "src/base/rc_string.h"
 #include "src/base/utils.h"
 #include "src/css/parser/details/common.h"
 #include "src/css/token.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 namespace details {
 
 class Tokenizer {
@@ -328,7 +328,7 @@ private:
     if (isIdentifierStart(remainingAfterNumber)) {
       auto [name, nameConsumedChars] = consumeName(remainingAfterNumber);
       return token<Token::Dimension>(number.consumed_chars + nameConsumedChars, number.number, name,
-                                     std::move(numberString), type);
+                                     LengthParser::ParseUnit(name), std::move(numberString), type);
     } else if (remainingAfterNumber.starts_with("%")) {
       return token<Token::Percentage>(number.consumed_chars + 1, number.number,
                                       std::move(numberString), type);
@@ -601,5 +601,4 @@ private:
 };
 
 }  // namespace details
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

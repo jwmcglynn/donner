@@ -4,10 +4,10 @@
 #include <string_view>
 #include <variant>
 
+#include "src/base/length.h"
 #include "src/base/rc_string.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 using TokenIndex = size_t;
 
@@ -159,9 +159,11 @@ struct Token {
 
   /// `<dimension-token>`
   struct Dimension {
-    Dimension(double value, RcString suffix, RcString valueString, NumberType type)
+    Dimension(double value, RcString suffix, std::optional<Lengthd::Unit> suffixUnit,
+              RcString valueString, NumberType type)
         : value(value),
           suffix(std::move(suffix)),
+          suffixUnit(suffixUnit),
           valueString(std::move(valueString)),
           type(type) {}
 
@@ -173,6 +175,7 @@ struct Token {
 
     double value;
     RcString suffix;
+    std::optional<Lengthd::Unit> suffixUnit;  //!< The parsed unit of the suffix, if known.
     RcString valueString;
     NumberType type;
   };
@@ -192,25 +195,19 @@ struct Token {
   /// `<CDO-token>`, '<!--'
   struct CDO {
     bool operator==(const CDO&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CDO&) {
-      return os << "CDO";
-    }
+    friend std::ostream& operator<<(std::ostream& os, const CDO&) { return os << "CDO"; }
   };
 
   /// `<CDC-token>`, '-->'
   struct CDC {
     bool operator==(const CDC&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const CDC&) {
-      return os << "CDC";
-    }
+    friend std::ostream& operator<<(std::ostream& os, const CDC&) { return os << "CDC"; }
   };
 
   /// `<colon-token>`
   struct Colon {
     bool operator==(const Colon&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const Colon&) {
-      return os << "Colon";
-    }
+    friend std::ostream& operator<<(std::ostream& os, const Colon&) { return os << "Colon"; }
   };
 
   /// `<semicolon-token>`
@@ -301,9 +298,7 @@ struct Token {
   /// `<EOF-token>`.
   struct EofToken {
     bool operator==(const EofToken&) const { return true; }
-    friend std::ostream& operator<<(std::ostream& os, const EofToken&) {
-      return os << "EofToken";
-    }
+    friend std::ostream& operator<<(std::ostream& os, const EofToken&) { return os << "EofToken"; }
   };
 
   using TokenValue =
@@ -335,6 +330,16 @@ struct Token {
   template <typename T>
   T&& get() && {
     return std::move(std::get<T>(value_));
+  }
+
+  template <typename T>
+  T* tryGet() {
+    return std::get_if<T>(&value_);
+  }
+
+  template <typename T>
+  const T* tryGet() const {
+    return std::get_if<T>(&value_);
   }
 
   template <typename Visitor>
@@ -382,5 +387,4 @@ private:
   size_t offset_;
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

@@ -130,6 +130,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
             paint.setAntiAlias(true);
             paint.setColor(toSkia(solid.color));
             paint.setStyle(SkPaint::Style::kStroke_Style);
+            // TODO: Handle units.
+            paint.setStrokeWidth(style.strokeWidth.get().value().value);
             drawPath(*maybeSpline, paint);
           } else if (stroke.value().is<svg::PaintServer::None>()) {
             // Do nothing.

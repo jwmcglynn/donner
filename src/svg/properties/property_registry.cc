@@ -3,6 +3,7 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include "src/base/parser/length_parser.h"
 #include "src/css/parser/color_parser.h"
 #include "src/css/parser/declaration_list_parser.h"
 #include "src/css/parser/value_parser.h"
@@ -132,7 +133,39 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
   return err;
 }
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 3> kProperties = {
+ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> components,
+                                           bool allowUserUnits) {
+  if (components.size() != 1) {
+    ParseError err;
+    err.reason = "Invalid length or percentage";
+    return err;
+  }
+
+  const css::ComponentValue& component = components.front();
+  if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
+    if (!dimension->suffixUnit) {
+      ParseError err;
+      err.reason = "Invalid unit on length";
+      err.offset = component.sourceOffset();
+      return err;
+    } else {
+      return Lengthd(dimension->value, dimension->suffixUnit.value());
+    }
+  } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
+    return Lengthd(percentage->value, Lengthd::Unit::Percent);
+  } else if (allowUserUnits) {
+    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      return Lengthd(number->value, Lengthd::Unit::None);
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid length or percentage";
+  err.offset = component.sourceOffset();
+  return err;
+}
+
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 4> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return parse(
@@ -155,6 +188,15 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 3> kProp
            params,
            [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
            &registry.stroke);
+     }},  //
+    {"stroke-width",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) {
+             return ParseLengthPercentage(params.components, params.allowUserUnits);
+           },
+           &registry.strokeWidth);
      }}  //
 };
 
@@ -221,6 +263,7 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
     // Trim both leading and trailing whitespace.
     params.components = trimWhitespace(components);
     params.specificity = kSpecificityPresentationAttribute;
+    params.allowUserUnits = true;
 
     std::ignore = it->second(*this, params);
     return true;

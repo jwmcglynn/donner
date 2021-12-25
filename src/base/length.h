@@ -53,6 +53,9 @@ struct Length {
 
   T value = T(0);
   Unit unit = Unit::None;
+
+  Length() = default;
+  explicit Length(T value, Unit unit = Unit::None) : value(value), unit(unit) {}
 };
 
 // Helper typedefs.

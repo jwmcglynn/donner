@@ -39,7 +39,7 @@ std::string_view TypeToString(rapidxml_ns::node_type type) {
 static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
                                                    std::string_view value) {
   LengthParser::Options options;
-  options.unit_optional = true;
+  options.unitOptional = true;
 
   auto maybeLengthResult = LengthParser::Parse(value, options);
   if (maybeLengthResult.hasError()) {

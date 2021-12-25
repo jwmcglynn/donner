@@ -56,10 +56,7 @@
       "problemMatcher": [
         "$gcc"
       ],
-      "group": {
-        "kind": "test",
-        "isDefault": true,
-      },
+      "group": "test",
       "presentation": {
         "clear": true
       }
@@ -75,11 +72,14 @@
     {
       "label": "renderer_tool",
       "type": "shell",
-      "command": "bazel run //src/renderer:renderer_tool -- ${workspaceFolder}/src/svg/xml/testdata/e-path-034.svg",
+      "command": "bazel run //src/renderer:renderer_tool -- ${workspaceFolder}/src/renderer/testdata/Ghostscript_Tiger.svg",
       "problemMatcher": [
         "$gcc"
       ],
-      "group": "test",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
       "presentation": {
         "clear": true
       },
@@ -149,7 +149,7 @@
       "type": "shell",
       "command": "bazel build //src/css/parser:parser_tests -c dbg",
       "problemMatcher": [],
-      "group": "test",
+      "group": "test"
     }
   ]
 }

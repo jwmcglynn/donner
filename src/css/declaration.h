@@ -9,8 +9,7 @@
 #include "src/base/rc_string.h"
 #include "src/css/token.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 struct ComponentValue;
 
@@ -51,6 +50,15 @@ struct ComponentValue {
   template <typename T>
   bool isToken() const {
     return is<Token>() && get<Token>().is<T>();
+  }
+
+  template <typename T>
+  const T* tryGetToken() const {
+    if (const Token* token = std::get_if<Token>(&value)) {
+      return token->tryGet<T>();
+    } else {
+      return nullptr;
+    }
   }
 
   template <typename T>
@@ -147,5 +155,4 @@ struct DeclarationOrAtRule {
   }
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

@@ -31,6 +31,9 @@ struct PropertyParseFnParams {
   std::span<const css::ComponentValue> components;
   PropertyState explicitState = PropertyState::NotSet;
   css::Specificity specificity;
+  /// For presentation attributes, values may be unitless, in which case they the spec says they are
+  /// specified in "user units". See https://www.w3.org/TR/SVG2/types.html#syntax.
+  bool allowUserUnits = false;
 };
 
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
@@ -106,6 +109,8 @@ public:
   }};
   Property<PaintServer, PropertyCascade::Inherit> stroke{
       []() -> std::optional<PaintServer> { return PaintServer::None(); }};
+  Property<Lengthd, PropertyCascade::Inherit> strokeWidth{
+      []() -> std::optional<Lengthd> { return Lengthd(1, Lengthd::Unit::None); }};
 
   /**
    * Inherit the value of each element in the stylesheet.
@@ -115,6 +120,7 @@ public:
     result.color = color.inheritFrom(parent.color);
     result.fill = fill.inheritFrom(parent.fill);
     result.stroke = stroke.inheritFrom(parent.stroke);
+    result.strokeWidth = strokeWidth.inheritFrom(parent.strokeWidth);
 
     return result;
   }

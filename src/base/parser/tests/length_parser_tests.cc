@@ -5,6 +5,9 @@
 #include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/base/tests/base_test_utils.h"
 
+using testing::Eq;
+using testing::Optional;
+
 namespace donner {
 
 using Unit = Lengthd::Unit;
@@ -128,13 +131,26 @@ TEST(LengthParser, InvalidUnit) {
 
 TEST(LengthParser, UnitOptional) {
   LengthParser::Options options;
-  options.unit_optional = true;
+  options.unitOptional = true;
 
   EXPECT_THAT(LengthParser::Parse("1pp", options), ParseResultIs(LengthResult(1, Unit::None, 1)));
   EXPECT_THAT(LengthParser::Parse("1", options), ParseResultIs(LengthResult(1, Unit::None, 1)));
 }
 
 TEST(LengthParser, Units) {
+  EXPECT_THAT(LengthParser::ParseUnit("%"), Optional(Unit::Percent));
+  EXPECT_THAT(LengthParser::ParseUnit("cm"), Optional(Unit::Cm));
+  EXPECT_THAT(LengthParser::ParseUnit("mm"), Optional(Unit::Mm));
+  EXPECT_THAT(LengthParser::ParseUnit("q"), Optional(Unit::Q));
+  EXPECT_THAT(LengthParser::ParseUnit("in"), Optional(Unit::In));
+  EXPECT_THAT(LengthParser::ParseUnit("pc"), Optional(Unit::Pc));
+
+  EXPECT_THAT(LengthParser::ParseUnit("p"), Eq(std::nullopt));
+  EXPECT_THAT(LengthParser::ParseUnit("%a"), Eq(std::nullopt));
+  EXPECT_THAT(LengthParser::ParseUnit("mmm"), Eq(std::nullopt));
+}
+
+TEST(LengthParser, LengthUnits) {
   EXPECT_THAT(LengthParser::Parse("123%"), ParseResultIs(LengthResult(123, Unit::Percent, 4)));
   EXPECT_THAT(LengthParser::Parse("-4cm"), ParseResultIs(LengthResult(-4, Unit::Cm, 4)));
   EXPECT_THAT(LengthParser::Parse("5mm"), ParseResultIs(LengthResult(5, Unit::Mm, 3)));
