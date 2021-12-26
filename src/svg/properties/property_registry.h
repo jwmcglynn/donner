@@ -2,6 +2,7 @@
 
 #include <span>
 
+#include "src/base/box.h"
 #include "src/base/parser/parse_result.h"
 #include "src/css/color.h"
 #include "src/css/declaration.h"
@@ -46,6 +47,8 @@ public:
 
   template <typename T, PropertyCascade kCascade = PropertyCascade::None>
   struct Property {
+    using Type = T;
+
     Property(GetInitialFn<T> getInitialFn = []() -> std::optional<T> { return std::nullopt; })
         : getInitialFn(getInitialFn) {}
 
@@ -91,6 +94,14 @@ public:
       return result;
     }
 
+    void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
+      if constexpr (std::is_same_v<Lengthd, Type>) {
+        if (value) {
+          value = Lengthd(value->toPixels(viewbox, fontMetrics), Lengthd::Unit::Px);
+        }
+      }
+    }
+
     /**
      * @return true if the property has any value set, including CSS built-in values.
      */
@@ -113,6 +124,11 @@ public:
       []() -> std::optional<Lengthd> { return Lengthd(1, Lengthd::Unit::None); }};
 
   /**
+   * Return a tuple of all properties within the PropertyRegistry.
+   */
+  auto allProperties() { return std::forward_as_tuple(color, fill, stroke, strokeWidth); }
+
+  /**
    * Inherit the value of each element in the stylesheet.
    */
   [[nodiscard]] PropertyRegistry inheritFrom(const PropertyRegistry& parent) const {
@@ -123,6 +139,12 @@ public:
     result.strokeWidth = strokeWidth.inheritFrom(parent.strokeWidth);
 
     return result;
+  }
+
+  void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
+    std::apply([&viewbox, &fontMetrics](
+                   auto&&... property) { (property.resolveUnits(viewbox, fontMetrics), ...); },
+               allProperties());
   }
 
   /**

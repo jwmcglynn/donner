@@ -12,11 +12,7 @@ SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
 }
 
 void SVGSVGElement::setViewbox(std::optional<Boxd> viewbox) {
-  if (viewbox) {
-    registry_.get().get_or_emplace<ViewboxComponent>(entity_).viewbox = viewbox;
-  } else {
-    registry_.get().remove_if_exists<ViewboxComponent>(entity_);
-  }
+  registry_.get().get_or_emplace<ViewboxComponent>(entity_).viewbox = viewbox;
 }
 
 void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {

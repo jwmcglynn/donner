@@ -7,6 +7,7 @@ cc_library(
         "length.h",
         "math_utils.h",
         "rc_string.h",
+        "relative_length_metrics.h",
         "string_utils.h",
         "transform.h",
         "utils.h",

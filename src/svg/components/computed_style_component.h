@@ -1,11 +1,11 @@
 #pragma once
 
-#include <iostream>
-
+#include "src/svg/components/document_context.h"
 #include "src/svg/components/registry.h"
 #include "src/svg/components/style_component.h"
 #include "src/svg/components/stylesheet_component.h"
 #include "src/svg/components/tree_component.h"
+#include "src/svg/components/viewbox_component.h"
 
 namespace donner {
 
@@ -25,14 +25,10 @@ struct ComputedStyleComponent {
 
   template <ElementWithEntity T>
   void computeProperties(const T& element, Registry& registry, Entity entity) {
-    if (!properties_) {
-      properties_ = compute(element, registry, entity);
+    if (properties_) {
+      return;  // Already computed.
     }
-  }
 
-private:
-  template <ElementWithEntity T>
-  static svg::PropertyRegistry compute(const T& element, Registry& registry, Entity entity) {
     // Apply local style.
     svg::PropertyRegistry properties;
     if (auto* styleComponent = registry.try_get<StyleComponent>(entity)) {
@@ -60,13 +56,31 @@ private:
       ComputedStyleComponent& parentStyleComponent =
           registry.get_or_emplace<ComputedStyleComponent>(parent.entity());
       parentStyleComponent.computeProperties(parent, registry, parent.entity());
-      return properties.inheritFrom(parentStyleComponent.properties());
+      properties_ = properties.inheritFrom(parentStyleComponent.properties());
+      viewbox_ = parentStyleComponent.viewbox_;
     } else {
-      return properties;
+      properties_ = properties;
     }
+
+    if (auto* viewboxComponent = registry.try_get<ViewboxComponent>(entity);
+        viewboxComponent && viewboxComponent->viewbox) {
+      viewbox_ = viewboxComponent->viewbox.value();
+    } else if (!viewbox_) {
+      // If there is no viewbox, default to the size of the canvas.
+      const auto& documentContext = registry.ctx<DocumentContext>();
+      assert(documentContext.defaultSize.has_value());
+      viewbox_ = Boxd(Vector2d::Zero(), documentContext.defaultSize.value());
+    }
+
+    // Convert properties to relative transforms.
+    // TODO: Set font metrics from properties.
+    assert(viewbox_.has_value());
+    properties_->resolveUnits(viewbox_.value(), FontMetrics());
   }
 
+private:
   std::optional<svg::PropertyRegistry> properties_;
+  std::optional<Boxd> viewbox_;
 };
 
 }  // namespace donner

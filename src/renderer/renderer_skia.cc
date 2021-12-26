@@ -49,7 +49,7 @@ RendererSkia::RendererSkia(int width, int height) : width_(width), height_(heigh
 RendererSkia::~RendererSkia() {}
 
 void RendererSkia::draw(SVGDocument& document) {
-  RendererUtils::prepareDocumentForRendering(document);
+  RendererUtils::prepareDocumentForRendering(document, Vector2d(width_, height_));
   draw(document.registry(), document.rootEntity());
 }
 

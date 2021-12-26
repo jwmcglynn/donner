@@ -1,5 +1,8 @@
 #pragma once
 
+#include "src/base/box.h"
+#include "src/base/relative_length_metrics.h"
+
 namespace donner {
 
 /**
@@ -56,6 +59,42 @@ struct Length {
 
   Length() = default;
   explicit Length(T value, Unit unit = Unit::None) : value(value), unit(unit) {}
+
+  /**
+   * Convert the length to pixels, following the ratios at
+   * https://www.w3.org/TR/css-values/#absolute-lengths and
+   * https://www.w3.org/TR/css-values/#relative-lengths.
+   *
+   * @param viewbox Viewbox of the element for computing viewbox-relative conversions.
+   * @param fontMetrics Font size information for font-relative sizes.
+   * @return T length in pixels.
+   */
+  T toPixels(const Box<T>& viewbox, const FontMetrics& fontMetrics) {
+    switch (unit) {
+      // Absolute units.
+      case Unit::None: return value;
+      case Unit::Percent: return value * diagonalExtent(viewbox) / 100.0;
+      case Unit::Cm: return value * RelativeLengthMetrics::kCmToPixels;
+      case Unit::Mm: return value * RelativeLengthMetrics::kCmToPixels / 10.0;
+      case Unit::Q: return value * RelativeLengthMetrics::kCmToPixels / 40.0;
+      case Unit::In: return value * RelativeLengthMetrics::kInchesToPixels;
+      case Unit::Pc: return value * RelativeLengthMetrics::kInchesToPixels / 6.0;
+      case Unit::Pt: return value * RelativeLengthMetrics::kInchesToPixels;
+      case Unit::Px: return value;
+      // Relative units.
+      case Unit::Em: return value * fontMetrics.fontSize;
+      case Unit::Ex: return value * fontMetrics.exUnit();
+      case Unit::Ch: return value * fontMetrics.chUnit();
+      case Unit::Rem: return value * fontMetrics.rootFontSize;
+      case Unit::Vw: return value * viewbox.width() / 100.0;
+      case Unit::Vh: return value * viewbox.height() / 100.0;
+      case Unit::Vmin: return value * std::min(viewbox.width(), viewbox.height()) / 100.0;
+      case Unit::Vmax: return value * std::max(viewbox.width(), viewbox.height()) / 100.0;
+    }
+  }
+
+private:
+  static T diagonalExtent(const Box<T>& box) { return box.size().length(); }
 };
 
 // Helper typedefs.

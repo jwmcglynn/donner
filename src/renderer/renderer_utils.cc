@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "src/svg/components/computed_style_component.h"
+#include "src/svg/components/document_context.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/registry.h"
@@ -12,8 +13,9 @@
 
 namespace donner {
 
-void RendererUtils::prepareDocumentForRendering(SVGDocument& document) {
+void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize) {
   Registry& registry = document.registry();
+  registry.ctx<DocumentContext>().defaultSize = defaultSize;
 
   for (auto view = registry.view<RectComponent>(); auto entity : view) {
     auto [rect] = view.get(entity);
