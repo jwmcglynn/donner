@@ -384,11 +384,11 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
 }  // namespace
 
 ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
-                                             std::vector<ParseError>* out_warnings) {
+                                             std::vector<ParseError>* outWarnings) {
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;
 
-  XMLParserContext context(std::string_view(str.data(), str.size()), out_warnings);
+  XMLParserContext context(std::string_view(str.data(), str.size()), outWarnings);
 
   rapidxml_ns::xml_document<> xmlDocument;
   try {

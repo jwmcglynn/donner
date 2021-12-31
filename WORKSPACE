@@ -64,6 +64,12 @@ git_repository(
     remote = "https://github.com/abseil/abseil-cpp",
 )
 
+git_repository(
+    name = "pixelmatch-cpp17",
+    branch = "main",
+    remote = "https://github.com/jwmcglynn/pixelmatch-cpp17",
+)
+
 new_local_repository(
     name = "css-parsing-tests",
     build_file = "third_party/BUILD.css-parsing-tests",

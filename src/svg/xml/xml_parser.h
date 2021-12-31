@@ -16,11 +16,11 @@ public:
    * and end with a '\0'.
    *
    * @param str Mutable input data, which must be mutable and null-terminated.
-   * @param[out] out_warnings If provided, append warnings encountered to this vector.
+   * @param[out] outWarnings If non-null, append warnings encountered to this vector.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
   static ParseResult<SVGDocument> ParseSVG(std::span<char> str,
-                                           std::vector<ParseError>* out_warnings);
+                                           std::vector<ParseError>* outWarnings = nullptr);
 };
 
 }  // namespace donner

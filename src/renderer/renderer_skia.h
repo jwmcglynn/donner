@@ -22,6 +22,10 @@ public:
 
   bool save(const char* filename);
 
+  std::span<const uint8_t> pixelData() const;
+  int width() const { return width_; }
+  int height() const { return height_; }
+
 private:
   void draw(Registry& registry, Entity entity);
 

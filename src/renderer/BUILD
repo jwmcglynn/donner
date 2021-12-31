@@ -22,6 +22,14 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "renderer",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_skia",
+    ],
+)
+
 cc_binary(
     name = "renderer_tool",
     srcs = ["renderer_tool.cc"],

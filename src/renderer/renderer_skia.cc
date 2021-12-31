@@ -87,11 +87,12 @@ void RendererSkia::drawPath(const PathSpline& spline, const SkPaint& paint) {
 }
 
 bool RendererSkia::save(const char* filename) {
-  return RendererUtils::writeRgbaPixelsToPngFile(
-      filename,
-      std::span<const uint8_t>(static_cast<const uint8_t*>(bitmap_.getPixels()),
-                               bitmap_.computeByteSize()),
-      width_, height_);
+  return RendererUtils::writeRgbaPixelsToPngFile(filename, pixelData(), width_, height_);
+}
+
+std::span<const uint8_t> RendererSkia::pixelData() const {
+  return std::span<const uint8_t>(static_cast<const uint8_t*>(bitmap_.getPixels()),
+                                  bitmap_.computeByteSize());
 }
 
 void RendererSkia::draw(Registry& registry, Entity root) {
