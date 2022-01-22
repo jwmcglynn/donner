@@ -144,9 +144,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     }
 
     const TreeComponent& tree = registry.get<TreeComponent>(entity);
-    for (auto cur = tree.firstChild(); cur != entt::null;
-         cur = registry.get<TreeComponent>(cur).nextSibling()) {
-      drawEntity(transform, cur);
+    for (auto cur = tree.firstChild(); cur; cur = cur->nextSibling()) {
+      drawEntity(transform, entt::to_entity(registry, *cur));
     }
   };
 

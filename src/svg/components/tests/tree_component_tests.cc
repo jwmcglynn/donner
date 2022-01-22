@@ -13,27 +13,24 @@ namespace donner {
 
 class TreeComponentTests : public testing::Test {
 protected:
-  Entity createEntity() {
+  TreeComponent* createNode() {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, "unknown", entity);
-    return entity;
+    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, "unknown");
+    return &registry_.get<TreeComponent>(entity);
   }
 
-  TreeComponent& tree(Entity entity) { return registry_.get<TreeComponent>(entity); }
-
-  std::vector<Entity> children(Entity entity) {
-    std::vector<Entity> result;
-    for (auto cur = tree(entity).firstChild(); cur != entt::null; cur = tree(cur).nextSibling()) {
+  std::vector<TreeComponent*> children(TreeComponent* node) {
+    std::vector<TreeComponent*> result;
+    for (TreeComponent* cur = node->firstChild(); cur; cur = cur->nextSibling()) {
       result.push_back(cur);
     }
 
     // Iterate in reverse order and verify.
     if (result.empty()) {
-      EXPECT_TRUE(tree(entity).lastChild() == entt::null);
+      EXPECT_EQ(node->lastChild(), nullptr);
     } else {
-      std::deque<Entity> resultReverse;
-      for (auto cur = tree(entity).lastChild(); cur != entt::null;
-           cur = tree(cur).previousSibling()) {
+      std::deque<TreeComponent*> resultReverse;
+      for (TreeComponent* cur = node->lastChild(); cur; cur = cur->previousSibling()) {
         resultReverse.push_front(cur);
       }
 
@@ -47,276 +44,277 @@ protected:
 };
 
 TEST_F(TreeComponentTests, InsertBefore) {
-  auto root = createEntity();
-  auto child1 = createEntity();
-  auto child2 = createEntity();
-  auto child3 = createEntity();
-  auto child4 = createEntity();
+  auto root = createNode();
+  auto child1 = createNode();
+  auto child2 = createNode();
+  auto child3 = createNode();
+  auto child4 = createNode();
 
-  tree(root).insertBefore(registry_, child1, entt::null);
-  EXPECT_EQ(tree(root).firstChild(), child1);
-  EXPECT_EQ(tree(root).lastChild(), child1);
-  EXPECT_EQ(tree(child1).parent(), root);
+  root->insertBefore(child1, nullptr);
+  EXPECT_EQ(root->firstChild(), child1);
+  EXPECT_EQ(root->lastChild(), child1);
+  EXPECT_EQ(child1->parent(), root);
   EXPECT_THAT(children(root), ElementsAre(child1));
 
   // Inserts at beginning before only child.
-  tree(root).insertBefore(registry_, child2, child1);
-  EXPECT_EQ(tree(child2).parent(), root);
-  EXPECT_EQ(tree(child2).nextSibling(), child1);
-  EXPECT_EQ(tree(root).firstChild(), child2);
-  EXPECT_EQ(tree(child1).previousSibling(), child2);
+  root->insertBefore(child2, child1);
+  EXPECT_EQ(child2->parent(), root);
+  EXPECT_EQ(child2->nextSibling(), child1);
+  EXPECT_EQ(root->firstChild(), child2);
+  EXPECT_EQ(child1->previousSibling(), child2);
   EXPECT_THAT(children(root), ElementsAre(child2, child1));
 
   // Insert at end.
-  tree(root).insertBefore(registry_, child3, entt::null);
-  EXPECT_EQ(tree(child3).parent(), root);
-  EXPECT_EQ(tree(child3).previousSibling(), child1);
-  EXPECT_EQ(tree(root).lastChild(), child3);
-  EXPECT_EQ(tree(child1).nextSibling(), child3);
+  root->insertBefore(child3, nullptr);
+  EXPECT_EQ(child3->parent(), root);
+  EXPECT_EQ(child3->previousSibling(), child1);
+  EXPECT_EQ(root->lastChild(), child3);
+  EXPECT_EQ(child1->nextSibling(), child3);
   EXPECT_THAT(children(root), ElementsAre(child2, child1, child3));
 
   // Insert in middle.
-  tree(root).insertBefore(registry_, child4, child1);
-  EXPECT_EQ(tree(child4).parent(), root);
-  EXPECT_EQ(tree(child4).previousSibling(), child2);
-  EXPECT_EQ(tree(child4).nextSibling(), child1);
+  root->insertBefore(child4, child1);
+  EXPECT_EQ(child4->parent(), root);
+  EXPECT_EQ(child4->previousSibling(), child2);
+  EXPECT_EQ(child4->nextSibling(), child1);
 
-  EXPECT_EQ(tree(child2).nextSibling(), child4);
-  EXPECT_EQ(tree(child1).previousSibling(), child4);
+  EXPECT_EQ(child2->nextSibling(), child4);
+  EXPECT_EQ(child1->previousSibling(), child4);
   EXPECT_THAT(children(root), ElementsAre(child2, child4, child1, child3));
 }
 
 TEST_F(TreeComponentTests, InsertBefore_Errors) {
-  auto root = createEntity();
-  EXPECT_DEATH({ tree(root).insertBefore(registry_, entt::null, entt::null); }, "newNode is null");
+  auto root = createNode();
 
-  auto child1 = createEntity();
-  tree(root).insertBefore(registry_, child1, entt::null);
+  EXPECT_DEATH({ root->insertBefore(nullptr, nullptr); }, "newNode is null");
+
+  auto child1 = createNode();
+  root->insertBefore(child1, nullptr);
 
   // Wrong parent.
-  auto node1 = createEntity();
-  EXPECT_DEATH({ tree(root).insertBefore(registry_, child1, node1); }, "");
+  auto node1 = createNode();
+  EXPECT_DEATH({ root->insertBefore(child1, node1); }, "");
 }
 
 TEST_F(TreeComponentTests, InsertBefore_WithSelf) {
-  auto root = createEntity();
-  EXPECT_DEATH({ tree(root).insertBefore(registry_, entt::null, entt::null); }, "newNode is null");
+  auto root = createNode();
+  EXPECT_DEATH({ root->insertBefore(nullptr, nullptr); }, "newNode is null");
 
-  auto child1 = createEntity();
-  tree(root).insertBefore(registry_, child1, entt::null);
+  auto child1 = createNode();
+  root->insertBefore(child1, nullptr);
 
-  EXPECT_DEATH({ tree(root).insertBefore(registry_, child1, child1); }, "");
+  EXPECT_DEATH({ root->insertBefore(child1, child1); }, "");
 }
 
 TEST_F(TreeComponentTests, InsertBefore_WithRoot) {
-  auto root = createEntity();
-  EXPECT_DEATH({ tree(root).insertBefore(registry_, entt::null, entt::null); }, "newNode is null");
+  auto root = createNode();
+  EXPECT_DEATH({ root->insertBefore(nullptr, nullptr); }, "newNode is null");
 
-  auto child1 = createEntity();
-  EXPECT_DEATH({ tree(root).insertBefore(registry_, child1, root); }, "");
+  auto child1 = createNode();
+  EXPECT_DEATH({ root->insertBefore(child1, root); }, "");
 }
 
 TEST_F(TreeComponentTests, AppendChild) {
-  auto root = createEntity();
-  auto child1 = createEntity();
-  auto child2 = createEntity();
+  auto root = createNode();
+  auto child1 = createNode();
+  auto child2 = createNode();
 
-  tree(root).appendChild(registry_, child1);
-  EXPECT_EQ(tree(root).firstChild(), child1);
-  EXPECT_EQ(tree(root).lastChild(), child1);
-  EXPECT_EQ(tree(child1).parent(), root);
+  root->appendChild(child1);
+  EXPECT_EQ(root->firstChild(), child1);
+  EXPECT_EQ(root->lastChild(), child1);
+  EXPECT_EQ(child1->parent(), root);
   EXPECT_THAT(children(root), ElementsAre(child1));
 
-  tree(root).appendChild(registry_, child2);
-  EXPECT_EQ(tree(child2).parent(), root);
-  EXPECT_EQ(tree(child2).previousSibling(), child1);
-  EXPECT_EQ(tree(root).lastChild(), child2);
-  EXPECT_EQ(tree(child1).nextSibling(), child2);
+  root->appendChild(child2);
+  EXPECT_EQ(child2->parent(), root);
+  EXPECT_EQ(child2->previousSibling(), child1);
+  EXPECT_EQ(root->lastChild(), child2);
+  EXPECT_EQ(child1->nextSibling(), child2);
 
   EXPECT_THAT(children(root), ElementsAre(child1, child2));
 }
 
 TEST_F(TreeComponentTests, AppendChild_Errors) {
-  auto root = createEntity();
-  EXPECT_DEATH({ tree(root).appendChild(registry_, entt::null); }, "child is null");
+  auto root = createNode();
+  EXPECT_DEATH({ root->appendChild(nullptr); }, "child is null");
 
   // Cannot insert self.
-  EXPECT_DEATH({ tree(root).appendChild(registry_, root); }, "");
+  EXPECT_DEATH({ root->appendChild(root); }, "");
 }
 
 TEST_F(TreeComponentTests, ReplaceChild) {
-  auto root = createEntity();
-  auto child1 = createEntity();
-  auto child2 = createEntity();
+  auto root = createNode();
+  auto child1 = createNode();
+  auto child2 = createNode();
 
   // Replace with single element.
-  tree(root).appendChild(registry_, child1);
-  tree(root).replaceChild(registry_, child2, child1);
-  EXPECT_EQ(tree(root).firstChild(), child2);
-  EXPECT_EQ(tree(root).lastChild(), child2);
-  EXPECT_EQ(tree(child2).parent(), root);
-  EXPECT_TRUE(tree(child1).parent() == entt::null);
+  root->appendChild(child1);
+  root->replaceChild(child2, child1);
+  EXPECT_EQ(root->firstChild(), child2);
+  EXPECT_EQ(root->lastChild(), child2);
+  EXPECT_EQ(child2->parent(), root);
+  EXPECT_EQ(child1->parent(), nullptr);
 
-  auto child3 = createEntity();
-  tree(root).appendChild(registry_, child1);
-  tree(root).appendChild(registry_, child3);
+  auto child3 = createNode();
+  root->appendChild(child1);
+  root->appendChild(child3);
   EXPECT_THAT(children(root), ElementsAre(child2, child1, child3));
 
-  auto child4 = createEntity();
+  auto child4 = createNode();
 
   // Replace first.
-  tree(root).replaceChild(registry_, child4, child2);
+  root->replaceChild(child4, child2);
   EXPECT_THAT(children(root), ElementsAre(child4, child1, child3));
 
   // Replace middle.
-  tree(root).replaceChild(registry_, child2, child1);
+  root->replaceChild(child2, child1);
   EXPECT_THAT(children(root), ElementsAre(child4, child2, child3));
 
   // Replace last.
-  tree(root).replaceChild(registry_, child1, child3);
+  root->replaceChild(child1, child3);
   EXPECT_THAT(children(root), ElementsAre(child4, child2, child1));
 }
 
 TEST_F(TreeComponentTests, ReplaceChild_Errors) {
-  auto root = createEntity();
-  auto child1 = createEntity();
-  EXPECT_DEATH({ tree(root).replaceChild(registry_, entt::null, child1); }, "newChild is null");
-  EXPECT_DEATH({ tree(root).replaceChild(registry_, child1, entt::null); }, "oldChild is null");
+  auto root = createNode();
+  auto child1 = createNode();
+  EXPECT_DEATH({ root->replaceChild(nullptr, child1); }, "newChild is null");
+  EXPECT_DEATH({ root->replaceChild(child1, nullptr); }, "oldChild is null");
 
   // Cannot insert self.
-  tree(root).appendChild(registry_, child1);
-  EXPECT_DEATH({ tree(root).replaceChild(registry_, root, child1); }, "");
+  root->appendChild(child1);
+  EXPECT_DEATH({ root->replaceChild(root, child1); }, "");
 
   // Wrong parent.
-  auto node1 = createEntity();
-  auto child2 = createEntity();
-  EXPECT_DEATH({ tree(root).replaceChild(registry_, child2, node1); }, "");
+  auto node1 = createNode();
+  auto child2 = createNode();
+  EXPECT_DEATH({ root->replaceChild(child2, node1); }, "");
 }
 
 TEST_F(TreeComponentTests, ReplaceChild_ReplaceSelf) {
-  auto root = createEntity();
-  auto child1 = createEntity();
-  auto child2 = createEntity();
-  auto child3 = createEntity();
+  auto root = createNode();
+  auto child1 = createNode();
+  auto child2 = createNode();
+  auto child3 = createNode();
 
   // Cannot insert self.
-  tree(root).appendChild(registry_, child1);
-  tree(root).appendChild(registry_, child2);
-  tree(root).appendChild(registry_, child3);
+  root->appendChild(child1);
+  root->appendChild(child2);
+  root->appendChild(child3);
 
-  tree(root).replaceChild(registry_, child1, child1);
+  root->replaceChild(child1, child1);
   EXPECT_THAT(children(root), ElementsAre(child1, child2, child3));
 
-  tree(root).replaceChild(registry_, child2, child2);
+  root->replaceChild(child2, child2);
   EXPECT_THAT(children(root), ElementsAre(child1, child2, child3));
 
-  tree(root).replaceChild(registry_, child3, child3);
+  root->replaceChild(child3, child3);
   EXPECT_THAT(children(root), ElementsAre(child1, child2, child3));
 }
 
 TEST_F(TreeComponentTests, RemoveChild) {
-  auto root = createEntity();
-  auto child1 = createEntity();
+  auto root = createNode();
+  auto child1 = createNode();
 
   // Remove single element.
-  tree(root).appendChild(registry_, child1);
-  tree(root).removeChild(registry_, child1);
-  EXPECT_TRUE(tree(root).firstChild() == entt::null);
-  EXPECT_TRUE(tree(root).lastChild() == entt::null);
-  EXPECT_TRUE(tree(child1).parent() == entt::null);
+  root->appendChild(child1);
+  root->removeChild(child1);
+  EXPECT_EQ(root->firstChild(), nullptr);
+  EXPECT_EQ(root->lastChild(), nullptr);
+  EXPECT_EQ(child1->parent(), nullptr);
 
-  auto child2 = createEntity();
-  auto child3 = createEntity();
-  tree(root).appendChild(registry_, child1);
-  tree(root).appendChild(registry_, child2);
-  tree(root).appendChild(registry_, child3);
+  auto child2 = createNode();
+  auto child3 = createNode();
+  root->appendChild(child1);
+  root->appendChild(child2);
+  root->appendChild(child3);
   EXPECT_THAT(children(root), ElementsAre(child1, child2, child3));
 
   // Remove middle.
-  tree(root).removeChild(registry_, child2);
+  root->removeChild(child2);
   EXPECT_THAT(children(root), ElementsAre(child1, child3));
 
   // Remove first.
-  tree(root).removeChild(registry_, child1);
+  root->removeChild(child1);
   EXPECT_THAT(children(root), ElementsAre(child3));
 
-  tree(root).appendChild(registry_, child2);
+  root->appendChild(child2);
   EXPECT_THAT(children(root), ElementsAre(child3, child2));
 
   // Remove last.
-  tree(root).removeChild(registry_, child2);
+  root->removeChild(child2);
   EXPECT_THAT(children(root), ElementsAre(child3));
 }
 
 TEST_F(TreeComponentTests, RemoveChild_Errors) {
-  auto root = createEntity();
-  EXPECT_DEATH({ tree(root).removeChild(registry_, entt::null); }, "child is null");
+  auto root = createNode();
+  EXPECT_DEATH({ root->removeChild(nullptr); }, "child is null");
 
   // Cannot remove self.
-  EXPECT_DEATH({ tree(root).removeChild(registry_, root); }, "");
+  EXPECT_DEATH({ root->removeChild(root); }, "");
 
   // Wrong parent.
-  auto child1 = createEntity();
-  EXPECT_DEATH({ tree(root).removeChild(registry_, child1); }, "");
+  auto child1 = createNode();
+  EXPECT_DEATH({ root->removeChild(child1); }, "");
 }
 
 TEST_F(TreeComponentTests, Remove) {
-  auto root = createEntity();
-  auto child1 = createEntity();
+  auto root = createNode();
+  auto child1 = createNode();
 
   // Remove single element.
-  tree(root).appendChild(registry_, child1);
-  tree(child1).remove(registry_);
-  EXPECT_TRUE(tree(root).firstChild() == entt::null);
-  EXPECT_TRUE(tree(root).lastChild() == entt::null);
-  EXPECT_TRUE(tree(child1).parent() == entt::null);
+  root->appendChild(child1);
+  child1->remove();
+  EXPECT_EQ(root->firstChild(), nullptr);
+  EXPECT_EQ(root->lastChild(), nullptr);
+  EXPECT_EQ(child1->parent(), nullptr);
 
-  auto child2 = createEntity();
-  auto child3 = createEntity();
-  tree(root).appendChild(registry_, child1);
-  tree(root).appendChild(registry_, child2);
-  tree(root).appendChild(registry_, child3);
+  auto child2 = createNode();
+  auto child3 = createNode();
+  root->appendChild(child1);
+  root->appendChild(child2);
+  root->appendChild(child3);
   EXPECT_THAT(children(root), ElementsAre(child1, child2, child3));
 
   // Remove middle.
-  tree(child2).remove(registry_);
+  child2->remove();
   EXPECT_THAT(children(root), ElementsAre(child1, child3));
 
   // Remove first.
-  tree(child1).remove(registry_);
+  child1->remove();
   EXPECT_THAT(children(root), ElementsAre(child3));
 
-  tree(root).appendChild(registry_, child2);
+  root->appendChild(child2);
   EXPECT_THAT(children(root), ElementsAre(child3, child2));
 
   // Remove last.
-  tree(child2).remove(registry_);
+  child2->remove();
   EXPECT_THAT(children(root), ElementsAre(child3));
 }
 
 TEST_F(TreeComponentTests, Type) {
   {
-    auto entity = createEntity();
-    EXPECT_EQ(tree(entity).type(), ElementType::Unknown);
+    auto node = createNode();
+    EXPECT_EQ(node->type(), ElementType::Unknown);
   }
 
   {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::SVG, "svg", entity);
-    EXPECT_EQ(tree(entity).type(), ElementType::SVG);
+    registry_.emplace<TreeComponent>(entity, ElementType::SVG, "svg");
+    EXPECT_EQ(registry_.get<TreeComponent>(entity).type(), ElementType::SVG);
   }
 }
 
 TEST_F(TreeComponentTests, TypeString) {
   {
-    auto entity = createEntity();
-    EXPECT_EQ(tree(entity).typeString(), "unknown");
+    auto node = createNode();
+    EXPECT_EQ(node->typeString(), "unknown");
   }
 
   {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, "test-entity", entity);
-    EXPECT_EQ(tree(entity).typeString(), "test-entity");
+    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, "test-entity");
+    EXPECT_EQ(registry_.get<TreeComponent>(entity).typeString(), "test-entity");
   }
 }
 
