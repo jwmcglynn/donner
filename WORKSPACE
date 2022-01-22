@@ -84,7 +84,7 @@ new_local_repository(
 
 git_repository(
     name = "entt",
-    commit = "9d72ffb9fe0ce4a15bab3729b52fcb0adace4d7f",
+    commit = "a03b88e0eb679ca0fbb79d9c54293e772b4f4a93",
     remote = "https://github.com/skypjack/entt",
 )
 

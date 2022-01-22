@@ -62,7 +62,7 @@ void SVGElement::setId(std::string_view id) {
     auto& component = registry_.get().get_or_emplace<IdComponent>(entity_);
     component.id = id;
   } else {
-    registry_.get().remove_if_exists<IdComponent>(entity_);
+    registry_.get().remove<IdComponent>(entity_);
   }
 }
 
@@ -79,7 +79,7 @@ void SVGElement::setClassName(std::string_view name) {
     auto& component = registry_.get().get_or_emplace<ClassComponent>(entity_);
     component.className = name;
   } else {
-    registry_.get().remove_if_exists<ClassComponent>(entity_);
+    registry_.get().remove<ClassComponent>(entity_);
   }
 }
 
