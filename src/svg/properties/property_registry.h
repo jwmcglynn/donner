@@ -11,6 +11,10 @@
 
 namespace donner::svg {
 
+enum class StrokeLinecap { Butt, Round, Square };
+
+enum class StrokeLinejoin { Miter, MiterClip, Round, Bevel, Arcs };
+
 class PropertyRegistry;
 
 enum class PropertyState {
@@ -118,25 +122,58 @@ public:
   Property<PaintServer, PropertyCascade::Inherit> fill{[]() -> std::optional<PaintServer> {
     return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));
   }};
+
+  // Stroke.
   Property<PaintServer, PropertyCascade::Inherit> stroke{
       []() -> std::optional<PaintServer> { return PaintServer::None(); }};
+  Property<double, PropertyCascade::Inherit> strokeOpacity{
+      []() -> std::optional<double> { return 1.0; }};
   Property<Lengthd, PropertyCascade::Inherit> strokeWidth{
       []() -> std::optional<Lengthd> { return Lengthd(1, Lengthd::Unit::None); }};
+  Property<StrokeLinecap, PropertyCascade::Inherit> strokeLinecap{
+      []() -> std::optional<StrokeLinecap> { return StrokeLinecap::Butt; }};
+  Property<StrokeLinejoin, PropertyCascade::Inherit> strokeLinejoin{
+      []() -> std::optional<StrokeLinejoin> { return StrokeLinejoin::Miter; }};
+  Property<double, PropertyCascade::Inherit> strokeMiterlimit{
+      []() -> std::optional<double> { return 4.0; }};
+  Property<std::vector<Lengthd>, PropertyCascade::Inherit> strokeDasharray{
+      []() -> std::optional<std::vector<Lengthd>> { return std::nullopt; }};
+  Property<Lengthd, PropertyCascade::Inherit> strokeDashoffset{
+      []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
 
   /**
    * Return a tuple of all properties within the PropertyRegistry.
    */
-  auto allProperties() { return std::forward_as_tuple(color, fill, stroke, strokeWidth); }
+  auto allProperties() {
+    return std::forward_as_tuple(color, fill, stroke, strokeOpacity, strokeWidth, strokeLinecap,
+                                 strokeLinejoin, strokeMiterlimit, strokeDasharray,
+                                 strokeDashoffset);
+  }
+
+  template <size_t Start, size_t End, class F>
+  static constexpr void inheritPropertyHelper(F&& f) {
+    if constexpr (Start < End) {
+      f(std::integral_constant<size_t, Start>{});
+      inheritPropertyHelper<Start + 1, End>(f);
+    }
+  }
 
   /**
    * Inherit the value of each element in the stylesheet.
    */
   [[nodiscard]] PropertyRegistry inheritFrom(const PropertyRegistry& parent) const {
     PropertyRegistry result;
-    result.color = color.inheritFrom(parent.color);
-    result.fill = fill.inheritFrom(parent.fill);
-    result.stroke = stroke.inheritFrom(parent.stroke);
-    result.strokeWidth = strokeWidth.inheritFrom(parent.strokeWidth);
+    auto resultProperties = result.allProperties();
+    const auto parentProperties = const_cast<PropertyRegistry&>(parent).allProperties();
+    const auto selfProperties = const_cast<PropertyRegistry*>(this)->allProperties();
+
+    constexpr size_t kNumProperties = std::tuple_size_v<decltype(resultProperties)>;
+
+    inheritPropertyHelper<0, kNumProperties>(
+        [&resultProperties, parentProperties, selfProperties](auto i) {
+          std::get<i.value>(resultProperties) =
+              std::get<i.value>(selfProperties).inheritFrom(std::get<i.value>(parentProperties));
+        });
 
     return result;
   }

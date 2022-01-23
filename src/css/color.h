@@ -42,6 +42,16 @@ struct Color {
 
   RGBA rgba() const { return std::get<RGBA>(value); }
 
+  Color withOpacity(double opacity) const {
+    if (isCurrentColor()) {
+      return *this;
+    }
+
+    RGBA value = rgba();
+    value.a = static_cast<uint8_t>(opacity * 255);
+    return Color(value);
+  }
+
   friend std::ostream& operator<<(std::ostream& os, const Color& color);
 };
 

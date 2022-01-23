@@ -2,6 +2,7 @@
 
 #include "include/core/SkPath.h"
 #include "include/core/SkStream.h"
+#include "include/effects/SkDashPathEffect.h"
 #include "src/renderer/renderer_utils.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/path_component.h"
@@ -37,6 +38,26 @@ SkM44 toSkia(const Transformd& transform) {
 SkColor toSkia(const css::Color color) {
   // TODO: We need to resolve currentColor before getting here.
   return SkColorSetARGB(color.rgba().a, color.rgba().r, color.rgba().g, color.rgba().b);
+}
+
+SkPaint::Cap toSkia(svg::StrokeLinecap lineCap) {
+  switch (lineCap) {
+    case svg::StrokeLinecap::Butt: return SkPaint::Cap::kButt_Cap;
+    case svg::StrokeLinecap::Round: return SkPaint::Cap::kRound_Cap;
+    case svg::StrokeLinecap::Square: return SkPaint::Cap::kSquare_Cap;
+  }
+}
+
+SkPaint::Join toSkia(svg::StrokeLinejoin lineJoin) {
+  // TODO: Implement MiterClip and Arcs. For now, fallback to Miter, which is the default linejoin,
+  // since the feature is not implemented.
+  switch (lineJoin) {
+    case svg::StrokeLinejoin::Miter: return SkPaint::Join::kMiter_Join;
+    case svg::StrokeLinejoin::MiterClip: return SkPaint::Join::kMiter_Join;
+    case svg::StrokeLinejoin::Round: return SkPaint::Join::kRound_Join;
+    case svg::StrokeLinejoin::Bevel: return SkPaint::Join::kBevel_Join;
+    case svg::StrokeLinejoin::Arcs: return SkPaint::Join::kMiter_Join;
+  }
 }
 
 }  // namespace
@@ -129,10 +150,27 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
             SkPaint paint;
             paint.setAntiAlias(true);
-            paint.setColor(toSkia(solid.color));
             paint.setStyle(SkPaint::Style::kStroke_Style);
-            // TODO: Handle units.
+
+            paint.setColor(toSkia(solid.color.withOpacity(style.strokeOpacity.get().value())));
             paint.setStrokeWidth(style.strokeWidth.get().value().value);
+            paint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
+            paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
+            paint.setStrokeMiter(style.strokeMiterlimit.get().value());
+            if (style.strokeDasharray.get().has_value()) {
+              // TODO: Avoid this copy.
+              const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
+              std::vector<SkScalar> skiaDashes;
+              skiaDashes.reserve(dashes.size());
+              for (const Lengthd& dash : dashes) {
+                skiaDashes.push_back(dash.value);
+              }
+
+              paint.setPathEffect(
+                  SkDashPathEffect::Make(skiaDashes.data(), skiaDashes.size(),
+                                         style.strokeDashoffset.get().value().value));
+            }
+
             drawPath(*maybeSpline, paint);
           } else if (stroke.value().is<svg::PaintServer::None>()) {
             // Do nothing.

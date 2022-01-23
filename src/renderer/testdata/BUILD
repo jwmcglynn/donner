@@ -1,8 +1,8 @@
 filegroup(
     name = "testdata",
     srcs = glob([
-        "*.png",
         "*.svg",
+        "golden/*.png",
     ]),
     visibility = [
         "//src:__subpackages__",

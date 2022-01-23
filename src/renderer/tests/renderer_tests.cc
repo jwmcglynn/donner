@@ -106,7 +106,42 @@ protected:
 
 TEST_F(RendererTests, Ghostscript_Tiger) {
   SVGDocument document = loadSVG("src/renderer/testdata/Ghostscript_Tiger.svg");
-  renderAndCompare(document, 900, 900, "src/renderer/testdata/Ghostscript_Tiger.png");
+  renderAndCompare(document, 900, 900, "src/renderer/testdata/golden/Ghostscript_Tiger.png");
+}
+
+TEST_F(RendererTests, StrokingComplex) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_complex.svg");
+  renderAndCompare(document, 350, 130, "src/renderer/testdata/golden/stroking_complex.png");
+}
+
+TEST_F(RendererTests, StrokingDasharray) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_dasharray.svg");
+  renderAndCompare(document, 225, 100, "src/renderer/testdata/golden/stroking_dasharray.png");
+}
+
+TEST_F(RendererTests, StrokingDashoffset) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_dashoffset.svg");
+  renderAndCompare(document, 225, 100, "src/renderer/testdata/golden/stroking_dashoffset.png");
+}
+
+TEST_F(RendererTests, StrokingLinecap) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_linecap.svg");
+  renderAndCompare(document, 225, 100, "src/renderer/testdata/golden/stroking_linecap.png");
+}
+
+TEST_F(RendererTests, StrokingLinejoin) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_linejoin.svg");
+  renderAndCompare(document, 350, 100, "src/renderer/testdata/golden/stroking_linejoin.png");
+}
+
+TEST_F(RendererTests, StrokingMiterlimit) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_miterlimit.svg");
+  renderAndCompare(document, 225, 100, "src/renderer/testdata/golden/stroking_miterlimit.png");
+}
+
+TEST_F(RendererTests, StrokingStrokewidth) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_strokewidth.svg");
+  renderAndCompare(document, 225, 100, "src/renderer/testdata/golden/stroking_strokewidth.png");
 }
 
 }  // namespace donner

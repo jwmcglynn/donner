@@ -51,6 +51,20 @@ std::optional<ParseError> parse(const PropertyParseFnParams& params, ParseCallba
   return std::nullopt;
 }
 
+ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      return number->value;
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid number";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
 ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
   if (components.empty()) {
     ParseError err;
@@ -119,12 +133,12 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
       // whitespace.
       return PaintServer(PaintServer::Reference(url.value, std::nullopt));
     }
+  }
 
-    // If we couldn't parse yet, try parsing as a color.
-    auto colorResult = css::ColorParser::Parse(components);
-    if (colorResult.hasResult()) {
-      return PaintServer(PaintServer::Solid(std::move(colorResult.result())));
-    }
+  // If we couldn't parse yet, try parsing as a color.
+  auto colorResult = css::ColorParser::Parse(components);
+  if (colorResult.hasResult()) {
+    return PaintServer(PaintServer::Solid(std::move(colorResult.result())));
   }
 
   ParseError err;
@@ -135,37 +149,151 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
 
 ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> components,
                                            bool allowUserUnits) {
-  if (components.size() != 1) {
-    ParseError err;
-    err.reason = "Invalid length or percentage";
-    return err;
-  }
-
-  const css::ComponentValue& component = components.front();
-  if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
-    if (!dimension->suffixUnit) {
-      ParseError err;
-      err.reason = "Invalid unit on length";
-      err.offset = component.sourceOffset();
-      return err;
-    } else {
-      return Lengthd(dimension->value, dimension->suffixUnit.value());
-    }
-  } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
-    return Lengthd(percentage->value, Lengthd::Unit::Percent);
-  } else if (allowUserUnits) {
-    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-      return Lengthd(number->value, Lengthd::Unit::None);
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
+      if (!dimension->suffixUnit) {
+        ParseError err;
+        err.reason = "Invalid unit on length";
+        err.offset = component.sourceOffset();
+        return err;
+      } else {
+        return Lengthd(dimension->value, dimension->suffixUnit.value());
+      }
+    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
+      return Lengthd(percentage->value, Lengthd::Unit::Percent);
+    } else if (allowUserUnits) {
+      if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+        return Lengthd(number->value, Lengthd::Unit::None);
+      }
     }
   }
 
   ParseError err;
   err.reason = "Invalid length or percentage";
-  err.offset = component.sourceOffset();
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 4> kProperties = {
+ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      return Clamp(number->value, 0.0, 1.0);
+    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
+      return Clamp(percentage->value / 100.0, 0.0, 1.0);
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid alpha value";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
+ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("butt")) {
+        return StrokeLinecap::Butt;
+      } else if (value.equalsLowercase("round")) {
+        return StrokeLinecap::Round;
+      } else if (value.equalsLowercase("square")) {
+        return StrokeLinecap::Square;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid linecap";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
+ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("miter")) {
+        return StrokeLinejoin::Miter;
+      } else if (value.equalsLowercase("miter-clip")) {
+        return StrokeLinejoin::MiterClip;
+      } else if (value.equalsLowercase("round")) {
+        return StrokeLinejoin::Round;
+      } else if (value.equalsLowercase("bevel")) {
+        return StrokeLinejoin::Bevel;
+      } else if (value.equalsLowercase("arcs")) {
+        return StrokeLinejoin::Arcs;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid linejoin";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
+ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
+    std::span<const css::ComponentValue> components) {
+  // https://www.w3.org/TR/css-values-4/#mult-comma
+  std::vector<Lengthd> result;
+
+  auto trySkipToken = [&components]<typename T>() -> bool {
+    if (!components.empty() && components.front().isToken<T>()) {
+      components = components.subspan(1);
+      return true;
+    }
+    return false;
+  };
+
+  while (!components.empty()) {
+    if (!result.empty()) {
+      if (trySkipToken.template operator()<css::Token::Whitespace>() ||
+          trySkipToken.template operator()<css::Token::Comma>() || components.empty()) {
+        trySkipToken.template operator()<css::Token::Whitespace>();
+      } else {
+        ParseError err;
+        err.reason = "Unexpected token in dasharray";
+        err.offset =
+            !components.empty() ? components.front().sourceOffset() : ParseError::kEndOfString;
+        return err;
+      }
+    }
+
+    const css::ComponentValue& component = components.front();
+    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
+      if (!dimension->suffixUnit) {
+        ParseError err;
+        err.reason = "Invalid unit on length";
+        err.offset = component.sourceOffset();
+        return err;
+      } else {
+        result.emplace_back(dimension->value, dimension->suffixUnit.value());
+      }
+    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
+      result.emplace_back(percentage->value, Lengthd::Unit::Percent);
+    } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      result.emplace_back(number->value, Lengthd::Unit::None);
+    } else {
+      ParseError err;
+      err.reason = "Unexpected token in dasharray";
+      err.offset = component.sourceOffset();
+      return err;
+    }
+
+    components = components.subspan(1);
+  }
+
+  return result;
+}
+
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return parse(
@@ -189,6 +317,13 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 4> kProp
            [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
            &registry.stroke);
      }},  //
+    {"stroke-opacity",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components); },
+           &registry.strokeOpacity);
+     }},  //
     {"stroke-width",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return parse(
@@ -197,7 +332,50 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 4> kProp
              return ParseLengthPercentage(params.components, params.allowUserUnits);
            },
            &registry.strokeWidth);
-     }}  //
+     }},  //
+    {"stroke-linecap",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) {
+             return ParseStrokeLinecap(params.components);
+           },
+           &registry.strokeLinecap);
+     }},  //
+    {"stroke-linejoin",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) {
+             return ParseStrokeLinejoin(params.components);
+           },
+           &registry.strokeLinejoin);
+     }},  //
+    {"stroke-miterlimit",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseNumber(params.components); },
+           &registry.strokeMiterlimit);
+     }},  //
+    {"stroke-dasharray",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) {
+             return ParseStrokeDasharray(params.components);
+           },
+           &registry.strokeDasharray);
+     }},  //
+    {"stroke-dashoffset",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return parse(
+           params,
+           [](const PropertyParseFnParams& params) {
+             return ParseLengthPercentage(params.components, params.allowUserUnits);
+           },
+           &registry.strokeDashoffset);
+     }},  //
 };
 
 }  // namespace
@@ -265,7 +443,11 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
     params.specificity = kSpecificityPresentationAttribute;
     params.allowUserUnits = true;
 
-    std::ignore = it->second(*this, params);
+    auto maybeError = it->second(*this, params);
+    if (maybeError.has_value()) {
+      std::cerr << "Error parsing " << name << " property: " << maybeError.value() << std::endl;
+    }
+
     return true;
   }
 

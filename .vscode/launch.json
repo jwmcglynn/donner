@@ -46,6 +46,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "renderer_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/renderer/tests/renderer_tests",
+      "args": [
+        "--gtest_break_on_failure"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        "/proc/self/cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "css_tests",
       "program": "${workspaceFolder}/bazel-bin/src/css/css_tests",
       "args": [
