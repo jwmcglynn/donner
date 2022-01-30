@@ -4,6 +4,7 @@
 #include "src/svg/components/class_component.h"
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/id_component.h"
+#include "src/svg/components/shadow_tree_component.h"
 #include "src/svg/components/style_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
@@ -58,11 +59,10 @@ RcString SVGElement::id() const {
 }
 
 void SVGElement::setId(std::string_view id) {
+  // Explicitly remove and re-create, so that DocumentContext can update its id-to-entity map.
+  registry_.get().remove<IdComponent>(entity_);
   if (!id.empty()) {
-    auto& component = registry_.get().get_or_emplace<IdComponent>(entity_);
-    component.id = id;
-  } else {
-    registry_.get().remove<IdComponent>(entity_);
+    registry_.get().emplace<IdComponent>(entity_, IdComponent{RcString(id)});
   }
 }
 
@@ -126,6 +126,11 @@ std::optional<SVGElement> SVGElement::parentElement() const {
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
+  if (registry_.get().all_of<ShadowTreeComponent>(entity_)) {
+    // Don't enumerate children for shadow trees.
+    return std::nullopt;
+  }
+
   const auto& tree = registry_.get().get<TreeComponent>(entity_);
   return tree.firstChild() != entt::null
              ? std::make_optional(SVGElement(registry_, tree.firstChild()))
@@ -133,6 +138,11 @@ std::optional<SVGElement> SVGElement::firstChild() const {
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
+  if (registry_.get().all_of<ShadowTreeComponent>(entity_)) {
+    // Don't enumerate children for shadow trees.
+    return std::nullopt;
+  }
+
   const auto& tree = registry_.get().get<TreeComponent>(entity_);
   return tree.lastChild() != entt::null
              ? std::make_optional(SVGElement(registry_, tree.lastChild()))

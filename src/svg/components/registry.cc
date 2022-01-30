@@ -7,6 +7,8 @@ namespace donner {
 std::string_view TypeToString(ElementType type) {
   switch (type) {
     case ElementType::Circle: return "Circle";
+    case ElementType::Defs: return "Defs";
+    case ElementType::Use: return "Use";
     case ElementType::SVG: return "SVG";
     case ElementType::Path: return "Path";
     case ElementType::Rect: return "Rect";

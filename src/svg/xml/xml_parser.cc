@@ -11,12 +11,14 @@
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
 #include "src/svg/svg_circle_element.h"
+#include "src/svg/svg_defs_element.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/svg_path_element.h"
 #include "src/svg/svg_rect_element.h"
 #include "src/svg/svg_style_element.h"
 #include "src/svg/svg_svg_element.h"
 #include "src/svg/svg_unknown_element.h"
+#include "src/svg/svg_use_element.h"
 #include "src/svg/xml/details/xml_parser_context.h"
 
 namespace donner {
@@ -25,10 +27,12 @@ namespace {
 
 using SVGElements = entt::type_list<  //
     SVGCircleElement,                 //
-    SVGSVGElement,                    //
+    SVGDefsElement,                   //
     SVGPathElement,                   //
     SVGRectElement,                   //
-    SVGStyleElement>;
+    SVGStyleElement,                  //
+    SVGSVGElement,                    //
+    SVGUseElement>;
 
 std::string_view TypeToString(rapidxml_ns::node_type type) {
   switch (type) {
@@ -281,6 +285,34 @@ std::optional<ParseError> ParseAttribute<SVGStyleElement>(XMLParserContext& cont
 }
 
 template <>
+std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& context,
+                                                        SVGUseElement element,
+                                                        std::string_view namespacePrefix,
+                                                        std::string_view name,
+                                                        std::string_view value) {
+  // TODO: Support legacy xlink:href.
+  if (name == "href") {
+    element.setHref(RcString(value));
+  } else if (name == "x") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == "y") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == "width") {
+    element.setWidth(ParseLengthAttribute(context, value));
+  } else if (name == "height") {
+    element.setHeight(ParseLengthAttribute(context, value));
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
 std::optional<ParseError> ParseNodeContents<SVGStyleElement>(XMLParserContext& context,
                                                              SVGStyleElement element,
                                                              rapidxml_ns::xml_node<>* node) {
@@ -335,7 +367,7 @@ ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
     const std::string_view name = std::string_view(i->local_name(), i->local_name_size());
     const std::string_view value = std::string_view(i->value(), i->value_size());
 
-    if (!namespacePrefix.empty() && namespacePrefix != "xmlns") {
+    if (!namespacePrefix.empty() && namespacePrefix != "xmlns" && namespacePrefix != "xlink") {
       ParseError err;
       err.reason = "Ignored attribute '" + std::string(i->name(), i->name_size()) +
                    "' with an unsupported namespace";

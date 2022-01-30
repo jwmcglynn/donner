@@ -8,6 +8,8 @@
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/sized_element_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
@@ -137,17 +139,39 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 }
 
 void RendererSkia::draw(Registry& registry, Entity root) {
-  std::function<void(Transformd, Entity)> drawEntity = [&](Transformd transform, Entity entity) {
-    if (const auto* tc = registry.try_get<TransformComponent>(entity)) {
+  std::function<void(Transformd, Entity)> drawEntity = [&](Transformd transform,
+                                                           Entity treeEntity) {
+    const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);
+    const Entity styleEntity = treeEntity;
+    const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : treeEntity;
+
+    if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
+      if (behavior->nonrenderable) {
+        std::cout << "Skipping nonrenderable entity " << dataEntity << std::endl;
+        return;
+      }
+    }
+
+    std::cout << "Rendering " << TypeToString(registry.get<TreeComponent>(treeEntity).type()) << " "
+              << treeEntity << (shadowComponent ? " (shadow)" : "") << std::endl;
+
+    if (const auto* tc = registry.try_get<ViewboxTransformComponent>(dataEntity)) {
+      transform = tc->transform * transform;
+    }
+
+    if (const auto* tc = registry.try_get<TransformComponent>(dataEntity)) {
       transform = tc->transform * transform;
     }
 
     canvas_->setMatrix(toSkia(transform));
 
-    if (const auto* path = registry.try_get<ComputedPathComponent>(entity)) {
+    const ComputedStyleComponent& styleComponent =
+        registry.get<ComputedStyleComponent>(styleEntity);
+
+    if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
       if (auto maybeSpline = path->spline()) {
-        const svg::PropertyRegistry& style =
-            registry.get<ComputedStyleComponent>(entity).properties();
+        const svg::PropertyRegistry& style = styleComponent.properties();
+
         if (auto fill = style.fill.get()) {
           if (fill.value().is<svg::PaintServer::Solid>()) {
             const svg::PaintServer::Solid& solid = fill.value().get<svg::PaintServer::Solid>();
@@ -214,7 +238,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
       }
     }
 
-    const TreeComponent& tree = registry.get<TreeComponent>(entity);
+    const TreeComponent& tree = registry.get<TreeComponent>(treeEntity);
     for (auto cur = tree.firstChild(); cur != entt::null;
          cur = registry.get<TreeComponent>(cur).nextSibling()) {
       drawEntity(transform, cur);

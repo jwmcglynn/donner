@@ -4,6 +4,7 @@ cc_library(
     name = "svg",
     srcs = [
         "svg_circle_element.cc",
+        "svg_defs_element.cc",
         "svg_document.cc",
         "svg_element.cc",
         "svg_path_element.cc",
@@ -11,9 +12,11 @@ cc_library(
         "svg_style_element.cc",
         "svg_svg_element.cc",
         "svg_unknown_element.cc",
+        "svg_use_element.cc",
     ],
     hdrs = [
         "svg_circle_element.h",
+        "svg_defs_element.h",
         "svg_document.h",
         "svg_element.h",
         "svg_path_element.h",
@@ -21,6 +24,7 @@ cc_library(
         "svg_style_element.h",
         "svg_svg_element.h",
         "svg_unknown_element.h",
+        "svg_use_element.h",
     ],
     visibility = [
         "//:__pkg__",

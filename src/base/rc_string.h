@@ -414,3 +414,10 @@ private:
 };
 
 }  // namespace donner
+
+template <>
+struct std::hash<donner::RcString> {
+  std::size_t operator()(const donner::RcString& str) const {
+    return std::hash<std::string_view>()(str);
+  }
+};

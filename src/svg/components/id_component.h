@@ -4,8 +4,7 @@
 
 namespace donner {
 
-class IdComponent {
-public:
+struct IdComponent {
   RcString id;
 };
 

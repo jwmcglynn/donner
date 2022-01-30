@@ -152,6 +152,11 @@ TEST_F(RendererTests, StrokingPathLength) {
   renderAndCompare(document, "src/renderer/testdata/golden/stroking_pathlength.png");
 }
 
+TEST_F(RendererTests, PokerChips) {
+  SVGDocument document = loadSVG("src/renderer/testdata/poker_chips.svg");
+  renderAndCompare(document, "src/renderer/testdata/golden/poker_chips.png");
+}
+
 TEST_F(RendererTests, QuadBezier) {
   SVGDocument document = loadSVG("src/renderer/testdata/quadbezier1.svg");
   renderAndCompare(document, "src/renderer/testdata/golden/quadbezier1.png");

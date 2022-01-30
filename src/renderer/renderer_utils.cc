@@ -5,11 +5,13 @@
 #include <fstream>
 
 #include "src/svg/components/circle_component.h"
+#include "src/svg/components/computed_shadow_tree_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/registry.h"
+#include "src/svg/components/shadow_tree_component.h"
 #include "src/svg/components/sized_element_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
@@ -27,15 +29,29 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
         entity, sizedElement.computeTransform(registry, entity, defaultSize));
   }
 
+  // Instantiate shadow trees.
+  for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
+    auto [shadowTreeComponent] = view.get(entity);
+    if (auto targetEntity = shadowTreeComponent.targetEntity(registry);
+        targetEntity != entt::null) {
+      registry.get_or_emplace<ComputedShadowTreeComponent>(entity).instantiate(registry,
+                                                                               targetEntity);
+    } else {
+      std::cerr << "Warning: Failed to resolve shadow tree target with href '"
+                << shadowTreeComponent.href() << "'." << std::endl;
+    }
+  }
+
+  // Create placeholder ComputedStyleComponents for all elements in the tree.
   for (auto view = registry.view<TreeComponent>(); auto entity : view) {
     // TODO: Can this be done in one step, or do the two loops need to be separate?
     std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
   }
 
+  // Compute the styles for all elements.
   for (auto view = registry.view<ComputedStyleComponent>(); auto entity : view) {
     auto [styleComponent] = view.get(entity);
-    styleComponent.computeProperties(SVGElement::fromEntityUnchecked(registry, entity), registry,
-                                     entity);
+    styleComponent.computeProperties(registry, entity);
   }
 
   // Then compute all paths.
