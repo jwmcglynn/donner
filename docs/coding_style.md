@@ -5,7 +5,7 @@ As a baseline, Donner SVG aligns with the [Google C++ coding style](https://goog
 
 ## Includes
 
-Include paths for donner-svg files are relative to the donner svg directory and use double quotes:
+Include paths for Donner files are relative to the donner svg directory and use double quotes:
 
 ```
 // GOOD:

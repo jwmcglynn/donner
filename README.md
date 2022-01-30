@@ -1,5 +1,5 @@
 # Donner
-[![Build Status](https://github.com/jwmcglynn/donner-svg/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/jwmcglynn/donner-svg/actions/workflows/main.yml) [![codecov](https://codecov.io/gh/jwmcglynn/donner-svg/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner-svg)
+[![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![codecov](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner)
 
 Donner is a modern C++20 SVG rendering library that:
 * Implements **SVG2** natively
