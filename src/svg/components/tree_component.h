@@ -16,11 +16,12 @@ public:
    * If \a newNode is already in the tree, it is first removed from its parent. However, if
    * inserting the child will create a cycle, the behavior is undefined.
    *
+   * @param registry Entity registry.
    * @param newNode New node to insert.
    * @param referenceNode Nullable, a child of this node to insert \a newNode before. Must be a
    *                      child of the current node.
    */
-  void insertBefore(TreeComponent* newNode, TreeComponent* referenceNode);
+  void insertBefore(Registry& registry, Entity newNode, Entity referenceNode);
 
   /**
    * Append \a child as a child of the current node.
@@ -28,9 +29,10 @@ public:
    * If \a child is already in the tree, it is first removed from its parent. However, if inserting
    * the \a child will create a cycle, the behavior is undefined.
    *
+   * @param registry Entity registry.
    * @param child Node to append.
    */
-  void appendChild(TreeComponent* child);
+  void appendChild(Registry& registry, Entity child);
 
   /**
    * Replace \a oldChild with \a newChild in the tree, removing \a oldChild and inserting \a
@@ -39,49 +41,46 @@ public:
    * If \a newChild is already in the tree, it is first removed from its parent. However, if
    * inserting the child will create a cycle, the behavior is undefined.
    *
+   * @param registry Entity registry.
    * @param newChild New child to insert.
    * @param oldChild Old child to remove, must be a child of the current node.
    */
-  void replaceChild(TreeComponent* newChild, TreeComponent* oldChild);
+  void replaceChild(Registry& registry, Entity newChild, Entity oldChild);
 
   /**
    * Remove \a child from this node.
    *
+   * @param registry Entity registry.
    * @param child Child to remove, must be a child of the current node.
    */
-  void removeChild(TreeComponent* child);
+  void removeChild(Registry& registry, Entity child);
 
   /**
    * Remove this node from its parent, if it has one. Has no effect if this has no parent.
+   *
+   * @param registry Entity registry.
    */
-  void remove();
+  void remove(Registry& registry);
 
   ElementType type() const { return type_; }
 
   RcString typeString() const { return typeString_; }
 
-  TreeComponent* parent() const { return parent_; }
-  TreeComponent* firstChild() const { return firstChild_; }
-  TreeComponent* lastChild() const { return lastChild_; }
-  TreeComponent* previousSibling() const { return previousSibling_; }
-  TreeComponent* nextSibling() const { return nextSibling_; }
+  Entity parent() const { return parent_; }
+  Entity firstChild() const { return firstChild_; }
+  Entity lastChild() const { return lastChild_; }
+  Entity previousSibling() const { return previousSibling_; }
+  Entity nextSibling() const { return nextSibling_; }
 
 private:
   ElementType type_;
   RcString typeString_;
 
-  TreeComponent* parent_ = nullptr;
-  TreeComponent* firstChild_ = nullptr;
-  TreeComponent* lastChild_ = nullptr;
-  TreeComponent* previousSibling_ = nullptr;
-  TreeComponent* nextSibling_ = nullptr;
+  Entity parent_{entt::null};
+  Entity firstChild_{entt::null};
+  Entity lastChild_{entt::null};
+  Entity previousSibling_{entt::null};
+  Entity nextSibling_{entt::null};
 };
 
 }  // namespace donner
-
-// Ensure pointer stability, so that we can directly reference TreeComponents without invalidating
-// them when entities are deleted.
-template <>
-struct entt::component_traits<donner::TreeComponent> : entt::basic_component_traits {
-  static constexpr auto in_place_delete = true;
-};

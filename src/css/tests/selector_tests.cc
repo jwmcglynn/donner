@@ -17,14 +17,12 @@ struct FakeElementData {
 };
 
 struct FakeElement {
-  FakeElement(Registry& registry, TreeComponent* node) : registry_(registry), node_(node) {}
+  FakeElement(Registry& registry, Entity entity) : registry_(registry), entity_(entity) {}
 
-  Entity entity() const { return entt::to_entity(registry_.get(), *node_); }
-
-  RcString typeString() const { return node_->typeString(); }
-  RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity()).id; }
+  RcString typeString() const { return registry_.get().get<TreeComponent>(entity_).typeString(); }
+  RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
   RcString className() const {
-    return registry_.get().get_or_emplace<FakeElementData>(entity()).className;
+    return registry_.get().get_or_emplace<FakeElementData>(entity_).className;
   }
 
   bool hasAttribute(std::string_view name) const {
@@ -38,26 +36,29 @@ struct FakeElement {
   }
 
   std::optional<FakeElement> parentElement() {
-    return node_->parent() ? std::make_optional(FakeElement(registry_, node_->parent()))
-                           : std::nullopt;
+    auto& tree = registry_.get().get<TreeComponent>(entity_);
+    return tree.parent() != entt::null ? std::make_optional(FakeElement(registry_, tree.parent()))
+                                       : std::nullopt;
   }
 
   std::optional<FakeElement> previousSibling() {
-    return node_->previousSibling()
-               ? std::make_optional(FakeElement(registry_, node_->previousSibling()))
+    auto& tree = registry_.get().get<TreeComponent>(entity_);
+    return tree.previousSibling() != entt::null
+               ? std::make_optional(FakeElement(registry_, tree.previousSibling()))
                : std::nullopt;
   }
 
 private:
   std::reference_wrapper<Registry> registry_;
-  TreeComponent* node_;
+  Entity entity_;
 };
 
 class SelectorTests : public testing::Test {
 protected:
-  TreeComponent* createNode(std::string_view typeString) {
+  Entity createEntity(std::string_view typeString) {
     auto entity = registry_.create();
-    return &registry_.emplace<TreeComponent>(entity, ElementType::Unknown, RcString(typeString));
+    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, RcString(typeString));
+    return entity;
   }
 
   bool matches(std::string_view selector, FakeElement element) {
@@ -78,16 +79,17 @@ protected:
     registry_.get_or_emplace<FakeElementData>(entity).className = className;
   }
 
-  FakeElement element(TreeComponent* node) { return FakeElement(registry_, node); }
+  FakeElement element(Entity entity) { return FakeElement(registry_, entity); }
+  TreeComponent& tree(Entity entity) { return registry_.get<TreeComponent>(entity); }
 
   Registry registry_;
 };
 
 TEST_F(SelectorTests, TypeMatch) {
-  auto root = createNode("rect");
-  auto child1 = createNode("a");
+  auto root = createEntity("rect");
+  auto child1 = createEntity("a");
 
-  root->appendChild(child1);
+  tree(root).appendChild(registry_, child1);
 
   EXPECT_TRUE(matches("rect", element(root)));
   EXPECT_TRUE(matches("a", element(child1)));
@@ -95,18 +97,18 @@ TEST_F(SelectorTests, TypeMatch) {
 }
 
 TEST_F(SelectorTests, Combinators) {
-  auto root = createNode("root");
-  auto mid = createNode("mid");
-  auto childA = createNode("a");
-  auto childB = createNode("b");
-  auto childC = createNode("c");
-  auto childD = createNode("d");
+  auto root = createEntity("root");
+  auto mid = createEntity("mid");
+  auto childA = createEntity("a");
+  auto childB = createEntity("b");
+  auto childC = createEntity("c");
+  auto childD = createEntity("d");
 
-  root->appendChild(mid);
-  mid->appendChild(childA);
-  mid->appendChild(childB);
-  mid->appendChild(childC);
-  mid->appendChild(childD);
+  tree(root).appendChild(registry_, mid);
+  tree(mid).appendChild(registry_, childA);
+  tree(mid).appendChild(registry_, childB);
+  tree(mid).appendChild(registry_, childC);
+  tree(mid).appendChild(registry_, childD);
 
   EXPECT_TRUE(matches("root a", element(childA)));
   EXPECT_FALSE(matches("root > a", element(childA)));

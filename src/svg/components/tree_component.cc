@@ -4,111 +4,133 @@
 
 namespace donner {
 
-void TreeComponent::insertBefore(TreeComponent* newNode, TreeComponent* referenceNode) {
-  assert(newNode && "newNode is null");
+void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity referenceNode) {
+  assert(newNode != entt::null && "newNode is null");
   // referenceNode may be null.
 
-  newNode->remove();
+  const Entity self = entt::to_entity(registry, *this);
 
-  if (referenceNode) {
-    UTILS_RELEASE_ASSERT(referenceNode->parent_ == this);
+  auto& newTree = registry.get<TreeComponent>(newNode);
+  newTree.remove(registry);
 
-    newNode->previousSibling_ = referenceNode->previousSibling_;
-    newNode->nextSibling_ = referenceNode;
-    referenceNode->previousSibling_ = newNode;
+  if (referenceNode != entt::null) {
+    auto& referenceTree = registry.get<TreeComponent>(referenceNode);
+    UTILS_RELEASE_ASSERT(referenceTree.parent_ == self);
+
+    newTree.previousSibling_ = referenceTree.previousSibling_;
+    newTree.nextSibling_ = referenceNode;
+    referenceTree.previousSibling_ = newNode;
 
     // If there is no previousSibling_, this was the first node.
-    if (newNode->previousSibling_ == nullptr) {
+    if (newTree.previousSibling_ == entt::null) {
       firstChild_ = newNode;
     } else {
-      newNode->previousSibling_->nextSibling_ = newNode;
+      auto& previousTree = registry.get<TreeComponent>(newTree.previousSibling_);
+      previousTree.nextSibling_ = newNode;
     }
 
   } else {
     // If no referenceNode is provided, insert at the end.
-    if (lastChild_) {
-      assert(lastChild_->nextSibling_ == nullptr);
-      lastChild_->nextSibling_ = newNode;
-      newNode->previousSibling_ = lastChild_;
+    if (lastChild_ != entt::null) {
+      auto& lastTree = registry.get<TreeComponent>(lastChild_);
+      assert(lastTree.nextSibling_ == entt::null);
+      lastTree.nextSibling_ = newNode;
+      newTree.previousSibling_ = lastChild_;
 
       lastChild_ = newNode;
 
     } else {
       // No children.
-      assert(firstChild_ == nullptr);
-      assert(lastChild_ == nullptr);
+      assert(firstChild_ == entt::null);
+      assert(lastChild_ == entt::null);
 
       firstChild_ = newNode;
       lastChild_ = newNode;
     }
   }
 
-  newNode->parent_ = this;
+  newTree.parent_ = self;
 }
 
-void TreeComponent::appendChild(TreeComponent* child) {
-  assert(child && "child is null");
-  UTILS_RELEASE_ASSERT(child != this);
+void TreeComponent::appendChild(Registry& registry, Entity child) {
+  assert(child != entt::null && "child is null");
 
-  child->remove();
-  child->parent_ = this;
+  const Entity self = entt::to_entity(registry, *this);
+  UTILS_RELEASE_ASSERT(child != self);
 
-  if (lastChild_) {
-    assert(lastChild_->nextSibling_ == nullptr);
+  auto& childTree = registry.get<TreeComponent>(child);
+  childTree.remove(registry);
+  childTree.parent_ = self;
 
-    child->previousSibling_ = lastChild_;
-    lastChild_->nextSibling_ = child;
+  if (lastChild_ != entt::null) {
+    auto& lastChildTree = registry.get<TreeComponent>(lastChild_);
+    assert(lastChildTree.nextSibling_ == entt::null);
+
+    childTree.previousSibling_ = lastChild_;
+    lastChildTree.nextSibling_ = child;
 
   } else {
     // No children.
-    assert(firstChild_ == nullptr);
+    assert(firstChild_ == entt::null);
     firstChild_ = child;
   }
 
   lastChild_ = child;
 }
 
-void TreeComponent::replaceChild(TreeComponent* newChild, TreeComponent* oldChild) {
-  assert(newChild && "newChild is null");
-  assert(oldChild && "oldChild is null");
-  UTILS_RELEASE_ASSERT(newChild != this);
-  UTILS_RELEASE_ASSERT(oldChild->parent_ == this);
+void TreeComponent::replaceChild(Registry& registry, Entity newChild, Entity oldChild) {
+  assert(newChild != entt::null && "newChild is null");
+  assert(oldChild != entt::null && "oldChild is null");
 
-  TreeComponent* oldChildNext = oldChild->nextSibling_;
-  oldChild->remove();
-  insertBefore(newChild, oldChildNext);
+  const Entity self = entt::to_entity(registry, *this);
+  UTILS_RELEASE_ASSERT(newChild != self);
+
+  auto& oldChildTree = registry.get<TreeComponent>(oldChild);
+  UTILS_RELEASE_ASSERT(oldChildTree.parent_ == self);
+
+  const Entity oldChildNext = oldChildTree.nextSibling_;
+  oldChildTree.remove(registry);
+  insertBefore(registry, newChild, oldChildNext);
 }
 
-void TreeComponent::removeChild(TreeComponent* child) {
-  assert(child && "child is null");
-  UTILS_RELEASE_ASSERT(child->parent_ == this);
-  child->remove();
+void TreeComponent::removeChild(Registry& registry, Entity child) {
+  assert(child != entt::null && "child is null");
+
+  auto& childTree = registry.get<TreeComponent>(child);
+  const Entity self = entt::to_entity(registry, *this);
+  UTILS_RELEASE_ASSERT(childTree.parent_ == self);
+  childTree.remove(registry);
 }
 
-void TreeComponent::remove() {
-  if (parent_) {
+void TreeComponent::remove(Registry& registry) {
+  if (parent_ != entt::null) {
+    auto& parentTree = registry.get<TreeComponent>(parent_);
+    const Entity self = entt::to_entity(registry, *this);
+
     // Remove from parent.
-    if (parent_->firstChild_ == this) {
-      parent_->firstChild_ = nextSibling_;
+    if (parentTree.firstChild_ == self) {
+      parentTree.firstChild_ = nextSibling_;
     }
-    if (parent_->lastChild_ == this) {
-      parent_->lastChild_ = previousSibling_;
+    if (parentTree.lastChild_ == self) {
+      parentTree.lastChild_ = previousSibling_;
     }
 
     // Remove from previous sibling.
-    if (previousSibling_) {
-      previousSibling_->nextSibling_ = nextSibling_;
+    if (previousSibling_ != entt::null) {
+      auto& previousTree = registry.get<TreeComponent>(previousSibling_);
+      previousTree.nextSibling_ = nextSibling_;
     }
 
     // Remove from next sibling.
-    if (nextSibling_) {
-      nextSibling_->previousSibling_ = previousSibling_;
+    if (nextSibling_ != entt::null) {
+      auto& nextTree = registry.get<TreeComponent>(nextSibling_);
+      nextTree.previousSibling_ = previousSibling_;
     }
 
     // Clear out tree state.
-    parent_ = nullptr;
-    previousSibling_ = nullptr;
-    nextSibling_ = nullptr;
+    parent_ = entt::null;
+    previousSibling_ = entt::null;
+    nextSibling_ = entt::null;
   }
 }
 

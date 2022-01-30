@@ -120,74 +120,63 @@ SVGDocument& SVGElement::ownerDocument() {
 }
 
 std::optional<SVGElement> SVGElement::parentElement() const {
-  Registry& registry = registry_.get();
-  const auto& tree = registry.get<TreeComponent>(entity_);
-  return tree.parent()
-             ? std::make_optional(SVGElement(registry, entt::to_entity(registry, *tree.parent())))
-             : std::nullopt;
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  return tree.parent() != entt::null ? std::make_optional(SVGElement(registry_, tree.parent()))
+                                     : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
-  Registry& registry = registry_.get();
-  const auto& tree = registry.get<TreeComponent>(entity_);
-  return tree.firstChild() ? std::make_optional(SVGElement(
-                                 registry, entt::to_entity(registry, *tree.firstChild())))
-                           : std::nullopt;
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  return tree.firstChild() != entt::null
+             ? std::make_optional(SVGElement(registry_, tree.firstChild()))
+             : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
-  Registry& registry = registry_.get();
-  const auto& tree = registry.get<TreeComponent>(entity_);
-  return tree.lastChild() ? std::make_optional(
-                                SVGElement(registry, entt::to_entity(registry, *tree.lastChild())))
-                          : std::nullopt;
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  return tree.lastChild() != entt::null
+             ? std::make_optional(SVGElement(registry_, tree.lastChild()))
+             : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
-  Registry& registry = registry_.get();
-  const auto& tree = registry.get<TreeComponent>(entity_);
-  return tree.previousSibling() ? std::make_optional(SVGElement(
-                                      registry, entt::to_entity(registry, *tree.previousSibling())))
-                                : std::nullopt;
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  return tree.previousSibling() != entt::null
+             ? std::make_optional(SVGElement(registry_, tree.previousSibling()))
+             : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
-  Registry& registry = registry_.get();
-  const auto& tree = registry.get<TreeComponent>(entity_);
-  return tree.nextSibling() ? std::make_optional(SVGElement(
-                                  registry, entt::to_entity(registry, *tree.nextSibling())))
-                            : std::nullopt;
+  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  return tree.nextSibling() != entt::null
+             ? std::make_optional(SVGElement(registry_, tree.nextSibling()))
+             : std::nullopt;
 }
 
 SVGElement SVGElement::insertBefore(SVGElement newNode, std::optional<SVGElement> referenceNode) {
-  Registry& registry = registry_.get();
-  registry.get<TreeComponent>(entity_).insertBefore(
-      &registry.get<TreeComponent>(newNode.entity_),
-      referenceNode ? &registry.get<TreeComponent>(referenceNode->entity_) : nullptr);
+  registry_.get().get<TreeComponent>(entity_).insertBefore(
+      registry_, newNode.entity_, referenceNode ? referenceNode->entity_ : entt::null);
   return newNode;
 }
 
 SVGElement SVGElement::appendChild(SVGElement child) {
-  Registry& registry = registry_.get();
-  registry.get<TreeComponent>(entity_).appendChild(&registry.get<TreeComponent>(child.entity_));
+  registry_.get().get<TreeComponent>(entity_).appendChild(registry_, child.entity_);
   return child;
 }
 
 SVGElement SVGElement::replaceChild(SVGElement newChild, SVGElement oldChild) {
-  Registry& registry = registry_.get();
-  registry.get<TreeComponent>(entity_).replaceChild(&registry.get<TreeComponent>(newChild.entity_),
-                                                    &registry.get<TreeComponent>(oldChild.entity_));
+  registry_.get().get<TreeComponent>(entity_).replaceChild(registry_, newChild.entity_,
+                                                           oldChild.entity_);
   return newChild;
 }
 
 SVGElement SVGElement::removeChild(SVGElement child) {
-  Registry& registry = registry_.get();
-  registry.get<TreeComponent>(entity_).removeChild(&registry.get<TreeComponent>(child.entity_));
+  registry_.get().get<TreeComponent>(entity_).removeChild(registry_, child.entity_);
   return child;
 }
 
 void SVGElement::remove() {
-  registry_.get().get<TreeComponent>(entity_).remove();
+  registry_.get().get<TreeComponent>(entity_).remove(registry_);
 }
 
 std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
