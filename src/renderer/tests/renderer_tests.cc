@@ -147,6 +147,11 @@ TEST_F(RendererTests, StrokingStrokewidth) {
   renderAndCompare(document, "src/renderer/testdata/golden/stroking_strokewidth.png");
 }
 
+TEST_F(RendererTests, StrokingPathLength) {
+  SVGDocument document = loadSVG("src/renderer/testdata/stroking_pathlength.svg");
+  renderAndCompare(document, "src/renderer/testdata/golden/stroking_pathlength.png");
+}
+
 TEST_F(RendererTests, QuadBezier) {
   SVGDocument document = loadSVG("src/renderer/testdata/quadbezier1.svg");
   renderAndCompare(document, "src/renderer/testdata/golden/quadbezier1.png");

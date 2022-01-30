@@ -27,4 +27,12 @@ std::optional<ParseError> SVGPathElement::setD(std::string_view d) {
   return computed.setFromDString(d);
 }
 
+std::optional<double> SVGPathElement::pathLength() const {
+  return registry_.get().get_or_emplace<ComputedPathComponent>(entity_).userPathLength;
+}
+
+void SVGPathElement::setPathLength(std::optional<double> value) {
+  registry_.get().get_or_emplace<ComputedPathComponent>(entity_).userPathLength = value;
+}
+
 }  // namespace donner

@@ -6,6 +6,7 @@
 #include <tuple>
 
 #include "src/base/parser/length_parser.h"
+#include "src/base/parser/number_parser.h"
 #include "src/svg/parser/preserve_aspect_ratio_parser.h"
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
@@ -39,6 +40,20 @@ std::string_view TypeToString(rapidxml_ns::node_type type) {
     case rapidxml_ns::node_declaration: return "node_declaration";
     case rapidxml_ns::node_doctype: return "node_doctype";
     case rapidxml_ns::node_pi: return "node_pi";
+  }
+}
+
+static std::optional<double> ParseNumberNoSuffix(std::string_view str) {
+  const auto maybeResult = NumberParser::Parse(str);
+  if (maybeResult.hasResult()) {
+    if (maybeResult.result().consumed_chars != str.size()) {
+      // We had extra characters, treat as invalid.
+      return std::nullopt;
+    }
+
+    return maybeResult.result().number;
+  } else {
+    return std::nullopt;
   }
 }
 
@@ -116,6 +131,15 @@ std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& conte
   if (name == "d") {
     if (auto warning = element.setD(value)) {
       context.addSubparserWarning(std::move(warning.value()), context.parserOriginFrom(value));
+    }
+  } else if (name == "pathLength") {
+    // Parse the attribute as a number, and if it resolves set the length.
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setPathLength(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid pathLength value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);

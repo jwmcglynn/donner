@@ -1,6 +1,7 @@
 #include "src/renderer/renderer_skia.h"
 
 #include "include/core/SkPath.h"
+#include "include/core/SkPathMeasure.h"
 #include "include/core/SkStream.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "src/renderer/renderer_utils.h"
@@ -181,18 +182,26 @@ void RendererSkia::draw(Registry& registry, Entity root) {
             const SkPath skiaPath = toSkia(*maybeSpline);
 
             if (style.strokeDasharray.get().has_value()) {
+              double dashUnitsScale = 1.0;
+              if (path->userPathLength && !NearZero(path->userPathLength.value())) {
+                // If the user specifies a path length, we need to scale between the user's length
+                // and computed length.
+                const double skiaLength = SkPathMeasure(skiaPath, false).getLength();
+                dashUnitsScale = skiaLength / path->userPathLength.value();
+              }
+
               // TODO: Avoid the copying on property access, if possible, and try to cache the
               // computed SkDashPathEffect.
               const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
               std::vector<SkScalar> skiaDashes;
               skiaDashes.reserve(dashes.size());
               for (const Lengthd& dash : dashes) {
-                skiaDashes.push_back(dash.value);
+                skiaDashes.push_back(dash.value * dashUnitsScale);
               }
 
-              paint.setPathEffect(
-                  SkDashPathEffect::Make(skiaDashes.data(), skiaDashes.size(),
-                                         style.strokeDashoffset.get().value().value));
+              paint.setPathEffect(SkDashPathEffect::Make(
+                  skiaDashes.data(), skiaDashes.size(),
+                  style.strokeDashoffset.get().value().value * dashUnitsScale));
             }
 
             canvas_->drawPath(skiaPath, paint);

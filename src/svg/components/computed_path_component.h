@@ -15,6 +15,8 @@ public:
   void setSpline(std::optional<PathSpline>&& spline);
   const std::optional<PathSpline>& spline() const;
 
+  std::optional<double> userPathLength;
+
 private:
   std::optional<PathSpline> spline_;
 };

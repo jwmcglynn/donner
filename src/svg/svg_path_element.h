@@ -16,6 +16,9 @@ public:
 
   std::string_view d() const;
   std::optional<ParseError> setD(std::string_view d);
+
+  std::optional<double> pathLength() const;
+  void setPathLength(std::optional<double> value);
 };
 
 }  // namespace donner
