@@ -10,10 +10,11 @@ enum class Entity : std::uint32_t {};
 using Registry = entt::basic_registry<Entity>;
 
 enum class ElementType {
-  SVG,
+  Circle,
   Path,
   Rect,
   Style,
+  SVG,
   Unknown,
 };
 

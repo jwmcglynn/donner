@@ -10,6 +10,7 @@ cc_library(
         "viewbox_component.cc",
     ],
     hdrs = [
+        "circle_component.h",
         "class_component.h",
         "computed_path_component.h",
         "computed_style_component.h",

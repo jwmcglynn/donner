@@ -4,6 +4,7 @@
 
 #include <fstream>
 
+#include "src/svg/components/circle_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/path_component.h"
@@ -17,11 +18,6 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
   Registry& registry = document.registry();
   registry.ctx<DocumentContext>().defaultSize = defaultSize;
 
-  for (auto view = registry.view<RectComponent>(); auto entity : view) {
-    auto [rect] = view.get(entity);
-    rect.computePath(registry.get_or_emplace<ComputedPathComponent>(entity));
-  }
-
   for (auto view = registry.view<TreeComponent>(); auto entity : view) {
     // TODO: Can this be done in one step, or do the two loops need to be separate?
     std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
@@ -31,6 +27,17 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
     auto [styleComponent] = view.get(entity);
     styleComponent.computeProperties(SVGElement::fromEntityUnchecked(registry, entity), registry,
                                      entity);
+  }
+
+  // Then compute all paths.
+  for (auto view = registry.view<RectComponent>(); auto entity : view) {
+    auto [rect] = view.get(entity);
+    rect.computePath(registry.get_or_emplace<ComputedPathComponent>(entity));
+  }
+
+  for (auto view = registry.view<CircleComponent>(); auto entity : view) {
+    auto [circle] = view.get(entity);
+    circle.computePath(registry.get_or_emplace<ComputedPathComponent>(entity));
   }
 }
 

@@ -144,4 +144,9 @@ TEST_F(RendererTests, StrokingStrokewidth) {
   renderAndCompare(document, 225, 100, "src/renderer/testdata/golden/stroking_strokewidth.png");
 }
 
+TEST_F(RendererTests, QuadBezier) {
+  SVGDocument document = loadSVG("src/renderer/testdata/quadbezier1.svg");
+  renderAndCompare(document, 300, 300, "src/renderer/testdata/golden/quadbezier1.png");
+}
+
 }  // namespace donner

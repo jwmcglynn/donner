@@ -9,6 +9,7 @@
 #include "src/svg/parser/preserve_aspect_ratio_parser.h"
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
+#include "src/svg/svg_circle_element.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/svg_path_element.h"
 #include "src/svg/svg_rect_element.h"
@@ -21,7 +22,12 @@ namespace donner {
 
 namespace {
 
-using SVGElements = entt::type_list<SVGSVGElement, SVGPathElement, SVGRectElement, SVGStyleElement>;
+using SVGElements = entt::type_list<  //
+    SVGCircleElement,                 //
+    SVGSVGElement,                    //
+    SVGPathElement,                   //
+    SVGRectElement,                   //
+    SVGStyleElement>;
 
 std::string_view TypeToString(rapidxml_ns::node_type type) {
   switch (type) {
@@ -110,6 +116,31 @@ std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& conte
   if (name == "d") {
     if (auto warning = element.setD(value)) {
       context.addSubparserWarning(std::move(warning.value()), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGCircleElement>(XMLParserContext& context,
+                                                           SVGCircleElement element,
+                                                           std::string_view namespacePrefix,
+                                                           std::string_view name,
+                                                           std::string_view value) {
+  if (name == "cx") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setCx(length.value());
+    }
+  } else if (name == "cy") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setCy(length.value());
+    }
+  } else if (name == "r") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setR(length.value());
     }
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);

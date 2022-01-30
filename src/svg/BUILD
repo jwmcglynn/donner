@@ -3,6 +3,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 cc_library(
     name = "svg",
     srcs = [
+        "svg_circle_element.cc",
         "svg_document.cc",
         "svg_element.cc",
         "svg_path_element.cc",
@@ -12,6 +13,7 @@ cc_library(
         "svg_unknown_element.cc",
     ],
     hdrs = [
+        "svg_circle_element.h",
         "svg_document.h",
         "svg_element.h",
         "svg_path_element.h",
