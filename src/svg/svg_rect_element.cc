@@ -7,7 +7,7 @@ namespace donner {
 
 SVGRectElement SVGRectElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGRectElement(registry, CreateEntity(registry, "rect", Type));
+  return SVGRectElement(registry, CreateEntity(registry, RcString(Tag), Type));
 }
 
 void SVGRectElement::setX(Lengthd value) {

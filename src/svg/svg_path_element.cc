@@ -8,7 +8,7 @@ namespace donner {
 
 SVGPathElement SVGPathElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGPathElement(registry, CreateEntity(registry, "path", Type));
+  return SVGPathElement(registry, CreateEntity(registry, RcString(Tag), Type));
 }
 
 std::string_view SVGPathElement::d() const {

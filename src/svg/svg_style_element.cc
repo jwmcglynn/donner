@@ -7,7 +7,7 @@ namespace donner {
 
 SVGStyleElement SVGStyleElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGStyleElement(registry, CreateEntity(registry, "style", Type));
+  return SVGStyleElement(registry, CreateEntity(registry, RcString(Tag), Type));
 }
 
 void SVGStyleElement::setType(RcString type) {
