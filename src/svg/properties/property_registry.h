@@ -13,7 +13,41 @@ namespace donner::svg {
 
 enum class StrokeLinecap { Butt, Round, Square };
 
+inline std::ostream& operator<<(std::ostream& os, StrokeLinecap value) {
+  switch (value) {
+    case StrokeLinecap::Butt: return os << "butt";
+    case StrokeLinecap::Round: return os << "round";
+    case StrokeLinecap::Square: return os << "square";
+  }
+
+  UTILS_UNREACHABLE();
+}
+
 enum class StrokeLinejoin { Miter, MiterClip, Round, Bevel, Arcs };
+
+inline std::ostream& operator<<(std::ostream& os, StrokeLinejoin value) {
+  switch (value) {
+    case StrokeLinejoin::Miter: return os << "miter";
+    case StrokeLinejoin::MiterClip: return os << "miter-clip";
+    case StrokeLinejoin::Round: return os << "round";
+    case StrokeLinejoin::Bevel: return os << "bevel";
+    case StrokeLinejoin::Arcs: return os << "arcs";
+  }
+
+  UTILS_UNREACHABLE();
+}
+
+using StrokeDasharray = std::vector<Lengthd>;
+
+inline std::ostream& operator<<(std::ostream& os, const StrokeDasharray& value) {
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (i > 0) {
+      os << ",";
+    }
+    os << value[i];
+  }
+  return os;
+}
 
 class PropertyRegistry;
 
@@ -53,8 +87,10 @@ public:
   struct Property {
     using Type = T;
 
-    Property(GetInitialFn<T> getInitialFn = []() -> std::optional<T> { return std::nullopt; })
-        : getInitialFn(getInitialFn) {}
+    Property(
+        std::string_view name,
+        GetInitialFn<T> getInitialFn = []() -> std::optional<T> { return std::nullopt; })
+        : name(name), getInitialFn(getInitialFn) {}
 
     /**
      * Get the property value, without considering inheritance. Returns the initial value if the
@@ -79,12 +115,19 @@ public:
       if constexpr (kCascade == PropertyCascade::Inherit) {
         assert(parent.state != PropertyState::Inherit && "Parent should already be resolved");
 
-        if (state == PropertyState::NotSet || state == PropertyState::Inherit ||
-            state == PropertyState::ExplicitUnset) {
-          // Inherit from parent.
-          result.value = parent.get();
-          // Keep current specificity.
-          result.state = PropertyState::Set;
+        if (parent.hasValue()) {
+          if (state == PropertyState::NotSet || state == PropertyState::Inherit ||
+              state == PropertyState::ExplicitUnset) {
+            // Inherit from parent.
+            result.value = parent.get();
+            // Keep current specificity.
+            result.state = PropertyState::Set;
+          } else if (parent.specificity > specificity) {
+            // Inherit from parent, but with a lower specificity.
+            result.value = parent.get();
+            result.specificity = parent.specificity;
+            result.state = PropertyState::Set;
+          }
         }
       } else {
         // Inherit only if the state is Inherit.
@@ -111,6 +154,7 @@ public:
      */
     bool hasValue() const { return state != PropertyState::NotSet; }
 
+    std::string_view name;
     std::optional<T> value;
     PropertyState state = PropertyState::NotSet;
     css::Specificity specificity;
@@ -118,27 +162,29 @@ public:
     GetInitialFn<T> getInitialFn;
   };
 
-  Property<css::Color, PropertyCascade::Inherit> color;
-  Property<PaintServer, PropertyCascade::Inherit> fill{[]() -> std::optional<PaintServer> {
-    return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));
-  }};
+  Property<css::Color, PropertyCascade::Inherit> color{"color"};
+  Property<PaintServer, PropertyCascade::Inherit> fill{
+      "fill", []() -> std::optional<PaintServer> {
+        return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));
+      }};
 
   // Stroke.
   Property<PaintServer, PropertyCascade::Inherit> stroke{
-      []() -> std::optional<PaintServer> { return PaintServer::None(); }};
+      "stroke", []() -> std::optional<PaintServer> { return PaintServer::None(); }};
   Property<double, PropertyCascade::Inherit> strokeOpacity{
-      []() -> std::optional<double> { return 1.0; }};
+      "stroke-opacity", []() -> std::optional<double> { return 1.0; }};
   Property<Lengthd, PropertyCascade::Inherit> strokeWidth{
-      []() -> std::optional<Lengthd> { return Lengthd(1, Lengthd::Unit::None); }};
+      "stroke-width", []() -> std::optional<Lengthd> { return Lengthd(1, Lengthd::Unit::None); }};
   Property<StrokeLinecap, PropertyCascade::Inherit> strokeLinecap{
-      []() -> std::optional<StrokeLinecap> { return StrokeLinecap::Butt; }};
+      "stroke-linecap", []() -> std::optional<StrokeLinecap> { return StrokeLinecap::Butt; }};
   Property<StrokeLinejoin, PropertyCascade::Inherit> strokeLinejoin{
-      []() -> std::optional<StrokeLinejoin> { return StrokeLinejoin::Miter; }};
+      "stroke-linejoin", []() -> std::optional<StrokeLinejoin> { return StrokeLinejoin::Miter; }};
   Property<double, PropertyCascade::Inherit> strokeMiterlimit{
-      []() -> std::optional<double> { return 4.0; }};
-  Property<std::vector<Lengthd>, PropertyCascade::Inherit> strokeDasharray{
-      []() -> std::optional<std::vector<Lengthd>> { return std::nullopt; }};
+      "stroke-miterlimit", []() -> std::optional<double> { return 4.0; }};
+  Property<StrokeDasharray, PropertyCascade::Inherit> strokeDasharray{
+      "stroke-dasharray", []() -> std::optional<StrokeDasharray> { return std::nullopt; }};
   Property<Lengthd, PropertyCascade::Inherit> strokeDashoffset{
+      "stroke-dashoffset",
       []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
 
   /**
@@ -150,11 +196,19 @@ public:
                                  strokeDashoffset);
   }
 
+  static constexpr size_t numProperties() {
+    // If this is at class scope, it fails with a compiler error: "function with deduced return type
+    // cannot be used before it is defined".
+    using PropertiesTuple =
+        std::invoke_result_t<decltype(&PropertyRegistry::allProperties), PropertyRegistry>;
+    return std::tuple_size_v<PropertiesTuple>;
+  }
+
   template <size_t Start, size_t End, class F>
-  static constexpr void inheritPropertyHelper(F&& f) {
+  static constexpr void forEachProperty(F&& f) {
     if constexpr (Start < End) {
       f(std::integral_constant<size_t, Start>{});
-      inheritPropertyHelper<Start + 1, End>(f);
+      forEachProperty<Start + 1, End>(f);
     }
   }
 
@@ -167,9 +221,7 @@ public:
     const auto parentProperties = const_cast<PropertyRegistry&>(parent).allProperties();
     const auto selfProperties = const_cast<PropertyRegistry*>(this)->allProperties();
 
-    constexpr size_t kNumProperties = std::tuple_size_v<decltype(resultProperties)>;
-
-    inheritPropertyHelper<0, kNumProperties>(
+    forEachProperty<0, numProperties()>(
         [&resultProperties, parentProperties, selfProperties](auto i) {
           std::get<i.value>(resultProperties) =
               std::get<i.value>(selfProperties).inheritFrom(std::get<i.value>(parentProperties));
@@ -211,6 +263,38 @@ public:
    * @return true if the attribute name was supported.
    */
   bool parsePresentationAttribute(std::string_view name, std::string_view value);
+
+  friend std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry);
 };
+
+#if 1
+template <typename T, PropertyCascade kCascade>
+std::ostream& operator<<(std::ostream& os,
+                         const PropertyRegistry::Property<T, kCascade>& property) {
+  os << property.name << ":";
+
+  if (property.state == PropertyState::Set) {
+    if (property.value) {
+      os << " " << *property.value;
+    } else {
+      os << " nullopt";
+    }
+  }
+
+  switch (property.state) {
+    case PropertyState::Set: os << " (set)"; break;
+    case PropertyState::Inherit: os << " (inherit)"; break;
+    case PropertyState::ExplicitInitial: os << " (explicit initial)"; break;
+    case PropertyState::ExplicitUnset: os << " (explicit unset)"; break;
+    case PropertyState::NotSet: os << " (not set)"; break;
+  }
+
+  if (property.state != PropertyState::NotSet) {
+    os << " @ " << property.specificity;
+  }
+
+  return os;
+}
+#endif
 
 }  // namespace donner::svg

@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "src/base/parser/tests/parse_result_test_utils.h"
+#include "src/base/tests/base_test_utils.h"
 #include "src/svg/properties/property_registry.h"
 
 namespace donner::svg {
@@ -23,6 +24,12 @@ TEST(PropertyRegistry, ParseDeclaration) {
   PropertyRegistry registry;
   EXPECT_THAT(registry.parseProperty(declaration, Specificity()), Eq(std::nullopt));
   EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0, 0xFF, 0, 0xFF))));
+
+  // Test printing to string.
+  EXPECT_THAT(registry, ToStringIs(R"(PropertyRegistry {
+  color: Color(0, 255, 0, 255) (set) @ Specificity(0, 0, 0)
+}
+)"));
 }
 
 TEST(PropertyRegistry, ParseDeclarationError) {

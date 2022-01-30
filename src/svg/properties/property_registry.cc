@@ -454,4 +454,19 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
   return false;  // Attribute was not supported.
 }
 
+std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
+  os << "PropertyRegistry {" << std::endl;
+
+  const auto resultProperties = const_cast<PropertyRegistry&>(registry).allProperties();
+  PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>(
+      [&os, &resultProperties](auto i) {
+        const auto& property = std::get<i.value>(resultProperties);
+        if (property.hasValue()) {
+          os << "  " << property << std::endl;
+        }
+      });
+
+  return os << "}" << std::endl;
+}
+
 }  // namespace donner::svg

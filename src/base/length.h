@@ -93,6 +93,30 @@ struct Length {
     }
   }
 
+  friend std::ostream& operator<<(std::ostream& os, const Length<T>& length) {
+    os << length.value;
+    switch (length.unit) {
+      case Unit::None: break;
+      case Unit::Percent: os << "%"; break;
+      case Unit::Cm: os << "cm"; break;
+      case Unit::Mm: os << "mm"; break;
+      case Unit::Q: os << "Q"; break;
+      case Unit::In: os << "in"; break;
+      case Unit::Pc: os << "pc"; break;
+      case Unit::Pt: os << "pt"; break;
+      case Unit::Px: os << "px"; break;
+      case Unit::Em: os << "em"; break;
+      case Unit::Ex: os << "ex"; break;
+      case Unit::Ch: os << "ch"; break;
+      case Unit::Rem: os << "rem"; break;
+      case Unit::Vw: os << "vw"; break;
+      case Unit::Vh: os << "vh"; break;
+      case Unit::Vmin: os << "vmin"; break;
+      case Unit::Vmax: os << "vmax"; break;
+    }
+    return os;
+  }
+
 private:
   static T diagonalExtent(const Box<T>& box) { return box.size().length(); }
 };
