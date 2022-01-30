@@ -10,6 +10,8 @@
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/registry.h"
+#include "src/svg/components/sized_element_component.h"
+#include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 
 namespace donner {
@@ -17,6 +19,13 @@ namespace donner {
 void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize) {
   Registry& registry = document.registry();
   registry.ctx<DocumentContext>().defaultSize = defaultSize;
+
+  for (auto view = registry.view<SizedElementComponent>(); auto entity : view) {
+    auto [sizedElement] = view.get(entity);
+
+    registry.emplace_or_replace<ViewboxTransformComponent>(
+        entity, sizedElement.computeTransform(registry, entity, defaultSize));
+  }
 
   for (auto view = registry.view<TreeComponent>(); auto entity : view) {
     // TODO: Can this be done in one step, or do the two loops need to be separate?
@@ -30,14 +39,16 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
   }
 
   // Then compute all paths.
-  for (auto view = registry.view<RectComponent>(); auto entity : view) {
-    auto [rect] = view.get(entity);
-    rect.computePath(registry.get_or_emplace<ComputedPathComponent>(entity));
+  for (auto view = registry.view<RectComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [rect, style] = view.get(entity);
+    rect.computePath(registry.get_or_emplace<ComputedPathComponent>(entity), style.viewbox(),
+                     FontMetrics());
   }
 
-  for (auto view = registry.view<CircleComponent>(); auto entity : view) {
-    auto [circle] = view.get(entity);
-    circle.computePath(registry.get_or_emplace<ComputedPathComponent>(entity));
+  for (auto view = registry.view<CircleComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [circle, style] = view.get(entity);
+    circle.computePath(registry.get_or_emplace<ComputedPathComponent>(entity), style.viewbox(),
+                       FontMetrics());
   }
 }
 
@@ -48,6 +59,8 @@ bool RendererUtils::writeRgbaPixelsToPngFile(const char* filename,
     std::ofstream output;
   };
 
+  assert(width > 0);
+  assert(height > 0);
   assert(rgbaPixels.size() == width * height * 4);
 
   Context context;

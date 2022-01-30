@@ -8,4 +8,8 @@ struct TransformComponent {
   Transformd transform;
 };
 
+struct ViewboxTransformComponent {
+  Transformd transform;
+};
+
 }  // namespace donner

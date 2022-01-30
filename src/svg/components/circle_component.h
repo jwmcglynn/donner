@@ -13,9 +13,10 @@ struct CircleComponent {
   Lengthd cy;
   Lengthd r;
 
-  void computePath(ComputedPathComponent& component) {
-    const Vector2d center(cx.value, cy.value);
-    const double radius = r.value;
+  void computePath(ComputedPathComponent& component, const Boxd& viewbox,
+                   const FontMetrics& fontMetrics) {
+    const Vector2d center(cx.toPixels(viewbox, fontMetrics), cy.toPixels(viewbox, fontMetrics));
+    const double radius = r.toPixels(viewbox, fontMetrics);
 
     component.setSpline(PathSpline::Builder().circle(center, radius).build());
   }

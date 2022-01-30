@@ -14,7 +14,7 @@ namespace donner {
 
 class RendererSkia {
 public:
-  RendererSkia(int width, int height);
+  RendererSkia(int defaultWidth, int defaultHeight);
   ~RendererSkia();
 
   void draw(SVGDocument& document);
@@ -22,14 +22,14 @@ public:
   bool save(const char* filename);
 
   std::span<const uint8_t> pixelData() const;
-  int width() const { return width_; }
-  int height() const { return height_; }
+  int width() const { return bitmap_.width(); }
+  int height() const { return bitmap_.height(); }
 
 private:
   void draw(Registry& registry, Entity entity);
 
-  int width_;
-  int height_;
+  int defaultWidth_;
+  int defaultHeight_;
 
   SkAutoGraphics ag_;
   SkBitmap bitmap_;

@@ -23,6 +23,11 @@ struct ComputedStyleComponent {
     return properties_.value();
   }
 
+  const Boxd& viewbox() const {
+    assert(viewbox_.has_value());
+    return viewbox_.value();
+  }
+
   template <ElementWithEntity T>
   void computeProperties(const T& element, Registry& registry, Entity entity) {
     if (properties_) {

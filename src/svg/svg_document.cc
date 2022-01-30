@@ -9,8 +9,7 @@ namespace donner {
 SVGDocument::SVGDocument() {
   registry_.set<DocumentContext>(*this);
 
-  svgElement_ = registry_.create();
-  registry_.emplace<TreeComponent>(svgElement_, ElementType::SVG, "svg");
+  svgElement_ = SVGSVGElement::Create(*this).entity();
 }
 
 SVGSVGElement SVGDocument::svgElement() {

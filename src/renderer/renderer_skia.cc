@@ -16,6 +16,9 @@ namespace donner {
 
 namespace {
 
+// The maximum size supported for a rendered image.
+static constexpr int kMaxDimension = 8192;
+
 SkM44 toSkia(const Transformd& transform) {
   return SkM44{float(transform.data[0]),
                float(transform.data[2]),
@@ -94,16 +97,32 @@ SkPath toSkia(const PathSpline& spline) {
 }
 
 }  // namespace
-RendererSkia::RendererSkia(int width, int height) : width_(width), height_(height) {
-  bitmap_.allocPixels(SkImageInfo::MakeN32Premul(width, height));
-  canvas_ = std::make_unique<SkCanvas>(bitmap_);
-}
+
+RendererSkia::RendererSkia(int defaultWidth, int defaultHeight)
+    : defaultWidth_(defaultWidth), defaultHeight_(defaultHeight) {}
 
 RendererSkia::~RendererSkia() {}
 
 void RendererSkia::draw(SVGDocument& document) {
-  RendererUtils::prepareDocumentForRendering(document, Vector2d(width_, height_));
-  draw(document.registry(), document.rootEntity());
+  Registry& registry = document.registry();
+  const Entity rootEntity = document.rootEntity();
+
+  const Vector2d calculatedSize =
+      registry.get_or_emplace<SizedElementComponent>(rootEntity)
+          .calculatedSize(registry, rootEntity, Vector2d(defaultWidth_, defaultHeight_));
+
+  // TODO: How should we convert float to integers? Should it be rounded?
+  const int width = static_cast<int>(calculatedSize.x);
+  const int height = static_cast<int>(calculatedSize.y);
+  // TODO: This shouldn't crash if the number comes from within the SVG itself.
+  assert(width > 0 && width < kMaxDimension);
+  assert(height > 0 && height < kMaxDimension);
+
+  bitmap_.allocPixels(SkImageInfo::MakeN32Premul(width, height));
+  canvas_ = std::make_unique<SkCanvas>(bitmap_);
+
+  RendererUtils::prepareDocumentForRendering(document, Vector2d(width, height));
+  draw(registry, rootEntity);
 }
 
 bool RendererSkia::save(const char* filename) {
@@ -193,27 +212,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     }
   };
 
-  // Get initial transform.
-  Boxd initialSize({0, 0}, {width_, height_});
-  Transformd transform;
-  if (const auto* sizedComponent = registry.try_get<SizedElementComponent>(root)) {
-    initialSize.top_left.x = sizedComponent->x.value;
-    initialSize.top_left.y = sizedComponent->y.value;
-
-    if (sizedComponent->width) {
-      initialSize.bottom_right.x = sizedComponent->width->value;
-    }
-
-    if (sizedComponent->height) {
-      initialSize.bottom_right.y = sizedComponent->height->value;
-    }
-  }
-
-  if (const auto* viewbox = registry.try_get<ViewboxComponent>(root)) {
-    transform = viewbox->computeTransform(initialSize);
-  }
-
-  drawEntity(transform, root);
+  drawEntity(Transformd(), root);
 }
 
 }  // namespace donner

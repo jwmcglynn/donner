@@ -81,6 +81,8 @@ extern "C" int main(int argc, char* argv[]) {
   RendererSkia renderer(kWidth, kHeight);
   renderer.draw(document);
 
+  std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << std::endl;
+
   constexpr const char* kOutputFilename = "output.png";
   if (renderer.save(kOutputFilename)) {
     std::cout << "Saved to file: " << std::filesystem::absolute(kOutputFilename) << std::endl;
