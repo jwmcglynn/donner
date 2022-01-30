@@ -18,7 +18,6 @@ public:
   ~RendererSkia();
 
   void draw(SVGDocument& document);
-  void drawPath(const PathSpline& spline, const SkPaint& paint);
 
   bool save(const char* filename);
 

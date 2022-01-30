@@ -60,21 +60,7 @@ SkPaint::Join toSkia(svg::StrokeLinejoin lineJoin) {
   }
 }
 
-}  // namespace
-
-RendererSkia::RendererSkia(int width, int height) : width_(width), height_(height) {
-  bitmap_.allocPixels(SkImageInfo::MakeN32Premul(width, height));
-  canvas_ = std::make_unique<SkCanvas>(bitmap_);
-}
-
-RendererSkia::~RendererSkia() {}
-
-void RendererSkia::draw(SVGDocument& document) {
-  RendererUtils::prepareDocumentForRendering(document, Vector2d(width_, height_));
-  draw(document.registry(), document.rootEntity());
-}
-
-void RendererSkia::drawPath(const PathSpline& spline, const SkPaint& paint) {
+SkPath toSkia(const PathSpline& spline) {
   SkPath path;
   const std::vector<Vector2d>& points = spline.points();
 
@@ -104,11 +90,25 @@ void RendererSkia::drawPath(const PathSpline& spline, const SkPaint& paint) {
     }
   }
 
-  canvas_->drawPath(path, paint);
+  return path;
+}
+
+}  // namespace
+RendererSkia::RendererSkia(int width, int height) : width_(width), height_(height) {
+  bitmap_.allocPixels(SkImageInfo::MakeN32Premul(width, height));
+  canvas_ = std::make_unique<SkCanvas>(bitmap_);
+}
+
+RendererSkia::~RendererSkia() {}
+
+void RendererSkia::draw(SVGDocument& document) {
+  RendererUtils::prepareDocumentForRendering(document, Vector2d(width_, height_));
+  draw(document.registry(), document.rootEntity());
 }
 
 bool RendererSkia::save(const char* filename) {
-  return RendererUtils::writeRgbaPixelsToPngFile(filename, pixelData(), width_, height_);
+  return RendererUtils::writeRgbaPixelsToPngFile(filename, pixelData(), bitmap_.width(),
+                                                 bitmap_.height());
 }
 
 std::span<const uint8_t> RendererSkia::pixelData() const {
@@ -136,7 +136,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
             paint.setAntiAlias(true);
             paint.setColor(toSkia(solid.color));
             paint.setStyle(SkPaint::Style::kFill_Style);
-            drawPath(*maybeSpline, paint);
+
+            canvas_->drawPath(toSkia(*maybeSpline), paint);
           } else if (fill.value().is<svg::PaintServer::None>()) {
             // Do nothing.
           } else {
@@ -157,8 +158,12 @@ void RendererSkia::draw(Registry& registry, Entity root) {
             paint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
             paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
             paint.setStrokeMiter(style.strokeMiterlimit.get().value());
+
+            const SkPath skiaPath = toSkia(*maybeSpline);
+
             if (style.strokeDasharray.get().has_value()) {
-              // TODO: Avoid this copy.
+              // TODO: Avoid the copying on property access, if possible, and try to cache the
+              // computed SkDashPathEffect.
               const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
               std::vector<SkScalar> skiaDashes;
               skiaDashes.reserve(dashes.size());
@@ -171,7 +176,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
                                          style.strokeDashoffset.get().value().value));
             }
 
-            drawPath(*maybeSpline, paint);
+            canvas_->drawPath(skiaPath, paint);
           } else if (stroke.value().is<svg::PaintServer::None>()) {
             // Do nothing.
           } else {
