@@ -12,8 +12,8 @@ class SVGDocument {
 public:
   SVGDocument();
 
-  Registry& registry() { return registry_; }
-  const Registry& registry() const { return registry_; }
+  Registry& registry() { return *registry_; }
+  const Registry& registry() const { return *registry_; }
   Entity rootEntity() const { return svgElement_; }
 
   SVGSVGElement svgElement();
@@ -21,7 +21,7 @@ public:
   bool operator==(const SVGDocument& other) const;
 
 private:
-  Registry registry_;
+  std::shared_ptr<Registry> registry_;
   Entity svgElement_;
 };
 

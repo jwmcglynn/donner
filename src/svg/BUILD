@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
     name = "svg",
@@ -29,22 +29,12 @@ cc_library(
     visibility = [
         "//:__pkg__",
         "//src/renderer:__subpackages__",
+        "//src/svg/tests:__pkg__",
         "//src/svg/xml:__pkg__",
     ],
     deps = [
         "//src/svg/components",
         "//src/svg/core",
         "//src/svg/parser",
-    ],
-)
-
-cc_test(
-    name = "svg_tests",
-    srcs = [
-        "tests/svg_element_tests.cc",
-    ],
-    deps = [
-        ":svg",
-        "@com_google_gtest//:gtest_main",
     ],
 )

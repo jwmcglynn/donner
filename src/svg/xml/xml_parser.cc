@@ -412,8 +412,6 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
   for (rapidxml_ns::xml_node<>* i = rootNode->first_node(); i; i = i->next_sibling()) {
     const std::string_view name = std::string_view(i->local_name(), i->local_name_size());
     const std::string_view namespacePrefix = std::string_view(i->prefix(), i->prefix_size());
-    std::cout << TypeToString(i->type()) << ": " << std::string_view(i->name(), i->name_size())
-              << std::endl;
 
     if (i->type() == rapidxml_ns::node_element) {
       if (element) {

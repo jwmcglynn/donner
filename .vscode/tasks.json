@@ -140,7 +140,7 @@
     {
       "label": "svg_tests",
       "type": "shell",
-      "command": "bazel build //src/svg:svg_tests -c dbg",
+      "command": "bazel build //src/svg/tests:svg_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },

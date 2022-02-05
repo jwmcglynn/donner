@@ -175,7 +175,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/src/svg/svg_tests",
+      "pattern": "bazel-bin/src/svg/tests/svg_tests",
       "runTask": {
         "before": [
           "svg_tests"

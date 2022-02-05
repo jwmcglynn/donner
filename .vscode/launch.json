@@ -21,7 +21,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "core_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/core_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/core/core_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -34,7 +34,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "svg_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/svg_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/tests/svg_tests",
       "args": [
         "--gtest_break_on_failure"
       ],

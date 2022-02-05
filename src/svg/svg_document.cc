@@ -6,18 +6,18 @@
 
 namespace donner {
 
-SVGDocument::SVGDocument() {
-  registry_.set<DocumentContext>(*this, registry_);
+SVGDocument::SVGDocument() : registry_(std::make_unique<Registry>()) {
+  registry_->set<DocumentContext>(*this, *registry_);
 
   svgElement_ = SVGSVGElement::Create(*this).entity();
 }
 
 SVGSVGElement SVGDocument::svgElement() {
-  return SVGSVGElement(registry_, rootEntity());
+  return SVGSVGElement(*registry_, rootEntity());
 }
 
 bool SVGDocument::operator==(const SVGDocument& other) const {
-  return &registry_.ctx<const DocumentContext>() == &other.registry_.ctx<const DocumentContext>();
+  return &registry_->ctx<const DocumentContext>() == &other.registry_->ctx<const DocumentContext>();
 }
 
 }  // namespace donner
