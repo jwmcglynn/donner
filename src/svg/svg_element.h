@@ -7,6 +7,7 @@
 #include "src/base/transform.h"
 #include "src/base/utils.h"
 #include "src/svg/components/registry.h"
+#include "src/svg/properties/property_registry.h"
 
 namespace donner {
 
@@ -111,6 +112,8 @@ public:
   }
 
   std::optional<SVGElement> querySelector(std::string_view selector);
+
+  const svg::PropertyRegistry& getComputedStyle() const;
 
 protected:
   static Entity CreateEntity(Registry& registry, RcString typeString, ElementType Type);

@@ -3,11 +3,13 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 cc_test(
     name = "svg_tests",
     srcs = [
+        "element_style_tests.cc",
         "svg_circle_tests.cc",
         "svg_element_tests.cc",
     ],
     deps = [
         ":xml_test_utils",
+        "//src/base:base_test_utils",
         "//src/svg",
         "@com_google_gtest//:gtest_main",
     ],

@@ -118,7 +118,7 @@ struct ComputedStyleComponent {
 
     // Inherit from parent.
     if (const Entity parent = registry.get<TreeComponent>(entity).parent(); parent != entt::null) {
-      auto& parentStyleComponent = registry.get<ComputedStyleComponent>(parent);
+      auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
       parentStyleComponent.computeProperties(registry, parent);
 
       properties_ = properties.inheritFrom(parentStyleComponent.properties());

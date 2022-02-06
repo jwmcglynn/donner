@@ -1,5 +1,6 @@
 #include "src/svg/tests/xml_test_utils.h"
 
+#include "src/svg/components/document_context.h"
 #include "src/svg/xml/xml_parser.h"
 
 namespace donner {
@@ -28,6 +29,11 @@ SVGDocument instantiateSubtree(std::string_view str) {
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
     return SVGDocument();
   }
+
+  // TODO: Find a better way to set the canvas size, this is needed for computed style calculation
+  // to succeed.
+  auto& document = maybeResult.result();
+  document.registry().ctx<DocumentContext>().defaultSize = Vector2d(100.0, 100.0);
 
   return std::move(maybeResult.result());
 }

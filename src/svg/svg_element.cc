@@ -2,6 +2,7 @@
 
 #include "src/css/parser/selector_parser.h"
 #include "src/svg/components/class_component.h"
+#include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/id_component.h"
 #include "src/svg/components/shadow_tree_component.h"
@@ -197,6 +198,13 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
 
   const css::Selector selector = std::move(selectorResult.result());
   return querySelectorSearch(selector, *this);
+}
+
+const svg::PropertyRegistry& SVGElement::getComputedStyle() const {
+  auto& computedStyle = registry_.get().get_or_emplace<ComputedStyleComponent>(entity_);
+  computedStyle.computeProperties(registry_.get(), entity_);
+
+  return computedStyle.properties();
 }
 
 Entity SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
