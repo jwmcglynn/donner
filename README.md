@@ -1,6 +1,6 @@
 # Donner 🌩
 
-[![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![codecov](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner)  ![loc](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.json)
+[![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC) [![codecov](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner)  ![loc](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.json)
 ![comments](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/comments.json)
 
 Donner is a modern C++20 SVG rendering library that:
