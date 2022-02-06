@@ -1,0 +1,49 @@
+name: Badges
+
+on:
+  push:
+    branches:
+      - badges
+
+jobs:
+  update-badges:
+    name: Update Badges
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: shogo82148/actions-setup-perl@v1
+      with:
+        perl-version: '5.34'
+
+    - name: Install cloc
+      run: |
+        mkdir -p "${GITHUB_WORKSPACE}/tmp"
+        wget https://github.com/AlDanial/cloc/releases/download/v1.92/cloc-1.92.tar.gz -O "${GITHUB_WORKSPACE}/tmp/cloc.tar.gz"
+        tar xvfz "${GITHUB_WORKSPACE}/tmp/cloc.tar.gz" -C "${GITHUB_WORKSPACE}/tmp"
+        echo "${GITHUB_WORKSPACE}/tmp/cloc-1.92" >> $GITHUB_PATH
+
+    - name: Get the Numbers
+      run: |
+        echo "CODE_LINES=$(tools/cloc.sh --loc)" >> $GITHUB_ENV
+        echo "COMMENT_LINES=$(tools/cloc.sh --percentage)%" >> $GITHUB_ENV
+
+    - name: Create Lines-of-Code-Badge
+      uses: schneegans/dynamic-badges-action@v1.0.0
+      with:
+        auth: ${{ secrets.GIST_SECRET }}
+        gistID: 91f7f490a72af9c06506c8176729d218
+        filename: loc.json
+        label: Lines of Code
+        message: ${{ env.CODE_LINES }}
+        color: lightgrey
+
+    - name: Create Comments-Badge
+      uses: schneegans/dynamic-badges-action@v1.0.0
+      with:
+        auth: ${{ secrets.GIST_SECRET }}
+        gistID: 91f7f490a72af9c06506c8176729d218
+        filename: comments.json
+        label: Comments
+        message: ${{ env.COMMENT_LINES }}
+        color: green
