@@ -36,7 +36,7 @@ std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallba
     return std::nullopt;
   }
 
-  ParseResult<T> result = callbackFn(params);
+  auto result = callbackFn(params);
   if (result.hasError()) {
     // If there is a parse error, the CSS specification requires user agents to ignore the
     // declaration, and not modify the existing value.

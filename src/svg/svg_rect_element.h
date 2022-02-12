@@ -30,6 +30,17 @@ public:
   Lengthd height() const;
   std::optional<Lengthd> rx() const;
   std::optional<Lengthd> ry() const;
+
+  Lengthd computedX() const;
+  Lengthd computedY() const;
+  Lengthd computedWidth() const;
+  Lengthd computedHeight() const;
+  Lengthd computedRx() const;
+  Lengthd computedRy() const;
+
+private:
+  void invalidate() const;
+  void compute() const;
 };
 
 }  // namespace donner::svg

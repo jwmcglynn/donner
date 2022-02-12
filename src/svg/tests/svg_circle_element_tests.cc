@@ -33,7 +33,7 @@ MATCHER_P(CircleHas, matchers, "") {
 
 }  // namespace
 
-TEST(SVGCircleTests, Defaults) {
+TEST(SVGCircleElementTests, Defaults) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGCircleElement>(  //
                   "<circle />"),
               CircleHas(AllOf(CxEq(0.0, Lengthd::Unit::None),  //
@@ -41,7 +41,7 @@ TEST(SVGCircleTests, Defaults) {
                               REq(0.0, Lengthd::Unit::None))));
 }
 
-TEST(SVGCircleTests, Simple) {
+TEST(SVGCircleElementTests, Simple) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGCircleElement>(  //
                   R"(<circle cx="50" cy="50" r="40" />)"),
               CircleHas(AllOf(CxEq(50.0, Lengthd::Unit::None),  //
@@ -49,7 +49,7 @@ TEST(SVGCircleTests, Simple) {
                               REq(40.0, Lengthd::Unit::None))));
 }
 
-TEST(SVGCircleTests, Units) {
+TEST(SVGCircleElementTests, Units) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGCircleElement>(  //
                   R"(<circle cx="50px" cy="30em" r="0" />)"),
               CircleHas(AllOf(CxEq(50.0, Lengthd::Unit::Px),  //
@@ -57,7 +57,7 @@ TEST(SVGCircleTests, Units) {
                               REq(0.0, Lengthd::Unit::None))));
 }
 
-TEST(SVGCircleTests, PresentationAttributes) {
+TEST(SVGCircleElementTests, PresentationAttributes) {
   auto result = instantiateSubtreeElementAs<SVGCircleElement>(R"(
       <circle />
       <style>

@@ -104,7 +104,8 @@
     "complex": "cpp",
     "coroutine": "cpp",
     "__bits": "cpp",
-    "cassert": "cpp"
+    "cassert": "cpp",
+    "version": "cpp"
   },
   "files.exclude": {
     "bazel-*": true

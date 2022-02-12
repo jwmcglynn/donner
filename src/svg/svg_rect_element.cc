@@ -11,57 +11,115 @@ SVGRectElement SVGRectElement::Create(SVGDocument& document) {
 }
 
 void SVGRectElement::setX(Lengthd value) {
-  handle_.get_or_emplace<RectComponent>().x = value;
+  invalidate();
+
+  auto& properties = handle_.get_or_emplace<RectComponent>().properties;
+  properties.x.set(value, css::Specificity::Override());
 }
 
 void SVGRectElement::setY(Lengthd value) {
-  handle_.get_or_emplace<RectComponent>().y = value;
+  invalidate();
+
+  auto& properties = handle_.get_or_emplace<RectComponent>().properties;
+  properties.y.set(value, css::Specificity::Override());
 }
 
 void SVGRectElement::setWidth(Lengthd value) {
-  handle_.get_or_emplace<RectComponent>().width = value;
+  invalidate();
+
+  auto& properties = handle_.get_or_emplace<RectComponent>().properties;
+  properties.width.set(value, css::Specificity::Override());
 }
 
 void SVGRectElement::setHeight(Lengthd value) {
-  handle_.get_or_emplace<RectComponent>().height = value;
+  invalidate();
+
+  auto& properties = handle_.get_or_emplace<RectComponent>().properties;
+  properties.height.set(value, css::Specificity::Override());
 }
 
 void SVGRectElement::setRx(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<RectComponent>().rx = value;
+  invalidate();
+
+  auto& properties = handle_.get_or_emplace<RectComponent>().properties;
+  properties.rx.set(value, css::Specificity::Override());
 }
 
 void SVGRectElement::setRy(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<RectComponent>().ry = value;
+  invalidate();
+
+  auto& properties = handle_.get_or_emplace<RectComponent>().properties;
+  properties.ry.set(value, css::Specificity::Override());
 }
 
 Lengthd SVGRectElement::x() const {
   const auto* component = handle_.try_get<RectComponent>();
-  return component ? component->x : Lengthd();
+  return component ? component->properties.x.getRequired() : Lengthd();
 }
 
 Lengthd SVGRectElement::y() const {
   const auto* component = handle_.try_get<RectComponent>();
-  return component ? component->y : Lengthd();
+  return component ? component->properties.y.getRequired() : Lengthd();
 }
 
 Lengthd SVGRectElement::width() const {
   const auto* component = handle_.try_get<RectComponent>();
-  return component ? component->width : Lengthd();
+  return component ? component->properties.width.getRequired() : Lengthd();
 }
 
 Lengthd SVGRectElement::height() const {
   const auto* component = handle_.try_get<RectComponent>();
-  return component ? component->height : Lengthd();
+  return component ? component->properties.height.getRequired() : Lengthd();
 }
 
 std::optional<Lengthd> SVGRectElement::rx() const {
   const auto* component = handle_.try_get<RectComponent>();
-  return component ? component->rx : std::nullopt;
+  return component ? component->properties.rx.get() : std::nullopt;
 }
 
 std::optional<Lengthd> SVGRectElement::ry() const {
   const auto* component = handle_.try_get<RectComponent>();
-  return component ? component->ry : std::nullopt;
+  return component ? component->properties.ry.get() : std::nullopt;
+}
+
+Lengthd SVGRectElement::computedX() const {
+  compute();
+  return handle_.get<ComputedRectComponent>().properties.x.getRequired();
+}
+
+Lengthd SVGRectElement::computedY() const {
+  compute();
+  return handle_.get<ComputedRectComponent>().properties.y.getRequired();
+}
+
+Lengthd SVGRectElement::computedWidth() const {
+  compute();
+  return handle_.get<ComputedRectComponent>().properties.width.getRequired();
+}
+
+Lengthd SVGRectElement::computedHeight() const {
+  compute();
+  return handle_.get<ComputedRectComponent>().properties.height.getRequired();
+}
+
+Lengthd SVGRectElement::computedRx() const {
+  compute();
+  return handle_.get<ComputedRectComponent>().properties.calculateRx();
+}
+
+Lengthd SVGRectElement::computedRy() const {
+  compute();
+  return handle_.get<ComputedRectComponent>().properties.calculateRy();
+}
+
+void SVGRectElement::invalidate() const {
+  handle_.remove<ComputedRectComponent>();
+  handle_.remove<ComputedPathComponent>();
+}
+
+void SVGRectElement::compute() const {
+  auto& rect = handle_.get_or_emplace<RectComponent>();
+  rect.computePath(handle_, FontMetrics());
 }
 
 }  // namespace donner::svg

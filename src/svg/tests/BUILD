@@ -4,8 +4,9 @@ cc_test(
     name = "svg_tests",
     srcs = [
         "element_style_tests.cc",
-        "svg_circle_tests.cc",
+        "svg_circle_element_tests.cc",
         "svg_element_tests.cc",
+        "svg_rect_element_tests.cc",
     ],
     deps = [
         ":xml_test_utils",

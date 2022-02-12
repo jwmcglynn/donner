@@ -59,8 +59,7 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
   // Then compute all paths.
   for (auto view = registry.view<RectComponent, ComputedStyleComponent>(); auto entity : view) {
     auto [rect, style] = view.get(entity);
-    rect.computePath(registry.get_or_emplace<ComputedPathComponent>(entity), style.viewbox(),
-                     FontMetrics());
+    rect.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics());
   }
 
   for (auto view = registry.view<CircleComponent, ComputedStyleComponent>(); auto entity : view) {
