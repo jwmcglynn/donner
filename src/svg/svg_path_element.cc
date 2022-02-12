@@ -8,11 +8,11 @@ namespace donner::svg {
 
 SVGPathElement SVGPathElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGPathElement(registry, CreateEntity(registry, RcString(Tag), Type));
+  return SVGPathElement(CreateEntity(registry, RcString(Tag), Type));
 }
 
 std::string_view SVGPathElement::d() const {
-  if (const auto* pathComponent = registry_.get().try_get<PathComponent>(entity_)) {
+  if (const auto* pathComponent = handle_.try_get<PathComponent>()) {
     return pathComponent->d();
   } else {
     return "";
@@ -20,19 +20,19 @@ std::string_view SVGPathElement::d() const {
 }
 
 std::optional<ParseError> SVGPathElement::setD(std::string_view d) {
-  auto& pathComponent = registry_.get().get_or_emplace<PathComponent>(entity_);
+  auto& pathComponent = handle_.get_or_emplace<PathComponent>();
   pathComponent.setD(d);
 
-  auto& computed = registry_.get().get_or_emplace<ComputedPathComponent>(entity_);
+  auto& computed = handle_.get_or_emplace<ComputedPathComponent>();
   return computed.setFromDString(d);
 }
 
 std::optional<double> SVGPathElement::pathLength() const {
-  return registry_.get().get_or_emplace<ComputedPathComponent>(entity_).userPathLength;
+  return handle_.get_or_emplace<ComputedPathComponent>().userPathLength;
 }
 
 void SVGPathElement::setPathLength(std::optional<double> value) {
-  registry_.get().get_or_emplace<ComputedPathComponent>(entity_).userPathLength = value;
+  handle_.get_or_emplace<ComputedPathComponent>().userPathLength = value;
 }
 
 }  // namespace donner::svg

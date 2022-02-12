@@ -13,7 +13,7 @@ SVGDocument::SVGDocument() : registry_(std::make_unique<Registry>()) {
 }
 
 SVGSVGElement SVGDocument::svgElement() {
-  return SVGSVGElement(*registry_, rootEntity());
+  return SVGSVGElement(EntityHandle(*registry_, rootEntity()));
 }
 
 bool SVGDocument::operator==(const SVGDocument& other) const {

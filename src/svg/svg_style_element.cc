@@ -7,23 +7,23 @@ namespace donner::svg {
 
 SVGStyleElement SVGStyleElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGStyleElement(registry, CreateEntity(registry, RcString(Tag), Type));
+  return SVGStyleElement(CreateEntity(registry, RcString(Tag), Type));
 }
 
 void SVGStyleElement::setType(RcString type) {
-  auto& stylesheetComponent = registry_.get().get_or_emplace<StylesheetComponent>(entity_);
+  auto& stylesheetComponent = handle_.get_or_emplace<StylesheetComponent>();
   stylesheetComponent.type = type;
 }
 
 void SVGStyleElement::setContents(std::string_view style) {
   if (isCssType()) {
-    auto& stylesheetComponent = registry_.get().get_or_emplace<StylesheetComponent>(entity_);
+    auto& stylesheetComponent = handle_.get_or_emplace<StylesheetComponent>();
     stylesheetComponent.parseStylesheet(style);
   }
 }
 
 bool SVGStyleElement::isCssType() const {
-  auto* stylesheetComponent = registry_.get().try_get<StylesheetComponent>(entity_);
+  auto* stylesheetComponent = handle_.try_get<StylesheetComponent>();
   if (stylesheetComponent) {
     return stylesheetComponent->isCssType();
   } else {

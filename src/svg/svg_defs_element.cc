@@ -7,9 +7,9 @@ namespace donner::svg {
 
 SVGDefsElement SVGDefsElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  Entity entity = CreateEntity(registry, RcString(Tag), Type);
-  registry.emplace<RenderingBehaviorComponent>(entity, true);
-  return SVGDefsElement(registry, entity);
+  EntityHandle handle = CreateEntity(registry, RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(true);
+  return SVGDefsElement(handle);
 }
 
 }  // namespace donner::svg

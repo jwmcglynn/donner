@@ -19,15 +19,11 @@ class SVGDocument;
 
 class SVGElement {
 protected:
-  SVGElement(Registry& registry, Entity entity);
+  explicit SVGElement(EntityHandle handle);
 
 public:
   SVGElement(const SVGElement& other);
   SVGElement& operator=(const SVGElement& other);
-
-  static SVGElement fromEntityUnchecked(Registry& registry, Entity entity) {
-    return SVGElement(registry, entity);
-  }
 
   ElementType type() const;
   RcString typeString() const;
@@ -103,7 +99,7 @@ public:
    */
   void remove();
 
-  bool operator==(const SVGElement& other) const { return entity_ == other.entity_; }
+  bool operator==(const SVGElement& other) const { return handle_ == other.handle_; }
 
   template <typename Derived>
   Derived cast() {
@@ -119,15 +115,17 @@ public:
   const PropertyRegistry& getComputedStyle() const;
 
 protected:
-  static Entity CreateEntity(Registry& registry, RcString typeString, ElementType Type);
+  static EntityHandle CreateEntity(Registry& registry, RcString typeString, ElementType Type);
 
-  std::reference_wrapper<Registry> registry_;
-  Entity entity_;
+  Registry& registry() const { return *handle_.registry(); }
+  EntityHandle toHandle(Entity entity) const { return EntityHandle(registry(), entity); }
+
+  EntityHandle handle_;
 };
 
 class SVGGraphicsElement : public SVGElement {
 protected:
-  SVGGraphicsElement(Registry& registry, Entity entity) : SVGElement(registry, entity) {}
+  explicit SVGGraphicsElement(EntityHandle handle) : SVGElement(handle) {}
 };
 
 class SVGGeometryElement : public SVGGraphicsElement {};

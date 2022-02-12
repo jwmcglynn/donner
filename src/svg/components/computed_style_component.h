@@ -85,13 +85,15 @@ struct ComputedStyleComponent {
     return viewbox_.value();
   }
 
-  void computeProperties(Registry& registry, Entity entity) {
+  void computeProperties(EntityHandle handle) {
     if (properties_) {
       return;  // Already computed.
     }
 
-    const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(entity);
-    const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : entity;
+    Registry& registry = *handle.registry();
+
+    const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
+    const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
 
     // Apply local style.
     PropertyRegistry properties;
@@ -106,8 +108,8 @@ struct ComputedStyleComponent {
       auto [stylesheet] = view.get(stylesheetEntity);
 
       for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
-        if (css::SelectorMatchResult match =
-                rule.selector.matches(ShadowedElementAdapter(registry, entity, dataEntity));
+        if (css::SelectorMatchResult match = rule.selector.matches(
+                ShadowedElementAdapter(registry, handle.entity(), dataEntity));
             match) {
           for (const auto& declaration : rule.declarations) {
             properties.parseProperty(declaration, match.specificity);
@@ -117,9 +119,9 @@ struct ComputedStyleComponent {
     }
 
     // Inherit from parent.
-    if (const Entity parent = registry.get<TreeComponent>(entity).parent(); parent != entt::null) {
+    if (const Entity parent = handle.get<TreeComponent>().parent(); parent != entt::null) {
       auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
-      parentStyleComponent.computeProperties(registry, parent);
+      parentStyleComponent.computeProperties(EntityHandle(registry, parent));
 
       properties_ = properties.inheritFrom(parentStyleComponent.properties());
       viewbox_ = parentStyleComponent.viewbox_;
@@ -127,7 +129,7 @@ struct ComputedStyleComponent {
       properties_ = properties;
     }
 
-    if (auto* viewboxComponent = registry.try_get<ViewboxComponent>(entity);
+    if (auto* viewboxComponent = handle.try_get<ViewboxComponent>();
         viewboxComponent && viewboxComponent->viewbox) {
       viewbox_ = viewboxComponent->viewbox.value();
     } else if (!viewbox_) {

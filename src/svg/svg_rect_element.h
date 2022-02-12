@@ -9,7 +9,7 @@ namespace donner::svg {
 
 class SVGRectElement : public SVGGraphicsElement {
 protected:
-  SVGRectElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
+  explicit SVGRectElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Rect;

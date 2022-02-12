@@ -6,7 +6,7 @@ namespace donner::svg {
 
 class SVGUnknownElement : public SVGGraphicsElement {
 protected:
-  SVGUnknownElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
+  explicit SVGUnknownElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Unknown;

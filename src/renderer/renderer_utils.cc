@@ -53,7 +53,7 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
   // Compute the styles for all elements.
   for (auto view = registry.view<ComputedStyleComponent>(); auto entity : view) {
     auto [styleComponent] = view.get(entity);
-    styleComponent.computeProperties(registry, entity);
+    styleComponent.computeProperties(EntityHandle(registry, entity));
   }
 
   // Then compute all paths.

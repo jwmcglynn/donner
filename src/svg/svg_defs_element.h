@@ -6,7 +6,7 @@ namespace donner::svg {
 
 class SVGDefsElement : public SVGGraphicsElement {
 protected:
-  SVGDefsElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
+  explicit SVGDefsElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Defs;

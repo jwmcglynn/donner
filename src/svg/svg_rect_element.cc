@@ -7,60 +7,60 @@ namespace donner::svg {
 
 SVGRectElement SVGRectElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGRectElement(registry, CreateEntity(registry, RcString(Tag), Type));
+  return SVGRectElement(CreateEntity(registry, RcString(Tag), Type));
 }
 
 void SVGRectElement::setX(Lengthd value) {
-  registry_.get().get_or_emplace<RectComponent>(entity_).x = value;
+  handle_.get_or_emplace<RectComponent>().x = value;
 }
 
 void SVGRectElement::setY(Lengthd value) {
-  registry_.get().get_or_emplace<RectComponent>(entity_).y = value;
+  handle_.get_or_emplace<RectComponent>().y = value;
 }
 
 void SVGRectElement::setWidth(Lengthd value) {
-  registry_.get().get_or_emplace<RectComponent>(entity_).width = value;
+  handle_.get_or_emplace<RectComponent>().width = value;
 }
 
 void SVGRectElement::setHeight(Lengthd value) {
-  registry_.get().get_or_emplace<RectComponent>(entity_).height = value;
+  handle_.get_or_emplace<RectComponent>().height = value;
 }
 
 void SVGRectElement::setRx(std::optional<Lengthd> value) {
-  registry_.get().get_or_emplace<RectComponent>(entity_).rx = value;
+  handle_.get_or_emplace<RectComponent>().rx = value;
 }
 
 void SVGRectElement::setRy(std::optional<Lengthd> value) {
-  registry_.get().get_or_emplace<RectComponent>(entity_).ry = value;
+  handle_.get_or_emplace<RectComponent>().ry = value;
 }
 
 Lengthd SVGRectElement::x() const {
-  const auto* component = registry_.get().try_get<RectComponent>(entity_);
+  const auto* component = handle_.try_get<RectComponent>();
   return component ? component->x : Lengthd();
 }
 
 Lengthd SVGRectElement::y() const {
-  const auto* component = registry_.get().try_get<RectComponent>(entity_);
+  const auto* component = handle_.try_get<RectComponent>();
   return component ? component->y : Lengthd();
 }
 
 Lengthd SVGRectElement::width() const {
-  const auto* component = registry_.get().try_get<RectComponent>(entity_);
+  const auto* component = handle_.try_get<RectComponent>();
   return component ? component->width : Lengthd();
 }
 
 Lengthd SVGRectElement::height() const {
-  const auto* component = registry_.get().try_get<RectComponent>(entity_);
+  const auto* component = handle_.try_get<RectComponent>();
   return component ? component->height : Lengthd();
 }
 
 std::optional<Lengthd> SVGRectElement::rx() const {
-  const auto* component = registry_.get().try_get<RectComponent>(entity_);
+  const auto* component = handle_.try_get<RectComponent>();
   return component ? component->rx : std::nullopt;
 }
 
 std::optional<Lengthd> SVGRectElement::ry() const {
-  const auto* component = registry_.get().try_get<RectComponent>(entity_);
+  const auto* component = handle_.try_get<RectComponent>();
   return component ? component->ry : std::nullopt;
 }
 

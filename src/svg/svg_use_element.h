@@ -8,7 +8,7 @@ namespace donner::svg {
 
 class SVGUseElement : public SVGElement {
 protected:
-  SVGUseElement(Registry& registry, Entity entity) : SVGElement(registry, entity) {}
+  explicit SVGUseElement(EntityHandle handle) : SVGElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Use;

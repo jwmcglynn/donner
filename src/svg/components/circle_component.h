@@ -48,7 +48,7 @@ struct CircleComponent {
 
   void computePath(EntityHandle handle, const FontMetrics& fontMetrics) {
     ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
-    style.computeProperties(*handle.registry(), handle.entity());
+    style.computeProperties(handle);
 
     return computePathWithPrecomputedStyle(handle, style, fontMetrics);
   }

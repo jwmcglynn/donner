@@ -9,7 +9,7 @@ namespace donner::svg {
 
 class SVGCircleElement : public SVGGraphicsElement {
 protected:
-  SVGCircleElement(Registry& registry, Entity entity) : SVGGraphicsElement(registry, entity) {}
+  explicit SVGCircleElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Circle;

@@ -34,25 +34,25 @@ static std::optional<SVGElement> querySelectorSearch(const css::Selector& select
 
 }  // namespace
 
-SVGElement::SVGElement(Registry& registry, Entity entity) : registry_(registry), entity_(entity) {}
+SVGElement::SVGElement(EntityHandle handle) : handle_(handle) {}
 
 SVGElement::SVGElement(const SVGElement& other) = default;
 SVGElement& SVGElement::operator=(const SVGElement& other) = default;
 
 ElementType SVGElement::type() const {
-  return registry_.get().get<TreeComponent>(entity_).type();
+  return handle_.get<TreeComponent>().type();
 }
 
 RcString SVGElement::typeString() const {
-  return registry_.get().get<TreeComponent>(entity_).typeString();
+  return handle_.get<TreeComponent>().typeString();
 }
 
 Entity SVGElement::entity() const {
-  return entity_;
+  return handle_.entity();
 }
 
 RcString SVGElement::id() const {
-  if (const auto* component = registry_.get().try_get<IdComponent>(entity_)) {
+  if (const auto* component = handle_.try_get<IdComponent>()) {
     return component->id;
   } else {
     return "";
@@ -61,14 +61,14 @@ RcString SVGElement::id() const {
 
 void SVGElement::setId(std::string_view id) {
   // Explicitly remove and re-create, so that DocumentContext can update its id-to-entity map.
-  registry_.get().remove<IdComponent>(entity_);
+  handle_.remove<IdComponent>();
   if (!id.empty()) {
-    registry_.get().emplace<IdComponent>(entity_, IdComponent{RcString(id)});
+    handle_.emplace<IdComponent>(IdComponent{RcString(id)});
   }
 }
 
 RcString SVGElement::className() const {
-  if (const auto* component = registry_.get().try_get<ClassComponent>(entity_)) {
+  if (const auto* component = handle_.try_get<ClassComponent>()) {
     return component->className;
   } else {
     return "";
@@ -77,15 +77,15 @@ RcString SVGElement::className() const {
 
 void SVGElement::setClassName(std::string_view name) {
   if (!name.empty()) {
-    auto& component = registry_.get().get_or_emplace<ClassComponent>(entity_);
+    auto& component = handle_.get_or_emplace<ClassComponent>();
     component.className = name;
   } else {
-    registry_.get().remove<ClassComponent>(entity_);
+    handle_.remove<ClassComponent>();
   }
 }
 
 Transformd SVGElement::transform() const {
-  if (const auto* component = registry_.get().try_get<TransformComponent>(entity_)) {
+  if (const auto* component = handle_.try_get<TransformComponent>()) {
     return component->transform;
   } else {
     return Transformd();
@@ -93,17 +93,16 @@ Transformd SVGElement::transform() const {
 }
 
 void SVGElement::setTransform(Transformd transform) {
-  auto& component = registry_.get().get_or_emplace<TransformComponent>(entity_);
+  auto& component = handle_.get_or_emplace<TransformComponent>();
   component.transform = transform;
 }
 
 void SVGElement::setStyle(std::string_view style) {
-  registry_.get().get_or_emplace<StyleComponent>(entity_).setStyle(style);
+  handle_.get_or_emplace<StyleComponent>().setStyle(style);
 }
 
 bool SVGElement::trySetPresentationAttribute(std::string_view name, std::string_view value) {
-  return registry_.get().get_or_emplace<StyleComponent>(entity_).trySetPresentationAttribute(
-      registry_.get(), name, value);
+  return handle_.get_or_emplace<StyleComponent>().trySetPresentationAttribute(handle_, name, value);
 }
 
 bool SVGElement::hasAttribute(std::string_view name) const {
@@ -117,77 +116,77 @@ std::optional<RcString> SVGElement::getAttribute(std::string_view name) const {
 }
 
 SVGDocument& SVGElement::ownerDocument() {
-  return registry_.get().ctx<DocumentContext>().document;
+  return registry().ctx<DocumentContext>().document;
 }
 
 std::optional<SVGElement> SVGElement::parentElement() const {
-  const auto& tree = registry_.get().get<TreeComponent>(entity_);
-  return tree.parent() != entt::null ? std::make_optional(SVGElement(registry_, tree.parent()))
+  const auto& tree = handle_.get<TreeComponent>();
+  return tree.parent() != entt::null ? std::make_optional(SVGElement(toHandle(tree.parent())))
                                      : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
-  if (registry_.get().all_of<ShadowTreeComponent>(entity_)) {
+  if (handle_.all_of<ShadowTreeComponent>()) {
     // Don't enumerate children for shadow trees.
     return std::nullopt;
   }
 
-  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  const auto& tree = handle_.get<TreeComponent>();
   return tree.firstChild() != entt::null
-             ? std::make_optional(SVGElement(registry_, tree.firstChild()))
+             ? std::make_optional(SVGElement(toHandle(tree.firstChild())))
              : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
-  if (registry_.get().all_of<ShadowTreeComponent>(entity_)) {
+  if (handle_.all_of<ShadowTreeComponent>()) {
     // Don't enumerate children for shadow trees.
     return std::nullopt;
   }
 
-  const auto& tree = registry_.get().get<TreeComponent>(entity_);
-  return tree.lastChild() != entt::null
-             ? std::make_optional(SVGElement(registry_, tree.lastChild()))
-             : std::nullopt;
+  const auto& tree = handle_.get<TreeComponent>();
+  return tree.lastChild() != entt::null ? std::make_optional(SVGElement(toHandle(tree.lastChild())))
+                                        : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
-  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  const auto& tree = handle_.get<TreeComponent>();
   return tree.previousSibling() != entt::null
-             ? std::make_optional(SVGElement(registry_, tree.previousSibling()))
+             ? std::make_optional(SVGElement(toHandle(tree.previousSibling())))
              : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
-  const auto& tree = registry_.get().get<TreeComponent>(entity_);
+  const auto& tree = handle_.get<TreeComponent>();
   return tree.nextSibling() != entt::null
-             ? std::make_optional(SVGElement(registry_, tree.nextSibling()))
+             ? std::make_optional(SVGElement(toHandle(tree.nextSibling())))
              : std::nullopt;
 }
 
 SVGElement SVGElement::insertBefore(SVGElement newNode, std::optional<SVGElement> referenceNode) {
-  registry_.get().get<TreeComponent>(entity_).insertBefore(
-      registry_, newNode.entity_, referenceNode ? referenceNode->entity_ : entt::null);
+  handle_.get<TreeComponent>().insertBefore(
+      registry(), newNode.handle_.entity(),
+      referenceNode ? referenceNode->handle_.entity() : entt::null);
   return newNode;
 }
 
 SVGElement SVGElement::appendChild(SVGElement child) {
-  registry_.get().get<TreeComponent>(entity_).appendChild(registry_, child.entity_);
+  handle_.get<TreeComponent>().appendChild(registry(), child.handle_.entity());
   return child;
 }
 
 SVGElement SVGElement::replaceChild(SVGElement newChild, SVGElement oldChild) {
-  registry_.get().get<TreeComponent>(entity_).replaceChild(registry_, newChild.entity_,
-                                                           oldChild.entity_);
+  handle_.get<TreeComponent>().replaceChild(registry(), newChild.handle_.entity(),
+                                            oldChild.handle_.entity());
   return newChild;
 }
 
 SVGElement SVGElement::removeChild(SVGElement child) {
-  registry_.get().get<TreeComponent>(entity_).removeChild(registry_, child.entity_);
+  handle_.get<TreeComponent>().removeChild(registry(), child.entity());
   return child;
 }
 
 void SVGElement::remove() {
-  registry_.get().get<TreeComponent>(entity_).remove(registry_);
+  handle_.get<TreeComponent>().remove(registry());
 }
 
 std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
@@ -201,16 +200,16 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
 }
 
 const PropertyRegistry& SVGElement::getComputedStyle() const {
-  auto& computedStyle = registry_.get().get_or_emplace<ComputedStyleComponent>(entity_);
-  computedStyle.computeProperties(registry_.get(), entity_);
+  auto& computedStyle = handle_.get_or_emplace<ComputedStyleComponent>();
+  computedStyle.computeProperties(handle_);
 
   return computedStyle.properties();
 }
 
-Entity SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
+EntityHandle SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
   Entity entity = registry.create();
   registry.emplace<TreeComponent>(entity, type, std::move(typeString));
-  return entity;
+  return EntityHandle(registry, entity);
 }
 
 }  // namespace donner::svg

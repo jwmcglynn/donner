@@ -13,7 +13,7 @@ class SVGSVGElement : public SVGElement {
   friend class SVGDocument;
 
 protected:
-  SVGSVGElement(Registry& registry, Entity entity) : SVGElement(registry, entity) {}
+  explicit SVGSVGElement(EntityHandle handle) : SVGElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::SVG;
