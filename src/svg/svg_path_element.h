@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/svg/core/path_spline.h"
 #include "src/svg/svg_element.h"
 
 namespace donner::svg {
@@ -14,11 +15,17 @@ public:
 
   static SVGPathElement Create(SVGDocument& document);
 
-  std::string_view d() const;
-  std::optional<ParseError> setD(std::string_view d);
+  RcString d() const;
+  std::optional<ParseError> setD(RcString d);
 
   std::optional<double> pathLength() const;
   void setPathLength(std::optional<double> value);
+
+  std::optional<PathSpline> computedSpline() const;
+
+private:
+  void invalidate() const;
+  void compute() const;
 };
 
 }  // namespace donner::svg

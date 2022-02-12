@@ -14,7 +14,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -27,7 +27,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -53,7 +53,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -66,7 +66,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -79,7 +79,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -92,7 +92,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -105,7 +105,7 @@
       ],
       "cwd": "${workspaceFolder}/bazel-bin/src/css/parser/css_parsing_tests.runfiles/__main__",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       },
     },
     {
@@ -118,7 +118,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -131,7 +131,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -144,7 +144,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -157,7 +157,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -170,7 +170,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -179,11 +179,11 @@
       "name": "renderer_tool",
       "program": "${workspaceFolder}/bazel-bin/src/svg/renderer/renderer_tool",
       "args": [
-        "${workspaceFolder}/src/svg/renderer/testdata/rect2.svg"
+        "${workspaceFolder}/src/svg/renderer/testdata/stroking_pathlength.svg"
       ],
       "cwd": "${workspaceFolder}/bazel-bin/src/svg/renderer/renderer_tool.runfiles/__main__",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       },
     },
   ]

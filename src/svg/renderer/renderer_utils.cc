@@ -18,7 +18,8 @@
 
 namespace donner::svg {
 
-void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize) {
+void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize,
+                                                std::vector<ParseError>* outWarnings) {
   Registry& registry = document.registry();
   registry.ctx<DocumentContext>().defaultSize = defaultSize;
 
@@ -55,6 +56,14 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
   }
 
   // Then compute all paths.
+  for (auto view = registry.view<PathComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [path, style] = view.get(entity);
+    auto maybeError = path.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style);
+    if (maybeError && outWarnings) {
+      outWarnings->emplace_back(std::move(maybeError.value()));
+    }
+  }
+
   for (auto view = registry.view<RectComponent, ComputedStyleComponent>(); auto entity : view) {
     auto [rect, style] = view.get(entity);
     rect.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics());

@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "src/base/parser/tests/parse_result_test_utils.h"
+#include "src/svg/renderer/renderer_utils.h"
 #include "src/svg/xml/xml_parser.h"
 
 using testing::AllOf;
@@ -70,10 +71,15 @@ TEST(XmlParser, Warning) {
   <path d="M 100 100 h 2!" />
 </svg>)";
 
+  // TODO: Add another test to verify warnings from XMLParser and not during render-tree
+  // instantiation.
   std::vector<ParseError> warnings;
-  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+  auto documentResult = XMLParser::ParseSVG(spanFromString(simpleXml));
+  ASSERT_THAT(documentResult, NoParseError());
+  RendererUtils::prepareDocumentForRendering(documentResult.result(), {200, 200}, &warnings);
+  // TODO: Map this offset back to absolute values (2, 24)
   EXPECT_THAT(warnings,
-              ElementsAre(ParseWarningIs(2, 24, "Failed to parse number: Invalid argument")));
+              ElementsAre(ParseWarningIs(0, 13, "Failed to parse number: Invalid argument")));
 }
 
 TEST(XmlParser, InvalidXmlns) {

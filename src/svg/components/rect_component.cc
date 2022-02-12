@@ -19,7 +19,7 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components, params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
                },
                &properties.x);
          }},  //
@@ -28,7 +28,7 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components, params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
                },
                &properties.y);
          }},  //
@@ -37,7 +37,7 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components, params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
                },
                &properties.width);
          }},  //
@@ -46,7 +46,7 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components, params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
                },
                &properties.height);
          }},  //
@@ -55,7 +55,7 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentageOrAuto(params.components, params.allowUserUnits);
+                 return ParseLengthPercentageOrAuto(params.components(), params.allowUserUnits);
                },
                &properties.rx);
          }},  //
@@ -64,7 +64,7 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentageOrAuto(params.components, params.allowUserUnits);
+                 return ParseLengthPercentageOrAuto(params.components(), params.allowUserUnits);
                },
                &properties.ry);
          }},  //
@@ -109,7 +109,7 @@ void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
         computedRect.properties.calculateRy().toPixels(style.viewbox(), fontMetrics));
 
     // Draw with rounded corners.
-    handle.get_or_emplace<ComputedPathComponent>().setSpline(
+    handle.get_or_emplace<ComputedPathComponent>().spline =
         PathSpline::Builder()
             // Draw top line.
             .moveTo(pos + Vector2d(radius.x, 0))
@@ -137,16 +137,16 @@ void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
                      pos + Vector2d(radius.x - radius.x * arcMagic, 0.0),
                      pos + Vector2d(radius.x, 0.0))
             .closePath()
-            .build());
+            .build();
 
   } else {
-    handle.get_or_emplace<ComputedPathComponent>().setSpline(PathSpline::Builder()
-                                                                 .moveTo(pos)
-                                                                 .lineTo(pos + Vector2d(size.x, 0))
-                                                                 .lineTo(pos + size)
-                                                                 .lineTo(pos + Vector2d(0, size.y))
-                                                                 .closePath()
-                                                                 .build());
+    handle.get_or_emplace<ComputedPathComponent>().spline = PathSpline::Builder()
+                                                                .moveTo(pos)
+                                                                .lineTo(pos + Vector2d(size.x, 0))
+                                                                .lineTo(pos + size)
+                                                                .lineTo(pos + Vector2d(0, size.y))
+                                                                .closePath()
+                                                                .build();
   }
 }
 

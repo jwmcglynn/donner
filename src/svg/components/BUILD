@@ -22,7 +22,6 @@ cc_library(
     name = "components",
     srcs = [
         "circle_component.cc",
-        "computed_path_component.cc",
         "path_component.cc",
         "rect_component.cc",
         "registry.cc",

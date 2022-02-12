@@ -169,7 +169,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
         registry.get<ComputedStyleComponent>(styleEntity);
 
     if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
-      if (auto maybeSpline = path->spline()) {
+      if (path->spline) {
         const PropertyRegistry& style = styleComponent.properties();
 
         if (auto fill = style.fill.get()) {
@@ -181,7 +181,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
             paint.setColor(toSkia(solid.color));
             paint.setStyle(SkPaint::Style::kFill_Style);
 
-            canvas_->drawPath(toSkia(*maybeSpline), paint);
+            canvas_->drawPath(toSkia(*path->spline), paint);
           } else if (fill.value().is<PaintServer::None>()) {
             // Do nothing.
           } else {
@@ -203,7 +203,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
             paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
             paint.setStrokeMiter(style.strokeMiterlimit.get().value());
 
-            const SkPath skiaPath = toSkia(*maybeSpline);
+            const SkPath skiaPath = toSkia(*path->spline);
 
             if (style.strokeDasharray.get().has_value()) {
               double dashUnitsScale = 1.0;

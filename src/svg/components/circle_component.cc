@@ -19,7 +19,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components, params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
                },
                &properties.cx);
          }},  //
@@ -28,7 +28,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components, params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
                },
                &properties.cy);
          }},  //
@@ -37,7 +37,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components, params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
                },
                &properties.r);
          }}  //

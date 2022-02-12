@@ -6,13 +6,21 @@
 namespace donner::svg {
 
 struct PropertyParseFnParams {
-  std::span<const css::ComponentValue> components;
+  std::variant<std::string_view, std::span<const css::ComponentValue>> valueOrComponents;
   PropertyState explicitState = PropertyState::NotSet;
   css::Specificity specificity;
   /// For presentation attributes, values may be unitless, in which case they the spec says they are
   /// specified in "user units". See https://www.w3.org/TR/SVG2/types.html#syntax.
   bool allowUserUnits = false;
+
+  std::span<const css::ComponentValue> components() const;
+
+private:
+  mutable std::optional<std::vector<css::ComponentValue>> parsedComponents_;
 };
+
+PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
+                                          css::Specificity specificity);
 
 /**
  * If the components contain only a single ident, returns an RcString for that ident's contents.

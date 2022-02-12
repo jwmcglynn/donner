@@ -23,9 +23,6 @@ class PropertyRegistry;
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const PropertyParseFnParams& params);
 
-PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
-                                          css::Specificity specificity);
-
 template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
 std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
                                 Property<T, kCascade>* destination) {

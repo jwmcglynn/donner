@@ -19,19 +19,6 @@ namespace {
 static constexpr css::Specificity kSpecificityPresentationAttribute =
     css::Specificity::FromABC(0, 0, 0);
 
-std::span<const css::ComponentValue> trimWhitespace(
-    std::span<const css::ComponentValue> components) {
-  while (!components.empty() && components.front().isToken<css::Token::Whitespace>()) {
-    components = components.subspan(1);
-  }
-
-  while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
-    components = components.subspan(0, components.size() - 1);
-  }
-
-  return components;
-}
-
 ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -259,7 +246,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return css::ColorParser::Parse(params.components);
+             return css::ColorParser::Parse(params.components());
            },
            &registry.color);
      }},  //
@@ -267,21 +254,25 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
+           [](const PropertyParseFnParams& params) {
+             return ParsePaintServer(params.components());
+           },
            &registry.fill);
      }},  //
     {"stroke",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
+           [](const PropertyParseFnParams& params) {
+             return ParsePaintServer(params.components());
+           },
            &registry.stroke);
      }},  //
     {"stroke-opacity",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components); },
+           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
            &registry.strokeOpacity);
      }},  //
     {"stroke-width",
@@ -289,7 +280,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return ParseLengthPercentage(params.components, params.allowUserUnits);
+             return ParseLengthPercentage(params.components(), params.allowUserUnits);
            },
            &registry.strokeWidth);
      }},  //
@@ -298,7 +289,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return ParseStrokeLinecap(params.components);
+             return ParseStrokeLinecap(params.components());
            },
            &registry.strokeLinecap);
      }},  //
@@ -307,7 +298,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return ParseStrokeLinejoin(params.components);
+             return ParseStrokeLinejoin(params.components());
            },
            &registry.strokeLinejoin);
      }},  //
@@ -315,7 +306,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseNumber(params.components); },
+           [](const PropertyParseFnParams& params) { return ParseNumber(params.components()); },
            &registry.strokeMiterlimit);
      }},  //
     {"stroke-dasharray",
@@ -323,7 +314,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return ParseStrokeDasharray(params.components);
+             return ParseStrokeDasharray(params.components());
            },
            &registry.strokeDasharray);
      }},  //
@@ -332,38 +323,13 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return ParseLengthPercentage(params.components, params.allowUserUnits);
+             return ParseLengthPercentage(params.components(), params.allowUserUnits);
            },
            &registry.strokeDashoffset);
      }},  //
 };
 
 }  // namespace
-
-PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
-                                          css::Specificity specificity) {
-  PropertyParseFnParams params;
-  // Note that we only need to trim the trailing whitespace here, but trimWhitespace actually trims
-  // both.
-  params.components = trimWhitespace(declaration.values);
-
-  // Detect CSS-wide keywords, see https://www.w3.org/TR/css-cascade-3/#defaulting-keywords.
-  if (params.components.size() == 1 && params.components.front().isToken<css::Token::Ident>()) {
-    const RcString& ident =
-        params.components.front().get<css::Token>().get<css::Token::Ident>().value;
-    if (ident.equalsLowercase("initial")) {
-      params.explicitState = PropertyState::ExplicitInitial;
-    } else if (ident.equalsLowercase("inherit")) {
-      params.explicitState = PropertyState::Inherit;
-    } else if (ident.equalsLowercase("unset")) {
-      params.explicitState = PropertyState::ExplicitUnset;
-    }
-  }
-
-  params.specificity = declaration.important ? css::Specificity::Important() : specificity;
-
-  return params;
-}
 
 std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                           css::Specificity specificity) {
@@ -431,16 +397,13 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
   assert((!type.has_value() || (type.has_value() && handle != EntityHandle())) &&
          "If a type is specified, entity handle must be set");
 
+  PropertyParseFnParams params;
+  params.valueOrComponents = value;
+  params.specificity = kSpecificityPresentationAttribute;
+  params.allowUserUnits = true;
+
   const auto it = kProperties.find(frozen::string(name));
   if (it != kProperties.end()) {
-    std::vector<css::ComponentValue> components = css::ValueParser::Parse(value);
-
-    PropertyParseFnParams params;
-    // Trim both leading and trailing whitespace.
-    params.components = trimWhitespace(components);
-    params.specificity = kSpecificityPresentationAttribute;
-    params.allowUserUnits = true;
-
     auto maybeError = it->second(*this, params);
     if (maybeError.has_value()) {
       std::cerr << "Error parsing " << name << " property: " << maybeError.value() << std::endl;
@@ -453,14 +416,6 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
     // Stop processing if there is not an element type.
     return false;
   }
-
-  std::vector<css::ComponentValue> components = css::ValueParser::Parse(value);
-
-  PropertyParseFnParams params;
-  // Trim both leading and trailing whitespace.
-  params.components = trimWhitespace(components);
-  params.specificity = kSpecificityPresentationAttribute;
-  params.allowUserUnits = true;
 
   ParseResult<bool> result = toConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
     return ParsePresentationAttribute<elementType()>(handle, name, params);

@@ -6,12 +6,14 @@ cc_test(
         "element_style_tests.cc",
         "svg_circle_element_tests.cc",
         "svg_element_tests.cc",
+        "svg_path_element_tests.cc",
         "svg_rect_element_tests.cc",
     ],
     deps = [
         ":xml_test_utils",
         "//src/base:base_test_utils",
         "//src/svg",
+        "//src/svg/core:core_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

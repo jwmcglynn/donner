@@ -8,7 +8,8 @@ namespace css {
 
 std::vector<ComponentValue> ValueParser::Parse(std::string_view str) {
   details::Tokenizer tokenizer_(str);
-  return details::parseListOfComponentValues(tokenizer_);
+  return details::parseListOfComponentValues(tokenizer_,
+                                             details::WhitespaceHandling::TrimLeadingAndTrailing);
 }
 
 }  // namespace css

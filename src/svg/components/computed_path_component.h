@@ -10,15 +10,8 @@ namespace donner::svg {
 
 class ComputedPathComponent {
 public:
-  std::optional<ParseError> setFromDString(std::string_view d);
-
-  void setSpline(std::optional<PathSpline>&& spline);
-  const std::optional<PathSpline>& spline() const;
-
+  std::optional<PathSpline> spline;
   std::optional<double> userPathLength;
-
-private:
-  std::optional<PathSpline> spline_;
 };
 
 }  // namespace donner::svg

@@ -21,6 +21,7 @@ cc_test(
     deps = [
         ":xml",
         "//src/base/parser:parser_test_utils",
+        "//src/svg/renderer:renderer_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -10,6 +10,8 @@ namespace donner::css::details {
 
 enum class ParseMode { Keep, Discard };
 
+enum class WhitespaceHandling { Keep, TrimLeadingAndTrailing };
+
 template <typename T, typename TokenType = Token>
 concept TokenizerLike = requires(T t) {
   { t.next() } -> std::same_as<TokenType>;
@@ -56,12 +58,24 @@ ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode
 /// Parse a list of component values, per
 /// https://www.w3.org/TR/css-syntax-3/#parse-list-of-component-values
 template <TokenizerLike<Token> T>
-std::vector<ComponentValue> parseListOfComponentValues(T& tokenizer) {
+std::vector<ComponentValue> parseListOfComponentValues(
+    T& tokenizer, WhitespaceHandling whitespace = WhitespaceHandling::Keep) {
   std::vector<ComponentValue> result;
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
+    if (whitespace == WhitespaceHandling::TrimLeadingAndTrailing && result.empty() &&
+        token.is<Token::Whitespace>()) {
+      continue;
+    }
+
     if (!token.is<Token::EofToken>()) {
       result.emplace_back(consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep));
+    }
+  }
+
+  if (whitespace == WhitespaceHandling::TrimLeadingAndTrailing) {
+    while (!result.empty() && result.back().isToken<Token::Whitespace>()) {
+      result.pop_back();
     }
   }
 

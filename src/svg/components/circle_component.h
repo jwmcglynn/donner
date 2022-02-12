@@ -42,8 +42,8 @@ struct CircleComponent {
     const double radius =
         computedCircle.properties.r.getRequired().toPixels(style.viewbox(), fontMetrics);
 
-    handle.emplace_or_replace<ComputedPathComponent>().setSpline(
-        PathSpline::Builder().circle(center, radius).build());
+    handle.emplace_or_replace<ComputedPathComponent>().spline =
+        PathSpline::Builder().circle(center, radius).build();
   }
 
   void computePath(EntityHandle handle, const FontMetrics& fontMetrics) {

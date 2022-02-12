@@ -51,10 +51,12 @@ Lengthd SVGCircleElement::computedCx() const {
   compute();
   return handle_.get<ComputedCircleComponent>().properties.cx.getRequired();
 }
+
 Lengthd SVGCircleElement::computedCy() const {
   compute();
   return handle_.get<ComputedCircleComponent>().properties.cy.getRequired();
 }
+
 Lengthd SVGCircleElement::computedR() const {
   compute();
   return handle_.get<ComputedCircleComponent>().properties.r.getRequired();

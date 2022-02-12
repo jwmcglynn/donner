@@ -13,11 +13,13 @@ namespace css {
 
 TEST(ValueParser, Empty) {
   EXPECT_THAT(ValueParser::Parse(""), ElementsAre());
-  EXPECT_THAT(ValueParser::Parse(" \t\f"), ElementsAre(TokenIsWhitespace(" \t\f")));
+  EXPECT_THAT(ValueParser::Parse(" \t\f"), ElementsAre());
 }
 
 TEST(ValueParser, Basic) {
   EXPECT_THAT(ValueParser::Parse("test"), ElementsAre(TokenIsIdent("test")));
+  EXPECT_THAT(ValueParser::Parse(" test \t"), ElementsAre(TokenIsIdent("test")));
+
   EXPECT_THAT(ValueParser::Parse("rgb(0,1,2)"),
               ElementsAre(FunctionIs(
                   "rgb", ElementsAre(TokenIsNumber(0, "0", NumberType::Integer), TokenIsComma(),

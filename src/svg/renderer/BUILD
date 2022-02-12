@@ -4,6 +4,7 @@ cc_library(
     name = "renderer_utils",
     srcs = ["renderer_utils.cc"],
     hdrs = ["renderer_utils.h"],
+    visibility = ["//src/svg:__subpackages__"],
     deps = [
         "//src/svg",
         "@stb//:image_write",

@@ -132,11 +132,7 @@ std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& conte
                                                          std::string_view namespacePrefix,
                                                          std::string_view name,
                                                          std::string_view value) {
-  if (name == "d") {
-    if (auto warning = element.setD(value)) {
-      context.addSubparserWarning(std::move(warning.value()), context.parserOriginFrom(value));
-    }
-  } else if (name == "pathLength") {
+  if (name == "pathLength") {
     // Parse the attribute as a number, and if it resolves set the length.
     if (auto maybeNumber = ParseNumberNoSuffix(value)) {
       element.setPathLength(maybeNumber.value());
