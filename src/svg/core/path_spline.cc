@@ -5,6 +5,34 @@
 
 namespace donner::svg {
 
+std::ostream& operator<<(std::ostream& os, PathSpline::CommandType type) {
+  switch (type) {
+    case PathSpline::CommandType::MoveTo: os << "CommandType::MoveTo"; break;
+    case PathSpline::CommandType::LineTo: os << "CommandType::LineTo"; break;
+    case PathSpline::CommandType::CurveTo: os << "CommandType::CurveTo"; break;
+    case PathSpline::CommandType::ClosePath: os << "CommandType::ClosePath"; break;
+    default: UTILS_RELEASE_ASSERT(false && "Invalid command");
+  }
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const PathSpline::Command& command) {
+  return os << "Command {" << command.type << ", " << command.point_index << "}";
+}
+
+std::ostream& operator<<(std::ostream& os, const PathSpline& spline) {
+  os << "PathSpline {\n";
+  os << " points: [\n  ";
+  for (const auto& pt : spline.points()) {
+    os << pt << ", ";
+  }
+  os << "\n ]\n commands: [\n  ";
+  for (const auto& command : spline.commands()) {
+    os << command << ", ";
+  }
+  return os << "\n ]\n}\n";
+}
+
 Boxd PathSpline::bounds() const {
   UTILS_RELEASE_ASSERT(!empty());
 

@@ -1,19 +1,36 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/base/tests/base_test_utils.h"
+#include "src/svg/core/tests/path_spline_test_utils.h"
 #include "src/svg/svg_rect_element.h"
 #include "src/svg/tests/xml_test_utils.h"
 
 using testing::AllOf;
+using testing::ElementsAre;
 
 namespace donner::svg {
+
+using Command = PathSpline::Command;
+using CommandType = PathSpline::CommandType;
+
+namespace {
 
 MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
   return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
          testing::ExplainMatchResult(unitMatcher, arg.unit, result_listener);
 }
 
-namespace {
+MATCHER_P(ComputedSplineIs, matchers, "") {
+  const auto& maybeSpline = arg.element.computedSpline();
+  if (maybeSpline) {
+    *result_listener << "computed spline is " << *maybeSpline;
+    return testing::ExplainMatchResult(matchers, maybeSpline.value(), result_listener);
+  } else {
+    *result_listener << "spline is empty";
+    return false;
+  }
+}
 
 auto XEq(auto valueMatcher, auto unitMatcher) {
   return testing::Property("x", &SVGRectElement::x, LengthIs(valueMatcher, unitMatcher));
@@ -94,6 +111,35 @@ TEST(SVGRectElementTests, PresentationAttributes) {
                                     YEq(0.0, Lengthd::Unit::None),      //
                                     WidthEq(0.0, Lengthd::Unit::None),  //
                                     HeightEq(0.0, Lengthd::Unit::None))));
+}
+
+TEST(SVGRectElementTests, Spline) {
+  EXPECT_THAT(
+      instantiateSubtreeElementAs<SVGRectElement>(  //
+          R"(<rect x="50" y="40" width="30" height="20" />)"),
+      ComputedSplineIs(PointsAndCommandsAre(
+          ElementsAre(Vector2d(50, 40), Vector2d(80, 40), Vector2d(80, 60), Vector2d(50, 60)),  //
+          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                      Command{CommandType::LineTo, 2}, Command{CommandType::LineTo, 3},
+                      Command{CommandType::ClosePath, 0}))));
+}
+
+TEST(SVGRectElementTests, SplineRoundedCorners) {
+  EXPECT_THAT(
+      instantiateSubtreeElementAs<SVGRectElement>(  //
+          R"(<rect x="50" y="40" width="30" height="20" rx="4" ry="4"/>)"),
+      ComputedSplineIs(PointsAndCommandsAre(
+          ElementsAre(Vector2d(54, 40), Vector2d(76, 40), Vector2Near(78.2091, 40),
+                      Vector2Near(80, 41.7909), Vector2d(80, 44), Vector2d(80, 56),
+                      Vector2Near(80, 58.2091), Vector2Near(78.2091, 60), Vector2d(76, 60),
+                      Vector2d(54, 60), Vector2Near(51.7909, 60), Vector2Near(50, 58.2091),
+                      Vector2d(50, 56), Vector2d(50, 44), Vector2Near(50, 41.7909),
+                      Vector2Near(51.7909, 40), Vector2d(54, 40)),  //
+          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                      Command{CommandType::CurveTo, 2}, Command{CommandType::LineTo, 5},
+                      Command{CommandType::CurveTo, 6}, Command{CommandType::LineTo, 9},
+                      Command{CommandType::CurveTo, 10}, Command{CommandType::LineTo, 13},
+                      Command{CommandType::CurveTo, 14}, Command{CommandType::ClosePath, 0}))));
 }
 
 }  // namespace donner::svg

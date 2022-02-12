@@ -19,11 +19,11 @@ MATCHER(ComputedSplineIsEmpty, "") {
 }
 
 MATCHER_P(ComputedSplineIs, matchers, "") {
-  if (arg.element.computedSpline()) {
-    return testing::ExplainMatchResult(matchers, arg.element.computedSpline().value(),
-                                       result_listener);
+  const auto maybeSpline = arg.element.computedSpline();
+  if (maybeSpline) {
+    return testing::ExplainMatchResult(matchers, maybeSpline.value(), result_listener);
   } else {
-    *result_listener << "computedSpline() is empty";
+    *result_listener << "spline is empty";
     return false;
   }
 }
@@ -76,7 +76,7 @@ TEST(SVGPathElementTests, PresentationAttributes) {
       </style>
     )"),
               ComputedSplineIs(PointsAndCommandsAre(
-                  ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),  //
+                  ElementsAre(Vector2d(1, 1), Vector2d(2, 3)),  //
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
 }
 

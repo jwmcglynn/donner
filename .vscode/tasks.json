@@ -25,12 +25,24 @@
     {
       "label": "svg (all)",
       "type": "shell",
-      "command": "bazel build //src/svg/...",
+      "command": "bazel test -c dbg //src/svg/...",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "test",
+      "presentation": {
+        "clear": true
+      }
+    },
+    {
+      "label": "svg_tests",
+      "type": "shell",
+      "command": "bazel run -c dbg //src/svg/tests:svg_tests",
       "problemMatcher": [
         "$gcc"
       ],
       "group": {
-        "kind": "build",
+        "kind": "test",
         "isDefault": true
       },
       "presentation": {
@@ -76,10 +88,7 @@
       "problemMatcher": [
         "$gcc"
       ],
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      },
+      "group": "test",
       "presentation": {
         "clear": true
       },
@@ -142,7 +151,10 @@
       "type": "shell",
       "command": "bazel build //src/svg/tests:svg_tests -c dbg",
       "problemMatcher": [],
-      "group": "build"
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
     },
     {
       "label": "css_parser_tests",

@@ -10,10 +10,16 @@ namespace donner::svg {
 class PathSpline {
 public:
   enum class CommandType { MoveTo, CurveTo, LineTo, ClosePath };
+  friend std::ostream& operator<<(std::ostream& os, CommandType type);
 
   struct Command {
     CommandType type;
     size_t point_index;
+
+    friend inline bool operator==(const Command& lhs, const Command& rhs) {
+      return lhs.point_index == rhs.point_index && lhs.type == rhs.type;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const Command& command);
   };
 
   class Builder {
@@ -146,6 +152,8 @@ public:
    * @param t Position on spline, between 0.0 and 1.0.
    */
   Vector2d normalAt(size_t index, double t) const;
+
+  friend std::ostream& operator<<(std::ostream& os, const PathSpline& spline);
 
 private:
   PathSpline(std::vector<Vector2d>&& points, std::vector<Command>&& commands);

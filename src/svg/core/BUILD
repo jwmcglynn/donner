@@ -21,9 +21,6 @@ cc_library(
 cc_library(
     name = "core_test_utils",
     testonly = 1,
-    srcs = [
-        "tests/path_spline_test_utils.cc",
-    ],
     hdrs = [
         "tests/path_spline_test_utils.h",
     ],

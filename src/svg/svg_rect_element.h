@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "src/base/length.h"
+#include "src/svg/core/path_spline.h"
 #include "src/svg/svg_element.h"
 
 namespace donner::svg {
@@ -37,6 +38,8 @@ public:
   Lengthd computedHeight() const;
   Lengthd computedRx() const;
   Lengthd computedRy() const;
+
+  std::optional<PathSpline> computedSpline() const;
 
 private:
   void invalidate() const;

@@ -112,6 +112,15 @@ Lengthd SVGRectElement::computedRy() const {
   return handle_.get<ComputedRectComponent>().properties.calculateRy();
 }
 
+std::optional<PathSpline> SVGRectElement::computedSpline() const {
+  compute();
+  if (const auto* computedPath = handle_.try_get<ComputedPathComponent>()) {
+    return computedPath->spline;
+  } else {
+    return std::nullopt;
+  }
+}
+
 void SVGRectElement::invalidate() const {
   handle_.remove<ComputedRectComponent>();
   handle_.remove<ComputedPathComponent>();
