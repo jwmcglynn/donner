@@ -36,11 +36,11 @@
       "name": "svg_tests",
       "program": "${workspaceFolder}/bazel-bin/src/svg/tests/svg_tests",
       "args": [
-        "--gtest_break_on_failure"
+        "--gtest_break_on_failure",
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        "/proc/self/cwd": "${workspaceFolder}"
+        ".": "${workspaceFolder}"
       }
     },
     {
@@ -86,7 +86,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "properties_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/properties/properties_tests",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/properties/tests/properties_tests",
       "args": [
         "--gtest_break_on_failure"
       ],

@@ -1,11 +1,33 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
+    name = "registry",
+    srcs = [
+        "registry.cc",
+    ],
+    hdrs = [
+        "registry.h",
+    ],
+    visibility = [
+        "//src/css:__pkg__",
+        "//src/svg:__subpackages__",
+    ],
+    deps = [
+        "//src/base",
+        "@entt",
+    ],
+)
+
+cc_library(
     name = "components",
     srcs = [
+        "circle_component.cc",
         "computed_path_component.cc",
         "path_component.cc",
+        "rect_component.cc",
         "registry.cc",
+        "sized_element_component.cc",
+        "stylesheet_component.cc",
         "tree_component.cc",
         "viewbox_component.cc",
     ],
@@ -35,10 +57,9 @@ cc_library(
         "//src/svg:__subpackages__",
     ],
     deps = [
-        "//src/base",
+        ":registry",
         "//src/svg/parser",
         "//src/svg/properties",
-        "@entt",
     ],
 )
 

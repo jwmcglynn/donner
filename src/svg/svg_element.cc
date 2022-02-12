@@ -102,8 +102,8 @@ void SVGElement::setStyle(std::string_view style) {
 }
 
 bool SVGElement::trySetPresentationAttribute(std::string_view name, std::string_view value) {
-  return registry_.get().get_or_emplace<StyleComponent>(entity_).trySetPresentationAttribute(name,
-                                                                                             value);
+  return registry_.get().get_or_emplace<StyleComponent>(entity_).trySetPresentationAttribute(
+      registry_.get(), name, value);
 }
 
 bool SVGElement::hasAttribute(std::string_view name) const {

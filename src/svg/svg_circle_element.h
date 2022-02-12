@@ -5,7 +5,7 @@
 #include "src/base/length.h"
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGCircleElement : public SVGGraphicsElement {
 protected:
@@ -24,6 +24,14 @@ public:
   Lengthd cx() const;
   Lengthd cy() const;
   Lengthd r() const;
+
+  Lengthd computedCx() const;
+  Lengthd computedCy() const;
+  Lengthd computedR() const;
+
+private:
+  void invalidate() const;
+  void compute() const;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/css/parser/stylesheet_parser.h"
+#include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/properties/property_registry.h"
 
 namespace donner {

@@ -61,10 +61,10 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
                      FontMetrics());
   }
 
-  for (auto view = registry.view<CircleComponent, ComputedStyleComponent>(); auto entity : view) {
+  for (auto view = registry.view<svg::CircleComponent, ComputedStyleComponent>();
+       auto entity : view) {
     auto [circle, style] = view.get(entity);
-    circle.computePath(registry.get_or_emplace<ComputedPathComponent>(entity), style.viewbox(),
-                       FontMetrics());
+    circle.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics());
   }
 }
 

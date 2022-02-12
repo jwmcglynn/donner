@@ -3,6 +3,7 @@
 #include "src/base/rc_string.h"
 #include "src/base/vector2.h"
 #include "src/svg/components/id_component.h"
+#include "src/svg/components/registry.h"
 
 namespace donner {
 

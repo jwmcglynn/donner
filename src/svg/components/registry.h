@@ -13,6 +13,7 @@ inline std::ostream& operator<<(std::ostream& os, const Entity& entity) {
 }
 
 using Registry = entt::basic_registry<Entity>;
+using EntityHandle = entt::basic_handle<Entity>;
 
 enum class ElementType {
   Circle,
@@ -26,5 +27,17 @@ enum class ElementType {
 };
 
 std::string_view TypeToString(ElementType type);
+
+template <typename ComponentT>
+struct HandleOfMixin {
+protected:
+  Entity entityOf(Registry& registry) const {
+    return entt::to_entity(registry, static_cast<const ComponentT&>(*this));
+  }
+
+  EntityHandle handleOf(Registry& registry) const {
+    return EntityHandle(registry, entityOf(registry));
+  }
+};
 
 }  // namespace donner

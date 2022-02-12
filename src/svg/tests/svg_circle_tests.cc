@@ -5,9 +5,8 @@
 #include "src/svg/tests/xml_test_utils.h"
 
 using testing::AllOf;
-using testing::Property;
 
-namespace donner {
+namespace donner::svg {
 
 MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
   return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
@@ -17,15 +16,15 @@ MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
 namespace {
 
 auto CxEq(auto valueMatcher, auto unitMatcher) {
-  return Property("cx", &SVGCircleElement::cx, LengthIs(valueMatcher, unitMatcher));
+  return testing::Property("cx", &SVGCircleElement::cx, LengthIs(valueMatcher, unitMatcher));
 }
 
 auto CyEq(auto valueMatcher, auto unitMatcher) {
-  return Property("cy", &SVGCircleElement::cy, LengthIs(valueMatcher, unitMatcher));
+  return testing::Property("cy", &SVGCircleElement::cy, LengthIs(valueMatcher, unitMatcher));
 }
 
 auto REq(auto valueMatcher, auto unitMatcher) {
-  return Property("r", &SVGCircleElement::r, LengthIs(valueMatcher, unitMatcher));
+  return testing::Property("r", &SVGCircleElement::r, LengthIs(valueMatcher, unitMatcher));
 }
 
 MATCHER_P(CircleHas, matchers, "") {
@@ -58,4 +57,25 @@ TEST(SVGCircleTests, Units) {
                               REq(0.0, Lengthd::Unit::None))));
 }
 
-}  // namespace donner
+TEST(SVGCircleTests, PresentationAttributes) {
+  auto result = instantiateSubtreeElementAs<SVGCircleElement>(R"(
+      <circle />
+      <style>
+        circle {
+          cx: 0;
+          cy: 10px;
+          r: 20em;
+        }
+      </style>
+    )");
+
+  EXPECT_THAT(result.element.computedCx(), LengthIs(0.0, Lengthd::Unit::None));
+  EXPECT_THAT(result.element.computedCy(), LengthIs(10.0, Lengthd::Unit::Px));
+  EXPECT_THAT(result.element.computedR(), LengthIs(20.0, Lengthd::Unit::Em));
+
+  EXPECT_THAT(result, CircleHas(AllOf(CxEq(0.0, Lengthd::Unit::None),  //
+                                      CyEq(0.0, Lengthd::Unit::None),  //
+                                      REq(0.0, Lengthd::Unit::None))));
+}
+
+}  // namespace donner::svg

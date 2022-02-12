@@ -33,6 +33,7 @@ public:
   }
   static constexpr Specificity Important() { return Specificity(SpecialType::Important); }
   static constexpr Specificity StyleAttribute() { return Specificity(SpecialType::StyleAttribute); }
+  static constexpr Specificity Override() { return Specificity(SpecialType::Override); }
 
   auto operator<=>(const Specificity& other) const {
     if (special_ != other.special_) {
@@ -53,7 +54,12 @@ public:
 
 private:
   // The order is important here, since operator<=> considers later enum values to be greater.
-  enum class SpecialType { None, StyleAttribute, Important };
+  enum class SpecialType {
+    None,
+    StyleAttribute,
+    Important,
+    Override  //<! Values set from C++ API.
+  };
 
   constexpr Specificity(uint32_t a, uint32_t b, uint32_t c) : a_(a), b_(b), c_(c) {}
   constexpr Specificity(SpecialType special) : special_(special) {}

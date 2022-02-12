@@ -26,7 +26,7 @@ namespace donner {
 namespace {
 
 using SVGElements = entt::type_list<  //
-    SVGCircleElement,                 //
+    svg::SVGCircleElement,            //
     SVGDefsElement,                   //
     SVGPathElement,                   //
     SVGRectElement,                   //
@@ -144,31 +144,6 @@ std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& conte
       ParseError err;
       err.reason = "Invalid pathLength value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-    }
-  } else {
-    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
-  }
-
-  return std::nullopt;
-}
-
-template <>
-std::optional<ParseError> ParseAttribute<SVGCircleElement>(XMLParserContext& context,
-                                                           SVGCircleElement element,
-                                                           std::string_view namespacePrefix,
-                                                           std::string_view name,
-                                                           std::string_view value) {
-  if (name == "cx") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setCx(length.value());
-    }
-  } else if (name == "cy") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setCy(length.value());
-    }
-  } else if (name == "r") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setR(length.value());
     }
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);

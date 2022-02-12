@@ -1,13 +1,18 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
     name = "properties",
     srcs = [
         "paint_server.cc",
+        "presentation_attribute_parsing.cc",
+        "property_parsing.cc",
         "property_registry.cc",
     ],
     hdrs = [
         "paint_server.h",
+        "presentation_attribute_parsing.h",
+        "property.h",
+        "property_parsing.h",
         "property_registry.h",
     ],
     visibility = ["//src/svg:__subpackages__"],
@@ -15,20 +20,7 @@ cc_library(
         "//src/base/parser",
         "//src/css",
         "//src/css/parser",
+        "//src/svg/components:registry",
         "@frozen",
-    ],
-)
-
-cc_test(
-    name = "properties_tests",
-    srcs = [
-        "tests/paint_server_tests.cc",
-        "tests/property_registry_tests.cc",
-    ],
-    deps = [
-        ":properties",
-        "//src/base:base_test_utils",
-        "//src/base/parser:parser_test_utils",
-        "@com_google_gtest//:gtest_main",
     ],
 )

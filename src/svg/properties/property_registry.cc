@@ -2,11 +2,14 @@
 
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
+#include <frozen/unordered_set.h>
 
 #include "src/base/parser/length_parser.h"
 #include "src/css/parser/color_parser.h"
 #include "src/css/parser/declaration_list_parser.h"
 #include "src/css/parser/value_parser.h"
+#include "src/svg/properties/presentation_attribute_parsing.h"
+#include "src/svg/properties/property_parsing.h"
 
 namespace donner::svg {
 
@@ -27,28 +30,6 @@ std::span<const css::ComponentValue> trimWhitespace(
   }
 
   return components;
-}
-
-template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
-std::optional<ParseError> parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
-                                PropertyRegistry::Property<T, kCascade>* destination) {
-  // If the property is set to a built-in keyword, such as "inherit", the property has already been
-  // parsed so we can just set based on the value of explicitState.
-  if (params.explicitState != PropertyState::NotSet) {
-    destination->set(params.explicitState, params.specificity);
-    return std::nullopt;
-  }
-
-  ParseResult<T> result = callbackFn(params);
-  if (result.hasError()) {
-    // If there is a parse error, the CSS specification requires user agents to ignore the
-    // declaration, and not modify the existing value.
-    // See https://www.w3.org/TR/CSS2/syndata.html#ignore.
-    return std::move(result.error());
-  }
-
-  destination->set(std::move(result.result()), params.specificity);
-  return std::nullopt;
 }
 
 ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
@@ -144,34 +125,6 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
   ParseError err;
   err.reason = "Invalid paint server";
   err.offset = firstComponent.sourceOffset();
-  return err;
-}
-
-ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> components,
-                                           bool allowUserUnits) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
-      if (!dimension->suffixUnit) {
-        ParseError err;
-        err.reason = "Invalid unit on length";
-        err.offset = component.sourceOffset();
-        return err;
-      } else {
-        return Lengthd(dimension->value, dimension->suffixUnit.value());
-      }
-    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
-      return Lengthd(percentage->value, Lengthd::Unit::Percent);
-    } else if (allowUserUnits) {
-      if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-        return Lengthd(number->value, Lengthd::Unit::None);
-      }
-    }
-  }
-
-  ParseError err;
-  err.reason = "Invalid length or percentage";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
@@ -293,10 +246,17 @@ ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
   return result;
 }
 
+// List of valid presentation attributes from
+// https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
+static constexpr frozen::unordered_set<frozen::string, 12> kValidPresentationAttributes = {
+    "cx", "cy", "height", "width", "x", "y", "r", "rx", "ry", "d", "fill", "transform",
+    // The properties which may apply to any element in the SVG namespace are omitted.
+};
+
 static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) {
              return css::ColorParser::Parse(params.components);
@@ -305,28 +265,28 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
      }},  //
     {"fill",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
            &registry.fill);
      }},  //
     {"stroke",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) { return ParsePaintServer(params.components); },
            &registry.stroke);
      }},  //
     {"stroke-opacity",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components); },
            &registry.strokeOpacity);
      }},  //
     {"stroke-width",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) {
              return ParseLengthPercentage(params.components, params.allowUserUnits);
@@ -335,7 +295,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
      }},  //
     {"stroke-linecap",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) {
              return ParseStrokeLinecap(params.components);
@@ -344,7 +304,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
      }},  //
     {"stroke-linejoin",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) {
              return ParseStrokeLinejoin(params.components);
@@ -353,14 +313,14 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
      }},  //
     {"stroke-miterlimit",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) { return ParseNumber(params.components); },
            &registry.strokeMiterlimit);
      }},  //
     {"stroke-dasharray",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) {
              return ParseStrokeDasharray(params.components);
@@ -369,7 +329,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
      }},  //
     {"stroke-dashoffset",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return parse(
+       return Parse(
            params,
            [](const PropertyParseFnParams& params) {
              return ParseLengthPercentage(params.components, params.allowUserUnits);
@@ -380,8 +340,8 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
 
 }  // namespace
 
-std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
-                                                          css::Specificity specificity) {
+PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
+                                          css::Specificity specificity) {
   PropertyParseFnParams params;
   // Note that we only need to trim the trailing whitespace here, but trimWhitespace actually trims
   // both.
@@ -402,15 +362,29 @@ std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration
 
   params.specificity = declaration.important ? css::Specificity::Important() : specificity;
 
-  const auto it = kProperties.find(frozen::string(declaration.name));
+  return params;
+}
+
+std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
+                                                          css::Specificity specificity) {
+  const frozen::string frozenName(declaration.name);
+  const auto it = kProperties.find(frozenName);
   if (it != kProperties.end()) {
-    return it->second(*this, params);
+    return it->second(*this, CreateParseFnParams(declaration, specificity));
   }
 
-  ParseError err;
-  err.reason = "Unknown property '" + declaration.name + "'";
-  err.offset = declaration.sourceOffset;
-  return err;
+  // Only store unparsed properties if they are valid presentation attribute names.
+  if (kValidPresentationAttributes.count(frozenName) != 0) {
+    unparsedProperties.emplace(
+        std::make_pair(declaration.name, UnparsedProperty{declaration, specificity}));
+  } else {
+    ParseError err;
+    err.reason = "Unknown property '" + declaration.name + "'";
+    err.offset = declaration.sourceOffset;
+    return err;
+  }
+
+  return std::nullopt;
 }
 
 void PropertyRegistry::parseStyle(std::string_view str) {
@@ -421,7 +395,28 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::string_view value) {
+namespace {
+
+template <typename ReturnType, typename FnT>
+ReturnType toConstexpr(ElementType type, FnT fn) {
+  switch (type) {
+    case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());
+    case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
+    case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
+    case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
+    case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
+    case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());
+    case ElementType::Unknown:
+      return fn(std::integral_constant<ElementType, ElementType::Unknown>());
+    case ElementType::Use: return fn(std::integral_constant<ElementType, ElementType::Use>());
+  };
+}
+
+}  // namespace
+
+bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::string_view value,
+                                                  std::optional<ElementType> type,
+                                                  EntityHandle handle) {
   /* TODO: The SVG2 spec says the name may be similar to the attribute, not necessarily the same.
    * There may need to be a second mapping.
    */
@@ -433,6 +428,9 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
    * In practice, we should propagate an "allowUserUnits" flag. "User units" are specified as being
    * equivalent to pixels.
    */
+  assert((!type.has_value() || (type.has_value() && handle != EntityHandle())) &&
+         "If a type is specified, entity handle must be set");
+
   const auto it = kProperties.find(frozen::string(name));
   if (it != kProperties.end()) {
     std::vector<css::ComponentValue> components = css::ValueParser::Parse(value);
@@ -451,7 +449,29 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
     return true;
   }
 
-  return false;  // Attribute was not supported.
+  if (!type.has_value()) {
+    // Stop processing if there is not an element type.
+    return false;
+  }
+
+  std::vector<css::ComponentValue> components = css::ValueParser::Parse(value);
+
+  PropertyParseFnParams params;
+  // Trim both leading and trailing whitespace.
+  params.components = trimWhitespace(components);
+  params.specificity = kSpecificityPresentationAttribute;
+  params.allowUserUnits = true;
+
+  ParseResult<bool> result = toConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
+    return ParsePresentationAttribute<elementType()>(handle, name, params);
+  });
+
+  if (result.hasError()) {
+    std::cerr << "Error parsing " << name << " property: " << result.error() << std::endl;
+    return false;
+  } else {
+    return result.result();
+  }
 }
 
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {

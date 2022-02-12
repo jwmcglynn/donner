@@ -4,6 +4,7 @@
 
 #include "src/base/length.h"
 #include "src/svg/components/computed_path_component.h"
+#include "src/svg/properties/presentation_attribute_parsing.h"
 
 namespace donner {
 
@@ -19,19 +20,7 @@ struct RectComponent {
   std::optional<Lengthd> ry;
 
   void computePath(ComputedPathComponent& component, const Boxd& viewbox,
-                   const FontMetrics& fontMetrics) {
-    const Vector2d pos(x.toPixels(viewbox, fontMetrics), y.toPixels(viewbox, fontMetrics));
-    const Vector2d size(width.toPixels(viewbox, fontMetrics),
-                        height.toPixels(viewbox, fontMetrics));
-
-    component.setSpline(PathSpline::Builder()
-                            .moveTo(pos)
-                            .lineTo(pos + Vector2d(size.x, 0))
-                            .lineTo(pos + size)
-                            .lineTo(pos + Vector2d(0, size.y))
-                            .closePath()
-                            .build());
-  }
+                   const FontMetrics& fontMetrics);
 };
 
 }  // namespace donner

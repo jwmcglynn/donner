@@ -167,7 +167,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/src/svg/properties/properties_tests",
+      "pattern": "bazel-bin/src/svg/properties/tests/properties_tests",
       "runTask": {
         "before": [
           "properties_tests"
