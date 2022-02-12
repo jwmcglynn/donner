@@ -306,16 +306,16 @@ TEST(TransformParser, SkewY_ParseErrors) {
 
 TEST(TransformParser, MultiplicationOrder) {
   {
-    const Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5) *
-                         Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
+    const Transformd t = Transformd::Translate({-50, 100}) * Transformd::Scale({2, 2}) *
+                         Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
 
     EXPECT_THAT(TransformParser::Parse("rotate(45) scale(2) translate(-50, 100)"),
                 ParseResultIs(TransformEq(t)));
   }
 
   {
-    const Transformd t = Transformd::Translate({80, 80}) * Transformd::Scale({1.5, 1.5}) *
-                         Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
+    const Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5) *
+                         Transformd::Scale({1.5, 1.5}) * Transformd::Translate({80, 80});
 
     EXPECT_THAT(TransformParser::Parse("translate(80, 80), scale(1.5, 1.5) \t,\n rotate(45) "),
                 ParseResultIs(TransformEq(t)));

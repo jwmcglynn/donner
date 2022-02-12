@@ -36,7 +36,7 @@ public:
     Builder& lineTo(const Vector2d& point);
 
     /**
-     * Draw a bezier curve from the current point to @p point3, using @p point1 and @p point2 as
+     * Draw a bezier curve from the current point to \p point3, using \p point1 and \p point2 as
      * anchors.
      *
      * @param point1 First control point.
@@ -52,11 +52,11 @@ public:
      * @param radius Radius before rotation.
      * @param rotationRadians Rotation to the x-axis of the ellipse formed by the arc.
      * @param largeArcFlag false for arc length <= 180, true for arc >= 180.
-     * @param sweep false for negative angle, true for positive angle.
+     * @param sweepFlag false for negative angle, true for positive angle.
      * @param endPoint End point.
      */
     Builder& arcTo(const Vector2d& radius, double rotationRadians, bool largeArcFlag,
-                   bool sweep_flag, const Vector2d& endPoint);
+                   bool sweepFlag, const Vector2d& endPoint);
 
     /**
      * Close the path.

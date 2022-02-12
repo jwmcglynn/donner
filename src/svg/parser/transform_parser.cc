@@ -38,7 +38,7 @@ public:
           return std::move(error.value());
         }
 
-        transform *= t;
+        transform = t * transform;
 
       } else if (func == "translate") {
         // Accept either 1 or 2 numbers.
@@ -50,7 +50,7 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, so Ty is implicitly 0.0.
-          transform *= Transformd::Translate(Vector2d(maybeTx.result(), 0.0));
+          transform = Transformd::Translate(Vector2d(maybeTx.result(), 0.0)) * transform;
         } else {
           skipCommaWhitespace();
 
@@ -59,7 +59,8 @@ public:
             return std::move(maybeTy.error());
           }
 
-          transform *= Transformd::Translate(Vector2d(maybeTx.result(), maybeTy.result()));
+          transform =
+              Transformd::Translate(Vector2d(maybeTx.result(), maybeTy.result())) * transform;
         }
 
       } else if (func == "scale") {
@@ -72,7 +73,7 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, use Sx for both x and y.
-          transform *= Transformd::Scale(Vector2d(maybeSx.result(), maybeSx.result()));
+          transform = Transformd::Scale(Vector2d(maybeSx.result(), maybeSx.result())) * transform;
         } else {
           skipCommaWhitespace();
 
@@ -81,7 +82,7 @@ public:
             return std::move(maybeSy.error());
           }
 
-          transform *= Transformd::Scale(Vector2d(maybeSx.result(), maybeSy.result()));
+          transform = Transformd::Scale(Vector2d(maybeSx.result(), maybeSy.result())) * transform;
         }
 
       } else if (func == "rotate") {
@@ -94,8 +95,9 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, rotation around origin.
-          transform *= Transformd::Rotation(maybeRotationDegrees.result() *
-                                            MathConstants<double>::kDegToRad);
+          transform = Transformd::Rotation(maybeRotationDegrees.result() *
+                                           MathConstants<double>::kDegToRad) *
+                      transform;
         } else {
           skipCommaWhitespace();
 
@@ -105,10 +107,10 @@ public:
           }
 
           const Vector2d offset(numbers[0], numbers[1]);
-          transform *= Transformd::Translate(-offset) *
-                       Transformd::Rotation(maybeRotationDegrees.result() *
-                                            MathConstants<double>::kDegToRad) *
-                       Transformd::Translate(offset);
+          transform = Transformd::Translate(-offset) *
+                      Transformd::Rotation(maybeRotationDegrees.result() *
+                                           MathConstants<double>::kDegToRad) *
+                      Transformd::Translate(offset) * transform;
         }
 
       } else if (func == "skewX") {
@@ -117,7 +119,8 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform *= Transformd::SkewX(maybeNumber.result() * MathConstants<double>::kDegToRad);
+        transform =
+            Transformd::SkewX(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
 
       } else if (func == "skewY") {
         auto maybeNumber = readNumber();
@@ -125,7 +128,8 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform *= Transformd::SkewY(maybeNumber.result() * MathConstants<double>::kDegToRad);
+        transform =
+            Transformd::SkewY(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
 
       } else {
         ParseError err;
