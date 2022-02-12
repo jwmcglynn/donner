@@ -2,7 +2,7 @@
 
 #include "src/svg/components/registry.h"
 
-namespace donner {
+namespace donner::svg {
 
 /**
  * A component attached to entities in the shadow tree, indicating which light entity they are
@@ -12,4 +12,4 @@ struct ShadowEntityComponent {
   Entity lightEntity;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

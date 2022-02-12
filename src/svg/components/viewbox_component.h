@@ -6,7 +6,7 @@
 #include "src/base/transform.h"
 #include "src/svg/core/preserve_aspect_ratio.h"
 
-namespace donner {
+namespace donner::svg {
 
 struct ViewboxComponent {
   std::optional<Boxd> viewbox;
@@ -21,4 +21,4 @@ struct ViewboxComponent {
   Transformd computeTransform(Boxd size) const;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -1,9 +1,9 @@
 #pragma once
 
-namespace donner {
+namespace donner::svg {
 
 struct RenderingBehaviorComponent {
   bool nonrenderable = false;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

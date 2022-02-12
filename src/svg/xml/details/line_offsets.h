@@ -7,7 +7,7 @@
 
 #include "src/base/utils.h"
 
-namespace donner {
+namespace donner::svg {
 
 class LineOffsets {
 public:
@@ -65,4 +65,4 @@ private:
   std::vector<size_t> offsets_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

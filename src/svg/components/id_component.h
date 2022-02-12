@@ -2,10 +2,10 @@
 
 #include "src/base/rc_string.h"
 
-namespace donner {
+namespace donner::svg {
 
 struct IdComponent {
   RcString id;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

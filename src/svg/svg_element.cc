@@ -11,7 +11,7 @@
 #include "src/svg/components/tree_component.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 namespace {
 
@@ -200,7 +200,7 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
   return querySelectorSearch(selector, *this);
 }
 
-const svg::PropertyRegistry& SVGElement::getComputedStyle() const {
+const PropertyRegistry& SVGElement::getComputedStyle() const {
   auto& computedStyle = registry_.get().get_or_emplace<ComputedStyleComponent>(entity_);
   computedStyle.computeProperties(registry_.get(), entity_);
 
@@ -213,4 +213,4 @@ Entity SVGElement::CreateEntity(Registry& registry, RcString typeString, Element
   return entity;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

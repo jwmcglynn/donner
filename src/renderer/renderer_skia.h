@@ -17,7 +17,7 @@ public:
   RendererSkia(int defaultWidth, int defaultHeight);
   ~RendererSkia();
 
-  void draw(SVGDocument& document);
+  void draw(svg::SVGDocument& document);
 
   bool save(const char* filename);
 
@@ -26,7 +26,7 @@ public:
   int height() const { return bitmap_.height(); }
 
 private:
-  void draw(Registry& registry, Entity entity);
+  void draw(svg::Registry& registry, svg::Entity entity);
 
   int defaultWidth_;
   int defaultHeight_;

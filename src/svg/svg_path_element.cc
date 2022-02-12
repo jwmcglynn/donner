@@ -4,7 +4,7 @@
 #include "src/svg/components/path_component.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGPathElement SVGPathElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -35,4 +35,4 @@ void SVGPathElement::setPathLength(std::optional<double> value) {
   registry_.get().get_or_emplace<ComputedPathComponent>(entity_).userPathLength = value;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

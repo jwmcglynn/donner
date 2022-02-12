@@ -17,6 +17,8 @@
 
 namespace donner {
 
+using namespace svg;
+
 namespace {
 
 // The maximum size supported for a rendered image.
@@ -138,7 +140,7 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
                                   bitmap_.computeByteSize());
 }
 
-void RendererSkia::draw(Registry& registry, Entity root) {
+void RendererSkia::draw(svg::Registry& registry, svg::Entity root) {
   std::function<void(Transformd, Entity)> drawEntity = [&](Transformd transform,
                                                            Entity treeEntity) {
     const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);

@@ -4,7 +4,7 @@
 
 #include "src/base/parser/number_parser.h"
 
-namespace donner {
+namespace donner::svg {
 
 // Note that this doesn't inherit from ParserBase, since it has a slightly different interpretation
 // of isWhitespace per the spec.
@@ -473,4 +473,4 @@ ParseResult<PathSpline> PathParser::Parse(std::string_view d) {
   return parser.parse();
 }
 
-}  // namespace donner
+}  // namespace donner::svg

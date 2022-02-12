@@ -6,7 +6,7 @@
 
 using testing::ElementsAre;
 
-namespace donner {
+namespace donner::svg {
 
 TEST(LineOffsets, NoLines) {
   {
@@ -104,4 +104,4 @@ TEST(LineOffsets, LineOffsetErrors) {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

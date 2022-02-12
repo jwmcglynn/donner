@@ -16,7 +16,7 @@ using testing::Lt;
 using testing::Matcher;
 using testing::SizeIs;
 
-namespace donner {
+namespace donner::svg {
 
 using Command = PathSpline::Command;
 using CommandType = PathSpline::CommandType;
@@ -684,4 +684,4 @@ TEST(PathSpline, NormalAt) {
   EXPECT_EQ(spline.normalAt(9, 1.0), Vector2(0.0, 0.0));
 }
 
-}  // namespace donner
+}  // namespace donner::svg

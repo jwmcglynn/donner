@@ -9,7 +9,7 @@
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 
-namespace donner {
+namespace donner::svg {
 
 class TreeComponentTests : public testing::Test {
 protected:
@@ -320,4 +320,4 @@ TEST_F(TreeComponentTests, TypeString) {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

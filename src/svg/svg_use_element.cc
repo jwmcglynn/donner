@@ -5,7 +5,7 @@
 #include "src/svg/components/sized_element_component.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGUseElement SVGUseElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -62,4 +62,4 @@ std::optional<Lengthd> SVGUseElement::height() const {
   return component ? component->height : std::nullopt;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

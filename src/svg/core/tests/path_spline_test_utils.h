@@ -6,7 +6,7 @@
 
 #include "src/svg/core/path_spline.h"
 
-namespace donner {
+namespace donner::svg {
 
 bool operator==(const PathSpline::Command& lhs, const PathSpline::Command& rhs);
 
@@ -26,4 +26,4 @@ MATCHER_P2(PointsAndCommandsAre, pointsMatcher, commandsMatcher, "") {
          testing::ExplainMatchResult(commandsMatcher, arg.commands(), result_listener);
 }
 
-}  // namespace donner
+}  // namespace donner::svg

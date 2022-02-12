@@ -4,7 +4,7 @@
 #include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/properties/property_registry.h"
 
-namespace donner {
+namespace donner::svg {
 
 struct StylesheetComponent {
   css::Stylesheet stylesheet;
@@ -18,4 +18,4 @@ struct StylesheetComponent {
   void parseStylesheet(std::string_view str) { stylesheet = css::StylesheetParser::Parse(str); }
 };
 
-}  // namespace donner
+}  // namespace donner::svg

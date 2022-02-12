@@ -5,7 +5,7 @@
 #include "src/base/length.h"
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGRectElement : public SVGGraphicsElement {
 protected:
@@ -32,4 +32,4 @@ public:
   std::optional<Lengthd> ry() const;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

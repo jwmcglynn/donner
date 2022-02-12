@@ -9,7 +9,7 @@
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
 
-namespace donner {
+namespace donner::svg {
 
 /**
  * Stores an offset/size for elements that are positioned with x/y/width/height attributes with
@@ -57,4 +57,4 @@ struct SizedElementComponent {
   }
 };
 
-}  // namespace donner
+}  // namespace donner::svg

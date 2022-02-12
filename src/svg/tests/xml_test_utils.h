@@ -5,7 +5,7 @@
 #include "src/svg/svg_document.h"
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGDocument instantiateSubtree(std::string_view str);
 
@@ -27,4 +27,4 @@ ParsedFragment<ElementT> instantiateSubtreeElementAs(std::string_view str) {
   return ParsedFragment<ElementT>{std::move(result.document), result.element.cast<ElementT>()};
 };
 
-}  // namespace donner
+}  // namespace donner::svg

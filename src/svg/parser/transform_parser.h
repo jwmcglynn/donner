@@ -5,7 +5,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/base/transform.h"
 
-namespace donner {
+namespace donner::svg {
 
 class TransformParser {
 public:
@@ -19,4 +19,4 @@ public:
   static ParseResult<Transformd> Parse(std::string_view str);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

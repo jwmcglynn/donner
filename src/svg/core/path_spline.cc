@@ -3,7 +3,7 @@
 #include "src/base/math_utils.h"
 #include "src/base/utils.h"
 
-namespace donner {
+namespace donner::svg {
 
 Boxd PathSpline::bounds() const {
   UTILS_RELEASE_ASSERT(!empty());
@@ -554,4 +554,4 @@ PathSpline PathSpline::Builder::build() {
 PathSpline::PathSpline(std::vector<Vector2d>&& points, std::vector<Command>&& commands)
     : points_(std::move(points)), commands_(std::move(commands)) {}
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -9,7 +9,7 @@ namespace donner {
 
 class RendererUtils {
 public:
-  static void prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize);
+  static void prepareDocumentForRendering(svg::SVGDocument& document, Vector2d defaultSize);
 
   /**
    * Write raw RGBA pixel data to a PNG file.

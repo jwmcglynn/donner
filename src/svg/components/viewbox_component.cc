@@ -1,6 +1,6 @@
 #include "src/svg/components/viewbox_component.h"
 
-namespace donner {
+namespace donner::svg {
 
 Transformd ViewboxComponent::computeTransform(Boxd size) const {
   if (!viewbox) {
@@ -25,4 +25,4 @@ Transformd ViewboxComponent::computeTransform(Boxd size) const {
          Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
 }
 
-}  // namespace donner
+}  // namespace donner::svg

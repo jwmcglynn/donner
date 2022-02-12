@@ -5,7 +5,7 @@
 #include "src/svg/components/id_component.h"
 #include "src/svg/components/registry.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGDocument;
 
@@ -32,4 +32,4 @@ private:
   }
 };
 
-}  // namespace donner
+}  // namespace donner::svg

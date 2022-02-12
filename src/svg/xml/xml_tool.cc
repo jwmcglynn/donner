@@ -6,7 +6,7 @@
 #include "src/svg/svg_element.h"
 #include "src/svg/xml/xml_parser.h"
 
-namespace donner {
+namespace donner::svg {
 
 void DumpTree(SVGElement element, int depth) {
   for (int i = 0; i < depth; ++i) {
@@ -67,4 +67,4 @@ extern "C" int main(int argc, char* argv[]) {
   return 0;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

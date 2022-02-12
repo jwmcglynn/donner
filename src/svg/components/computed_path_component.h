@@ -6,7 +6,7 @@
 #include "src/base/parser/parse_error.h"
 #include "src/svg/core/path_spline.h"
 
-namespace donner {
+namespace donner::svg {
 
 class ComputedPathComponent {
 public:
@@ -21,4 +21,4 @@ private:
   std::optional<PathSpline> spline_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

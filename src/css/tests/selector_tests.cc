@@ -17,9 +17,11 @@ struct FakeElementData {
 };
 
 struct FakeElement {
-  FakeElement(Registry& registry, Entity entity) : registry_(registry), entity_(entity) {}
+  FakeElement(svg::Registry& registry, svg::Entity entity) : registry_(registry), entity_(entity) {}
 
-  RcString typeString() const { return registry_.get().get<TreeComponent>(entity_).typeString(); }
+  RcString typeString() const {
+    return registry_.get().get<svg::TreeComponent>(entity_).typeString();
+  }
   RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
   RcString className() const {
     return registry_.get().get_or_emplace<FakeElementData>(entity_).className;
@@ -36,28 +38,28 @@ struct FakeElement {
   }
 
   std::optional<FakeElement> parentElement() {
-    auto& tree = registry_.get().get<TreeComponent>(entity_);
+    auto& tree = registry_.get().get<svg::TreeComponent>(entity_);
     return tree.parent() != entt::null ? std::make_optional(FakeElement(registry_, tree.parent()))
                                        : std::nullopt;
   }
 
   std::optional<FakeElement> previousSibling() {
-    auto& tree = registry_.get().get<TreeComponent>(entity_);
+    auto& tree = registry_.get().get<svg::TreeComponent>(entity_);
     return tree.previousSibling() != entt::null
                ? std::make_optional(FakeElement(registry_, tree.previousSibling()))
                : std::nullopt;
   }
 
 private:
-  std::reference_wrapper<Registry> registry_;
-  Entity entity_;
+  std::reference_wrapper<svg::Registry> registry_;
+  svg::Entity entity_;
 };
 
 class SelectorTests : public testing::Test {
 protected:
-  Entity createEntity(std::string_view typeString) {
+  svg::Entity createEntity(std::string_view typeString) {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, RcString(typeString));
+    registry_.emplace<svg::TreeComponent>(entity, svg::ElementType::Unknown, RcString(typeString));
     return entity;
   }
 
@@ -71,18 +73,18 @@ protected:
     return maybeSelector.result().matches(element).matched;
   }
 
-  void setId(Entity entity, std::string_view id) {
+  void setId(svg::Entity entity, std::string_view id) {
     registry_.get_or_emplace<FakeElementData>(entity).id = id;
   }
 
-  void setClassName(Entity entity, std::string_view className) {
+  void setClassName(svg::Entity entity, std::string_view className) {
     registry_.get_or_emplace<FakeElementData>(entity).className = className;
   }
 
-  FakeElement element(Entity entity) { return FakeElement(registry_, entity); }
-  TreeComponent& tree(Entity entity) { return registry_.get<TreeComponent>(entity); }
+  FakeElement element(svg::Entity entity) { return FakeElement(registry_, entity); }
+  svg::TreeComponent& tree(svg::Entity entity) { return registry_.get<svg::TreeComponent>(entity); }
 
-  Registry registry_;
+  svg::Registry registry_;
 };
 
 TEST_F(SelectorTests, TypeMatch) {

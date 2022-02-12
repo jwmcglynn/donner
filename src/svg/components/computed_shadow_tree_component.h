@@ -11,7 +11,7 @@
 
 // TODO: Automatically delete ComputedShadowTreeComponent when ShadowTreeComponent is removed.
 
-namespace donner {
+namespace donner::svg {
 
 struct ComputedShadowTreeComponent {
   ComputedShadowTreeComponent() {}
@@ -81,4 +81,4 @@ private:
   Entity lightRoot_ = entt::null;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

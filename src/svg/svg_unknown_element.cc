@@ -2,11 +2,11 @@
 
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGUnknownElement SVGUnknownElement::Create(SVGDocument& document, RcString typeString) {
   Registry& registry = document.registry();
   return SVGUnknownElement(registry, CreateEntity(registry, std::move(typeString), Type));
 }
 
-}  // namespace donner
+}  // namespace donner::svg

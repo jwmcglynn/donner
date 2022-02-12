@@ -4,7 +4,7 @@
 #include <ostream>
 #include <string_view>
 
-namespace donner {
+namespace donner::svg {
 
 enum class Entity : std::uint32_t {};
 
@@ -40,4 +40,4 @@ protected:
   }
 };
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -4,7 +4,7 @@
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/registry.h"
 
-namespace donner {
+namespace donner::svg {
 
 class ShadowTreeComponent {
 public:
@@ -28,4 +28,4 @@ private:
   RcString href_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

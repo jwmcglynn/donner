@@ -3,7 +3,7 @@
 #include "src/base/rc_string.h"
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGStyleElement : public SVGElement {
 protected:
@@ -21,4 +21,4 @@ public:
   bool isCssType() const;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

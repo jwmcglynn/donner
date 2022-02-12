@@ -10,9 +10,12 @@
 #include "src/svg/properties/property_registry.h"
 
 namespace donner {
+struct ParseError;
+}
+
+namespace donner::svg {
 
 class SVGDocument;
-struct ParseError;
 
 class SVGElement {
 protected:
@@ -113,7 +116,7 @@ public:
 
   std::optional<SVGElement> querySelector(std::string_view selector);
 
-  const svg::PropertyRegistry& getComputedStyle() const;
+  const PropertyRegistry& getComputedStyle() const;
 
 protected:
   static Entity CreateEntity(Registry& registry, RcString typeString, ElementType Type);
@@ -129,4 +132,4 @@ protected:
 
 class SVGGeometryElement : public SVGGraphicsElement {};
 
-}  // namespace donner
+}  // namespace donner::svg

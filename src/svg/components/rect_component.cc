@@ -2,7 +2,7 @@
 
 #include "src/svg/parser/path_parser.h"
 
-namespace donner {
+namespace donner::svg {
 
 void RectComponent::computePath(ComputedPathComponent& component, const Boxd& viewbox,
                                 const FontMetrics& fontMetrics) {
@@ -19,10 +19,10 @@ void RectComponent::computePath(ComputedPathComponent& component, const Boxd& vi
 }
 
 template <>
-ParseResult<bool> svg::ParsePresentationAttribute<ElementType::Rect>(
+ParseResult<bool> ParsePresentationAttribute<ElementType::Rect>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   // TODO
   return false;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -7,7 +7,7 @@
 #include "src/svg/core/preserve_aspect_ratio.h"
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGSVGElement : public SVGElement {
   friend class SVGDocument;
@@ -36,4 +36,4 @@ public:
   std::optional<PreserveAspectRatio> preserveAspectRatio() const;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

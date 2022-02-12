@@ -2,7 +2,7 @@
 
 #include "src/base/utils.h"
 
-namespace donner {
+namespace donner::svg {
 
 void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity referenceNode) {
   assert(newNode != entt::null && "newNode is null");
@@ -134,4 +134,4 @@ void TreeComponent::remove(Registry& registry) {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

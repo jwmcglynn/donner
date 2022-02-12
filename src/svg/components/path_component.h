@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace donner {
+namespace donner::svg {
 
 class PathComponent {
 public:
@@ -13,4 +13,4 @@ private:
   std::string d_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -3,7 +3,7 @@
 #include "src/svg/parser/path_parser.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner {
+namespace donner::svg {
 
 std::string_view PathComponent::d() const {
   return d_;
@@ -14,10 +14,10 @@ void PathComponent::setD(std::string_view d) {
 }
 
 template <>
-ParseResult<bool> svg::ParsePresentationAttribute<ElementType::Path>(
+ParseResult<bool> ParsePresentationAttribute<ElementType::Path>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   // TODO
   return false;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

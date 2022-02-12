@@ -5,7 +5,7 @@
 #include "src/base/tests/base_test_utils.h"
 #include "src/svg/parser/transform_parser.h"
 
-namespace donner {
+namespace donner::svg {
 
 TEST(TransformParser, Empty) {
   EXPECT_THAT(TransformParser::Parse(""), ParseResultIs(TransformIsIdentity()));
@@ -322,4 +322,4 @@ TEST(TransformParser, MultiplicationOrder) {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -2,7 +2,7 @@
 
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGPathElement : public SVGGraphicsElement {
 protected:
@@ -21,4 +21,4 @@ public:
   void setPathLength(std::optional<double> value);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

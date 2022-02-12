@@ -5,7 +5,7 @@
 #include "src/base/box.h"
 #include "src/base/vector2.h"
 
-namespace donner {
+namespace donner::svg {
 
 class PathSpline {
 public:
@@ -161,4 +161,4 @@ private:
   std::vector<Command> commands_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

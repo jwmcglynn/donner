@@ -6,7 +6,7 @@
 
 using testing::Optional;
 
-namespace donner {
+namespace donner::svg {
 
 using css::Color;
 using css::RGBA;
@@ -61,4 +61,4 @@ TEST(ElementStyleTests, StyleInheritance) {
               Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0xFF, 0, 0xFF))))));
 }
 
-}  // namespace donner
+}  // namespace donner::svg

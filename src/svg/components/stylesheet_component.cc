@@ -2,13 +2,13 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner {
+namespace donner::svg {
 
 template <>
-ParseResult<bool> svg::ParsePresentationAttribute<ElementType::Style>(
+ParseResult<bool> ParsePresentationAttribute<ElementType::Style>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   // TODO
   return false;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -2,7 +2,7 @@
 
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGUnknownElement : public SVGGraphicsElement {
 protected:
@@ -14,4 +14,4 @@ public:
   static SVGUnknownElement Create(SVGDocument& document, RcString typeString);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

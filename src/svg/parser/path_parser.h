@@ -5,7 +5,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/svg/core/path_spline.h"
 
-namespace donner {
+namespace donner::svg {
 
 class PathParser {
 public:
@@ -23,4 +23,4 @@ public:
   static ParseResult<PathSpline> Parse(std::string_view d);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

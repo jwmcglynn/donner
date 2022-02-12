@@ -1,6 +1,6 @@
 #pragma once
 
-namespace donner {
+namespace donner::svg {
 
 class PreserveAspectRatio {
 public:
@@ -54,4 +54,4 @@ public:
   }
 };
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -6,7 +6,7 @@
 #include "src/svg/components/computed_path_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner {
+namespace donner::svg {
 
 /**
  * Parameters for a <rect> element.
@@ -23,4 +23,4 @@ struct RectComponent {
                    const FontMetrics& fontMetrics);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

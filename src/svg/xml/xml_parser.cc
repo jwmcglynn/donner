@@ -21,12 +21,12 @@
 #include "src/svg/svg_use_element.h"
 #include "src/svg/xml/details/xml_parser_context.h"
 
-namespace donner {
+namespace donner::svg {
 
 namespace {
 
 using SVGElements = entt::type_list<  //
-    svg::SVGCircleElement,            //
+    SVGCircleElement,                 //
     SVGDefsElement,                   //
     SVGPathElement,                   //
     SVGRectElement,                   //
@@ -471,4 +471,4 @@ ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
   return svgDocument;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -5,7 +5,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/svg/core/preserve_aspect_ratio.h"
 
-namespace donner {
+namespace donner::svg {
 
 class PreserveAspectRatioParser {
 public:
@@ -30,4 +30,4 @@ public:
   static ParseResult<PreserveAspectRatio> Parse(std::string_view str);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

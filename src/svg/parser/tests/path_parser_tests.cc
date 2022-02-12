@@ -10,7 +10,7 @@ using testing::AllOf;
 using testing::ElementsAre;
 using testing::HasSubstr;
 
-namespace donner {
+namespace donner::svg {
 
 using Command = PathSpline::Command;
 using CommandType = PathSpline::CommandType;
@@ -677,4 +677,4 @@ TEST(PathParser, NoWhitespace) {
                       Command{CommandType::LineTo, 4}, Command{CommandType::ClosePath, 0}))));
 }
 
-}  // namespace donner
+}  // namespace donner::svg

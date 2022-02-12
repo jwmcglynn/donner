@@ -12,7 +12,7 @@ MATCHER_P3(ParseWarningIs, line, offset, errorMessageMatcher, "") {
          arg.line == line && arg.offset == offset;
 }
 
-namespace donner {
+namespace donner::svg {
 
 namespace {
 static std::span<char> spanFromString(std::string& data) {
@@ -155,4 +155,4 @@ TEST(XmlParser, MismatchedNamespace) {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

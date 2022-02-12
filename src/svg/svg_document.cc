@@ -4,7 +4,7 @@
 #include "src/svg/components/tree_component.h"
 #include "src/svg/svg_svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGDocument::SVGDocument() : registry_(std::make_unique<Registry>()) {
   registry_->set<DocumentContext>(*this, *registry_);
@@ -20,4 +20,4 @@ bool SVGDocument::operator==(const SVGDocument& other) const {
   return &registry_->ctx<const DocumentContext>() == &other.registry_->ctx<const DocumentContext>();
 }
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -4,10 +4,10 @@
 #include "src/svg/components/tree_component.h"
 #include "src/svg/properties/property_registry.h"
 
-namespace donner {
+namespace donner::svg {
 
 struct StyleComponent : public HandleOfMixin<StyleComponent> {
-  svg::PropertyRegistry properties;
+  PropertyRegistry properties;
 
   void setStyle(std::string_view style) { properties.parseStyle(style); }
   bool trySetPresentationAttribute(Registry& registry, std::string_view name,
@@ -18,4 +18,4 @@ struct StyleComponent : public HandleOfMixin<StyleComponent> {
   }
 };
 
-}  // namespace donner
+}  // namespace donner::svg

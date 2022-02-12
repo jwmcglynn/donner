@@ -11,6 +11,8 @@
 
 namespace donner {
 
+using namespace svg;
+
 namespace {
 
 std::string escapeFilename(std::string filename) {

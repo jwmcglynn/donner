@@ -3,7 +3,7 @@
 #include "src/svg/components/document_context.h"
 #include "src/svg/xml/xml_parser.h"
 
-namespace donner {
+namespace donner::svg {
 
 namespace {
 
@@ -49,4 +49,4 @@ ParsedFragment<> instantiateSubtreeElement(std::string_view str) {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

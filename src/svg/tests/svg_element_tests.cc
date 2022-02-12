@@ -11,7 +11,7 @@ using testing::ElementsAre;
 using testing::ElementsAreArray;
 using testing::Optional;
 
-namespace donner {
+namespace donner::svg {
 
 class SVGElementTests : public testing::Test {
 protected:
@@ -86,4 +86,4 @@ TEST_F(SVGElementTests, Id) {
   EXPECT_EQ(element.id(), "");
 }
 
-}  // namespace donner
+}  // namespace donner::svg

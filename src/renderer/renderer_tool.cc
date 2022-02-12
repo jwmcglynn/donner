@@ -10,15 +10,15 @@
 
 namespace donner {
 
-void DumpTree(SVGElement element, int depth) {
+void DumpTree(svg::SVGElement element, int depth) {
   for (int i = 0; i < depth; ++i) {
     std::cout << "  ";
   }
 
   std::cout << TypeToString(element.type()) << ", " << element.entity() << ", id: '" << element.id()
             << "'";
-  if (element.type() == ElementType::SVG) {
-    if (auto viewbox = element.cast<SVGSVGElement>().viewbox()) {
+  if (element.type() == svg::ElementType::SVG) {
+    if (auto viewbox = element.cast<svg::SVGSVGElement>().viewbox()) {
       std::cout << ", viewbox: " << *viewbox;
     }
   }
@@ -49,7 +49,7 @@ extern "C" int main(int argc, char* argv[]) {
   file.read(fileData.data(), fileLength);
 
   std::vector<ParseError> warnings;
-  auto maybeResult = XMLParser::ParseSVG(fileData, &warnings);
+  auto maybeResult = svg::XMLParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
@@ -67,7 +67,7 @@ extern "C" int main(int argc, char* argv[]) {
 
   std::cout << "Tree:" << std::endl;
 
-  SVGDocument document = std::move(maybeResult.result());
+  svg::SVGDocument document = std::move(maybeResult.result());
   DumpTree(document.svgElement(), 0);
 
   if (auto path1 = document.svgElement().querySelector("#path1")) {

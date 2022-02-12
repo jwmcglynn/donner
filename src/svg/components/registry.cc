@@ -2,7 +2,7 @@
 
 #include "src/base/utils.h"
 
-namespace donner {
+namespace donner::svg {
 
 std::string_view TypeToString(ElementType type) {
   switch (type) {
@@ -18,4 +18,4 @@ std::string_view TypeToString(ElementType type) {
 
   UTILS_UNREACHABLE();
 }
-}  // namespace donner
+}  // namespace donner::svg

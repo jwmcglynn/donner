@@ -3,7 +3,7 @@
 #include "src/svg/components/stylesheet_component.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGStyleElement SVGStyleElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -33,4 +33,4 @@ bool SVGStyleElement::isCssType() const {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

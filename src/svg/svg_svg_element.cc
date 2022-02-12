@@ -4,7 +4,7 @@
 #include "src/svg/components/viewbox_component.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -74,4 +74,4 @@ std::optional<Lengthd> SVGSVGElement::height() const {
   return component ? component->height : std::nullopt;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

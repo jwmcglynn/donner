@@ -3,7 +3,7 @@
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGDefsElement SVGDefsElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -12,4 +12,4 @@ SVGDefsElement SVGDefsElement::Create(SVGDocument& document) {
   return SVGDefsElement(registry, entity);
 }
 
-}  // namespace donner
+}  // namespace donner::svg

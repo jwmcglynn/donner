@@ -4,7 +4,7 @@
 
 #include "src/base/utils.h"
 
-namespace donner {
+namespace donner::svg {
 
 bool operator==(const PathSpline::Command& lhs, const PathSpline::Command& rhs) {
   return lhs.point_index == rhs.point_index && lhs.type == rhs.type;
@@ -33,4 +33,4 @@ void PrintTo(const PathSpline& spline, std::ostream* os) {
   *os << " }";
 }
 
-}  // namespace donner
+}  // namespace donner::svg

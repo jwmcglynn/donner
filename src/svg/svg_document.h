@@ -3,7 +3,7 @@
 #include "src/svg/components/registry.h"
 #include "src/svg/svg_svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class XMLParser;
 class SVGSVGElement;
@@ -25,4 +25,4 @@ private:
   Entity svgElement_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

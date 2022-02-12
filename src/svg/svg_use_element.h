@@ -4,7 +4,7 @@
 #include "src/base/rc_string.h"
 #include "src/svg/svg_element.h"
 
-namespace donner {
+namespace donner::svg {
 
 class SVGUseElement : public SVGElement {
 protected:
@@ -29,4 +29,4 @@ public:
   std::optional<Lengthd> height() const;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -2,7 +2,7 @@
 
 #include "src/base/parser/details/parser_base.h"
 
-namespace donner {
+namespace donner::svg {
 
 class ViewboxParserImpl : public ParserBase {
 public:
@@ -36,4 +36,4 @@ ParseResult<Boxd> ViewboxParser::Parse(std::string_view str) {
   return parser.parse();
 }
 
-}  // namespace donner
+}  // namespace donner::svg

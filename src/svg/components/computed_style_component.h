@@ -12,7 +12,7 @@
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
 
-namespace donner {
+namespace donner::svg {
 
 struct ShadowedElementAdapter {
   ShadowedElementAdapter(Registry& registry, Entity treeEntity, Entity dataEntity)
@@ -75,7 +75,7 @@ private:
 struct ComputedStyleComponent {
   ComputedStyleComponent() {}
 
-  const svg::PropertyRegistry& properties() const {
+  const PropertyRegistry& properties() const {
     assert(properties_);
     return properties_.value();
   }
@@ -94,11 +94,11 @@ struct ComputedStyleComponent {
     const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : entity;
 
     // Apply local style.
-    svg::PropertyRegistry properties;
+    PropertyRegistry properties;
     if (auto* styleComponent = registry.try_get<StyleComponent>(dataEntity)) {
       properties = styleComponent->properties;
     } else {
-      properties = svg::PropertyRegistry();
+      properties = PropertyRegistry();
     }
 
     // Apply style from stylesheets.
@@ -144,8 +144,8 @@ struct ComputedStyleComponent {
   }
 
 private:
-  std::optional<svg::PropertyRegistry> properties_;
+  std::optional<PropertyRegistry> properties_;
   std::optional<Boxd> viewbox_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

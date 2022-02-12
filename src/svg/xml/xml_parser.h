@@ -5,7 +5,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 class XMLParser {
 public:
@@ -23,4 +23,4 @@ public:
                                            std::vector<ParseError>* outWarnings = nullptr);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

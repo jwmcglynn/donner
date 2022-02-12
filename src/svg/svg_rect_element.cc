@@ -3,7 +3,7 @@
 #include "src/svg/components/rect_component.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 SVGRectElement SVGRectElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -64,4 +64,4 @@ std::optional<Lengthd> SVGRectElement::ry() const {
   return component ? component->ry : std::nullopt;
 }
 
-}  // namespace donner
+}  // namespace donner::svg

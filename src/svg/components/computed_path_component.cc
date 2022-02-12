@@ -2,7 +2,7 @@
 
 #include "src/svg/parser/path_parser.h"
 
-namespace donner {
+namespace donner::svg {
 
 std::optional<ParseError> ComputedPathComponent::setFromDString(std::string_view d) {
   auto maybePath = PathParser::Parse(d);
@@ -25,4 +25,4 @@ const std::optional<PathSpline>& ComputedPathComponent::spline() const {
   return spline_;
 }
 
-}  // namespace donner
+}  // namespace donner::svg
