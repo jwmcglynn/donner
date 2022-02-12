@@ -1,10 +1,9 @@
-#include "src/renderer/renderer_skia.h"
+#include "src/svg/renderer/renderer_skia.h"
 
 #include "include/core/SkPath.h"
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkStream.h"
 #include "include/effects/SkDashPathEffect.h"
-#include "src/renderer/renderer_utils.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
@@ -14,15 +13,14 @@
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/renderer/renderer_utils.h"
 
-namespace donner {
-
-using namespace svg;
+namespace donner::svg {
 
 namespace {
 
-// The maximum size supported for a rendered image.
-static constexpr int kMaxDimension = 8192;
+// The maximum size supported for a rendered image. Unused in release builds.
+[[maybe_unused]] static constexpr int kMaxDimension = 8192;
 
 SkM44 toSkia(const Transformd& transform) {
   return SkM44{float(transform.data[0]),
@@ -48,23 +46,23 @@ SkColor toSkia(const css::Color color) {
   return SkColorSetARGB(color.rgba().a, color.rgba().r, color.rgba().g, color.rgba().b);
 }
 
-SkPaint::Cap toSkia(svg::StrokeLinecap lineCap) {
+SkPaint::Cap toSkia(StrokeLinecap lineCap) {
   switch (lineCap) {
-    case svg::StrokeLinecap::Butt: return SkPaint::Cap::kButt_Cap;
-    case svg::StrokeLinecap::Round: return SkPaint::Cap::kRound_Cap;
-    case svg::StrokeLinecap::Square: return SkPaint::Cap::kSquare_Cap;
+    case StrokeLinecap::Butt: return SkPaint::Cap::kButt_Cap;
+    case StrokeLinecap::Round: return SkPaint::Cap::kRound_Cap;
+    case StrokeLinecap::Square: return SkPaint::Cap::kSquare_Cap;
   }
 }
 
-SkPaint::Join toSkia(svg::StrokeLinejoin lineJoin) {
+SkPaint::Join toSkia(StrokeLinejoin lineJoin) {
   // TODO: Implement MiterClip and Arcs. For now, fallback to Miter, which is the default linejoin,
   // since the feature is not implemented.
   switch (lineJoin) {
-    case svg::StrokeLinejoin::Miter: return SkPaint::Join::kMiter_Join;
-    case svg::StrokeLinejoin::MiterClip: return SkPaint::Join::kMiter_Join;
-    case svg::StrokeLinejoin::Round: return SkPaint::Join::kRound_Join;
-    case svg::StrokeLinejoin::Bevel: return SkPaint::Join::kBevel_Join;
-    case svg::StrokeLinejoin::Arcs: return SkPaint::Join::kMiter_Join;
+    case StrokeLinejoin::Miter: return SkPaint::Join::kMiter_Join;
+    case StrokeLinejoin::MiterClip: return SkPaint::Join::kMiter_Join;
+    case StrokeLinejoin::Round: return SkPaint::Join::kRound_Join;
+    case StrokeLinejoin::Bevel: return SkPaint::Join::kBevel_Join;
+    case StrokeLinejoin::Arcs: return SkPaint::Join::kMiter_Join;
   }
 }
 
@@ -140,7 +138,7 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
                                   bitmap_.computeByteSize());
 }
 
-void RendererSkia::draw(svg::Registry& registry, svg::Entity root) {
+void RendererSkia::draw(Registry& registry, Entity root) {
   std::function<void(Transformd, Entity)> drawEntity = [&](Transformd transform,
                                                            Entity treeEntity) {
     const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);
@@ -172,11 +170,11 @@ void RendererSkia::draw(svg::Registry& registry, svg::Entity root) {
 
     if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
       if (auto maybeSpline = path->spline()) {
-        const svg::PropertyRegistry& style = styleComponent.properties();
+        const PropertyRegistry& style = styleComponent.properties();
 
         if (auto fill = style.fill.get()) {
-          if (fill.value().is<svg::PaintServer::Solid>()) {
-            const svg::PaintServer::Solid& solid = fill.value().get<svg::PaintServer::Solid>();
+          if (fill.value().is<PaintServer::Solid>()) {
+            const PaintServer::Solid& solid = fill.value().get<PaintServer::Solid>();
 
             SkPaint paint;
             paint.setAntiAlias(true);
@@ -184,7 +182,7 @@ void RendererSkia::draw(svg::Registry& registry, svg::Entity root) {
             paint.setStyle(SkPaint::Style::kFill_Style);
 
             canvas_->drawPath(toSkia(*maybeSpline), paint);
-          } else if (fill.value().is<svg::PaintServer::None>()) {
+          } else if (fill.value().is<PaintServer::None>()) {
             // Do nothing.
           } else {
             // TODO: Other paint types.
@@ -192,8 +190,8 @@ void RendererSkia::draw(svg::Registry& registry, svg::Entity root) {
         }
 
         if (auto stroke = style.stroke.get()) {
-          if (stroke.value().is<svg::PaintServer::Solid>()) {
-            const svg::PaintServer::Solid& solid = stroke.value().get<svg::PaintServer::Solid>();
+          if (stroke.value().is<PaintServer::Solid>()) {
+            const PaintServer::Solid& solid = stroke.value().get<PaintServer::Solid>();
 
             SkPaint paint;
             paint.setAntiAlias(true);
@@ -231,7 +229,7 @@ void RendererSkia::draw(svg::Registry& registry, svg::Entity root) {
             }
 
             canvas_->drawPath(skiaPath, paint);
-          } else if (stroke.value().is<svg::PaintServer::None>()) {
+          } else if (stroke.value().is<PaintServer::None>()) {
             // Do nothing.
           } else {
             // TODO: Other paint types.
@@ -250,4 +248,4 @@ void RendererSkia::draw(svg::Registry& registry, svg::Entity root) {
   drawEntity(Transformd(), root);
 }
 
-}  // namespace donner
+}  // namespace donner::svg

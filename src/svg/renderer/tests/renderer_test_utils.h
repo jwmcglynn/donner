@@ -6,7 +6,7 @@
 #include <optional>
 #include <vector>
 
-namespace donner {
+namespace donner::svg {
 
 struct Image {
   int width;
@@ -32,4 +32,4 @@ public:
   }
 };
 
-}  // namespace donner
+}  // namespace donner::svg

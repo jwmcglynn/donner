@@ -4,21 +4,21 @@
 #include <iostream>
 #include <vector>
 
-#include "src/renderer/renderer_skia.h"
+#include "src/svg/renderer/renderer_skia.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/xml/xml_parser.h"
 
-namespace donner {
+namespace donner::svg {
 
-void DumpTree(svg::SVGElement element, int depth) {
+void DumpTree(SVGElement element, int depth) {
   for (int i = 0; i < depth; ++i) {
     std::cout << "  ";
   }
 
   std::cout << TypeToString(element.type()) << ", " << element.entity() << ", id: '" << element.id()
             << "'";
-  if (element.type() == svg::ElementType::SVG) {
-    if (auto viewbox = element.cast<svg::SVGSVGElement>().viewbox()) {
+  if (element.type() == ElementType::SVG) {
+    if (auto viewbox = element.cast<SVGSVGElement>().viewbox()) {
       std::cout << ", viewbox: " << *viewbox;
     }
   }
@@ -49,7 +49,7 @@ extern "C" int main(int argc, char* argv[]) {
   file.read(fileData.data(), fileLength);
 
   std::vector<ParseError> warnings;
-  auto maybeResult = svg::XMLParser::ParseSVG(fileData, &warnings);
+  auto maybeResult = XMLParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
@@ -67,7 +67,7 @@ extern "C" int main(int argc, char* argv[]) {
 
   std::cout << "Tree:" << std::endl;
 
-  svg::SVGDocument document = std::move(maybeResult.result());
+  SVGDocument document = std::move(maybeResult.result());
   DumpTree(document.svgElement(), 0);
 
   if (auto path1 = document.svgElement().querySelector("#path1")) {
@@ -95,4 +95,4 @@ extern "C" int main(int argc, char* argv[]) {
   }
 }
 
-}  // namespace donner
+}  // namespace donner::svg

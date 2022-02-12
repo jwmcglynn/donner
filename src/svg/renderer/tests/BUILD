@@ -17,11 +17,11 @@ cc_test(
         "renderer_tests.cc",
     ],
     data = [
-        "//src/renderer/testdata",
+        "//src/svg/renderer/testdata",
     ],
     deps = [
         ":renderer_test_utils",
-        "//src/renderer",
+        "//src/svg/renderer",
         "//src/svg/xml",
         "@com_google_gtest//:gtest_main",
         "@pixelmatch-cpp17",

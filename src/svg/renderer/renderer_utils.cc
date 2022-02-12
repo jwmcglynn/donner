@@ -1,4 +1,4 @@
-#include "src/renderer/renderer_utils.h"
+#include "src/svg/renderer/renderer_utils.h"
 
 #include <stb/stb_image_write.h>
 
@@ -16,9 +16,7 @@
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 
-namespace donner {
-
-using namespace svg;
+namespace donner::svg {
 
 void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize) {
   Registry& registry = document.registry();
@@ -95,4 +93,4 @@ bool RendererUtils::writeRgbaPixelsToPngFile(const char* filename,
   return context.output.good();
 }
 
-}  // namespace donner
+}  // namespace donner::svg

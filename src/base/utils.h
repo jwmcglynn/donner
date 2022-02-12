@@ -40,12 +40,22 @@
 #ifdef NDEBUG
 #define UTILS_RELEASE_ASSERT(x)                                        \
   do {                                                                 \
-    const bool result = (x);                                           \
-    if (!result) {                                                     \
+    const bool _utilsResult = (x);                                     \
+    if (!_utilsResult) {                                               \
       fprintf(stderr, "Error: UTILS_RELEASE_ASSERT failed: %s\n", #x); \
       abort();                                                         \
     }                                                                  \
   } while (false)
+
+#define UTILS_RELEASE_ASSERT_MSG(x, msg)                                          \
+  do {                                                                            \
+    const bool _utilsResult = (x);                                                \
+    if (!_utilsResult) {                                                          \
+      fprintf(stderr, "Error: UTILS_RELEASE_ASSERT failed: %s, %s\n", #x, (msg)); \
+      abort();                                                                    \
+    }                                                                             \
+  } while (false)
 #else
 #define UTILS_RELEASE_ASSERT(x) assert(x)
+#define UTILS_RELEASE_ASSERT_MSG(x, msg) assert((x) && (msg))
 #endif

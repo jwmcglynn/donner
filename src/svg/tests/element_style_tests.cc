@@ -10,7 +10,6 @@ namespace donner::svg {
 
 using css::Color;
 using css::RGBA;
-using svg::PaintServer;
 
 TEST(ElementStyleTests, Attributes) {
   EXPECT_THAT(instantiateSubtreeElement(R"(

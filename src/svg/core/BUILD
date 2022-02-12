@@ -10,8 +10,8 @@ cc_library(
         "preserve_aspect_ratio.h",
     ],
     visibility = [
-        "//src/renderer:__subpackages__",
         "//src/svg:__subpackages__",
+        "//src/svg/renderer:__subpackages__",
     ],
     deps = [
         "//src/base",

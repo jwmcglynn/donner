@@ -72,7 +72,7 @@
     {
       "label": "renderer_tool",
       "type": "shell",
-      "command": "bazel run //src/renderer:renderer_tool -- ${workspaceFolder}/src/renderer/testdata/Ghostscript_Tiger.svg",
+      "command": "bazel run //src/svg/renderer:renderer_tool -- ${workspaceFolder}/src/svg/renderer/testdata/Ghostscript_Tiger.svg",
       "problemMatcher": [
         "$gcc"
       ],

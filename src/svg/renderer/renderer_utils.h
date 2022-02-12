@@ -5,11 +5,11 @@
 
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 class RendererUtils {
 public:
-  static void prepareDocumentForRendering(svg::SVGDocument& document, Vector2d defaultSize);
+  static void prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize);
 
   /**
    * Write raw RGBA pixel data to a PNG file.
@@ -24,4 +24,4 @@ public:
                                        int width, int height);
 };
 
-}  // namespace donner
+}  // namespace donner::svg

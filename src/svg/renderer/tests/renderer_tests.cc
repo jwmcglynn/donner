@@ -4,14 +4,12 @@
 
 #include <fstream>
 
-#include "src/renderer/renderer_skia.h"
-#include "src/renderer/renderer_utils.h"
-#include "src/renderer/tests/renderer_test_utils.h"
+#include "src/svg/renderer/renderer_skia.h"
+#include "src/svg/renderer/renderer_utils.h"
+#include "src/svg/renderer/tests/renderer_test_utils.h"
 #include "src/svg/xml/xml_parser.h"
 
-namespace donner {
-
-using namespace svg;
+namespace donner::svg {
 
 namespace {
 
@@ -110,58 +108,58 @@ protected:
 };
 
 TEST_F(RendererTests, Ghostscript_Tiger) {
-  SVGDocument document = loadSVG("src/renderer/testdata/Ghostscript_Tiger.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/Ghostscript_Tiger.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/Ghostscript_Tiger.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/Ghostscript_Tiger.png");
 }
 
 TEST_F(RendererTests, StrokingComplex) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_complex.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_complex.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_complex.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_complex.png");
 }
 
 TEST_F(RendererTests, StrokingDasharray) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_dasharray.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_dasharray.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_dasharray.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_dasharray.png");
 }
 
 TEST_F(RendererTests, StrokingDashoffset) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_dashoffset.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_dashoffset.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_dashoffset.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_dashoffset.png");
 }
 
 TEST_F(RendererTests, StrokingLinecap) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_linecap.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_linecap.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_linecap.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_linecap.png");
 }
 
 TEST_F(RendererTests, StrokingLinejoin) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_linejoin.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_linejoin.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_linejoin.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_linejoin.png");
 }
 
 TEST_F(RendererTests, StrokingMiterlimit) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_miterlimit.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_miterlimit.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_miterlimit.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_miterlimit.png");
 }
 
 TEST_F(RendererTests, StrokingStrokewidth) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_strokewidth.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_strokewidth.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_strokewidth.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_strokewidth.png");
 }
 
 TEST_F(RendererTests, StrokingPathLength) {
-  SVGDocument document = loadSVG("src/renderer/testdata/stroking_pathlength.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/stroking_pathlength.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_pathlength.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_pathlength.png");
 }
 
 TEST_F(RendererTests, PokerChips) {
-  SVGDocument document = loadSVG("src/renderer/testdata/poker_chips.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/poker_chips.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/poker_chips.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/poker_chips.png");
 }
 
 TEST_F(RendererTests, QuadBezier) {
-  SVGDocument document = loadSVG("src/renderer/testdata/quadbezier1.svg");
-  renderAndCompare(document, "src/renderer/testdata/golden/quadbezier1.png");
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/quadbezier1.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/quadbezier1.png");
 }
 
-}  // namespace donner
+}  // namespace donner::svg

@@ -10,14 +10,14 @@
 #include "src/svg/core/path_spline.h"
 #include "src/svg/svg_document.h"
 
-namespace donner {
+namespace donner::svg {
 
 class RendererSkia {
 public:
   RendererSkia(int defaultWidth, int defaultHeight);
   ~RendererSkia();
 
-  void draw(svg::SVGDocument& document);
+  void draw(SVGDocument& document);
 
   bool save(const char* filename);
 
@@ -26,7 +26,7 @@ public:
   int height() const { return bitmap_.height(); }
 
 private:
-  void draw(svg::Registry& registry, svg::Entity entity);
+  void draw(Registry& registry, Entity entity);
 
   int defaultWidth_;
   int defaultHeight_;
@@ -36,4 +36,4 @@ private:
   std::unique_ptr<SkCanvas> canvas_;
 };
 
-}  // namespace donner
+}  // namespace donner::svg

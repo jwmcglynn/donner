@@ -78,9 +78,10 @@ struct Property {
   std::optional<T> get() const { return state == PropertyState::Set ? value : getInitialFn(); }
   T getRequired() const {
     auto result = get();
-    UTILS_RELEASE_ASSERT(result.has_value() && "Required property not set");
+    UTILS_RELEASE_ASSERT_MSG(result.has_value(), "Required property not set");
     return std::move(result.value());
   }
+
   void set(std::optional<T> newValue, css::Specificity newSpecificity) {
     value = std::move(newValue);
     state = PropertyState::Set;

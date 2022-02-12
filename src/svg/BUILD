@@ -28,8 +28,8 @@ cc_library(
     ],
     visibility = [
         "//:__pkg__",
-        "//src/renderer:__subpackages__",
         "//src/svg/properties/tests:__pkg__",
+        "//src/svg/renderer:__subpackages__",
         "//src/svg/tests:__pkg__",
         "//src/svg/xml:__pkg__",
     ],
