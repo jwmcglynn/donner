@@ -16,7 +16,7 @@ public:
   static SVGPathElement Create(SVGDocument& document);
 
   RcString d() const;
-  std::optional<ParseError> setD(RcString d);
+  void setD(RcString d);
 
   std::optional<double> pathLength() const;
   void setPathLength(std::optional<double> value);

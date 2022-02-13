@@ -21,14 +21,11 @@ RcString SVGPathElement::d() const {
   return "";
 }
 
-std::optional<ParseError> SVGPathElement::setD(RcString d) {
+void SVGPathElement::setD(RcString d) {
   invalidate();
 
   auto& path = handle_.get_or_emplace<PathComponent>();
   path.d.set(d, css::Specificity::Override());
-
-  // TODO: Change return type.
-  return std::nullopt;
 }
 
 std::optional<double> SVGPathElement::pathLength() const {
