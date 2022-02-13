@@ -113,6 +113,9 @@ TEST(TransformParserCss, Translate_ParseErrors) {
   // Bad parameter count.
   EXPECT_THAT(parseAsCss("translate(2px,)"), ParseErrorIs("Not enough parameters"));
 
+  // Missing comma.
+  EXPECT_THAT(parseAsCss("translate(2px 4px)"), ParseErrorIs("Expected a comma"));
+
   // Invalid spacing.
   EXPECT_THAT(parseAsCss(" translate ( \t 3px ) "),
               ParseErrorIs("Expected a function, found unexpected token"));
