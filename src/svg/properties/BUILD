@@ -21,6 +21,7 @@ cc_library(
         "//src/css",
         "//src/css/parser",
         "//src/svg/components:registry",
+        "//src/svg/parser",
         "@frozen",
     ],
 )

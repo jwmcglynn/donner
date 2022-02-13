@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/css/specificity.h"
+#include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/properties/property.h"
 
 namespace donner::svg {
@@ -29,17 +30,6 @@ PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
  * @return A string if the components contain a single ident, otherwise std::nullopt.
  */
 std::optional<RcString> TryGetSingleIdent(std::span<const css::ComponentValue> components);
-
-/**
- * Parse a <length-percentage> value.
- *
- * @param components Component values, which should already be trimmed.
- * @param allowUserUnits Whether to allow unitless values, if this is a parse in the context of XML
- *   attributes.
- * @return Return a Length or a parse error.
- */
-ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> components,
-                                           bool allowUserUnits);
 
 /**
  * Parse a <length-percentage>, which may optionally be set to "auto", in which case this returns
