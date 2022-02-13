@@ -41,10 +41,7 @@
       "problemMatcher": [
         "$gcc"
       ],
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      },
+      "group": "test",
       "presentation": {
         "clear": true
       }
@@ -84,7 +81,7 @@
     {
       "label": "renderer_tool",
       "type": "shell",
-      "command": "bazel run //src/svg/renderer:renderer_tool -- ${workspaceFolder}/src/svg/renderer/testdata/Ghostscript_Tiger.svg",
+      "command": "bazel run -c dbg //src/svg/renderer:renderer_tool -- ${workspaceFolder}/src/svg/renderer/testdata/Ghostscript_Tiger.svg",
       "problemMatcher": [
         "$gcc"
       ],
@@ -119,6 +116,13 @@
       "group": "build"
     },
     {
+      "label": "svg_parser_tests (run)",
+      "type": "shell",
+      "command": "bazel run //src/svg/parser:parser_tests -c dbg",
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
       "label": "components_tests",
       "type": "shell",
       "command": "bazel build //src/svg/components:components_tests -c dbg",
@@ -128,7 +132,7 @@
     {
       "label": "properties_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/properties:properties_tests -c dbg",
+      "command": "bazel build //src/svg/properties/tests:properties_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },
@@ -149,10 +153,10 @@
     {
       "label": "svg_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/tests:svg_tests -c dbg",
+      "command": "bazel run //src/svg/tests:svg_tests -c dbg",
       "problemMatcher": [],
       "group": {
-        "kind": "build",
+        "kind": "test",
         "isDefault": true
       }
     },

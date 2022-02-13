@@ -67,8 +67,8 @@ MATCHER_P(NormalizedEq, expectedVector, "") {
  *
  * @param other Transform object to compare.
  */
-MATCHER_P(TransformEq, other, "") {
-  return testing::ExplainMatchResult(testing::Pointwise(testing::DoubleNear(0.0001), other.data),
+MATCHER_P(TransformEq, other, "transform eq " + testing::PrintToString(other)) {
+  return testing::ExplainMatchResult(testing::Pointwise(testing::DoubleNear(0.001), other.data),
                                      arg.data, result_listener);
 }
 

@@ -3,6 +3,8 @@
 
 #include <deque>
 
+#include "src/base/tests/base_test_utils.h"
+#include "src/svg/components/document_context.h"
 #include "src/svg/svg_document.h"
 #include "src/svg/svg_element.h"
 #include "src/svg/svg_unknown_element.h"
@@ -15,6 +17,10 @@ namespace donner::svg {
 
 class SVGElementTests : public testing::Test {
 protected:
+  SVGElementTests() {
+    document_.registry().ctx<DocumentContext>().defaultSize = Vector2d(800, 600);
+  }
+
   SVGElement create() { return SVGUnknownElement::Create(document_, "unknown"); }
 
   std::vector<SVGElement> children(SVGElement element) {
@@ -84,6 +90,13 @@ TEST_F(SVGElementTests, Id) {
 
   element.setId("");
   EXPECT_EQ(element.id(), "");
+}
+
+TEST_F(SVGElementTests, Transform) {
+  auto element = create();
+  element.setStyle("transform: translate(1px, 2px)");
+
+  EXPECT_THAT(element.transform(), TransformIs(1, 0, 0, 1, 1, 2));
 }
 
 }  // namespace donner::svg

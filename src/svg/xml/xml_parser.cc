@@ -92,14 +92,6 @@ static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context,
     element.setId(value);
   } else if (name == "class") {
     element.setClassName(value);
-  } else if (name == "transform") {
-    auto maybeTransform = TransformParser::Parse(value);
-    if (maybeTransform.hasError()) {
-      context.addSubparserWarning(std::move(maybeTransform.error()),
-                                  context.parserOriginFrom(value));
-    } else {
-      element.setTransform(maybeTransform.result());
-    }
   } else if (name == "style") {
     element.setStyle(value);
   } else {

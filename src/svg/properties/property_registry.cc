@@ -8,7 +8,6 @@
 #include "src/css/parser/color_parser.h"
 #include "src/css/parser/declaration_list_parser.h"
 #include "src/css/parser/value_parser.h"
-#include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/properties/property_parsing.h"
 
 namespace donner::svg {
@@ -361,25 +360,6 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-namespace {
-
-template <typename ReturnType, typename FnT>
-ReturnType toConstexpr(ElementType type, FnT fn) {
-  switch (type) {
-    case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());
-    case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
-    case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
-    case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
-    case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
-    case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());
-    case ElementType::Unknown:
-      return fn(std::integral_constant<ElementType, ElementType::Unknown>());
-    case ElementType::Use: return fn(std::integral_constant<ElementType, ElementType::Use>());
-  };
-}
-
-}  // namespace
-
 bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::string_view value,
                                                   std::optional<ElementType> type,
                                                   EntityHandle handle) {
@@ -412,15 +392,7 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
     return true;
   }
 
-  if (!type.has_value()) {
-    // Stop processing if there is not an element type.
-    return false;
-  }
-
-  ParseResult<bool> result = toConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
-    return ParsePresentationAttribute<elementType()>(handle, name, params);
-  });
-
+  ParseResult<bool> result = ParseSpecialAttributes(params, name, type, handle);
   if (result.hasError()) {
     std::cerr << "Error parsing " << name << " property: " << result.error() << std::endl;
     return false;

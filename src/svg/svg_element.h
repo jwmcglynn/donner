@@ -120,6 +120,9 @@ protected:
   Registry& registry() const { return *handle_.registry(); }
   EntityHandle toHandle(Entity entity) const { return EntityHandle(registry(), entity); }
 
+  void invalidateTransform();
+  void computeTransform() const;
+
   EntityHandle handle_;
 };
 

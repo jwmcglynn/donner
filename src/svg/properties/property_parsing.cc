@@ -1,12 +1,31 @@
 #include "src/svg/properties/property_parsing.h"
 
 #include "src/css/parser/value_parser.h"
+#include "src/svg/components/transform_component.h"
+#include "src/svg/parser/css_transform_parser.h"
+#include "src/svg/parser/transform_parser.h"
+#include "src/svg/properties/presentation_attribute_parsing.h"
 
 namespace donner::svg {
 
 namespace {
 
-std::span<const css::ComponentValue> trimTrailingWhitespace(
+template <typename ReturnType, typename FnT>
+ReturnType ToConstexpr(ElementType type, FnT fn) {
+  switch (type) {
+    case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());
+    case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
+    case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
+    case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
+    case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
+    case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());
+    case ElementType::Unknown:
+      return fn(std::integral_constant<ElementType, ElementType::Unknown>());
+    case ElementType::Use: return fn(std::integral_constant<ElementType, ElementType::Use>());
+  };
+}
+
+std::span<const css::ComponentValue> TrimTrailingWhitespace(
     std::span<const css::ComponentValue> components) {
   while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
     components = components.subspan(0, components.size() - 1);
@@ -32,7 +51,7 @@ std::span<const css::ComponentValue> PropertyParseFnParams::components() const {
 PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
                                           css::Specificity specificity) {
   PropertyParseFnParams params;
-  params.valueOrComponents = trimTrailingWhitespace(declaration.values);
+  params.valueOrComponents = TrimTrailingWhitespace(declaration.values);
 
   // Detect CSS-wide keywords, see https://www.w3.org/TR/css-cascade-3/#defaulting-keywords.
   const auto components = params.components();
@@ -52,6 +71,38 @@ PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
   return params;
 }
 
+ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::string_view name,
+                                         std::optional<ElementType> type, EntityHandle handle) {
+  if (StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
+    auto& transform = handle.get_or_emplace<TransformComponent>();
+    auto maybeError = Parse(
+        params,
+        [](const PropertyParseFnParams& params) {
+          if (const std::string_view* str =
+                  std::get_if<std::string_view>(&params.valueOrComponents)) {
+            return TransformParser::Parse(*str).map<CssTransform>(
+                [](const Transformd& transform) { return CssTransform(transform); });
+          } else {
+            return CssTransformParser::Parse(params.components());
+          }
+        },
+        &transform.transform);
+    if (maybeError) {
+      std::cerr << "Error parsing " << name << " property: " << maybeError.value() << std::endl;
+      return false;
+    }
+  }
+
+  if (!type.has_value()) {
+    // Stop processing if there is not an element type.
+    return false;
+  }
+
+  return ToConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
+    return ParsePresentationAttribute<elementType()>(handle, name, params);
+  });
+}
+
 std::optional<RcString> TryGetSingleIdent(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -61,36 +112,6 @@ std::optional<RcString> TryGetSingleIdent(std::span<const css::ComponentValue> c
   }
 
   return std::nullopt;
-}
-
-ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> components,
-                                           bool allowUserUnits) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
-      if (!dimension->suffixUnit) {
-        ParseError err;
-        err.reason = "Invalid unit on length";
-        err.offset = component.sourceOffset();
-        return err;
-      } else {
-        return Lengthd(dimension->value, dimension->suffixUnit.value());
-      }
-    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
-      return Lengthd(percentage->value, Lengthd::Unit::Percent);
-    } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-      if (!allowUserUnits && number->valueString == "0") {
-        return Lengthd(0, Lengthd::Unit::None);
-      } else if (allowUserUnits) {
-        return Lengthd(number->value, Lengthd::Unit::None);
-      }
-    }
-  }
-
-  ParseError err;
-  err.reason = "Invalid length or percentage";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
-  return err;
 }
 
 ParseResult<std::optional<Lengthd>> ParseLengthPercentageOrAuto(

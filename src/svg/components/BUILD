@@ -19,6 +19,19 @@ cc_library(
 )
 
 cc_library(
+    name = "transform_component",
+    hdrs = [
+        "transform_component.h",
+    ],
+    visibility = [
+        "//src/svg:__subpackages__",
+    ],
+    deps = [
+        "//src/base",
+    ],
+)
+
+cc_library(
     name = "components",
     srcs = [
         "circle_component.cc",
@@ -27,6 +40,7 @@ cc_library(
         "registry.cc",
         "sized_element_component.cc",
         "stylesheet_component.cc",
+        "transform_component.cc",
         "tree_component.cc",
         "viewbox_component.cc",
     ],
@@ -47,7 +61,6 @@ cc_library(
         "sized_element_component.h",
         "style_component.h",
         "stylesheet_component.h",
-        "transform_component.h",
         "tree_component.h",
         "viewbox_component.h",
     ],
@@ -57,6 +70,7 @@ cc_library(
     ],
     deps = [
         ":registry",
+        ":transform_component",
         "//src/svg/parser",
         "//src/svg/properties",
     ],

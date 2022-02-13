@@ -159,7 +159,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
       transform = tc->transform * transform;
     }
 
-    if (const auto* tc = registry.try_get<TransformComponent>(dataEntity)) {
+    if (const auto* tc = registry.try_get<ComputedTransformComponent>(dataEntity)) {
       transform = tc->transform * transform;
     }
 

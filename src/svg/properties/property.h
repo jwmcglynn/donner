@@ -3,6 +3,7 @@
 #include "src/base/box.h"
 #include "src/base/parser/parse_result.h"
 #include "src/css/declaration.h"
+#include "src/css/specificity.h"
 
 namespace donner::svg {
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/css/specificity.h"
+#include "src/svg/components/registry.h"
 #include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/properties/property.h"
 
@@ -20,8 +21,34 @@ private:
   mutable std::optional<std::vector<css::ComponentValue>> parsedComponents_;
 };
 
+template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
+std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
+                                Property<T, kCascade>* destination) {
+  // If the property is set to a built-in keyword, such as "inherit", the property has already been
+  // parsed so we can just set based on the value of explicitState.
+  if (params.explicitState != PropertyState::NotSet) {
+    destination->set(params.explicitState, params.specificity);
+    return std::nullopt;
+  }
+
+  auto result = callbackFn(params);
+  if (result.hasError()) {
+    // If there is a parse error, the CSS specification requires user agents to ignore the
+    // declaration, and not modify the existing value.
+    // See https://www.w3.org/TR/CSS2/syndata.html#ignore.
+    return std::move(result.error());
+  }
+
+  destination->set(std::move(result.result()), params.specificity);
+  return std::nullopt;
+}
+
 PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
                                           css::Specificity specificity);
+
+ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::string_view name,
+                                         std::optional<ElementType> type = std::nullopt,
+                                         EntityHandle handle = EntityHandle());
 
 /**
  * If the components contain only a single ident, returns an RcString for that ident's contents.

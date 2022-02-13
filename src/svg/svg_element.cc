@@ -85,16 +85,13 @@ void SVGElement::setClassName(std::string_view name) {
 }
 
 Transformd SVGElement::transform() const {
-  if (const auto* component = handle_.try_get<TransformComponent>()) {
-    return component->transform;
-  } else {
-    return Transformd();
-  }
+  computeTransform();
+  return handle_.get<ComputedTransformComponent>().transform;
 }
 
 void SVGElement::setTransform(Transformd transform) {
   auto& component = handle_.get_or_emplace<TransformComponent>();
-  component.transform = transform;
+  component.transform.set(CssTransform(transform), css::Specificity::Override());
 }
 
 void SVGElement::setStyle(std::string_view style) {
@@ -210,6 +207,15 @@ EntityHandle SVGElement::CreateEntity(Registry& registry, RcString typeString, E
   Entity entity = registry.create();
   registry.emplace<TreeComponent>(entity, type, std::move(typeString));
   return EntityHandle(registry, entity);
+}
+
+void SVGElement::invalidateTransform() {
+  handle_.remove<ComputedTransformComponent>();
+}
+
+void SVGElement::computeTransform() const {
+  auto& transform = handle_.get_or_emplace<TransformComponent>();
+  transform.compute(handle_, FontMetrics());
 }
 
 }  // namespace donner::svg

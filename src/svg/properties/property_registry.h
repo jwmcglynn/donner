@@ -23,28 +23,6 @@ class PropertyRegistry;
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const PropertyParseFnParams& params);
 
-template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
-std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
-                                Property<T, kCascade>* destination) {
-  // If the property is set to a built-in keyword, such as "inherit", the property has already been
-  // parsed so we can just set based on the value of explicitState.
-  if (params.explicitState != PropertyState::NotSet) {
-    destination->set(params.explicitState, params.specificity);
-    return std::nullopt;
-  }
-
-  auto result = callbackFn(params);
-  if (result.hasError()) {
-    // If there is a parse error, the CSS specification requires user agents to ignore the
-    // declaration, and not modify the existing value.
-    // See https://www.w3.org/TR/CSS2/syndata.html#ignore.
-    return std::move(result.error());
-  }
-
-  destination->set(std::move(result.result()), params.specificity);
-  return std::nullopt;
-}
-
 class PropertyRegistry {
 public:
   Property<css::Color, PropertyCascade::Inherit> color{"color"};
