@@ -60,6 +60,12 @@ struct Length {
   Length() = default;
   explicit Length(T value, Unit unit = Unit::None) : value(value), unit(unit) {}
 
+  enum class Extent {
+    X,     //!< Use X component of viewbox for percentage calculations.
+    Y,     //!< Use Y component of viewbox for percentage calculations.
+    Mixed  //!< Use diagonal extent of viewbox.
+  };
+
   /**
    * Convert the length to pixels, following the ratios at
    * https://www.w3.org/TR/css-values/#absolute-lengths and
@@ -69,17 +75,26 @@ struct Length {
    * @param fontMetrics Font size information for font-relative sizes.
    * @return T length in pixels.
    */
-  T toPixels(const Box<T>& viewbox, const FontMetrics& fontMetrics) {
+  T toPixels(const Box<T>& viewbox, const FontMetrics& fontMetrics,
+             Extent extent = Extent::Mixed) const {
     switch (unit) {
       // Absolute units.
       case Unit::None: return value;
-      case Unit::Percent: return value * diagonalExtent(viewbox) / 100.0;
+      case Unit::Percent: {
+        if (extent == Extent::X) {
+          return value * viewbox.width() / 100;
+        } else if (extent == Extent::Y) {
+          return value * viewbox.height() / 100;
+        } else {
+          return value * diagonalExtent(viewbox) / 100;
+        }
+      }
       case Unit::Cm: return value * RelativeLengthMetrics::kCmToPixels;
       case Unit::Mm: return value * RelativeLengthMetrics::kCmToPixels / 10.0;
       case Unit::Q: return value * RelativeLengthMetrics::kCmToPixels / 40.0;
       case Unit::In: return value * RelativeLengthMetrics::kInchesToPixels;
       case Unit::Pc: return value * RelativeLengthMetrics::kInchesToPixels / 6.0;
-      case Unit::Pt: return value * RelativeLengthMetrics::kInchesToPixels;
+      case Unit::Pt: return value * RelativeLengthMetrics::kPointsToPixels;
       case Unit::Px: return value;
       // Relative units.
       case Unit::Em: return value * fontMetrics.fontSize;

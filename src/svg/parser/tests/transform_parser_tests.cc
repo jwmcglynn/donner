@@ -17,6 +17,7 @@ TEST(TransformParser, ParseErrors) {
   EXPECT_THAT(TransformParser::Parse(")"),
               ParseErrorIs("Unexpected end of string instead of transform function"));
   EXPECT_THAT(TransformParser::Parse("invalid("), ParseErrorIs("Unexpected function 'invalid'"));
+  EXPECT_THAT(TransformParser::Parse("invalid2()"), ParseErrorIs("Unexpected function 'invalid2'"));
   EXPECT_THAT(TransformParser::Parse("scale(1),,scale(1)"),
               ParseErrorIs("Unexpected function ',scale'"));
   EXPECT_THAT(TransformParser::Parse(",scale(1)"), ParseErrorIs("Unexpected function ',scale'"));

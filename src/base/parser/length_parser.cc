@@ -12,6 +12,7 @@ std::optional<Lengthd::Unit> parseUnit(std::string_view suffix, size_t* charsCon
     std::string_view suffix;
   };
 
+  // TODO: Switch this to frozen map.
   // Note: suffix must be lowercase for comparison.
   static constexpr const SuffixMap kSuffixMap[] = {
       {Lengthd::Unit::Percent, "%"},  //

@@ -4,6 +4,7 @@ load("//build_defs:rules.bzl", "donner_cc_fuzzer")
 cc_library(
     name = "parser",
     srcs = [
+        "css_transform_parser.cc",
         "length_percentage_parser.cc",
         "path_parser.cc",
         "preserve_aspect_ratio_parser.cc",
@@ -11,6 +12,8 @@ cc_library(
         "viewbox_parser.cc",
     ],
     hdrs = [
+        "angle_parser.h",
+        "css_transform_parser.h",
         "length_percentage_parser.h",
         "path_parser.h",
         "preserve_aspect_ratio_parser.h",
@@ -31,14 +34,17 @@ cc_test(
     srcs = [
         "tests/path_parser_tests.cc",
         "tests/preserve_aspect_ratio_parser_tests.cc",
+        "tests/css_transform_parser_tests.cc",
         "tests/transform_parser_tests.cc",
         "tests/viewbox_parser_tests.cc",
+        # TODO: angle_parser_tests.cc
         # TODO: length_percentage_parser_tests.cc
     ],
     deps = [
         ":parser",
         "//src/base:base_test_utils",
         "//src/base/parser:parser_test_utils",
+        "//src/css/parser",
         "//src/svg/core:core_test_utils",
         "@com_google_gtest//:gtest_main",
     ],

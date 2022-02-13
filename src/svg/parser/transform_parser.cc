@@ -4,18 +4,20 @@
 
 namespace donner::svg {
 
+namespace {
+
 class TransformParserImpl : public ParserBase {
 public:
   TransformParserImpl(std::string_view str) : ParserBase(str) {}
 
   ParseResult<Transformd> parse() {
-    bool hasFunction = false;
+    bool allowComma = false;
     Transformd transform;
 
     skipWhitespace();
 
     while (!remaining_.empty()) {
-      if (hasFunction && remaining_[0] == ',') {
+      if (allowComma && remaining_[0] == ',') {
         // Skip optional comma.
         remaining_.remove_prefix(1);
         skipWhitespace();
@@ -144,7 +146,7 @@ public:
       if (remaining_.starts_with(')')) {
         remaining_.remove_prefix(1);
         skipWhitespace();
-        hasFunction = true;
+        allowComma = true;
       } else {
         ParseError err;
         err.reason = "Expected ')'";
@@ -187,6 +189,8 @@ private:
     return err;
   }
 };
+
+}  // namespace
 
 ParseResult<Transformd> TransformParser::Parse(std::string_view str) {
   TransformParserImpl parser(str);

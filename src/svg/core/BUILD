@@ -6,6 +6,7 @@ cc_library(
         "path_spline.cc",
     ],
     hdrs = [
+        "css_transform.h",
         "path_spline.h",
         "preserve_aspect_ratio.h",
     ],
