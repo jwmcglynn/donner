@@ -7,6 +7,17 @@
 
 namespace donner::svg {
 
+enum class FillRule { NonZero, EvenOdd };
+
+inline std::ostream& operator<<(std::ostream& os, FillRule value) {
+  switch (value) {
+    case FillRule::NonZero: return os << "nonzero";
+    case FillRule::EvenOdd: return os << "evenodd";
+  }
+
+  UTILS_UNREACHABLE();
+}
+
 enum class StrokeLinecap { Butt, Round, Square };
 
 inline std::ostream& operator<<(std::ostream& os, StrokeLinecap value) {

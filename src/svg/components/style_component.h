@@ -6,7 +6,7 @@
 
 namespace donner::svg {
 
-struct StyleComponent : public HandleOfMixin<StyleComponent> {
+struct StyleComponent {
   PropertyRegistry properties;
 
   void setStyle(std::string_view style) { properties.parseStyle(style); }

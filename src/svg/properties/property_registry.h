@@ -30,6 +30,10 @@ public:
       "fill", []() -> std::optional<PaintServer> {
         return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));
       }};
+  Property<FillRule, PropertyCascade::Inherit> fillRule{
+      "fill-rule", []() -> std::optional<FillRule> { return FillRule::NonZero; }};
+  Property<double, PropertyCascade::Inherit> fillOpacity{
+      "fill-opacity", []() -> std::optional<double> { return 1.0; }};
 
   // Stroke.
   Property<PaintServer, PropertyCascade::Inherit> stroke{
@@ -56,8 +60,8 @@ public:
    * Return a tuple of all properties within the PropertyRegistry.
    */
   auto allProperties() {
-    return std::forward_as_tuple(color, fill, stroke, strokeOpacity, strokeWidth, strokeLinecap,
-                                 strokeLinejoin, strokeMiterlimit, strokeDasharray,
+    return std::forward_as_tuple(color, fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
+                                 strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset);
   }
 

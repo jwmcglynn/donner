@@ -112,6 +112,16 @@ TEST_F(RendererTests, Ghostscript_Tiger) {
   renderAndCompare(document, "src/svg/renderer/testdata/golden/Ghostscript_Tiger.png");
 }
 
+TEST_F(RendererTests, FillRule001) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/a-fill-rule-001.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/a-fill-rule-001.png");
+}
+
+TEST_F(RendererTests, FillRule002) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/a-fill-rule-002.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/a-fill-rule-002.png");
+}
+
 TEST_F(RendererTests, StrokingComplex) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_complex.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_complex.png");

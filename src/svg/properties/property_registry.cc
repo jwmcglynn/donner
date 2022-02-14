@@ -130,6 +130,26 @@ ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> compone
   return err;
 }
 
+ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("nonzero")) {
+        return FillRule::NonZero;
+      } else if (value.equalsLowercase("evenodd")) {
+        return FillRule::EvenOdd;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid fill rule";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
 ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -239,7 +259,7 @@ static constexpr frozen::unordered_set<frozen::string, 12> kValidPresentationAtt
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 12> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return Parse(
@@ -257,6 +277,20 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 10> kPro
              return ParsePaintServer(params.components());
            },
            &registry.fill);
+     }},  //
+    {"fill-rule",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseFillRule(params.components()); },
+           &registry.fillRule);
+     }},  //
+    {"fill-opacity",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
+           &registry.fillOpacity);
      }},  //
     {"stroke",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {

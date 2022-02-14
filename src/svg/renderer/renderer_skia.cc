@@ -182,10 +182,14 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
             SkPaint paint;
             paint.setAntiAlias(true);
-            paint.setColor(toSkia(solid.color));
+            paint.setColor(toSkia(solid.color.withOpacity(style.fillOpacity.get().value())));
             paint.setStyle(SkPaint::Style::kFill_Style);
 
-            canvas_->drawPath(toSkia(*path->spline), paint);
+            SkPath skiaPath = toSkia(*path->spline);
+            if (style.fillRule.get() == FillRule::EvenOdd) {
+              skiaPath.setFillType(SkPathFillType::kEvenOdd);
+            }
+            canvas_->drawPath(skiaPath, paint);
           } else if (fill.value().is<PaintServer::None>()) {
             // Do nothing.
           } else {
