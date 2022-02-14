@@ -101,8 +101,8 @@ SkPath toSkia(const PathSpline& spline) {
 
 }  // namespace
 
-RendererSkia::RendererSkia(int defaultWidth, int defaultHeight)
-    : defaultWidth_(defaultWidth), defaultHeight_(defaultHeight) {}
+RendererSkia::RendererSkia(int defaultWidth, int defaultHeight, bool verbose)
+    : defaultWidth_(defaultWidth), defaultHeight_(defaultHeight), verbose_(verbose) {}
 
 RendererSkia::~RendererSkia() {}
 
@@ -147,13 +147,17 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
     if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
       if (behavior->nonrenderable) {
-        std::cout << "Skipping nonrenderable entity " << dataEntity << std::endl;
+        if (verbose_) {
+          std::cout << "Skipping nonrenderable entity " << dataEntity << std::endl;
+        }
         return;
       }
     }
 
-    std::cout << "Rendering " << TypeToString(registry.get<TreeComponent>(treeEntity).type()) << " "
-              << treeEntity << (shadowComponent ? " (shadow)" : "") << std::endl;
+    if (verbose_) {
+      std::cout << "Rendering " << TypeToString(registry.get<TreeComponent>(treeEntity).type())
+                << " " << treeEntity << (shadowComponent ? " (shadow)" : "") << std::endl;
+    }
 
     if (const auto* tc = registry.try_get<ViewboxTransformComponent>(dataEntity)) {
       transform = tc->transform * transform;

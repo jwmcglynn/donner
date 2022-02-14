@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -9,6 +10,29 @@
 #include "src/svg/xml/xml_parser.h"
 
 namespace donner::svg {
+
+class Trace {
+public:
+  explicit Trace(const char* name) : name_(name) {}
+
+  ~Trace() { stop(); }
+
+  void stop() {
+    if (!stopped_) {
+      stopped_ = true;
+
+      auto end = std::chrono::high_resolution_clock::now();
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start_);
+      std::cout << name_ << ": " << duration.count() << "ms" << std::endl;
+    }
+  }
+
+private:
+  const char* name_;
+  bool stopped_ = false;
+  std::chrono::time_point<std::chrono::high_resolution_clock> start_ =
+      std::chrono::high_resolution_clock::now();
+};
 
 void DumpTree(SVGElement element, int depth) {
   for (int i = 0; i < depth; ++i) {
@@ -49,7 +73,11 @@ extern "C" int main(int argc, char* argv[]) {
   file.read(fileData.data(), fileLength);
 
   std::vector<ParseError> warnings;
+
+  Trace traceParse("Parse");
   auto maybeResult = XMLParser::ParseSVG(fileData, &warnings);
+  traceParse.stop();
+
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
@@ -65,9 +93,9 @@ extern "C" int main(int argc, char* argv[]) {
     }
   }
 
-  std::cout << "Tree:" << std::endl;
-
   SVGDocument document = std::move(maybeResult.result());
+
+  std::cout << "Tree:" << std::endl;
   DumpTree(document.svgElement(), 0);
 
   if (auto path1 = document.svgElement().querySelector("#path1")) {
@@ -79,8 +107,14 @@ extern "C" int main(int argc, char* argv[]) {
   const size_t kWidth = 800;
   const size_t kHeight = 600;
 
+  Trace traceCreateRenderer("Create Renderer");
   RendererSkia renderer(kWidth, kHeight);
-  renderer.draw(document);
+  traceCreateRenderer.stop();
+
+  {
+    Trace traceRender("Render");
+    renderer.draw(document);
+  }
 
   std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << std::endl;
 
