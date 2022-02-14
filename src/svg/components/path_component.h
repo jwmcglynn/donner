@@ -3,6 +3,7 @@
 #include "src/base/parser/parse_error.h"
 #include "src/base/rc_string.h"
 #include "src/svg/components/computed_style_component.h"
+#include "src/svg/components/registry.h"
 #include "src/svg/properties/property.h"
 
 namespace donner::svg {
@@ -18,5 +19,7 @@ struct PathComponent {
 
   std::optional<ParseError> computePath(EntityHandle handle);
 };
+
+void InstantiateComputedPathComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
 }  // namespace donner::svg

@@ -46,7 +46,8 @@ struct RectProperties {
 
 struct ComputedRectComponent {
   ComputedRectComponent(const RectProperties& inputProperties,
-                        const std::map<RcString, UnparsedProperty>& unparsedProperties);
+                        const std::map<RcString, UnparsedProperty>& unparsedProperties,
+                        std::vector<ParseError>* outWarnings);
 
   RectProperties properties;
 };
@@ -55,14 +56,17 @@ struct RectComponent {
   RectProperties properties;
 
   void computePathWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
-                                       const FontMetrics& fontMetrics);
+                                       const FontMetrics& fontMetrics,
+                                       std::vector<ParseError>* outWarnings);
 
   void computePath(EntityHandle handle, const FontMetrics& fontMetrics) {
     ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
     style.computeProperties(handle);
 
-    return computePathWithPrecomputedStyle(handle, style, fontMetrics);
+    return computePathWithPrecomputedStyle(handle, style, fontMetrics, nullptr);
   }
 };
+
+void InstantiateComputedRectComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
 }  // namespace donner::svg

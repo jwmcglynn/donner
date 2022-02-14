@@ -99,4 +99,14 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Path>(
   return false;
 }
 
+void InstantiateComputedPathComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<PathComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [path, style] = view.get(entity);
+    auto maybeError = path.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style);
+    if (maybeError && outWarnings) {
+      outWarnings->emplace_back(std::move(maybeError.value()));
+    }
+  }
+}
+
 }  // namespace donner::svg

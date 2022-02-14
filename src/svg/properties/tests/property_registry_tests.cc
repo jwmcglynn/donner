@@ -116,39 +116,42 @@ TEST(PropertyRegistry, ParseColor) {
 TEST(PropertyRegistry, ParsePresentationAttribute) {
   {
     PropertyRegistry registry;
-    EXPECT_TRUE(registry.parsePresentationAttribute("color", "red"));
+    EXPECT_THAT(registry.parsePresentationAttribute("color", "red"), ParseResultIs(true));
     EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
   }
 
   {
     PropertyRegistry registry;
-    EXPECT_FALSE(registry.parsePresentationAttribute("not_supported", "red"));
+    EXPECT_THAT(registry.parsePresentationAttribute("not_supported", "red"), ParseResultIs(false));
   }
 
   {
     PropertyRegistry registry;
-    EXPECT_TRUE(registry.parsePresentationAttribute("color", ""));
+    EXPECT_THAT(registry.parsePresentationAttribute("color", ""), ParseErrorIs("No color found"));
     EXPECT_FALSE(registry.color.hasValue());
     EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
   }
 
   {
     PropertyRegistry registry;
-    EXPECT_TRUE(registry.parsePresentationAttribute("color", "invalid"));
+    EXPECT_THAT(registry.parsePresentationAttribute("color", "invalid"),
+                ParseErrorIs("Invalid color 'invalid'"));
     EXPECT_FALSE(registry.color.hasValue());
     EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
   }
 
   {
     PropertyRegistry registry;
-    EXPECT_TRUE(registry.parsePresentationAttribute("color", "red !important"));
+    EXPECT_THAT(registry.parsePresentationAttribute("color", "red !important"),
+                ParseErrorIs("Expected a single color"));
     EXPECT_FALSE(registry.color.hasValue()) << "!important is not supported";
     EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
   }
 
   {
     PropertyRegistry registry;
-    EXPECT_TRUE(registry.parsePresentationAttribute("color", " /*comment*/ red "));
+    EXPECT_THAT(registry.parsePresentationAttribute("color", " /*comment*/ red "),
+                ParseResultIs(true));
     EXPECT_TRUE(registry.color.hasValue()) << "Comments and whitespace should be ignored";
     EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
   }
@@ -174,7 +177,8 @@ TEST(PropertyRegistry, Fill) {
 
   {
     PropertyRegistry registry;
-    EXPECT_TRUE(registry.parsePresentationAttribute("fill", ""));
+    EXPECT_THAT(registry.parsePresentationAttribute("fill", ""),
+                ParseErrorIs("Invalid paint server value"));
     EXPECT_FALSE(registry.fill.hasValue());
     EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
   }

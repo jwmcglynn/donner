@@ -98,7 +98,8 @@ void SVGElement::setStyle(std::string_view style) {
   handle_.get_or_emplace<StyleComponent>().setStyle(style);
 }
 
-bool SVGElement::trySetPresentationAttribute(std::string_view name, std::string_view value) {
+ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
+                                                          std::string_view value) {
   return handle_.get_or_emplace<StyleComponent>().trySetPresentationAttribute(handle_, name, value);
 }
 
@@ -113,7 +114,7 @@ std::optional<RcString> SVGElement::getAttribute(std::string_view name) const {
 }
 
 SVGDocument& SVGElement::ownerDocument() {
-  return registry().ctx<DocumentContext>().document;
+  return registry().ctx<DocumentContext>().document();
 }
 
 std::optional<SVGElement> SVGElement::parentElement() const {

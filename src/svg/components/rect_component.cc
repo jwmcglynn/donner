@@ -74,15 +74,16 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
 
 ComputedRectComponent::ComputedRectComponent(
     const RectProperties& inputProperties,
-    const std::map<RcString, UnparsedProperty>& unparsedProperties)
+    const std::map<RcString, UnparsedProperty>& unparsedProperties,
+    std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
       auto maybeError =
           it->second(properties, CreateParseFnParams(property.declaration, property.specificity));
-      if (maybeError) {
-        std::cerr << "Error parsing property " << name << ": " << *maybeError << std::endl;
+      if (maybeError && outWarnings) {
+        outWarnings->emplace_back(std::move(maybeError.value()));
       }
     }
   }
@@ -90,9 +91,10 @@ ComputedRectComponent::ComputedRectComponent(
 
 void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
                                                     const ComputedStyleComponent& style,
-                                                    const FontMetrics& fontMetrics) {
+                                                    const FontMetrics& fontMetrics,
+                                                    std::vector<ParseError>* outWarnings) {
   const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(
-      properties, style.properties().unparsedProperties);
+      properties, style.properties().unparsedProperties, outWarnings);
 
   const Vector2d pos(
       computedRect.properties.x.getRequired().toPixels(style.viewbox(), fontMetrics),
@@ -166,6 +168,14 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Rect>(
   }
 
   return false;
+}
+
+void InstantiateComputedRectComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<RectComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [rect, style] = view.get(entity);
+    rect.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                         outWarnings);
+  }
 }
 
 }  // namespace donner::svg

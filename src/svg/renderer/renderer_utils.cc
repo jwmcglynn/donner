@@ -4,17 +4,8 @@
 
 #include <fstream>
 
-#include "src/svg/components/circle_component.h"
-#include "src/svg/components/computed_shadow_tree_component.h"
-#include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/document_context.h"
-#include "src/svg/components/path_component.h"
-#include "src/svg/components/rect_component.h"
 #include "src/svg/components/registry.h"
-#include "src/svg/components/shadow_tree_component.h"
-#include "src/svg/components/sized_element_component.h"
-#include "src/svg/components/transform_component.h"
-#include "src/svg/components/tree_component.h"
 
 namespace donner::svg {
 
@@ -23,58 +14,7 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
   Registry& registry = document.registry();
   registry.ctx<DocumentContext>().defaultSize = defaultSize;
 
-  for (auto view = registry.view<SizedElementComponent>(); auto entity : view) {
-    auto [sizedElement] = view.get(entity);
-
-    registry.emplace_or_replace<ViewboxTransformComponent>(
-        entity, sizedElement.computeTransform(registry, entity, defaultSize));
-  }
-
-  // Instantiate shadow trees.
-  for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
-    auto [shadowTreeComponent] = view.get(entity);
-    if (auto targetEntity = shadowTreeComponent.targetEntity(registry);
-        targetEntity != entt::null) {
-      registry.get_or_emplace<ComputedShadowTreeComponent>(entity).instantiate(registry,
-                                                                               targetEntity);
-    } else {
-      std::cerr << "Warning: Failed to resolve shadow tree target with href '"
-                << shadowTreeComponent.href() << "'." << std::endl;
-    }
-  }
-
-  // Create placeholder ComputedStyleComponents for all elements in the tree.
-  for (auto view = registry.view<TreeComponent>(); auto entity : view) {
-    // TODO: Can this be done in one step, or do the two loops need to be separate?
-    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
-  }
-
-  // Compute the styles for all elements.
-  for (auto view = registry.view<ComputedStyleComponent>(); auto entity : view) {
-    auto [styleComponent] = view.get(entity);
-    styleComponent.computeProperties(EntityHandle(registry, entity));
-  }
-
-  computeAllTransforms(registry);
-
-  // Then compute all paths.
-  for (auto view = registry.view<PathComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [path, style] = view.get(entity);
-    auto maybeError = path.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style);
-    if (maybeError && outWarnings) {
-      outWarnings->emplace_back(std::move(maybeError.value()));
-    }
-  }
-
-  for (auto view = registry.view<RectComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [rect, style] = view.get(entity);
-    rect.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics());
-  }
-
-  for (auto view = registry.view<CircleComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [circle, style] = view.get(entity);
-    circle.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics());
-  }
+  registry.ctx<DocumentContext>().instantiateRenderTree(outWarnings);
 }
 
 bool RendererUtils::writeRgbaPixelsToPngFile(const char* filename,

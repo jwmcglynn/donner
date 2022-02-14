@@ -132,9 +132,9 @@ public:
    * @param handle Entity handle to use for parsing additional attributes.
    * @return true if the attribute name was supported.
    */
-  bool parsePresentationAttribute(std::string_view name, std::string_view value,
-                                  std::optional<ElementType> type = std::nullopt,
-                                  EntityHandle handle = EntityHandle());
+  ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
+                                               std::optional<ElementType> type = std::nullopt,
+                                               EntityHandle handle = EntityHandle());
 
   friend std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry);
 };

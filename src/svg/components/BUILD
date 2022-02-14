@@ -35,6 +35,7 @@ cc_library(
     name = "components",
     srcs = [
         "circle_component.cc",
+        "document_context.cc",
         "path_component.cc",
         "rect_component.cc",
         "registry.cc",

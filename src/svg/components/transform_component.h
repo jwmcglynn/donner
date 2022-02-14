@@ -14,7 +14,8 @@ struct TransformComponent {
                                    []() -> std::optional<CssTransform> { return std::nullopt; }};
 
   void computeWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
-                                   const FontMetrics& fontMetrics);
+                                   const FontMetrics& fontMetrics,
+                                   std::vector<ParseError>* outWarnings);
 
   void compute(EntityHandle handle, const FontMetrics& fontMetrics);
 };
@@ -27,6 +28,6 @@ struct ViewboxTransformComponent {
   Transformd transform;
 };
 
-void computeAllTransforms(Registry& registry);
+void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings);
 
 }  // namespace donner::svg

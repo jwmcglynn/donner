@@ -10,8 +10,8 @@ struct StyleComponent : public HandleOfMixin<StyleComponent> {
   PropertyRegistry properties;
 
   void setStyle(std::string_view style) { properties.parseStyle(style); }
-  bool trySetPresentationAttribute(EntityHandle handle, std::string_view name,
-                                   std::string_view value) {
+  ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                std::string_view value) {
     return properties.parsePresentationAttribute(name, value, handle.get<TreeComponent>().type(),
                                                  handle);
   }

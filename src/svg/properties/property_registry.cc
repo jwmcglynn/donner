@@ -360,9 +360,10 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::string_view value,
-                                                  std::optional<ElementType> type,
-                                                  EntityHandle handle) {
+ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
+                                                               std::string_view value,
+                                                               std::optional<ElementType> type,
+                                                               EntityHandle handle) {
   /* TODO: The SVG2 spec says the name may be similar to the attribute, not necessarily the same.
    * There may need to be a second mapping.
    */
@@ -386,19 +387,13 @@ bool PropertyRegistry::parsePresentationAttribute(std::string_view name, std::st
   if (it != kProperties.end()) {
     auto maybeError = it->second(*this, params);
     if (maybeError.has_value()) {
-      std::cerr << "Error parsing " << name << " property: " << maybeError.value() << std::endl;
+      return std::move(maybeError.value());
     }
 
     return true;
   }
 
-  ParseResult<bool> result = ParseSpecialAttributes(params, name, type, handle);
-  if (result.hasError()) {
-    std::cerr << "Error parsing " << name << " property: " << result.error() << std::endl;
-    return false;
-  } else {
-    return result.result();
-  }
+  return ParseSpecialAttributes(params, name, type, handle);
 }
 
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {

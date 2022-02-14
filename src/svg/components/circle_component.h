@@ -20,7 +20,8 @@ struct CircleProperties {
 
 struct ComputedCircleComponent {
   ComputedCircleComponent(const CircleProperties& inputProperties,
-                          const std::map<RcString, UnparsedProperty>& unparsedProperties);
+                          const std::map<RcString, UnparsedProperty>& unparsedProperties,
+                          std::vector<ParseError>* outWarnings);
 
   CircleProperties properties;
 };
@@ -32,9 +33,10 @@ struct CircleComponent {
   CircleProperties properties;
 
   void computePathWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
-                                       const FontMetrics& fontMetrics) {
+                                       const FontMetrics& fontMetrics,
+                                       std::vector<ParseError>* outWarnings) {
     const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
-        properties, style.properties().unparsedProperties);
+        properties, style.properties().unparsedProperties, outWarnings);
 
     const Vector2d center(
         computedCircle.properties.cx.getRequired().toPixels(style.viewbox(), fontMetrics),
@@ -50,8 +52,10 @@ struct CircleComponent {
     ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
     style.computeProperties(handle);
 
-    return computePathWithPrecomputedStyle(handle, style, fontMetrics);
+    return computePathWithPrecomputedStyle(handle, style, fontMetrics, nullptr);
   }
 };
+
+void InstantiateComputedCircleComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
 }  // namespace donner::svg

@@ -40,7 +40,7 @@ public:
   void setTransform(Transformd transform);
 
   void setStyle(std::string_view style);
-  bool trySetPresentationAttribute(std::string_view name, std::string_view value);
+  ParseResult<bool> trySetPresentationAttribute(std::string_view name, std::string_view value);
 
   bool hasAttribute(std::string_view name) const;
   std::optional<RcString> getAttribute(std::string_view name) const;

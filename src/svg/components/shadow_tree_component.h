@@ -15,9 +15,9 @@ public:
   Entity targetEntity(Registry& registry) {
     // TODO: Full parsing support for URL references.
     if (StringUtils::StartsWith(href_, std::string_view("#"))) {
-      auto& idToEntity = registry.ctx<DocumentContext>().idToEntity;
-      if (auto it = idToEntity.find(href_.substr(1)); it != idToEntity.end()) {
-        return it->second;
+      if (auto entity = registry.ctx<const DocumentContext>().getEntityById(href_.substr(1));
+          entity != entt::null) {
+        return entity;
       }
     }
 

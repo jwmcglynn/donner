@@ -38,16 +38,18 @@ struct ComputedShadowTreeComponent {
    *
    * @param registry The registry.
    * @param lightTarget Target entity to reflect in the shadow tree.
+   * @param outWarnings If provided, warnings will be added to this vector.
    */
-  void instantiate(Registry& registry, Entity lightTarget) {
+  void instantiate(Registry& registry, Entity lightTarget, std::vector<ParseError>* outWarnings) {
     teardown(registry);
     lightRoot_ = lightTarget;
 
-    computeChildren(registry, entt::to_entity(registry, *this), lightTarget);
+    computeChildren(registry, entt::to_entity(registry, *this), lightTarget, outWarnings);
   }
 
 private:
-  void computeChildren(Registry& registry, Entity shadowParent, Entity lightTarget) {
+  void computeChildren(Registry& registry, Entity shadowParent, Entity lightTarget,
+                       std::vector<ParseError>* outWarnings) {
     const Entity shadow = registry.create();
     const TreeComponent& lightTargetTree = registry.get<TreeComponent>(lightTarget);
     registry.emplace<TreeComponent>(shadow, lightTargetTree.type(), lightTargetTree.typeString());
@@ -61,15 +63,17 @@ private:
     // the shadow tree.
     if (auto* nestedShadow = registry.try_get<ShadowTreeComponent>(lightTarget)) {
       if (auto targetEntity = nestedShadow->targetEntity(registry); targetEntity != entt::null) {
-        computeChildren(registry, shadow, targetEntity);
-      } else {
-        std::cerr << "Error: Failed to find target entity for nested shadow tree: "
-                  << nestedShadow->href() << std::endl;
+        computeChildren(registry, shadow, targetEntity, outWarnings);
+      } else if (outWarnings) {
+        ParseError err;
+        err.reason = std::string("Failed to find target entity for nested shadow tree '") +
+                     nestedShadow->href() + "'";
+        outWarnings->emplace_back(std::move(err));
       }
     } else {
       for (auto child = lightTargetTree.firstChild(); child != entt::null;
            child = registry.get<TreeComponent>(child).nextSibling()) {
-        computeChildren(registry, shadow, child);
+        computeChildren(registry, shadow, child, outWarnings);
       }
     }
   }

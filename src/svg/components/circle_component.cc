@@ -48,15 +48,16 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
 
 ComputedCircleComponent::ComputedCircleComponent(
     const CircleProperties& inputProperties,
-    const std::map<RcString, UnparsedProperty>& unparsedProperties)
+    const std::map<RcString, UnparsedProperty>& unparsedProperties,
+    std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
       auto maybeError =
           it->second(properties, CreateParseFnParams(property.declaration, property.specificity));
-      if (maybeError) {
-        std::cerr << "Error parsing property " << name << ": " << *maybeError << std::endl;
+      if (maybeError && outWarnings) {
+        outWarnings->emplace_back(std::move(maybeError.value()));
       }
     }
   }
@@ -79,4 +80,13 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
 
   return false;
 }
+
+void InstantiateComputedCircleComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<CircleComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [circle, style] = view.get(entity);
+    circle.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                           outWarnings);
+  }
+}
+
 }  // namespace donner::svg

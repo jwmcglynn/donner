@@ -8,7 +8,8 @@ namespace donner::svg {
 
 void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
                                                      const ComputedStyleComponent& style,
-                                                     const FontMetrics& fontMetrics) {
+                                                     const FontMetrics& fontMetrics,
+                                                     std::vector<ParseError>* outWarnings) {
   const auto& properties = style.properties().unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
     const UnparsedProperty& property = it->second;
@@ -31,9 +32,8 @@ void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
         },
         &transform);
 
-    if (maybeError) {
-      // TODO: Add mechanism to plumb errors.
-      std::cerr << "Error parsing transform: " << *maybeError << std::endl;
+    if (maybeError && outWarnings) {
+      outWarnings->emplace_back(std::move(maybeError.value()));
     }
   }
 
@@ -49,10 +49,10 @@ void TransformComponent::compute(EntityHandle handle, const FontMetrics& fontMet
   ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
   style.computeProperties(handle);
 
-  return computeWithPrecomputedStyle(handle, style, fontMetrics);
+  return computeWithPrecomputedStyle(handle, style, fontMetrics, nullptr);
 }
 
-void computeAllTransforms(Registry& registry) {
+void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings) {
   // Create placeholder ComputedTransformComponents for all elements in the tree.
   for (auto entity : registry.view<TransformComponent>()) {
     std::ignore = registry.get_or_emplace<ComputedTransformComponent>(entity);
@@ -62,7 +62,8 @@ void computeAllTransforms(Registry& registry) {
   for (auto view = registry.view<TransformComponent, ComputedStyleComponent>();
        auto entity : view) {
     auto [transform, style] = view.get(entity);
-    transform.computeWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics());
+    transform.computeWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                          outWarnings);
   }
 }
 

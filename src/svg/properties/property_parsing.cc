@@ -88,9 +88,10 @@ ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::str
         },
         &transform.transform);
     if (maybeError) {
-      std::cerr << "Error parsing " << name << " property: " << maybeError.value() << std::endl;
-      return false;
+      return std::move(maybeError.value());
     }
+
+    return true;
   }
 
   if (!type.has_value()) {

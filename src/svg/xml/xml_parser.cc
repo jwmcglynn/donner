@@ -96,7 +96,10 @@ static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context,
     element.setStyle(value);
   } else {
     // Try to parse as a presentation attribute.
-    if (!element.trySetPresentationAttribute(name, value)) {
+    auto result = element.trySetPresentationAttribute(name, value);
+    if (result.hasError()) {
+      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
+    } else if (!result.result()) {
       ParseError err;
       err.reason = "Unknown attribute '" + std::string(name) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
