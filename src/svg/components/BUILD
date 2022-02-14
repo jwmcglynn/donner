@@ -61,6 +61,7 @@ cc_library(
         "path_component.h",
         "path_length_component.h",
         "poly_component.h",
+        "preserve_aspect_ratio_component.h",
         "rect_component.h",
         "registry.h",
         "rendering_behavior_component.h",

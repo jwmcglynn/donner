@@ -5,9 +5,12 @@
 #include "src/base/box.h"
 #include "src/base/length.h"
 #include "src/base/transform.h"
+#include "src/svg/components/computed_style_component.h"
+#include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/registry.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/properties/presentation_attribute_parsing.h"
 
 namespace donner::svg {
 
@@ -18,42 +21,73 @@ namespace donner::svg {
  *
  * If not specified, x/y default to 0, and width/height are std::nullopt.
  */
-struct SizedElementComponent {
-  Lengthd x;
-  Lengthd y;
-  std::optional<Lengthd> width;
-  std::optional<Lengthd> height;
+struct SizedElementProperties {
+  Property<Lengthd> x{"x",
+                      []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+  Property<Lengthd> y{"y",
+                      []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+  Property<Lengthd> width{"width", []() -> std::optional<Lengthd> { return std::nullopt; }};
+  Property<Lengthd> height{"height", []() -> std::optional<Lengthd> { return std::nullopt; }};
 
-  Vector2d calculatedSize(Registry& registry, Entity entity, Vector2d defaultRenderSize) const {
-    // TODO: Confirm if this is the correct behavior if <svg> has a viewbox specifying a size, but
-    // no width/height. For Ghostscript_Tiger to detect the size, we need to do this.
-    if (const auto* viewbox = registry.try_get<ViewboxComponent>(entity);
-        viewbox && !width && !height && viewbox->viewbox) {
-      return viewbox->viewbox->size();
-    } else {
-      return Vector2d(width ? width->value : defaultRenderSize.x,
-                      height ? height->value : defaultRenderSize.y);
-    }
-  }
+  auto allProperties() { return std::forward_as_tuple(x, y, width, height); }
+};
 
-  // TODO: Should this also call Lengthd::toPixels to convert units?
-  Transformd computeTransform(Registry& registry, Entity entity, Vector2d defaultRenderSize) const {
+struct ComputedSizedElementComponent {
+  ComputedSizedElementComponent(EntityHandle handle, SizedElementProperties properties,
+                                const std::map<RcString, UnparsedProperty>& unparsedProperties,
+                                Boxd inheritedViewbox, FontMetrics fontMetrics,
+                                std::vector<ParseError>* outWarnings);
+
+  Boxd bounds;
+  Boxd inheritedViewbox;
+
+  Transformd computeTransform(EntityHandle handle) const {
     // TODO: A component with different behavior based on type seems like an
     // antipattern, perhaps this should be a separate component class?
     // If this entity also has a viewbox, this SizedElementComponent is used to define a viewport.
-    if (const auto* viewbox = registry.try_get<ViewboxComponent>(entity)) {
-      const Boxd initialSize(Vector2d(x.value, y.value),
-                             calculatedSize(registry, entity, defaultRenderSize));
-      return viewbox->computeTransform(initialSize);
+
+    if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
+      return viewbox->computeTransform(
+          bounds, handle.get<PreserveAspectRatioComponent>().preserveAspectRatio);
     } else {
-      if (width || height) {
-        // TODO: Add scale, see viewbox_component as an example of how to do so.
-        assert(false && "Not implemented");
+      PreserveAspectRatio preserveAspectRatio;
+      if (const auto* preserveAspectRatioComponent =
+              handle.try_get<PreserveAspectRatioComponent>()) {
+        preserveAspectRatio = preserveAspectRatioComponent->preserveAspectRatio;
       }
 
-      // TODO: What happens if a <use> element has a transform attribute? Do these clobber?
-      return Transformd::Translate(Vector2d(x.value, y.value));
+      Vector2d scale = bounds.size() / inheritedViewbox.size();
+
+      if (preserveAspectRatio.align != PreserveAspectRatio::Align::None) {
+        if (preserveAspectRatio.meetOrSlice == PreserveAspectRatio::MeetOrSlice::Meet) {
+          scale.x = scale.y = std::min(scale.x, scale.y);
+        } else {
+          scale.x = scale.y = std::max(scale.x, scale.y);
+        }
+      }
+
+      Vector2d translation = bounds.top_left - (inheritedViewbox.top_left * scale);
+      const Vector2d alignMaxOffset = bounds.size() - inheritedViewbox.size() * scale;
+
+      const Vector2d alignMultiplier(preserveAspectRatio.alignMultiplierX(),
+                                     preserveAspectRatio.alignMultiplierY());
+      return Transformd::Scale(scale) *
+             Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
     }
+  }
+};
+
+struct SizedElementComponent {
+  SizedElementProperties properties;
+
+  void computeWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
+                                   FontMetrics fontMetrics, std::vector<ParseError>* outWarnings);
+
+  void compute(EntityHandle handle) {
+    ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
+    style.computeProperties(handle);
+
+    return computeWithPrecomputedStyle(handle, style, FontMetrics(), nullptr);
   }
 };
 

@@ -7,6 +7,11 @@
 
 namespace donner::svg {
 
+struct UnparsedProperty {
+  css::Declaration declaration;
+  css::Specificity specificity;
+};
+
 struct PropertyParseFnParams {
   std::variant<std::string_view, std::span<const css::ComponentValue>> valueOrComponents;
   PropertyState explicitState = PropertyState::NotSet;

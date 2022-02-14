@@ -33,7 +33,7 @@ public:
   std::optional<Lengthd> width() const;
   std::optional<Lengthd> height() const;
   std::optional<Boxd> viewbox() const;
-  std::optional<PreserveAspectRatio> preserveAspectRatio() const;
+  PreserveAspectRatio preserveAspectRatio() const;
 };
 
 }  // namespace donner::svg

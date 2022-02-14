@@ -111,21 +111,27 @@ void RendererSkia::draw(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();
 
-  const Vector2d calculatedSize =
-      registry.get_or_emplace<SizedElementComponent>(rootEntity)
-          .calculatedSize(registry, rootEntity, Vector2d(defaultWidth_, defaultHeight_));
+  RendererUtils::prepareDocumentForRendering(document, Vector2d(defaultWidth_, defaultHeight_));
 
+  auto& computedSizeComponent = registry.get<ComputedSizedElementComponent>(rootEntity);
+  Vector2d renderingSize = computedSizeComponent.bounds.size();
+
+  if (renderingSize.x < 1 || renderingSize.y < 1 || renderingSize.x > kMaxDimension ||
+      renderingSize.y > kMaxDimension) {
+    // Invalid size, override so that we don't run out of memory.
+    renderingSize = Vector2d(Clamp(renderingSize.x, 1.0, static_cast<double>(kMaxDimension)),
+                             Clamp(renderingSize.y, 1.0, static_cast<double>(kMaxDimension)));
+
+    const Vector2d origin = computedSizeComponent.bounds.top_left;
+    computedSizeComponent.bounds = Boxd(origin, origin + renderingSize);
+  }
   // TODO: How should we convert float to integers? Should it be rounded?
-  const int width = static_cast<int>(calculatedSize.x);
-  const int height = static_cast<int>(calculatedSize.y);
-  // TODO: This shouldn't crash if the number comes from within the SVG itself.
-  assert(width > 0 && width < kMaxDimension);
-  assert(height > 0 && height < kMaxDimension);
+  const int width = static_cast<int>(renderingSize.x);
+  const int height = static_cast<int>(renderingSize.y);
 
   bitmap_.allocPixels(SkImageInfo::MakeN32Premul(width, height));
   canvas_ = std::make_unique<SkCanvas>(bitmap_);
 
-  RendererUtils::prepareDocumentForRendering(document, Vector2d(width, height));
   draw(registry, rootEntity);
 }
 
@@ -160,8 +166,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
                 << " " << treeEntity << (shadowComponent ? " (shadow)" : "") << std::endl;
     }
 
-    if (const auto* tc = registry.try_get<ViewboxTransformComponent>(dataEntity)) {
-      transform = tc->transform * transform;
+    if (const auto* sizedElement = registry.try_get<ComputedSizedElementComponent>(dataEntity)) {
+      transform = sizedElement->computeTransform(EntityHandle(registry, dataEntity)) * transform;
     }
 
     if (const auto* tc = registry.try_get<ComputedTransformComponent>(dataEntity)) {

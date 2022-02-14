@@ -10,15 +10,15 @@ namespace donner::svg {
 
 struct ViewboxComponent {
   std::optional<Boxd> viewbox;
-  PreserveAspectRatio preserveAspectRatio;
 
   /**
    * Computes the transform for the given Viewbox per
    * https://www.w3.org/TR/SVG2/coords.html#ComputingAViewportsTransform
    *
    * @param size The position and size of the element.
+   * @param preserveAspectRatio The preserveAspectRatio property.
    */
-  Transformd computeTransform(Boxd size) const;
+  Transformd computeTransform(Boxd size, PreserveAspectRatio preserveAspectRatio) const;
 };
 
 }  // namespace donner::svg

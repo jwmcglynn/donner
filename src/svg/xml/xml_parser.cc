@@ -258,22 +258,6 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
     } else {
       element.setPreserveAspectRatio(maybeAspectRatio.result());
     }
-  } else if (name == "x") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setX(length.value());
-    }
-  } else if (name == "y") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setY(length.value());
-    }
-  } else if (name == "width") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setWidth(length.value());
-    }
-  } else if (name == "height") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setHeight(length.value());
-    }
   } else if (namespacePrefix == "xmlns" || name == "xmlns") {
     // This was already parsed by @ref ParseXmlNsAttribute.
   } else {
@@ -316,18 +300,6 @@ std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& contex
   // TODO: Support legacy xlink:href.
   if (name == "href") {
     element.setHref(RcString(value));
-  } else if (name == "x") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setX(length.value());
-    }
-  } else if (name == "y") {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setY(length.value());
-    }
-  } else if (name == "width") {
-    element.setWidth(ParseLengthAttribute(context, value));
-  } else if (name == "height") {
-    element.setHeight(ParseLengthAttribute(context, value));
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);
   }

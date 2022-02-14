@@ -127,6 +127,11 @@ TEST_F(RendererTests, Skew1) {
   renderAndCompare(document, "src/svg/renderer/testdata/golden/skew1.png");
 }
 
+TEST_F(RendererTests, SizeTooLarge) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/size-too-large.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/size-too-large.png");
+}
+
 TEST_F(RendererTests, Ghostscript_Tiger) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/Ghostscript_Tiger.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/Ghostscript_Tiger.png");

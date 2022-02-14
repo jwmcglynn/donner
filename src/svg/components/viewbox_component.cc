@@ -2,7 +2,8 @@
 
 namespace donner::svg {
 
-Transformd ViewboxComponent::computeTransform(Boxd size) const {
+Transformd ViewboxComponent::computeTransform(Boxd size,
+                                              PreserveAspectRatio preserveAspectRatio) const {
   if (!viewbox) {
     return Transformd();
   }

@@ -32,13 +32,6 @@ DocumentContext::DocumentContext(SVGDocument& document, Registry& registry)
 void DocumentContext::instantiateRenderTree(std::vector<ParseError>* outWarnings) {
   assert(defaultSize.has_value() && "defaultSize must be set before instantiating render tree");
 
-  for (auto view = registry_.view<SizedElementComponent>(); auto entity : view) {
-    auto [sizedElement] = view.get(entity);
-
-    registry_.emplace_or_replace<ViewboxTransformComponent>(
-        entity, sizedElement.computeTransform(registry_, entity, defaultSize.value()));
-  }
-
   // Instantiate shadow trees.
   for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
     auto [shadowTreeComponent] = view.get(entity);
@@ -63,6 +56,13 @@ void DocumentContext::instantiateRenderTree(std::vector<ParseError>* outWarnings
   for (auto view = registry_.view<ComputedStyleComponent>(); auto entity : view) {
     auto [styleComponent] = view.get(entity);
     styleComponent.computeProperties(EntityHandle(registry_, entity));
+  }
+
+  for (auto view = registry_.view<SizedElementComponent, ComputedStyleComponent>();
+       auto entity : view) {
+    auto [component, style] = view.get(entity);
+    component.computeWithPrecomputedStyle(EntityHandle(registry_, entity), style, FontMetrics(),
+                                          outWarnings);
   }
 
   ComputeAllTransforms(registry_, outWarnings);

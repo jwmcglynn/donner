@@ -27,39 +27,39 @@ RcString SVGUseElement::href() const {
 }
 
 void SVGUseElement::setX(Lengthd value) {
-  handle_.get_or_emplace<SizedElementComponent>().x = value;
+  handle_.get_or_emplace<SizedElementComponent>().properties.x.set(value,
+                                                                   css::Specificity::Override());
 }
 
 void SVGUseElement::setY(Lengthd value) {
-  handle_.get_or_emplace<SizedElementComponent>().y = value;
+  handle_.get_or_emplace<SizedElementComponent>().properties.y.set(value,
+                                                                   css::Specificity::Override());
 }
 
 void SVGUseElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<SizedElementComponent>().width = value;
+  handle_.get_or_emplace<SizedElementComponent>().properties.width.set(
+      value, css::Specificity::Override());
 }
 
 void SVGUseElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<SizedElementComponent>().height = value;
+  handle_.get_or_emplace<SizedElementComponent>().properties.height.set(
+      value, css::Specificity::Override());
 }
 
 Lengthd SVGUseElement::x() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->x : Lengthd();
+  return handle_.get_or_emplace<SizedElementComponent>().properties.x.getRequired();
 }
 
 Lengthd SVGUseElement::y() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->y : Lengthd();
+  return handle_.get_or_emplace<SizedElementComponent>().properties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGUseElement::width() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->width : std::nullopt;
+  return handle_.get_or_emplace<SizedElementComponent>().properties.width.get();
 }
 
 std::optional<Lengthd> SVGUseElement::height() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->height : std::nullopt;
+  return handle_.get_or_emplace<SizedElementComponent>().properties.height.get();
 }
 
 }  // namespace donner::svg

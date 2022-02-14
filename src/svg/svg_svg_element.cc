@@ -1,5 +1,6 @@
 #include "src/svg/svg_svg_element.h"
 
+#include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/sized_element_component.h"
 #include "src/svg/components/viewbox_component.h"
 #include "src/svg/svg_document.h"
@@ -10,67 +11,57 @@ SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
   EntityHandle handle = CreateEntity(registry, RcString(Tag), Type);
   handle.emplace<ViewboxComponent>();
+  handle.emplace<PreserveAspectRatioComponent>();
+  handle.emplace<SizedElementComponent>();
   return SVGSVGElement(handle);
 }
 
 void SVGSVGElement::setViewbox(std::optional<Boxd> viewbox) {
-  handle_.get_or_emplace<ViewboxComponent>().viewbox = viewbox;
+  handle_.get<ViewboxComponent>().viewbox = viewbox;
 }
 
 void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  handle_.get_or_emplace<ViewboxComponent>().preserveAspectRatio = preserveAspectRatio;
+  handle_.get<PreserveAspectRatioComponent>().preserveAspectRatio = preserveAspectRatio;
 }
 
 void SVGSVGElement::setX(Lengthd value) {
-  handle_.get_or_emplace<SizedElementComponent>().x = value;
+  handle_.get<SizedElementComponent>().properties.x.set(value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setY(Lengthd value) {
-  handle_.get_or_emplace<SizedElementComponent>().y = value;
+  handle_.get<SizedElementComponent>().properties.y.set(value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<SizedElementComponent>().width = value;
+  handle_.get<SizedElementComponent>().properties.width.set(value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<SizedElementComponent>().height = value;
+  handle_.get<SizedElementComponent>().properties.height.set(value, css::Specificity::Override());
 }
 
 std::optional<Boxd> SVGSVGElement::viewbox() const {
-  if (const auto* component = handle_.try_get<ViewboxComponent>()) {
-    return component->viewbox;
-  }
-
-  return std::nullopt;
+  return handle_.get<ViewboxComponent>().viewbox;
 }
 
-std::optional<PreserveAspectRatio> SVGSVGElement::preserveAspectRatio() const {
-  if (const auto* component = handle_.try_get<ViewboxComponent>()) {
-    return component->preserveAspectRatio;
-  }
-
-  return std::nullopt;
+PreserveAspectRatio SVGSVGElement::preserveAspectRatio() const {
+  return handle_.get<PreserveAspectRatioComponent>().preserveAspectRatio;
 }
 
 Lengthd SVGSVGElement::x() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->x : Lengthd();
+  return handle_.get<SizedElementComponent>().properties.x.getRequired();
 }
 
 Lengthd SVGSVGElement::y() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->y : Lengthd();
+  return handle_.get<SizedElementComponent>().properties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGSVGElement::width() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->width : std::nullopt;
+  return handle_.get<SizedElementComponent>().properties.width.getRequired();
 }
 
 std::optional<Lengthd> SVGSVGElement::height() const {
-  const auto* component = handle_.try_get<SizedElementComponent>();
-  return component ? component->height : std::nullopt;
+  return handle_.get<SizedElementComponent>().properties.height.getRequired();
 }
 
 }  // namespace donner::svg

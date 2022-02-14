@@ -14,11 +14,6 @@
 
 namespace donner::svg {
 
-struct UnparsedProperty {
-  css::Declaration declaration;
-  css::Specificity specificity;
-};
-
 class PropertyRegistry;
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const PropertyParseFnParams& params);
@@ -60,9 +55,9 @@ public:
    * Return a tuple of all properties within the PropertyRegistry.
    */
   auto allProperties() {
-    return std::forward_as_tuple(color, fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
-                                 strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
-                                 strokeDashoffset);
+    return std::forward_as_tuple(color, fill, fillRule, fillOpacity, stroke, strokeOpacity,
+                                 strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
+                                 strokeDasharray, strokeDashoffset);
   }
 
   static constexpr size_t numProperties() {

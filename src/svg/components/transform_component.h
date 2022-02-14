@@ -24,10 +24,6 @@ struct ComputedTransformComponent {
   Transformd transform;
 };
 
-struct ViewboxTransformComponent {
-  Transformd transform;
-};
-
 void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings);
 
 }  // namespace donner::svg
