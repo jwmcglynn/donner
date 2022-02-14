@@ -177,7 +177,7 @@ private:
     }
 
     const NumberParser::Result& result = maybeResult.result();
-    remaining_.remove_prefix(result.consumed_chars);
+    remaining_.remove_prefix(result.consumedChars);
     return result.number;
   }
 

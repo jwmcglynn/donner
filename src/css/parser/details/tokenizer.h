@@ -14,7 +14,7 @@ namespace details {
 
 class Tokenizer {
 public:
-  Tokenizer(std::string_view str) : str_(str), remaining_(str) {}
+  explicit Tokenizer(std::string_view str) : str_(str), remaining_(str) {}
 
   Token next() {
     if (nextToken_) {
@@ -308,14 +308,14 @@ private:
   /// Consume a numeric token, per https://www.w3.org/TR/css-syntax-3/#consume-numeric-token
   Token consumeNumericToken() {
     NumberParser::Options options;
-    options.forbid_out_of_range = false;
+    options.forbidOutOfRange = false;
 
     ParseResult<NumberParser::Result> numberResult = NumberParser::Parse(remaining_, options);
     assert(numberResult.hasResult());  // Should not hit due to isNumberStart() precondition.
 
     NumberParser::Result number = numberResult.result();
 
-    RcString numberString(remaining_.substr(0, number.consumed_chars));
+    RcString numberString(remaining_.substr(0, number.consumedChars));
     NumberType type = NumberType::Integer;
     for (char ch : numberString) {
       if (ch == '.' || ch == 'E' || ch == 'e') {
@@ -324,16 +324,16 @@ private:
       }
     }
 
-    std::string_view remainingAfterNumber = remaining_.substr(number.consumed_chars);
+    std::string_view remainingAfterNumber = remaining_.substr(number.consumedChars);
     if (isIdentifierStart(remainingAfterNumber)) {
       auto [name, nameConsumedChars] = consumeName(remainingAfterNumber);
-      return token<Token::Dimension>(number.consumed_chars + nameConsumedChars, number.number, name,
+      return token<Token::Dimension>(number.consumedChars + nameConsumedChars, number.number, name,
                                      LengthParser::ParseUnit(name), std::move(numberString), type);
     } else if (remainingAfterNumber.starts_with("%")) {
-      return token<Token::Percentage>(number.consumed_chars + 1, number.number,
+      return token<Token::Percentage>(number.consumedChars + 1, number.number,
                                       std::move(numberString), type);
     } else {
-      return token<Token::Number>(number.consumed_chars, number.number, std::move(numberString),
+      return token<Token::Number>(number.consumedChars, number.number, std::move(numberString),
                                   type);
     }
   }

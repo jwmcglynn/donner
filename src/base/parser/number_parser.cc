@@ -13,7 +13,7 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
   if (str.size() >= 2 && str[0] == '0' && (str[1] == 'x' || str[1] == 'X')) {
     // Detected a hex value, only parse the first 0.
     result.number = 0.0;
-    result.consumed_chars = 1;
+    result.consumedChars = 1;
     return result;
   }
 
@@ -45,16 +45,16 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
       return err;
     }
 
-    result.consumed_chars = strAdvance - str.begin();
+    result.consumedChars = strAdvance - str.begin();
 
     // Ending with a period is out-of-spec, move the pointer backwards and so it is not consumed.
-    if (str[result.consumed_chars - 1] == '.') {
-      --result.consumed_chars;
+    if (str[result.consumedChars - 1] == '.') {
+      --result.consumedChars;
     }
 
     return result;
-  } else if (!options.forbid_out_of_range && ec == std::errc::result_out_of_range) {
-    result.consumed_chars = strAdvance - str.begin();
+  } else if (!options.forbidOutOfRange && ec == std::errc::result_out_of_range) {
+    result.consumedChars = strAdvance - str.begin();
 
     if (str.starts_with('-')) {
       result.number = -std::numeric_limits<double>::infinity();

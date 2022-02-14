@@ -11,29 +11,29 @@ namespace donner {
 using Result = NumberParser::Result;
 
 static bool operator==(const Result& lhs, const Result& rhs) {
-  return lhs.number == rhs.number && lhs.consumed_chars == rhs.consumed_chars;
+  return lhs.number == rhs.number && lhs.consumedChars == rhs.consumedChars;
 }
 
 static void PrintTo(const Result& result, std::ostream* os) {
-  *os << "(" << result.number << ", consumed: " << result.consumed_chars << ")";
+  *os << "(" << result.number << ", consumed: " << result.consumedChars << ")";
 }
 
 TEST(NumberParser, TestHelpers) {
   NumberParser::Result result;
-  result.consumed_chars = 1;
+  result.consumedChars = 1;
   result.number = 2.0;
 
   EXPECT_EQ(testing::PrintToString(result), "(2, consumed: 1)");
 
   NumberParser::Result other;
-  other.consumed_chars = 1;
+  other.consumedChars = 1;
   other.number = 2.0;
   EXPECT_EQ(result, other);
 
-  other.consumed_chars = 2;
+  other.consumedChars = 2;
   EXPECT_NE(result, other);
 
-  other.consumed_chars = 1;
+  other.consumedChars = 1;
   other.number = -2.0;
   EXPECT_NE(result, other);
 }
@@ -131,7 +131,7 @@ TEST(NumberParser, InfAndNaN) {
 
 TEST(NumberParser, AllowOutOfRange) {
   NumberParser::Options options;
-  options.forbid_out_of_range = false;
+  options.forbidOutOfRange = false;
 
   // Still don't allow Inf/NaN.
   EXPECT_THAT(NumberParser::Parse("Inf", options), ParseErrorIs(HasSubstr("Not finite")));

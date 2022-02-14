@@ -197,7 +197,7 @@ inline bool InRange(T var, T start, T end) {
 template <typename T>
 struct QuadraticSolution {
   T solution[2] = {};
-  bool has_solution = false;
+  bool hasSolution = false;
 };
 
 /**
@@ -215,21 +215,21 @@ QuadraticSolution<T> SolveQuadratic(T a, T b, T c) {
   QuadraticSolution<T> res;
 
   // b^2 - 4ac.
-  T sqrt_content = b * b - T(4) * a * c;
+  T sqrtContent = b * b - T(4) * a * c;
 
   // Check to see if any solutions exist.
-  if (sqrt_content < T(0) || a == T(0)) {
-    res.has_solution = false;
+  if (sqrtContent < T(0) || a == T(0)) {
+    res.hasSolution = false;
     return res;
   }
 
   // Build up the equation.
-  sqrt_content = sqrt(sqrt_content);
+  sqrtContent = sqrt(sqrtContent);
 
   // Solve the two conditions.
-  res.solution[0] = (-b + sqrt_content) / (T(2) * a);
-  res.solution[1] = (-b - sqrt_content) / (T(2) * a);
-  res.has_solution = true;
+  res.solution[0] = (-b + sqrtContent) / (T(2) * a);
+  res.solution[1] = (-b - sqrtContent) / (T(2) * a);
+  res.hasSolution = true;
   return res;
 }
 

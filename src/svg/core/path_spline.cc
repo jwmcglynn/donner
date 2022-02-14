@@ -87,7 +87,7 @@ Boxd PathSpline::bounds() const {
           // Solve using the quadratic formula.
           const QuadraticSolution<double> res = SolveQuadratic(a.x, b.x, c.x);
 
-          if (res.has_solution) {
+          if (res.hasSolution) {
             if (res.solution[0] >= 0.0 && res.solution[0] <= 1.0) {
               box.addPoint(pointAt(i, res.solution[0]));
             }
@@ -110,7 +110,7 @@ Boxd PathSpline::bounds() const {
           // Solve using the quadratic formula.
           QuadraticSolution<double> res = SolveQuadratic(a.y, b.y, c.y);
 
-          if (res.has_solution) {
+          if (res.hasSolution) {
             if (res.solution[0] >= 0.0 && res.solution[0] <= 1.0) {
               box.addPoint(pointAt(i, res.solution[0]));
             }

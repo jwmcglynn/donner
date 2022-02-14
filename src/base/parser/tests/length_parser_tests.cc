@@ -41,70 +41,69 @@ static void PrintTo(const Lengthd& value, std::ostream* os) {
 
 static void PrintTo(const LengthParser::Result& value, std::ostream* os) {
   *os << "Result {" << testing::PrintToString(value.length)
-      << ", consumed_chars: " << value.consumed_chars << "}";
+      << ", consumedChars: " << value.consumedChars << "}";
 }
 
 MATCHER_P3(LengthResult, valueMatcher, unitMatcher, consumedChars, "") {
   return testing::ExplainMatchResult(valueMatcher, arg.length.value, result_listener) &&
          testing::ExplainMatchResult(unitMatcher, arg.length.unit, result_listener) &&
-         arg.consumed_chars == consumedChars;
+         arg.consumedChars == consumedChars;
 }
 
 TEST(LengthParser, TestHelpers) {
   LengthParser::Result result;
-  result.consumed_chars = 1;
+  result.consumedChars = 1;
   result.length.value = 2.0;
   result.length.unit = Lengthd::Unit::None;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::None}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::None}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Percent;
-  EXPECT_EQ(testing::PrintToString(result),
-            "Result {Length {2, Unit::Percent}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Percent}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Cm;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Cm}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Cm}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Mm;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Mm}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Mm}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Q;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Q}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Q}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::In;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::In}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::In}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Pc;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Pc}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Pc}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Pt;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Pt}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Pt}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Px;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Px}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Px}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Em;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Em}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Em}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Ex;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Ex}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Ex}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Ch;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Ch}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Ch}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Rem;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Rem}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Rem}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vw;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vw}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vw}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vh;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vh}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vh}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vmin;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vmin}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vmin}, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vmax;
-  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vmax}, consumed_chars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {Length {2, Unit::Vmax}, consumedChars: 1}");
 }
 
 TEST(LengthParser, Empty) {

@@ -11,7 +11,7 @@ class LengthParser {
 public:
   struct Result {
     Lengthd length;
-    size_t consumed_chars;
+    size_t consumedChars;
   };
 
   struct Options {
@@ -53,7 +53,7 @@ public:
    * to all numbers by setting Options::unitOptional to true.
    *
    * Note that this may not consume all input, the caller should handle the result of
-   * Result::consumed_chars.
+   * Result::consumedChars.
    *
    * @param str String to parse, not all characters may be consumed.
    * @param options Parser options.

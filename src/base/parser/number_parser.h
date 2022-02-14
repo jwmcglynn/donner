@@ -10,7 +10,7 @@ class NumberParser {
 public:
   struct Result {
     double number;
-    size_t consumed_chars;
+    size_t consumedChars;
   };
 
   struct Options {
@@ -19,7 +19,7 @@ public:
      * returning an error.  With this set to false, assuming the input string starts with a number,
      * all parses should return successful ParseResults.
      */
-    bool forbid_out_of_range = true;
+    bool forbidOutOfRange = true;
 
     Options() {}
   };

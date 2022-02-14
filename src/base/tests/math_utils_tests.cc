@@ -1,9 +1,9 @@
-#include "src/base/math_utils.h"
-
 #include <gtest/gtest-death-test.h>
 #include <gtest/gtest.h>
 
 #include <limits>
+
+#include "src/base/math_utils.h"
 
 namespace donner {
 
@@ -154,24 +154,24 @@ TEST(MathUtils, InRange) {
 TEST(MathUtils, SolveQuadratic) {
   {
     QuadraticSolution<float> res = SolveQuadratic(0.0f, 0.0f, 0.0f);
-    EXPECT_FALSE(res.has_solution);
+    EXPECT_FALSE(res.hasSolution);
   }
 
   {
     QuadraticSolution<float> res = SolveQuadratic(1.0f, 1.0f, 1.0f);
-    EXPECT_FALSE(res.has_solution);
+    EXPECT_FALSE(res.hasSolution);
   }
 
   {
     QuadraticSolution<float> res = SolveQuadratic(1.0f, 2.0f, 1.0f);
-    EXPECT_TRUE(res.has_solution);
+    EXPECT_TRUE(res.hasSolution);
     EXPECT_EQ(res.solution[0], -1.0f);
     EXPECT_EQ(res.solution[1], -1.0f);
   }
 
   {
     QuadraticSolution<float> res = SolveQuadratic(1.0f, 5.0f, 2.25f);
-    EXPECT_TRUE(res.has_solution);
+    EXPECT_TRUE(res.hasSolution);
     EXPECT_EQ(res.solution[0], -0.5f);
     EXPECT_EQ(res.solution[1], -4.5f);
   }

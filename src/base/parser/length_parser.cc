@@ -74,14 +74,14 @@ public:
       }
 
       result.length.value = number;
-      result.consumed_chars = currentOffset();
+      result.consumedChars = currentOffset();
       return result;
     }
 
     size_t charsConsumed = 0;
     if (auto maybeUnit = parseUnit(remaining_, &charsConsumed)) {
       remaining_.remove_prefix(charsConsumed);
-      result.consumed_chars = currentOffset();
+      result.consumedChars = currentOffset();
       result.length.value = number;
       result.length.unit = maybeUnit.value();
       return result;
@@ -94,7 +94,7 @@ public:
       return err;
     } else {
       result.length.value = number;
-      result.consumed_chars = currentOffset();
+      result.consumedChars = currentOffset();
       return result;
     }
   }

@@ -50,7 +50,7 @@ std::string_view TypeToString(rapidxml_ns::node_type type) {
 static std::optional<double> ParseNumberNoSuffix(std::string_view str) {
   const auto maybeResult = NumberParser::Parse(str);
   if (maybeResult.hasResult()) {
-    if (maybeResult.result().consumed_chars != str.size()) {
+    if (maybeResult.result().consumedChars != str.size()) {
       // We had extra characters, treat as invalid.
       return std::nullopt;
     }
@@ -73,10 +73,10 @@ static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
     return std::nullopt;
   }
 
-  if (maybeLengthResult.result().consumed_chars != value.size()) {
+  if (maybeLengthResult.result().consumedChars != value.size()) {
     ParseError err;
     err.reason = "Unexpected data at end of attribute";
-    err.offset = maybeLengthResult.result().consumed_chars;
+    err.offset = maybeLengthResult.result().consumedChars;
     context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     return std::nullopt;
   }
