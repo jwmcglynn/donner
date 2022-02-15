@@ -107,6 +107,16 @@ protected:
   }
 };
 
+TEST_F(RendererTests, Ellipse1) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/ellipse1.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/ellipse1.png");
+}
+
+TEST_F(RendererTests, Rect2) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/rect2.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/rect2.png");
+}
+
 TEST_F(RendererTests, Ghostscript_Tiger) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/Ghostscript_Tiger.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/Ghostscript_Tiger.png");

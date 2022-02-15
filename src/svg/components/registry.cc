@@ -8,6 +8,7 @@ std::string_view TypeToString(ElementType type) {
   switch (type) {
     case ElementType::Circle: return "Circle";
     case ElementType::Defs: return "Defs";
+    case ElementType::Ellipse: return "Ellipse";
     case ElementType::G: return "G";
     case ElementType::Use: return "Use";
     case ElementType::SVG: return "SVG";

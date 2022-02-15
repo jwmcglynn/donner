@@ -8,6 +8,8 @@
 
 using testing::AllOf;
 using testing::ElementsAre;
+using testing::Eq;
+using testing::Optional;
 
 namespace donner::svg {
 
@@ -48,15 +50,25 @@ auto HeightEq(auto valueMatcher, auto unitMatcher) {
   return testing::Property("height", &SVGRectElement::height, LengthIs(valueMatcher, unitMatcher));
 }
 
+auto RxIsAuto() {
+  return testing::Property("rx", &SVGRectElement::rx, Eq(std::nullopt));
+}
+
 auto RxEq(auto valueMatcher, auto unitMatcher) {
-  return testing::Property("rx", &SVGRectElement::rx, LengthIs(valueMatcher, unitMatcher));
+  return testing::Property("rx", &SVGRectElement::rx,
+                           Optional(LengthIs(valueMatcher, unitMatcher)));
+}
+
+auto RyIsAuto() {
+  return testing::Property("ry", &SVGRectElement::ry, Eq(std::nullopt));
 }
 
 auto RyEq(auto valueMatcher, auto unitMatcher) {
-  return testing::Property("ry", &SVGRectElement::ry, LengthIs(valueMatcher, unitMatcher));
+  return testing::Property("ry", &SVGRectElement::ry,
+                           Optional(LengthIs(valueMatcher, unitMatcher)));
 }
 
-MATCHER_P(RectHas, matchers, "") {
+MATCHER_P(ElementHas, matchers, "") {
   return testing::ExplainMatchResult(matchers, arg.element, result_listener);
 }
 
@@ -65,28 +77,37 @@ MATCHER_P(RectHas, matchers, "") {
 TEST(SVGRectElementTests, Defaults) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGRectElement>(  //
                   "<rect />"),
-              RectHas(AllOf(XEq(0.0, Lengthd::Unit::None),      //
-                            YEq(0.0, Lengthd::Unit::None),      //
-                            WidthEq(0.0, Lengthd::Unit::None),  //
-                            HeightEq(0.0, Lengthd::Unit::None))));
+              ElementHas(AllOf(XEq(0.0, Lengthd::Unit::None),      //
+                               YEq(0.0, Lengthd::Unit::None),      //
+                               WidthEq(0.0, Lengthd::Unit::None),  //
+                               HeightEq(0.0, Lengthd::Unit::None))));
 }
 
 TEST(SVGRectElementTests, Simple) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGRectElement>(  //
                   R"(<rect x="50" y="40" width="30" height="20" />)"),
-              RectHas(AllOf(XEq(50.0, Lengthd::Unit::None),      //
-                            YEq(40.0, Lengthd::Unit::None),      //
-                            WidthEq(30.0, Lengthd::Unit::None),  //
-                            HeightEq(20.0, Lengthd::Unit::None))));
+              ElementHas(AllOf(XEq(50.0, Lengthd::Unit::None),       //
+                               YEq(40.0, Lengthd::Unit::None),       //
+                               WidthEq(30.0, Lengthd::Unit::None),   //
+                               HeightEq(20.0, Lengthd::Unit::None),  //
+                               RxIsAuto(),                           //
+                               RyIsAuto())));
+}
+
+TEST(SVGRectElementTests, RoundedCorners) {
+  EXPECT_THAT(instantiateSubtreeElementAs<SVGRectElement>(  //
+                  R"(<rect x="50" y="40" width="30" height="20" rx="5" ry="6" />)"),
+              ElementHas(AllOf(RxEq(5.0, Lengthd::Unit::None),  //
+                               RyEq(6.0, Lengthd::Unit::None))));
 }
 
 TEST(SVGRectElementTests, Units) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGRectElement>(  //
                   R"(<rect x="50px" y="0" width="30em" height="20pt" />)"),
-              RectHas(AllOf(XEq(50.0, Lengthd::Unit::Px),      //
-                            YEq(0.0, Lengthd::Unit::None),     //
-                            WidthEq(30.0, Lengthd::Unit::Em),  //
-                            HeightEq(20.0, Lengthd::Unit::Pt))));
+              ElementHas(AllOf(XEq(50.0, Lengthd::Unit::Px),      //
+                               YEq(0.0, Lengthd::Unit::None),     //
+                               WidthEq(30.0, Lengthd::Unit::Em),  //
+                               HeightEq(20.0, Lengthd::Unit::Pt))));
 }
 
 TEST(SVGRectElementTests, PresentationAttributes) {
@@ -107,10 +128,10 @@ TEST(SVGRectElementTests, PresentationAttributes) {
   EXPECT_THAT(result.element.computedWidth(), LengthIs(20.0, Lengthd::Unit::Em));
   EXPECT_THAT(result.element.computedHeight(), LengthIs(30.0, Lengthd::Unit::Pt));
 
-  EXPECT_THAT(result, RectHas(AllOf(XEq(0.0, Lengthd::Unit::None),      //
-                                    YEq(0.0, Lengthd::Unit::None),      //
-                                    WidthEq(0.0, Lengthd::Unit::None),  //
-                                    HeightEq(0.0, Lengthd::Unit::None))));
+  EXPECT_THAT(result, ElementHas(AllOf(XEq(0.0, Lengthd::Unit::None),      //
+                                       YEq(0.0, Lengthd::Unit::None),      //
+                                       WidthEq(0.0, Lengthd::Unit::None),  //
+                                       HeightEq(0.0, Lengthd::Unit::None))));
 }
 
 TEST(SVGRectElementTests, Spline) {

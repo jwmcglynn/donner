@@ -18,6 +18,7 @@ using EntityHandle = entt::basic_handle<Entity>;
 enum class ElementType {
   Circle,
   Defs,
+  Ellipse,
   G,
   Path,
   Rect,
@@ -34,6 +35,8 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
   switch (type) {
     case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());
     case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
+    case ElementType::Ellipse:
+      return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
     case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());

@@ -3,6 +3,7 @@
 #include "src/svg/components/circle_component.h"
 #include "src/svg/components/computed_shadow_tree_component.h"
 #include "src/svg/components/computed_style_component.h"
+#include "src/svg/components/ellipse_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/shadow_tree_component.h"
@@ -21,6 +22,7 @@ DocumentContext::DocumentContext(SVGDocument& document, Registry& registry)
   sink.connect<&InstantiateComputedPathComponents>();
   sink.connect<&InstantiateComputedRectComponents>();
   sink.connect<&InstantiateComputedCircleComponents>();
+  sink.connect<&InstantiateComputedEllipseComponents>();
 }
 
 void DocumentContext::instantiateRenderTree(std::vector<ParseError>* outWarnings) {

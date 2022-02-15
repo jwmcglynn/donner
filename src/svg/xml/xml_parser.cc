@@ -13,6 +13,7 @@
 #include "src/svg/svg_circle_element.h"
 #include "src/svg/svg_defs_element.h"
 #include "src/svg/svg_element.h"
+#include "src/svg/svg_ellipse_element.h"
 #include "src/svg/svg_g_element.h"
 #include "src/svg/svg_path_element.h"
 #include "src/svg/svg_rect_element.h"
@@ -29,6 +30,7 @@ namespace {
 using SVGElements = entt::type_list<  //
     SVGCircleElement,                 //
     SVGDefsElement,                   //
+    SVGEllipseElement,                //
     SVGGElement,                      //
     SVGPathElement,                   //
     SVGRectElement,                   //

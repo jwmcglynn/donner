@@ -36,6 +36,7 @@ cc_library(
     srcs = [
         "circle_component.cc",
         "document_context.cc",
+        "ellipse_component.cc",
         "path_component.cc",
         "rect_component.cc",
         "registry.cc",
@@ -52,6 +53,7 @@ cc_library(
         "computed_shadow_tree_component.h",
         "computed_style_component.h",
         "document_context.h",
+        "ellipse_component.h",
         "id_component.h",
         "path_component.h",
         "rect_component.h",
