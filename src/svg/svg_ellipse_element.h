@@ -1,15 +1,13 @@
 #pragma once
 
-#include <optional>
-
 #include "src/base/length.h"
-#include "src/svg/svg_element.h"
+#include "src/svg/svg_geometry_element.h"
 
 namespace donner::svg {
 
-class SVGEllipseElement : public SVGGraphicsElement {
+class SVGEllipseElement : public SVGGeometryElement {
 protected:
-  explicit SVGEllipseElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
+  explicit SVGEllipseElement(EntityHandle handle) : SVGGeometryElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Ellipse;

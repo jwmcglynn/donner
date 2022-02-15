@@ -56,6 +56,7 @@ cc_library(
         "ellipse_component.h",
         "id_component.h",
         "path_component.h",
+        "path_length_component.h",
         "rect_component.h",
         "registry.h",
         "rendering_behavior_component.h",

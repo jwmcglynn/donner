@@ -6,6 +6,7 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/path_component.h"
+#include "src/svg/components/path_length_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/shadow_entity_component.h"
@@ -215,11 +216,12 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
             if (style.strokeDasharray.get().has_value()) {
               double dashUnitsScale = 1.0;
-              if (path->userPathLength && !NearZero(path->userPathLength.value())) {
+              if (const auto* pathLength = registry.try_get<PathLengthComponent>(dataEntity);
+                  pathLength && !NearZero(pathLength->value)) {
                 // If the user specifies a path length, we need to scale between the user's length
                 // and computed length.
                 const double skiaLength = SkPathMeasure(skiaPath, false).getLength();
-                dashUnitsScale = skiaLength / path->userPathLength.value();
+                dashUnitsScale = skiaLength / pathLength->value;
               }
 
               // TODO: Avoid the copying on property access, if possible, and try to cache the

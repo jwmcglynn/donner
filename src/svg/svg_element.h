@@ -131,6 +131,4 @@ protected:
   explicit SVGGraphicsElement(EntityHandle handle) : SVGElement(handle) {}
 };
 
-class SVGGeometryElement : public SVGGraphicsElement {};
-
 }  // namespace donner::svg

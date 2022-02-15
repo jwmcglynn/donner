@@ -1,16 +1,14 @@
 #pragma once
 
-#include <optional>
-
 #include "src/base/length.h"
 #include "src/svg/core/path_spline.h"
-#include "src/svg/svg_element.h"
+#include "src/svg/svg_geometry_element.h"
 
 namespace donner::svg {
 
-class SVGRectElement : public SVGGraphicsElement {
+class SVGRectElement : public SVGGeometryElement {
 protected:
-  explicit SVGRectElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
+  explicit SVGRectElement(EntityHandle handle) : SVGGeometryElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Rect;

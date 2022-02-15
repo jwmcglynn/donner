@@ -94,6 +94,18 @@
       }
     },
     {
+      "label": "renderer_tests",
+      "type": "shell",
+      "command": "bazel run -c dbg //src/svg/renderer/tests:renderer_tests",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
       "label": "base_parser_tests",
       "type": "shell",
       "command": "bazel build //src/base/parser:parser_tests -c dbg",
@@ -155,10 +167,7 @@
       "type": "shell",
       "command": "bazel run //src/svg/tests:svg_tests -c dbg",
       "problemMatcher": [],
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      }
+      "group": "test"
     },
     {
       "label": "css_parser_tests",

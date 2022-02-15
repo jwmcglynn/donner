@@ -28,14 +28,6 @@ void SVGPathElement::setD(RcString d) {
   path.d.set(d, css::Specificity::Override());
 }
 
-std::optional<double> SVGPathElement::pathLength() const {
-  return handle_.get_or_emplace<PathComponent>().userPathLength;
-}
-
-void SVGPathElement::setPathLength(std::optional<double> value) {
-  handle_.get_or_emplace<PathComponent>().userPathLength = value;
-}
-
 std::optional<PathSpline> SVGPathElement::computedSpline() const {
   compute();
   if (const auto* computedPath = handle_.try_get<ComputedPathComponent>()) {

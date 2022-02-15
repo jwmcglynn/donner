@@ -69,7 +69,6 @@ std::optional<ParseError> PathComponent::computePathWithPrecomputedStyle(
       } else {
         computedPath.spline = std::nullopt;
       }
-      computedPath.userPathLength = userPathLength;
     }
   } else {
     handle.remove<ComputedPathComponent>();

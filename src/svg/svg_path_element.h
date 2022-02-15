@@ -1,13 +1,13 @@
 #pragma once
 
 #include "src/svg/core/path_spline.h"
-#include "src/svg/svg_element.h"
+#include "src/svg/svg_geometry_element.h"
 
 namespace donner::svg {
 
-class SVGPathElement : public SVGGraphicsElement {
+class SVGPathElement : public SVGGeometryElement {
 protected:
-  explicit SVGPathElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
+  explicit SVGPathElement(EntityHandle handle) : SVGGeometryElement(handle) {}
 
 public:
   static constexpr ElementType Type = ElementType::Path;
@@ -17,9 +17,6 @@ public:
 
   RcString d() const;
   void setD(RcString d);
-
-  std::optional<double> pathLength() const;
-  void setPathLength(std::optional<double> value);
 
   std::optional<PathSpline> computedSpline() const;
 

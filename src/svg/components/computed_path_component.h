@@ -8,10 +8,8 @@
 
 namespace donner::svg {
 
-class ComputedPathComponent {
-public:
+struct ComputedPathComponent {
   std::optional<PathSpline> spline;
-  std::optional<double> userPathLength;
 };
 
 }  // namespace donner::svg

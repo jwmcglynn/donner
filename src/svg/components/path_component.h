@@ -10,7 +10,6 @@ namespace donner::svg {
 
 struct PathComponent {
   Property<RcString> d{"d", []() -> std::optional<RcString> { return RcString(); }};
-  std::optional<double> userPathLength;
 
   auto allProperties() { return std::forward_as_tuple(d); }
 

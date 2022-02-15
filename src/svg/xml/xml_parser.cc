@@ -38,6 +38,11 @@ using SVGElements = entt::type_list<  //
     SVGSVGElement,                    //
     SVGUseElement>;
 
+template <typename T>
+concept HasPathLength = requires(T element, std::optional<double> value) {
+  element.setPathLength(value);
+};
+
 std::string_view TypeToString(rapidxml_ns::node_type type) {
   switch (type) {
     case rapidxml_ns::node_document: return "node_document";
@@ -88,10 +93,11 @@ static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
   return maybeLengthResult.result().length;
 }
 
-static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, SVGElement element,
-                                                      std::string_view namespacePrefix,
-                                                      std::string_view name,
-                                                      std::string_view value) {
+static std::optional<ParseError> ParseUnconditionalCommonAttribute(XMLParserContext& context,
+                                                                   SVGElement element,
+                                                                   std::string_view namespacePrefix,
+                                                                   std::string_view name,
+                                                                   std::string_view value) {
   if (name == "id") {
     element.setId(value);
   } else if (name == "class") {
@@ -113,6 +119,28 @@ static std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context,
 }
 
 template <typename T>
+std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, T element,
+                                               std::string_view namespacePrefix,
+                                               std::string_view name, std::string_view value) {
+  if constexpr (HasPathLength<T>) {
+    if (name == "pathLength") {
+      // Parse the attribute as a number, and if it resolves set the length.
+      if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+        element.setPathLength(maybeNumber.value());
+      } else {
+        ParseError err;
+        err.reason = "Invalid pathLength value '" + std::string(value) + "'";
+        context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+      }
+
+      return std::nullopt;
+    }
+  }
+
+  return ParseUnconditionalCommonAttribute(context, element, namespacePrefix, name, value);
+}
+
+template <typename T>
 std::optional<ParseError> ParseNodeContents(XMLParserContext& context, T element,
                                             rapidxml_ns::xml_node<>* node) {
   return std::nullopt;
@@ -123,28 +151,6 @@ std::optional<ParseError> ParseAttribute(XMLParserContext& context, T element,
                                          std::string_view namespacePrefix, std::string_view name,
                                          std::string_view value) {
   return ParseCommonAttribute(context, element, namespacePrefix, name, value);
-}
-
-template <>
-std::optional<ParseError> ParseAttribute<SVGPathElement>(XMLParserContext& context,
-                                                         SVGPathElement element,
-                                                         std::string_view namespacePrefix,
-                                                         std::string_view name,
-                                                         std::string_view value) {
-  if (name == "pathLength") {
-    // Parse the attribute as a number, and if it resolves set the length.
-    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      element.setPathLength(maybeNumber.value());
-    } else {
-      ParseError err;
-      err.reason = "Invalid pathLength value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-    }
-  } else {
-    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
-  }
-
-  return std::nullopt;
 }
 
 template <>
