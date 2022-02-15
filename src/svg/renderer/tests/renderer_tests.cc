@@ -62,13 +62,17 @@ protected:
     const size_t strideInPixels = renderer.width();
     const int width = renderer.width();
     const int height = renderer.height();
-
-    const char* goldenImagePath = std::getenv("UPDATE_GOLDEN_IMAGES");
-    bool updateGoldenImages = (goldenImagePath != nullptr);
     Image goldenImage;
 
-    if (updateGoldenImages) {
+    const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
+    if (goldenImageDirToUpdate) {
       goldenImage = Image{width, height, strideInPixels, std::vector<uint8_t>(width * height * 4)};
+
+      const std::filesystem::path goldenImagePath =
+          std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
+
+      RendererUtils::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(),
+                                              renderer.pixelData(), width, height, strideInPixels);
     } else {
       auto maybeGoldenImage = RendererTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
       ASSERT_TRUE(maybeGoldenImage.has_value());
@@ -88,21 +92,22 @@ protected:
     const int mismatchedPixels = pixelmatch::pixelmatch(
         goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
 
-    if (updateGoldenImages) {
-      const std::filesystem::path imageToUpdate =
-          std::filesystem::path(goldenImagePath) / goldenImageFilename;
-      RendererUtils::writeRgbaPixelsToPngFile(imageToUpdate.string().c_str(), renderer.pixelData(),
-                                              width, height);
-    } else if (mismatchedPixels != 0) {
-      const std::filesystem::path actualDiffFilename =
+    if (mismatchedPixels != 0) {
+      const std::filesystem::path actualImagePath =
           std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
-      std::cerr << "Saving actual diff to: " << actualDiffFilename << std::endl;
+      std::cout << "Actual rendering: " << actualImagePath.string() << std::endl;
+      RendererUtils::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(),
+                                              renderer.pixelData(), width, height, strideInPixels);
 
-      RendererUtils::writeRgbaPixelsToPngFile(actualDiffFilename.string().c_str(), diffImage, width,
-                                              height);
+      const std::filesystem::path diffFilePath =
+          std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
+      std::cerr << "Diff: " << diffFilePath.string() << std::endl;
+
+      RendererUtils::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
+                                              height, strideInPixels);
 
       FAIL() << "Computed image diff and expected version in " << goldenImageFilename
-             << " do not match, " << mismatchedPixels << " pixels do not match.";
+             << " do not match, " << mismatchedPixels << " pixels different.";
     }
   }
 };
