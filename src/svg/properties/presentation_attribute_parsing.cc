@@ -2,7 +2,7 @@
 
 namespace donner::svg {
 
-// SVGDefsElement has no component, so define the presentation attribute template overload for it
+// For elements without components, define the presentation attribute template overload for them
 // here.
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Defs>(
@@ -10,8 +10,13 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Defs>(
   return false;
 }
 
-// SVGUnknownElement has no component, so define the presentation attribute template overload for it
-// here.
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::G>(EntityHandle handle,
+                                                             std::string_view name,
+                                                             const PropertyParseFnParams& params) {
+  return false;
+}
+
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Unknown>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {

@@ -10,21 +10,6 @@ namespace donner::svg {
 
 namespace {
 
-template <typename ReturnType, typename FnT>
-ReturnType ToConstexpr(ElementType type, FnT fn) {
-  switch (type) {
-    case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());
-    case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
-    case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
-    case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
-    case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
-    case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());
-    case ElementType::Unknown:
-      return fn(std::integral_constant<ElementType, ElementType::Unknown>());
-    case ElementType::Use: return fn(std::integral_constant<ElementType, ElementType::Use>());
-  };
-}
-
 std::span<const css::ComponentValue> TrimTrailingWhitespace(
     std::span<const css::ComponentValue> components) {
   while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
