@@ -19,7 +19,7 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
 
 bool RendererUtils::writeRgbaPixelsToPngFile(const char* filename,
                                              std::span<const uint8_t> rgbaPixels, int width,
-                                             int height) {
+                                             int height, size_t strideInPixels) {
   struct Context {
     std::ofstream output;
   };
@@ -39,7 +39,8 @@ bool RendererUtils::writeRgbaPixelsToPngFile(const char* filename,
         Context* contextObj = reinterpret_cast<Context*>(context);
         contextObj->output.write(static_cast<const char*>(data), len);
       },
-      &context, width, height, 4, rgbaPixels.data(), width * 4);
+      &context, width, height, 4, rgbaPixels.data(),
+      /* stride in bytes */ strideInPixels ? strideInPixels * 4 : width * 4);
 
   return context.output.good();
 }
