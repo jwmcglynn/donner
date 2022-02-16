@@ -15,6 +15,7 @@
 #include "src/svg/svg_element.h"
 #include "src/svg/svg_ellipse_element.h"
 #include "src/svg/svg_g_element.h"
+#include "src/svg/svg_line_element.h"
 #include "src/svg/svg_path_element.h"
 #include "src/svg/svg_rect_element.h"
 #include "src/svg/svg_style_element.h"
@@ -32,6 +33,7 @@ using SVGElements = entt::type_list<  //
     SVGDefsElement,                   //
     SVGEllipseElement,                //
     SVGGElement,                      //
+    SVGLineElement,                   //
     SVGPathElement,                   //
     SVGRectElement,                   //
     SVGStyleElement,                  //
@@ -151,6 +153,35 @@ std::optional<ParseError> ParseAttribute(XMLParserContext& context, T element,
                                          std::string_view namespacePrefix, std::string_view name,
                                          std::string_view value) {
   return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGLineElement>(XMLParserContext& context,
+                                                         SVGLineElement element,
+                                                         std::string_view namespacePrefix,
+                                                         std::string_view name,
+                                                         std::string_view value) {
+  if (name == "x1") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX1(length.value());
+    }
+  } else if (name == "y1") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY1(length.value());
+    }
+  } else if (name == "x2") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX2(length.value());
+    }
+  } else if (name == "y2") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY2(length.value());
+    }
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
 }
 
 template <>

@@ -20,6 +20,7 @@ enum class ElementType {
   Defs,
   Ellipse,
   G,
+  Line,
   Path,
   Rect,
   Style,
@@ -38,6 +39,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Ellipse:
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());
+    case ElementType::Line: return fn(std::integral_constant<ElementType, ElementType::Line>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
     case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
     case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());

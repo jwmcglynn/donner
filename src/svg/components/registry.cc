@@ -10,6 +10,7 @@ std::string_view TypeToString(ElementType type) {
     case ElementType::Defs: return "Defs";
     case ElementType::Ellipse: return "Ellipse";
     case ElementType::G: return "G";
+    case ElementType::Line: return "Line";
     case ElementType::Use: return "Use";
     case ElementType::SVG: return "SVG";
     case ElementType::Path: return "Path";

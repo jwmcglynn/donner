@@ -4,6 +4,7 @@
 #include "src/svg/components/computed_shadow_tree_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/ellipse_component.h"
+#include "src/svg/components/line_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/shadow_tree_component.h"
@@ -19,10 +20,11 @@ DocumentContext::DocumentContext(SVGDocument& document, Registry& registry)
 
   // Set up render tree signals.
   entt::sink sink(computePaths_);
-  sink.connect<&InstantiateComputedPathComponents>();
-  sink.connect<&InstantiateComputedRectComponents>();
   sink.connect<&InstantiateComputedCircleComponents>();
   sink.connect<&InstantiateComputedEllipseComponents>();
+  sink.connect<&InstantiateComputedPathComponents>();
+  sink.connect<&InstantiateComputedRectComponents>();
+  sink.connect<&InstantiateLineComponents>();
 }
 
 void DocumentContext::instantiateRenderTree(std::vector<ParseError>* outWarnings) {

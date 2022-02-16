@@ -62,27 +62,27 @@ protected:
     const size_t strideInPixels = renderer.width();
     const int width = renderer.width();
     const int height = renderer.height();
-    Image goldenImage;
 
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
     if (goldenImageDirToUpdate) {
-      goldenImage = Image{width, height, strideInPixels, std::vector<uint8_t>(width * height * 4)};
-
       const std::filesystem::path goldenImagePath =
           std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
 
       RendererUtils::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(),
                                               renderer.pixelData(), width, height, strideInPixels);
-    } else {
-      auto maybeGoldenImage = RendererTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
-      ASSERT_TRUE(maybeGoldenImage.has_value());
 
-      goldenImage = std::move(maybeGoldenImage.value());
-      ASSERT_EQ(goldenImage.width, width);
-      ASSERT_EQ(goldenImage.height, height);
-      ASSERT_EQ(goldenImage.strideInPixels, strideInPixels);
-      ASSERT_EQ(goldenImage.data.size(), renderer.pixelData().size());
+      std::cout << "Updated golden image: " << goldenImagePath.string() << std::endl;
+      return;
     }
+
+    auto maybeGoldenImage = RendererTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
+    ASSERT_TRUE(maybeGoldenImage.has_value());
+
+    Image goldenImage = std::move(maybeGoldenImage.value());
+    ASSERT_EQ(goldenImage.width, width);
+    ASSERT_EQ(goldenImage.height, height);
+    ASSERT_EQ(goldenImage.strideInPixels, strideInPixels);
+    ASSERT_EQ(goldenImage.data.size(), renderer.pixelData().size());
 
     std::vector<uint8_t> diffImage;
     diffImage.resize(strideInPixels * height * 4);
@@ -120,6 +120,11 @@ TEST_F(RendererTests, Ellipse1) {
 TEST_F(RendererTests, Rect2) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/rect2.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/rect2.png");
+}
+
+TEST_F(RendererTests, Skew1) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/skew1.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/skew1.png");
 }
 
 TEST_F(RendererTests, Ghostscript_Tiger) {
