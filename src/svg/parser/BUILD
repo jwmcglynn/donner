@@ -7,6 +7,7 @@ cc_library(
         "css_transform_parser.cc",
         "length_percentage_parser.cc",
         "path_parser.cc",
+        "points_list_parser.cc",
         "preserve_aspect_ratio_parser.cc",
         "transform_parser.cc",
         "viewbox_parser.cc",
@@ -16,6 +17,7 @@ cc_library(
         "css_transform_parser.h",
         "length_percentage_parser.h",
         "path_parser.h",
+        "points_list_parser.h",
         "preserve_aspect_ratio_parser.h",
         "transform_parser.h",
         "viewbox_parser.h",
@@ -37,6 +39,7 @@ cc_test(
         "tests/css_transform_parser_tests.cc",
         "tests/transform_parser_tests.cc",
         "tests/viewbox_parser_tests.cc",
+        "tests/points_list_parser_tests.cc",
         # TODO: angle_parser_tests.cc
         # TODO: length_percentage_parser_tests.cc
     ],

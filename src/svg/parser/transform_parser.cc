@@ -17,10 +17,8 @@ public:
     skipWhitespace();
 
     while (!remaining_.empty()) {
-      if (allowComma && remaining_[0] == ',') {
-        // Skip optional comma.
-        remaining_.remove_prefix(1);
-        skipWhitespace();
+      if (allowComma) {
+        skipCommaWhitespace();
       }
 
       const int functionStart = currentOffset();

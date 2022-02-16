@@ -24,8 +24,8 @@ protected:
   void skipWhitespace();
 
   /**
-   * Remove whitespace characters and up to one ',' character from the front of @p remaining_ if the
-   * exist.
+   * Remove whitespace characters and up to one ',' character from the front of @p remaining_ if
+   * they exist.
    */
   void skipCommaWhitespace();
 
