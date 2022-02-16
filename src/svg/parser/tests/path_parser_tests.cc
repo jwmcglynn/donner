@@ -85,7 +85,7 @@ TEST(PathParser, ParseErrors) {
 
   // Until a valid command is received, the next argument is interpreted as a number.
   EXPECT_THAT(PathParser::Parse("M 0 0 b"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(PathParser, ClosePath) {
@@ -364,7 +364,7 @@ TEST(PathParser, HorizontalLineTo_ParseError) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 
   {
@@ -373,7 +373,7 @@ TEST(PathParser, HorizontalLineTo_ParseError) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 }
 
@@ -406,7 +406,7 @@ TEST(PathParser, VerticalLineTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 
   {
@@ -415,7 +415,7 @@ TEST(PathParser, VerticalLineTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 
   // Chain between multiple types.
@@ -481,7 +481,7 @@ TEST(PathParser, CurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 
   {
@@ -489,7 +489,7 @@ TEST(PathParser, CurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 }
 
@@ -514,7 +514,7 @@ TEST(PathParser, QuadCurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 
   {
@@ -522,7 +522,7 @@ TEST(PathParser, QuadCurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Invalid argument")));
+                            ParseErrorIs("Failed to parse number: Unexpected character")));
   }
 }
 

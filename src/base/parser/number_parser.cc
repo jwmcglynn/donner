@@ -67,7 +67,7 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     ParseError err;
     err.reason = "Failed to parse number";
     if (ec == std::errc::invalid_argument) {
-      err.reason += ": Invalid argument";
+      err.reason += ": Unexpected character";
     } else if (ec == std::errc::result_out_of_range) {
       err.reason += ": Out of range";
     }

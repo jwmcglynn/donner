@@ -107,7 +107,8 @@ TEST(LengthParser, TestHelpers) {
 }
 
 TEST(LengthParser, Empty) {
-  EXPECT_THAT(LengthParser::Parse(""), ParseErrorIs("Failed to parse number: Invalid argument"));
+  EXPECT_THAT(LengthParser::Parse(""),
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(LengthParser, Zero) {

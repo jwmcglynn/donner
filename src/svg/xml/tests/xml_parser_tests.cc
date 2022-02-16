@@ -79,7 +79,7 @@ TEST(XmlParser, Warning) {
   RendererUtils::prepareDocumentForRendering(documentResult.result(), {200, 200}, &warnings);
   // TODO: Map this offset back to absolute values (2, 24)
   EXPECT_THAT(warnings,
-              ElementsAre(ParseWarningIs(0, 13, "Failed to parse number: Invalid argument")));
+              ElementsAre(ParseWarningIs(0, 13, "Failed to parse number: Unexpected character")));
 }
 
 TEST(XmlParser, InvalidXmlns) {

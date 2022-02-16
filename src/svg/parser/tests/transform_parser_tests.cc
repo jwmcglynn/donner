@@ -43,13 +43,13 @@ TEST(TransformParser, Matrix) {
 TEST(TransformParser, Matrix_ParseErrors) {
   // No parameters.
   EXPECT_THAT(TransformParser::Parse("matrix()"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Too few parameters.
   EXPECT_THAT(TransformParser::Parse("matrix(1, 2, 3)"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
   EXPECT_THAT(TransformParser::Parse("matrix(1, 2, 3, 4, 5)"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Too many parameters.
   EXPECT_THAT(TransformParser::Parse("matrix(1, 2, 3, 4, 5, 6, 7)"), ParseErrorIs("Expected ')'"));
@@ -60,7 +60,7 @@ TEST(TransformParser, Matrix_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("matrix 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("matrix("),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(TransformParser, Translate) {
@@ -82,11 +82,11 @@ TEST(TransformParser, Translate) {
 TEST(TransformParser, Translate_ParseErrors) {
   // No parameters.
   EXPECT_THAT(TransformParser::Parse("translate()"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Bad parameter count.
   EXPECT_THAT(TransformParser::Parse("translate(2,)"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Too many parameters.
   EXPECT_THAT(TransformParser::Parse("translate(1, 2, 3)"), ParseErrorIs("Expected ')'"));
@@ -98,7 +98,7 @@ TEST(TransformParser, Translate_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("translate 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("translate("),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(TransformParser, Scale) {
@@ -119,13 +119,13 @@ TEST(TransformParser, Scale) {
 TEST(TransformParser, Scale_ParseErrors) {
   // No parameters.
   EXPECT_THAT(TransformParser::Parse("scale()"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
   EXPECT_THAT(TransformParser::Parse("scale(,)"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Bad parameter count.
   EXPECT_THAT(TransformParser::Parse("scale(1,)"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Too many parameters.
   EXPECT_THAT(TransformParser::Parse("scale(1, 2, 3)"), ParseErrorIs("Expected ')'"));
@@ -137,7 +137,7 @@ TEST(TransformParser, Scale_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("scale 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("scale("),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(TransformParser, Rotate_OneParameter) {
@@ -185,15 +185,15 @@ TEST(TransformParser, Rotate_WithCenter) {
 TEST(TransformParser, Rotate_ParseErrors) {
   // No parameters.
   EXPECT_THAT(TransformParser::Parse("rotate()"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Bad parameter count.
   EXPECT_THAT(TransformParser::Parse("rotate(1,)"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
   EXPECT_THAT(TransformParser::Parse("rotate(1, 2)"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
   EXPECT_THAT(TransformParser::Parse("rotate(1, 2, )"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
   EXPECT_THAT(TransformParser::Parse("rotate(1, 2, 3, 4)"), ParseErrorIs("Expected ')'"));
 
   // Missing parens.
@@ -202,7 +202,7 @@ TEST(TransformParser, Rotate_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("rotate 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("rotate("),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(TransformParser, SkewX) {
@@ -240,7 +240,7 @@ TEST(TransformParser, SkewX) {
 TEST(TransformParser, SkewX_ParseErrors) {
   // No parameters.
   EXPECT_THAT(TransformParser::Parse("skewX()"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Bad parameter count.
   EXPECT_THAT(TransformParser::Parse("skewX(1,)"), ParseErrorIs("Expected ')'"));
@@ -252,7 +252,7 @@ TEST(TransformParser, SkewX_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("skewX 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("skewX("),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(TransformParser, SkewY) {
@@ -290,7 +290,7 @@ TEST(TransformParser, SkewY) {
 TEST(TransformParser, SkewY_ParseErrors) {
   // No parameters.
   EXPECT_THAT(TransformParser::Parse("skewY()"),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 
   // Bad parameter count.
   EXPECT_THAT(TransformParser::Parse("skewY(1,)"), ParseErrorIs("Expected ')'"));
@@ -302,7 +302,7 @@ TEST(TransformParser, SkewY_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("skewY 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("skewY("),
-              ParseErrorIs("Failed to parse number: Invalid argument"));
+              ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
 TEST(TransformParser, MultiplicationOrder) {

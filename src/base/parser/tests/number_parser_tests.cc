@@ -39,7 +39,7 @@ TEST(NumberParser, TestHelpers) {
 }
 
 TEST(NumberParser, Empty) {
-  EXPECT_THAT(NumberParser::Parse(""), ParseErrorIs(HasSubstr("Invalid argument")));
+  EXPECT_THAT(NumberParser::Parse(""), ParseErrorIs(HasSubstr("Unexpected character")));
 }
 
 TEST(NumberParser, Integers) {
@@ -54,15 +54,15 @@ TEST(NumberParser, Signs) {
   EXPECT_THAT(NumberParser::Parse("+0"), ParseResultIs(Result{0.0, 2}));
   EXPECT_THAT(NumberParser::Parse("-0"), ParseResultIs(Result{0.0, 2}));
   EXPECT_THAT(NumberParser::Parse("+-0"), ParseErrorIs(HasSubstr("Invalid sign")));
-  EXPECT_THAT(NumberParser::Parse("-+0"), ParseErrorIs(HasSubstr("Invalid argument")));
-  EXPECT_THAT(NumberParser::Parse("+"), ParseErrorIs(HasSubstr("Invalid argument")));
-  EXPECT_THAT(NumberParser::Parse("-"), ParseErrorIs(HasSubstr("Invalid argument")));
-  EXPECT_THAT(NumberParser::Parse("+-"), ParseErrorIs(HasSubstr("Invalid argument")));
-  EXPECT_THAT(NumberParser::Parse("-+"), ParseErrorIs(HasSubstr("Invalid argument")));
+  EXPECT_THAT(NumberParser::Parse("-+0"), ParseErrorIs(HasSubstr("Unexpected character")));
+  EXPECT_THAT(NumberParser::Parse("+"), ParseErrorIs(HasSubstr("Unexpected character")));
+  EXPECT_THAT(NumberParser::Parse("-"), ParseErrorIs(HasSubstr("Unexpected character")));
+  EXPECT_THAT(NumberParser::Parse("+-"), ParseErrorIs(HasSubstr("Unexpected character")));
+  EXPECT_THAT(NumberParser::Parse("-+"), ParseErrorIs(HasSubstr("Unexpected character")));
 }
 
 TEST(NumberParser, Decimal) {
-  EXPECT_THAT(NumberParser::Parse("."), ParseErrorIs(HasSubstr("Invalid argument")));
+  EXPECT_THAT(NumberParser::Parse("."), ParseErrorIs(HasSubstr("Unexpected character")));
 
   // Zero decimal digits before the dot are allowed.
   EXPECT_THAT(NumberParser::Parse(".0"), ParseResultIs(Result{0.0, 2}));
