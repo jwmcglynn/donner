@@ -132,6 +132,21 @@ TEST_F(RendererTests, Ghostscript_Tiger) {
   renderAndCompare(document, "src/svg/renderer/testdata/golden/Ghostscript_Tiger.png");
 }
 
+TEST_F(RendererTests, Polygon) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/polygon.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/polygon.png");
+}
+
+TEST_F(RendererTests, Polyline) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/polyline.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/polyline.png");
+}
+
+TEST_F(RendererTests, Lion) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/lion.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/lion.png");
+}
+
 TEST_F(RendererTests, FillRule001) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/a-fill-rule-001.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/a-fill-rule-001.png");

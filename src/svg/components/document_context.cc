@@ -6,6 +6,7 @@
 #include "src/svg/components/ellipse_component.h"
 #include "src/svg/components/line_component.h"
 #include "src/svg/components/path_component.h"
+#include "src/svg/components/poly_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/shadow_tree_component.h"
 #include "src/svg/components/sized_element_component.h"
@@ -25,6 +26,7 @@ DocumentContext::DocumentContext(SVGDocument& document, Registry& registry)
   sink.connect<&InstantiateComputedPathComponents>();
   sink.connect<&InstantiateComputedRectComponents>();
   sink.connect<&InstantiateLineComponents>();
+  sink.connect<&InstantiatePolyComponents>();
 }
 
 void DocumentContext::instantiateRenderTree(std::vector<ParseError>* outWarnings) {

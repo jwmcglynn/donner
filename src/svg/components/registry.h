@@ -22,6 +22,8 @@ enum class ElementType {
   G,
   Line,
   Path,
+  Polygon,
+  Polyline,
   Rect,
   Style,
   SVG,      //!< SVG root element.
@@ -41,6 +43,10 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());
     case ElementType::Line: return fn(std::integral_constant<ElementType, ElementType::Line>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
+    case ElementType::Polygon:
+      return fn(std::integral_constant<ElementType, ElementType::Polygon>());
+    case ElementType::Polyline:
+      return fn(std::integral_constant<ElementType, ElementType::Polyline>());
     case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
     case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
     case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());

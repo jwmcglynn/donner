@@ -7,6 +7,7 @@
 
 #include "src/base/parser/length_parser.h"
 #include "src/base/parser/number_parser.h"
+#include "src/svg/parser/points_list_parser.h"
 #include "src/svg/parser/preserve_aspect_ratio_parser.h"
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
@@ -17,6 +18,8 @@
 #include "src/svg/svg_g_element.h"
 #include "src/svg/svg_line_element.h"
 #include "src/svg/svg_path_element.h"
+#include "src/svg/svg_polygon_element.h"
+#include "src/svg/svg_polyline_element.h"
 #include "src/svg/svg_rect_element.h"
 #include "src/svg/svg_style_element.h"
 #include "src/svg/svg_svg_element.h"
@@ -35,6 +38,8 @@ using SVGElements = entt::type_list<  //
     SVGGElement,                      //
     SVGLineElement,                   //
     SVGPathElement,                   //
+    SVGPolygonElement,                //
+    SVGPolylineElement,               //
     SVGRectElement,                   //
     SVGStyleElement,                  //
     SVGSVGElement,                    //
@@ -176,6 +181,54 @@ std::optional<ParseError> ParseAttribute<SVGLineElement>(XMLParserContext& conte
   } else if (name == "y2") {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setY2(length.value());
+    }
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGPolygonElement>(XMLParserContext& context,
+                                                            SVGPolygonElement element,
+                                                            std::string_view namespacePrefix,
+                                                            std::string_view name,
+                                                            std::string_view value) {
+  if (name == "points") {
+    auto pointsResult = PointsListParser::Parse(value);
+
+    // Note that errors here are non-fatal, since valid points are also returned.
+    if (pointsResult.hasError()) {
+      context.addSubparserWarning(std::move(pointsResult.error()), context.parserOriginFrom(value));
+    }
+
+    if (pointsResult.hasResult()) {
+      element.setPoints(std::move(pointsResult.result()));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGPolylineElement>(XMLParserContext& context,
+                                                             SVGPolylineElement element,
+                                                             std::string_view namespacePrefix,
+                                                             std::string_view name,
+                                                             std::string_view value) {
+  if (name == "points") {
+    auto pointsResult = PointsListParser::Parse(value);
+
+    // Note that errors here are non-fatal, since valid points are also returned.
+    if (pointsResult.hasError()) {
+      context.addSubparserWarning(std::move(pointsResult.error()), context.parserOriginFrom(value));
+    }
+
+    if (pointsResult.hasResult()) {
+      element.setPoints(std::move(pointsResult.result()));
     }
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);
