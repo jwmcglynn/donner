@@ -35,7 +35,7 @@ struct PolyComponent {
       builder.closePath();
     }
 
-    handle.emplace_or_replace<ComputedPathComponent>().spline = builder.build();
+    handle.emplace_or_replace<ComputedPathComponent>(builder.build());
   }
 
   void computePath(EntityHandle handle, const FontMetrics& fontMetrics) {

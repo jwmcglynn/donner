@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 struct ComputedPathComponent {
-  std::optional<PathSpline> spline;
+  PathSpline spline;
 };
 
 }  // namespace donner::svg

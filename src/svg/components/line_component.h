@@ -23,8 +23,8 @@ struct LineComponent {
     const Vector2d end(x2.toPixels(style.viewbox(), fontMetrics),
                        y2.toPixels(style.viewbox(), fontMetrics));
 
-    handle.emplace_or_replace<ComputedPathComponent>().spline =
-        PathSpline::Builder().moveTo(start).lineTo(end).build();
+    handle.emplace_or_replace<ComputedPathComponent>(
+        PathSpline::Builder().moveTo(start).lineTo(end).build());
   }
 
   void computePath(EntityHandle handle, const FontMetrics& fontMetrics) {

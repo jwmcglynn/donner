@@ -28,6 +28,8 @@ public:
   void overrideSize() { overrideSize_ = true; }
 
 private:
+  class Impl;
+
   void draw(Registry& registry, Entity entity);
 
   int defaultWidth_;

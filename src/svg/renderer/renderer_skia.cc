@@ -105,6 +105,107 @@ SkPath toSkia(const PathSpline& spline) {
 
 }  // namespace
 
+class RendererSkia::Impl {
+public:
+  Impl(RendererSkia& renderer) : renderer_(renderer) {}
+
+  void drawPath(EntityHandle dataHandle, const ComputedPathComponent& path,
+                const PropertyRegistry& style, const Boxd& viewbox,
+                const FontMetrics& fontMetrics) {
+    if (auto fill = style.fill.get()) {
+      drawPathFill(path, fill.value(), style);
+    }
+
+    if (auto stroke = style.stroke.get()) {
+      drawPathStroke(dataHandle, path, stroke.value(), style, viewbox, fontMetrics);
+    }
+  }
+
+  void drawPathFill(const ComputedPathComponent& path, const PaintServer& paint,
+                    const PropertyRegistry& style) {
+    if (paint.is<PaintServer::Solid>()) {
+      const PaintServer::Solid& solid = paint.get<PaintServer::Solid>();
+
+      SkPaint paint;
+      paint.setAntiAlias(true);
+      paint.setColor(toSkia(
+          solid.color.resolve(style.color.getRequired().rgba(), style.fillOpacity.get().value())));
+      paint.setStyle(SkPaint::Style::kFill_Style);
+
+      SkPath skiaPath = toSkia(path.spline);
+      if (style.fillRule.get() == FillRule::EvenOdd) {
+        skiaPath.setFillType(SkPathFillType::kEvenOdd);
+      }
+      renderer_.canvas_->drawPath(skiaPath, paint);
+    } else if (paint.is<PaintServer::None>()) {
+      // Do nothing.
+    } else {
+      // TODO: Other paint types.
+    }
+  }
+
+  void drawPathStroke(EntityHandle dataHandle, const ComputedPathComponent& path,
+                      const PaintServer& paint, const PropertyRegistry& style, const Boxd& viewbox,
+                      const FontMetrics& fontMetrics) {
+    if (paint.is<PaintServer::Solid>()) {
+      const PaintServer::Solid& solid = paint.get<PaintServer::Solid>();
+
+      const double strokeWidth = style.strokeWidth.get().value().toPixels(viewbox, fontMetrics);
+
+      if (strokeWidth > 0.0) {
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        paint.setStyle(SkPaint::Style::kStroke_Style);
+
+        paint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
+                                                  style.strokeOpacity.get().value())));
+        paint.setStrokeWidth(strokeWidth);
+        paint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
+        paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
+        paint.setStrokeMiter(style.strokeMiterlimit.get().value());
+
+        const SkPath skiaPath = toSkia(path.spline);
+
+        if (style.strokeDasharray.get().has_value()) {
+          double dashUnitsScale = 1.0;
+          if (const auto* pathLength = dataHandle.try_get<PathLengthComponent>();
+              pathLength && !NearZero(pathLength->value)) {
+            // If the user specifies a path length, we need to scale between the user's length
+            // and computed length.
+            const double skiaLength = SkPathMeasure(skiaPath, false).getLength();
+            dashUnitsScale = skiaLength / pathLength->value;
+          }
+
+          // TODO: Avoid the copying on property access, if possible, and try to cache the
+          // computed SkDashPathEffect.
+          const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
+
+          std::vector<SkScalar> skiaDashes;
+          skiaDashes.reserve(dashes.size());
+
+          for (const Lengthd& dash : dashes) {
+            skiaDashes.push_back(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale);
+          }
+
+          paint.setPathEffect(SkDashPathEffect::Make(
+              skiaDashes.data(), skiaDashes.size(),
+              style.strokeDashoffset.get().value().toPixels(viewbox, fontMetrics) *
+                  dashUnitsScale));
+        }
+
+        renderer_.canvas_->drawPath(skiaPath, paint);
+      }
+    } else if (paint.is<PaintServer::None>()) {
+      // Do nothing.
+    } else {
+      // TODO: Other paint types.
+    }
+  }
+
+private:
+  RendererSkia& renderer_;
+};
+
 RendererSkia::RendererSkia(int defaultWidth, int defaultHeight, bool verbose)
     : defaultWidth_(defaultWidth), defaultHeight_(defaultHeight), verbose_(verbose) {}
 
@@ -155,6 +256,8 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 }
 
 void RendererSkia::draw(Registry& registry, Entity root) {
+  Impl impl(*this);
+
   std::function<void(Transformd, Entity)> drawEntity = [&](Transformd transform,
                                                            Entity treeEntity) {
     const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);
@@ -198,85 +301,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
         registry.get<ComputedStyleComponent>(styleEntity);
 
     if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
-      if (path->spline) {
-        const PropertyRegistry& style = styleComponent.properties();
-
-        if (auto fill = style.fill.get()) {
-          if (fill.value().is<PaintServer::Solid>()) {
-            const PaintServer::Solid& solid = fill.value().get<PaintServer::Solid>();
-
-            SkPaint paint;
-            paint.setAntiAlias(true);
-            paint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
-                                                      style.fillOpacity.get().value())));
-            paint.setStyle(SkPaint::Style::kFill_Style);
-
-            SkPath skiaPath = toSkia(*path->spline);
-            if (style.fillRule.get() == FillRule::EvenOdd) {
-              skiaPath.setFillType(SkPathFillType::kEvenOdd);
-            }
-            canvas_->drawPath(skiaPath, paint);
-          } else if (fill.value().is<PaintServer::None>()) {
-            // Do nothing.
-          } else {
-            // TODO: Other paint types.
-          }
-        }
-
-        if (auto stroke = style.stroke.get()) {
-          if (stroke.value().is<PaintServer::Solid>()) {
-            const PaintServer::Solid& solid = stroke.value().get<PaintServer::Solid>();
-
-            const double strokeWidth =
-                style.strokeWidth.get().value().toPixels(styleComponent.viewbox(), FontMetrics());
-
-            if (strokeWidth > 0.0) {
-              SkPaint paint;
-              paint.setAntiAlias(true);
-              paint.setStyle(SkPaint::Style::kStroke_Style);
-
-              paint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
-                                                        style.strokeOpacity.get().value())));
-              paint.setStrokeWidth(strokeWidth);
-              paint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
-              paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
-              paint.setStrokeMiter(style.strokeMiterlimit.get().value());
-
-              const SkPath skiaPath = toSkia(*path->spline);
-
-              if (style.strokeDasharray.get().has_value()) {
-                double dashUnitsScale = 1.0;
-                if (const auto* pathLength = registry.try_get<PathLengthComponent>(dataEntity);
-                    pathLength && !NearZero(pathLength->value)) {
-                  // If the user specifies a path length, we need to scale between the user's length
-                  // and computed length.
-                  const double skiaLength = SkPathMeasure(skiaPath, false).getLength();
-                  dashUnitsScale = skiaLength / pathLength->value;
-                }
-
-                // TODO: Avoid the copying on property access, if possible, and try to cache the
-                // computed SkDashPathEffect.
-                const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
-                std::vector<SkScalar> skiaDashes;
-                skiaDashes.reserve(dashes.size());
-                for (const Lengthd& dash : dashes) {
-                  skiaDashes.push_back(dash.value * dashUnitsScale);
-                }
-
-                paint.setPathEffect(SkDashPathEffect::Make(
-                    skiaDashes.data(), skiaDashes.size(),
-                    style.strokeDashoffset.get().value().value * dashUnitsScale));
-              }
-
-              canvas_->drawPath(skiaPath, paint);
-            }
-          } else if (stroke.value().is<PaintServer::None>()) {
-            // Do nothing.
-          } else {
-            // TODO: Other paint types.
-          }
-        }
-      }
+      impl.drawPath(EntityHandle(registry, dataEntity), *path, styleComponent.properties(),
+                    styleComponent.viewbox(), FontMetrics());
     }
 
     const TreeComponent& tree = registry.get<TreeComponent>(treeEntity);

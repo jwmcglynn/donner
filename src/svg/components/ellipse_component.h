@@ -62,8 +62,8 @@ struct EllipseComponent {
         computedEllipse.properties.calculateRx().toPixels(style.viewbox(), fontMetrics),
         computedEllipse.properties.calculateRy().toPixels(style.viewbox(), fontMetrics));
 
-    handle.emplace_or_replace<ComputedPathComponent>().spline =
-        PathSpline::Builder().ellipse(center, radius).build();
+    handle.emplace_or_replace<ComputedPathComponent>(
+        PathSpline::Builder().ellipse(center, radius).build());
   }
 
   void computePath(EntityHandle handle, const FontMetrics& fontMetrics) {

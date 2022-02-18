@@ -111,7 +111,7 @@ void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
         computedRect.properties.calculateRy().toPixels(style.viewbox(), fontMetrics));
 
     // Draw with rounded corners.
-    handle.get_or_emplace<ComputedPathComponent>().spline =
+    handle.emplace_or_replace<ComputedPathComponent>(
         PathSpline::Builder()
             // Draw top line.
             .moveTo(pos + Vector2d(radius.x, 0))
@@ -139,16 +139,16 @@ void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
                      pos + Vector2d(radius.x - radius.x * arcMagic, 0.0),
                      pos + Vector2d(radius.x, 0.0))
             .closePath()
-            .build();
+            .build());
 
   } else {
-    handle.get_or_emplace<ComputedPathComponent>().spline = PathSpline::Builder()
-                                                                .moveTo(pos)
-                                                                .lineTo(pos + Vector2d(size.x, 0))
-                                                                .lineTo(pos + size)
-                                                                .lineTo(pos + Vector2d(0, size.y))
-                                                                .closePath()
-                                                                .build();
+    handle.emplace_or_replace<ComputedPathComponent>(PathSpline::Builder()
+                                                         .moveTo(pos)
+                                                         .lineTo(pos + Vector2d(size.x, 0))
+                                                         .lineTo(pos + size)
+                                                         .lineTo(pos + Vector2d(0, size.y))
+                                                         .closePath()
+                                                         .build());
   }
 }
 

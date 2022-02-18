@@ -63,11 +63,10 @@ std::optional<ParseError> PathComponent::computePathWithPrecomputedStyle(
     }
 
     if (maybePath.hasResult()) {
-      auto& computedPath = handle.get_or_emplace<ComputedPathComponent>();
       if (!maybePath.result().empty()) {
-        computedPath.spline = std::move(maybePath.result());
+        handle.emplace_or_replace<ComputedPathComponent>(std::move(maybePath.result()));
       } else {
-        computedPath.spline = std::nullopt;
+        handle.remove<ComputedPathComponent>();
       }
     }
   } else {
