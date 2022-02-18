@@ -27,3 +27,21 @@ cc_test(
         "@pixelmatch-cpp17",
     ],
 )
+
+cc_test(
+    name = "resvg_test_suite",
+    srcs = [
+        "resvg_test_suite.cc",
+    ],
+    data = [
+        "@resvg-test-suite//:png",
+        "@resvg-test-suite//:svg",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        "//src/svg/renderer",
+        "//src/svg/xml",
+        "@com_google_gtest//:gtest_main",
+        "@pixelmatch-cpp17",
+    ],
+)

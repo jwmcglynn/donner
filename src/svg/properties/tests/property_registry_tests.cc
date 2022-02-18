@@ -57,7 +57,6 @@ TEST(PropertyRegistry, UnsupportedProperty) {
   PropertyRegistry registry;
   EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
               Optional(ParseErrorIs("Unknown property 'not-supported'")));
-  EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
 }
 
 TEST(PropertyRegistry, ParseErrorsAreIgnored) {
@@ -75,7 +74,8 @@ TEST(PropertyRegistry, ParseErrorsAreIgnored) {
   {
     PropertyRegistry registry;
     registry.parseStyle("color: invalid");
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))))
+        << "Invalid property should be ignored";
   }
 }
 
@@ -85,24 +85,24 @@ TEST(PropertyRegistry, BuiltinKeywords) {
     registry.parseStyle("color: initial");
     EXPECT_EQ(registry.color.state, PropertyState::ExplicitInitial);
     EXPECT_TRUE(registry.color.hasValue());
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
 
     registry.parseStyle("color: inherit");
     EXPECT_EQ(registry.color.state, PropertyState::Inherit);
     EXPECT_TRUE(registry.color.hasValue());
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
 
     registry.parseStyle("color: unset");
     EXPECT_EQ(registry.color.state, PropertyState::ExplicitUnset);
     EXPECT_TRUE(registry.color.hasValue());
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("color: inherit invalid");
     EXPECT_FALSE(registry.color.hasValue());
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 }
 
@@ -129,7 +129,7 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
     PropertyRegistry registry;
     EXPECT_THAT(registry.parsePresentationAttribute("color", ""), ParseErrorIs("No color found"));
     EXPECT_FALSE(registry.color.hasValue());
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
   {
@@ -137,7 +137,7 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
     EXPECT_THAT(registry.parsePresentationAttribute("color", "invalid"),
                 ParseErrorIs("Invalid color 'invalid'"));
     EXPECT_FALSE(registry.color.hasValue());
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
   {
@@ -145,7 +145,7 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
     EXPECT_THAT(registry.parsePresentationAttribute("color", "red !important"),
                 ParseErrorIs("Expected a single color"));
     EXPECT_FALSE(registry.color.hasValue()) << "!important is not supported";
-    EXPECT_THAT(registry.color.get(), Eq(std::nullopt));
+    EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
   {

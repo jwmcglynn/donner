@@ -160,3 +160,12 @@ go_rules_dependencies()
 go_register_toolchains(version = "1.17.2")
 
 gazelle_dependencies(go_repository_default_config = "//:WORKSPACE.bazel")
+
+# resvg test suite
+
+new_git_repository(
+    name = "resvg-test-suite",
+    build_file = "@//third_party:BUILD.resvg-test-suite",
+    commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
+    remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
+)

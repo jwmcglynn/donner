@@ -262,12 +262,24 @@ static constexpr frozen::unordered_set<frozen::string, 12> kValidPresentationAtt
 static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 12> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
-       return Parse(
+       auto maybeError = Parse(
            params,
            [](const PropertyParseFnParams& params) {
              return css::ColorParser::Parse(params.components());
            },
            &registry.color);
+       if (maybeError.has_value()) {
+         return maybeError;
+       }
+
+       // From https://www.w3.org/TR/css-color-3/#currentcolor:
+       // If the ‘currentColor’ keyword is set on the ‘color’ property itself, it is treated as
+       // ‘color: inherit’.
+       if (registry.color.hasValue() && registry.color.getRequired().isCurrentColor()) {
+         registry.color.set(PropertyState::Inherit, registry.color.specificity);
+       }
+
+       return maybeError;
      }},  //
     {"fill",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {

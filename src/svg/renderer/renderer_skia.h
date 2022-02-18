@@ -25,11 +25,14 @@ public:
   int width() const { return bitmap_.width(); }
   int height() const { return bitmap_.height(); }
 
+  void overrideSize() { overrideSize_ = true; }
+
 private:
   void draw(Registry& registry, Entity entity);
 
   int defaultWidth_;
   int defaultHeight_;
+  bool overrideSize_ = false;
   bool verbose_;
 
   SkAutoGraphics ag_;

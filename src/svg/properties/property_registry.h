@@ -20,7 +20,8 @@ using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry
 
 class PropertyRegistry {
 public:
-  Property<css::Color, PropertyCascade::Inherit> color{"color"};
+  Property<css::Color, PropertyCascade::Inherit> color{
+      "color", []() -> std::optional<css::Color> { return css::Color(css::RGBA(0, 0, 0, 0xFF)); }};
   Property<PaintServer, PropertyCascade::Inherit> fill{
       "fill", []() -> std::optional<PaintServer> {
         return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));

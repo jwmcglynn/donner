@@ -1,0 +1,15 @@
+filegroup(
+    name = "svg",
+    srcs = glob([
+        "svg/*.svg",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "png",
+    srcs = glob([
+        "png/*.png",
+    ]),
+    visibility = ["//visibility:public"],
+)

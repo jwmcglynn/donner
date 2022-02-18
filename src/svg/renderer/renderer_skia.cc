@@ -46,9 +46,8 @@ SkRect toSkia(const Boxd& box) {
   return SkRect::MakeLTRB(box.top_left.x, box.top_left.y, box.bottom_right.x, box.bottom_right.y);
 }
 
-SkColor toSkia(const css::Color color) {
-  // TODO: We need to resolve currentColor before getting here.
-  return SkColorSetARGB(color.rgba().a, color.rgba().r, color.rgba().g, color.rgba().b);
+SkColor toSkia(const css::RGBA rgba) {
+  return SkColorSetARGB(rgba.a, rgba.r, rgba.g, rgba.b);
 }
 
 SkPaint::Cap toSkia(StrokeLinecap lineCap) {
@@ -120,8 +119,13 @@ void RendererSkia::draw(SVGDocument& document) {
   auto& computedSizeComponent = registry.get<ComputedSizedElementComponent>(rootEntity);
   Vector2d renderingSize = computedSizeComponent.bounds.size();
 
-  if (renderingSize.x < 1 || renderingSize.y < 1 || renderingSize.x > kMaxDimension ||
-      renderingSize.y > kMaxDimension) {
+  if (overrideSize_) {
+    renderingSize = Vector2d(defaultWidth_, defaultHeight_);
+
+    const Vector2d origin = computedSizeComponent.bounds.top_left;
+    computedSizeComponent.bounds = Boxd(origin, origin + renderingSize);
+  } else if (renderingSize.x < 1 || renderingSize.y < 1 || renderingSize.x > kMaxDimension ||
+             renderingSize.y > kMaxDimension) {
     // Invalid size, override so that we don't run out of memory.
     renderingSize = Vector2d(Clamp(renderingSize.x, 1.0, static_cast<double>(kMaxDimension)),
                              Clamp(renderingSize.y, 1.0, static_cast<double>(kMaxDimension)));
@@ -129,11 +133,12 @@ void RendererSkia::draw(SVGDocument& document) {
     const Vector2d origin = computedSizeComponent.bounds.top_left;
     computedSizeComponent.bounds = Boxd(origin, origin + renderingSize);
   }
+
   // TODO: How should we convert float to integers? Should it be rounded?
   const int width = static_cast<int>(renderingSize.x);
   const int height = static_cast<int>(renderingSize.y);
 
-  bitmap_.allocPixels(SkImageInfo::MakeN32Premul(width, height));
+  bitmap_.allocPixels(SkImageInfo::MakeN32(width, height, SkAlphaType::kUnpremul_SkAlphaType));
   canvas_ = std::make_unique<SkCanvas>(bitmap_);
 
   draw(registry, rootEntity);
@@ -202,7 +207,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
             SkPaint paint;
             paint.setAntiAlias(true);
-            paint.setColor(toSkia(solid.color.withOpacity(style.fillOpacity.get().value())));
+            paint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
+                                                      style.fillOpacity.get().value())));
             paint.setStyle(SkPaint::Style::kFill_Style);
 
             SkPath skiaPath = toSkia(*path->spline);
@@ -221,43 +227,49 @@ void RendererSkia::draw(Registry& registry, Entity root) {
           if (stroke.value().is<PaintServer::Solid>()) {
             const PaintServer::Solid& solid = stroke.value().get<PaintServer::Solid>();
 
-            SkPaint paint;
-            paint.setAntiAlias(true);
-            paint.setStyle(SkPaint::Style::kStroke_Style);
+            const double strokeWidth =
+                style.strokeWidth.get().value().toPixels(styleComponent.viewbox(), FontMetrics());
 
-            paint.setColor(toSkia(solid.color.withOpacity(style.strokeOpacity.get().value())));
-            paint.setStrokeWidth(style.strokeWidth.get().value().value);
-            paint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
-            paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
-            paint.setStrokeMiter(style.strokeMiterlimit.get().value());
+            if (strokeWidth > 0.0) {
+              SkPaint paint;
+              paint.setAntiAlias(true);
+              paint.setStyle(SkPaint::Style::kStroke_Style);
 
-            const SkPath skiaPath = toSkia(*path->spline);
+              paint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
+                                                        style.strokeOpacity.get().value())));
+              paint.setStrokeWidth(strokeWidth);
+              paint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
+              paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
+              paint.setStrokeMiter(style.strokeMiterlimit.get().value());
 
-            if (style.strokeDasharray.get().has_value()) {
-              double dashUnitsScale = 1.0;
-              if (const auto* pathLength = registry.try_get<PathLengthComponent>(dataEntity);
-                  pathLength && !NearZero(pathLength->value)) {
-                // If the user specifies a path length, we need to scale between the user's length
-                // and computed length.
-                const double skiaLength = SkPathMeasure(skiaPath, false).getLength();
-                dashUnitsScale = skiaLength / pathLength->value;
+              const SkPath skiaPath = toSkia(*path->spline);
+
+              if (style.strokeDasharray.get().has_value()) {
+                double dashUnitsScale = 1.0;
+                if (const auto* pathLength = registry.try_get<PathLengthComponent>(dataEntity);
+                    pathLength && !NearZero(pathLength->value)) {
+                  // If the user specifies a path length, we need to scale between the user's length
+                  // and computed length.
+                  const double skiaLength = SkPathMeasure(skiaPath, false).getLength();
+                  dashUnitsScale = skiaLength / pathLength->value;
+                }
+
+                // TODO: Avoid the copying on property access, if possible, and try to cache the
+                // computed SkDashPathEffect.
+                const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
+                std::vector<SkScalar> skiaDashes;
+                skiaDashes.reserve(dashes.size());
+                for (const Lengthd& dash : dashes) {
+                  skiaDashes.push_back(dash.value * dashUnitsScale);
+                }
+
+                paint.setPathEffect(SkDashPathEffect::Make(
+                    skiaDashes.data(), skiaDashes.size(),
+                    style.strokeDashoffset.get().value().value * dashUnitsScale));
               }
 
-              // TODO: Avoid the copying on property access, if possible, and try to cache the
-              // computed SkDashPathEffect.
-              const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
-              std::vector<SkScalar> skiaDashes;
-              skiaDashes.reserve(dashes.size());
-              for (const Lengthd& dash : dashes) {
-                skiaDashes.push_back(dash.value * dashUnitsScale);
-              }
-
-              paint.setPathEffect(SkDashPathEffect::Make(
-                  skiaDashes.data(), skiaDashes.size(),
-                  style.strokeDashoffset.get().value().value * dashUnitsScale));
+              canvas_->drawPath(skiaPath, paint);
             }
-
-            canvas_->drawPath(skiaPath, paint);
           } else if (stroke.value().is<PaintServer::None>()) {
             // Do nothing.
           } else {
