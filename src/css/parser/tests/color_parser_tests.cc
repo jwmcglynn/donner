@@ -154,11 +154,17 @@ TEST(ColorParser, Rgb) {
               ParseErrorIs("Missing comma when parsing function 'rgb'"));
 
   // With alpha.
-  EXPECT_THAT(ColorParser::ParseString("rgb(1, 2, 3, 4)"), ParseResultIs(Color(RGBA(1, 2, 3, 4))));
+  EXPECT_THAT(ColorParser::ParseString("rgb(1, 2, 3, 0.02)"),
+              ParseResultIs(Color(RGBA(1, 2, 3, 5))));
   EXPECT_THAT(ColorParser::ParseString("rgb(5 6 7 / 8%)"), ParseResultIs(Color(RGBA(5, 6, 7, 20))));
 
   // Invalid alpha.
   EXPECT_THAT(ColorParser::ParseString("rgb(5 6 7 / 5in)"), ParseErrorIs("Unexpected alpha value"));
+
+  // Alpha is clamped.
+  EXPECT_THAT(ColorParser::ParseString("rgb(1, 2, 3, 2)"),
+              ParseResultIs(Color(RGBA(1, 2, 3, 255))));
+  EXPECT_THAT(ColorParser::ParseString("rgb(1, 2, 3, -1)"), ParseResultIs(Color(RGBA(1, 2, 3, 0))));
 
   // Percentages.
   EXPECT_THAT(ColorParser::ParseString("rgb(50%, 30%, 10%)"),
@@ -220,8 +226,8 @@ TEST(ColorParser, Hsl) {
               ParseErrorIs("Missing comma when parsing function 'hsla'"));
 
   // With alpha.
-  EXPECT_THAT(ColorParser::ParseString("hsl(1, 2%, 3%, 4)"),
-              ParseResultIs(Color(RGBA(8, 8, 7, 4))));
+  EXPECT_THAT(ColorParser::ParseString("hsl(1, 2%, 3%, 0.04)"),
+              ParseResultIs(Color(RGBA(8, 8, 7, 10))));
   EXPECT_THAT(ColorParser::ParseString("hsla(5grad 6% 7% / 8%)"),
               ParseResultIs(Color(RGBA(19, 17, 17, 20))));
 
@@ -230,8 +236,8 @@ TEST(ColorParser, Hsl) {
               ParseErrorIs("Unexpected alpha value"));
 
   // Without spacing.
-  EXPECT_THAT(ColorParser::ParseString("hsl(1deg,2%,3%,4)"),
-              ParseResultIs(Color(RGBA(8, 8, 7, 4))));
+  EXPECT_THAT(ColorParser::ParseString("hsl(1deg,2%,3%,0.04)"),
+              ParseResultIs(Color(RGBA(8, 8, 7, 10))));
   // Space after 'deg' is required to separate the token.
   EXPECT_THAT(ColorParser::ParseString("hsla(5deg 6%7%/8%)"),
               ParseResultIs(Color(RGBA(19, 17, 17, 20))));

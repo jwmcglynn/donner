@@ -163,18 +163,6 @@ INSTANTIATE_TEST_SUITE_P(
             "a-fill-033.svg",          // Not impl: <pattern>
             "a-fill-034.svg",          // Not impl: Paint reference fallback
             "a-fill-035.svg",          // Not impl: Paint reference fallback
-            "a-fill-042.svg",          // "transparent" color (SVG 2)
-            "a-fill-044.svg",          // rgba(0, 127, 0, 0.5) (SVG 2)
-            "a-fill-045.svg",          // rgba(0, 127, 0, 0) (SVG 2)
-            "a-fill-046.svg",          // rgba(0, 127, 0, -1) (SVG 2)
-            "a-fill-048.svg",          // rgba(0, 127, 0, 50%) (SVG 2)
-            "a-fill-049.svg",          // rgba(0%, 50%, 0%, 0.5) (SVG 2)
-            "a-fill-051.svg",          // #RRGGBBAA (SVG 2)
-            "a-fill-052.svg",          // #RGBA (SVG 2)
-            "a-fill-057.svg",          // hsla(120, 100%, 25%, 0.5) (SVG 2)
-            "a-fill-058.svg",          // hsl(120, 100%, 25%, 0.5) (SVG 2)
-            "a-fill-059.svg",          // `rgb(0, 127, 0, 0.5)` (SVG 2) (Technically
-                                       // against spec, but UAs support it)
             "a-fill-opacity-002.svg",  // Not impl: "opacity"
             "a-fill-opacity-003.svg",  // Not impl: `fill-opacity`, <linearGradient>
             "a-fill-opacity-004.svg",  // Not impl: `fill-opacity` affects pattern

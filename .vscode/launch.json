@@ -59,6 +59,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "resvg_test_suite",
+      "program": "${workspaceFolder}/bazel-bin/src/svg/renderer/tests/resvg_test_suite",
+      "args": [
+        "--gtest_break_on_failure"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "css_tests",
       "program": "${workspaceFolder}/bazel-bin/src/css/css_tests",
       "args": [

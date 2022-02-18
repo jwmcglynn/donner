@@ -469,7 +469,7 @@ public:
 
     auto alphaToken = std::move(alphaResult.result());
     if (alphaToken.is<Token::Number>()) {
-      return numberToChannel(alphaToken.get<Token::Number>().value);
+      return numberToAlpha(alphaToken.get<Token::Number>().value);
     } else if (alphaToken.is<Token::Percentage>()) {
       return percentageToChannel(alphaToken.get<Token::Percentage>().value);
     } else {
@@ -529,6 +529,11 @@ private:
   static uint8_t percentageToChannel(double number) {
     // Convert 100 -> 255.
     return numberToChannel(number * 2.55);
+  }
+
+  static uint8_t numberToAlpha(double number) {
+    // Like numberToChannel, except in the range of [0, 1].
+    return static_cast<uint8_t>(Clamp(Round(number * 255.0), 0.0, 255.0));
   }
 
   static unsigned int fromHex(unsigned char ch) {

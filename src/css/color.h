@@ -44,7 +44,9 @@ struct Color {
 
   RGBA resolve(RGBA currentColor, double opacity) const {
     RGBA value = isCurrentColor() ? currentColor : rgba();
-    value.a = static_cast<uint8_t>(opacity * 255);
+    if (opacity != 1.0) {
+      value.a = static_cast<uint8_t>(value.a * opacity);
+    }
     return value;
   }
 
