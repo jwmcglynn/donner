@@ -132,6 +132,11 @@ TEST_F(RendererTests, SizeTooLarge) {
   renderAndCompare(document, "src/svg/renderer/testdata/golden/size-too-large.png");
 }
 
+TEST_F(RendererTests, NestedSvgAspectRatio) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/nested-svg-aspectratio.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/nested-svg-aspectratio.png");
+}
+
 TEST_F(RendererTests, Ghostscript_Tiger) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/Ghostscript_Tiger.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/Ghostscript_Tiger.png");

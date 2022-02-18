@@ -8,8 +8,6 @@
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/registry.h"
-#include "src/svg/components/tree_component.h"
-#include "src/svg/components/viewbox_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
 namespace donner::svg {
@@ -38,43 +36,29 @@ struct ComputedSizedElementComponent {
                                 Boxd inheritedViewbox, FontMetrics fontMetrics,
                                 std::vector<ParseError>* outWarnings);
 
-  Boxd bounds;
-  Boxd inheritedViewbox;
+  Boxd bounds;            //!< The computed rect of this sized element.
+  Boxd inheritedViewbox;  //!< The viewbox of the parent element, used for preserveAspectRatio
+                          //!< transformations.
 
-  Transformd computeTransform(EntityHandle handle) const {
-    // TODO: A component with different behavior based on type seems like an
-    // antipattern, perhaps this should be a separate component class?
-    // If this entity also has a viewbox, this SizedElementComponent is used to define a viewport.
+  /**
+   * If this element establishes a clipping context, returns the clip rect in the parent's
+   * coordinate system.
+   *
+   * @param handle Entity handle.
+   * @return std::optional<Boxd> Clip rect, or std::nullopt if this element does not establish a
+   *   clipping context.
+   */
+  std::optional<Boxd> clipRect(EntityHandle handle) const;
 
-    if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
-      return viewbox->computeTransform(
-          bounds, handle.get<PreserveAspectRatioComponent>().preserveAspectRatio);
-    } else {
-      PreserveAspectRatio preserveAspectRatio;
-      if (const auto* preserveAspectRatioComponent =
-              handle.try_get<PreserveAspectRatioComponent>()) {
-        preserveAspectRatio = preserveAspectRatioComponent->preserveAspectRatio;
-      }
-
-      Vector2d scale = bounds.size() / inheritedViewbox.size();
-
-      if (preserveAspectRatio.align != PreserveAspectRatio::Align::None) {
-        if (preserveAspectRatio.meetOrSlice == PreserveAspectRatio::MeetOrSlice::Meet) {
-          scale.x = scale.y = std::min(scale.x, scale.y);
-        } else {
-          scale.x = scale.y = std::max(scale.x, scale.y);
-        }
-      }
-
-      Vector2d translation = bounds.top_left - (inheritedViewbox.top_left * scale);
-      const Vector2d alignMaxOffset = bounds.size() - inheritedViewbox.size() * scale;
-
-      const Vector2d alignMultiplier(preserveAspectRatio.alignMultiplierX(),
-                                     preserveAspectRatio.alignMultiplierY());
-      return Transformd::Scale(scale) *
-             Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
-    }
-  }
+  /**
+   * Computes the transformation from the parent's cordinate system into the coordinate system
+   * established by this sized element.
+   *
+   * @param handle Entity handle.
+   * @return Transformd Transformation from the parent's coordinate system into the sized element's
+   * c  oordinate system.
+   */
+  Transformd computeTransform(EntityHandle handle) const;
 };
 
 struct SizedElementComponent {

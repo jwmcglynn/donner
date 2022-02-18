@@ -42,6 +42,10 @@ SkM44 toSkia(const Transformd& transform) {
                1.0f};
 }
 
+SkRect toSkia(const Boxd& box) {
+  return SkRect::MakeLTRB(box.top_left.x, box.top_left.y, box.bottom_right.x, box.bottom_right.y);
+}
+
 SkColor toSkia(const css::Color color) {
   // TODO: We need to resolve currentColor before getting here.
   return SkColorSetARGB(color.rgba().a, color.rgba().r, color.rgba().g, color.rgba().b);
@@ -151,6 +155,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
     const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : treeEntity;
+    bool shouldRestore = false;
 
     if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
       if (behavior->nonrenderable) {
@@ -167,7 +172,15 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     }
 
     if (const auto* sizedElement = registry.try_get<ComputedSizedElementComponent>(dataEntity)) {
-      transform = sizedElement->computeTransform(EntityHandle(registry, dataEntity)) * transform;
+      const EntityHandle handle(registry, dataEntity);
+      transform = sizedElement->computeTransform(handle) * transform;
+
+      if (auto clipRect = sizedElement->clipRect(handle)) {
+        canvas_->save();
+        shouldRestore = true;
+
+        canvas_->clipRect(toSkia(clipRect.value()));
+      }
     }
 
     if (const auto* tc = registry.try_get<ComputedTransformComponent>(dataEntity)) {
@@ -258,6 +271,10 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     for (auto cur = tree.firstChild(); cur != entt::null;
          cur = registry.get<TreeComponent>(cur).nextSibling()) {
       drawEntity(transform, cur);
+    }
+
+    if (shouldRestore) {
+      canvas_->restore();
     }
   };
 

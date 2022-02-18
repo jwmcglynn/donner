@@ -29,6 +29,11 @@ private:
 template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
 std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
                                 Property<T, kCascade>* destination) {
+  if (params.specificity < destination->specificity) {
+    // Existing specificity is higher than the new one, so we don't need to parse.
+    return std::nullopt;
+  }
+
   // If the property is set to a built-in keyword, such as "inherit", the property has already been
   // parsed so we can just set based on the value of explicitState.
   if (params.explicitState != PropertyState::NotSet) {

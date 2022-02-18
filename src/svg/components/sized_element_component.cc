@@ -3,6 +3,7 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include "src/svg/components/viewbox_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
 namespace donner::svg {
@@ -130,6 +131,45 @@ ComputedSizedElementComponent::ComputedSizedElementComponent(
     : bounds(applyUnparsedPropertiesAndGetBounds(handle, properties, unparsedProperties,
                                                  inheritedViewbox, fontMetrics, outWarnings)),
       inheritedViewbox(inheritedViewbox) {}
+
+std::optional<Boxd> ComputedSizedElementComponent::clipRect(EntityHandle handle) const {
+  if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
+    return bounds;
+  }
+
+  return std::nullopt;
+}
+
+Transformd ComputedSizedElementComponent::computeTransform(EntityHandle handle) const {
+  // If this entity also has a viewbox, this SizedElementComponent is used to define a viewport.
+  if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
+    return viewbox->computeTransform(
+        bounds, handle.get<PreserveAspectRatioComponent>().preserveAspectRatio);
+  } else {
+    PreserveAspectRatio preserveAspectRatio;
+    if (const auto* preserveAspectRatioComponent = handle.try_get<PreserveAspectRatioComponent>()) {
+      preserveAspectRatio = preserveAspectRatioComponent->preserveAspectRatio;
+    }
+
+    Vector2d scale = bounds.size() / inheritedViewbox.size();
+
+    if (preserveAspectRatio.align != PreserveAspectRatio::Align::None) {
+      if (preserveAspectRatio.meetOrSlice == PreserveAspectRatio::MeetOrSlice::Meet) {
+        scale.x = scale.y = std::min(scale.x, scale.y);
+      } else {
+        scale.x = scale.y = std::max(scale.x, scale.y);
+      }
+    }
+
+    Vector2d translation = bounds.top_left - (inheritedViewbox.top_left * scale);
+    const Vector2d alignMaxOffset = bounds.size() - inheritedViewbox.size() * scale;
+
+    const Vector2d alignMultiplier(preserveAspectRatio.alignMultiplierX(),
+                                   preserveAspectRatio.alignMultiplierY());
+    return Transformd::Scale(scale) *
+           Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
+  }
+}
 
 void SizedElementComponent::computeWithPrecomputedStyle(EntityHandle handle,
                                                         const ComputedStyleComponent& style,
