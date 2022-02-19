@@ -479,15 +479,16 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
   }
 
   // Now draw the arc.
-  const size_t numSegs = (size_t)ceil(Abs(deltaTheta / (MathConstants<double>::kPi * 0.5 + 0.001)));
+  const size_t numSegs =
+      static_cast<size_t>(ceil(Abs(deltaTheta / (MathConstants<double>::kPi * 0.5 + 0.001))));
   Vector2d dir(cosRotation, sinRotation);
   const double thetaIncrement = deltaTheta / double(numSegs);
 
   // Draw segments.
   for (size_t i = 0; i < numSegs; ++i) {
     // Determine the properties of the current segment.
-    const double thetaStart = theta + double(i) * thetaIncrement;
-    const double thetaEnd = theta + double(i + 1) * thetaIncrement;
+    const double thetaStart = theta + i * thetaIncrement;
+    const double thetaEnd = theta + (i + 1) * thetaIncrement;
 
     const double thetahalf = 0.5 * (thetaEnd - thetaStart);
 

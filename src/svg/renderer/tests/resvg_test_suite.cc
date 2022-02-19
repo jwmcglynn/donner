@@ -16,6 +16,10 @@ namespace donner::svg {
 
 namespace {
 
+// Circle rendering is slightly different since Donner uses four custom curves instead of arcTo.
+// Allow a small number of mismatched pixels to accomodate.
+static constexpr size_t kMaxMismatchedPixels = 15;
+
 static const std::filesystem::path kSvgDir = "external/resvg-test-suite/svg/";
 static const std::filesystem::path kGoldenDir = "external/resvg-test-suite/png/";
 
@@ -28,6 +32,21 @@ std::string escapeFilename(std::string filename) {
     }
   });
   return filename;
+}
+
+std::string testNameFromFilename(const testing::TestParamInfo<std::filesystem::path>& info) {
+  std::string name = info.param.stem().string();
+
+  // Sanitize the test name, notably replacing '-' with '_'.
+  std::transform(name.begin(), name.end(), name.begin(), [](char c) {
+    if (!isalnum(c)) {
+      return '_';
+    } else {
+      return c;
+    }
+  });
+
+  return name;
 }
 
 std::vector<std::filesystem::path> getTestsWithPrefix(const char* prefix,
@@ -111,9 +130,7 @@ protected:
     const int mismatchedPixels = pixelmatch::pixelmatch(
         goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
 
-    // TODO: Temporarily increase threshold from 0 to allow for one mismatched pixel in stroke
-    // rendering.
-    if (mismatchedPixels > 1) {
+    if (mismatchedPixels > kMaxMismatchedPixels) {
       std::cout << "FAIL (" << mismatchedPixels << " pixels differ)" << std::endl;
 
       const std::filesystem::path actualImagePath =
@@ -173,7 +190,18 @@ INSTANTIATE_TEST_SUITE_P(
             "a-fill-opacity-003.svg",  // Not impl: `fill-opacity`, <linearGradient>
             "a-fill-opacity-004.svg",  // Not impl: `fill-opacity` affects pattern
             "a-fill-opacity-006.svg",  // Not impl: <text>
-        })));
+        })),
+    testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    Shape, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix("a-shape",
+                                {
+                                    "a-shape-rendering-005.svg",  // Not impl: <text>
+                                    "a-shape-rendering-008.svg",  // Not impl: <marker>
+                                })),
+    testNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(
     Stroke, ResvgTestSuite,
     ValuesIn(getTestsWithPrefix(
@@ -202,6 +230,21 @@ INSTANTIATE_TEST_SUITE_P(
             "a-stroke-opacity-004.svg",     // Not impl: <pattern>
             "a-stroke-opacity-006.svg",     // Not impl: <text>
             "a-stroke-width-004.svg",       // UB: Nothing should be renderered
-        })));
+        })),
+    testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    Style, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix(
+        "a-style",
+        {
+            "a-style-002.svg",  // Bug? Comments in style
+            "a-style-003.svg",  // <svg version="1.1"> disables geometry attributes in style
+            "a-style-004.svg",  // Bug? Transform in style
+        })),
+    testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Circle, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-circle")),
+                         testNameFromFilename);
 
 }  // namespace donner::svg
