@@ -14,10 +14,12 @@ public:
 
   struct Command {
     CommandType type;
-    size_t point_index;
+    size_t pointIndex;
+
+    Command(CommandType type, size_t pointIndex) : type(type), pointIndex(pointIndex) {}
 
     friend inline bool operator==(const Command& lhs, const Command& rhs) {
-      return lhs.point_index == rhs.point_index && lhs.type == rhs.type;
+      return lhs.pointIndex == rhs.pointIndex && lhs.type == rhs.type;
     }
     friend std::ostream& operator<<(std::ostream& os, const Command& command);
   };
@@ -105,7 +107,7 @@ public:
     std::vector<Command> commands_;
 
     // Index of last moveto point in the points_ vector.
-    size_t moveto_point_index_ = kNPos;
+    size_t moveToPointIndex_ = kNPos;
   };
 
   bool empty() const { return commands_.empty(); }

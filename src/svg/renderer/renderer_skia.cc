@@ -77,19 +77,19 @@ SkPath toSkia(const PathSpline& spline) {
   for (const PathSpline::Command& command : spline.commands()) {
     switch (command.type) {
       case PathSpline::CommandType::MoveTo: {
-        auto pt = points[command.point_index];
+        auto pt = points[command.pointIndex];
         path.moveTo(pt.x, pt.y);
         break;
       }
       case PathSpline::CommandType::CurveTo: {
-        auto c0 = points[command.point_index];
-        auto c1 = points[command.point_index + 1];
-        auto end = points[command.point_index + 2];
+        auto c0 = points[command.pointIndex];
+        auto c1 = points[command.pointIndex + 1];
+        auto end = points[command.pointIndex + 2];
         path.cubicTo(c0.x, c0.y, c1.x, c1.y, end.x, end.y);
         break;
       }
       case PathSpline::CommandType::LineTo: {
-        auto pt = points[command.point_index];
+        auto pt = points[command.pointIndex];
         path.lineTo(pt.x, pt.y);
         break;
       }
