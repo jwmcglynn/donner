@@ -180,11 +180,17 @@ public:
           // computed SkDashPathEffect.
           const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
 
-          std::vector<SkScalar> skiaDashes;
-          skiaDashes.reserve(dashes.size());
+          // We need to repeat if there are an odd number of values, Skia requires an even number of
+          // dash lengths.
+          const size_t numRepeats = (dashes.size() & 1) ? 2 : 1;
 
+          std::vector<SkScalar> skiaDashes;
+          skiaDashes.reserve(dashes.size() * numRepeats);
+
+          for (int i = 0; i < numRepeats; ++i) {
           for (const Lengthd& dash : dashes) {
             skiaDashes.push_back(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale);
+          }
           }
 
           paint.setPathEffect(SkDashPathEffect::Make(

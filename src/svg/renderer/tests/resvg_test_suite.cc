@@ -188,11 +188,8 @@ INSTANTIATE_TEST_SUITE_P(
             "a-stroke-011.svg",             // Not impl: Gradients, "gradientUnits" property
             "a-stroke-012.svg",             // Not impl: <pattern>
             "a-stroke-013.svg",             // Not impl: <pattern>, "gradientUnits"
-            "a-stroke-dasharray-003.svg",   // Bug? Odd list
-            "a-stroke-dasharray-004.svg",   // Bug? Odd list
             "a-stroke-dasharray-005.svg",   // Not impl: "font-size"? "em" units (font-size="20" not
                                             // impl)
-            "a-stroke-dasharray-006.svg",   // Bug? "mm" units
             "a-stroke-dasharray-007.svg",   // UB (negative values)
             "a-stroke-dasharray-009.svg",   // UB (negative sum)
             "a-stroke-dasharray-012.svg",   // Bug? Strange aliasing artifacts.
