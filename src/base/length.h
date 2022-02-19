@@ -133,7 +133,14 @@ struct Length {
   }
 
 private:
-  static T diagonalExtent(const Box<T>& box) { return box.size().length(); }
+  static T diagonalExtent(const Box<T>& box) {
+    // Using the SVG spec's definition of normalized diagonal length:
+    // > The normalized diagonal length must be calculated with
+    // > `sqrt((width)**2 + (height)**2)/sqrt(2)`.
+    // From https://svgwg.org/svg2-draft/coords.html#Units
+    constexpr T kInvSqrt2(0.70710678118);
+    return box.size().length() * kInvSqrt2;
+  }
 };
 
 // Helper typedefs.
