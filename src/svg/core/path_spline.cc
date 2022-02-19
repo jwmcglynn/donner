@@ -534,21 +534,21 @@ PathSpline::Builder& PathSpline::Builder::ellipse(const Vector2d& center, const 
   // Start at theta = 0, or (radius.x, 0.0).
   moveTo(center + Vector2d(radius.x, 0.0));
 
-  // First curve, to (0.0, -radius.y).
-  curveTo(center + Vector2d(radius.x, -radius.y * kArcMagic),
-          center + Vector2d(radius.x * kArcMagic, -radius.y), center + Vector2d(0.0, -radius.y));
+  // First curve, to (0.0, radius.y).
+  curveTo(center + Vector2d(radius.x, radius.y * kArcMagic),
+          center + Vector2d(radius.x * kArcMagic, radius.y), center + Vector2d(0.0, radius.y));
 
   // Second curve, to (-radius.x, 0.0).
-  curveTo(center + Vector2d(-radius.x * kArcMagic, -radius.y),
-          center + Vector2d(-radius.x, -radius.y * kArcMagic), center + Vector2d(-radius.x, 0.0));
+  curveTo(center + Vector2d(-radius.x * kArcMagic, radius.y),
+          center + Vector2d(-radius.x, radius.y * kArcMagic), center + Vector2d(-radius.x, 0.0));
 
-  // Third curve, to (0.0, radius.y).
-  curveTo(center + Vector2d(-radius.x, radius.y * kArcMagic),
-          center + Vector2d(-radius.x * kArcMagic, radius.y), center + Vector2d(0.0, radius.y));
+  // Third curve, to (0.0, -radius.y).
+  curveTo(center + Vector2d(-radius.x, -radius.y * kArcMagic),
+          center + Vector2d(-radius.x * kArcMagic, -radius.y), center + Vector2d(0.0, -radius.y));
 
   // Fourth curve, to (radius.x, 0.0).
-  curveTo(center + Vector2d(radius.x * kArcMagic, radius.y),
-          center + Vector2d(radius.x, radius.y * kArcMagic), center + Vector2d(radius.x, 0.0));
+  curveTo(center + Vector2d(radius.x * kArcMagic, -radius.y),
+          center + Vector2d(radius.x, -radius.y * kArcMagic), center + Vector2d(radius.x, 0.0));
 
   closePath();
   return *this;

@@ -216,8 +216,8 @@ TEST(PathSplineBuilder, Ellipse) {
   PathSpline spline = builder.build();
 
   EXPECT_THAT(spline.points(),
-              ElementsAre(Vector2d(2.0, 1.0), _, _, Vector2d(0.0, 0.0), _, _, Vector2d(-2.0, 1.0),
-                          _, _, Vector2d(0.0, 2.0), _, _, Vector2d(2.0, 1.0)));
+              ElementsAre(Vector2d(2.0, 1.0), _, _, Vector2d(0.0, 2.0), _, _, Vector2d(-2.0, 1.0),
+                          _, _, Vector2d(0.0, 0.0), _, _, Vector2d(2.0, 1.0)));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
                           Command{CommandType::CurveTo, 4}, Command{CommandType::CurveTo, 7},
@@ -230,8 +230,8 @@ TEST(PathSplineBuilder, Circle) {
   PathSpline spline = builder.build();
 
   EXPECT_THAT(spline.points(),
-              ElementsAre(Vector2d(2.0, 1.0), _, _, Vector2d(0.0, -1.0), _, _, Vector2d(-2.0, 1.0),
-                          _, _, Vector2d(0.0, 3.0), _, _, Vector2d(2.0, 1.0)));
+              ElementsAre(Vector2d(2.0, 1.0), _, _, Vector2d(0.0, 3.0), _, _, Vector2d(-2.0, 1.0),
+                          _, _, Vector2d(0.0, -1.0), _, _, Vector2d(2.0, 1.0)));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
                           Command{CommandType::CurveTo, 4}, Command{CommandType::CurveTo, 7},
@@ -566,36 +566,36 @@ TEST(PathSpline, TangentAt) {
   EXPECT_EQ(spline.commands()[4].type, CommandType::MoveTo);
   // MoveTo matches the next point.
   EXPECT_EQ(spline.pointAt(4, 0.0), Vector2(5.0, 1.0));
-  EXPECT_THAT(spline.tangentAt(4, 0.0), Vector2Eq(0.0, Lt(0.0)));
-  EXPECT_THAT(spline.tangentAt(4, 1.0), Vector2Eq(0.0, Lt(0.0)));
+  EXPECT_THAT(spline.tangentAt(4, 0.0), Vector2Eq(0.0, Gt(0.0)));
+  EXPECT_THAT(spline.tangentAt(4, 1.0), Vector2Eq(0.0, Gt(0.0)));
 
   // Right side, going clockwise to bottom.
   EXPECT_EQ(spline.commands()[5].type, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(5, 0.0), Vector2(5.0, 1.0));
-  EXPECT_THAT(spline.tangentAt(5, 0.0), Vector2Eq(0.0, Lt(0.0)));
-  EXPECT_THAT(spline.tangentAt(5, 0.5), NormalizedEq(Vector2(-1.0, -1.0)));
+  EXPECT_THAT(spline.tangentAt(5, 0.0), Vector2Eq(0.0, Gt(0.0)));
+  EXPECT_THAT(spline.tangentAt(5, 0.5), NormalizedEq(Vector2(-1.0, 1.0)));
   EXPECT_THAT(spline.tangentAt(5, 1.0), Vector2Eq(Lt(0.0), 0.0));
 
   // Bottom, clockwise to left.
   EXPECT_EQ(spline.commands()[6].type, CommandType::CurveTo);
-  EXPECT_EQ(spline.pointAt(6, 0.0), Vector2(4.0, 0.0));
+  EXPECT_EQ(spline.pointAt(6, 0.0), Vector2(4.0, 2.0));
   EXPECT_THAT(spline.tangentAt(6, 0.0), Vector2Eq(Lt(0.0), 0.0));
-  EXPECT_THAT(spline.tangentAt(6, 0.5), NormalizedEq(Vector2(-1.0, 1.0)));
-  EXPECT_THAT(spline.tangentAt(6, 1.0), Vector2Eq(0.0, Gt(0.0)));
+  EXPECT_THAT(spline.tangentAt(6, 0.5), NormalizedEq(Vector2(-1.0, -1.0)));
+  EXPECT_THAT(spline.tangentAt(6, 1.0), Vector2Eq(0.0, Lt(0.0)));
 
   // Left, clockwise to top.
   EXPECT_EQ(spline.commands()[7].type, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(7, 0.0), Vector2(3.0, 1.0));
-  EXPECT_THAT(spline.tangentAt(7, 0.0), Vector2Eq(0.0, Gt(0.0)));
-  EXPECT_THAT(spline.tangentAt(7, 0.5), NormalizedEq(Vector2(1.0, 1.0)));
+  EXPECT_THAT(spline.tangentAt(7, 0.0), Vector2Eq(0.0, Lt(0.0)));
+  EXPECT_THAT(spline.tangentAt(7, 0.5), NormalizedEq(Vector2(1.0, -1.0)));
   EXPECT_THAT(spline.tangentAt(7, 1.0), Vector2Eq(Gt(0.0), 0.0));
 
   // Top, clockwise to right.
   EXPECT_EQ(spline.commands()[8].type, CommandType::CurveTo);
-  EXPECT_EQ(spline.pointAt(8, 0.0), Vector2(4.0, 2.0));
+  EXPECT_EQ(spline.pointAt(8, 0.0), Vector2(4.0, 0.0));
   EXPECT_THAT(spline.tangentAt(8, 0.0), Vector2Eq(Gt(0.0), 0.0));
-  EXPECT_THAT(spline.tangentAt(8, 0.5), NormalizedEq(Vector2(1.0, -1.0)));
-  EXPECT_THAT(spline.tangentAt(8, 1.0), Vector2Eq(0.0, Lt(0.0)));
+  EXPECT_THAT(spline.tangentAt(8, 0.5), NormalizedEq(Vector2(1.0, 1.0)));
+  EXPECT_THAT(spline.tangentAt(8, 1.0), Vector2Eq(0.0, Gt(0.0)));
 
   // Since there is no line segment, since the ClosePath is directly connected, the tangent is zero.
   EXPECT_EQ(spline.commands()[9].type, CommandType::ClosePath);
@@ -647,36 +647,36 @@ TEST(PathSpline, NormalAt) {
   EXPECT_EQ(spline.commands()[4].type, CommandType::MoveTo);
   // MoveTo matches the next point.
   EXPECT_EQ(spline.pointAt(4, 0.0), Vector2(5.0, 1.0));
-  EXPECT_THAT(spline.normalAt(4, 0.0), Vector2Eq(Gt(0.0), 0.0));
-  EXPECT_THAT(spline.normalAt(4, 1.0), Vector2Eq(Gt(0.0), 0.0));
+  EXPECT_THAT(spline.normalAt(4, 0.0), Vector2Eq(Lt(0.0), 0.0));
+  EXPECT_THAT(spline.normalAt(4, 1.0), Vector2Eq(Lt(0.0), 0.0));
 
   // Right side, going clockwise to bottom.
   EXPECT_EQ(spline.commands()[5].type, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(5, 0.0), Vector2(5.0, 1.0));
-  EXPECT_THAT(spline.normalAt(5, 0.0), Vector2Eq(Gt(0.0), 0.0));
-  EXPECT_THAT(spline.normalAt(5, 0.5), NormalizedEq(Vector2(1.0, -1.0)));
+  EXPECT_THAT(spline.normalAt(5, 0.0), Vector2Eq(Lt(0.0), 0.0));
+  EXPECT_THAT(spline.normalAt(5, 0.5), NormalizedEq(Vector2(-1.0, -1.0)));
   EXPECT_THAT(spline.normalAt(5, 1.0), Vector2Eq(0.0, Lt(0.0)));
 
   // Bottom, clockwise to left.
   EXPECT_EQ(spline.commands()[6].type, CommandType::CurveTo);
-  EXPECT_EQ(spline.pointAt(6, 0.0), Vector2(4.0, 0.0));
+  EXPECT_EQ(spline.pointAt(6, 0.0), Vector2(4.0, 2.0));
   EXPECT_THAT(spline.normalAt(6, 0.0), Vector2Eq(0.0, Lt(0.0)));
-  EXPECT_THAT(spline.normalAt(6, 0.5), NormalizedEq(Vector2(-1.0, -1.0)));
-  EXPECT_THAT(spline.normalAt(6, 1.0), Vector2Eq(Lt(0.0), 0.0));
+  EXPECT_THAT(spline.normalAt(6, 0.5), NormalizedEq(Vector2(1.0, -1.0)));
+  EXPECT_THAT(spline.normalAt(6, 1.0), Vector2Eq(Gt(0.0), 0.0));
 
   // Left, clockwise to top.
   EXPECT_EQ(spline.commands()[7].type, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(7, 0.0), Vector2(3.0, 1.0));
-  EXPECT_THAT(spline.normalAt(7, 0.0), Vector2Eq(Lt(0.0), 0.0));
-  EXPECT_THAT(spline.normalAt(7, 0.5), NormalizedEq(Vector2(-1.0, 1.0)));
+  EXPECT_THAT(spline.normalAt(7, 0.0), Vector2Eq(Gt(0.0), 0.0));
+  EXPECT_THAT(spline.normalAt(7, 0.5), NormalizedEq(Vector2(1.0, 1.0)));
   EXPECT_THAT(spline.normalAt(7, 1.0), Vector2Eq(0.0, Gt(0.0)));
 
   // Top, clockwise to right.
   EXPECT_EQ(spline.commands()[8].type, CommandType::CurveTo);
-  EXPECT_EQ(spline.pointAt(8, 0.0), Vector2(4.0, 2.0));
+  EXPECT_EQ(spline.pointAt(8, 0.0), Vector2(4.0, 0.0));
   EXPECT_THAT(spline.normalAt(8, 0.0), Vector2Eq(0.0, Gt(0.0)));
-  EXPECT_THAT(spline.normalAt(8, 0.5), NormalizedEq(Vector2(1.0, 1.0)));
-  EXPECT_THAT(spline.normalAt(8, 1.0), Vector2Eq(Gt(0.0), 0.0));
+  EXPECT_THAT(spline.normalAt(8, 0.5), NormalizedEq(Vector2(-1.0, 1.0)));
+  EXPECT_THAT(spline.normalAt(8, 1.0), Vector2Eq(Lt(0.0), 0.0));
 
   // Since there is no line segment, since the ClosePath is directly connected, the normal is zero.
   EXPECT_EQ(spline.commands()[9].type, CommandType::ClosePath);
