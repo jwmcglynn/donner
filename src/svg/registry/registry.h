@@ -21,10 +21,13 @@ enum class ElementType {
   Ellipse,
   G,
   Line,
+  LinearGradient,
   Path,
   Polygon,
   Polyline,
+  RadialGradient,
   Rect,
+  Stop,  //!< For gradient stops.
   Style,
   SVG,      //!< SVG root element.
   Unknown,  //!< For unknown elements.
@@ -42,12 +45,17 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());
     case ElementType::Line: return fn(std::integral_constant<ElementType, ElementType::Line>());
+    case ElementType::LinearGradient:
+      return fn(std::integral_constant<ElementType, ElementType::LinearGradient>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
     case ElementType::Polygon:
       return fn(std::integral_constant<ElementType, ElementType::Polygon>());
     case ElementType::Polyline:
       return fn(std::integral_constant<ElementType, ElementType::Polyline>());
+    case ElementType::RadialGradient:
+      return fn(std::integral_constant<ElementType, ElementType::RadialGradient>());
     case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
+    case ElementType::Stop: return fn(std::integral_constant<ElementType, ElementType::Stop>());
     case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
     case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());
     case ElementType::Unknown:

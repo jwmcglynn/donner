@@ -3,8 +3,8 @@
 #include "src/base/parser/parse_error.h"
 #include "src/base/rc_string.h"
 #include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/properties/property.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 

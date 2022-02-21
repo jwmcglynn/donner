@@ -5,7 +5,8 @@
 #include <fstream>
 
 #include "src/svg/components/document_context.h"
-#include "src/svg/components/registry.h"
+#include "src/svg/components/rendering_context.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 
@@ -14,7 +15,7 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d 
   Registry& registry = document.registry();
   registry.ctx<DocumentContext>().defaultSize = defaultSize;
 
-  registry.ctx<DocumentContext>().instantiateRenderTree(outWarnings);
+  registry.ctx_or_set<RenderingContext>(registry).instantiateRenderTree(outWarnings);
 }
 
 bool RendererUtils::writeRgbaPixelsToPngFile(const char* filename,

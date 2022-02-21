@@ -1,9 +1,9 @@
 #pragma once
 
 #include "src/base/transform.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/core/css_transform.h"
 #include "src/svg/properties/property.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 

@@ -12,8 +12,11 @@ std::optional<Lengthd::Unit> parseUnit(std::string_view suffix, size_t* charsCon
     std::string_view suffix;
   };
 
-  // TODO: Switch this to frozen map.
   // Note: suffix must be lowercase for comparison.
+
+  // This can potentially be optimized to use a binary search, however for the size of this list it
+  // would likely not be worth it. It isn't a good candidate for a frozen map because we're trying
+  // to match string prefixes.
   static constexpr const SuffixMap kSuffixMap[] = {
       {Lengthd::Unit::Percent, "%"},  //
       {Lengthd::Unit::Cm, "cm"},      //
@@ -84,6 +87,14 @@ public:
       result.consumedChars = currentOffset();
       result.length.value = number;
       result.length.unit = maybeUnit.value();
+
+      if (options_.limitUnitToPercentage && result.length.unit != Lengthd::Unit::Percent) {
+        ParseError err;
+        err.reason = "Unexpected unit, expected percentage";
+        err.offset = currentOffset();
+        return err;
+      }
+
       return result;
     }
 

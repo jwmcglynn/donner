@@ -1,6 +1,6 @@
 #pragma once
 
-#include "src/svg/components/registry.h"
+#include "src/svg/registry/registry.h"
 #include "src/svg/svg_svg_element.h"
 
 namespace donner::svg {

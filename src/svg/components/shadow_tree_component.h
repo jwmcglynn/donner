@@ -2,30 +2,23 @@
 
 #include "src/base/rc_string.h"
 #include "src/svg/components/document_context.h"
-#include "src/svg/components/registry.h"
+#include "src/svg/graph/reference.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 
 class ShadowTreeComponent {
 public:
-  ShadowTreeComponent(RcString href) : href_(href) {}
+  ShadowTreeComponent(Reference href) : reference_(href) {}
 
-  RcString href() const { return href_; }
+  RcString href() const { return reference_.href; }
 
-  Entity targetEntity(Registry& registry) {
-    // TODO: Full parsing support for URL references.
-    if (StringUtils::StartsWith(href_, std::string_view("#"))) {
-      if (auto entity = registry.ctx<const DocumentContext>().getEntityById(href_.substr(1));
-          entity != entt::null) {
-        return entity;
-      }
-    }
-
-    return entt::null;
+  std::optional<ResolvedReference> targetEntity(Registry& registry) {
+    return reference_.resolve(registry);
   }
 
 private:
-  RcString href_;
+  Reference reference_;
 };
 
 }  // namespace donner::svg

@@ -212,20 +212,18 @@ TEST(PropertyRegistry, Fill) {
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#test)");
-    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference("#test"))));
 
     registry.parseStyle("fill: url(#test) none");
-    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference("#test"))));
 
     registry.parseStyle("fill: url(#test) green");
-    EXPECT_THAT(
-        registry.fill.get(),
-        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 128, 0, 0xFF))))));
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference(
+                                         "#test", Color(RGBA(0, 128, 0, 0xFF))))));
 
     registry.parseStyle("fill: url(#test)   lime\t  ");
-    EXPECT_THAT(
-        registry.fill.get(),
-        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference(
+                                         "#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
   }
 
   {
@@ -283,20 +281,20 @@ TEST(PropertyRegistry, Stroke) {
   {
     PropertyRegistry registry;
     registry.parseStyle("stroke: url(#test)");
-    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+    EXPECT_THAT(registry.stroke.get(),
+                Optional(PaintServer(PaintServer::ElementReference("#test"))));
 
     registry.parseStyle("stroke: url(#test) none");
-    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::Reference("#test"))));
+    EXPECT_THAT(registry.stroke.get(),
+                Optional(PaintServer(PaintServer::ElementReference("#test"))));
 
     registry.parseStyle("stroke: url(#test) green");
-    EXPECT_THAT(
-        registry.stroke.get(),
-        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 128, 0, 0xFF))))));
+    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::ElementReference(
+                                           "#test", Color(RGBA(0, 128, 0, 0xFF))))));
 
     registry.parseStyle("stroke: url(#test)   lime\t  ");
-    EXPECT_THAT(
-        registry.stroke.get(),
-        Optional(PaintServer(PaintServer::Reference("#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
+    EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::ElementReference(
+                                           "#test", Color(RGBA(0, 0xFF, 0, 0xFF))))));
   }
 }
 

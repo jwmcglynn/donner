@@ -6,8 +6,8 @@
 #include "include/core/SkGraphics.h"
 #include "include/core/SkImageEncoder.h"
 #include "include/core/SkString.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/core/path_spline.h"
+#include "src/svg/registry/registry.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {

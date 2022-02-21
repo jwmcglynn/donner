@@ -7,6 +7,9 @@
 
 namespace donner::svg {
 
+/**
+ * Parameters for a <ellipse> element.
+ */
 struct EllipseProperties {
   Property<Lengthd> cx{"cx",
                        []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
@@ -42,9 +45,6 @@ struct ComputedEllipseComponent {
   EllipseProperties properties;
 };
 
-/**
- * Parameters for a <ellipse> element.
- */
 struct EllipseComponent {
   EllipseProperties properties;
 

@@ -78,7 +78,8 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
           } else if (token.is<css::Token::Ident>()) {
             const RcString& value = token.get<css::Token::Ident>().value;
             if (value.equalsLowercase("none")) {
-              return PaintServer(PaintServer::Reference(url.value, std::nullopt));
+              // TODO: Is there a difference between omitted and "none"?
+              return PaintServer(PaintServer::ElementReference(url.value, std::nullopt));
             }
           }
         }
@@ -86,7 +87,8 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
         // If we couldn't identify a fallback yet, try parsing it as a color.
         auto colorResult = css::ColorParser::Parse(components.subspan(i));
         if (colorResult.hasResult()) {
-          return PaintServer(PaintServer::Reference(url.value, std::move(colorResult.result())));
+          return PaintServer(
+              PaintServer::ElementReference(url.value, std::move(colorResult.result())));
         } else {
           // Invalid paint.
           ParseError err;
@@ -98,7 +100,7 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
 
       // If we finished looping over additional tokens and didn't return, there is no fallback, only
       // whitespace.
-      return PaintServer(PaintServer::Reference(url.value, std::nullopt));
+      return PaintServer(PaintServer::ElementReference(url.value, std::nullopt));
     }
   }
 
@@ -111,22 +113,6 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
   ParseError err;
   err.reason = "Invalid paint server";
   err.offset = firstComponent.sourceOffset();
-  return err;
-}
-
-ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-      return Clamp(number->value, 0.0, 1.0);
-    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
-      return Clamp(percentage->value / 100.0, 0.0, 1.0);
-    }
-  }
-
-  ParseError err;
-  err.reason = "Invalid alpha value";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 

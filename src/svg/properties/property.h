@@ -94,6 +94,11 @@ struct Property {
     return std::move(result.value());
   }
 
+  const T& getRequiredRef() const {
+    UTILS_RELEASE_ASSERT_MSG(hasValue(), "Required property not set");
+    return value.value();
+  }
+
   void set(std::optional<T> newValue, css::Specificity newSpecificity) {
     value = std::move(newValue);
     state = PropertyState::Set;

@@ -17,10 +17,10 @@ std::ostream& operator<<(std::ostream& os, const PaintServer& paint) {
   } else if (paint.is<PaintServer::Solid>()) {
     os << "solid " << paint.get<PaintServer::Solid>().color;
   } else {
-    const PaintServer::Reference& reference = paint.get<PaintServer::Reference>();
-    os << "url(" << reference.url << ")";
-    if (reference.fallback) {
-      os << " " << *reference.fallback;
+    const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
+    os << "url(" << ref.reference.href << ")";
+    if (ref.fallback) {
+      os << " " << *ref.fallback;
     }
   }
   os << ")";

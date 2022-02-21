@@ -17,10 +17,13 @@
 #include "src/svg/svg_ellipse_element.h"
 #include "src/svg/svg_g_element.h"
 #include "src/svg/svg_line_element.h"
+#include "src/svg/svg_linear_gradient_element.h"
 #include "src/svg/svg_path_element.h"
 #include "src/svg/svg_polygon_element.h"
 #include "src/svg/svg_polyline_element.h"
+#include "src/svg/svg_radial_gradient_element.h"
 #include "src/svg/svg_rect_element.h"
+#include "src/svg/svg_stop_element.h"
 #include "src/svg/svg_style_element.h"
 #include "src/svg/svg_svg_element.h"
 #include "src/svg/svg_unknown_element.h"
@@ -37,6 +40,9 @@ using SVGElements = entt::type_list<  //
     SVGEllipseElement,                //
     SVGGElement,                      //
     SVGLineElement,                   //
+    SVGLinearGradientElement,         //
+    SVGStopElement,                   //
+    SVGRadialGradientElement,         //
     SVGPathElement,                   //
     SVGPolygonElement,                //
     SVGPolylineElement,               //
@@ -100,6 +106,37 @@ static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
   return maybeLengthResult.result().length;
 }
 
+static std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view value) {
+  // Since we want to both parse a number or percent, use a LengthParser and then filter the allowed
+  // suffixes.
+  LengthParser::Options options;
+  options.unitOptional = true;
+  options.limitUnitToPercentage = true;
+
+  auto maybeLengthResult = LengthParser::Parse(value, options);
+  if (maybeLengthResult.hasError()) {
+    context.addSubparserWarning(std::move(maybeLengthResult.error()),
+                                context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  if (maybeLengthResult.result().consumedChars != value.size()) {
+    ParseError err;
+    err.reason = "Unexpected data at end of attribute";
+    err.offset = maybeLengthResult.result().consumedChars;
+    context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  // Convert to the [0, 1] range.
+  const Lengthd length = maybeLengthResult.result().length;
+  if (length.unit == Lengthd::Unit::Percent) {
+    return Clamp(NarrowToFloat(length.value / 100.0), 0.0f, 1.0f);
+  } else {
+    return Clamp(NarrowToFloat(length.value), 0.0f, 1.0f);
+  }
+}
+
 static std::optional<ParseError> ParseUnconditionalCommonAttribute(XMLParserContext& context,
                                                                    SVGElement element,
                                                                    std::string_view namespacePrefix,
@@ -147,6 +184,47 @@ std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, T elem
   return ParseUnconditionalCommonAttribute(context, element, namespacePrefix, name, value);
 }
 
+std::optional<ParseError> ParseGradientCommonAttribute(XMLParserContext& context,
+                                                       SVGGradientElement& element,
+                                                       std::string_view namespacePrefix,
+                                                       std::string_view name,
+                                                       std::string_view value) {
+  if (name == "gradientUnits") {
+    if (value == "userSpaceOnUse") {
+      element.setGradientUnits(GradientUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setGradientUnits(GradientUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid gradientUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == "gradientTransform") {
+    auto result = TransformParser::Parse(value);
+    if (result.hasError()) {
+      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
+    } else {
+      element.setGradientTransform(result.result());
+    }
+  } else if (name == "spreadMethod") {
+    if (value == "pad") {
+      element.setSpreadMethod(GradientSpreadMethod::Pad);
+    } else if (value == "reflect") {
+      element.setSpreadMethod(GradientSpreadMethod::Reflect);
+    } else if (value == "repeat") {
+      element.setSpreadMethod(GradientSpreadMethod::Repeat);
+    } else {
+      ParseError err;
+      err.reason = "Invalid spreadMethod value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
 template <typename T>
 std::optional<ParseError> ParseNodeContents(XMLParserContext& context, T element,
                                             rapidxml_ns::xml_node<>* node) {
@@ -184,6 +262,35 @@ std::optional<ParseError> ParseAttribute<SVGLineElement>(XMLParserContext& conte
     }
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGLinearGradientElement>(XMLParserContext& context,
+                                                                   SVGLinearGradientElement element,
+                                                                   std::string_view namespacePrefix,
+                                                                   std::string_view name,
+                                                                   std::string_view value) {
+  if (name == "x1") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX1(length.value());
+    }
+  } else if (name == "y1") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY1(length.value());
+    }
+  } else if (name == "x2") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX2(length.value());
+    }
+  } else if (name == "y2") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY2(length.value());
+    }
+  } else {
+    return ParseGradientCommonAttribute(context, element, namespacePrefix, name, value);
   }
 
   return std::nullopt;
@@ -238,6 +345,43 @@ std::optional<ParseError> ParseAttribute<SVGPolylineElement>(XMLParserContext& c
 }
 
 template <>
+std::optional<ParseError> ParseAttribute<SVGRadialGradientElement>(XMLParserContext& context,
+                                                                   SVGRadialGradientElement element,
+                                                                   std::string_view namespacePrefix,
+                                                                   std::string_view name,
+                                                                   std::string_view value) {
+  if (name == "cx") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setCx(length.value());
+    }
+  } else if (name == "cy") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setCy(length.value());
+    }
+  } else if (name == "r") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setR(length.value());
+    }
+  } else if (name == "fx") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setFx(length.value());
+    }
+  } else if (name == "fy") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setFy(length.value());
+    }
+  } else if (name == "fr") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setFr(length.value());
+    }
+  } else {
+    return ParseGradientCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
 std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& context,
                                                         SVGSVGElement element,
                                                         std::string_view namespacePrefix,
@@ -260,6 +404,23 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
     }
   } else if (namespacePrefix == "xmlns" || name == "xmlns") {
     // This was already parsed by @ref ParseXmlNsAttribute.
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGStopElement>(XMLParserContext& context,
+                                                         SVGStopElement element,
+                                                         std::string_view namespacePrefix,
+                                                         std::string_view name,
+                                                         std::string_view value) {
+  if (name == "offset") {
+    if (auto maybeOffset = ParseStopOffset(context, value)) {
+      element.setOffset(maybeOffset.value());
+    }
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);
   }

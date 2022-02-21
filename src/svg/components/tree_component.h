@@ -1,7 +1,7 @@
 #pragma once
 
 #include "src/base/rc_string.h"
-#include "src/svg/components/registry.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 

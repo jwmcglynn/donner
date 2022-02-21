@@ -5,12 +5,12 @@
 
 #include "src/svg/components/class_component.h"
 #include "src/svg/components/document_context.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/style_component.h"
 #include "src/svg/components/stylesheet_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 

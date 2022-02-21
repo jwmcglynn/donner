@@ -114,4 +114,20 @@ ParseResult<std::optional<Lengthd>> ParseLengthPercentageOrAuto(
   }
 }
 
+ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      return Clamp(number->value, 0.0, 1.0);
+    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
+      return Clamp(percentage->value / 100.0, 0.0, 1.0);
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid alpha value";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
 }  // namespace donner::svg

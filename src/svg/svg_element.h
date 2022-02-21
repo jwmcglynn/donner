@@ -6,8 +6,8 @@
 #include "src/base/rc_string.h"
 #include "src/base/transform.h"
 #include "src/base/utils.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/properties/property_registry.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner {
 struct ParseError;

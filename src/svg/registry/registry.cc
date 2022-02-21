@@ -1,4 +1,4 @@
-#include "src/svg/components/registry.h"
+#include "src/svg/registry/registry.h"
 
 #include "src/base/utils.h"
 
@@ -11,12 +11,15 @@ std::string_view TypeToString(ElementType type) {
     case ElementType::Ellipse: return "Ellipse";
     case ElementType::G: return "G";
     case ElementType::Line: return "Line";
+    case ElementType::LinearGradient: return "LinearGradient";
     case ElementType::Use: return "Use";
     case ElementType::SVG: return "SVG";
     case ElementType::Path: return "Path";
     case ElementType::Polygon: return "Polygon";
     case ElementType::Polyline: return "Polyline";
+    case ElementType::RadialGradient: return "RadialGradient";
     case ElementType::Rect: return "Rect";
+    case ElementType::Stop: return "Stop";
     case ElementType::Style: return "Style";
     case ElementType::Unknown: return "Unknown";
   }

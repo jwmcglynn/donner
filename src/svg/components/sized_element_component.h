@@ -7,8 +7,8 @@
 #include "src/base/transform.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 

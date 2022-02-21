@@ -1,0 +1,80 @@
+#include "src/svg/components/stop_component.h"
+
+#include "src/css/parser/color_parser.h"
+#include "src/svg/properties/presentation_attribute_parsing.h"
+#include "src/svg/properties/property_parsing.h"
+
+namespace donner::svg {
+
+namespace {
+
+std::optional<ParseError> ParseStopColor(StopProperties& properties,
+                                         const PropertyParseFnParams& params) {
+  return Parse(
+      params,
+      [](const PropertyParseFnParams& params) {
+        return css::ColorParser::Parse(params.components());
+      },
+      &properties.stopColor);
+}
+
+std::optional<ParseError> ParseStopOpacity(StopProperties& properties,
+                                           const PropertyParseFnParams& params) {
+  return Parse(
+      params,
+      [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
+      &properties.stopOpacity);
+}
+
+// Returns true if the property was found and parsed successfully.
+ParseResult<bool> ParseProperty(std::string_view name, const PropertyParseFnParams params,
+                                StopProperties& properties) {
+  // TODO: Case insensitive?
+  if (name == "stop-color") {
+    if (auto maybeError = ParseStopColor(properties, params)) {
+      return std::move(maybeError.value());
+    }
+  } else if (name == "stop-opacity") {
+    if (auto maybeError = ParseStopOpacity(properties, params)) {
+      return std::move(maybeError.value());
+    }
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+}  // namespace
+
+ComputedStopComponent::ComputedStopComponent(
+    const StopProperties& inputProperties,
+    const std::map<RcString, UnparsedProperty>& unparsedProperties,
+    std::vector<ParseError>* outWarnings)
+    : properties(inputProperties) {
+  for (const auto& [name, unparsedProperty] : unparsedProperties) {
+    const PropertyParseFnParams params =
+        CreateParseFnParams(unparsedProperty.declaration, unparsedProperty.specificity);
+
+    auto result = ParseProperty(name, params, properties);
+    if (result.hasError() && outWarnings) {
+      outWarnings->emplace_back(std::move(result.error()));
+    }
+  }
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::Stop>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  StopProperties& properties = handle.get_or_emplace<StopComponent>().properties;
+  return ParseProperty(name, params, properties);
+}
+
+void InstantiateStopComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<StopComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [component, style] = view.get(entity);
+    component.computeWithPrecomputedStyle(EntityHandle(registry, entity), style, outWarnings);
+  }
+}
+
+}  // namespace donner::svg

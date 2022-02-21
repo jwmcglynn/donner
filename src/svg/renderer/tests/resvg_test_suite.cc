@@ -18,7 +18,7 @@ namespace {
 
 // Circle rendering is slightly different since Donner uses four custom curves instead of arcTo.
 // Allow a small number of mismatched pixels to accomodate.
-static constexpr size_t kMaxMismatchedPixels = 15;
+static constexpr size_t kMaxMismatchedPixels = 100;
 
 static const std::filesystem::path kSvgDir = "external/resvg-test-suite/svg/";
 static const std::filesystem::path kGoldenDir = "external/resvg-test-suite/png/";
@@ -246,5 +246,50 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(Circle, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-circle")),
                          testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    LinearGradient, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix("e-linearGradient",
+                                {
+                                    "e-linearGradient-007.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-008.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-010.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-011.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-012.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-014.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-015.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-028.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-034.svg",  // Not impl: `xlink:href`
+                                    "e-linearGradient-036.svg",  // Not impl: Recursive `xlink:href`
+                                    "e-linearGradient-037.svg",  // UB: Invalid `gradientTransform`
+                                })),
+    testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    RadialGradient, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix("e-radialGradient",
+                                {
+                                    "e-radialGradient-007.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-008.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-009.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-011.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-012.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-013.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-014.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-026.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-027.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-029.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-030.svg",  // Not impl: `xlink:href`
+                                    "e-radialGradient-031.svg",  // Bug? Focal point correction
+                                    "e-radialGradient-032.svg",  // UB: Negative `r`
+                                    "e-radialGradient-036.svg",  // Bug? Stop-opacity
+                                    "e-radialGradient-037.svg",  // Bug? Stop-opacity
+                                    "e-radialGradient-039.svg",  // UB: Invalid `gradientUnits`
+                                    "e-radialGradient-040.svg",  // UB: Invalid `gradientTransform
+                                    "e-radialGradient-042.svg",  // UB: fr=0.5 (SVG 2)
+                                    "e-radialGradient-043.svg",  // UB: fr=0.5 (SVG 2)
+                                    "e-radialGradient-045.svg",  // UB: fr=-1 (SVG 2)
+                                })),
+    testNameFromFilename);
 
 }  // namespace donner::svg

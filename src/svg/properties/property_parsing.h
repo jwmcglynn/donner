@@ -1,9 +1,9 @@
 #pragma once
 
 #include "src/css/specificity.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/properties/property.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 
@@ -80,5 +80,18 @@ std::optional<RcString> TryGetSingleIdent(std::span<const css::ComponentValue> c
  */
 ParseResult<std::optional<Lengthd>> ParseLengthPercentageOrAuto(
     std::span<const css::ComponentValue> components, bool allowUserUnits);
+
+/**
+ * Parse an <alpha-value>, defined by CSS Color:
+ * https://www.w3.org/TR/css-color/#typedef-alpha-value
+ *
+ *   <alpha-value> = <number> | <percentage>
+ *
+ * Where if a number is specified, it's represented with 1.0 being 100%.
+ *
+ * @param components
+ * @return ParseResult<double> Parsed alpha value as a double, in the range of [0, 1].
+ */
+ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> components);
 
 }  // namespace donner::svg

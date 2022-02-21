@@ -5,9 +5,9 @@
 
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/document_context.h"
-#include "src/svg/components/registry.h"
 #include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/shadow_tree_component.h"
+#include "src/svg/registry/registry.h"
 
 // TODO: Automatically delete ComputedShadowTreeComponent when ShadowTreeComponent is removed.
 
@@ -62,8 +62,8 @@ private:
     // Iterate over all children and create Entities and ShadowEntityComponents for each of them for
     // the shadow tree.
     if (auto* nestedShadow = registry.try_get<ShadowTreeComponent>(lightTarget)) {
-      if (auto targetEntity = nestedShadow->targetEntity(registry); targetEntity != entt::null) {
-        computeChildren(registry, shadow, targetEntity, outWarnings);
+      if (auto targetEntity = nestedShadow->targetEntity(registry)) {
+        computeChildren(registry, shadow, targetEntity.value(), outWarnings);
       } else if (outWarnings) {
         ParseError err;
         err.reason = std::string("Failed to find target entity for nested shadow tree '") +

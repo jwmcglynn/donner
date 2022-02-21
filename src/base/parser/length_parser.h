@@ -27,6 +27,11 @@ public:
      */
     bool unitOptional = false;
 
+    /**
+     * If true, limits the parser to a <percentage>, or <number> if \ref unitOptional is set.
+     */
+    bool limitUnitToPercentage = false;
+
     Options() {}
   };
 
@@ -44,7 +49,7 @@ public:
    *
    *  <dimension-token> = <number-token> <ident-token>
    *  <percentage-token> = <number-token> %
-   *  <number-token> = The result of @ref NumberParser, a real number in either fixed or scientific
+   *  <number-token> = The result of \ref NumberParser, a real number in either fixed or scientific
    *    notation, with optional '+' or '-' prefix.
    *  <ident-token> = -?-? [ a-z A-Z _ or non-ASCII ] [ a-z A-Z _ - or non-ASCII ]
    *    However, LengthParser is limited to valid suffixes for length, as defined by Length::Unit.

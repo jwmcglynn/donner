@@ -76,6 +76,17 @@ struct MathConstants<double> {
 };
 
 /**
+ * Semantically represent a narrowing conversion, such as converting a double to a float, to make
+ * the conversion more visible.
+ *
+ * For example:
+ * const float f = NarrowToFloat(1.0);
+ */
+inline float NarrowToFloat(double from) {
+  return static_cast<float>(from);
+}
+
+/**
  * Returns minimum of the provided values.
  */
 template <typename T>

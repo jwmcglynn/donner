@@ -1,7 +1,7 @@
 #pragma once
 
-#include "src/svg/components/registry.h"  // For EntityHandle
 #include "src/svg/properties/property_parsing.h"
+#include "src/svg/registry/registry.h"  // For EntityHandle
 
 namespace donner::svg {
 

@@ -20,9 +20,11 @@ cc_library(
         "//src/base/parser",
         "//src/css",
         "//src/css/parser",
-        "//src/svg/components:registry",
+        "//src/svg/components:document_context",
         "//src/svg/components:transform_component",
+        "//src/svg/graph",
         "//src/svg/parser",
+        "//src/svg/registry",
         "@frozen",
     ],
 )

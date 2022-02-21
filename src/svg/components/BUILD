@@ -1,24 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
-    name = "registry",
-    srcs = [
-        "registry.cc",
-    ],
-    hdrs = [
-        "registry.h",
-    ],
-    visibility = [
-        "//src/css:__pkg__",
-        "//src/svg:__subpackages__",
-    ],
-    deps = [
-        "//src/base",
-        "@entt",
-    ],
-)
-
-cc_library(
     name = "transform_component",
     hdrs = [
         "transform_component.h",
@@ -32,17 +14,38 @@ cc_library(
 )
 
 cc_library(
+    name = "document_context",
+    srcs = [
+        "document_context.cc",
+    ],
+    hdrs = [
+        "document_context.h",
+        "id_component.h",
+    ],
+    visibility = [
+        "//src/svg:__subpackages__",
+    ],
+    deps = [
+        "//src/base",
+        "//src/svg/registry",
+    ],
+)
+
+cc_library(
     name = "components",
     srcs = [
         "circle_component.cc",
-        "document_context.cc",
         "ellipse_component.cc",
+        "gradient_component.cc",
         "line_component.cc",
+        "linear_gradient_component.cc",
         "path_component.cc",
         "poly_component.cc",
+        "radial_gradient_component.cc",
         "rect_component.cc",
-        "registry.cc",
+        "rendering_context.cc",
         "sized_element_component.cc",
+        "stop_component.cc",
         "stylesheet_component.cc",
         "transform_component.cc",
         "tree_component.cc",
@@ -54,20 +57,22 @@ cc_library(
         "computed_path_component.h",
         "computed_shadow_tree_component.h",
         "computed_style_component.h",
-        "document_context.h",
         "ellipse_component.h",
-        "id_component.h",
+        "gradient_component.h",
         "line_component.h",
+        "linear_gradient_component.h",
         "path_component.h",
         "path_length_component.h",
         "poly_component.h",
         "preserve_aspect_ratio_component.h",
+        "radial_gradient_component.h",
         "rect_component.h",
-        "registry.h",
         "rendering_behavior_component.h",
+        "rendering_context.h",
         "shadow_entity_component.h",
         "shadow_tree_component.h",
         "sized_element_component.h",
+        "stop_component.h",
         "style_component.h",
         "stylesheet_component.h",
         "tree_component.h",
@@ -78,10 +83,11 @@ cc_library(
         "//src/svg:__subpackages__",
     ],
     deps = [
-        ":registry",
+        ":document_context",
         ":transform_component",
         "//src/svg/parser",
         "//src/svg/properties",
+        "//src/svg/registry",
     ],
 )
 

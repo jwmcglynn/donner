@@ -1,8 +1,8 @@
 #pragma once
 
-#include "src/svg/components/registry.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/properties/property_registry.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 

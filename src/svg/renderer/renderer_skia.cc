@@ -1,12 +1,18 @@
 #include "src/svg/renderer/renderer_skia.h"
 
+// Skia
 #include "include/core/SkPath.h"
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkStream.h"
 #include "include/effects/SkDashPathEffect.h"
+#include "include/effects/SkGradientShader.h"
+//
 #include "src/svg/components/computed_style_component.h"
+#include "src/svg/components/gradient_component.h"
+#include "src/svg/components/linear_gradient_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/path_length_component.h"
+#include "src/svg/components/radial_gradient_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/shadow_entity_component.h"
@@ -103,6 +109,14 @@ SkPath toSkia(const PathSpline& spline) {
   return path;
 }
 
+SkTileMode toSkia(GradientSpreadMethod spreadMethod) {
+  switch (spreadMethod) {
+    case GradientSpreadMethod::Pad: return SkTileMode::kClamp;
+    case GradientSpreadMethod::Reflect: return SkTileMode::kMirror;
+    case GradientSpreadMethod::Repeat: return SkTileMode::kRepeat;
+  }
+}
+
 }  // namespace
 
 class RendererSkia::Impl {
@@ -113,7 +127,7 @@ public:
                 const PropertyRegistry& style, const Boxd& viewbox,
                 const FontMetrics& fontMetrics) {
     if (auto fill = style.fill.get()) {
-      drawPathFill(path, fill.value(), style);
+      drawPathFill(dataHandle, path, fill.value(), style, viewbox);
     }
 
     if (auto stroke = style.stroke.get()) {
@@ -121,86 +135,260 @@ public:
     }
   }
 
-  void drawPathFill(const ComputedPathComponent& path, const PaintServer& paint,
-                    const PropertyRegistry& style) {
+  std::optional<SkPaint> createFallbackPaint(const PaintServer::ElementReference& ref,
+                                             css::RGBA currentColor) {
+    if (ref.fallback) {
+      SkPaint paint;
+      paint.setAntiAlias(true);
+      paint.setColor(toSkia(ref.fallback.value().resolve(currentColor, /* opacity */ 1.0)));
+      return paint;
+    }
+
+    return std::nullopt;
+  }
+
+  inline Lengthd toPercent(Lengthd value) {
+    if (value.unit == Lengthd::Unit::None) {
+      value.value *= 100.0;
+      value.unit = Lengthd::Unit::Percent;
+    }
+
+    assert(value.unit == Lengthd::Unit::Percent);
+    return value;
+  }
+
+  inline SkScalar resolveGradientCoord(Lengthd value, const Boxd& viewbox) {
+    // Not plumbing FontMetrics here, since only percentage values are accepted.
+    return NarrowToFloat(toPercent(value).toPixels(viewbox, FontMetrics()));
+  }
+
+  SkPoint resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewbox,
+                                const Transformd& transform) {
+    const Vector2d pt = transform.transformPosition(
+        Vector2d(toPercent(x).toPixels(viewbox, FontMetrics(), Lengthd::Extent::X),
+                 toPercent(y).toPixels(viewbox, FontMetrics(), Lengthd::Extent::Y)));
+    return SkPoint::Make(NarrowToFloat(pt.x), NarrowToFloat(pt.y));
+  }
+
+  std::optional<SkPaint> instantiatePaintReference(EntityHandle dataHandle,
+                                                   const PaintServer::ElementReference& ref,
+                                                   const Boxd& pathBounds, const Boxd& viewbox,
+                                                   css::RGBA currentColor) {
+    if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry())) {
+      const EntityHandle target = resolvedRef->handle;
+
+      if (const auto [gradient, gradientStops] =
+              target.try_get<GradientComponent, ComputedGradientComponent>();
+          gradient && gradientStops) {
+        // Apply gradientUnits and gradientTransform.
+        const bool objectBoundingBox = gradient->gradientUnits == GradientUnits::ObjectBoundingBox;
+
+        Transformd transform = gradient->gradientTransform;
+        if (objectBoundingBox) {
+          // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
+          //
+          // > Keyword objectBoundingBox should not be used when the geometry of the applicable
+          // > element has no width or no height, such as the case of a horizontal or vertical line,
+          // > even when the line has actual thickness when viewed due to having a non-zero stroke
+          // > width since stroke width is ignored for bounding box calculations. When the geometry
+          // > of the applicable element has no width or height and objectBoundingBox is specified,
+          // > then the given effect (e.g., a gradient or a filter) will be ignored.
+          //
+          if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
+            return createFallbackPaint(ref, currentColor);
+          }
+
+          // Note that this applies *before* transform.
+          transform *= Transformd::Translate(pathBounds.top_left);
+        }
+
+        const Boxd& bounds = objectBoundingBox ? pathBounds : viewbox;
+
+        std::vector<SkScalar> pos;
+        std::vector<SkColor> color;
+        for (const GradientStop& stop : gradientStops->stops) {
+          pos.push_back(stop.offset);
+          color.push_back(toSkia(stop.color.resolve(currentColor, stop.opacity)));
+        }
+
+        assert(pos.size() == color.size());
+
+        // From https://www.w3.org/TR/SVG2/pservers.html#StopNotes:
+        //
+        // > It is necessary that at least two stops defined to have a gradient effect. If no stops
+        // > are defined, then painting shall occur as if 'none' were specified as the paint style.
+        // > If one stop is defined, then paint with the solid color fill using the color defined
+        // > for that gradient stop.
+        //
+        if (pos.empty() || pos.size() > std::numeric_limits<int>::max()) {
+          return createFallbackPaint(ref, currentColor);
+        }
+
+        const int numStops = static_cast<int>(pos.size());
+        if (numStops == 1) {
+          SkPaint paint;
+          paint.setColor(color[0]);
+          return paint;
+        }
+
+        if (const auto* linearGradient = target.try_get<LinearGradientComponent>()) {
+          const SkPoint points[] = {
+              resolveGradientCoords(linearGradient->x1, linearGradient->y1, bounds, transform),
+              resolveGradientCoords(linearGradient->x2, linearGradient->y2, bounds, transform)};
+
+          SkPaint paint;
+          paint.setAntiAlias(true);
+          paint.setShader(SkGradientShader::MakeLinear(points, color.data(), pos.data(), numStops,
+                                                       toSkia(gradient->spreadMethod)));
+          return paint;
+        } else {
+          const auto& radialGradient = target.get<RadialGradientComponent>();
+          const SkPoint centerEnd =
+              resolveGradientCoords(radialGradient.cx, radialGradient.cy, bounds, transform);
+          const SkScalar radiusEnd = resolveGradientCoord(radialGradient.r, bounds);
+
+          const SkPoint centerStart = resolveGradientCoords(
+              radialGradient.fx.value_or(radialGradient.cx),
+              radialGradient.fy.value_or(radialGradient.cy), bounds, transform);
+          const SkScalar radiusStart = resolveGradientCoord(radialGradient.fr, bounds);
+
+          SkPaint paint;
+          paint.setAntiAlias(true);
+          paint.setShader(SkGradientShader::MakeTwoPointConical(
+              centerStart, radiusStart, centerEnd, radiusEnd, color.data(), pos.data(), numStops,
+              toSkia(gradient->spreadMethod)));
+          return paint;
+        }
+      } else {
+        // TODO: <pattern> paint types.
+      }
+    }
+
+    return createFallbackPaint(ref, currentColor);
+  }
+
+  void drawPathFillWithSkPaint(const ComputedPathComponent& path, SkPaint& skPaint,
+                               const PropertyRegistry& style) {
+    SkPath skPath = toSkia(path.spline);
+    if (style.fillRule.get() == FillRule::EvenOdd) {
+      skPath.setFillType(SkPathFillType::kEvenOdd);
+    }
+
+    skPaint.setAntiAlias(true);
+    skPaint.setStyle(SkPaint::Style::kFill_Style);
+    renderer_.canvas_->drawPath(skPath, skPaint);
+  }
+
+  void drawPathFill(EntityHandle dataHandle, const ComputedPathComponent& path,
+                    const PaintServer& paint, const PropertyRegistry& style, const Boxd& viewbox) {
     if (paint.is<PaintServer::Solid>()) {
       const PaintServer::Solid& solid = paint.get<PaintServer::Solid>();
 
-      SkPaint paint;
-      paint.setAntiAlias(true);
-      paint.setColor(toSkia(
+      SkPaint skPaint;
+      skPaint.setColor(toSkia(
           solid.color.resolve(style.color.getRequired().rgba(), style.fillOpacity.get().value())));
-      paint.setStyle(SkPaint::Style::kFill_Style);
 
-      SkPath skiaPath = toSkia(path.spline);
-      if (style.fillRule.get() == FillRule::EvenOdd) {
-        skiaPath.setFillType(SkPathFillType::kEvenOdd);
+      drawPathFillWithSkPaint(path, skPaint, style);
+    } else if (paint.is<PaintServer::ElementReference>()) {
+      const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
+
+      std::optional<SkPaint> skPaint = instantiatePaintReference(
+          dataHandle, ref, path.spline.bounds(), viewbox, style.color.getRequired().rgba());
+      if (skPaint) {
+        drawPathFillWithSkPaint(path, skPaint.value(), style);
       }
-      renderer_.canvas_->drawPath(skiaPath, paint);
+
     } else if (paint.is<PaintServer::None>()) {
       // Do nothing.
+
     } else {
       // TODO: Other paint types.
     }
   }
 
+  struct StrokeConfig {
+    double strokeWidth;
+    double miterLimit;
+  };
+
+  void drawPathStrokeWithSkPaint(EntityHandle dataHandle, const ComputedPathComponent& path,
+                                 const StrokeConfig& config, SkPaint& skPaint,
+                                 const PropertyRegistry& style, const Boxd& viewbox,
+                                 const FontMetrics& fontMetrics) {
+    const SkPath skPath = toSkia(path.spline);
+
+    if (style.strokeDasharray.hasValue()) {
+      double dashUnitsScale = 1.0;
+      if (const auto* pathLength = dataHandle.try_get<PathLengthComponent>();
+          pathLength && !NearZero(pathLength->value)) {
+        // If the user specifies a path length, we need to scale between the user's length
+        // and computed length.
+        const double skiaLength = SkPathMeasure(skPath, false).getLength();
+        dashUnitsScale = skiaLength / pathLength->value;
+      }
+
+      // Use getRequiredRef to avoid copying the vector on access.
+      const std::vector<Lengthd>& dashes = style.strokeDasharray.getRequiredRef();
+
+      // We need to repeat if there are an odd number of values, Skia requires an even number
+      // of dash lengths.
+      const size_t numRepeats = (dashes.size() & 1) ? 2 : 1;
+
+      std::vector<SkScalar> skiaDashes;
+      skiaDashes.reserve(dashes.size() * numRepeats);
+
+      for (int i = 0; i < numRepeats; ++i) {
+        for (const Lengthd& dash : dashes) {
+          skiaDashes.push_back(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale);
+        }
+      }
+
+      skPaint.setPathEffect(SkDashPathEffect::Make(
+          skiaDashes.data(), skiaDashes.size(),
+          style.strokeDashoffset.get().value().toPixels(viewbox, fontMetrics) * dashUnitsScale));
+    }
+
+    skPaint.setAntiAlias(true);
+    skPaint.setStyle(SkPaint::Style::kStroke_Style);
+
+    skPaint.setStrokeWidth(config.strokeWidth);
+    skPaint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
+    skPaint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
+    skPaint.setStrokeMiter(config.miterLimit);
+
+    renderer_.canvas_->drawPath(skPath, skPaint);
+  }
+
   void drawPathStroke(EntityHandle dataHandle, const ComputedPathComponent& path,
                       const PaintServer& paint, const PropertyRegistry& style, const Boxd& viewbox,
                       const FontMetrics& fontMetrics) {
+    const StrokeConfig config = {
+        .strokeWidth = style.strokeWidth.get().value().toPixels(viewbox, fontMetrics),
+        .miterLimit = style.strokeMiterlimit.get().value()};
+
+    if (config.strokeWidth <= 0.0) {
+      return;
+    }
+
     if (paint.is<PaintServer::Solid>()) {
       const PaintServer::Solid& solid = paint.get<PaintServer::Solid>();
 
-      const double strokeWidth = style.strokeWidth.get().value().toPixels(viewbox, fontMetrics);
-
-      if (strokeWidth > 0.0) {
-        SkPaint paint;
-        paint.setAntiAlias(true);
-        paint.setStyle(SkPaint::Style::kStroke_Style);
-
-        paint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
+      SkPaint skPaint;
+      skPaint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
                                                   style.strokeOpacity.get().value())));
-        paint.setStrokeWidth(strokeWidth);
-        paint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
-        paint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
-        paint.setStrokeMiter(style.strokeMiterlimit.get().value());
 
-        const SkPath skiaPath = toSkia(path.spline);
+      drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint, style, viewbox, fontMetrics);
+    } else if (paint.is<PaintServer::ElementReference>()) {
+      const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
 
-        if (style.strokeDasharray.get().has_value()) {
-          double dashUnitsScale = 1.0;
-          if (const auto* pathLength = dataHandle.try_get<PathLengthComponent>();
-              pathLength && !NearZero(pathLength->value)) {
-            // If the user specifies a path length, we need to scale between the user's length
-            // and computed length.
-            const double skiaLength = SkPathMeasure(skiaPath, false).getLength();
-            dashUnitsScale = skiaLength / pathLength->value;
-          }
-
-          // TODO: Avoid the copying on property access, if possible, and try to cache the
-          // computed SkDashPathEffect.
-          const std::vector<Lengthd> dashes = style.strokeDasharray.get().value();
-
-          // We need to repeat if there are an odd number of values, Skia requires an even number of
-          // dash lengths.
-          const size_t numRepeats = (dashes.size() & 1) ? 2 : 1;
-
-          std::vector<SkScalar> skiaDashes;
-          skiaDashes.reserve(dashes.size() * numRepeats);
-
-          for (int i = 0; i < numRepeats; ++i) {
-          for (const Lengthd& dash : dashes) {
-            skiaDashes.push_back(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale);
-          }
-          }
-
-          paint.setPathEffect(SkDashPathEffect::Make(
-              skiaDashes.data(), skiaDashes.size(),
-              style.strokeDashoffset.get().value().toPixels(viewbox, fontMetrics) *
-                  dashUnitsScale));
-        }
-
-        renderer_.canvas_->drawPath(skiaPath, paint);
+      std::optional<SkPaint> skPaint = instantiatePaintReference(
+          dataHandle, ref, path.spline.strokeMiterBounds(config.strokeWidth, config.miterLimit),
+          viewbox, style.color.getRequired().rgba());
+      if (skPaint) {
+        drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint.value(), style, viewbox,
+                                  fontMetrics);
       }
+
     } else if (paint.is<PaintServer::None>()) {
       // Do nothing.
     } else {
@@ -272,7 +460,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     bool shouldRestore = false;
 
     if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
-      if (behavior->nonrenderable) {
+      if (behavior->behavior == RenderingBehavior::Nonrenderable) {
         if (verbose_) {
           std::cout << "Skipping nonrenderable entity " << dataEntity << std::endl;
         }

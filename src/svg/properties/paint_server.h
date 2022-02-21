@@ -8,6 +8,7 @@
 
 #include "src/base/rc_string.h"
 #include "src/css/color.h"
+#include "src/svg/graph/reference.h"
 
 namespace donner::svg {
 
@@ -31,16 +32,16 @@ struct PaintServer {
     bool operator==(const Solid&) const = default;
   };
 
-  struct Reference {
-    RcString url;
+  struct ElementReference {
+    Reference reference;
     std::optional<css::Color> fallback;
 
-    Reference(RcString url, std::optional<css::Color> fallback = std::nullopt)
-        : url(std::move(url)), fallback(std::move(fallback)) {}
-    bool operator==(const Reference&) const = default;
+    ElementReference(Reference reference, std::optional<css::Color> fallback = std::nullopt)
+        : reference(std::move(reference)), fallback(std::move(fallback)) {}
+    bool operator==(const ElementReference&) const = default;
   };
 
-  using Type = std::variant<None, ContextFill, ContextStroke, Solid, Reference>;
+  using Type = std::variant<None, ContextFill, ContextStroke, Solid, ElementReference>;
   Type value;
 
   /* implicit */ PaintServer(Type value) : value(std::move(value)) {}
