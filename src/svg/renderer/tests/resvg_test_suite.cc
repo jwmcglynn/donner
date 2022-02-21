@@ -174,20 +174,12 @@ INSTANTIATE_TEST_SUITE_P(
         {
             "a-fill-010.svg",          // UB
             "a-fill-015.svg",          // UB
-            "a-fill-016.svg",          // Not impl: <linearGradient>
-            "a-fill-017.svg",          // Not impl: <radialGradient>
             "a-fill-018.svg",          // Not impl: <pattern>
-            "a-fill-024.svg",          // Not impl: <linearGradient>
-            "a-fill-025.svg",          // Not impl: <linearGradient>
-            "a-fill-026.svg",          // Not impl: Paint reference fallback
-            "a-fill-027.svg",          // Not impl: Paint reference fallback
-            "a-fill-031.svg",          // Not impl: <linearGradient>
-            "a-fill-032.svg",          // Not impl: <radialGradient>
-            "a-fill-033.svg",          // Not impl: <pattern>
-            "a-fill-034.svg",          // Not impl: Paint reference fallback
-            "a-fill-035.svg",          // Not impl: Paint reference fallback
+            "a-fill-027.svg",          // Not impl: Fallback with icc-color
+            "a-fill-031.svg",          // Not impl: <text>
+            "a-fill-032.svg",          // Not impl: <text>
+            "a-fill-033.svg",          // Not impl: <pattern>, <text>
             "a-fill-opacity-002.svg",  // Not impl: "opacity"
-            "a-fill-opacity-003.svg",  // Not impl: `fill-opacity`, <linearGradient>
             "a-fill-opacity-004.svg",  // Not impl: `fill-opacity` affects pattern
             "a-fill-opacity-006.svg",  // Not impl: <text>
         })),
@@ -207,13 +199,10 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
-            "a-stroke-002.svg",             // Not impl: <linearGradient>
-            "a-stroke-003.svg",             // Not impl: <radialGradient>
             "a-stroke-004.svg",             // Not impl: <pattern>
-            "a-stroke-007.svg",             // Not impl: <linearGradient>
-            "a-stroke-008.svg",             // Not impl: <radialGradient>
+            "a-stroke-007.svg",             // Not impl: <text>
+            "a-stroke-008.svg",             // Not impl: <text>
             "a-stroke-009.svg",             // Not impl: <pattern>, <text>
-            "a-stroke-011.svg",             // Not impl: Gradients, "gradientUnits" property
             "a-stroke-012.svg",             // Not impl: <pattern>
             "a-stroke-013.svg",             // Not impl: <pattern>, "gradientUnits"
             "a-stroke-dasharray-005.svg",   // Not impl: "font-size"? "em" units (font-size="20" not
@@ -226,7 +215,6 @@ INSTANTIATE_TEST_SUITE_P(
             "a-stroke-linejoin-004.svg",    // UB (SVG 2), no UA supports `miter-clip`
             "a-stroke-linejoin-005.svg",    // UB (SVG 2), no UA supports `arcs`
             "a-stroke-opacity-002.svg",     // Not impl: "opacity"
-            "a-stroke-opacity-003.svg",     // Not impl: <linearGradient>
             "a-stroke-opacity-004.svg",     // Not impl: <pattern>
             "a-stroke-opacity-006.svg",     // Not impl: <text>
             "a-stroke-width-004.svg",       // UB: Nothing should be renderered
