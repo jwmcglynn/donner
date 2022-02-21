@@ -20,7 +20,7 @@ static constexpr frozen::unordered_map<frozen::string, SizedElementPresentationA
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.x);
          }},  //
@@ -29,7 +29,7 @@ static constexpr frozen::unordered_map<frozen::string, SizedElementPresentationA
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.y);
          }},  //
@@ -38,7 +38,7 @@ static constexpr frozen::unordered_map<frozen::string, SizedElementPresentationA
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.width);
          }},  //
@@ -47,7 +47,7 @@ static constexpr frozen::unordered_map<frozen::string, SizedElementPresentationA
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.height);
          }},
@@ -106,7 +106,8 @@ void applyUnparsedProperties(SizedElementProperties& properties,
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
       auto maybeError =
-          it->second(properties, CreateParseFnParams(property.declaration, property.specificity));
+          it->second(properties, CreateParseFnParams(property.declaration, property.specificity,
+                                                     PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }

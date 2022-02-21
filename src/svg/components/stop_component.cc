@@ -54,7 +54,8 @@ ComputedStopComponent::ComputedStopComponent(
     : properties(inputProperties) {
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
     const PropertyParseFnParams params =
-        CreateParseFnParams(unparsedProperty.declaration, unparsedProperty.specificity);
+        CreateParseFnParams(unparsedProperty.declaration, unparsedProperty.specificity,
+                            PropertyParseBehavior::AllowUserUnits);
 
     auto result = ParseProperty(name, params, properties);
     if (result.hasError() && outWarnings) {

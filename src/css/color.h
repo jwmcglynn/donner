@@ -42,9 +42,9 @@ struct Color {
 
   RGBA rgba() const { return std::get<RGBA>(value); }
 
-  RGBA resolve(RGBA currentColor, double opacity) const {
+  RGBA resolve(RGBA currentColor, float opacity) const {
     RGBA value = isCurrentColor() ? currentColor : rgba();
-    if (opacity != 1.0) {
+    if (opacity != 1.0f) {
       value.a = static_cast<uint8_t>(value.a * opacity);
     }
     return value;

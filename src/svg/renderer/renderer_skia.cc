@@ -29,6 +29,10 @@ namespace {
 // The maximum size supported for a rendered image. Unused in release builds.
 [[maybe_unused]] static constexpr int kMaxDimension = 8192;
 
+SkPoint toSkia(Vector2d value) {
+  return SkPoint::Make(NarrowToFloat(value.x), NarrowToFloat(value.y));
+}
+
 SkM44 toSkia(const Transformd& transform) {
   return SkM44{float(transform.data[0]),
                float(transform.data[2]),
@@ -136,18 +140,22 @@ public:
   }
 
   std::optional<SkPaint> createFallbackPaint(const PaintServer::ElementReference& ref,
-                                             css::RGBA currentColor) {
+                                             css::RGBA currentColor, float opacity) {
     if (ref.fallback) {
       SkPaint paint;
       paint.setAntiAlias(true);
-      paint.setColor(toSkia(ref.fallback.value().resolve(currentColor, /* opacity */ 1.0)));
+      paint.setColor(toSkia(ref.fallback.value().resolve(currentColor, opacity)));
       return paint;
     }
 
     return std::nullopt;
   }
 
-  inline Lengthd toPercent(Lengthd value) {
+  inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
+    if (!numbersArePercent) {
+      return value;
+    }
+
     if (value.unit == Lengthd::Unit::None) {
       value.value *= 100.0;
       value.unit = Lengthd::Unit::Percent;
@@ -157,23 +165,26 @@ public:
     return value;
   }
 
-  inline SkScalar resolveGradientCoord(Lengthd value, const Boxd& viewbox) {
+  inline SkScalar resolveGradientCoord(Lengthd value, const Boxd& viewbox, bool numbersArePercent) {
     // Not plumbing FontMetrics here, since only percentage values are accepted.
-    return NarrowToFloat(toPercent(value).toPixels(viewbox, FontMetrics()));
+    return NarrowToFloat(toPercent(value, numbersArePercent).toPixels(viewbox, FontMetrics()));
   }
 
-  SkPoint resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewbox,
-                                const Transformd& transform) {
-    const Vector2d pt = transform.transformPosition(
-        Vector2d(toPercent(x).toPixels(viewbox, FontMetrics(), Lengthd::Extent::X),
-                 toPercent(y).toPixels(viewbox, FontMetrics(), Lengthd::Extent::Y)));
-    return SkPoint::Make(NarrowToFloat(pt.x), NarrowToFloat(pt.y));
+  Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewbox,
+                                 const Transformd& transform, bool numbersArePercent) {
+    return transform.transformPosition(Vector2d(
+        toPercent(x, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::X),
+        toPercent(y, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::Y)));
+  }
+
+  bool CircleContainsPoint(Vector2d center, double radius, Vector2d point) {
+    return (point - center).lengthSquared() <= radius * radius;
   }
 
   std::optional<SkPaint> instantiatePaintReference(EntityHandle dataHandle,
                                                    const PaintServer::ElementReference& ref,
                                                    const Boxd& pathBounds, const Boxd& viewbox,
-                                                   css::RGBA currentColor) {
+                                                   css::RGBA currentColor, float opacity) {
     if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry())) {
       const EntityHandle target = resolvedRef->handle;
 
@@ -184,6 +195,7 @@ public:
         const bool objectBoundingBox = gradient->gradientUnits == GradientUnits::ObjectBoundingBox;
 
         Transformd transform = gradient->gradientTransform;
+        bool numbersArePercent = false;
         if (objectBoundingBox) {
           // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
           //
@@ -195,11 +207,14 @@ public:
           // > then the given effect (e.g., a gradient or a filter) will be ignored.
           //
           if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
-            return createFallbackPaint(ref, currentColor);
+            return createFallbackPaint(ref, currentColor, opacity);
           }
 
           // Note that this applies *before* transform.
           transform *= Transformd::Translate(pathBounds.top_left);
+
+          // TODO: Can numbersArePercent be represented by the transform instead?
+          numbersArePercent = true;
         }
 
         const Boxd& bounds = objectBoundingBox ? pathBounds : viewbox;
@@ -208,7 +223,7 @@ public:
         std::vector<SkColor> color;
         for (const GradientStop& stop : gradientStops->stops) {
           pos.push_back(stop.offset);
-          color.push_back(toSkia(stop.color.resolve(currentColor, stop.opacity)));
+          color.push_back(toSkia(stop.color.resolve(currentColor, stop.opacity * opacity)));
         }
 
         assert(pos.size() == color.size());
@@ -221,7 +236,7 @@ public:
         // > for that gradient stop.
         //
         if (pos.empty() || pos.size() > std::numeric_limits<int>::max()) {
-          return createFallbackPaint(ref, currentColor);
+          return createFallbackPaint(ref, currentColor, opacity);
         }
 
         const int numStops = static_cast<int>(pos.size());
@@ -233,8 +248,10 @@ public:
 
         if (const auto* linearGradient = target.try_get<LinearGradientComponent>()) {
           const SkPoint points[] = {
-              resolveGradientCoords(linearGradient->x1, linearGradient->y1, bounds, transform),
-              resolveGradientCoords(linearGradient->x2, linearGradient->y2, bounds, transform)};
+              toSkia(resolveGradientCoords(linearGradient->x1, linearGradient->y1, bounds,
+                                           transform, numbersArePercent)),
+              toSkia(resolveGradientCoords(linearGradient->x2, linearGradient->y2, bounds,
+                                           transform, numbersArePercent))};
 
           SkPaint paint;
           paint.setAntiAlias(true);
@@ -243,20 +260,53 @@ public:
           return paint;
         } else {
           const auto& radialGradient = target.get<RadialGradientComponent>();
-          const SkPoint centerEnd =
-              resolveGradientCoords(radialGradient.cx, radialGradient.cy, bounds, transform);
-          const SkScalar radiusEnd = resolveGradientCoord(radialGradient.r, bounds);
+          const Vector2d center = resolveGradientCoords(radialGradient.cx, radialGradient.cy,
+                                                        bounds, transform, numbersArePercent);
+          const SkScalar radius = resolveGradientCoord(radialGradient.r, bounds, numbersArePercent);
 
-          const SkPoint centerStart = resolveGradientCoords(
+          Vector2d focalCenter = resolveGradientCoords(
               radialGradient.fx.value_or(radialGradient.cx),
-              radialGradient.fy.value_or(radialGradient.cy), bounds, transform);
-          const SkScalar radiusStart = resolveGradientCoord(radialGradient.fr, bounds);
+              radialGradient.fy.value_or(radialGradient.cy), bounds, transform, numbersArePercent);
+          const SkScalar focalRadius =
+              resolveGradientCoord(radialGradient.fr, bounds, numbersArePercent);
+
+          if (NearZero(radius)) {
+            SkPaint paint;
+            paint.setColor(color.back());
+            return paint;
+          }
+
+          // NOTE: In SVG1, if the focal point lies outside of the circle, the focal point set to
+          // the intersection of the circle and the focal point.
+          //
+          // This changes in SVG2, where a cone is created,
+          // https://www.w3.org/TR/SVG2/pservers.html#RadialGradientNotes:
+          //
+          // > If the start circle defined by ‘fx’, ‘fy’ and ‘fr’ lies outside the end circle
+          // > defined by ‘cx’, ‘cy’, and ‘r’, effectively a cone is created, touched by the two
+          // > circles. Areas outside the cone stay untouched by the gradient (transparent black).
+          //
+          // Skia will automatically create the cone, but we need to handle the degenerate case:
+          //
+          // > If the start [focal] circle fully overlaps with the end circle, no gradient is drawn.
+          // > The area stays untouched (transparent black).
+          //
+          const double distanceBetweenCenters = (center - focalCenter).length();
+          if (distanceBetweenCenters + radius <= focalRadius) {
+            return std::nullopt;
+          }
 
           SkPaint paint;
           paint.setAntiAlias(true);
-          paint.setShader(SkGradientShader::MakeTwoPointConical(
-              centerStart, radiusStart, centerEnd, radiusEnd, color.data(), pos.data(), numStops,
-              toSkia(gradient->spreadMethod)));
+          if (NearZero(focalRadius) && focalCenter == center) {
+            paint.setShader(SkGradientShader::MakeRadial(toSkia(center), radius, color.data(),
+                                                         pos.data(), numStops,
+                                                         toSkia(gradient->spreadMethod)));
+          } else {
+            paint.setShader(SkGradientShader::MakeTwoPointConical(
+                toSkia(focalCenter), focalRadius, toSkia(center), radius, color.data(), pos.data(),
+                numStops, toSkia(gradient->spreadMethod)));
+          }
           return paint;
         }
       } else {
@@ -264,7 +314,7 @@ public:
       }
     }
 
-    return createFallbackPaint(ref, currentColor);
+    return createFallbackPaint(ref, currentColor, opacity);
   }
 
   void drawPathFillWithSkPaint(const ComputedPathComponent& path, SkPaint& skPaint,
@@ -281,19 +331,21 @@ public:
 
   void drawPathFill(EntityHandle dataHandle, const ComputedPathComponent& path,
                     const PaintServer& paint, const PropertyRegistry& style, const Boxd& viewbox) {
+    const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
+
     if (paint.is<PaintServer::Solid>()) {
       const PaintServer::Solid& solid = paint.get<PaintServer::Solid>();
 
       SkPaint skPaint;
-      skPaint.setColor(toSkia(
-          solid.color.resolve(style.color.getRequired().rgba(), style.fillOpacity.get().value())));
+      skPaint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(), fillOpacity)));
 
       drawPathFillWithSkPaint(path, skPaint, style);
     } else if (paint.is<PaintServer::ElementReference>()) {
       const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
 
-      std::optional<SkPaint> skPaint = instantiatePaintReference(
-          dataHandle, ref, path.spline.bounds(), viewbox, style.color.getRequired().rgba());
+      std::optional<SkPaint> skPaint =
+          instantiatePaintReference(dataHandle, ref, path.spline.bounds(), viewbox,
+                                    style.color.getRequired().rgba(), fillOpacity);
       if (skPaint) {
         drawPathFillWithSkPaint(path, skPaint.value(), style);
       }
@@ -365,6 +417,7 @@ public:
     const StrokeConfig config = {
         .strokeWidth = style.strokeWidth.get().value().toPixels(viewbox, fontMetrics),
         .miterLimit = style.strokeMiterlimit.get().value()};
+    const double strokeOpacity = style.strokeOpacity.get().value();
 
     if (config.strokeWidth <= 0.0) {
       return;
@@ -374,8 +427,8 @@ public:
       const PaintServer::Solid& solid = paint.get<PaintServer::Solid>();
 
       SkPaint skPaint;
-      skPaint.setColor(toSkia(solid.color.resolve(style.color.getRequired().rgba(),
-                                                  style.strokeOpacity.get().value())));
+      skPaint.setColor(
+          toSkia(solid.color.resolve(style.color.getRequired().rgba(), strokeOpacity)));
 
       drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint, style, viewbox, fontMetrics);
     } else if (paint.is<PaintServer::ElementReference>()) {
@@ -383,7 +436,7 @@ public:
 
       std::optional<SkPaint> skPaint = instantiatePaintReference(
           dataHandle, ref, path.spline.strokeMiterBounds(config.strokeWidth, config.miterLimit),
-          viewbox, style.color.getRequired().rgba());
+          viewbox, style.color.getRequired().rgba(), NarrowToFloat((strokeOpacity)));
       if (skPaint) {
         drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint.value(), style, viewbox,
                                   fontMetrics);

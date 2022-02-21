@@ -504,9 +504,7 @@ void ParseXmlNsAttribute(XMLParserContext& context, rapidxml_ns::xml_node<>* nod
         ParseError err;
         err.reason = "Unexpected namespace '" + std::string(value) + "'";
         context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-      }
-
-      if (namespacePrefix == "xmlns") {
+      } else if (namespacePrefix == "xmlns") {
         context.setNamespacePrefix(name);
       }
 
@@ -602,7 +600,9 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
           if (namespacePrefix != context.namespacePrefix()) {
             ParseError err;
             err.reason = "<" + std::string(i->name(), i->name_size()) +
-                         "> has a mismatched namespace prefix";
+                         "> has a mismatched namespace prefix. Expected '" +
+                         std::string(context.namespacePrefix()) + "', found '" +
+                         std::string(namespacePrefix) + "'";
             return context.fromSubparser(std::move(err), context.parserOriginFrom(namespacePrefix));
           }
 

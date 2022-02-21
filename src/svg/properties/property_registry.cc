@@ -240,8 +240,9 @@ ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-static constexpr frozen::unordered_set<frozen::string, 12> kValidPresentationAttributes = {
-    "cx", "cy", "height", "width", "x", "y", "r", "rx", "ry", "d", "fill", "transform",
+static constexpr frozen::unordered_set<frozen::string, 14> kValidPresentationAttributes = {
+    "cx", "cy", "height", "width",     "x",          "y",           "r", "rx",
+    "ry", "d",  "fill",   "transform", "stop-color", "stop-opacity"
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
@@ -311,7 +312,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 12> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return ParseLengthPercentage(params.components(), params.allowUserUnits);
+             return ParseLengthPercentage(params.components(), params.allowUserUnits());
            },
            &registry.strokeWidth);
      }},  //
@@ -354,7 +355,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 12> kPro
        return Parse(
            params,
            [](const PropertyParseFnParams& params) {
-             return ParseLengthPercentage(params.components(), params.allowUserUnits);
+             return ParseLengthPercentage(params.components(), params.allowUserUnits());
            },
            &registry.strokeDashoffset);
      }},  //
@@ -367,7 +368,8 @@ std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration
   const frozen::string frozenName(declaration.name);
   const auto it = kProperties.find(frozenName);
   if (it != kProperties.end()) {
-    return it->second(*this, CreateParseFnParams(declaration, specificity));
+    return it->second(*this, CreateParseFnParams(declaration, specificity,
+                                                 PropertyParseBehavior::AllowUserUnits));
   }
 
   // Only store unparsed properties if they are valid presentation attribute names.
@@ -399,12 +401,12 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   /* TODO: The SVG2 spec says the name may be similar to the attribute, not necessarily the same.
    * There may need to be a second mapping.
    */
-  /* TODO: For attributes, fields may be unitless, in which case they are specified in "user units",
+  /* For attributes, fields may be unitless, in which case they are specified in "user units",
    * see https://www.w3.org/TR/SVG2/coords.html#TermUserUnits. For this case, the spec says to
    * adjust the grammar to modify things like <length> to [<length> | <number>], see
    * https://www.w3.org/TR/SVG2/types.html#syntax.
    *
-   * In practice, we should propagate an "allowUserUnits" flag. "User units" are specified as being
+   * In practice, we propagate an "AllowUserUnits" flag. "User units" are specified as being
    * equivalent to pixels.
    */
   assert((!type.has_value() || (type.has_value() && handle != EntityHandle())) &&
@@ -413,7 +415,7 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   PropertyParseFnParams params;
   params.valueOrComponents = value;
   params.specificity = kSpecificityPresentationAttribute;
-  params.allowUserUnits = true;
+  params.parseBehavior = PropertyParseBehavior::AllowUserUnits;
 
   const auto it = kProperties.find(frozen::string(name));
   if (it != kProperties.end()) {

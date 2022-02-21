@@ -48,7 +48,8 @@ std::optional<ParseError> PathComponent::computePathWithPrecomputedStyle(
   const auto& properties = style.properties().unparsedProperties;
   if (auto it = properties.find("d"); it != properties.end()) {
     auto maybeError = Parse(
-        CreateParseFnParams(it->second.declaration, it->second.specificity),
+        CreateParseFnParams(it->second.declaration, it->second.specificity,
+                            PropertyParseBehavior::AllowUserUnits),
         [](const PropertyParseFnParams& params) { return ParseD(params.components()); }, &actualD);
     if (maybeError) {
       return std::move(maybeError.value());

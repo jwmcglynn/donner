@@ -267,29 +267,31 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     RadialGradient, ResvgTestSuite,
-    ValuesIn(getTestsWithPrefix("e-radialGradient",
-                                {
-                                    "e-radialGradient-007.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-008.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-009.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-011.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-012.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-013.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-014.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-026.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-027.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-029.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-030.svg",  // Not impl: `xlink:href`
-                                    "e-radialGradient-031.svg",  // Bug? Focal point correction
-                                    "e-radialGradient-032.svg",  // UB: Negative `r`
-                                    "e-radialGradient-036.svg",  // Bug? Stop-opacity
-                                    "e-radialGradient-037.svg",  // Bug? Stop-opacity
-                                    "e-radialGradient-039.svg",  // UB: Invalid `gradientUnits`
-                                    "e-radialGradient-040.svg",  // UB: Invalid `gradientTransform
-                                    "e-radialGradient-042.svg",  // UB: fr=0.5 (SVG 2)
-                                    "e-radialGradient-043.svg",  // UB: fr=0.5 (SVG 2)
-                                    "e-radialGradient-045.svg",  // UB: fr=-1 (SVG 2)
-                                })),
+    ValuesIn(getTestsWithPrefix(
+        "e-radialGradient",
+        {
+            "e-radialGradient-007.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-008.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-009.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-011.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-012.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-013.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-014.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-026.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-027.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-029.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-030.svg",  // Not impl: `xlink:href`
+            "e-radialGradient-031.svg",  // Test suite bug? In SVG2 this was changed to draw conical
+                                         //  gradient instead of correcting focal point.
+            "e-radialGradient-032.svg",  // UB: Negative `r`
+            "e-radialGradient-039.svg",  // UB: Invalid `gradientUnits`
+            "e-radialGradient-040.svg",  // UB: Invalid `gradientTransform
+            "e-radialGradient-042.svg",  // UB: fr=0.5 (SVG 2)
+            "e-radialGradient-043.svg",  // UB: fr=0.5 (SVG 2)
+            "e-radialGradient-044.svg",  // Test suite bug? fr > default value of r (0.5) should not
+                                         //  render.
+            "e-radialGradient-045.svg",  // UB: fr=-1 (SVG 2)
+        })),
     testNameFromFilename);
 
 }  // namespace donner::svg

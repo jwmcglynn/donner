@@ -19,7 +19,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cx);
          }},  //
@@ -28,7 +28,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cy);
          }},  //
@@ -37,7 +37,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
            return Parse(
                params,
                [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits);
+                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.r);
          }}  //
@@ -55,7 +55,8 @@ ComputedCircleComponent::ComputedCircleComponent(
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
       auto maybeError =
-          it->second(properties, CreateParseFnParams(property.declaration, property.specificity));
+          it->second(properties, CreateParseFnParams(property.declaration, property.specificity,
+                                                     PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }

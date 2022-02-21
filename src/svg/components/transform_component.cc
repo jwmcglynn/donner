@@ -17,7 +17,7 @@ void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
     PropertyParseFnParams params;
     params.valueOrComponents = property.declaration.values;
     params.specificity = property.specificity;
-    params.allowUserUnits = false;
+    params.parseBehavior = PropertyParseBehavior::AllowUserUnits;
 
     auto maybeError = Parse(
         params,

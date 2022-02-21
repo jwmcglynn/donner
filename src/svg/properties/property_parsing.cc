@@ -34,9 +34,11 @@ std::span<const css::ComponentValue> PropertyParseFnParams::components() const {
 }
 
 PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
-                                          css::Specificity specificity) {
+                                          css::Specificity specificity,
+                                          PropertyParseBehavior parseBehavior) {
   PropertyParseFnParams params;
   params.valueOrComponents = TrimTrailingWhitespace(declaration.values);
+  params.parseBehavior = parseBehavior;
 
   // Detect CSS-wide keywords, see https://www.w3.org/TR/css-cascade-3/#defaulting-keywords.
   const auto components = params.components();

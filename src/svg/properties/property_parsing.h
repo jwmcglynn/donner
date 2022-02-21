@@ -12,15 +12,21 @@ struct UnparsedProperty {
   css::Specificity specificity;
 };
 
+enum class PropertyParseBehavior {
+  Default,
+  AllowUserUnits,
+};
+
 struct PropertyParseFnParams {
   std::variant<std::string_view, std::span<const css::ComponentValue>> valueOrComponents;
   PropertyState explicitState = PropertyState::NotSet;
   css::Specificity specificity;
   /// For presentation attributes, values may be unitless, in which case they the spec says they are
   /// specified in "user units". See https://www.w3.org/TR/SVG2/types.html#syntax.
-  bool allowUserUnits = false;
+  PropertyParseBehavior parseBehavior = PropertyParseBehavior::Default;
 
   std::span<const css::ComponentValue> components() const;
+  bool allowUserUnits() const { return parseBehavior == PropertyParseBehavior::AllowUserUnits; }
 
 private:
   mutable std::optional<std::vector<css::ComponentValue>> parsedComponents_;
@@ -53,8 +59,9 @@ std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallba
   return std::nullopt;
 }
 
-PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
-                                          css::Specificity specificity);
+PropertyParseFnParams CreateParseFnParams(
+    const css::Declaration& declaration, css::Specificity specificity,
+    PropertyParseBehavior PropertyParseBehavior = PropertyParseBehavior::Default);
 
 ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::string_view name,
                                          std::optional<ElementType> type = std::nullopt,

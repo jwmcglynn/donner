@@ -115,7 +115,8 @@ TEST(XmlParser, MismatchedNamespace) {
     std::vector<ParseError> warnings;
     EXPECT_THAT(
         XMLParser::ParseSVG(spanFromString(mismatchedSvgXmlnsXml), &warnings),
-        AllOf(ParseErrorPos(1, 1), ParseErrorIs("<svg> has a mismatched namespace prefix")));
+        AllOf(ParseErrorPos(1, 1),
+              ParseErrorIs("<svg> has a mismatched namespace prefix. Expected 'svg', found ''")));
   }
 
   {

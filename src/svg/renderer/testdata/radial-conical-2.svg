@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Source: https://gitlab.gnome.org/GNOME/librsvg/-/issues/508, slightly modified -->
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   width="110mm"
+   height="60mm"
+   viewBox="0 0 110 60"
+   id="svg">
+  <defs id="defs">
+    <radialGradient
+       id="radialGradient"
+       gradientUnits="userSpaceOnUse"
+       spreadMethod="reflect"
+
+       cx="40"
+       cy="30"
+       r="20"
+
+       fx="70"
+       fy="30"
+       fr="10">
+      <stop style="stop-color:#aa88ff" offset="0%"/>
+      <stop style="stop-color:#ffddcc" offset="50%"/>
+      <stop style="stop-color:#bbffee" offset="100%"/>
+    </radialGradient>
+  </defs>
+  <g id="layer1">
+    <rect
+       id="rec" style="fill:url(#radialGradient)"
+       width="110" height="60"
+       x="0" y="0" />
+    <circle
+       style="fill:none;stroke-width:0.1;stroke-miterlimit:4;stroke-dasharray:none;stroke:#000000;stroke-opacity:1"
+       id="circle1"
+       cx="70"
+       cy="30"
+       r="10" />
+    <circle
+       style="fill:none;stroke-width:0.1;stroke-miterlimit:4;stroke-dasharray:none;stroke:#000000;stroke-opacity:1"
+       id="circle2"
+       cx="40"
+       cy="30"
+       r="20" />
+  </g>
+</svg>
