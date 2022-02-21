@@ -14,7 +14,6 @@ namespace donner::svg {
  */
 struct GradientComponent {
   GradientUnits gradientUnits = GradientUnits::Default;
-  Transformd gradientTransform;
   GradientSpreadMethod spreadMethod = GradientSpreadMethod::Default;
 };
 

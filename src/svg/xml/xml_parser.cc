@@ -137,11 +137,22 @@ static std::optional<float> ParseStopOffset(XMLParserContext& context, std::stri
   }
 }
 
-static std::optional<ParseError> ParseUnconditionalCommonAttribute(XMLParserContext& context,
-                                                                   SVGElement element,
-                                                                   std::string_view namespacePrefix,
-                                                                   std::string_view name,
-                                                                   std::string_view value) {
+static void ParsePresentationAttribute(XMLParserContext& context, SVGElement element,
+                                       std::string_view namespacePrefix, std::string_view name,
+                                       std::string_view value) {
+  auto result = element.trySetPresentationAttribute(name, value);
+  if (result.hasError()) {
+    context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
+  } else if (!result.result()) {
+    ParseError err;
+    err.reason = "Unknown attribute '" + std::string(name) + "'";
+    context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+  }
+}
+
+static void ParseUnconditionalCommonAttribute(XMLParserContext& context, SVGElement element,
+                                              std::string_view namespacePrefix,
+                                              std::string_view name, std::string_view value) {
   if (name == "id") {
     element.setId(value);
   } else if (name == "class") {
@@ -149,17 +160,8 @@ static std::optional<ParseError> ParseUnconditionalCommonAttribute(XMLParserCont
   } else if (name == "style") {
     element.setStyle(value);
   } else {
-    // Try to parse as a presentation attribute.
-    auto result = element.trySetPresentationAttribute(name, value);
-    if (result.hasError()) {
-      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
-    } else if (!result.result()) {
-      ParseError err;
-      err.reason = "Unknown attribute '" + std::string(name) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-    }
+    ParsePresentationAttribute(context, element, namespacePrefix, name, value);
   }
-  return std::nullopt;
 }
 
 template <typename T>
@@ -181,7 +183,8 @@ std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, T elem
     }
   }
 
-  return ParseUnconditionalCommonAttribute(context, element, namespacePrefix, name, value);
+  ParseUnconditionalCommonAttribute(context, element, namespacePrefix, name, value);
+  return std::nullopt;
 }
 
 std::optional<ParseError> ParseGradientCommonAttribute(XMLParserContext& context,
@@ -200,12 +203,8 @@ std::optional<ParseError> ParseGradientCommonAttribute(XMLParserContext& context
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
   } else if (name == "gradientTransform") {
-    auto result = TransformParser::Parse(value);
-    if (result.hasError()) {
-      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
-    } else {
-      element.setGradientTransform(result.result());
-    }
+    // "gradientTransform" maps to the "transform" presentation attribute.
+    ParsePresentationAttribute(context, element, namespacePrefix, "transform", value);
   } else if (name == "spreadMethod") {
     if (value == "pad") {
       element.setSpreadMethod(GradientSpreadMethod::Pad);

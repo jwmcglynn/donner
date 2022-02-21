@@ -9,6 +9,11 @@ namespace donner::svg {
 
 struct ComputedStyleComponent;
 
+struct ComputedTransformComponent {
+  Transformd transform;
+  CssTransform rawCssTransform;
+};
+
 struct TransformComponent {
   Property<CssTransform> transform{"transform",
                                    []() -> std::optional<CssTransform> { return std::nullopt; }};
@@ -18,10 +23,18 @@ struct TransformComponent {
                                    std::vector<ParseError>* outWarnings);
 
   void compute(EntityHandle handle, const FontMetrics& fontMetrics);
-};
 
-struct ComputedTransformComponent {
-  Transformd transform;
+  /**
+   * Get the computed transform, computing it if necessary. If the transform is not set, returns
+   * nullptr, the caller should substite the result for identity in this case.
+   *
+   * @param handle Entity handle.
+   * @param fontMetrics Font metrics used for resolving lengths in the <transform-list>.
+   * @return const ComputedTransformComponent* The computed transform component, or nullptr if the
+   *  transform is not set.
+   */
+  static const ComputedTransformComponent* ComputedTransform(EntityHandle handle,
+                                                             const FontMetrics& fontMetrics);
 };
 
 void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings);

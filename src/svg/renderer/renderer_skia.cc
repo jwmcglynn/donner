@@ -177,8 +177,17 @@ public:
         toPercent(y, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::Y)));
   }
 
-  bool CircleContainsPoint(Vector2d center, double radius, Vector2d point) {
+  static bool CircleContainsPoint(Vector2d center, double radius, Vector2d point) {
     return (point - center).lengthSquared() <= radius * radius;
+  }
+
+  Transformd ResolveTransform(const ComputedTransformComponent* maybeTransformComponent,
+                              const Boxd& viewbox, const FontMetrics& fontMetrics) {
+    if (maybeTransformComponent) {
+      return maybeTransformComponent->rawCssTransform.compute(viewbox, fontMetrics);
+    } else {
+      return Transformd();
+    }
   }
 
   std::optional<SkPaint> instantiatePaintReference(EntityHandle dataHandle,
@@ -194,8 +203,11 @@ public:
         // Apply gradientUnits and gradientTransform.
         const bool objectBoundingBox = gradient->gradientUnits == GradientUnits::ObjectBoundingBox;
 
-        Transformd transform = gradient->gradientTransform;
+        const ComputedTransformComponent* maybeTransformComponent =
+            TransformComponent::ComputedTransform(target, FontMetrics());
+
         bool numbersArePercent = false;
+        Transformd transform;
         if (objectBoundingBox) {
           // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
           //
@@ -210,11 +222,15 @@ public:
             return createFallbackPaint(ref, currentColor, opacity);
           }
 
+          transform = ResolveTransform(maybeTransformComponent, pathBounds, FontMetrics());
+
           // Note that this applies *before* transform.
           transform *= Transformd::Translate(pathBounds.top_left);
 
           // TODO: Can numbersArePercent be represented by the transform instead?
           numbersArePercent = true;
+        } else {
+          transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
         }
 
         const Boxd& bounds = objectBoundingBox ? pathBounds : viewbox;

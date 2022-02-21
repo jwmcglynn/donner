@@ -14,9 +14,6 @@ public:
   GradientUnits gradientUnits() const;
   void setGradientUnits(GradientUnits value);
 
-  Transformd gradientTransform() const;
-  void setGradientTransform(Transformd value);
-
   GradientSpreadMethod spreadMethod() const;
   void setSpreadMethod(GradientSpreadMethod value);
 

@@ -10,6 +10,7 @@ void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
                                                      const ComputedStyleComponent& style,
                                                      const FontMetrics& fontMetrics,
                                                      std::vector<ParseError>* outWarnings) {
+  // TODO: This should avoid recomputing the transform each request.
   const auto& properties = style.properties().unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
     const UnparsedProperty& property = it->second;
@@ -37,11 +38,12 @@ void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
     }
   }
 
-  auto& computedTransform = handle.get_or_emplace<ComputedTransformComponent>().transform;
+  auto& computedTransform = handle.get_or_emplace<ComputedTransformComponent>();
   if (transform.get()) {
-    computedTransform = transform.get().value().compute(style.viewbox(), fontMetrics);
+    computedTransform.rawCssTransform = transform.get().value();
+    computedTransform.transform = transform.get().value().compute(style.viewbox(), fontMetrics);
   } else {
-    computedTransform = Transformd();
+    computedTransform.transform = Transformd();
   }
 }
 
@@ -49,7 +51,17 @@ void TransformComponent::compute(EntityHandle handle, const FontMetrics& fontMet
   ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
   style.computeProperties(handle);
 
-  return computeWithPrecomputedStyle(handle, style, fontMetrics, nullptr);
+  computeWithPrecomputedStyle(handle, style, fontMetrics, nullptr);
+}
+
+const ComputedTransformComponent* TransformComponent::ComputedTransform(
+    EntityHandle handle, const FontMetrics& fontMetrics) {
+  if (auto* transform = handle.try_get<TransformComponent>()) {
+    transform->compute(handle, fontMetrics);
+    return &handle.get<ComputedTransformComponent>();
+  } else {
+    return nullptr;
+  }
 }
 
 void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings) {
