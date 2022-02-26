@@ -1,5 +1,6 @@
 #pragma once
 
+#include <compare>
 #include <entt/entt.hpp>
 #include <ostream>
 #include <string_view>
@@ -7,6 +8,10 @@
 namespace donner::svg {
 
 enum class Entity : std::uint32_t {};
+
+inline auto operator<=>(Entity lhs, Entity rhs) {
+  return static_cast<std::uint32_t>(lhs) <=> static_cast<std::uint32_t>(rhs);
+}
 
 inline std::ostream& operator<<(std::ostream& os, const Entity& entity) {
   return os << "#" << static_cast<std::uint32_t>(entity);

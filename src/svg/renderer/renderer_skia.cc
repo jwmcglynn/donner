@@ -197,11 +197,10 @@ public:
     if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry())) {
       const EntityHandle target = resolvedRef->handle;
 
-      if (const auto [gradient, gradientStops] =
-              target.try_get<GradientComponent, ComputedGradientComponent>();
-          gradient && gradientStops) {
+      if (const auto* computedGradient = target.try_get<ComputedGradientComponent>()) {
         // Apply gradientUnits and gradientTransform.
-        const bool objectBoundingBox = gradient->gradientUnits == GradientUnits::ObjectBoundingBox;
+        const bool objectBoundingBox =
+            computedGradient->gradientUnits == GradientUnits::ObjectBoundingBox;
 
         const ComputedTransformComponent* maybeTransformComponent =
             TransformComponent::ComputedTransform(target, FontMetrics());
@@ -237,7 +236,7 @@ public:
 
         std::vector<SkScalar> pos;
         std::vector<SkColor> color;
-        for (const GradientStop& stop : gradientStops->stops) {
+        for (const GradientStop& stop : computedGradient->stops) {
           pos.push_back(stop.offset);
           color.push_back(toSkia(stop.color.resolve(currentColor, stop.opacity * opacity)));
         }
@@ -262,7 +261,7 @@ public:
           return paint;
         }
 
-        if (const auto* linearGradient = target.try_get<LinearGradientComponent>()) {
+        if (const auto* linearGradient = target.try_get<ComputedLinearGradientComponent>()) {
           const SkPoint points[] = {
               toSkia(resolveGradientCoords(linearGradient->x1, linearGradient->y1, bounds,
                                            transform, numbersArePercent)),
@@ -272,10 +271,10 @@ public:
           SkPaint paint;
           paint.setAntiAlias(true);
           paint.setShader(SkGradientShader::MakeLinear(points, color.data(), pos.data(), numStops,
-                                                       toSkia(gradient->spreadMethod)));
+                                                       toSkia(computedGradient->spreadMethod)));
           return paint;
         } else {
-          const auto& radialGradient = target.get<RadialGradientComponent>();
+          const auto& radialGradient = target.get<ComputedRadialGradientComponent>();
           const Vector2d center = resolveGradientCoords(radialGradient.cx, radialGradient.cy,
                                                         bounds, transform, numbersArePercent);
           const SkScalar radius = resolveGradientCoord(radialGradient.r, bounds, numbersArePercent);
@@ -317,11 +316,11 @@ public:
           if (NearZero(focalRadius) && focalCenter == center) {
             paint.setShader(SkGradientShader::MakeRadial(toSkia(center), radius, color.data(),
                                                          pos.data(), numStops,
-                                                         toSkia(gradient->spreadMethod)));
+                                                         toSkia(computedGradient->spreadMethod)));
           } else {
             paint.setShader(SkGradientShader::MakeTwoPointConical(
                 toSkia(focalCenter), focalRadius, toSkia(center), radius, color.data(), pos.data(),
-                numStops, toSkia(gradient->spreadMethod)));
+                numStops, toSkia(computedGradient->spreadMethod)));
           }
           return paint;
         }

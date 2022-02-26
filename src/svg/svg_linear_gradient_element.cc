@@ -14,35 +14,35 @@ SVGLinearGradientElement SVGLinearGradientElement::Create(SVGDocument& document)
   return SVGLinearGradientElement(handle);
 }
 
-void SVGLinearGradientElement::setX1(Lengthd value) {
+void SVGLinearGradientElement::setX1(std::optional<Lengthd> value) {
   handle_.get<LinearGradientComponent>().x1 = value;
 }
 
-void SVGLinearGradientElement::setY1(Lengthd value) {
+void SVGLinearGradientElement::setY1(std::optional<Lengthd> value) {
   handle_.get<LinearGradientComponent>().y1 = value;
 }
 
-void SVGLinearGradientElement::setX2(Lengthd value) {
+void SVGLinearGradientElement::setX2(std::optional<Lengthd> value) {
   handle_.get<LinearGradientComponent>().x2 = value;
 }
 
-void SVGLinearGradientElement::setY2(Lengthd value) {
+void SVGLinearGradientElement::setY2(std::optional<Lengthd> value) {
   handle_.get<LinearGradientComponent>().y2 = value;
 }
 
-Lengthd SVGLinearGradientElement::x1() const {
+std::optional<Lengthd> SVGLinearGradientElement::x1() const {
   return handle_.get<LinearGradientComponent>().x1;
 }
 
-Lengthd SVGLinearGradientElement::y1() const {
+std::optional<Lengthd> SVGLinearGradientElement::y1() const {
   return handle_.get<LinearGradientComponent>().y1;
 }
 
-Lengthd SVGLinearGradientElement::x2() const {
+std::optional<Lengthd> SVGLinearGradientElement::x2() const {
   return handle_.get<LinearGradientComponent>().x2;
 }
 
-Lengthd SVGLinearGradientElement::y2() const {
+std::optional<Lengthd> SVGLinearGradientElement::y2() const {
   return handle_.get<LinearGradientComponent>().y2;
 }
 

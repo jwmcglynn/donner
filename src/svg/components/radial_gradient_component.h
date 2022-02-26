@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "src/base/length.h"
+#include "src/svg/registry/registry.h"
 
 namespace donner::svg {
 
@@ -10,6 +11,17 @@ namespace donner::svg {
  * Parameters for a <radialGradient> element.
  */
 struct RadialGradientComponent {
+  std::optional<Lengthd> cx;
+  std::optional<Lengthd> cy;
+  std::optional<Lengthd> r;
+  std::optional<Lengthd> fx;
+  std::optional<Lengthd> fy;
+  std::optional<Lengthd> fr;
+
+  void inheritAttributes(EntityHandle handle, EntityHandle base);
+};
+
+struct ComputedRadialGradientComponent {
   Lengthd cx = Lengthd(50, Lengthd::Unit::Percent);
   Lengthd cy = Lengthd(50, Lengthd::Unit::Percent);
   Lengthd r = Lengthd(50, Lengthd::Unit::Percent);
@@ -19,6 +31,8 @@ struct RadialGradientComponent {
   std::optional<Lengthd> fx;
   std::optional<Lengthd> fy;
   Lengthd fr = Lengthd(0, Lengthd::Unit::Percent);
+
+  void inheritAttributes(EntityHandle handle, EntityHandle base);
 };
 
 }  // namespace donner::svg

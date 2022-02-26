@@ -9,7 +9,7 @@ namespace donner::svg {
 
 class ShadowTreeComponent {
 public:
-  ShadowTreeComponent(Reference href) : reference_(href) {}
+  explicit ShadowTreeComponent(Reference href) : reference_(href) {}
 
   RcString href() const { return reference_.href; }
 

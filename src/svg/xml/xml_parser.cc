@@ -217,6 +217,8 @@ std::optional<ParseError> ParseGradientCommonAttribute(XMLParserContext& context
       err.reason = "Invalid spreadMethod value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
+  } else if (name == "href") {
+    element.setHref(RcString(value));
   } else {
     return ParseCommonAttribute(context, element, namespacePrefix, name, value);
   }

@@ -11,10 +11,12 @@ protected:
   explicit SVGGradientElement(EntityHandle handle);
 
 public:
+  std::optional<RcString> href() const;
   GradientUnits gradientUnits() const;
-  void setGradientUnits(GradientUnits value);
-
   GradientSpreadMethod spreadMethod() const;
+
+  void setHref(std::optional<RcString> value);
+  void setGradientUnits(GradientUnits value);
   void setSpreadMethod(GradientSpreadMethod value);
 
 protected:

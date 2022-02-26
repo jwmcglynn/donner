@@ -28,7 +28,8 @@ private:
   Registry& registry_;
 
   // Rendering signal handlers.
-  entt::sigh<void(Registry&, std::vector<ParseError>*)> computePaths_;
+  entt::sigh<void(Registry&)> evaluateConditionalComponents_;
+  entt::sigh<void(Registry&, std::vector<ParseError>*)> instantiateComputedComponents_;
 };
 
 }  // namespace donner::svg

@@ -6,6 +6,7 @@ cc_library(
         "reference.cc",
     ],
     hdrs = [
+        "recursion_guard.h",
         "reference.h",
     ],
     visibility = [

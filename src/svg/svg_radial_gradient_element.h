@@ -15,19 +15,19 @@ public:
 
   static SVGRadialGradientElement Create(SVGDocument& document);
 
-  void setCx(Lengthd value);
-  void setCy(Lengthd value);
-  void setR(Lengthd value);
+  void setCx(std::optional<Lengthd> value);
+  void setCy(std::optional<Lengthd> value);
+  void setR(std::optional<Lengthd> value);
   void setFx(std::optional<Lengthd> value);
   void setFy(std::optional<Lengthd> value);
-  void setFr(Lengthd value);
+  void setFr(std::optional<Lengthd> value);
 
-  Lengthd cx() const;
-  Lengthd cy() const;
-  Lengthd r() const;
+  std::optional<Lengthd> cx() const;
+  std::optional<Lengthd> cy() const;
+  std::optional<Lengthd> r() const;
   std::optional<Lengthd> fx() const;
   std::optional<Lengthd> fy() const;
-  Lengthd fr() const;
+  std::optional<Lengthd> fr() const;
 };
 
 }  // namespace donner::svg

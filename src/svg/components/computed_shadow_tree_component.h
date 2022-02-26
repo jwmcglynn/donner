@@ -7,6 +7,7 @@
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/shadow_tree_component.h"
+#include "src/svg/graph/recursion_guard.h"
 #include "src/svg/registry/registry.h"
 
 // TODO: Automatically delete ComputedShadowTreeComponent when ShadowTreeComponent is removed.
@@ -44,12 +45,13 @@ struct ComputedShadowTreeComponent {
     teardown(registry);
     lightRoot_ = lightTarget;
 
-    computeChildren(registry, entt::to_entity(registry, *this), lightTarget, outWarnings);
+    RecursionGuard guard;
+    computeChildren(registry, guard, entt::to_entity(registry, *this), lightTarget, outWarnings);
   }
 
 private:
-  void computeChildren(Registry& registry, Entity shadowParent, Entity lightTarget,
-                       std::vector<ParseError>* outWarnings) {
+  void computeChildren(Registry& registry, RecursionGuard& guard, Entity shadowParent,
+                       Entity lightTarget, std::vector<ParseError>* outWarnings) {
     const Entity shadow = registry.create();
     const TreeComponent& lightTargetTree = registry.get<TreeComponent>(lightTarget);
     registry.emplace<TreeComponent>(shadow, lightTargetTree.type(), lightTargetTree.typeString());
@@ -63,7 +65,19 @@ private:
     // the shadow tree.
     if (auto* nestedShadow = registry.try_get<ShadowTreeComponent>(lightTarget)) {
       if (auto targetEntity = nestedShadow->targetEntity(registry)) {
-        computeChildren(registry, shadow, targetEntity.value(), outWarnings);
+        if (guard.hasRecursion(targetEntity.value())) {
+          if (outWarnings) {
+            ParseError err;
+            err.reason = std::string("Shadow tree recursion detected, ignoring shadow tree for '" +
+                                     nestedShadow->href() + '"');
+            outWarnings->emplace_back(std::move(err));
+          }
+          return;
+        }
+
+        RecursionGuard childGuard = guard.with(targetEntity.value());
+        computeChildren(registry, childGuard, shadow, targetEntity.value(),
+                        outWarnings);
       } else if (outWarnings) {
         ParseError err;
         err.reason = std::string("Failed to find target entity for nested shadow tree '") +
@@ -73,7 +87,7 @@ private:
     } else {
       for (auto child = lightTargetTree.firstChild(); child != entt::null;
            child = registry.get<TreeComponent>(child).nextSibling()) {
-        computeChildren(registry, shadow, child, outWarnings);
+        computeChildren(registry, guard, shadow, child, outWarnings);
       }
     }
   }

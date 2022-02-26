@@ -20,17 +20,24 @@ namespace donner::svg {
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {
   // Set up render tree signals.
-  entt::sink sink(computePaths_);
-  sink.connect<&InstantiateComputedCircleComponents>();
-  sink.connect<&InstantiateComputedEllipseComponents>();
-  sink.connect<&InstantiateComputedPathComponents>();
-  sink.connect<&InstantiateComputedRectComponents>();
-  sink.connect<&InstantiateLineComponents>();
-  sink.connect<&InstantiatePolyComponents>();
+  {
+    entt::sink sink(evaluateConditionalComponents_);
+    sink.connect<&EvaluateConditionalGradientShadowTrees>();
+  }
 
-  // Should instantiate <stop> before gradients.
-  sink.connect<&InstantiateStopComponents>();
-  sink.connect<&InstantiateGradientComponents>();
+  {
+    entt::sink sink(instantiateComputedComponents_);
+    sink.connect<&InstantiateComputedCircleComponents>();
+    sink.connect<&InstantiateComputedEllipseComponents>();
+    sink.connect<&InstantiateComputedPathComponents>();
+    sink.connect<&InstantiateComputedRectComponents>();
+    sink.connect<&InstantiateLineComponents>();
+    sink.connect<&InstantiatePolyComponents>();
+
+    // Should instantiate <stop> before gradients.
+    sink.connect<&InstantiateStopComponents>();
+    sink.connect<&InstantiateGradientComponents>();
+  }
 }
 
 void RenderingContext::instantiateRenderTree(std::vector<ParseError>* outWarnings) {
@@ -68,7 +75,8 @@ void RenderingContext::instantiateRenderTree(std::vector<ParseError>* outWarning
 
   ComputeAllTransforms(registry_, outWarnings);
 
-  computePaths_.publish(registry_, outWarnings);
+  evaluateConditionalComponents_.publish(registry_);
+  instantiateComputedComponents_.publish(registry_, outWarnings);
 }
 
 }  // namespace donner::svg

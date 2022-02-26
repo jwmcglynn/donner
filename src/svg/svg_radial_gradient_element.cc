@@ -14,15 +14,15 @@ SVGRadialGradientElement SVGRadialGradientElement::Create(SVGDocument& document)
   return SVGRadialGradientElement(handle);
 }
 
-void SVGRadialGradientElement::setCx(Lengthd value) {
+void SVGRadialGradientElement::setCx(std::optional<Lengthd> value) {
   handle_.get<RadialGradientComponent>().cx = value;
 }
 
-void SVGRadialGradientElement::setCy(Lengthd value) {
+void SVGRadialGradientElement::setCy(std::optional<Lengthd> value) {
   handle_.get<RadialGradientComponent>().cy = value;
 }
 
-void SVGRadialGradientElement::setR(Lengthd value) {
+void SVGRadialGradientElement::setR(std::optional<Lengthd> value) {
   handle_.get<RadialGradientComponent>().r = value;
 }
 
@@ -34,19 +34,19 @@ void SVGRadialGradientElement::setFy(std::optional<Lengthd> value) {
   handle_.get<RadialGradientComponent>().fy = value;
 }
 
-void SVGRadialGradientElement::setFr(Lengthd value) {
+void SVGRadialGradientElement::setFr(std::optional<Lengthd> value) {
   handle_.get<RadialGradientComponent>().fr = value;
 }
 
-Lengthd SVGRadialGradientElement::cx() const {
+std::optional<Lengthd> SVGRadialGradientElement::cx() const {
   return handle_.get<RadialGradientComponent>().cx;
 }
 
-Lengthd SVGRadialGradientElement::cy() const {
+std::optional<Lengthd> SVGRadialGradientElement::cy() const {
   return handle_.get<RadialGradientComponent>().cy;
 }
 
-Lengthd SVGRadialGradientElement::r() const {
+std::optional<Lengthd> SVGRadialGradientElement::r() const {
   return handle_.get<RadialGradientComponent>().r;
 }
 
@@ -58,7 +58,7 @@ std::optional<Lengthd> SVGRadialGradientElement::fy() const {
   return handle_.get<RadialGradientComponent>().fy;
 }
 
-Lengthd SVGRadialGradientElement::fr() const {
+std::optional<Lengthd> SVGRadialGradientElement::fr() const {
   return handle_.get<RadialGradientComponent>().fr;
 }
 
