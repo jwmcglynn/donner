@@ -3,6 +3,7 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include "src/svg/components/computed_shadow_tree_component.h"
 #include "src/svg/components/viewbox_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
@@ -74,6 +75,8 @@ Boxd calculateBounds(EntityHandle handle, const SizedElementProperties& properti
                      const Boxd& inheritedViewbox, FontMetrics fontMetrics) {
   // TODO: Confirm if this is the correct behavior if <svg> has a viewbox specifying a size, but
   // no width/height. For Ghostscript_Tiger to detect the size, we need to do this.
+  const ComputedShadowTreeComponent* shadowTree = handle.try_get<ComputedShadowTreeComponent>();
+
   Vector2d size;
   if (const auto* viewbox = handle.try_get<ViewboxComponent>();
       viewbox && !properties.width.hasValue() && !properties.height.hasValue() &&
@@ -83,14 +86,20 @@ Boxd calculateBounds(EntityHandle handle, const SizedElementProperties& properti
     size = inheritedViewbox.size();
   }
 
-  if (properties.width.hasValue()) {
-    size.x =
-        properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::X);
-  }
+  // From From https://www.w3.org/TR/SVG/struct.html#UseElement:
+  // > The width and height attributes only have an effect if the referenced element defines a
+  // > viewport (i.e., if it is a ‘svg’ or ‘symbol’)
+  if (!shadowTree ||
+      (shadowTree && handle.registry()->all_of<ViewboxComponent>(shadowTree->lightRoot()))) {
+    if (properties.width.hasValue()) {
+      size.x = properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics,
+                                                       Lengthd::Extent::X);
+    }
 
-  if (properties.height.hasValue()) {
-    size.y =
-        properties.height.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::Y);
+    if (properties.height.hasValue()) {
+      size.y = properties.height.getRequired().toPixels(inheritedViewbox, fontMetrics,
+                                                        Lengthd::Extent::Y);
+    }
   }
 
   const Vector2d origin(
