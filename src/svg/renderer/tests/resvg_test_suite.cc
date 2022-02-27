@@ -171,6 +171,15 @@ TEST_P(ResvgTestSuite, Compare) {
   renderAndCompare(document, svgFilename, goldenFilename.string().c_str());
 }
 
+// TODO(text): a-alignment-baseline
+// TODO(text): a-baseline-shift
+// TODO: a-clip
+// TODO: a-color
+// TODO: a-direction
+// TODO: a-display
+// TODO: a-dominant-baseline
+// TODO: a-enable-background
+
 INSTANTIATE_TEST_SUITE_P(
     Fill, ResvgTestSuite,
     ValuesIn(getTestsWithPrefix(
@@ -189,6 +198,20 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     testNameFromFilename);
 
+// TODO(filter): a-filter
+// TODO(filter): a-flood
+// TODO(font): a-font
+// TODO(font): a-glyph-orientation
+// TODO(text?): a-isolation
+// TODO(text): a-kerning
+// TODO(text): a-lengthAdjust
+// TODO(text): a-letter-spacing
+// TODO(marker): a-marker
+// TODO(filter): a-mark
+// TODO(filter): a-mix-blend-mode
+// TODO(opacity): a-opacity
+// TODO(text): a-overflow
+
 INSTANTIATE_TEST_SUITE_P(
     Shape, ResvgTestSuite,
     ValuesIn(getTestsWithPrefix("a-shape",
@@ -197,6 +220,9 @@ INSTANTIATE_TEST_SUITE_P(
                                     "a-shape-rendering-008.svg",  // Not impl: <marker>
                                 })),
     testNameFromFilename);
+
+// TODO: a-stop-color
+// TODO: a-stop-opacity
 
 INSTANTIATE_TEST_SUITE_P(
     Stroke, ResvgTestSuite,
@@ -236,11 +262,23 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     testNameFromFilename);
 
+// TODO: a-systemLanguage
+// TODO(text): a-text
+
 INSTANTIATE_TEST_SUITE_P(Transform, ResvgTestSuite, ValuesIn(getTestsWithPrefix("a-transform")),
                          testNameFromFilename);
 
+// TODO(text): a-unicode
+// TODO: a-visibility
+// TODO(text): a-word-spacing
+// TODO(text): a-writing-mode
+
+// TODO: e-a-
+
 INSTANTIATE_TEST_SUITE_P(Circle, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-circle")),
                          testNameFromFilename);
+
+// TODO(clip): e-clipPath
 
 INSTANTIATE_TEST_SUITE_P(Defs, ResvgTestSuite,
                          ValuesIn(getTestsWithPrefix("e-defs",
@@ -252,8 +290,13 @@ INSTANTIATE_TEST_SUITE_P(Defs, ResvgTestSuite,
 INSTANTIATE_TEST_SUITE_P(Ellipse, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-ellipse")),
                          testNameFromFilename);
 
+// TODO(filter): e-fe
+// TODO(filter) e-filter
+
 INSTANTIATE_TEST_SUITE_P(G, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-g")),
                          testNameFromFilename);
+
+// TODO: e-image
 
 INSTANTIATE_TEST_SUITE_P(Line, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-line-")),
                          testNameFromFilename);
@@ -273,6 +316,8 @@ INSTANTIATE_TEST_SUITE_P(Path, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-pa
                          testNameFromFilename);
 
 // TODO: e-pattern
+// TODO: e-polygon
+// TODO: e-polyline
 
 INSTANTIATE_TEST_SUITE_P(
     RadialGradient, ResvgTestSuite,
@@ -317,6 +362,9 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO: e-svg
 // TODO: e-switch
 // TODO: e-symbol
+// TODO(text): e-text-
+// TODO(text): e-textPath
+// TODO(text): e-tspan
 
 INSTANTIATE_TEST_SUITE_P(
     Use, ResvgTestSuite,
