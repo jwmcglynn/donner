@@ -318,6 +318,18 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO: e-switch
 // TODO: e-symbol
 
-// TODO: e-use
+INSTANTIATE_TEST_SUITE_P(
+    Use, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix("e-use",
+                                {
+                                    "e-use-008.svg",  // Not impl: External file.
+                                    "e-use-015.svg",  // Not impl: opacity attribute.
+                                    "e-use-019.svg",  // Not impl: display attribute.
+                                    "e-use-020.svg",  // Bug? size should be ignored
+                                    "e-use-025.svg",  // Bug? Indirect recursive
+                                    "e-use-026.svg",  // Bug? Indirect recursive
+                                    "e-use-027.svg",  // Bug? Nested recursive
+                                })),
+    testNameFromFilename);
 
 }  // namespace donner::svg
