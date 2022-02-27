@@ -202,7 +202,7 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(filter): a-flood
 // TODO(font): a-font
 // TODO(font): a-glyph-orientation
-// TODO(text?): a-isolation
+// TODO(filter?): a-isolation
 // TODO(text): a-kerning
 // TODO(text): a-lengthAdjust
 // TODO(text): a-letter-spacing
@@ -221,8 +221,8 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     testNameFromFilename);
 
-// TODO: a-stop-color
-// TODO: a-stop-opacity
+INSTANTIATE_TEST_SUITE_P(StopAttributes, ResvgTestSuite, ValuesIn(getTestsWithPrefix("a-stop")),
+                         testNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Stroke, ResvgTestSuite,
@@ -316,8 +316,12 @@ INSTANTIATE_TEST_SUITE_P(Path, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-pa
                          testNameFromFilename);
 
 // TODO: e-pattern
-// TODO: e-polygon
-// TODO: e-polyline
+
+INSTANTIATE_TEST_SUITE_P(Polygon, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-polygon")),
+                         testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Polyline, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-polyline")),
+                         testNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     RadialGradient, ResvgTestSuite,
@@ -325,11 +329,10 @@ INSTANTIATE_TEST_SUITE_P(
         "e-radialGradient",
         {
             "e-radialGradient-031.svg",  // Test suite bug? In SVG2 this was changed to draw conical
-                                         //  gradient instead of correcting focal point.
+                                         // gradient instead of correcting focal point.
             "e-radialGradient-032.svg",  // UB: Negative `r`
             "e-radialGradient-039.svg",  // UB: Invalid `gradientUnits`
             "e-radialGradient-040.svg",  // UB: Invalid `gradientTransform
-            "e-radialGradient-042.svg",  // UB: fr=0.5 (SVG 2)
             "e-radialGradient-043.svg",  // UB: fr=0.5 (SVG 2)
             "e-radialGradient-044.svg",  // Test suite bug? fr > default value of r (0.5) should not
                                          //  render.
@@ -350,7 +353,7 @@ INSTANTIATE_TEST_SUITE_P(Rect, ResvgTestSuite,
                          testNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    Stop, ResvgTestSuite,
+    StopElement, ResvgTestSuite,
     ValuesIn(getTestsWithPrefix("e-stop",
                                 {
                                     "e-stop-011.svg",  // Bug? Strange edge case, stop-color
@@ -358,7 +361,17 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     testNameFromFilename);
 
-// TODO: e-style
+INSTANTIATE_TEST_SUITE_P(
+    StyleElement, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix("e-style",
+                                {
+                                    "e-style-004.svg",  // Not impl: Attribute matchers
+                                    "e-style-012.svg",  // Not impl: <svg version="1.1">
+                                    "e-style-013.svg",  // Bug? CSS transform
+                                    "e-style-014.svg",  // Not impl: CSS @import
+                                })),
+    testNameFromFilename);
+
 // TODO: e-svg
 // TODO: e-switch
 // TODO: e-symbol
