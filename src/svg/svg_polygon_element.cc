@@ -1,13 +1,15 @@
 #include "src/svg/svg_polygon_element.h"
 
 #include "src/svg/components/poly_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
 
 SVGPolygonElement SVGPolygonElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGPolygonElement(CreateEntity(registry, RcString(Tag), Type));
+  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  return SVGPolygonElement(handle);
 }
 
 void SVGPolygonElement::setPoints(std::vector<Vector2d> points) {

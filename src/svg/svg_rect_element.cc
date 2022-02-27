@@ -1,13 +1,15 @@
 #include "src/svg/svg_rect_element.h"
 
 #include "src/svg/components/rect_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
 
 SVGRectElement SVGRectElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGRectElement(CreateEntity(registry, RcString(Tag), Type));
+  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  return SVGRectElement(handle);
 }
 
 void SVGRectElement::setX(Lengthd value) {
@@ -104,12 +106,18 @@ Lengthd SVGRectElement::computedHeight() const {
 
 Lengthd SVGRectElement::computedRx() const {
   compute();
-  return handle_.get<ComputedRectComponent>().properties.calculateRx();
+
+  const ComputedStyleComponent& style = handle_.get<ComputedStyleComponent>();
+  return std::get<0>(
+      handle_.get<ComputedRectComponent>().properties.calculateRx(style.viewbox(), FontMetrics()));
 }
 
 Lengthd SVGRectElement::computedRy() const {
   compute();
-  return handle_.get<ComputedRectComponent>().properties.calculateRy();
+
+  const ComputedStyleComponent& style = handle_.get_or_emplace<ComputedStyleComponent>();
+  return std::get<0>(
+      handle_.get<ComputedRectComponent>().properties.calculateRy(style.viewbox(), FontMetrics()));
 }
 
 std::optional<PathSpline> SVGRectElement::computedSpline() const {

@@ -86,29 +86,66 @@ struct Property {
   /**
    * Get the property value, without considering inheritance. Returns the initial value if the
    * property has not been set.
+   *
+   * @return The value if it is set, or the initial value if it is not. Returns std::nullopt if the
+   *  property is none.
    */
   std::optional<T> get() const { return state == PropertyState::Set ? value : getInitialFn(); }
+
+  /**
+   * Gets the value of the property, requiring that the value is not std::nullopt.
+   *
+   * @return The value.
+   */
   T getRequired() const {
     auto result = get();
     UTILS_RELEASE_ASSERT_MSG(result.has_value(), "Required property not set");
     return std::move(result.value());
   }
 
+  /**
+   * Gets a const-ref to the value, for accessing complex types without copying. Requires that \ref
+   * hasValue() is true.
+   *
+   * @return const T& Reference to the value.
+   */
   const T& getRequiredRef() const {
     UTILS_RELEASE_ASSERT_MSG(hasValue(), "Required property not set");
     return value.value();
   }
 
+  /**
+   * Set the property to a new value at the given specificity.
+   *
+   * @param newValue Value to set, or std::nullopt to set to an empty value.
+   * @param newSpecificity Specificity to use.
+   */
   void set(std::optional<T> newValue, css::Specificity newSpecificity) {
     value = std::move(newValue);
     state = PropertyState::Set;
     specificity = newSpecificity;
   }
 
+  /**
+   * Unset the current value and set the property to a specific state.
+   *
+   * @param newState New state to set.
+   * @param newSpecificity Specificity to use.
+   */
   void set(PropertyState newState, css::Specificity newSpecificity) {
     value.reset();
     state = newState;
     specificity = newSpecificity;
+  }
+
+  /**
+   * Replace the current property's value with a new value at the current specificity.
+   *
+   * @param newValue Value to use to replace the existing one.
+   */
+  void substitute(std::optional<T> newValue) {
+    value = std::move(newValue);
+    state = PropertyState::Set;
   }
 
   [[nodiscard]] Property<T, kCascade> inheritFrom(const Property<T, kCascade>& parent) const {

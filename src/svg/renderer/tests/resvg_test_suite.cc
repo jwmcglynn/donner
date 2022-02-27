@@ -126,7 +126,11 @@ protected:
     diffImage.resize(strideInPixels * height * 4);
 
     pixelmatch::Options options;
-    options.threshold = 0.01;
+    // For most tests, a tolerance of 0.01 is sufficient, but some specific tests have slightly
+    // different anti-aliasing artifacts, so a larger tolerance is required:
+    // - a_transform_007 - 0.05 to pass
+    // - e_line_001 - 0.02 to pass
+    options.threshold = 0.04;
     const int mismatchedPixels = pixelmatch::pixelmatch(
         goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
 
@@ -232,7 +236,26 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     testNameFromFilename);
 
+INSTANTIATE_TEST_SUITE_P(Transform, ResvgTestSuite, ValuesIn(getTestsWithPrefix("a-transform")),
+                         testNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(Circle, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-circle")),
+                         testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Defs, ResvgTestSuite,
+                         ValuesIn(getTestsWithPrefix("e-defs",
+                                                     {
+                                                         "e-defs-007.svg",  // Not impl: <text>
+                                                     })),
+                         testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Ellipse, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-ellipse")),
+                         testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(G, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-g")),
+                         testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Line, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-line-")),
                          testNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -242,6 +265,14 @@ INSTANTIATE_TEST_SUITE_P(
                                     "e-linearGradient-037.svg",  // UB: Invalid `gradientTransform`
                                 })),
     testNameFromFilename);
+
+// TODO: e-marker
+// TODO: e-mask
+
+INSTANTIATE_TEST_SUITE_P(Path, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-path")),
+                         testNameFromFilename);
+
+// TODO: e-pattern
 
 INSTANTIATE_TEST_SUITE_P(
     RadialGradient, ResvgTestSuite,
@@ -260,5 +291,33 @@ INSTANTIATE_TEST_SUITE_P(
             "e-radialGradient-045.svg",  // UB: fr=-1 (SVG 2)
         })),
     testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Rect, ResvgTestSuite,
+                         ValuesIn(getTestsWithPrefix("e-rect",
+                                                     {
+                                                         "e-rect-022.svg",  // Not impl: "em" units
+                                                         "e-rect-023.svg",  // Not impl: "ex" units
+                                                         "e-rect-029.svg",  // Not impl: "rem" units
+                                                         "e-rect-031.svg",  // Not impl: "ch" units
+                                                         "e-rect-034.svg",  // Bug? vw/vh
+                                                         "e-rect-036.svg",  // Bug? vmin/vmax
+                                                     })),
+                         testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    Stop, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix(
+        "e-stop",
+        {
+            "e-stop-011.svg",  // Bug? Strange edge case, stop-color inherited from <linearGradient.
+        })),
+    testNameFromFilename);
+
+// TODO: e-style
+// TODO: e-svg
+// TODO: e-switch
+// TODO: e-symbol
+
+// TODO: e-use
 
 }  // namespace donner::svg

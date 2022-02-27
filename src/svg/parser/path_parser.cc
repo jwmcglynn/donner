@@ -415,7 +415,7 @@ private:
 
       // Only transform the end coords with makeAbsolute, the rest are independent.
       const Vector2d radius = Vector2d(radiusAndRotation[0], radiusAndRotation[1]);
-      const double rotationRadians = radiusAndRotation[2];
+      const double rotationRadians = radiusAndRotation[2] * MathConstants<double>::kDegToRad;
       const Vector2d end = makeAbsolute(command, endCoords);
 
       spline_.arcTo(radius, rotationRadians, largeArcFlag, sweepFlag, end);

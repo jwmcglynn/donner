@@ -22,7 +22,7 @@ struct StopProperties {
 };
 
 struct ComputedStopComponent {
-  ComputedStopComponent(const StopProperties& inputProperties,
+  ComputedStopComponent(const StopProperties& inputProperties, const ComputedStyleComponent& style,
                         const std::map<RcString, UnparsedProperty>& unparsedProperties,
                         std::vector<ParseError>* outWarnings);
 
@@ -35,7 +35,7 @@ struct StopComponent {
   void computeWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
                                    std::vector<ParseError>* outWarnings) {
     handle.emplace_or_replace<ComputedStopComponent>(
-        properties, style.properties().unparsedProperties, outWarnings);
+        properties, style, style.properties().unparsedProperties, outWarnings);
   }
 
   void compute(EntityHandle handle) {

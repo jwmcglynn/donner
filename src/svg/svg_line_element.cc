@@ -2,13 +2,15 @@
 
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/line_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
 
 SVGLineElement SVGLineElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGLineElement(CreateEntity(registry, RcString(Tag), Type));
+  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  return SVGLineElement(handle);
 }
 
 void SVGLineElement::setX1(Lengthd value) {

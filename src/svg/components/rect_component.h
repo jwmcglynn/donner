@@ -7,6 +7,7 @@
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/properties/property.h"
+#include "src/svg/properties/rx_ry_properties.h"
 
 namespace donner::svg {
 
@@ -27,20 +28,14 @@ struct RectProperties {
 
   auto allProperties() { return std::forward_as_tuple(x, y, width, height, rx, ry); }
 
-  Lengthd calculateRx() const {
-    if (rx.hasValue()) {
-      return rx.getRequired();
-    } else {
-      return ry.hasValue() ? ry.getRequired() : Lengthd(0, Lengthd::Unit::None);
-    }
+  std::tuple<Lengthd, double> calculateRx(const Boxd& viewbox,
+                                          const FontMetrics& fontMetrics) const {
+    return CalculateRadiusMaybeAuto(rx, ry, viewbox, fontMetrics);
   }
 
-  Lengthd calculateRy() const {
-    if (ry.hasValue()) {
-      return ry.getRequired();
-    } else {
-      return rx.hasValue() ? rx.getRequired() : Lengthd(0, Lengthd::Unit::None);
-    }
+  std::tuple<Lengthd, double> calculateRy(const Boxd& viewbox,
+                                          const FontMetrics& fontMetrics) const {
+    return CalculateRadiusMaybeAuto(ry, rx, viewbox, fontMetrics);
   }
 };
 

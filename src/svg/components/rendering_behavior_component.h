@@ -2,7 +2,7 @@
 
 namespace donner::svg {
 
-enum class RenderingBehavior { Default, Nonrenderable };
+enum class RenderingBehavior { Default, Nonrenderable, NoTraverseChildren };
 
 struct RenderingBehaviorComponent {
   RenderingBehavior behavior = RenderingBehavior::Default;

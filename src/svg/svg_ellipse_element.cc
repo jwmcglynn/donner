@@ -2,13 +2,15 @@
 
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/ellipse_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
 
 SVGEllipseElement SVGEllipseElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGEllipseElement(CreateEntity(registry, RcString(Tag), Type));
+  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  return SVGEllipseElement(handle);
 }
 
 void SVGEllipseElement::setCx(Lengthd value) {
@@ -71,12 +73,18 @@ Lengthd SVGEllipseElement::computedCy() const {
 
 Lengthd SVGEllipseElement::computedRx() const {
   compute();
-  return handle_.get<ComputedEllipseComponent>().properties.calculateRx();
+
+  const ComputedStyleComponent& style = handle_.get<ComputedStyleComponent>();
+  return std::get<0>(handle_.get<ComputedEllipseComponent>().properties.calculateRx(style.viewbox(),
+                                                                                    FontMetrics()));
 }
 
 Lengthd SVGEllipseElement::computedRy() const {
   compute();
-  return handle_.get<ComputedEllipseComponent>().properties.calculateRy();
+
+  const ComputedStyleComponent& style = handle_.get_or_emplace<ComputedStyleComponent>();
+  return std::get<0>(handle_.get<ComputedEllipseComponent>().properties.calculateRy(style.viewbox(),
+                                                                                    FontMetrics()));
 }
 
 void SVGEllipseElement::invalidate() const {
@@ -85,8 +93,8 @@ void SVGEllipseElement::invalidate() const {
 }
 
 void SVGEllipseElement::compute() const {
-  auto& circle = handle_.get_or_emplace<EllipseComponent>();
-  circle.computePath(handle_, FontMetrics());
+  auto& ellipse = handle_.get_or_emplace<EllipseComponent>();
+  ellipse.computePath(handle_, FontMetrics());
 }
 
 }  // namespace donner::svg

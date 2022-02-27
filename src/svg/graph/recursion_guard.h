@@ -13,7 +13,7 @@ struct RecursionGuard {
   bool hasRecursion(Entity entity) const { return (entities_.find(entity) != entities_.end()); }
 
   void add(Entity entity) {
-    const auto result = entities_.insert(entity);
+    [[maybe_unused]] const auto result = entities_.insert(entity);
     assert(result.second && "New element must be inserted");
   }
 

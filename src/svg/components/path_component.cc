@@ -58,17 +58,20 @@ std::optional<ParseError> PathComponent::computePathWithPrecomputedStyle(
 
   if (actualD.hasValue()) {
     auto maybePath = PathParser::Parse(actualD.get().value());
-    if (maybePath.hasError()) {
+    if (!maybePath.hasResult()) {
       handle.remove<ComputedPathComponent>();
       return std::move(maybePath.error());
     }
 
-    if (maybePath.hasResult()) {
-      if (!maybePath.result().empty()) {
-        handle.emplace_or_replace<ComputedPathComponent>(std::move(maybePath.result()));
-      } else {
-        handle.remove<ComputedPathComponent>();
-      }
+    if (!maybePath.result().empty()) {
+      handle.emplace_or_replace<ComputedPathComponent>(std::move(maybePath.result()));
+    } else {
+      handle.remove<ComputedPathComponent>();
+    }
+
+    if (maybePath.hasError()) {
+      // Propagate warnings, which may be set on success too.
+      return std::move(maybePath.error());
     }
   } else {
     handle.remove<ComputedPathComponent>();

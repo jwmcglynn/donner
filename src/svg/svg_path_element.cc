@@ -2,13 +2,15 @@
 
 #include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/path_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
 
 SVGPathElement SVGPathElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGPathElement(CreateEntity(registry, RcString(Tag), Type));
+  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  return SVGPathElement(handle);
 }
 
 RcString SVGPathElement::d() const {

@@ -4,6 +4,7 @@
 #include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/properties/property.h"
+#include "src/svg/properties/rx_ry_properties.h"
 
 namespace donner::svg {
 
@@ -20,20 +21,14 @@ struct EllipseProperties {
 
   auto allProperties() { return std::forward_as_tuple(cx, cy, rx, ry); }
 
-  Lengthd calculateRx() const {
-    if (rx.hasValue()) {
-      return rx.getRequired();
-    } else {
-      return ry.hasValue() ? ry.getRequired() : Lengthd(0, Lengthd::Unit::None);
-    }
+  std::tuple<Lengthd, double> calculateRx(const Boxd& viewbox,
+                                          const FontMetrics& fontMetrics) const {
+    return CalculateRadiusMaybeAuto(rx, ry, viewbox, fontMetrics);
   }
 
-  Lengthd calculateRy() const {
-    if (ry.hasValue()) {
-      return ry.getRequired();
-    } else {
-      return rx.hasValue() ? rx.getRequired() : Lengthd(0, Lengthd::Unit::None);
-    }
+  std::tuple<Lengthd, double> calculateRy(const Boxd& viewbox,
+                                          const FontMetrics& fontMetrics) const {
+    return CalculateRadiusMaybeAuto(ry, rx, viewbox, fontMetrics);
   }
 };
 
@@ -59,11 +54,13 @@ struct EllipseComponent {
         computedEllipse.properties.cx.getRequired().toPixels(style.viewbox(), fontMetrics),
         computedEllipse.properties.cy.getRequired().toPixels(style.viewbox(), fontMetrics));
     const Vector2d radius(
-        computedEllipse.properties.calculateRx().toPixels(style.viewbox(), fontMetrics),
-        computedEllipse.properties.calculateRy().toPixels(style.viewbox(), fontMetrics));
+        std::get<1>(computedEllipse.properties.calculateRx(style.viewbox(), fontMetrics)),
+        std::get<1>(computedEllipse.properties.calculateRy(style.viewbox(), fontMetrics)));
 
-    handle.emplace_or_replace<ComputedPathComponent>(
-        PathSpline::Builder().ellipse(center, radius).build());
+    if (radius.x > 0.0 && radius.y > 0.0) {
+      handle.emplace_or_replace<ComputedPathComponent>(
+          PathSpline::Builder().ellipse(center, radius).build());
+    }
   }
 
   void computePath(EntityHandle handle, const FontMetrics& fontMetrics) {

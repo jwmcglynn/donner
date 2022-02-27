@@ -48,7 +48,7 @@ ParseResult<bool> ParseProperty(std::string_view name, const PropertyParseFnPara
 }  // namespace
 
 ComputedStopComponent::ComputedStopComponent(
-    const StopProperties& inputProperties,
+    const StopProperties& inputProperties, const ComputedStyleComponent& style,
     const std::map<RcString, UnparsedProperty>& unparsedProperties,
     std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
@@ -61,6 +61,12 @@ ComputedStopComponent::ComputedStopComponent(
     if (result.hasError() && outWarnings) {
       outWarnings->emplace_back(std::move(result.error()));
     }
+  }
+
+  // Evaluate stopColor if it is currentColor.
+  if (properties.stopColor.hasValue() && properties.stopColor.getRequired().isCurrentColor()) {
+    const auto& currentColor = style.properties().color;
+    properties.stopColor.set(currentColor.getRequired(), currentColor.specificity);
   }
 }
 

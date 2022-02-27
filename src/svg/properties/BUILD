@@ -7,6 +7,7 @@ cc_library(
         "presentation_attribute_parsing.cc",
         "property_parsing.cc",
         "property_registry.cc",
+        "rx_ry_properties.cc",
     ],
     hdrs = [
         "paint_server.h",
@@ -14,6 +15,7 @@ cc_library(
         "property.h",
         "property_parsing.h",
         "property_registry.h",
+        "rx_ry_properties.h",
     ],
     visibility = ["//src/svg:__subpackages__"],
     deps = [

@@ -526,6 +526,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     const Entity styleEntity = treeEntity;
     const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : treeEntity;
     bool shouldRestore = false;
+    bool traverseChildren = true;
 
     if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable) {
@@ -533,6 +534,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
           std::cout << "Skipping nonrenderable entity " << dataEntity << std::endl;
         }
         return;
+      } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
+        traverseChildren = false;
       }
     }
 
@@ -567,10 +570,12 @@ void RendererSkia::draw(Registry& registry, Entity root) {
                     styleComponent.viewbox(), FontMetrics());
     }
 
-    const TreeComponent& tree = registry.get<TreeComponent>(treeEntity);
-    for (auto cur = tree.firstChild(); cur != entt::null;
-         cur = registry.get<TreeComponent>(cur).nextSibling()) {
-      drawEntity(transform, cur);
+    if (traverseChildren) {
+      const TreeComponent& tree = registry.get<TreeComponent>(treeEntity);
+      for (auto cur = tree.firstChild(); cur != entt::null;
+           cur = registry.get<TreeComponent>(cur).nextSibling()) {
+        drawEntity(transform, cur);
+      }
     }
 
     if (shouldRestore) {

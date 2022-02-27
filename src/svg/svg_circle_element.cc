@@ -2,13 +2,15 @@
 
 #include "src/svg/components/circle_component.h"
 #include "src/svg/components/computed_style_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
 
 SVGCircleElement SVGCircleElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGCircleElement(CreateEntity(registry, RcString(Tag), Type));
+  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  return SVGCircleElement(handle);
 }
 
 void SVGCircleElement::setCx(Lengthd value) {

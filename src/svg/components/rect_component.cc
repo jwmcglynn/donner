@@ -104,52 +104,59 @@ void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
       computedRect.properties.width.getRequired().toPixels(style.viewbox(), fontMetrics),
       computedRect.properties.height.getRequired().toPixels(style.viewbox(), fontMetrics));
 
-  if (computedRect.properties.rx.hasValue() || computedRect.properties.ry.hasValue()) {
-    // 4/3 * (1 - cos(45 deg) / sin(45 deg) = 4/3 * (sqrt 2) - 1
-    const double arcMagic = 0.5522847498;
-    const Vector2d radius(
-        computedRect.properties.calculateRx().toPixels(style.viewbox(), fontMetrics),
-        computedRect.properties.calculateRy().toPixels(style.viewbox(), fontMetrics));
+  if (size.x > 0.0 && size.y > 0.0) {
+    if (computedRect.properties.rx.hasValue() || computedRect.properties.ry.hasValue()) {
+      // 4/3 * (1 - cos(45 deg) / sin(45 deg) = 4/3 * (sqrt 2) - 1
+      const double arcMagic = 0.5522847498;
+      const Vector2d radius(
+          Clamp(std::get<1>(computedRect.properties.calculateRx(style.viewbox(), fontMetrics)), 0.0,
+                size.x * 0.5),
+          Clamp(std::get<1>(computedRect.properties.calculateRy(style.viewbox(), fontMetrics)), 0.0,
+                size.y * 0.5));
 
-    // Draw with rounded corners.
-    handle.emplace_or_replace<ComputedPathComponent>(
-        PathSpline::Builder()
-            // Draw top line.
-            .moveTo(pos + Vector2d(radius.x, 0))
-            .lineTo(pos + Vector2d(size.x - radius.x, 0.0))
-            // Curve to the right line.
-            .curveTo(pos + Vector2d(size.x - radius.x + radius.x * arcMagic, 0.0),
-                     pos + Vector2d(size.x, radius.y - radius.y * arcMagic),
-                     pos + Vector2d(size.x, radius.y))
-            // Draw right line.
-            .lineTo(pos + Vector2d(size.x, size.y - radius.y))
-            // Curve to the bottom line.
-            .curveTo(pos + Vector2d(size.x, size.y - radius.y + radius.y * arcMagic),
-                     pos + Vector2d(size.x - radius.x + radius.x * arcMagic, size.y),
-                     pos + Vector2d(size.x - radius.x, size.y))
-            // Draw bottom line.
-            .lineTo(pos + Vector2d(radius.x, size.y))
-            // Curve to the left line.
-            .curveTo(pos + Vector2d(radius.x - radius.x * arcMagic, size.y),
-                     pos + Vector2d(0.0, size.y - radius.y + radius.y * arcMagic),
-                     pos + Vector2d(0.0, size.y - radius.y))
-            // Draw right line.
-            .lineTo(pos + Vector2d(0.0, radius.y))
-            // Curve to the top line.
-            .curveTo(pos + Vector2d(0.0, radius.y - radius.y * arcMagic),
-                     pos + Vector2d(radius.x - radius.x * arcMagic, 0.0),
-                     pos + Vector2d(radius.x, 0.0))
-            .closePath()
-            .build());
+      // Draw with rounded corners.
+      handle.emplace_or_replace<ComputedPathComponent>(
+          PathSpline::Builder()
+              // Draw top line.
+              .moveTo(pos + Vector2d(radius.x, 0))
+              .lineTo(pos + Vector2d(size.x - radius.x, 0.0))
+              // Curve to the right line.
+              .curveTo(pos + Vector2d(size.x - radius.x + radius.x * arcMagic, 0.0),
+                       pos + Vector2d(size.x, radius.y - radius.y * arcMagic),
+                       pos + Vector2d(size.x, radius.y))
+              // Draw right line.
+              .lineTo(pos + Vector2d(size.x, size.y - radius.y))
+              // Curve to the bottom line.
+              .curveTo(pos + Vector2d(size.x, size.y - radius.y + radius.y * arcMagic),
+                       pos + Vector2d(size.x - radius.x + radius.x * arcMagic, size.y),
+                       pos + Vector2d(size.x - radius.x, size.y))
+              // Draw bottom line.
+              .lineTo(pos + Vector2d(radius.x, size.y))
+              // Curve to the left line.
+              .curveTo(pos + Vector2d(radius.x - radius.x * arcMagic, size.y),
+                       pos + Vector2d(0.0, size.y - radius.y + radius.y * arcMagic),
+                       pos + Vector2d(0.0, size.y - radius.y))
+              // Draw right line.
+              .lineTo(pos + Vector2d(0.0, radius.y))
+              // Curve to the top line.
+              .curveTo(pos + Vector2d(0.0, radius.y - radius.y * arcMagic),
+                       pos + Vector2d(radius.x - radius.x * arcMagic, 0.0),
+                       pos + Vector2d(radius.x, 0.0))
+              .closePath()
+              .build());
 
+    } else {
+      handle.emplace_or_replace<ComputedPathComponent>(PathSpline::Builder()
+                                                           .moveTo(pos)
+                                                           .lineTo(pos + Vector2d(size.x, 0))
+                                                           .lineTo(pos + size)
+                                                           .lineTo(pos + Vector2d(0, size.y))
+                                                           .closePath()
+                                                           .build());
+    }
   } else {
-    handle.emplace_or_replace<ComputedPathComponent>(PathSpline::Builder()
-                                                         .moveTo(pos)
-                                                         .lineTo(pos + Vector2d(size.x, 0))
-                                                         .lineTo(pos + size)
-                                                         .lineTo(pos + Vector2d(0, size.y))
-                                                         .closePath()
-                                                         .build());
+    // Invalid width or height, don't generate a path.
+    handle.remove<ComputedPathComponent>();
   }
 }
 

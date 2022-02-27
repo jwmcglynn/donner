@@ -126,9 +126,4 @@ protected:
   EntityHandle handle_;
 };
 
-class SVGGraphicsElement : public SVGElement {
-protected:
-  explicit SVGGraphicsElement(EntityHandle handle) : SVGElement(handle) {}
-};
-
 }  // namespace donner::svg

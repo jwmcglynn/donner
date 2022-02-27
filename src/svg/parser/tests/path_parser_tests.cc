@@ -660,9 +660,9 @@ TEST(PathParser, NoWhitespace) {
 
   EXPECT_THAT(PathParser::Parse("M10-20A5.5.3-4 110-.1"),
               ParseResultIs(PointsAndCommandsAre(
-                  ElementsAre(Vector2d(10.0, -20.0), Vector2Near(28.2462, -40.6282),
-                              Vector2Near(40.7991, -52.8959), Vector2Near(38.0377, -47.4006),
-                              Vector2Near(35.2763, -41.9054), Vector2Near(18.2462, -20.7282),
+                  ElementsAre(Vector2d(10.0, -20.0), Vector2Near(106.745, -26.5935),
+                              Vector2Near(182.933, -27.4838), Vector2Near(180.172, -21.9885),
+                              Vector2Near(177.41, -16.4933), Vector2Near(96.7448, -6.69347),
                               Vector2Near(0, -0.1)),
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
                               Command{CommandType::CurveTo, 4}))));

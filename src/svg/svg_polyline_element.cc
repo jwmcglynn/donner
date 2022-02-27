@@ -1,13 +1,15 @@
 #include "src/svg/svg_polyline_element.h"
 
 #include "src/svg/components/poly_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
 
 SVGPolylineElement SVGPolylineElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGPolylineElement(CreateEntity(registry, RcString(Tag), Type));
+  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  return SVGPolylineElement(handle);
 }
 
 void SVGPolylineElement::setPoints(std::vector<Vector2d> points) {
