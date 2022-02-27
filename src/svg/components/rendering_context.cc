@@ -46,7 +46,7 @@ void RenderingContext::instantiateRenderTree(std::vector<ParseError>* outWarning
     auto [shadowTreeComponent] = view.get(entity);
     if (auto targetEntity = shadowTreeComponent.targetEntity(registry_)) {
       registry_.get_or_emplace<ComputedShadowTreeComponent>(entity).instantiate(
-          registry_, targetEntity.value(), outWarnings);
+          registry_, targetEntity.value(), shadowTreeComponent.href(), outWarnings);
     } else if (outWarnings) {
       ParseError err;
       err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +

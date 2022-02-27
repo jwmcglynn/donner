@@ -39,19 +39,41 @@ struct ComputedShadowTreeComponent {
    *
    * @param registry The registry.
    * @param lightTarget Target entity to reflect in the shadow tree.
+   * @param href The value of the href attribute for the shadow tree, for diagnostics.
    * @param outWarnings If provided, warnings will be added to this vector.
    */
-  void instantiate(Registry& registry, Entity lightTarget, std::vector<ParseError>* outWarnings) {
+  void instantiate(Registry& registry, Entity lightTarget, const RcString& href,
+                   std::vector<ParseError>* outWarnings) {
     teardown(registry);
     lightRoot_ = lightTarget;
 
+    const Entity shadowHostEntity = entt::to_entity(registry, *this);
+
+    std::set<Entity> shadowHostParents;
+    for (auto cur = registry.get<TreeComponent>(shadowHostEntity).parent(); cur != entt::null;
+         cur = registry.get<TreeComponent>(cur).parent()) {
+      shadowHostParents.insert(cur);
+    }
+
+    if (shadowHostParents.count(lightTarget)) {
+      if (outWarnings) {
+        ParseError err;
+        err.reason = std::string(
+            "Shadow tree recursion detected, element directly references parent: '" + href + '"');
+        outWarnings->emplace_back(std::move(err));
+      }
+
+      return;
+    }
+
     RecursionGuard guard;
-    computeChildren(registry, guard, entt::to_entity(registry, *this), lightTarget, outWarnings);
+    computeChildren(registry, guard, shadowHostEntity, lightTarget, shadowHostParents, outWarnings);
   }
 
 private:
   void computeChildren(Registry& registry, RecursionGuard& guard, Entity shadowParent,
-                       Entity lightTarget, std::vector<ParseError>* outWarnings) {
+                       Entity lightTarget, const std::set<Entity>& shadowHostParents,
+                       std::vector<ParseError>* outWarnings) {
     const Entity shadow = registry.create();
     const TreeComponent& lightTargetTree = registry.get<TreeComponent>(lightTarget);
     registry.emplace<TreeComponent>(shadow, lightTargetTree.type(), lightTargetTree.typeString());
@@ -65,6 +87,18 @@ private:
     // the shadow tree.
     if (auto* nestedShadow = registry.try_get<ShadowTreeComponent>(lightTarget)) {
       if (auto targetEntity = nestedShadow->targetEntity(registry)) {
+        if (shadowHostParents.count(targetEntity.value())) {
+          if (outWarnings) {
+            ParseError err;
+            err.reason = std::string(
+                "Shadow tree indirect recursion detected, element "
+                "references a shadow host parent: '" +
+                nestedShadow->href() + "'");
+            outWarnings->emplace_back(std::move(err));
+          }
+          return;
+        }
+
         if (guard.hasRecursion(targetEntity.value())) {
           if (outWarnings) {
             ParseError err;
@@ -76,7 +110,7 @@ private:
         }
 
         RecursionGuard childGuard = guard.with(targetEntity.value());
-        computeChildren(registry, childGuard, shadow, targetEntity.value(),
+        computeChildren(registry, childGuard, shadow, targetEntity.value(), shadowHostParents,
                         outWarnings);
       } else if (outWarnings) {
         ParseError err;
@@ -87,7 +121,7 @@ private:
     } else {
       for (auto child = lightTargetTree.firstChild(); child != entt::null;
            child = registry.get<TreeComponent>(child).nextSibling()) {
-        computeChildren(registry, guard, shadow, child, outWarnings);
+        computeChildren(registry, guard, shadow, child, shadowHostParents, outWarnings);
       }
     }
   }

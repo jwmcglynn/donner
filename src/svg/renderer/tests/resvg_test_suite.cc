@@ -306,11 +306,11 @@ INSTANTIATE_TEST_SUITE_P(Rect, ResvgTestSuite,
 
 INSTANTIATE_TEST_SUITE_P(
     Stop, ResvgTestSuite,
-    ValuesIn(getTestsWithPrefix(
-        "e-stop",
-        {
-            "e-stop-011.svg",  // Bug? Strange edge case, stop-color inherited from <linearGradient.
-        })),
+    ValuesIn(getTestsWithPrefix("e-stop",
+                                {
+                                    "e-stop-011.svg",  // Bug? Strange edge case, stop-color
+                                                       // inherited from <linearGradient>.
+                                })),
     testNameFromFilename);
 
 // TODO: e-style
@@ -325,9 +325,8 @@ INSTANTIATE_TEST_SUITE_P(
                                     "e-use-008.svg",  // Not impl: External file.
                                     "e-use-015.svg",  // Not impl: opacity attribute.
                                     "e-use-019.svg",  // Not impl: display attribute.
-                                    "e-use-025.svg",  // Bug? Indirect recursive
-                                    "e-use-026.svg",  // Bug? Indirect recursive
-                                    "e-use-027.svg",  // Bug? Nested recursive
+                                    "e-use-025.svg",  // Not impl: opacity attribute.
+                                    "e-use-026.svg",  // Not impl: opacity attribute.
                                 })),
     testNameFromFilename);
 
