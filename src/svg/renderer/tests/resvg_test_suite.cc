@@ -185,8 +185,8 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-fill",  //
         {
-            "a-fill-010.svg",          // UB
-            "a-fill-015.svg",          // UB
+            "a-fill-010.svg",          // UB: rgb(int int int)
+            "a-fill-015.svg",          // UB: ICC color
             "a-fill-018.svg",          // Not impl: <pattern>
             "a-fill-027.svg",          // Not impl: Fallback with icc-color
             "a-fill-031.svg",          // Not impl: <text>
@@ -239,9 +239,8 @@ INSTANTIATE_TEST_SUITE_P(
                                             // impl)
             "a-stroke-dasharray-007.svg",   // UB (negative values)
             "a-stroke-dasharray-009.svg",   // UB (negative sum)
-            "a-stroke-dasharray-012.svg",   // Bug? Strange aliasing artifacts.
-            "a-stroke-dasharray-013.svg",   // Bug? Dasharray should be reset on a new subpath
-            "a-stroke-dashoffset-004.svg",  // Bug? dashoffset "em" units
+            "a-stroke-dasharray-013.svg",   // Bug? Hairline rect mismatched pixels
+            "a-stroke-dashoffset-004.svg",  // Not impl: dashoffset "em" units
             "a-stroke-linejoin-004.svg",    // UB (SVG 2), no UA supports `miter-clip`
             "a-stroke-linejoin-005.svg",    // UB (SVG 2), no UA supports `arcs`
             "a-stroke-opacity-002.svg",     // Not impl: "opacity"
@@ -365,12 +364,50 @@ INSTANTIATE_TEST_SUITE_P(
                                 {
                                     "e-style-004.svg",  // Not impl: Attribute matchers
                                     "e-style-012.svg",  // Not impl: <svg version="1.1">
-                                    "e-style-013.svg",  // Bug? CSS transform
                                     "e-style-014.svg",  // Not impl: CSS @import
                                 })),
     testNameFromFilename);
 
-// TODO: e-svg
+INSTANTIATE_TEST_SUITE_P(
+    SvgElement, ResvgTestSuite,
+    ValuesIn(
+        getTestsWithPrefix("e-svg",
+                           {
+                               "e-svg-002.svg",  // Bug? xmlns validation
+                               "e-svg-003.svg",  // Bug? mixed namespaces
+                               "e-svg-004.svg",  // Bug/Not impl? XML Entity references
+                               "e-svg-005.svg",  // Bug/Not impl? XML Entity references
+                               "e-svg-007.svg",  // Bug/Not impl? Non-UTF8 encoding
+                               "e-svg-008.svg",  // Bug? preserveAspectRatio
+                               "e-svg-009.svg",  // Bug? preserveAspectRatio
+                               "e-svg-010.svg",  // Bug? preserveAspectRatio
+                               "e-svg-011.svg",  // Bug? preserveAspectRatio
+                               "e-svg-012.svg",  // Bug? preserveAspectRatio
+                               "e-svg-013.svg",  // Bug? preserveAspectRatio
+                               "e-svg-014.svg",  // Bug? preserveAspectRatio
+                               "e-svg-015.svg",  // Bug? preserveAspectRatio
+                               "e-svg-016.svg",  // Bug? preserveAspectRatio
+                               "e-svg-017.svg",  // Bug? viewbox
+                               "e-svg-018.svg",  // UB: Invalid id attribute
+                               "e-svg-019.svg",  // UB: Invalid id attribute
+                               "e-svg-020.svg",  // UB: FuncIRI parsing
+                               "e-svg-021.svg",  // UB: FuncIRI with invalid chars
+                               "e-svg-024.svg",  // Bug? Nested svg with rect
+                               "e-svg-028.svg",  // Not impl: overflow
+                               "e-svg-029.svg",  // Not impl: overflow
+                               "e-svg-030.svg",  // Bug? Deeply nested svg
+                               "e-svg-031.svg",  // Bug/Not impl? XML Entity references
+                               "e-svg-032.svg",  // Bug/Not impl? XML Entity references
+                               "e-svg-033.svg",  // Bug? Rect inside unknown element
+                               "e-svg-034.svg",  // Bug? Zero size
+                               "e-svg-035.svg",  // Bug? Negative size
+                               "e-svg-036.svg",  // Bug? No size
+                               "e-svg-037.svg",  // Bug? Nested svg with percent values
+                               "e-svg-039.svg",  // Bug? Nested svg with viewbox and percent values
+
+                           })),
+    testNameFromFilename);
+
 // TODO: e-switch
 // TODO: e-symbol
 // TODO(text): e-text-
