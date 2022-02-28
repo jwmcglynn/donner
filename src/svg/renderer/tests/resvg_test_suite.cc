@@ -256,9 +256,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-style",
         {
-            "a-style-002.svg",  // Bug? Comments in style
             "a-style-003.svg",  // <svg version="1.1"> disables geometry attributes in style
-            "a-style-004.svg",  // Bug? Transform in style
         })),
     testNameFromFilename);
 
@@ -332,7 +330,7 @@ INSTANTIATE_TEST_SUITE_P(
                                          // gradient instead of correcting focal point.
             "e-radialGradient-032.svg",  // UB: Negative `r`
             "e-radialGradient-039.svg",  // UB: Invalid `gradientUnits`
-            "e-radialGradient-040.svg",  // UB: Invalid `gradientTransform
+            "e-radialGradient-040.svg",  // UB: Invalid `gradientTransform`
             "e-radialGradient-043.svg",  // UB: fr=0.5 (SVG 2)
             "e-radialGradient-044.svg",  // Test suite bug? fr > default value of r (0.5) should not
                                          //  render.

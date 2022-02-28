@@ -207,6 +207,7 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
 EntityHandle SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
   Entity entity = registry.create();
   registry.emplace<TreeComponent>(entity, type, std::move(typeString));
+  registry.emplace<TransformComponent>(entity);
   return EntityHandle(registry, entity);
 }
 

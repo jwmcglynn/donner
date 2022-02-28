@@ -64,7 +64,8 @@ std::optional<Declaration> parseDeclarationGeneric(T& tokenizer, Token&& token) 
     // declarations.
     while (!tokenizer.isEOF()) {
       typename T::Item listItem = tokenizer.next();
-      if (!listItem.template isToken<Token::Semicolon>()) {
+      if (!listItem.template isToken<Token::Semicolon>() &&
+          !listItem.template isToken<Token::EofToken>()) {
         declarationInput.emplace_back(std::move(std::move(listItem.value)));
       } else {
         break;
