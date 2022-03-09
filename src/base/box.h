@@ -23,6 +23,11 @@ struct Box {
   static Box<T> CreateEmpty(const Vector2<T>& point) { return Box<T>(point, point); }
 
   /**
+   * Create a box with the given size, with the top-left corner at the origin.
+   */
+  static Box<T> WithSize(const Vector2<T>& size) { return Box<T>(Vector2<T>(), size); }
+
+  /**
    * Expand to include the provided point.
    */
   void addPoint(const Vector2<T>& point) {
@@ -44,6 +49,8 @@ struct Box {
   T height() const { return bottom_right.y - top_left.y; }
 
   Vector2<T> size() const { return Vector2<T>(width(), height()); }
+
+  bool isEmpty() const { return NearZero(width()) || NearZero(height()); }
 
   Box<T> operator-(const Vector2<T>& vec) const {
     return Box<T>(top_left - vec, bottom_right - vec);

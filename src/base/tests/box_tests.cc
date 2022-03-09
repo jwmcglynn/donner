@@ -18,6 +18,12 @@ TEST(Box, CreateEmpty) {
   EXPECT_EQ(empty.bottom_right, Vector2d(2.0, 1.0));
 }
 
+TEST(Box, WithSize) {
+  Boxd empty = Boxd::WithSize(Vector2d(4.0, 3.0));
+  EXPECT_EQ(empty.top_left, Vector2d(0, 0));
+  EXPECT_EQ(empty.bottom_right, Vector2d(4.0, 3.0));
+}
+
 TEST(Box, AddPoint) {
   Boxd box(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0));
 
@@ -51,6 +57,32 @@ TEST(Box, AddBox) {
   Boxd box(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));
   box.addBox(Boxd(Vector2d(5.0, 6.0), Vector2d(7.0, 8.0)));
   EXPECT_EQ(box, Boxd(Vector2d(1.0, 2.0), Vector2d(7.0, 8.0)));
+}
+
+TEST(Box, WidthHeight) {
+  const Boxd kEmpty = Boxd::CreateEmpty(Vector2d(2.0, 1.0));
+  EXPECT_EQ(kEmpty.width(), 0.0);
+  EXPECT_EQ(kEmpty.height(), 0.0);
+
+  const Boxd kBox1(Vector2d(1.0, 2.0), Vector2d(3.0, 5.0));
+  EXPECT_EQ(kBox1.width(), 2.0);
+  EXPECT_EQ(kBox1.height(), 3.0);
+}
+
+TEST(Box, Size) {
+  const Boxd kEmpty = Boxd::CreateEmpty(Vector2d(2.0, 1.0));
+  EXPECT_EQ(kEmpty.size(), Vector2d());
+
+  const Boxd kBox1(Vector2d(1.0, 2.0), Vector2d(3.0, 5.0));
+  EXPECT_EQ(kBox1.size(), Vector2d(2.0, 3.0));
+}
+
+TEST(Box, IsEmpty) {
+  const Boxd kEmpty = Boxd::CreateEmpty(Vector2d(2.0, 1.0));
+  EXPECT_TRUE(kEmpty.isEmpty());
+
+  const Boxd kBox1(Vector2d(1.0, 2.0), Vector2d(3.0, 5.0));
+  EXPECT_FALSE(kBox1.isEmpty());
 }
 
 // Operators
