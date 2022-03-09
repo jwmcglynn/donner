@@ -15,7 +15,8 @@ class DocumentContext {
 public:
   DocumentContext(SVGDocument& document, Registry& registry);
 
-  std::optional<Vector2d> defaultSize;
+  std::optional<Vector2i> canvasSize;
+  Entity rootEntity = entt::null;
 
   SVGDocument& document() const { return document_; }
 

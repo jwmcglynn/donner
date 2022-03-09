@@ -7,6 +7,7 @@
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/shadow_tree_component.h"
+#include "src/svg/components/tree_component.h"
 #include "src/svg/graph/recursion_guard.h"
 #include "src/svg/registry/registry.h"
 

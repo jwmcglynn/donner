@@ -104,11 +104,10 @@ extern "C" int main(int argc, char* argv[]) {
     path1->setStyle("stroke: white");
   }
 
-  const size_t kWidth = 800;
-  const size_t kHeight = 600;
+  document.setCanvasSize(800, 600);
 
   Trace traceCreateRenderer("Create Renderer");
-  RendererSkia renderer(kWidth, kHeight);
+  RendererSkia renderer;
   traceCreateRenderer.stop();
 
   {

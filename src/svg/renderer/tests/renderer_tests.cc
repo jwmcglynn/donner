@@ -54,9 +54,7 @@ protected:
   }
 
   void renderAndCompare(SVGDocument& document, const char* goldenImageFilename) {
-    // The size provided here specifies the default size, in most cases this is overridden by the
-    // SVG.
-    RendererSkia renderer(800, 600);
+    RendererSkia renderer;
     renderer.draw(document);
 
     const size_t strideInPixels = renderer.width();

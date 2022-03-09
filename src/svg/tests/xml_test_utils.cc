@@ -30,10 +30,9 @@ SVGDocument instantiateSubtree(std::string_view str) {
     return SVGDocument();
   }
 
-  // TODO: Find a better way to set the canvas size, this is needed for computed style calculation
-  // to succeed.
+  // Set the canvas size, this is needed for computed style calculation to succeed.
   auto& document = maybeResult.result();
-  document.registry().ctx<DocumentContext>().defaultSize = Vector2d(100.0, 100.0);
+  document.setCanvasSize(100, 100);
 
   return std::move(maybeResult.result());
 }

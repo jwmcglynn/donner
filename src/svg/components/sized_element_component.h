@@ -1,12 +1,12 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "src/base/box.h"
 #include "src/base/length.h"
 #include "src/base/transform.h"
 #include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/registry/registry.h"
 
@@ -61,18 +61,26 @@ struct ComputedSizedElementComponent {
   Transformd computeTransform(EntityHandle handle) const;
 };
 
+enum class InvalidSizeBehavior {
+  ZeroSize,
+  ReturnDefault,
+};
+
 struct SizedElementComponent {
   SizedElementProperties properties;
+
+  std::optional<float> intrinsicAspectRatio(Registry& registry) const;
+  Vector2i calculateDocumentSize(Registry& registry) const;
+
+  Vector2i calculateViewportScaledDocumentSize(Registry& registry, InvalidSizeBehavior behavior) const;
 
   void computeWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
                                    FontMetrics fontMetrics, std::vector<ParseError>* outWarnings);
 
-  void compute(EntityHandle handle) {
-    ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
-    style.computeProperties(handle);
+  void compute(EntityHandle handle);
 
-    return computeWithPrecomputedStyle(handle, style, FontMetrics(), nullptr);
-  }
+private:
+  Vector2d calculateRawDocumentSize(Registry& registry) const;
 };
 
 }  // namespace donner::svg

@@ -26,9 +26,6 @@ namespace donner::svg {
 
 namespace {
 
-// The maximum size supported for a rendered image. Unused in release builds.
-[[maybe_unused]] static constexpr int kMaxDimension = 8192;
-
 SkPoint toSkia(Vector2d value) {
   return SkPoint::Make(NarrowToFloat(value.x), NarrowToFloat(value.y));
 }
@@ -468,8 +465,7 @@ private:
   RendererSkia& renderer_;
 };
 
-RendererSkia::RendererSkia(int defaultWidth, int defaultHeight, bool verbose)
-    : defaultWidth_(defaultWidth), defaultHeight_(defaultHeight), verbose_(verbose) {}
+RendererSkia::RendererSkia(bool verbose) : verbose_(verbose) {}
 
 RendererSkia::~RendererSkia() {}
 
@@ -477,31 +473,14 @@ void RendererSkia::draw(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();
 
-  RendererUtils::prepareDocumentForRendering(document, Vector2d(defaultWidth_, defaultHeight_));
+  RendererUtils::prepareDocumentForRendering(document);
 
-  auto& computedSizeComponent = registry.get<ComputedSizedElementComponent>(rootEntity);
-  Vector2d renderingSize = computedSizeComponent.bounds.size();
+  const Vector2i renderingSize =
+      registry.get<SizedElementComponent>(rootEntity)
+          .calculateViewportScaledDocumentSize(registry, InvalidSizeBehavior::ReturnDefault);
 
-  if (overrideSize_) {
-    renderingSize = Vector2d(defaultWidth_, defaultHeight_);
-
-    const Vector2d origin = computedSizeComponent.bounds.top_left;
-    computedSizeComponent.bounds = Boxd(origin, origin + renderingSize);
-  } else if (renderingSize.x < 1 || renderingSize.y < 1 || renderingSize.x > kMaxDimension ||
-             renderingSize.y > kMaxDimension) {
-    // Invalid size, override so that we don't run out of memory.
-    renderingSize = Vector2d(Clamp(renderingSize.x, 1.0, static_cast<double>(kMaxDimension)),
-                             Clamp(renderingSize.y, 1.0, static_cast<double>(kMaxDimension)));
-
-    const Vector2d origin = computedSizeComponent.bounds.top_left;
-    computedSizeComponent.bounds = Boxd(origin, origin + renderingSize);
-  }
-
-  // TODO: How should we convert float to integers? Should it be rounded?
-  const int width = static_cast<int>(renderingSize.x);
-  const int height = static_cast<int>(renderingSize.y);
-
-  bitmap_.allocPixels(SkImageInfo::MakeN32(width, height, SkAlphaType::kUnpremul_SkAlphaType));
+  bitmap_.allocPixels(
+      SkImageInfo::MakeN32(renderingSize.x, renderingSize.y, SkAlphaType::kUnpremul_SkAlphaType));
   canvas_ = std::make_unique<SkCanvas>(bitmap_);
 
   draw(registry, rootEntity);
@@ -545,6 +524,10 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     }
 
     if (const auto* sizedElement = registry.try_get<ComputedSizedElementComponent>(dataEntity)) {
+      if (sizedElement->bounds.isEmpty()) {
+        return;
+      }
+
       const EntityHandle handle(registry, dataEntity);
       transform = sizedElement->computeTransform(handle) * transform;
 

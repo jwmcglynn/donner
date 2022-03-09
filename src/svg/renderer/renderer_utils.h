@@ -9,7 +9,7 @@ namespace donner::svg {
 
 class RendererUtils {
 public:
-  static void prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize,
+  static void prepareDocumentForRendering(SVGDocument& document,
                                           std::vector<ParseError>* outWarnings = nullptr);
 
   /**

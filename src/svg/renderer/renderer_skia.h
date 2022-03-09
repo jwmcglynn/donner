@@ -14,7 +14,7 @@ namespace donner::svg {
 
 class RendererSkia {
 public:
-  RendererSkia(int defaultWidth, int defaultHeight, bool verbose = false);
+  explicit RendererSkia(bool verbose = false);
   ~RendererSkia();
 
   void draw(SVGDocument& document);
@@ -25,16 +25,11 @@ public:
   int width() const { return bitmap_.width(); }
   int height() const { return bitmap_.height(); }
 
-  void overrideSize() { overrideSize_ = true; }
-
 private:
   class Impl;
 
   void draw(Registry& registry, Entity entity);
 
-  int defaultWidth_;
-  int defaultHeight_;
-  bool overrideSize_ = false;
   bool verbose_;
 
   SkAutoGraphics ag_;

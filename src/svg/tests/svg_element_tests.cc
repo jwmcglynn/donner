@@ -17,9 +17,7 @@ namespace donner::svg {
 
 class SVGElementTests : public testing::Test {
 protected:
-  SVGElementTests() {
-    document_.registry().ctx<DocumentContext>().defaultSize = Vector2d(800, 600);
-  }
+  SVGElementTests() { document_.setCanvasSize(800, 600); }
 
   SVGElement create() { return SVGUnknownElement::Create(document_, "unknown"); }
 

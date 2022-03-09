@@ -144,10 +144,12 @@ protected:
     std::cout << "[  COMPARE ] " << svgFilename.string()
               << ": ";  // No endl yet, the line will be continued
 
-    // The size provided here specifies the default size, in most cases this is overridden by the
-    // SVG.
-    RendererSkia renderer(500, 500);
-    renderer.overrideSize();
+    // The canvas size to draw into, as a recommendation instead of a strict guideline, since some
+    // SVGs may override.
+    // TODO: Add a flag to disable this behavior.
+    document.setCanvasSize(500, 500);
+
+    RendererSkia renderer;
     renderer.draw(document);
 
     const size_t strideInPixels = renderer.width();
@@ -346,7 +348,7 @@ INSTANTIATE_TEST_SUITE_P(Ellipse, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e
                          testNameFromFilename);
 
 // TODO(filter): e-fe
-// TODO(filter) e-filter
+// TODO(filter): e-filter
 
 INSTANTIATE_TEST_SUITE_P(G, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-g")),
                          testNameFromFilename);
@@ -445,37 +447,31 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-svg",
         {
-            {"e-svg-002.svg", Params::Skip()},  // Bug? xmlns validation
-            {"e-svg-003.svg", Params::Skip()},  // Bug? mixed namespaces
-            {"e-svg-004.svg", Params::Skip()},  // Bug/Not impl? XML Entity references
-            {"e-svg-005.svg", Params::Skip()},  // Bug/Not impl? XML Entity references
-            {"e-svg-007.svg", Params::Skip()},  // Bug/Not impl? Non-UTF8 encoding
-            {"e-svg-008.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-009.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-010.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-011.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-012.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-013.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-014.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-015.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-016.svg", Params::Skip()},  // Bug? preserveAspectRatio
-            {"e-svg-017.svg", Params::Skip()},  // Bug? viewbox
-            {"e-svg-018.svg", Params::Skip()},  // UB: Invalid id attribute
-            {"e-svg-019.svg", Params::Skip()},  // UB: Invalid id attribute
-            {"e-svg-020.svg", Params::Skip()},  // UB: FuncIRI parsing
-            {"e-svg-021.svg", Params::Skip()},  // UB: FuncIRI with invalid chars
-            {"e-svg-024.svg", Params::Skip()},  // Bug? Nested svg with rect
-            {"e-svg-028.svg", Params::Skip()},  // Not impl: overflow
-            {"e-svg-029.svg", Params::Skip()},  // Not impl: overflow
-            {"e-svg-030.svg", Params::Skip()},  // Bug? Deeply nested svg
-            {"e-svg-031.svg", Params::Skip()},  // Bug/Not impl? XML Entity references
-            {"e-svg-032.svg", Params::Skip()},  // Bug/Not impl? XML Entity references
-            {"e-svg-033.svg", Params::Skip()},  // Bug? Rect inside unknown element
-            {"e-svg-034.svg", Params::Skip()},  // Bug? Zero size
-            {"e-svg-035.svg", Params::Skip()},  // Bug? Negative size
-            {"e-svg-036.svg", Params::Skip()},  // Bug? No size
-            {"e-svg-037.svg", Params::Skip()},  // Bug? Nested svg with percent values
-            {"e-svg-039.svg", Params::Skip()},  // Bug? Nested svg with viewbox and percent values
+            {"e-svg-002.svg", Params::Skip()},                // Bug? xmlns validation
+            {"e-svg-003.svg", Params::Skip()},                // Bug? mixed namespaces
+            {"e-svg-004.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
+            {"e-svg-005.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
+            {"e-svg-007.svg", Params::Skip()},                // Bug/Not impl? Non-UTF8 encoding
+            {"e-svg-008.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-009.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-010.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-011.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-012.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-013.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-014.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-015.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-016.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-017.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
+            {"e-svg-018.svg", Params::Skip()},                // UB: Invalid id attribute
+            {"e-svg-019.svg", Params::Skip()},                // UB: Invalid id attribute
+            {"e-svg-020.svg", Params::Skip()},                // UB: FuncIRI parsing
+            {"e-svg-021.svg", Params::Skip()},                // UB: FuncIRI with invalid chars
+            {"e-svg-028.svg", Params::Skip()},                // Not impl: overflow
+            {"e-svg-029.svg", Params::Skip()},                // Not impl: overflow
+            {"e-svg-031.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
+            {"e-svg-032.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
+            {"e-svg-033.svg", Params::Skip()},                // Bug? Rect inside unknown element
+            {"e-svg-036.svg", Params::Skip()},  // Not impl: Computed bounds from content
 
         })),
     testNameFromFilename);

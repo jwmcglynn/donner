@@ -14,15 +14,17 @@ public:
 
   Registry& registry() { return *registry_; }
   const Registry& registry() const { return *registry_; }
-  Entity rootEntity() const { return svgElement_; }
+  Entity rootEntity() const;
 
   SVGSVGElement svgElement();
+
+  void setCanvasSize(int width, int height);
+  void useAutomaticCanvasSize();
 
   bool operator==(const SVGDocument& other) const;
 
 private:
   std::shared_ptr<Registry> registry_;
-  Entity svgElement_;
 };
 
 }  // namespace donner::svg

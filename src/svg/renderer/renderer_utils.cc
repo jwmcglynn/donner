@@ -10,11 +10,9 @@
 
 namespace donner::svg {
 
-void RendererUtils::prepareDocumentForRendering(SVGDocument& document, Vector2d defaultSize,
+void RendererUtils::prepareDocumentForRendering(SVGDocument& document,
                                                 std::vector<ParseError>* outWarnings) {
   Registry& registry = document.registry();
-  registry.ctx<DocumentContext>().defaultSize = defaultSize;
-
   registry.ctx_or_set<RenderingContext>(registry).instantiateRenderTree(outWarnings);
 }
 

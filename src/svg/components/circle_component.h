@@ -38,9 +38,10 @@ struct CircleComponent {
     const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
         properties, style.properties().unparsedProperties, outWarnings);
 
-    const Vector2d center(
-        computedCircle.properties.cx.getRequired().toPixels(style.viewbox(), fontMetrics),
-        computedCircle.properties.cy.getRequired().toPixels(style.viewbox(), fontMetrics));
+    const Vector2d center(computedCircle.properties.cx.getRequired().toPixels(
+                              style.viewbox(), fontMetrics, Lengthd::Extent::X),
+                          computedCircle.properties.cy.getRequired().toPixels(
+                              style.viewbox(), fontMetrics, Lengthd::Extent::Y));
     const double radius =
         computedCircle.properties.r.getRequired().toPixels(style.viewbox(), fontMetrics);
 

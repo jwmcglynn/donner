@@ -97,12 +97,14 @@ void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
   const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(
       properties, style.properties().unparsedProperties, outWarnings);
 
-  const Vector2d pos(
-      computedRect.properties.x.getRequired().toPixels(style.viewbox(), fontMetrics),
-      computedRect.properties.y.getRequired().toPixels(style.viewbox(), fontMetrics));
-  const Vector2d size(
-      computedRect.properties.width.getRequired().toPixels(style.viewbox(), fontMetrics),
-      computedRect.properties.height.getRequired().toPixels(style.viewbox(), fontMetrics));
+  const Vector2d pos(computedRect.properties.x.getRequired().toPixels(style.viewbox(), fontMetrics,
+                                                                      Lengthd::Extent::X),
+                     computedRect.properties.y.getRequired().toPixels(style.viewbox(), fontMetrics,
+                                                                      Lengthd::Extent::Y));
+  const Vector2d size(computedRect.properties.width.getRequired().toPixels(
+                          style.viewbox(), fontMetrics, Lengthd::Extent::X),
+                      computedRect.properties.height.getRequired().toPixels(
+                          style.viewbox(), fontMetrics, Lengthd::Extent::Y));
 
   if (size.x > 0.0 && size.y > 0.0) {
     if (computedRect.properties.rx.hasValue() || computedRect.properties.ry.hasValue()) {

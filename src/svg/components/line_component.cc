@@ -1,5 +1,7 @@
 #include "src/svg/components/line_component.h"
 
+#include "src/svg/properties/presentation_attribute_parsing.h"
+
 namespace donner::svg {
 
 template <>

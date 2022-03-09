@@ -66,6 +66,11 @@ struct Length {
     Mixed  //!< Use diagonal extent of viewbox.
   };
 
+  bool isAbsoluteSize() const {
+    return unit == Unit::None || unit == Unit::Cm || unit == Unit::Mm || unit == Unit::Q ||
+           unit == Unit::In || unit == Unit::Pc || unit == Unit::Pt || unit == Unit::Px;
+  }
+
   /**
    * Convert the length to pixels, following the ratios at
    * https://www.w3.org/TR/css-values/#absolute-lengths and

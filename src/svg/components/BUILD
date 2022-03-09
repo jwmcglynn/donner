@@ -35,6 +35,7 @@ cc_library(
     name = "components",
     srcs = [
         "circle_component.cc",
+        "computed_style_component.cc",
         "ellipse_component.cc",
         "gradient_component.cc",
         "line_component.cc",
