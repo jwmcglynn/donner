@@ -20,6 +20,11 @@ namespace {
 // Circle rendering is slightly different since Donner uses four custom curves instead of arcTo.
 // Allow a small number of mismatched pixels to accomodate.
 static constexpr int kDefaultMismatchedPixels = 100;
+
+// For most tests, a threshold of 0.01 is sufficient, but some specific tests have slightly
+// different anti-aliasing artifacts, so a larger threshold is required:
+// - a_transform_007 - 0.05 to pass
+// - e_line_001 - 0.02 to pass
 static constexpr float kDefaultThreshold = 0.01f;
 
 static const std::filesystem::path kSvgDir = "external/resvg-test-suite/svg/";
@@ -171,10 +176,6 @@ protected:
     const Params params = GetParam().params;
 
     pixelmatch::Options options;
-    // For most tests, a threshold of 0.01 is sufficient, but some specific tests have slightly
-    // different anti-aliasing artifacts, so a larger threshold is required:
-    // - a_transform_007 - 0.05 to pass
-    // - e_line_001 - 0.02 to pass
     options.threshold = params.threshold;
     const int mismatchedPixels = pixelmatch::pixelmatch(
         goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
@@ -289,7 +290,8 @@ INSTANTIATE_TEST_SUITE_P(
                                                              // (font-size="20" not impl)
             {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
             {"a-stroke-dasharray-009.svg", Params::Skip()},  // UB (negative sum)
-            {"a-stroke-dasharray-013.svg", Params::Skip()},  // Bug? Hairline rect mismatched pixels
+            {"a-stroke-dasharray-013.svg",
+             Params::WithThreshold(0.13f)},  // Larger threshold due to anti-aliasing artifacts.
             {"a-stroke-dashoffset-004.svg", Params::Skip()},  // Not impl: dashoffset "em" units
             {"a-stroke-linejoin-004.svg",
              Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
