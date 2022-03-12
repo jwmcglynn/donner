@@ -224,7 +224,15 @@ TEST_P(ResvgTestSuite, Compare) {
 // TODO(text): a-alignment-baseline
 // TODO(text): a-baseline-shift
 // TODO: a-clip
-// TODO: a-color
+
+INSTANTIATE_TEST_SUITE_P(Color, ResvgTestSuite,
+                         ValuesIn(getTestsWithPrefix("a-color",  //
+                                                     {
+                                                         {"a-color-interpolation-filters-001.svg",
+                                                          Params::Skip()},  // Not impl: Filters
+                                                     })),
+                         testNameFromFilename);
+
 // TODO: a-direction
 
 INSTANTIATE_TEST_SUITE_P(
