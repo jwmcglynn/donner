@@ -7,6 +7,76 @@
 
 namespace donner::svg {
 
+/**
+ * The parsed result of the CSS 'display' property, see
+ * https://www.w3.org/TR/CSS2/visuren.html#propdef-display.
+ *
+ * Note that in SVG2, there are only two distinct behaviors, 'none', and everything else rendered as
+ * normal, see https://www.w3.org/TR/SVG2/render.html#VisibilityControl
+ *
+ * > Elements that have any other display value than none are rendered as normal.
+ *
+ */
+enum class Display {
+  Inline,  //!< Inline is the default value.
+  Block,
+  ListItem,
+  InlineBlock,
+  Table,
+  InlineTable,
+  TableRowGroup,
+  TableHeaderGroup,
+  TableFooterGroup,
+  TableRow,
+  TableColumnGroup,
+  TableColumn,
+  TableCell,
+  TableCaption,
+  None,
+};
+
+inline std::ostream& operator<<(std::ostream& os, Display value) {
+  switch (value) {
+    case Display::Inline: return os << "inline";
+    case Display::Block: return os << "block";
+    case Display::ListItem: return os << "list-item";
+    case Display::InlineBlock: return os << "inline-block";
+    case Display::Table: return os << "table";
+    case Display::InlineTable: return os << "inline-table";
+    case Display::TableRowGroup: return os << "table-row-group";
+    case Display::TableHeaderGroup: return os << "table-header-group";
+    case Display::TableFooterGroup: return os << "table-footer-group";
+    case Display::TableRow: return os << "table-row";
+    case Display::TableColumnGroup: return os << "table-column-group";
+    case Display::TableColumn: return os << "table-column";
+    case Display::TableCell: return os << "table-cell";
+    case Display::TableCaption: return os << "table-caption";
+    case Display::None: return os << "none";
+  }
+
+  UTILS_UNREACHABLE();
+}
+
+/**
+ * The parsed result of the 'visibility' property, see:
+ * https://www.w3.org/TR/CSS2/visufx.html#propdef-visibility
+ */
+enum class Visibility {
+  Visible,  //!< Visible is the default value.
+  Hidden,
+  Collapse,
+};
+
+inline std::ostream& operator<<(std::ostream& os, Visibility value) {
+  switch (value) {
+    case Visibility::Visible: return os << "visible";
+    case Visibility::Hidden: return os << "hidden";
+    case Visibility::Collapse: return os << "collapse";
+  }
+
+  UTILS_UNREACHABLE();
+}
+
 enum class FillRule { NonZero, EvenOdd };
 
 inline std::ostream& operator<<(std::ostream& os, FillRule value) {

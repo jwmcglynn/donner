@@ -226,7 +226,31 @@ TEST_P(ResvgTestSuite, Compare) {
 // TODO: a-clip
 // TODO: a-color
 // TODO: a-direction
-// TODO: a-display
+
+INSTANTIATE_TEST_SUITE_P(
+    Display, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix("a-display",  //
+                                {
+                                    {"a-display-004.svg", Params::Skip()},  // Not impl: <clipPath>
+                                    {"a-display-005.svg", Params::Skip()},  // Not impl: <tspan>
+                                    {"a-display-006.svg", Params::Skip()},  // Not impl: <tref>
+                                    {"a-display-008.svg", Params::Skip()},  // Not impl: <clipPath>
+                                    {"a-display-009.svg", Params::Skip()},  // Not impl: <tspan>
+                                })),
+    testNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Visibility, ResvgTestSuite,
+                         ValuesIn(getTestsWithPrefix(
+                             "a-visibility",  //
+                             {
+                                 {"a-visibility-003.svg", Params::Skip()},  // Not impl: <tspan>
+                                 {"a-visibility-004.svg", Params::Skip()},  // Not impl: <tspan>
+                                 {"a-visibility-005.svg", Params::Skip()},  // Not impl: <clipPath>
+                                 {"a-visibility-006.svg", Params::Skip()},  // Not impl: <clipPath>
+                                 {"a-visibility-007.svg", Params::Skip()},  // Not impl: <clipPath>
+                             })),
+                         testNameFromFilename);
+
 // TODO: a-dominant-baseline
 // TODO: a-enable-background
 

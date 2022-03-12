@@ -22,7 +22,10 @@ class PropertyRegistry {
 public:
   Property<css::Color, PropertyCascade::Inherit> color{
       "color", []() -> std::optional<css::Color> { return css::Color(css::RGBA(0, 0, 0, 0xFF)); }};
+  Property<Display> display{"display", []() -> std::optional<Display> { return Display::Inline; }};
   Property<double> opacity{"opacity", []() -> std::optional<double> { return 1.0; }};
+  Property<Visibility, PropertyCascade::Inherit> visibility{
+      "visibility", []() -> std::optional<Visibility> { return Visibility::Visible; }};
 
   // Fill
   Property<PaintServer, PropertyCascade::Inherit> fill{
@@ -59,9 +62,9 @@ public:
    * Return a tuple of all properties within the PropertyRegistry.
    */
   auto allProperties() {
-    return std::forward_as_tuple(color, opacity, fill, fillRule, fillOpacity, stroke, strokeOpacity,
-                                 strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
-                                 strokeDasharray, strokeDashoffset);
+    return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
+                                 stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
+                                 strokeMiterlimit, strokeDasharray, strokeDashoffset);
   }
 
   static constexpr size_t numProperties() {

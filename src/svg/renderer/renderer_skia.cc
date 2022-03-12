@@ -461,6 +461,25 @@ public:
     }
   }
 
+  struct AutoRestore {
+    explicit AutoRestore(RendererSkia& renderer) : renderer_(renderer) {}
+    ~AutoRestore() {
+      if (restoreCount_) {
+        renderer_.canvas_->restoreToCount(restoreCount_.value());
+      }
+    }
+
+    void push(int count) {
+      if (!restoreCount_) {
+        restoreCount_ = count;
+      }
+    }
+
+  private:
+    std::optional<int> restoreCount_;
+    RendererSkia& renderer_;
+  };
+
 private:
   RendererSkia& renderer_;
 };
@@ -504,7 +523,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
     const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : treeEntity;
-    std::optional<int> restoreCount;
+    Impl::AutoRestore autoRestore(*this);
     bool traverseChildren = true;
 
     if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
@@ -532,11 +551,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
       transform = sizedElement->computeTransform(handle) * transform;
 
       if (auto clipRect = sizedElement->clipRect(handle)) {
-        const int count = canvas_->save();
-        if (!restoreCount) {
-          restoreCount = count;
-        }
-
+        autoRestore.push(canvas_->save());
         canvas_->clipRect(toSkia(clipRect.value()));
       }
     }
@@ -549,22 +564,26 @@ void RendererSkia::draw(Registry& registry, Entity root) {
 
     const ComputedStyleComponent& styleComponent =
         registry.get<ComputedStyleComponent>(styleEntity);
+    const auto& properties = styleComponent.properties();
 
-    // Create a new layer if opacity is less than 1.
-    if (styleComponent.properties().opacity.get().value() < 1.0) {
-      SkPaint opacityPaint;
-      opacityPaint.setAlphaf(NarrowToFloat(styleComponent.properties().opacity.get().value()));
-
-      // TODO: Calculate hint for size of layer.
-      const int count = canvas_->saveLayer(nullptr, &opacityPaint);
-      if (!restoreCount) {
-        restoreCount = count;
-      }
+    if (properties.display.getRequired() == Display::None) {
+      return;
     }
 
-    if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
-      impl.drawPath(EntityHandle(registry, dataEntity), *path, styleComponent.properties(),
-                    styleComponent.viewbox(), FontMetrics());
+    // Create a new layer if opacity is less than 1.
+    if (properties.opacity.getRequired() < 1.0) {
+      SkPaint opacityPaint;
+      opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
+
+      // TODO: Calculate hint for size of layer.
+      autoRestore.push(canvas_->saveLayer(nullptr, &opacityPaint));
+    }
+
+    if (properties.visibility.getRequired() == Visibility::Visible) {
+      if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
+        impl.drawPath(EntityHandle(registry, dataEntity), *path, styleComponent.properties(),
+                      styleComponent.viewbox(), FontMetrics());
+      }
     }
 
     if (traverseChildren) {
@@ -573,10 +592,6 @@ void RendererSkia::draw(Registry& registry, Entity root) {
            cur = registry.get<TreeComponent>(cur).nextSibling()) {
         drawEntity(transform, cur);
       }
-    }
-
-    if (restoreCount) {
-      canvas_->restoreToCount(restoreCount.value());
     }
   };
 

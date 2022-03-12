@@ -32,6 +32,74 @@ ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components)
   return err;
 }
 
+ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("inline")) {
+        return Display::Inline;
+      } else if (value.equalsLowercase("block")) {
+        return Display::Block;
+      } else if (value.equalsLowercase("list-item")) {
+        return Display::ListItem;
+      } else if (value.equalsLowercase("inline-block")) {
+        return Display::InlineBlock;
+      } else if (value.equalsLowercase("table")) {
+        return Display::Table;
+      } else if (value.equalsLowercase("inline-table")) {
+        return Display::InlineTable;
+      } else if (value.equalsLowercase("table-row-group")) {
+        return Display::TableRowGroup;
+      } else if (value.equalsLowercase("table-header-group")) {
+        return Display::TableHeaderGroup;
+      } else if (value.equalsLowercase("table-footer-group")) {
+        return Display::TableFooterGroup;
+      } else if (value.equalsLowercase("table-row")) {
+        return Display::TableRow;
+      } else if (value.equalsLowercase("table-column-group")) {
+        return Display::TableColumnGroup;
+      } else if (value.equalsLowercase("table-column")) {
+        return Display::TableColumn;
+      } else if (value.equalsLowercase("table-cell")) {
+        return Display::TableCell;
+      } else if (value.equalsLowercase("table-caption")) {
+        return Display::TableCaption;
+      } else if (value.equalsLowercase("none")) {
+        return Display::None;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid display value";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
+ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("visible")) {
+        return Visibility::Visible;
+      } else if (value.equalsLowercase("hidden")) {
+        return Visibility::Hidden;
+      } else if (value.equalsLowercase("collapse")) {
+        return Visibility::Collapse;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid display value";
+  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  return err;
+}
+
 ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
   if (components.empty()) {
     ParseError err;
@@ -246,7 +314,7 @@ static constexpr frozen::unordered_set<frozen::string, 14> kValidPresentationAtt
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 13> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 15> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        auto maybeError = Parse(
@@ -268,12 +336,26 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 13> kPro
 
        return maybeError;
      }},  //
+    {"display",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseDisplay(params.components()); },
+           &registry.display);
+     }},  //
     {"opacity",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        return Parse(
            params,
            [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
            &registry.opacity);
+     }},  //
+    {"visibility",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseVisibility(params.components()); },
+           &registry.visibility);
      }},  //
     {"fill",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
