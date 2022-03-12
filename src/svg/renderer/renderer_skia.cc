@@ -504,7 +504,7 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
     const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : treeEntity;
-    bool shouldRestore = false;
+    std::optional<int> restoreCount;
     bool traverseChildren = true;
 
     if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
@@ -532,8 +532,10 @@ void RendererSkia::draw(Registry& registry, Entity root) {
       transform = sizedElement->computeTransform(handle) * transform;
 
       if (auto clipRect = sizedElement->clipRect(handle)) {
-        canvas_->save();
-        shouldRestore = true;
+        const int count = canvas_->save();
+        if (!restoreCount) {
+          restoreCount = count;
+        }
 
         canvas_->clipRect(toSkia(clipRect.value()));
       }
@@ -548,6 +550,18 @@ void RendererSkia::draw(Registry& registry, Entity root) {
     const ComputedStyleComponent& styleComponent =
         registry.get<ComputedStyleComponent>(styleEntity);
 
+    // Create a new layer if opacity is less than 1.
+    if (styleComponent.properties().opacity.get().value() < 1.0) {
+      SkPaint opacityPaint;
+      opacityPaint.setAlphaf(NarrowToFloat(styleComponent.properties().opacity.get().value()));
+
+      // TODO: Calculate hint for size of layer.
+      const int count = canvas_->saveLayer(nullptr, &opacityPaint);
+      if (!restoreCount) {
+        restoreCount = count;
+      }
+    }
+
     if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
       impl.drawPath(EntityHandle(registry, dataEntity), *path, styleComponent.properties(),
                     styleComponent.viewbox(), FontMetrics());
@@ -561,8 +575,8 @@ void RendererSkia::draw(Registry& registry, Entity root) {
       }
     }
 
-    if (shouldRestore) {
-      canvas_->restore();
+    if (restoreCount) {
+      canvas_->restoreToCount(restoreCount.value());
     }
   };
 

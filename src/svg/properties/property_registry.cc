@@ -246,7 +246,7 @@ static constexpr frozen::unordered_set<frozen::string, 14> kValidPresentationAtt
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 12> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 13> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        auto maybeError = Parse(
@@ -267,6 +267,13 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 12> kPro
        }
 
        return maybeError;
+     }},  //
+    {"opacity",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
+           &registry.opacity);
      }},  //
     {"fill",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {

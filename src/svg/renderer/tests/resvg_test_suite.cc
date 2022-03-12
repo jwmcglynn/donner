@@ -242,7 +242,6 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-fill-031.svg", Params::Skip()},          // Not impl: <text>
             {"a-fill-032.svg", Params::Skip()},          // Not impl: <text>
             {"a-fill-033.svg", Params::Skip()},          // Not impl: <pattern>, <text>
-            {"a-fill-opacity-002.svg", Params::Skip()},  // Not impl: "opacity"
             {"a-fill-opacity-004.svg", Params::Skip()},  // Not impl: `fill-opacity` affects pattern
             {"a-fill-opacity-006.svg", Params::Skip()},  // Not impl: <text>
         })),
@@ -259,7 +258,19 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(marker): a-marker
 // TODO(filter): a-mark
 // TODO(filter): a-mix-blend-mode
-// TODO(opacity): a-opacity
+
+INSTANTIATE_TEST_SUITE_P(
+    Opacity, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix(
+        "a-opacity",
+        {
+            {"a-opacity-002.svg", Params::Skip()},  // Not impl: <clipPath>
+            {"a-opacity-005.svg",
+             Params::Skip()},  // Changed in css-color-4 to allow percentage in <alpha-value>, see
+                               // https://www.w3.org/TR/css-color/#transparency
+        })),
+    testNameFromFilename);
+
 // TODO(text): a-overflow
 
 INSTANTIATE_TEST_SUITE_P(Shape, ResvgTestSuite,
@@ -296,7 +307,6 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-linejoin-004.svg",
              Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
-            {"a-stroke-opacity-002.svg", Params::Skip()},   // Not impl: "opacity"
             {"a-stroke-opacity-004.svg", Params::Skip()},   // Not impl: <pattern>
             {"a-stroke-opacity-006.svg", Params::Skip()},   // Not impl: <text>
             {"a-stroke-width-004.svg", Params::Skip()},     // UB: Nothing should be renderered
@@ -489,10 +499,7 @@ INSTANTIATE_TEST_SUITE_P(Use, ResvgTestSuite,
                              "e-use",
                              {
                                  {"e-use-008.svg", Params::Skip()},  // Not impl: External file.
-                                 {"e-use-015.svg", Params::Skip()},  // Not impl: opacity attribute.
                                  {"e-use-019.svg", Params::Skip()},  // Not impl: display attribute.
-                                 {"e-use-025.svg", Params::Skip()},  // Not impl: opacity attribute.
-                                 {"e-use-026.svg", Params::Skip()},  // Not impl: opacity attribute.
                              })),
                          testNameFromFilename);
 
