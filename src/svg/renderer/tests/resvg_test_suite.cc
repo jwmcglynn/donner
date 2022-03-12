@@ -247,18 +247,6 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     testNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Visibility, ResvgTestSuite,
-                         ValuesIn(getTestsWithPrefix(
-                             "a-visibility",  //
-                             {
-                                 {"a-visibility-003.svg", Params::Skip()},  // Not impl: <tspan>
-                                 {"a-visibility-004.svg", Params::Skip()},  // Not impl: <tspan>
-                                 {"a-visibility-005.svg", Params::Skip()},  // Not impl: <clipPath>
-                                 {"a-visibility-006.svg", Params::Skip()},  // Not impl: <clipPath>
-                                 {"a-visibility-007.svg", Params::Skip()},  // Not impl: <clipPath>
-                             })),
-                         testNameFromFilename);
-
 // TODO: a-dominant-baseline
 // TODO: a-enable-background
 
@@ -369,7 +357,19 @@ INSTANTIATE_TEST_SUITE_P(
     testNameFromFilename);
 
 // TODO(text): a-unicode
-// TODO: a-visibility
+
+INSTANTIATE_TEST_SUITE_P(Visibility, ResvgTestSuite,
+                         ValuesIn(getTestsWithPrefix(
+                             "a-visibility",  //
+                             {
+                                 {"a-visibility-003.svg", Params::Skip()},  // Not impl: <tspan>
+                                 {"a-visibility-004.svg", Params::Skip()},  // Not impl: <tspan>
+                                 {"a-visibility-005.svg", Params::Skip()},  // Not impl: <clipPath>
+                                 {"a-visibility-006.svg", Params::Skip()},  // Not impl: <clipPath>
+                                 {"a-visibility-007.svg", Params::Skip()},  // Not impl: <clipPath>
+                             })),
+                         testNameFromFilename);
+
 // TODO(text): a-word-spacing
 // TODO(text): a-writing-mode
 
@@ -526,13 +526,12 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(text): e-textPath
 // TODO(text): e-tspan
 
-INSTANTIATE_TEST_SUITE_P(Use, ResvgTestSuite,
-                         ValuesIn(getTestsWithPrefix(
-                             "e-use",
-                             {
-                                 {"e-use-008.svg", Params::Skip()},  // Not impl: External file.
-                                 {"e-use-019.svg", Params::Skip()},  // Not impl: display attribute.
-                             })),
-                         testNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Use, ResvgTestSuite,
+    ValuesIn(getTestsWithPrefix("e-use",
+                                {
+                                    {"e-use-008.svg", Params::Skip()},  // Not impl: External file.
+                                })),
+    testNameFromFilename);
 
 }  // namespace donner::svg
