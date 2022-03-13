@@ -17,6 +17,8 @@ public:
     return reference_.resolve(registry);
   }
 
+  bool setsContextColors = false;
+
 private:
   Reference reference_;
 };

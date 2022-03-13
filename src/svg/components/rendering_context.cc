@@ -140,6 +140,7 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
     bool traverseChildren = true;
     std::optional<Boxd> clipRect;
     int layerDepth = 0;
+    std::optional<ContextPaintServers> savedContextPaintServers;
 
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable) {
@@ -204,6 +205,14 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
       instance.resolvedStroke = ResolvePaint(dataHandle, stroke.value(), contextPaintServers);
     }
 
+    // Save the current context paint servers if this is a shadow tree host.
+    if (const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
+        shadowTree && shadowTree->setsContextColors) {
+      savedContextPaintServers = contextPaintServers;
+      contextPaintServers.contextFill = instance.resolvedFill;
+      contextPaintServers.contextStroke = instance.resolvedStroke;
+    }
+
     if (traverseChildren) {
       const TreeComponent& tree = registry_.get<TreeComponent>(treeEntity);
       for (auto cur = tree.firstChild(); cur != entt::null;
@@ -212,8 +221,13 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
       }
     }
 
+    // Restore state after rendering.
     if (layerDepth > 0) {
       restorePopDepth += layerDepth;
+    }
+
+    if (savedContextPaintServers) {
+      contextPaintServers = savedContextPaintServers.value();
     }
   };
 

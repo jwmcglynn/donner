@@ -175,16 +175,6 @@ TEST_F(RendererTests, Lion) {
   renderAndCompare(document, "src/svg/renderer/testdata/golden/lion.png");
 }
 
-TEST_F(RendererTests, FillRule001) {
-  SVGDocument document = loadSVG("src/svg/renderer/testdata/a-fill-rule-001.svg");
-  renderAndCompare(document, "src/svg/renderer/testdata/golden/a-fill-rule-001.png");
-}
-
-TEST_F(RendererTests, FillRule002) {
-  SVGDocument document = loadSVG("src/svg/renderer/testdata/a-fill-rule-002.svg");
-  renderAndCompare(document, "src/svg/renderer/testdata/golden/a-fill-rule-002.png");
-}
-
 TEST_F(RendererTests, StrokingComplex) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/stroking_complex.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/stroking_complex.png");
@@ -233,6 +223,31 @@ TEST_F(RendererTests, PokerChips) {
 TEST_F(RendererTests, QuadBezier) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/quadbezier1.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/quadbezier1.png");
+}
+
+TEST_F(RendererTests, SVG2_e_use_001) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/svg2-e-use-001.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/svg2-e-use-001.png");
+}
+
+TEST_F(RendererTests, SVG2_e_use_002) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/svg2-e-use-002.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/svg2-e-use-002.png");
+}
+
+TEST_F(RendererTests, SVG2_e_use_003) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/svg2-e-use-003.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/svg2-e-use-003.png");
+}
+
+TEST_F(RendererTests, SVG2_e_use_004) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/svg2-e-use-004.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/svg2-e-use-004.png");
+}
+
+TEST_F(RendererTests, SVG2_e_use_005) {
+  SVGDocument document = loadSVG("src/svg/renderer/testdata/svg2-e-use-005.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/svg2-e-use-005.png");
 }
 
 }  // namespace donner::svg

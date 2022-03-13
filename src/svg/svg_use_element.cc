@@ -13,7 +13,9 @@ SVGUseElement SVGUseElement::Create(SVGDocument& document) {
 }
 
 void SVGUseElement::setHref(RcString value) {
-  handle_.emplace_or_replace<ShadowTreeComponent>(value);
+  auto& shadowTree = handle_.emplace_or_replace<ShadowTreeComponent>(value);
+  shadowTree.setsContextColors = true;
+
   // Force the shadow tree to be regenerated.
   handle_.remove<ComputedShadowTreeComponent>();
 }
