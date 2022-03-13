@@ -154,7 +154,8 @@ protected:
     // TODO: Add a flag to disable this behavior.
     document.setCanvasSize(500, 500);
 
-    RendererSkia renderer;
+    // TODO: Do a re-render when there's a failure and enable verbose output.
+    RendererSkia renderer(/*verbose*/ false);
     renderer.draw(document);
 
     const size_t strideInPixels = renderer.width();

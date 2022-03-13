@@ -76,7 +76,7 @@ TEST(XmlParser, Warning) {
   std::vector<ParseError> warnings;
   auto documentResult = XMLParser::ParseSVG(spanFromString(simpleXml));
   ASSERT_THAT(documentResult, NoParseError());
-  RendererUtils::prepareDocumentForRendering(documentResult.result(), &warnings);
+  RendererUtils::prepareDocumentForRendering(documentResult.result(), /*verbose*/ false, &warnings);
   // TODO: Map this offset back to absolute values (2, 24)
   EXPECT_THAT(warnings,
               ElementsAre(ParseWarningIs(0, 13, "Failed to parse number: Unexpected character")));

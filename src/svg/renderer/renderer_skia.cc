@@ -439,25 +439,6 @@ public:
     }
   }
 
-  struct AutoRestore {
-    explicit AutoRestore(RendererSkia& renderer) : renderer_(renderer) {}
-    ~AutoRestore() {
-      if (restoreCount_) {
-        renderer_.canvas_->restoreToCount(restoreCount_.value());
-      }
-    }
-
-    void push(int count) {
-      if (!restoreCount_) {
-        restoreCount_ = count;
-      }
-    }
-
-  private:
-    std::optional<int> restoreCount_;
-    RendererSkia& renderer_;
-  };
-
 private:
   RendererSkia& renderer_;
 };
@@ -470,7 +451,8 @@ void RendererSkia::draw(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();
 
-  RendererUtils::prepareDocumentForRendering(document);
+  // TODO: Plumb outWarnings.
+  RendererUtils::prepareDocumentForRendering(document, verbose_);
 
   const Vector2i renderingSize =
       registry.get<SizedElementComponent>(rootEntity)
@@ -495,6 +477,7 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 
 void RendererSkia::draw(Registry& registry, Entity root) {
   Impl impl(*this);
+  std::vector<SubtreeInfo> subtreeMarkers;
 
   for (auto view = registry.view<RenderingInstanceComponent>(); auto entity : view) {
     auto [instance] = view.get(entity);
@@ -503,11 +486,6 @@ void RendererSkia::draw(Registry& registry, Entity root) {
       std::cout << "Rendering "
                 << TypeToString(registry.get<TreeComponent>(instance.dataEntity).type()) << " "
                 << entity << (instance.isShadow(registry) ? " (shadow)" : "") << std::endl;
-    }
-
-    // SkCanvas also has restoreToCount, but it just calls restore in a loop.
-    for (int i = 0; i < instance.restorePopDepth; ++i) {
-      canvas_->restore();
     }
 
     if (instance.clipRect) {
@@ -538,6 +516,20 @@ void RendererSkia::draw(Registry& registry, Entity root) {
       if (const auto* path = instance.dataHandle(registry).try_get<ComputedPathComponent>()) {
         impl.drawPath(instance.dataHandle(registry), instance, *path, styleComponent.properties(),
                       styleComponent.viewbox(), FontMetrics());
+      }
+    }
+
+    if (instance.subtreeInfo) {
+      subtreeMarkers.push_back(instance.subtreeInfo.value());
+    }
+
+    while (!subtreeMarkers.empty() && subtreeMarkers.back().lastRenderedEntity == entity) {
+      const SubtreeInfo subtreeInfo = subtreeMarkers.back();
+      subtreeMarkers.pop_back();
+
+      // SkCanvas also has restoreToCount, but it just calls restore in a loop.
+      for (int i = 0; i < subtreeInfo.restorePopDepth; ++i) {
+        canvas_->restore();
       }
     }
   }

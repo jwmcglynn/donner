@@ -7,6 +7,7 @@
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/ellipse_component.h"
 #include "src/svg/components/gradient_component.h"
+#include "src/svg/components/id_component.h"
 #include "src/svg/components/line_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/poly_component.h"
@@ -31,108 +32,23 @@ struct ContextPaintServers {
   ResolvedPaintServer contextStroke = PaintServer::None();
 };
 
-ResolvedPaintServer ResolvePaint(EntityHandle dataHandle, const PaintServer& paint,
-                                 const ContextPaintServers& contextPaintServers) {
-  if (paint.is<PaintServer::Solid>()) {
-    return paint.get<PaintServer::Solid>();
-  } else if (paint.is<PaintServer::ElementReference>()) {
-    const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
-
-    if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry())) {
-      return PaintResolvedReference{resolvedRef.value(), ref.fallback};
-    } else if (ref.fallback) {
-      return PaintServer::Solid(ref.fallback.value());
-    } else {
-      return PaintServer::None();
-    }
-  } else if (paint.is<PaintServer::ContextFill>()) {
-    return contextPaintServers.contextFill;
-  } else if (paint.is<PaintServer::ContextStroke>()) {
-    return contextPaintServers.contextStroke;
-  } else {
-    return PaintServer::None();
-  }
+bool IsValidPaintServer(EntityHandle handle) {
+  return handle.any_of<ComputedGradientComponent>();
 }
 
-}  // namespace
+class RenderingContextImpl {
+public:
+  explicit RenderingContextImpl(Registry& registry, bool verbose)
+      : registry_(registry), verbose_(verbose) {}
 
-RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {
-  // Set up render tree signals.
-  {
-    entt::sink sink(evaluateConditionalComponents_);
-    sink.connect<&EvaluateConditionalGradientShadowTrees>();
-  }
-
-  {
-    entt::sink sink(instantiateComputedComponents_);
-    sink.connect<&InstantiateComputedCircleComponents>();
-    sink.connect<&InstantiateComputedEllipseComponents>();
-    sink.connect<&InstantiateComputedPathComponents>();
-    sink.connect<&InstantiateComputedRectComponents>();
-    sink.connect<&InstantiateLineComponents>();
-    sink.connect<&InstantiatePolyComponents>();
-
-    // Should instantiate <stop> before gradients.
-    sink.connect<&InstantiateStopComponents>();
-    sink.connect<&InstantiateGradientComponents>();
-  }
-}
-
-void RenderingContext::instantiateRenderTree(std::vector<ParseError>* outWarnings) {
-  createComputedComponents(outWarnings);
-  instantiateRenderTreeWithPrecomputedTree();
-}
-
-void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
-  // Evaluate conditional components which may create shadow trees.
-  evaluateConditionalComponents_.publish(registry_);
-
-  // Instantiate shadow trees.
-  for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
-    auto [shadowTreeComponent] = view.get(entity);
-    if (auto targetEntity = shadowTreeComponent.targetEntity(registry_)) {
-      registry_.get_or_emplace<ComputedShadowTreeComponent>(entity).instantiate(
-          registry_, targetEntity.value(), shadowTreeComponent.href(), outWarnings);
-    } else if (outWarnings) {
-      ParseError err;
-      err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
-                   shadowTreeComponent.href() + "'";
-      outWarnings->emplace_back(std::move(err));
-    }
-  }
-
-  // Create placeholder ComputedStyleComponents for all elements in the tree.
-  for (auto view = registry_.view<TreeComponent>(); auto entity : view) {
-    std::ignore = registry_.get_or_emplace<ComputedStyleComponent>(entity);
-  }
-
-  // Compute the styles for all elements.
-  for (auto view = registry_.view<ComputedStyleComponent>(); auto entity : view) {
-    auto [styleComponent] = view.get(entity);
-    styleComponent.computeProperties(EntityHandle(registry_, entity));
-  }
-
-  for (auto view = registry_.view<SizedElementComponent, ComputedStyleComponent>();
-       auto entity : view) {
-    auto [component, style] = view.get(entity);
-    component.computeWithPrecomputedStyle(EntityHandle(registry_, entity), style, FontMetrics(),
-                                          outWarnings);
-  }
-
-  ComputeAllTransforms(registry_, outWarnings);
-
-  instantiateComputedComponents_.publish(registry_, outWarnings);
-}
-
-void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
-  registry_.clear<RenderingInstanceComponent>();
-
-  int drawOrder = 0;
-  int restorePopDepth = 0;
-  ContextPaintServers contextPaintServers;
-
-  std::function<void(Transformd, Entity)> traverseTree = [&](Transformd transform,
-                                                             Entity treeEntity) {
+  /**
+   * Traverse a tree, instanting each entity in the tree.
+   *
+   * @param transform The parent transform to apply to the entity.
+   * @param treeEntity Current entity in the tree or shadow tree.
+   * @return The last rendered entity.
+   */
+  void traverseTree(Transformd transform, Entity treeEntity) {
     const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
     const EntityHandle dataHandle(
@@ -177,13 +93,25 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
 
     RenderingInstanceComponent& instance =
         registry_.emplace<RenderingInstanceComponent>(styleEntity);
-    instance.drawOrder = drawOrder++;
-    instance.restorePopDepth = restorePopDepth;
+    instance.drawOrder = drawOrder_++;
     instance.transformCanvasSpace = transform;
     instance.clipRect = clipRect;
     instance.dataEntity = dataHandle.entity();
 
-    restorePopDepth = 0;
+    if (verbose_) {
+      std::cout << "Instatiating " << TypeToString(dataHandle.get<TreeComponent>().type()) << " ";
+
+      if (const auto* idComponent = dataHandle.try_get<IdComponent>()) {
+        std::cout << "id=" << idComponent->id << " ";
+      }
+
+      std::cout << dataHandle.entity();
+      if (instance.isShadow(registry_)) {
+        std::cout << " (shadow " << styleEntity << ")";
+      }
+
+      std::cout << std::endl;
+    }
 
     // Create a new layer if opacity is less than 1.
     if (properties.opacity.getRequired() < 1.0) {
@@ -197,21 +125,27 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
       instance.visible = false;
     }
 
-    if (auto fill = properties.fill.get()) {
-      instance.resolvedFill = ResolvePaint(dataHandle, fill.value(), contextPaintServers);
+    const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
+    const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
+
+    if (setsContextColors || (instance.visible && dataHandle.all_of<ComputedPathComponent>())) {
+      if (auto fill = properties.fill.get()) {
+        instance.resolvedFill = resolvePaint(dataHandle, fill.value(), contextPaintServers_);
+      }
+
+      if (auto stroke = properties.stroke.get()) {
+        instance.resolvedStroke = resolvePaint(dataHandle, stroke.value(), contextPaintServers_);
+      }
+
+      // Save the current context paint servers if this is a shadow tree host.
+      if (setsContextColors) {
+        savedContextPaintServers = contextPaintServers_;
+        contextPaintServers_.contextFill = instance.resolvedFill;
+        contextPaintServers_.contextStroke = instance.resolvedStroke;
+      }
     }
 
-    if (auto stroke = properties.stroke.get()) {
-      instance.resolvedStroke = ResolvePaint(dataHandle, stroke.value(), contextPaintServers);
-    }
-
-    // Save the current context paint servers if this is a shadow tree host.
-    if (const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
-        shadowTree && shadowTree->setsContextColors) {
-      savedContextPaintServers = contextPaintServers;
-      contextPaintServers.contextFill = instance.resolvedFill;
-      contextPaintServers.contextStroke = instance.resolvedStroke;
-    }
+    lastRenderedEntity_ = styleEntity;
 
     if (traverseChildren) {
       const TreeComponent& tree = registry_.get<TreeComponent>(treeEntity);
@@ -221,18 +155,125 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
       }
     }
 
-    // Restore state after rendering.
     if (layerDepth > 0) {
-      restorePopDepth += layerDepth;
+      instance.subtreeInfo = SubtreeInfo{lastRenderedEntity_, layerDepth};
     }
 
     if (savedContextPaintServers) {
-      contextPaintServers = savedContextPaintServers.value();
+      contextPaintServers_ = savedContextPaintServers.value();
     }
-  };
+  }
+
+  ResolvedPaintServer resolvePaint(EntityHandle dataHandle, const PaintServer& paint,
+                                   const ContextPaintServers& contextPaintServers) {
+    if (paint.is<PaintServer::Solid>()) {
+      return paint.get<PaintServer::Solid>();
+    } else if (paint.is<PaintServer::ElementReference>()) {
+      const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
+
+      if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
+          resolvedRef && IsValidPaintServer(resolvedRef->handle)) {
+        return PaintResolvedReference{resolvedRef.value(), ref.fallback};
+      } else if (ref.fallback) {
+        return PaintServer::Solid(ref.fallback.value());
+      } else {
+        return PaintServer::None();
+      }
+    } else if (paint.is<PaintServer::ContextFill>()) {
+      return contextPaintServers.contextFill;
+    } else if (paint.is<PaintServer::ContextStroke>()) {
+      return contextPaintServers.contextStroke;
+    } else {
+      return PaintServer::None();
+    }
+  }
+
+private:
+  Registry& registry_;
+  bool verbose_;
+
+  int drawOrder_ = 0;
+  Entity lastRenderedEntity_ = entt::null;
+  ContextPaintServers contextPaintServers_;
+};
+
+}  // namespace
+
+RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {
+  // Set up render tree signals.
+  {
+    entt::sink sink(evaluateConditionalComponents_);
+    sink.connect<&EvaluateConditionalGradientShadowTrees>();
+  }
+
+  {
+    entt::sink sink(instantiateComputedComponents_);
+    sink.connect<&InstantiateComputedCircleComponents>();
+    sink.connect<&InstantiateComputedEllipseComponents>();
+    sink.connect<&InstantiateComputedPathComponents>();
+    sink.connect<&InstantiateComputedRectComponents>();
+    sink.connect<&InstantiateLineComponents>();
+    sink.connect<&InstantiatePolyComponents>();
+
+    // Should instantiate <stop> before gradients.
+    sink.connect<&InstantiateStopComponents>();
+    sink.connect<&InstantiateGradientComponents>();
+  }
+}
+
+void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
+  createComputedComponents(outWarnings);
+  instantiateRenderTreeWithPrecomputedTree(verbose);
+}
+
+void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
+  // Evaluate conditional components which may create shadow trees.
+  evaluateConditionalComponents_.publish(registry_);
+
+  // Instantiate shadow trees.
+  for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
+    auto [shadowTreeComponent] = view.get(entity);
+    if (auto targetEntity = shadowTreeComponent.targetEntity(registry_)) {
+      registry_.get_or_emplace<ComputedShadowTreeComponent>(entity).instantiate(
+          registry_, targetEntity.value(), shadowTreeComponent.href(), outWarnings);
+    } else if (outWarnings) {
+      ParseError err;
+      err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
+                   shadowTreeComponent.href() + "'";
+      outWarnings->emplace_back(std::move(err));
+    }
+  }
+
+  // Create placeholder ComputedStyleComponents for all elements in the tree.
+  for (auto view = registry_.view<TreeComponent>(); auto entity : view) {
+    std::ignore = registry_.get_or_emplace<ComputedStyleComponent>(entity);
+  }
+
+  // Compute the styles for all elements.
+  for (auto view = registry_.view<ComputedStyleComponent>(); auto entity : view) {
+    auto [styleComponent] = view.get(entity);
+    styleComponent.computeProperties(EntityHandle(registry_, entity));
+  }
+
+  for (auto view = registry_.view<SizedElementComponent, ComputedStyleComponent>();
+       auto entity : view) {
+    auto [component, style] = view.get(entity);
+    component.computeWithPrecomputedStyle(EntityHandle(registry_, entity), style, FontMetrics(),
+                                          outWarnings);
+  }
+
+  ComputeAllTransforms(registry_, outWarnings);
+
+  instantiateComputedComponents_.publish(registry_, outWarnings);
+}
+
+void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
+  registry_.clear<RenderingInstanceComponent>();
 
   const Entity rootEntity = registry_.ctx<DocumentContext>().rootEntity;
-  traverseTree(Transformd(), rootEntity);
+
+  RenderingContextImpl impl(registry_, verbose);
+  impl.traverseTree(Transformd(), rootEntity);
 
   registry_.sort<RenderingInstanceComponent>(
       [](const RenderingInstanceComponent& lhs, const RenderingInstanceComponent& rhs) {

@@ -20,9 +20,10 @@ public:
    * Create the render tree for the document, optionally returning parse warnings found when parsing
    * deferred parts of the tree.
    *
+   * @param verbose If true, enable verbose logging.
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
-  void instantiateRenderTree(std::vector<ParseError>* outWarnings);
+  void instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings);
 
 private:
   /**
@@ -34,8 +35,10 @@ private:
 
   /**
    * Creates all rendering instances for the document, the final step before it can be rendered.
+   *
+   * @param verbose If true, enable verbose logging.
    */
-  void instantiateRenderTreeWithPrecomputedTree();
+  void instantiateRenderTreeWithPrecomputedTree(bool verbose);
 
   Registry& registry_;
 

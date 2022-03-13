@@ -9,6 +9,11 @@
 
 namespace donner::svg {
 
+struct SubtreeInfo {
+  Entity lastRenderedEntity;
+  int restorePopDepth = 0;  //!< How many isolated layers to pop after rendering this entity.
+};
+
 struct PaintResolvedReference {
   ResolvedReference reference;
   std::optional<css::Color> fallback;
@@ -30,7 +35,6 @@ struct RenderingInstanceComponent {
                         //!< rendering behavior when they are hidden, such as <pattern> elements.
   bool isolatedLayer = false;  //!< True if this instance establishes a new rendering layer, such as
                                //!< if there is opacity.
-  int restorePopDepth = 0;     //!< How many isolated layers to pop before rendering this instance.
 
   Transformd
       transformCanvasSpace;  //!< The canvas-space transform of the element, element-from-canvas.
@@ -52,6 +56,12 @@ struct RenderingInstanceComponent {
    * The resolved paint server for the instance's stroke, if any.
    */
   ResolvedPaintServer resolvedStroke = PaintServer::None();
+
+  /**
+   * Information about this elements subtree, if there is a rendering-influencing subtree attached
+   * to this entity.
+   */
+  std::optional<SubtreeInfo> subtreeInfo;
 
   /**
    * Shortcut for creating a handle for the \ref dataEntity, the entity containing the structural
@@ -79,7 +89,7 @@ struct RenderingInstanceComponent {
    * @param registry The registry to use.
    * @return True if this is a shadow tree instance.
    */
-  bool isShadow(Registry& registry) const { return entt::to_entity(registry, *this) == dataEntity; }
+  bool isShadow(Registry& registry) const { return entt::to_entity(registry, *this) != dataEntity; }
 };
 
 }  // namespace donner::svg
