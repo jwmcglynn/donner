@@ -4,9 +4,22 @@
 
 #include "src/base/box.h"
 #include "src/base/transform.h"
+#include "src/svg/properties/paint_server.h"
 #include "src/svg/registry/registry.h"
 
 namespace donner::svg {
+
+struct PaintResolvedReference {
+  ResolvedReference reference;
+  std::optional<css::Color> fallback;
+};
+
+using ResolvedPaintServer =
+    std::variant<PaintServer::None, PaintServer::Solid, PaintResolvedReference>;
+
+inline bool HasPaint(const ResolvedPaintServer& paint) {
+  return !std::holds_alternative<PaintServer::None>(paint);
+}
 
 struct RenderingInstanceComponent {
   RenderingInstanceComponent() = default;
@@ -29,6 +42,16 @@ struct RenderingInstanceComponent {
    * components like \ref IdComponent.
    */
   Entity dataEntity;
+
+  /**
+   * The resolved paint server for the instance's fill, if any.
+   */
+  ResolvedPaintServer resolvedFill = PaintServer::None();
+
+  /**
+   * The resolved paint server for the instance's stroke, if any.
+   */
+  ResolvedPaintServer resolvedStroke = PaintServer::None();
 
   /**
    * Shortcut for creating a handle for the \ref dataEntity, the entity containing the structural

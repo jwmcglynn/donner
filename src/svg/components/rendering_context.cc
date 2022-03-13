@@ -20,6 +20,42 @@
 
 namespace donner::svg {
 
+namespace {
+
+/**
+ * The current value of the context-fill and context-stroke paint servers, based on the rules
+ * described here: https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint
+ */
+struct ContextPaintServers {
+  ResolvedPaintServer contextFill = PaintServer::None();
+  ResolvedPaintServer contextStroke = PaintServer::None();
+};
+
+ResolvedPaintServer ResolvePaint(EntityHandle dataHandle, const PaintServer& paint,
+                                 const ContextPaintServers& contextPaintServers) {
+  if (paint.is<PaintServer::Solid>()) {
+    return paint.get<PaintServer::Solid>();
+  } else if (paint.is<PaintServer::ElementReference>()) {
+    const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
+
+    if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry())) {
+      return PaintResolvedReference{resolvedRef.value(), ref.fallback};
+    } else if (ref.fallback) {
+      return PaintServer::Solid(ref.fallback.value());
+    } else {
+      return PaintServer::None();
+    }
+  } else if (paint.is<PaintServer::ContextFill>()) {
+    return contextPaintServers.contextFill;
+  } else if (paint.is<PaintServer::ContextStroke>()) {
+    return contextPaintServers.contextStroke;
+  } else {
+    return PaintServer::None();
+  }
+}
+
+}  // namespace
+
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {
   // Set up render tree signals.
   {
@@ -93,18 +129,19 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
 
   int drawOrder = 0;
   int restorePopDepth = 0;
+  ContextPaintServers contextPaintServers;
 
   std::function<void(Transformd, Entity)> traverseTree = [&](Transformd transform,
                                                              Entity treeEntity) {
     const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
-    const Entity dataEntity =
-        shadowEntityComponent ? shadowEntityComponent->lightEntity : treeEntity;
+    const EntityHandle dataHandle(
+        registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : treeEntity);
     bool traverseChildren = true;
     std::optional<Boxd> clipRect;
     int layerDepth = 0;
 
-    if (const auto* behavior = registry_.try_get<RenderingBehaviorComponent>(dataEntity)) {
+    if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable) {
         return;
       } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
@@ -120,12 +157,11 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
       return;
     }
 
-    if (const auto* sizedElement = registry_.try_get<ComputedSizedElementComponent>(dataEntity)) {
+    if (const auto* sizedElement = dataHandle.try_get<ComputedSizedElementComponent>()) {
       if (sizedElement->bounds.isEmpty()) {
         return;
       }
 
-      const EntityHandle dataHandle(registry_, dataEntity);
       transform = sizedElement->computeTransform(dataHandle) * transform;
 
       if (auto maybeClipRect = sizedElement->clipRect(dataHandle)) {
@@ -134,7 +170,7 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
       }
     }
 
-    if (const auto* tc = registry_.try_get<ComputedTransformComponent>(dataEntity)) {
+    if (const auto* tc = dataHandle.try_get<ComputedTransformComponent>()) {
       transform = tc->transform * transform;
     }
 
@@ -144,7 +180,7 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
     instance.restorePopDepth = restorePopDepth;
     instance.transformCanvasSpace = transform;
     instance.clipRect = clipRect;
-    instance.dataEntity = dataEntity;
+    instance.dataEntity = dataHandle.entity();
 
     restorePopDepth = 0;
 
@@ -158,6 +194,14 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
 
     if (properties.visibility.getRequired() != Visibility::Visible) {
       instance.visible = false;
+    }
+
+    if (auto fill = properties.fill.get()) {
+      instance.resolvedFill = ResolvePaint(dataHandle, fill.value(), contextPaintServers);
+    }
+
+    if (auto stroke = properties.stroke.get()) {
+      instance.resolvedStroke = ResolvePaint(dataHandle, stroke.value(), contextPaintServers);
     }
 
     if (traverseChildren) {
