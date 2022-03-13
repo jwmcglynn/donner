@@ -25,6 +25,18 @@ public:
   void instantiateRenderTree(std::vector<ParseError>* outWarnings);
 
 private:
+  /**
+   * Create all computed parts of the tree, evaluating styles and creating shadow trees.
+   *
+   * @param outWarnings If non-null, warnings will be added to this vector.
+   */
+  void createComputedComponents(std::vector<ParseError>* outWarnings);
+
+  /**
+   * Creates all rendering instances for the document, the final step before it can be rendered.
+   */
+  void instantiateRenderTreeWithPrecomputedTree();
+
   Registry& registry_;
 
   // Rendering signal handlers.

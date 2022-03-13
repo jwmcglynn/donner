@@ -15,6 +15,7 @@
 #include "src/svg/components/radial_gradient_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/rendering_instance_component.h"
 #include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/sized_element_component.h"
 #include "src/svg/components/transform_component.h"
@@ -518,84 +519,53 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 void RendererSkia::draw(Registry& registry, Entity root) {
   Impl impl(*this);
 
-  std::function<void(Transformd, Entity)> drawEntity = [&](Transformd transform,
-                                                           Entity treeEntity) {
-    const auto* shadowComponent = registry.try_get<ShadowEntityComponent>(treeEntity);
-    const Entity styleEntity = treeEntity;
-    const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : treeEntity;
-    Impl::AutoRestore autoRestore(*this);
-    bool traverseChildren = true;
-
-    if (const auto* behavior = registry.try_get<RenderingBehaviorComponent>(dataEntity)) {
-      if (behavior->behavior == RenderingBehavior::Nonrenderable) {
-        if (verbose_) {
-          std::cout << "Skipping nonrenderable entity " << dataEntity << std::endl;
-        }
-        return;
-      } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
-        traverseChildren = false;
-      }
-    }
+  for (auto view = registry.view<RenderingInstanceComponent>(); auto entity : view) {
+    auto [instance] = view.get(entity);
 
     if (verbose_) {
-      std::cout << "Rendering " << TypeToString(registry.get<TreeComponent>(treeEntity).type())
-                << " " << treeEntity << (shadowComponent ? " (shadow)" : "") << std::endl;
+      std::cout << "Rendering "
+                << TypeToString(registry.get<TreeComponent>(instance.dataEntity).type()) << " "
+                << entity << (instance.isShadow(registry) ? " (shadow)" : "") << std::endl;
     }
 
-    if (const auto* sizedElement = registry.try_get<ComputedSizedElementComponent>(dataEntity)) {
-      if (sizedElement->bounds.isEmpty()) {
-        return;
-      }
-
-      const EntityHandle handle(registry, dataEntity);
-      transform = sizedElement->computeTransform(handle) * transform;
-
-      if (auto clipRect = sizedElement->clipRect(handle)) {
-        autoRestore.push(canvas_->save());
-        canvas_->clipRect(toSkia(clipRect.value()));
-      }
+    // SkCanvas also has restoreToCount, but it just calls restore in a loop.
+    for (int i = 0; i < instance.restorePopDepth; ++i) {
+      canvas_->restore();
     }
 
-    if (const auto* tc = registry.try_get<ComputedTransformComponent>(dataEntity)) {
-      transform = tc->transform * transform;
+    if (instance.clipRect) {
+      canvas_->save();
+      canvas_->clipRect(toSkia(instance.clipRect.value()));
     }
 
-    canvas_->setMatrix(toSkia(transform));
+    canvas_->setMatrix(toSkia(instance.transformCanvasSpace));
 
     const ComputedStyleComponent& styleComponent =
-        registry.get<ComputedStyleComponent>(styleEntity);
+        instance.styleHandle(registry).get<ComputedStyleComponent>();
     const auto& properties = styleComponent.properties();
 
-    if (properties.display.getRequired() == Display::None) {
-      return;
+    if (instance.isolatedLayer) {
+      // Create a new layer if opacity is less than 1.
+      if (properties.opacity.getRequired() < 1.0) {
+        SkPaint opacityPaint;
+        opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
+
+        // TODO: Calculate hint for size of layer.
+        canvas_->saveLayer(nullptr, &opacityPaint);
+      } else {
+        assert(false && "Failed to find reason for isolatedLayer");
+      }
     }
 
-    // Create a new layer if opacity is less than 1.
-    if (properties.opacity.getRequired() < 1.0) {
-      SkPaint opacityPaint;
-      opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
-
-      // TODO: Calculate hint for size of layer.
-      autoRestore.push(canvas_->saveLayer(nullptr, &opacityPaint));
-    }
-
-    if (properties.visibility.getRequired() == Visibility::Visible) {
-      if (const auto* path = registry.try_get<ComputedPathComponent>(dataEntity)) {
-        impl.drawPath(EntityHandle(registry, dataEntity), *path, styleComponent.properties(),
+    if (instance.visible) {
+      if (const auto* path = instance.dataHandle(registry).try_get<ComputedPathComponent>()) {
+        impl.drawPath(instance.dataHandle(registry), *path, styleComponent.properties(),
                       styleComponent.viewbox(), FontMetrics());
       }
     }
+  }
 
-    if (traverseChildren) {
-      const TreeComponent& tree = registry.get<TreeComponent>(treeEntity);
-      for (auto cur = tree.firstChild(); cur != entt::null;
-           cur = registry.get<TreeComponent>(cur).nextSibling()) {
-        drawEntity(transform, cur);
-      }
-    }
-  };
-
-  drawEntity(Transformd(), root);
+  canvas_->restoreToCount(1);
 }
 
 }  // namespace donner::svg

@@ -70,6 +70,7 @@ cc_library(
         "rect_component.h",
         "rendering_behavior_component.h",
         "rendering_context.h",
+        "rendering_instance_component.h",
         "shadow_entity_component.h",
         "shadow_tree_component.h",
         "sized_element_component.h",

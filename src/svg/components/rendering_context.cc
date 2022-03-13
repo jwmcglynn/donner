@@ -11,6 +11,8 @@
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/poly_component.h"
 #include "src/svg/components/rect_component.h"
+#include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/rendering_instance_component.h"
 #include "src/svg/components/shadow_tree_component.h"
 #include "src/svg/components/sized_element_component.h"
 #include "src/svg/components/stop_component.h"
@@ -41,6 +43,14 @@ RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {
 }
 
 void RenderingContext::instantiateRenderTree(std::vector<ParseError>* outWarnings) {
+  createComputedComponents(outWarnings);
+  instantiateRenderTreeWithPrecomputedTree();
+}
+
+void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
+  // Evaluate conditional components which may create shadow trees.
+  evaluateConditionalComponents_.publish(registry_);
+
   // Instantiate shadow trees.
   for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
     auto [shadowTreeComponent] = view.get(entity);
@@ -75,8 +85,101 @@ void RenderingContext::instantiateRenderTree(std::vector<ParseError>* outWarning
 
   ComputeAllTransforms(registry_, outWarnings);
 
-  evaluateConditionalComponents_.publish(registry_);
   instantiateComputedComponents_.publish(registry_, outWarnings);
+}
+
+void RenderingContext::instantiateRenderTreeWithPrecomputedTree() {
+  registry_.clear<RenderingInstanceComponent>();
+
+  int drawOrder = 0;
+  int restorePopDepth = 0;
+
+  std::function<void(Transformd, Entity)> traverseTree = [&](Transformd transform,
+                                                             Entity treeEntity) {
+    const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(treeEntity);
+    const Entity styleEntity = treeEntity;
+    const Entity dataEntity =
+        shadowEntityComponent ? shadowEntityComponent->lightEntity : treeEntity;
+    bool traverseChildren = true;
+    std::optional<Boxd> clipRect;
+    int layerDepth = 0;
+
+    if (const auto* behavior = registry_.try_get<RenderingBehaviorComponent>(dataEntity)) {
+      if (behavior->behavior == RenderingBehavior::Nonrenderable) {
+        return;
+      } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
+        traverseChildren = false;
+      }
+    }
+
+    const ComputedStyleComponent& styleComponent =
+        registry_.get<ComputedStyleComponent>(styleEntity);
+    const auto& properties = styleComponent.properties();
+
+    if (properties.display.getRequired() == Display::None) {
+      return;
+    }
+
+    if (const auto* sizedElement = registry_.try_get<ComputedSizedElementComponent>(dataEntity)) {
+      if (sizedElement->bounds.isEmpty()) {
+        return;
+      }
+
+      const EntityHandle dataHandle(registry_, dataEntity);
+      transform = sizedElement->computeTransform(dataHandle) * transform;
+
+      if (auto maybeClipRect = sizedElement->clipRect(dataHandle)) {
+        ++layerDepth;
+        clipRect = maybeClipRect;
+      }
+    }
+
+    if (const auto* tc = registry_.try_get<ComputedTransformComponent>(dataEntity)) {
+      transform = tc->transform * transform;
+    }
+
+    RenderingInstanceComponent& instance =
+        registry_.emplace<RenderingInstanceComponent>(styleEntity);
+    instance.drawOrder = drawOrder++;
+    instance.restorePopDepth = restorePopDepth;
+    instance.transformCanvasSpace = transform;
+    instance.clipRect = clipRect;
+    instance.dataEntity = dataEntity;
+
+    restorePopDepth = 0;
+
+    // Create a new layer if opacity is less than 1.
+    if (properties.opacity.getRequired() < 1.0) {
+      instance.isolatedLayer = true;
+
+      // TODO: Calculate hint for size of layer.
+      ++layerDepth;
+    }
+
+    if (properties.visibility.getRequired() != Visibility::Visible) {
+      instance.visible = false;
+    }
+
+    if (traverseChildren) {
+      const TreeComponent& tree = registry_.get<TreeComponent>(treeEntity);
+      for (auto cur = tree.firstChild(); cur != entt::null;
+           cur = registry_.get<TreeComponent>(cur).nextSibling()) {
+        traverseTree(transform, cur);
+      }
+    }
+
+    if (layerDepth > 0) {
+      restorePopDepth += layerDepth;
+    }
+  };
+
+  const Entity rootEntity = registry_.ctx<DocumentContext>().rootEntity;
+  traverseTree(Transformd(), rootEntity);
+
+  registry_.sort<RenderingInstanceComponent>(
+      [](const RenderingInstanceComponent& lhs, const RenderingInstanceComponent& rhs) {
+        return lhs.drawOrder < rhs.drawOrder;
+      });
 }
 
 }  // namespace donner::svg
