@@ -64,6 +64,15 @@ git_repository(
     remote = "https://github.com/abseil/abseil-cpp",
 )
 
+# Note this must use a commit from the `abseil` branch of the RE2 project.
+# https://github.com/google/re2/tree/abseil
+http_archive(
+    name = "com_googlesource_code_re2",
+    sha256 = "0a890c2aa0bb05b2ce906a15efb520d0f5ad4c7d37b8db959c43772802991887",
+    strip_prefix = "re2-a427f10b9fb4622dd6d8643032600aa1b50fbd12",
+    urls = ["https://github.com/google/re2/archive/a427f10b9fb4622dd6d8643032600aa1b50fbd12.zip"],  # 2022-06-09
+)
+
 git_repository(
     name = "pixelmatch-cpp17",
     branch = "main",
