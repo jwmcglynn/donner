@@ -29,6 +29,18 @@ constexpr UninitializedTag uninitialized;
  */
 template <typename T>
 struct Transform {
+  /**
+   * Storage for a 3x2 matrix, in column-major order.
+   *
+   * Elements are stored in the following order:
+   *
+   *   0 = scaleX
+   *   1 = skewY
+   *   2 = skewX
+   *   3 = scaleY
+   *   4 = translateX
+   *   5 = translateY
+   */
   T data[6];  // For the layout above, stores [a b c d e f]
 
   Transform() {
