@@ -15,110 +15,109 @@ namespace css {
 
 template <typename T>
 concept ElementLike = requires(T t, std::string_view name) {
-  { t.parentElement() } -> std::same_as<std::optional<T>>;
-  { t.previousSibling() } -> std::same_as<std::optional<T>>;
-  { t.typeString() } -> std::same_as<RcString>;
-  { t.id() } -> std::same_as<RcString>;
-  { t.className() } -> std::same_as<RcString>;
-  { t.hasAttribute(name) } -> std::same_as<bool>;
-  { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;
-};
+                        { t.parentElement() } -> std::same_as<std::optional<T>>;
+                        { t.previousSibling() } -> std::same_as<std::optional<T>>;
+                        { t.typeString() } -> std::same_as<RcString>;
+                        { t.id() } -> std::same_as<RcString>;
+                        { t.className() } -> std::same_as<RcString>;
+                        { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;
+                      };
 
 namespace details {
 
-  template <typename T>
-  class Generator {
+template <typename T>
+class Generator {
+public:
+  class Promise;
+  using Handle = std::experimental::coroutine_handle<Promise>;
+  using promise_type = Promise;
+
+public:
+  explicit Generator(Handle h) : coroutine_(h) {}
+  Generator(const Generator&) = delete;
+  Generator(Generator&& oth) noexcept : coroutine_(oth.coroutine_) { oth.coroutine_ = nullptr; }
+  Generator& operator=(const Generator&) = delete;
+  Generator& operator=(Generator&& other) noexcept {
+    coroutine_ = other.coroutine_;
+    other.coroutine_ = nullptr;
+    return *this;
+  }
+
+  ~Generator() {
+    if (coroutine_) {
+      coroutine_.destroy();
+    }
+  }
+
+  bool next() {
+    if (coroutine_) {
+      coroutine_.resume();
+    }
+
+    return !coroutine_.done();
+  }
+
+  T getValue() { return coroutine_.promise().currentValue_.value(); }
+
+  class Promise {
   public:
-    class Promise;
-    using Handle = std::experimental::coroutine_handle<Promise>;
-    using promise_type = Promise;
+    Promise() = default;
+    ~Promise() = default;
+    Promise(const Promise&) = delete;
+    Promise(Promise&&) = delete;
+    Promise& operator=(const Promise&) = delete;
+    Promise& operator=(Promise&&) = delete;
 
-  public:
-    explicit Generator(Handle h) : coroutine_(h) {}
-    Generator(const Generator&) = delete;
-    Generator(Generator&& oth) noexcept : coroutine_(oth.coroutine_) { oth.coroutine_ = nullptr; }
-    Generator& operator=(const Generator&) = delete;
-    Generator& operator=(Generator&& other) noexcept {
-      coroutine_ = other.coroutine_;
-      other.coroutine_ = nullptr;
-      return *this;
+    auto initial_suspend() noexcept { return std::experimental::suspend_always{}; }
+
+    auto final_suspend() noexcept { return std::experimental::suspend_always{}; }
+
+    auto get_return_object() noexcept { return Generator{Handle::from_promise(*this)}; }
+
+    auto return_void() noexcept { return std::experimental::suspend_never{}; }
+
+    auto yield_value(T value) {
+      currentValue_ = value;
+      return std::experimental::suspend_always{};
     }
 
-    ~Generator() {
-      if (coroutine_) {
-        coroutine_.destroy();
-      }
-    }
-
-    bool next() {
-      if (coroutine_) {
-        coroutine_.resume();
-      }
-
-      return !coroutine_.done();
-    }
-
-    T getValue() { return coroutine_.promise().currentValue_.value(); }
-
-    class Promise {
-    public:
-      Promise() = default;
-      ~Promise() = default;
-      Promise(const Promise&) = delete;
-      Promise(Promise&&) = delete;
-      Promise& operator=(const Promise&) = delete;
-      Promise& operator=(Promise&&) = delete;
-
-      auto initial_suspend() noexcept { return std::experimental::suspend_always{}; }
-
-      auto final_suspend() noexcept { return std::experimental::suspend_always{}; }
-
-      auto get_return_object() noexcept { return Generator{Handle::from_promise(*this)}; }
-
-      auto return_void() noexcept { return std::experimental::suspend_never{}; }
-
-      auto yield_value(T value) {
-        currentValue_ = value;
-        return std::experimental::suspend_always{};
-      }
-
-      [[noreturn]] void unhandled_exception() { std::exit(1); }
-
-    private:
-      std::optional<T> currentValue_;
-      friend class Generator;
-    };
+    [[noreturn]] void unhandled_exception() { std::exit(1); }
 
   private:
-    Handle coroutine_;
+    std::optional<T> currentValue_;
+    friend class Generator;
   };
 
-  template <typename T>
-  Generator<T> singleElementGenerator(const std::optional<T> element) {
-    if (element.has_value()) {
-      co_yield element.value();
-    }
+private:
+  Handle coroutine_;
+};
+
+template <typename T>
+Generator<T> singleElementGenerator(const std::optional<T> element) {
+  if (element.has_value()) {
+    co_yield element.value();
   }
+}
 
-  template <typename T>
-  Generator<T> parentsGenerator(const T& element) {
-    T currentElement = element;
+template <typename T>
+Generator<T> parentsGenerator(const T& element) {
+  T currentElement = element;
 
-    while (auto parent = currentElement.parentElement()) {
-      currentElement = parent.value();
-      co_yield currentElement;
-    }
+  while (auto parent = currentElement.parentElement()) {
+    currentElement = parent.value();
+    co_yield currentElement;
   }
+}
 
-  template <typename T>
-  Generator<T> previousSiblingsGenerator(const T& element) {
-    T currentElement = element;
+template <typename T>
+Generator<T> previousSiblingsGenerator(const T& element) {
+  T currentElement = element;
 
-    while (auto previousSibling = currentElement.previousSibling()) {
-      currentElement = previousSibling.value();
-      co_yield currentElement;
-    }
+  while (auto previousSibling = currentElement.previousSibling()) {
+    currentElement = previousSibling.value();
+    co_yield currentElement;
   }
+}
 
 }  // namespace details
 
@@ -307,7 +306,74 @@ struct AttributeSelector {
 
   template <ElementLike T>
   bool matches(const T& element) const {
-    // TODO
+    const std::optional<RcString> maybeValue = element.getAttribute(name.name);
+    if (!maybeValue) {
+      return false;
+    }
+
+    // If there's no additional condition, the attribute existing constitutes a match.
+    if (!matcher) {
+      return true;
+    }
+
+    const Matcher& m = matcher.value();
+    const RcString& value = maybeValue.value();
+
+    switch (m.op) {
+      case AttrMatcher::Includes:
+        // Returns true if attribute value is a whitespace-separated list of values, and one of them
+        // exactly matches the matcher value.
+        for (auto&& str : StringUtils::Split(value, ' ')) {
+          if (m.caseInsensitive) {
+            if (StringUtils::Equals<StringComparison::IgnoreCase>(str, m.value)) {
+              return true;
+            }
+          } else {
+            if (str == m.value) {
+              return true;
+            }
+          }
+        }
+        break;
+      case AttrMatcher::DashMatch:
+        // Matches if the attribute exactly matches, or matches the start of the value plus a
+        // hyphen. For example, "foo" matches "foo" and "foo-bar", but not "foobar".
+        if (m.caseInsensitive) {
+          return value.equalsIgnoreCase(m.value) ||
+                 StringUtils::StartsWith<StringComparison::IgnoreCase>(value, m.value + "-");
+        } else {
+          return value == m.value || StringUtils::StartsWith(value, m.value + "-");
+        }
+        break;
+      case AttrMatcher::PrefixMatch:
+        if (m.caseInsensitive) {
+          return StringUtils::StartsWith<StringComparison::IgnoreCase>(value, m.value);
+        } else {
+          return StringUtils::StartsWith(value, m.value);
+        }
+        break;
+      case AttrMatcher::SuffixMatch:
+        if (m.caseInsensitive) {
+          return StringUtils::EndsWith<StringComparison::IgnoreCase>(value, m.value);
+        } else {
+          return StringUtils::EndsWith(value, m.value);
+        }
+        break;
+      case AttrMatcher::SubstringMatch:
+        if (m.caseInsensitive) {
+          return StringUtils::Contains<StringComparison::IgnoreCase>(value, m.value);
+        } else {
+          return StringUtils::Contains(value, m.value);
+        }
+        break;
+      case AttrMatcher::Eq:
+        if (m.caseInsensitive) {
+          return value.equalsIgnoreCase(m.value);
+        } else {
+          return value == m.value;
+        }
+    }
+
     return false;
   }
 
