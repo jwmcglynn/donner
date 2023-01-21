@@ -28,7 +28,7 @@ public:
       "visibility", []() -> std::optional<Visibility> { return Visibility::Visible; }};
 
   // Fill
-  Property<PaintServer, PropertyCascade::Inherit> fill{
+  Property<PaintServer, PropertyCascade::PaintInherit> fill{
       "fill", []() -> std::optional<PaintServer> {
         return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));
       }};
@@ -38,7 +38,7 @@ public:
       "fill-opacity", []() -> std::optional<double> { return 1.0; }};
 
   // Stroke
-  Property<PaintServer, PropertyCascade::Inherit> stroke{
+  Property<PaintServer, PropertyCascade::PaintInherit> stroke{
       "stroke", []() -> std::optional<PaintServer> { return PaintServer::None(); }};
   Property<double, PropertyCascade::Inherit> strokeOpacity{
       "stroke-opacity", []() -> std::optional<double> { return 1.0; }};
@@ -86,7 +86,9 @@ public:
   /**
    * Inherit the value of each element in the stylesheet.
    */
-  [[nodiscard]] PropertyRegistry inheritFrom(const PropertyRegistry& parent) const {
+  [[nodiscard]] PropertyRegistry inheritFrom(
+      const PropertyRegistry& parent,
+      PropertyInheritOptions options = PropertyInheritOptions::All) const {
     PropertyRegistry result;
     result.unparsedProperties = unparsedProperties;  // Unparsed properties are not inherited.
 
@@ -95,9 +97,10 @@ public:
     const auto selfProperties = const_cast<PropertyRegistry*>(this)->allProperties();
 
     forEachProperty<0, numProperties()>(
-        [&resultProperties, parentProperties, selfProperties](auto i) {
+        [&resultProperties, &parentProperties, &selfProperties, options](auto i) {
           std::get<i.value>(resultProperties) =
-              std::get<i.value>(selfProperties).inheritFrom(std::get<i.value>(parentProperties));
+              std::get<i.value>(selfProperties)
+                  .inheritFrom(std::get<i.value>(parentProperties), options);
         });
 
     return result;

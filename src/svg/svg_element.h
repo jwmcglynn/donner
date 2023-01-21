@@ -36,9 +36,6 @@ public:
   RcString className() const;
   void setClassName(std::string_view name);
 
-  Transformd transform() const;
-  void setTransform(Transformd transform);
-
   void setStyle(std::string_view style);
   ParseResult<bool> trySetPresentationAttribute(std::string_view name, std::string_view value);
 
@@ -119,9 +116,6 @@ protected:
 
   Registry& registry() const { return *handle_.registry(); }
   EntityHandle toHandle(Entity entity) const { return EntityHandle(registry(), entity); }
-
-  void invalidateTransform();
-  void computeTransform() const;
 
   EntityHandle handle_;
 };

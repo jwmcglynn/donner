@@ -19,6 +19,8 @@ public:
 
   void draw(SVGDocument& document);
 
+  sk_sp<SkPicture> drawIntoSkPicture(SVGDocument& document);
+
   bool save(const char* filename);
 
   std::span<const uint8_t> pixelData() const;
@@ -34,7 +36,8 @@ private:
 
   SkAutoGraphics ag_;
   SkBitmap bitmap_;
-  std::unique_ptr<SkCanvas> canvas_;
+  SkCanvas* rootCanvas_ = nullptr;
+  SkCanvas* currentCanvas_ = nullptr;
 };
 
 }  // namespace donner::svg

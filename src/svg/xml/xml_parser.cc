@@ -19,6 +19,7 @@
 #include "src/svg/svg_line_element.h"
 #include "src/svg/svg_linear_gradient_element.h"
 #include "src/svg/svg_path_element.h"
+#include "src/svg/svg_pattern_element.h"
 #include "src/svg/svg_polygon_element.h"
 #include "src/svg/svg_polyline_element.h"
 #include "src/svg/svg_radial_gradient_element.h"
@@ -44,6 +45,7 @@ using SVGElements = entt::type_list<  //
     SVGStopElement,                   //
     SVGRadialGradientElement,         //
     SVGPathElement,                   //
+    SVGPatternElement,                //
     SVGPolygonElement,                //
     SVGPolylineElement,               //
     SVGRectElement,                   //
@@ -292,6 +294,75 @@ std::optional<ParseError> ParseAttribute<SVGLinearGradientElement>(XMLParserCont
     }
   } else {
     return ParseGradientCommonAttribute(context, element, namespacePrefix, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGPatternElement>(XMLParserContext& context,
+                                                            SVGPatternElement element,
+                                                            std::string_view namespacePrefix,
+                                                            std::string_view name,
+                                                            std::string_view value) {
+  if (name == "x") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == "y") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == "width") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setWidth(length.value());
+    }
+  } else if (name == "height") {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setHeight(length.value());
+    }
+  } else if (name == "viewBox") {
+    auto maybeViewbox = ViewboxParser::Parse(value);
+    if (maybeViewbox.hasError()) {
+      context.addSubparserWarning(std::move(maybeViewbox.error()), context.parserOriginFrom(value));
+    } else {
+      element.setViewbox(maybeViewbox.result());
+    }
+  } else if (name == "preserveAspectRatio") {
+    auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
+    if (maybeAspectRatio.hasError()) {
+      context.addSubparserWarning(std::move(maybeAspectRatio.error()),
+                                  context.parserOriginFrom(value));
+    } else {
+      element.setPreserveAspectRatio(maybeAspectRatio.result());
+    }
+  } else if (name == "patternUnits") {
+    if (value == "userSpaceOnUse") {
+      element.setPatternUnits(PatternUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setPatternUnits(PatternUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid patternUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == "patternContentUnits") {
+    if (value == "userSpaceOnUse") {
+      element.setPatternContentUnits(PatternContentUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setPatternContentUnits(PatternContentUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid patternUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == "patternTransform") {
+    // "patternTransform" maps to the "transform" presentation attribute.
+    ParsePresentationAttribute(context, element, namespacePrefix, "transform", value);
+  } else if (name == "href") {
+    element.setHref(RcString(value));
+  } else {
+    return ParseCommonAttribute(context, element, namespacePrefix, name, value);
   }
 
   return std::nullopt;

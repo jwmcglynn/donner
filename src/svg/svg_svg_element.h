@@ -21,19 +21,19 @@ public:
 
   static SVGSVGElement Create(SVGDocument& document);
 
-  void setX(Lengthd value);
-  void setY(Lengthd value);
-  void setWidth(std::optional<Lengthd> value);
-  void setHeight(std::optional<Lengthd> value);
-  void setViewbox(std::optional<Boxd> viewbox);
-  void setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio);
-
   Lengthd x() const;
   Lengthd y() const;
   std::optional<Lengthd> width() const;
   std::optional<Lengthd> height() const;
   std::optional<Boxd> viewbox() const;
   PreserveAspectRatio preserveAspectRatio() const;
+
+  void setX(Lengthd value);
+  void setY(Lengthd value);
+  void setWidth(std::optional<Lengthd> value);
+  void setHeight(std::optional<Lengthd> value);
+  void setViewbox(std::optional<Boxd> viewbox);
+  void setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio);
 };
 
 }  // namespace donner::svg

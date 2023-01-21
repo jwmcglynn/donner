@@ -17,6 +17,7 @@ struct SubtreeInfo {
 struct PaintResolvedReference {
   ResolvedReference reference;
   std::optional<css::Color> fallback;
+  std::optional<SubtreeInfo> subtreeInfo;
 };
 
 using ResolvedPaintServer =
@@ -70,7 +71,7 @@ struct RenderingInstanceComponent {
    * @param registry The registry to use.
    * @return A handle for the \ref dataEntity.
    */
-  EntityHandle dataHandle(Registry& registry) { return EntityHandle(registry, dataEntity); }
+  EntityHandle dataHandle(Registry& registry) const { return EntityHandle(registry, dataEntity); }
 
   /**
    * A handle for the entity containing style information, which may be different than the \ref
@@ -79,7 +80,7 @@ struct RenderingInstanceComponent {
    * @param registry The registry to use.
    * @return A handle for the style entity.
    */
-  EntityHandle styleHandle(Registry& registry) {
+  EntityHandle styleHandle(Registry& registry) const {
     return EntityHandle(registry, entt::to_entity(registry, *this));
   }
 

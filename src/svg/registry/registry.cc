@@ -15,6 +15,7 @@ std::string_view TypeToString(ElementType type) {
     case ElementType::Use: return "Use";
     case ElementType::SVG: return "SVG";
     case ElementType::Path: return "Path";
+    case ElementType::Pattern: return "Pattern";
     case ElementType::Polygon: return "Polygon";
     case ElementType::Polyline: return "Polyline";
     case ElementType::RadialGradient: return "RadialGradient";

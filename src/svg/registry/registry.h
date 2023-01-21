@@ -28,6 +28,7 @@ enum class ElementType {
   Line,
   LinearGradient,
   Path,
+  Pattern,
   Polygon,
   Polyline,
   RadialGradient,
@@ -53,6 +54,8 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::LinearGradient:
       return fn(std::integral_constant<ElementType, ElementType::LinearGradient>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
+    case ElementType::Pattern:
+      return fn(std::integral_constant<ElementType, ElementType::Pattern>());
     case ElementType::Polygon:
       return fn(std::integral_constant<ElementType, ElementType::Polygon>());
     case ElementType::Polyline:

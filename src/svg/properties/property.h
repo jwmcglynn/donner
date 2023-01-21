@@ -126,19 +126,40 @@ inline std::ostream& operator<<(std::ostream& os, const StrokeDasharray& value) 
   return os;
 }
 
-enum class PropertyCascade { None, Inherit };
+/**
+ * Defines how this property cascades between the parent and child elements.
+ */
+enum class PropertyCascade {
+  None,         //!< Property does not inherit.
+  Inherit,      //!< Property inherits unconditionally.
+  PaintInherit  //!< Property inherits unless the child is instantiated as a paint server. This is
+                //!< handled as a special case to prevent recursion for <pattern>.
+};
 
+/**
+ * The current property state, which can be either set, not set, or a specific CSS keyword such as
+ * "inherit", "initial", or "unset".
+ */
 enum class PropertyState {
   NotSet = 0,
   Set = 1,             //!< If the property has a value set.
   Inherit = 2,         //!< If the property's value is "inherit".
-  ExplicitInitial = 3, /**< If the property's value is "initial", explicitly set by the user. Sets
-                        *   the property to its initial value with a specificity. */
+  ExplicitInitial = 3, /**< If the property's value is "initial", explicitly set by the user.
+                        * Sets the property to its initial value with a specificity. */
   ExplicitUnset = 4,   /**< If the property's value is "unset", explicitly set by the user. Resolves
                         *   to either inherit or initial, depending on if the property is inheritable.
                         *
                         * @see https://www.w3.org/TR/css-cascade-3/#inherit-initial
                         */
+};
+
+/**
+ * Options to control how inheritance is performed, to either inherit everything or conditionally
+ * disable inheritance of paint servers.
+ */
+enum class PropertyInheritOptions {
+  All,      //!< Inherit everything (default).
+  NoPaint,  //!< Inherit everything except paint servers, for <pattern> elements.
 };
 
 template <typename T>
@@ -154,11 +175,11 @@ struct Property {
       : name(name), getInitialFn(getInitialFn) {}
 
   /**
-   * Get the property value, without considering inheritance. Returns the initial value if the
-   * property has not been set.
+   * Get the property value, without considering inheritance. Returns the initial value if
+   * the property has not been set.
    *
-   * @return The value if it is set, or the initial value if it is not. Returns std::nullopt if the
-   *  property is none.
+   * @return The value if it is set, or the initial value if it is not. Returns
+   * std::nullopt if the property is none.
    */
   std::optional<T> get() const { return state == PropertyState::Set ? value : getInitialFn(); }
 
@@ -218,13 +239,43 @@ struct Property {
     state = PropertyState::Set;
   }
 
-  [[nodiscard]] Property<T, kCascade> inheritFrom(const Property<T, kCascade>& parent) const {
+  /**
+   * Clear the current property's value.
+   */
+  void clear() {
+    value.reset();
+    state = PropertyState::NotSet;
+    specificity = css::Specificity();
+  }
+
+  /**
+   * Inherit the property from the parent element, if the parent has the property set at a higher
+   * specificity.
+   *
+   * Note that this typically inherits "backwards", taking a local property which may already have a
+   * value and then overriding it if the parent has a more specific one.  This is not required, but
+   * doing so is more efficient since we don't need to keep setting the property as the child
+   * overrides each parent.
+   *
+   * @param parent Parent property to inherit into this one.
+   * @param options Options to control how inheritance is performed, to conditionally disable
+   *   inheritance.
+   * @return Property with the resolved value after inheritance.
+   */
+  [[nodiscard]] Property<T, kCascade> inheritFrom(
+      const Property<T, kCascade>& parent,
+      PropertyInheritOptions options = PropertyInheritOptions::All) const {
     Property<T, kCascade> result = *this;
 
-    if constexpr (kCascade == PropertyCascade::Inherit) {
+    if constexpr (kCascade == PropertyCascade::Inherit ||
+                  kCascade == PropertyCascade::PaintInherit) {
       assert(parent.state != PropertyState::Inherit && "Parent should already be resolved");
 
-      if (parent.hasValue()) {
+      const bool isPaint = kCascade == PropertyCascade::PaintInherit;
+      const bool canInherit = options == PropertyInheritOptions::All ||
+                              (options == PropertyInheritOptions::NoPaint && !isPaint);
+
+      if (parent.hasValue() && canInherit) {
         if (state == PropertyState::NotSet || state == PropertyState::Inherit ||
             state == PropertyState::ExplicitUnset) {
           // Inherit from parent.
@@ -250,6 +301,13 @@ struct Property {
     return result;
   }
 
+  /**
+   * Convert the units of this property to pixel-relative values, if it contains a value which is
+   * relative such as a font- or viewport-relative length.
+   *
+   * @param viewbox The viewbox to use for resolving relative lengths.
+   * @param fontMetrics The font metrics to use for resolving relative lengths.
+   */
   void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
     if constexpr (std::is_same_v<Lengthd, Type>) {
       if (value) {

@@ -19,7 +19,7 @@ class SVGElementTests : public testing::Test {
 protected:
   SVGElementTests() { document_.setCanvasSize(800, 600); }
 
-  SVGElement create() { return SVGUnknownElement::Create(document_, "unknown"); }
+  SVGGraphicsElement create() { return SVGUnknownElement::Create(document_, "unknown"); }
 
   std::vector<SVGElement> children(SVGElement element) {
     std::vector<SVGElement> result;

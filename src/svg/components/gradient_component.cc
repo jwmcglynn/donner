@@ -1,11 +1,14 @@
 #include "src/svg/components/gradient_component.h"
 
 #include "src/base/math_utils.h"
+#include "src/svg/components/computed_shadow_tree_component.h"
+#include "src/svg/components/evaluated_reference_component.h"
 #include "src/svg/components/linear_gradient_component.h"
 #include "src/svg/components/radial_gradient_component.h"
 #include "src/svg/components/shadow_tree_component.h"
 #include "src/svg/components/stop_component.h"
 #include "src/svg/components/tree_component.h"
+#include "src/svg/graph/recursion_guard.h"
 
 namespace donner::svg {
 
@@ -80,14 +83,6 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
 
       inheritAttributes(cur, base);
 
-      if (auto* linearGradient = cur.try_get<LinearGradientComponent>()) {
-        linearGradient->inheritAttributes(cur, base);
-      }
-
-      if (auto* radialGradient = cur.try_get<RadialGradientComponent>()) {
-        radialGradient->inheritAttributes(cur, base);
-      }
-
       base = cur;
     }
   }
@@ -97,17 +92,18 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
     RecursionGuard shadowGuard;
     shadowGuard.add(treeEntity);
 
-    while (auto* shadow = treeEntity.try_get<ShadowTreeComponent>()) {
-      if (auto targetEntity = shadow->targetEntity(registry)) {
-        if (shadowGuard.hasRecursion(targetEntity->handle)) {
-          return;
-        }
-
-        shadowGuard.add(targetEntity->handle);
-
-        treeEntity = targetEntity->handle;
-        // TODO: Propagate warnings on error.
+    while (auto* shadow = treeEntity.try_get<ComputedShadowTreeComponent>()) {
+      if (shadow->mainLightRoot() == entt::null) {
+        return;
       }
+
+      treeEntity = EntityHandle(registry, shadow->mainLightRoot());
+
+      if (shadowGuard.hasRecursion(treeEntity)) {
+        return;
+      }
+
+      shadowGuard.add(treeEntity);
     }
   }
 
@@ -141,6 +137,10 @@ void ComputedGradientComponent::inheritAttributes(EntityHandle handle, EntityHan
   if (auto* linearGradient = handle.try_get<LinearGradientComponent>()) {
     linearGradient->inheritAttributes(handle, base);
   }
+
+  if (auto* radialGradient = handle.try_get<RadialGradientComponent>()) {
+    radialGradient->inheritAttributes(handle, base);
+  }
 }
 
 void EvaluateConditionalGradientShadowTrees(Registry& registry) {
@@ -154,7 +154,7 @@ void EvaluateConditionalGradientShadowTrees(Registry& registry) {
           registry.emplace_or_replace<EvaluatedReferenceComponent>(entity, resolvedHandle);
 
           if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
-            registry.emplace_or_replace<ShadowTreeComponent>(entity, gradient.href.value());
+            registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(gradient.href->href);
           }
         } else {
           // TODO: Propagate warning about mismatched element type.

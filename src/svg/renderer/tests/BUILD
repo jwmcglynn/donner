@@ -11,6 +11,24 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "image_comparison_test_fixture",
+    srcs = [
+        "image_comparison_test_fixture.cc",
+    ],
+    hdrs = [
+        "image_comparison_test_fixture.h",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        "//src/svg/renderer",
+        "//src/svg/xml",
+        "@com_google_gtest//:gtest",
+        "@pixelmatch-cpp17",
+        "@stb//:image",
+    ],
+)
+
 cc_test(
     name = "renderer_tests",
     srcs = [
@@ -38,10 +56,7 @@ cc_test(
         "@resvg-test-suite//:svg",
     ],
     deps = [
-        ":renderer_test_utils",
-        "//src/svg/renderer",
-        "//src/svg/xml",
+        ":image_comparison_test_fixture",
         "@com_google_gtest//:gtest_main",
-        "@pixelmatch-cpp17",
     ],
 )

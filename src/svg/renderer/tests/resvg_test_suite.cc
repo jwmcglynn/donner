@@ -1,105 +1,26 @@
 #include <gmock/gmock.h>
-#include <gtest/gtest.h>
-#include <pixelmatch/pixelmatch.h>
 
-#include <filesystem>
-#include <fstream>
-#include <map>
-
-#include "src/svg/renderer/renderer_skia.h"
-#include "src/svg/renderer/renderer_utils.h"
-#include "src/svg/renderer/tests/renderer_test_utils.h"
-#include "src/svg/xml/xml_parser.h"
+#include "image_comparison_test_fixture.h"
 
 using testing::ValuesIn;
 
 namespace donner::svg {
 
+using Params = ImageComparisonParams;
+
 namespace {
-
-// Circle rendering is slightly different since Donner uses four custom curves instead of arcTo.
-// Allow a small number of mismatched pixels to accomodate.
-static constexpr int kDefaultMismatchedPixels = 100;
-
-// For most tests, a threshold of 0.01 is sufficient, but some specific tests have slightly
-// different anti-aliasing artifacts, so a larger threshold is required:
-// - a_transform_007 - 0.05 to pass
-// - e_line_001 - 0.02 to pass
-static constexpr float kDefaultThreshold = 0.01f;
 
 static const std::filesystem::path kSvgDir = "external/resvg-test-suite/svg/";
 static const std::filesystem::path kGoldenDir = "external/resvg-test-suite/png/";
 
-struct Params {
-  float threshold = kDefaultThreshold;
-  int maxMismatchedPixels = kDefaultMismatchedPixels;
-  bool skip = false;
-
-  static Params Skip() {
-    Params result;
-    result.skip = true;
-    return result;
-  }
-
-  static Params WithThreshold(float threshold, int maxMismatchedPixels = kDefaultMismatchedPixels) {
-    Params result;
-    result.threshold = threshold;
-    result.maxMismatchedPixels = maxMismatchedPixels;
-    return result;
-  }
-};
-
-struct ResvgTestcase {
-  std::filesystem::path svgFilename;
-  Params params;
-
-  friend bool operator<(const ResvgTestcase& lhs, const ResvgTestcase& rhs) {
-    return lhs.svgFilename < rhs.svgFilename;
-  }
-
-  friend std::ostream& operator<<(std::ostream& os, const ResvgTestcase& rhs) {
-    return os << rhs.svgFilename.string();
-  }
-};
-
-std::string escapeFilename(std::string filename) {
-  std::transform(filename.begin(), filename.end(), filename.begin(), [](char c) {
-    if (c == '\\' || c == '/') {
-      return '_';
-    } else {
-      return c;
-    }
-  });
-  return filename;
-}
-
-std::string testNameFromFilename(const testing::TestParamInfo<ResvgTestcase>& info) {
-  std::string name = info.param.svgFilename.stem().string();
-
-  // Sanitize the test name, notably replacing '-' with '_'.
-  std::transform(name.begin(), name.end(), name.begin(), [](char c) {
-    if (!isalnum(c)) {
-      return '_';
-    } else {
-      return c;
-    }
-  });
-
-  if (info.param.params.skip) {
-    return "DISABLED_" + name;
-  } else {
-    return name;
-  }
-}
-
-std::vector<ResvgTestcase> getTestsWithPrefix(const char* prefix,
-                                              std::map<std::string, Params> overrides = {}) {
+std::vector<ImageComparisonTestcase> getTestsWithPrefix(
+    const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {}) {
   // Copy into a vector and sort the tests.
-  std::vector<ResvgTestcase> testPlan;
+  std::vector<ImageComparisonTestcase> testPlan;
   for (const auto& entry : std::filesystem::directory_iterator(kSvgDir)) {
     const std::string& filename = entry.path().filename().string();
     if (filename.find(prefix) == 0) {
-      ResvgTestcase test;
+      ImageComparisonTestcase test;
       test.svgFilename = entry.path();
 
       // Set special-case params.
@@ -117,103 +38,8 @@ std::vector<ResvgTestcase> getTestsWithPrefix(const char* prefix,
 
 }  // namespace
 
-class ResvgTestSuite : public testing::TestWithParam<ResvgTestcase> {
-protected:
-  SVGDocument loadSVG(const char* filename) {
-    std::ifstream file(filename);
-    EXPECT_TRUE(file) << "Failed to open file: " << filename;
-    if (!file) {
-      return SVGDocument();
-    }
-
-    file.seekg(0, std::ios::end);
-    const size_t fileLength = file.tellg();
-    file.seekg(0);
-
-    std::vector<char> fileData(fileLength + 1);
-    file.read(fileData.data(), fileLength);
-
-    auto maybeResult = XMLParser::ParseSVG(fileData);
-    EXPECT_FALSE(maybeResult.hasError())
-        << "Parse Error: " << maybeResult.error().line << ":" << maybeResult.error().offset << ": "
-        << maybeResult.error().reason;
-    if (maybeResult.hasError()) {
-      return SVGDocument();
-    }
-
-    return std::move(maybeResult.result());
-  }
-
-  void renderAndCompare(SVGDocument& document, const std::filesystem::path& svgFilename,
-                        const char* goldenImageFilename) {
-    std::cout << "[  COMPARE ] " << svgFilename.string()
-              << ": ";  // No endl yet, the line will be continued
-
-    // The canvas size to draw into, as a recommendation instead of a strict guideline, since some
-    // SVGs may override.
-    // TODO: Add a flag to disable this behavior.
-    document.setCanvasSize(500, 500);
-
-    // TODO: Do a re-render when there's a failure and enable verbose output.
-    RendererSkia renderer(/*verbose*/ false);
-    renderer.draw(document);
-
-    const size_t strideInPixels = renderer.width();
-    const int width = renderer.width();
-    const int height = renderer.height();
-
-    auto maybeGoldenImage = RendererTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
-    ASSERT_TRUE(maybeGoldenImage.has_value());
-
-    Image goldenImage = std::move(maybeGoldenImage.value());
-    ASSERT_EQ(goldenImage.width, width);
-    ASSERT_EQ(goldenImage.height, height);
-    ASSERT_EQ(goldenImage.strideInPixels, strideInPixels);
-    ASSERT_EQ(goldenImage.data.size(), renderer.pixelData().size());
-
-    std::vector<uint8_t> diffImage;
-    diffImage.resize(strideInPixels * height * 4);
-
-    const Params params = GetParam().params;
-
-    pixelmatch::Options options;
-    options.threshold = params.threshold;
-    const int mismatchedPixels = pixelmatch::pixelmatch(
-        goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
-
-    if (mismatchedPixels > params.maxMismatchedPixels) {
-      std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
-                << params.maxMismatchedPixels << " max)" << std::endl;
-
-      const std::filesystem::path actualImagePath =
-          std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
-      std::cout << "Actual rendering: " << actualImagePath.string() << std::endl;
-      RendererUtils::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(),
-                                              renderer.pixelData(), width, height, strideInPixels);
-
-      std::cout << "Expected: " << goldenImageFilename << std::endl;
-
-      const std::filesystem::path diffFilePath =
-          std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
-      std::cerr << "Diff: " << diffFilePath.string() << std::endl;
-
-      RendererUtils::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
-                                              height, strideInPixels);
-
-      FAIL() << mismatchedPixels << " pixels different.";
-    } else {
-      std::cout << "PASS";
-      if (mismatchedPixels != 0) {
-        std::cout << " (" << mismatchedPixels << " pixels differ, out of "
-                  << params.maxMismatchedPixels << " max)";
-      }
-      std::cout << std::endl;
-    }
-  }
-};
-
-TEST_P(ResvgTestSuite, Compare) {
-  const ResvgTestcase& testcase = GetParam();
+TEST_P(ImageComparisonTestFixture, ResvgTest) {
+  const ImageComparisonTestcase& testcase = GetParam();
 
   const std::filesystem::path goldenFilename =
       kGoldenDir / testcase.svgFilename.filename().replace_extension(".png");
@@ -226,18 +52,18 @@ TEST_P(ResvgTestSuite, Compare) {
 // TODO(text): a-baseline-shift
 // TODO: a-clip
 
-INSTANTIATE_TEST_SUITE_P(Color, ResvgTestSuite,
+INSTANTIATE_TEST_SUITE_P(Color, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-color",  //
                                                      {
                                                          {"a-color-interpolation-filters-001.svg",
                                                           Params::Skip()},  // Not impl: Filters
                                                      })),
-                         testNameFromFilename);
+                         TestNameFromFilename);
 
 // TODO: a-direction
 
 INSTANTIATE_TEST_SUITE_P(
-    Display, ResvgTestSuite,
+    Display, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("a-display",  //
                                 {
                                     {"a-display-004.svg", Params::Skip()},  // Not impl: <clipPath>
@@ -246,13 +72,13 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"a-display-008.svg", Params::Skip()},  // Not impl: <clipPath>
                                     {"a-display-009.svg", Params::Skip()},  // Not impl: <tspan>
                                 })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 // TODO: a-dominant-baseline
 // TODO: a-enable-background
 
 INSTANTIATE_TEST_SUITE_P(
-    Fill, ResvgTestSuite,
+    Fill, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "a-fill",  //
         {
@@ -266,7 +92,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-fill-opacity-004.svg", Params::Skip()},  // Not impl: `fill-opacity` affects pattern
             {"a-fill-opacity-006.svg", Params::Skip()},  // Not impl: <text>
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 // TODO(filter): a-filter
 // TODO(filter): a-flood
@@ -281,7 +107,7 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(filter): a-mix-blend-mode
 
 INSTANTIATE_TEST_SUITE_P(
-    Opacity, ResvgTestSuite,
+    Opacity, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "a-opacity",
         {
@@ -290,11 +116,11 @@ INSTANTIATE_TEST_SUITE_P(
              Params::Skip()},  // Changed in css-color-4 to allow percentage in <alpha-value>, see
                                // https://www.w3.org/TR/css-color/#transparency
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 // TODO(text): a-overflow
 
-INSTANTIATE_TEST_SUITE_P(Shape, ResvgTestSuite,
+INSTANTIATE_TEST_SUITE_P(Shape, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-shape",
                                                      {
                                                          {"a-shape-rendering-005.svg",
@@ -302,13 +128,13 @@ INSTANTIATE_TEST_SUITE_P(Shape, ResvgTestSuite,
                                                          {"a-shape-rendering-008.svg",
                                                           Params::Skip()},  // Not impl: <marker>
                                                      })),
-                         testNameFromFilename);
+                         TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(StopAttributes, ResvgTestSuite, ValuesIn(getTestsWithPrefix("a-stop")),
-                         testNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StopAttributes, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-stop")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    Stroke, ResvgTestSuite,
+    Stroke, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
@@ -332,34 +158,34 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-opacity-006.svg", Params::Skip()},   // Not impl: <text>
             {"a-stroke-width-004.svg", Params::Skip()},     // UB: Nothing should be renderered
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    Style, ResvgTestSuite,
+    Style, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "a-style",
         {
             {"a-style-003.svg",
              Params::Skip()},  // <svg version="1.1"> disables geometry attributes in style
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 // TODO: a-systemLanguage
 // TODO(text): a-text
 
 INSTANTIATE_TEST_SUITE_P(
-    Transform, ResvgTestSuite,
+    Transform, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "a-transform",
         {
             {"a-transform-007.svg",
              Params::WithThreshold(0.05f)},  // Larger threshold due to anti-aliasing artifacts.
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 // TODO(text): a-unicode
 
-INSTANTIATE_TEST_SUITE_P(Visibility, ResvgTestSuite,
+INSTANTIATE_TEST_SUITE_P(Visibility, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix(
                              "a-visibility",  //
                              {
@@ -369,39 +195,39 @@ INSTANTIATE_TEST_SUITE_P(Visibility, ResvgTestSuite,
                                  {"a-visibility-006.svg", Params::Skip()},  // Not impl: <clipPath>
                                  {"a-visibility-007.svg", Params::Skip()},  // Not impl: <clipPath>
                              })),
-                         testNameFromFilename);
+                         TestNameFromFilename);
 
 // TODO(text): a-word-spacing
 // TODO(text): a-writing-mode
 
 // TODO: e-a-
 
-INSTANTIATE_TEST_SUITE_P(Circle, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-circle")),
-                         testNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Circle, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-circle")), TestNameFromFilename);
 
 // TODO(clip): e-clipPath
 
-INSTANTIATE_TEST_SUITE_P(Defs, ResvgTestSuite,
+INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-defs",
                                                      {
                                                          {"e-defs-007.svg",
                                                           Params::Skip()},  // Not impl: <text>
                                                      })),
-                         testNameFromFilename);
+                         TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Ellipse, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-ellipse")),
-                         testNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-ellipse")), TestNameFromFilename);
 
 // TODO(filter): e-fe
 // TODO(filter): e-filter
 
-INSTANTIATE_TEST_SUITE_P(G, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-g")),
-                         testNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(G, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-g")),
+                         TestNameFromFilename);
 
 // TODO: e-image
 
 INSTANTIATE_TEST_SUITE_P(
-    Line, ResvgTestSuite,
+    Line, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-line-",
         {
@@ -409,33 +235,63 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(0.02f)},  // Larger threshold due to anti-aliasing artifacts with
                                              // overlapping lines.
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    LinearGradient, ResvgTestSuite,
+    LinearGradient, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-linearGradient",
                                 {
                                     {"e-linearGradient-037.svg",
                                      Params::Skip()},  // UB: Invalid `gradientTransform`
                                 })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 // TODO: e-marker
 // TODO: e-mask
 
-INSTANTIATE_TEST_SUITE_P(Path, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-path")),
-                         testNameFromFilename);
-
-// TODO: e-pattern
-
-INSTANTIATE_TEST_SUITE_P(Polygon, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-polygon")),
-                         testNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Polyline, ResvgTestSuite, ValuesIn(getTestsWithPrefix("e-polyline")),
-                         testNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-path")),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    RadialGradient, ResvgTestSuite,
+    Pattern, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-pattern",
+        {
+            {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
+            {"e-pattern-007.svg",
+             Params::Skip()},  // Not impl: patternContentUnits=objectBoundingBox
+            {"e-pattern-008.svg",
+             Params::Skip()},  // Not impl: patternContentUnits=objectBoundingBox
+            {"e-pattern-009.svg", Params::Skip()},  // Not impl: viewBox
+            {"e-pattern-010.svg", Params::Skip()},  // Not impl: viewBox
+            {"e-pattern-011.svg", Params::Skip()},  // Not impl: preserveAspectRatio
+            {"e-pattern-014.svg", Params::Skip()},  // Not impl: Full href attributes
+            {"e-pattern-016.svg", Params::Skip()},  // Not impl: Full href attributes
+            {"e-pattern-018.svg", Params::Skip()},  // Not impl: <text>
+            {"e-pattern-019.svg",
+             Params::Skip()},  // Not impl: patternContentUnits, objectBoundingBox
+            {"e-pattern-020.svg", Params::Skip()},  // Not impl: objectBoundingBox
+            {"e-pattern-021.svg", Params::Skip()},  // Bug? Recursive on child
+            {"e-pattern-022.svg", Params::Skip()},  // Bug? Self-recursive
+            {"e-pattern-023.svg", Params::Skip()},  // Bug? Self-recursive on child
+            {"e-pattern-024.svg", Params::Skip()},  // Not impl: objectBoundingBox
+            {"e-pattern-025.svg", Params::Skip()},  // Not impl: objectBoundingBox
+            {"e-pattern-026.svg", Params::Skip()},  // Not impl: userSpaceOnUse
+            {"e-pattern-027.svg", Params::Skip()},  // Bug? Invalid patternUnits
+            {"e-pattern-028.svg", Params::Skip()},  // UB: Invalid patternTransform
+            {"e-pattern-029.svg", Params::Skip()},  // Not impl: viewBox
+            {"e-pattern-030.svg", Params::Skip()},  // Not impl: userSpaceOnUse
+        })),
+    TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Polygon, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-polygon")), TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(Polyline, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-polyline")), TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    RadialGradient, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-radialGradient",
         {
@@ -451,10 +307,10 @@ INSTANTIATE_TEST_SUITE_P(
                                //  render.
             {"e-radialGradient-045.svg", Params::Skip()},  // UB: fr=-1 (SVG 2)
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    Rect, ResvgTestSuite,
+    Rect, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-rect",
                                 {
                                     {"e-rect-022.svg", Params::Skip()},  // Not impl: "em" units
@@ -464,20 +320,20 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"e-rect-034.svg", Params::Skip()},  // Bug? vw/vh
                                     {"e-rect-036.svg", Params::Skip()},  // Bug? vmin/vmax
                                 })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    StopElement, ResvgTestSuite,
+    StopElement, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-stop",
                                 {
                                     {"e-stop-011.svg",
                                      Params::Skip()},  // Bug? Strange edge case, stop-color
                                                        // inherited from <linearGradient>.
                                 })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    StyleElement, ResvgTestSuite,
+    StyleElement, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-style",
         {
@@ -485,10 +341,10 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-style-012.svg", Params::Skip()},  // Not impl: <svg version="1.1">
             {"e-style-014.svg", Params::Skip()},  // Not impl: CSS @import
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
-    SvgElement, ResvgTestSuite,
+    SvgElement, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-svg",
         {
@@ -519,7 +375,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-svg-036.svg", Params::Skip()},  // Not impl: Computed bounds from content
 
         })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 // TODO: e-switch
 // TODO: e-symbol
@@ -528,11 +384,11 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(text): e-tspan
 
 INSTANTIATE_TEST_SUITE_P(
-    Use, ResvgTestSuite,
+    Use, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-use",
                                 {
                                     {"e-use-008.svg", Params::Skip()},  // Not impl: External file.
                                 })),
-    testNameFromFilename);
+    TestNameFromFilename);
 
 }  // namespace donner::svg

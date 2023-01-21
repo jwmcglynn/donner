@@ -116,8 +116,8 @@ Boxd CalculateBounds(EntityHandle handle, const SizedElementProperties& properti
   // From https://www.w3.org/TR/SVG/struct.html#UseElement:
   // > The width and height attributes only have an effect if the referenced element defines a
   // > viewport (i.e., if it is a ‘svg’ or ‘symbol’)
-  if (!shadowTree ||
-      (shadowTree && handle.registry()->all_of<ViewboxComponent>(shadowTree->lightRoot()))) {
+  if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
+                      handle.registry()->all_of<ViewboxComponent>(shadowTree->mainLightRoot()))) {
     if (properties.width.hasValue()) {
       size.x = properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics,
                                                        Lengthd::Extent::X);
@@ -254,6 +254,7 @@ Transformd ComputedSizedElementComponent::computeTransform(EntityHandle handle) 
   if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
     return viewbox->computeTransform(bounds, GetPreserveAspectRatio(handle));
   } else {
+    // This branch is hit for <use> elements.
     PreserveAspectRatio preserveAspectRatio = PreserveAspectRatio::None();
     if (const auto* preserveAspectRatioComponent = handle.try_get<PreserveAspectRatioComponent>()) {
       preserveAspectRatio = preserveAspectRatioComponent->preserveAspectRatio;

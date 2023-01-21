@@ -38,7 +38,7 @@ void ComputedLinearGradientComponent::inheritAttributes(EntityHandle handle, Ent
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::LinearGradient>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <radialGradient> still has normal attributes, not presentation attributes that can be
+  // In SVG2, <linearGradient> still has normal attributes, not presentation attributes that can be
   // specified in CSS.
   return false;
 }

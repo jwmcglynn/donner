@@ -5,15 +5,10 @@
 #include "src/base/parser/parse_error.h"
 #include "src/base/transform.h"
 #include "src/svg/core/gradient.h"
-#include "src/svg/graph/recursion_guard.h"
 #include "src/svg/graph/reference.h"
 #include "src/svg/registry/registry.h"
 
 namespace donner::svg {
-
-struct EvaluatedReferenceComponent {
-  EntityHandle target;
-};
 
 /**
  * Common parameters for gradient elements, <linearGradient> and <radialGradient>

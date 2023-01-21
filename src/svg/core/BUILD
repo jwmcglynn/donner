@@ -9,7 +9,9 @@ cc_library(
         "css_transform.h",
         "gradient.h",
         "path_spline.h",
+        "pattern.h",
         "preserve_aspect_ratio.h",
+        "shadow_branch.h",
     ],
     visibility = [
         "//src/svg:__subpackages__",

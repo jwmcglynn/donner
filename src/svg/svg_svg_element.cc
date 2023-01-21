@@ -16,30 +16,6 @@ SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
   return SVGSVGElement(handle);
 }
 
-void SVGSVGElement::setViewbox(std::optional<Boxd> viewbox) {
-  handle_.get<ViewboxComponent>().viewbox = viewbox;
-}
-
-void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  handle_.get<PreserveAspectRatioComponent>().preserveAspectRatio = preserveAspectRatio;
-}
-
-void SVGSVGElement::setX(Lengthd value) {
-  handle_.get<SizedElementComponent>().properties.x.set(value, css::Specificity::Override());
-}
-
-void SVGSVGElement::setY(Lengthd value) {
-  handle_.get<SizedElementComponent>().properties.y.set(value, css::Specificity::Override());
-}
-
-void SVGSVGElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get<SizedElementComponent>().properties.width.set(value, css::Specificity::Override());
-}
-
-void SVGSVGElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get<SizedElementComponent>().properties.height.set(value, css::Specificity::Override());
-}
-
 std::optional<Boxd> SVGSVGElement::viewbox() const {
   return handle_.get<ViewboxComponent>().viewbox;
 }
@@ -62,6 +38,30 @@ std::optional<Lengthd> SVGSVGElement::width() const {
 
 std::optional<Lengthd> SVGSVGElement::height() const {
   return handle_.get<SizedElementComponent>().properties.height.getRequired();
+}
+
+void SVGSVGElement::setViewbox(std::optional<Boxd> viewbox) {
+  handle_.get<ViewboxComponent>().viewbox = viewbox;
+}
+
+void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
+  handle_.get<PreserveAspectRatioComponent>().preserveAspectRatio = preserveAspectRatio;
+}
+
+void SVGSVGElement::setX(Lengthd value) {
+  handle_.get<SizedElementComponent>().properties.x.set(value, css::Specificity::Override());
+}
+
+void SVGSVGElement::setY(Lengthd value) {
+  handle_.get<SizedElementComponent>().properties.y.set(value, css::Specificity::Override());
+}
+
+void SVGSVGElement::setWidth(std::optional<Lengthd> value) {
+  handle_.get<SizedElementComponent>().properties.width.set(value, css::Specificity::Override());
+}
+
+void SVGSVGElement::setHeight(std::optional<Lengthd> value) {
+  handle_.get<SizedElementComponent>().properties.height.set(value, css::Specificity::Override());
 }
 
 }  // namespace donner::svg

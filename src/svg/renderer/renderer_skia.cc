@@ -3,15 +3,20 @@
 // Skia
 #include "include/core/SkPath.h"
 #include "include/core/SkPathMeasure.h"
+#include "include/core/SkPictureRecorder.h"
 #include "include/core/SkStream.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 //
+#include "src/svg/components/computed_shadow_tree_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/gradient_component.h"
+#include "src/svg/components/id_component.h"  // For verbose logging.
 #include "src/svg/components/linear_gradient_component.h"
 #include "src/svg/components/path_component.h"
 #include "src/svg/components/path_length_component.h"
+#include "src/svg/components/pattern_component.h"
+#include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/radial_gradient_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
@@ -29,6 +34,16 @@ namespace {
 
 SkPoint toSkia(Vector2d value) {
   return SkPoint::Make(NarrowToFloat(value.x), NarrowToFloat(value.y));
+}
+
+SkMatrix toSkiaMatrix(const Transformd& transform) {
+  return SkMatrix::MakeAll(NarrowToFloat(transform.data[0]),  // scaleX
+                           NarrowToFloat(transform.data[2]),  // skewX
+                           NarrowToFloat(transform.data[4]),  // transX
+                           NarrowToFloat(transform.data[1]),  // skewY
+                           NarrowToFloat(transform.data[3]),  // scaleY
+                           NarrowToFloat(transform.data[5]),  // transY
+                           0, 0, 1);
 }
 
 SkM44 toSkia(const Transformd& transform) {
@@ -119,17 +134,121 @@ SkTileMode toSkia(GradientSpreadMethod spreadMethod) {
   }
 }
 
+struct InstanceView {
+public:
+  using ViewType =
+      entt::basic_view<Entity, entt::get_t<RenderingInstanceComponent>, entt::exclude_t<>, void>;
+  using Iterator = ViewType::iterator;
+
+  explicit InstanceView(const ViewType& view)
+      : view_(view), current_(view.begin()), end_(view.end()) {}
+
+  bool done() const { return current_ == end_; }
+  void advance() { ++current_; }
+
+  Entity currentEntity() const {
+    assert(!done());
+    return *current_;
+  }
+
+  const RenderingInstanceComponent& get() const {
+    return view_.get<RenderingInstanceComponent>(currentEntity());
+  }
+
+private:
+  const ViewType& view_;
+  Iterator current_;
+  Iterator end_;
+};
+
 }  // namespace
 
 class RendererSkia::Impl {
 public:
-  Impl(RendererSkia& renderer) : renderer_(renderer) {}
+  Impl(RendererSkia& renderer, InstanceView&& view) : renderer_(renderer), view_(std::move(view)) {}
+
+  void drawUntil(Registry& registry, Entity endEntity) {
+    bool foundEndEntity = false;
+
+    while (!view_.done() && !foundEndEntity) {
+      foundEndEntity = view_.currentEntity() == endEntity;
+
+      const RenderingInstanceComponent& instance = view_.get();
+      const Entity entity = view_.currentEntity();
+      view_.advance();
+
+      if (renderer_.verbose_) {
+        std::cout << "Rendering "
+                  << TypeToString(registry.get<TreeComponent>(instance.dataEntity).type()) << " ";
+
+        if (const auto* idComponent = registry.try_get<IdComponent>(instance.dataEntity)) {
+          std::cout << "id=" << idComponent->id << " ";
+        }
+
+        std::cout << instance.dataEntity;
+        if (instance.isShadow(registry)) {
+          std::cout << " (shadow " << instance.styleHandle(registry).entity() << ")";
+        }
+
+        std::cout << " transform=" << instance.transformCanvasSpace << std::endl;
+
+        std::cout << std::endl;
+      }
+
+      if (instance.clipRect) {
+        renderer_.currentCanvas_->save();
+        renderer_.currentCanvas_->clipRect(toSkia(instance.clipRect.value()));
+      }
+
+      renderer_.currentCanvas_->setMatrix(toSkia(instance.transformCanvasSpace));
+
+      const ComputedStyleComponent& styleComponent =
+          instance.styleHandle(registry).get<ComputedStyleComponent>();
+      const auto& properties = styleComponent.properties();
+
+      if (instance.isolatedLayer) {
+        // Create a new layer if opacity is less than 1.
+        if (properties.opacity.getRequired() < 1.0) {
+          SkPaint opacityPaint;
+          opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
+
+          // TODO: Calculate hint for size of layer.
+          renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
+        } else {
+          assert(false && "Failed to find reason for isolatedLayer");
+        }
+      }
+
+      if (instance.visible) {
+        if (const auto* path = instance.dataHandle(registry).try_get<ComputedPathComponent>()) {
+          drawPath(instance.dataHandle(registry), instance, *path, styleComponent.properties(),
+                   styleComponent.viewbox(), FontMetrics());
+        }
+      }
+
+      if (instance.subtreeInfo) {
+        subtreeMarkers_.push_back(instance.subtreeInfo.value());
+      }
+
+      while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastRenderedEntity == entity) {
+        const SubtreeInfo subtreeInfo = subtreeMarkers_.back();
+        subtreeMarkers_.pop_back();
+
+        // SkCanvas also has restoreToCount, but it just calls restore in a loop.
+        for (int i = 0; i < subtreeInfo.restorePopDepth; ++i) {
+          renderer_.currentCanvas_->restore();
+        }
+      }
+    }
+
+    renderer_.currentCanvas_->restoreToCount(1);
+  }
 
   void drawPath(EntityHandle dataHandle, const RenderingInstanceComponent& instance,
                 const ComputedPathComponent& path, const PropertyRegistry& style,
                 const Boxd& viewbox, const FontMetrics& fontMetrics) {
     if (HasPaint(instance.resolvedFill)) {
-      drawPathFill(path, instance.resolvedFill, style, viewbox);
+      drawPathFill(dataHandle, path, instance.resolvedFill, style, viewbox);
     }
 
     if (HasPaint(instance.resolvedStroke)) {
@@ -188,143 +307,241 @@ public:
     }
   }
 
-  std::optional<SkPaint> instantiatePaintReference(const PaintResolvedReference& ref,
+  std::optional<SkPaint> instantiateGradient(EntityHandle target,
+                                             const ComputedGradientComponent& computedGradient,
+                                             const PaintResolvedReference& ref,
+                                             const Boxd& pathBounds, const Boxd& viewbox,
+                                             css::RGBA currentColor, float opacity) {
+    // Apply gradientUnits and gradientTransform.
+    const bool objectBoundingBox =
+        computedGradient.gradientUnits == GradientUnits::ObjectBoundingBox;
+
+    const ComputedTransformComponent* maybeTransformComponent =
+        TransformComponent::ComputedTransform(target, FontMetrics());
+
+    bool numbersArePercent = false;
+    Transformd transform;
+    if (objectBoundingBox) {
+      // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
+      //
+      // > Keyword objectBoundingBox should not be used when the geometry of the applicable
+      // > element has no width or no height, such as the case of a horizontal or vertical line,
+      // > even when the line has actual thickness when viewed due to having a non-zero stroke
+      // > width since stroke width is ignored for bounding box calculations. When the geometry
+      // > of the applicable element has no width or height and objectBoundingBox is specified,
+      // > then the given effect (e.g., a gradient or a filter) will be ignored.
+      //
+      if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
+        return createFallbackPaint(ref, currentColor, opacity);
+      }
+
+      transform = ResolveTransform(maybeTransformComponent, pathBounds, FontMetrics());
+
+      // Note that this applies *before* transform.
+      transform *= Transformd::Translate(pathBounds.top_left);
+
+      // TODO: Can numbersArePercent be represented by the transform instead?
+      numbersArePercent = true;
+    } else {
+      transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+    }
+
+    const Boxd& bounds = objectBoundingBox ? pathBounds : viewbox;
+
+    std::vector<SkScalar> pos;
+    std::vector<SkColor> color;
+    for (const GradientStop& stop : computedGradient.stops) {
+      pos.push_back(stop.offset);
+      color.push_back(toSkia(stop.color.resolve(currentColor, stop.opacity * opacity)));
+    }
+
+    assert(pos.size() == color.size());
+
+    // From https://www.w3.org/TR/SVG2/pservers.html#StopNotes:
+    //
+    // > It is necessary that at least two stops defined to have a gradient effect. If no stops
+    // > are defined, then painting shall occur as if 'none' were specified as the paint style.
+    // > If one stop is defined, then paint with the solid color fill using the color defined
+    // > for that gradient stop.
+    //
+    if (pos.empty() || pos.size() > std::numeric_limits<int>::max()) {
+      return createFallbackPaint(ref, currentColor, opacity);
+    }
+
+    const int numStops = static_cast<int>(pos.size());
+    if (numStops == 1) {
+      SkPaint paint;
+      paint.setColor(color[0]);
+      return paint;
+    }
+
+    if (const auto* linearGradient = target.try_get<ComputedLinearGradientComponent>()) {
+      const SkPoint points[] = {
+          toSkia(resolveGradientCoords(linearGradient->x1, linearGradient->y1, bounds, transform,
+                                       numbersArePercent)),
+          toSkia(resolveGradientCoords(linearGradient->x2, linearGradient->y2, bounds, transform,
+                                       numbersArePercent))};
+
+      SkPaint paint;
+      paint.setAntiAlias(true);
+      paint.setShader(SkGradientShader::MakeLinear(points, color.data(), pos.data(), numStops,
+                                                   toSkia(computedGradient.spreadMethod)));
+      return paint;
+    } else {
+      const auto& radialGradient = target.get<ComputedRadialGradientComponent>();
+      const Vector2d center = resolveGradientCoords(radialGradient.cx, radialGradient.cy, bounds,
+                                                    transform, numbersArePercent);
+      const SkScalar radius = resolveGradientCoord(radialGradient.r, bounds, numbersArePercent);
+
+      Vector2d focalCenter = resolveGradientCoords(radialGradient.fx.value_or(radialGradient.cx),
+                                                   radialGradient.fy.value_or(radialGradient.cy),
+                                                   bounds, transform, numbersArePercent);
+      const SkScalar focalRadius =
+          resolveGradientCoord(radialGradient.fr, bounds, numbersArePercent);
+
+      if (NearZero(radius)) {
+        SkPaint paint;
+        paint.setColor(color.back());
+        return paint;
+      }
+
+      // NOTE: In SVG1, if the focal point lies outside of the circle, the focal point set to
+      // the intersection of the circle and the focal point.
+      //
+      // This changes in SVG2, where a cone is created,
+      // https://www.w3.org/TR/SVG2/pservers.html#RadialGradientNotes:
+      //
+      // > If the start circle defined by ‘fx’, ‘fy’ and ‘fr’ lies outside the end circle
+      // > defined by ‘cx’, ‘cy’, and ‘r’, effectively a cone is created, touched by the two
+      // > circles. Areas outside the cone stay untouched by the gradient (transparent black).
+      //
+      // Skia will automatically create the cone, but we need to handle the degenerate case:
+      //
+      // > If the start [focal] circle fully overlaps with the end circle, no gradient is drawn.
+      // > The area stays untouched (transparent black).
+      //
+      const double distanceBetweenCenters = (center - focalCenter).length();
+      if (distanceBetweenCenters + radius <= focalRadius) {
+        return std::nullopt;
+      }
+
+      SkPaint paint;
+      paint.setAntiAlias(true);
+      if (NearZero(focalRadius) && focalCenter == center) {
+        paint.setShader(SkGradientShader::MakeRadial(toSkia(center), radius, color.data(),
+                                                     pos.data(), numStops,
+                                                     toSkia(computedGradient.spreadMethod)));
+      } else {
+        paint.setShader(SkGradientShader::MakeTwoPointConical(
+            toSkia(focalCenter), focalRadius, toSkia(center), radius, color.data(), pos.data(),
+            numStops, toSkia(computedGradient.spreadMethod)));
+      }
+      return paint;
+    }
+  }
+
+  PreserveAspectRatio GetPreserveAspectRatio(EntityHandle handle) {
+    if (const auto* preserveAspectRatioComponent = handle.try_get<PreserveAspectRatioComponent>()) {
+      return preserveAspectRatioComponent->preserveAspectRatio;
+    }
+
+    return PreserveAspectRatio::None();
+  }
+
+  std::optional<SkPaint> instantiatePattern(ComputedShadowTreeComponent::Branch branchType,
+                                            EntityHandle dataHandle, EntityHandle target,
+                                            const ComputedPatternComponent& computedPattern,
+                                            const PaintResolvedReference& ref,
+                                            const Boxd& pathBounds, const Boxd& viewbox,
+                                            css::RGBA currentColor, float opacity) {
+    if (!ref.subtreeInfo) {
+      // Subtree did not instantiate, indicating that recursion was detected.
+      return std::nullopt;
+    }
+
+    Registry& registry = *dataHandle.registry();
+    const bool objectBoundingBox = computedPattern.patternUnits == PatternUnits::ObjectBoundingBox;
+
+    const ComputedTransformComponent* maybeTransformComponent =
+        TransformComponent::ComputedTransform(target, FontMetrics());
+
+    Transformd transform;
+    std::optional<Boxd> patternBounds;
+
+    if (objectBoundingBox) {
+      // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
+      //
+      // > Keyword objectBoundingBox should not be used when the geometry of the applicable
+      // > element has no width or no height, such as the case of a horizontal or vertical line,
+      // > even when the line has actual thickness when viewed due to having a non-zero stroke
+      // > width since stroke width is ignored for bounding box calculations. When the geometry
+      // > of the applicable element has no width or height and objectBoundingBox is specified,
+      // > then the given effect (e.g., a gradient or a filter) will be ignored.
+      //
+      if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
+        return createFallbackPaint(ref, currentColor, opacity);
+      }
+
+      patternBounds = pathBounds;
+
+      transform = ResolveTransform(maybeTransformComponent, Boxd(Vector2d(), pathBounds.size()),
+                                   FontMetrics());
+
+      // Note that this applies *before* transform.
+      transform *= Transformd::Scale(pathBounds.size());
+
+    } else {
+      transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+
+      if (const auto* sizedElement = target.try_get<ComputedSizedElementComponent>()) {
+        patternBounds = sizedElement->bounds;
+
+        transform = sizedElement->computeTransform(target) * transform;
+      }
+    }
+
+    if (patternBounds) {
+      const SkRect tileRect = toSkia(patternBounds.value());
+
+      SkPictureRecorder recorder;
+      renderer_.currentCanvas_ = recorder.beginRecording(tileRect);
+
+      // Render the subtree into the offscreen SkPictureRecorder.
+      assert(ref.subtreeInfo);
+      drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+
+      renderer_.currentCanvas_ = renderer_.rootCanvas_;
+
+      // TODO: May need to transform content? Need to convert SkM44 to SkMatrix (3x3).
+      const SkMatrix localMatrix = toSkiaMatrix(transform);
+
+      SkPaint skPaint;
+      skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
+          SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix,
+          &tileRect));
+      return skPaint;
+    }
+
+    return std::nullopt;
+  }
+
+  std::optional<SkPaint> instantiatePaintReference(ComputedShadowTreeComponent::Branch branchType,
+                                                   EntityHandle dataHandle,
+                                                   const PaintResolvedReference& ref,
                                                    const Boxd& pathBounds, const Boxd& viewbox,
                                                    css::RGBA currentColor, float opacity) {
     const EntityHandle target = ref.reference.handle;
 
     if (const auto* computedGradient = target.try_get<ComputedGradientComponent>()) {
-      // Apply gradientUnits and gradientTransform.
-      const bool objectBoundingBox =
-          computedGradient->gradientUnits == GradientUnits::ObjectBoundingBox;
-
-      const ComputedTransformComponent* maybeTransformComponent =
-          TransformComponent::ComputedTransform(target, FontMetrics());
-
-      bool numbersArePercent = false;
-      Transformd transform;
-      if (objectBoundingBox) {
-        // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
-        //
-        // > Keyword objectBoundingBox should not be used when the geometry of the applicable
-        // > element has no width or no height, such as the case of a horizontal or vertical line,
-        // > even when the line has actual thickness when viewed due to having a non-zero stroke
-        // > width since stroke width is ignored for bounding box calculations. When the geometry
-        // > of the applicable element has no width or height and objectBoundingBox is specified,
-        // > then the given effect (e.g., a gradient or a filter) will be ignored.
-        //
-        if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
-          return createFallbackPaint(ref, currentColor, opacity);
-        }
-
-        transform = ResolveTransform(maybeTransformComponent, pathBounds, FontMetrics());
-
-        // Note that this applies *before* transform.
-        transform *= Transformd::Translate(pathBounds.top_left);
-
-        // TODO: Can numbersArePercent be represented by the transform instead?
-        numbersArePercent = true;
-      } else {
-        transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
-      }
-
-      const Boxd& bounds = objectBoundingBox ? pathBounds : viewbox;
-
-      std::vector<SkScalar> pos;
-      std::vector<SkColor> color;
-      for (const GradientStop& stop : computedGradient->stops) {
-        pos.push_back(stop.offset);
-        color.push_back(toSkia(stop.color.resolve(currentColor, stop.opacity * opacity)));
-      }
-
-      assert(pos.size() == color.size());
-
-      // From https://www.w3.org/TR/SVG2/pservers.html#StopNotes:
-      //
-      // > It is necessary that at least two stops defined to have a gradient effect. If no stops
-      // > are defined, then painting shall occur as if 'none' were specified as the paint style.
-      // > If one stop is defined, then paint with the solid color fill using the color defined
-      // > for that gradient stop.
-      //
-      if (pos.empty() || pos.size() > std::numeric_limits<int>::max()) {
-        return createFallbackPaint(ref, currentColor, opacity);
-      }
-
-      const int numStops = static_cast<int>(pos.size());
-      if (numStops == 1) {
-        SkPaint paint;
-        paint.setColor(color[0]);
-        return paint;
-      }
-
-      if (const auto* linearGradient = target.try_get<ComputedLinearGradientComponent>()) {
-        const SkPoint points[] = {
-            toSkia(resolveGradientCoords(linearGradient->x1, linearGradient->y1, bounds, transform,
-                                         numbersArePercent)),
-            toSkia(resolveGradientCoords(linearGradient->x2, linearGradient->y2, bounds, transform,
-                                         numbersArePercent))};
-
-        SkPaint paint;
-        paint.setAntiAlias(true);
-        paint.setShader(SkGradientShader::MakeLinear(points, color.data(), pos.data(), numStops,
-                                                     toSkia(computedGradient->spreadMethod)));
-        return paint;
-      } else {
-        const auto& radialGradient = target.get<ComputedRadialGradientComponent>();
-        const Vector2d center = resolveGradientCoords(radialGradient.cx, radialGradient.cy, bounds,
-                                                      transform, numbersArePercent);
-        const SkScalar radius = resolveGradientCoord(radialGradient.r, bounds, numbersArePercent);
-
-        Vector2d focalCenter = resolveGradientCoords(radialGradient.fx.value_or(radialGradient.cx),
-                                                     radialGradient.fy.value_or(radialGradient.cy),
-                                                     bounds, transform, numbersArePercent);
-        const SkScalar focalRadius =
-            resolveGradientCoord(radialGradient.fr, bounds, numbersArePercent);
-
-        if (NearZero(radius)) {
-          SkPaint paint;
-          paint.setColor(color.back());
-          return paint;
-        }
-
-        // NOTE: In SVG1, if the focal point lies outside of the circle, the focal point set to
-        // the intersection of the circle and the focal point.
-        //
-        // This changes in SVG2, where a cone is created,
-        // https://www.w3.org/TR/SVG2/pservers.html#RadialGradientNotes:
-        //
-        // > If the start circle defined by ‘fx’, ‘fy’ and ‘fr’ lies outside the end circle
-        // > defined by ‘cx’, ‘cy’, and ‘r’, effectively a cone is created, touched by the two
-        // > circles. Areas outside the cone stay untouched by the gradient (transparent black).
-        //
-        // Skia will automatically create the cone, but we need to handle the degenerate case:
-        //
-        // > If the start [focal] circle fully overlaps with the end circle, no gradient is drawn.
-        // > The area stays untouched (transparent black).
-        //
-        const double distanceBetweenCenters = (center - focalCenter).length();
-        if (distanceBetweenCenters + radius <= focalRadius) {
-          return std::nullopt;
-        }
-
-        SkPaint paint;
-        paint.setAntiAlias(true);
-        if (NearZero(focalRadius) && focalCenter == center) {
-          paint.setShader(SkGradientShader::MakeRadial(toSkia(center), radius, color.data(),
-                                                       pos.data(), numStops,
-                                                       toSkia(computedGradient->spreadMethod)));
-        } else {
-          paint.setShader(SkGradientShader::MakeTwoPointConical(
-              toSkia(focalCenter), focalRadius, toSkia(center), radius, color.data(), pos.data(),
-              numStops, toSkia(computedGradient->spreadMethod)));
-        }
-        return paint;
-      }
-    } else {
-      // TODO: <pattern> paint types.
+      return instantiateGradient(target, *computedGradient, ref, pathBounds, viewbox, currentColor,
+                                 opacity);
+    } else if (const auto* computedPattern = target.try_get<ComputedPatternComponent>()) {
+      return instantiatePattern(branchType, dataHandle, target, *computedPattern, ref, pathBounds,
+                                viewbox, currentColor, opacity);
     }
 
-    return std::nullopt;
+    UTILS_UNREACHABLE();  // The computed tree should invalidate any references that don't point to
+                          // a valid point server, see IsValidPaintServer.
   }
 
   void drawPathFillWithSkPaint(const ComputedPathComponent& path, SkPaint& skPaint,
@@ -336,11 +553,12 @@ public:
 
     skPaint.setAntiAlias(true);
     skPaint.setStyle(SkPaint::Style::kFill_Style);
-    renderer_.canvas_->drawPath(skPath, skPaint);
+    renderer_.currentCanvas_->drawPath(skPath, skPaint);
   }
 
-  void drawPathFill(const ComputedPathComponent& path, const ResolvedPaintServer& paint,
-                    const PropertyRegistry& style, const Boxd& viewbox) {
+  void drawPathFill(EntityHandle dataHandle, const ComputedPathComponent& path,
+                    const ResolvedPaintServer& paint, const PropertyRegistry& style,
+                    const Boxd& viewbox) {
     const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
@@ -350,7 +568,8 @@ public:
       drawPathFillWithSkPaint(path, skPaint, style);
     } else if (const auto* ref = std::get_if<PaintResolvedReference>(&paint)) {
       std::optional<SkPaint> skPaint = instantiatePaintReference(
-          *ref, path.spline.bounds(), viewbox, style.color.getRequired().rgba(), fillOpacity);
+          ComputedShadowTreeComponent::Branch::OffscreenFill, dataHandle, *ref,
+          path.spline.bounds(), viewbox, style.color.getRequired().rgba(), fillOpacity);
       if (skPaint) {
         drawPathFillWithSkPaint(path, skPaint.value(), style);
       }
@@ -407,7 +626,7 @@ public:
     skPaint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
     skPaint.setStrokeMiter(config.miterLimit);
 
-    renderer_.canvas_->drawPath(skPath, skPaint);
+    renderer_.currentCanvas_->drawPath(skPath, skPaint);
   }
 
   void drawPathStroke(EntityHandle dataHandle, const ComputedPathComponent& path,
@@ -430,7 +649,8 @@ public:
       drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint, style, viewbox, fontMetrics);
     } else if (const auto* ref = std::get_if<PaintResolvedReference>(&paint)) {
       std::optional<SkPaint> skPaint = instantiatePaintReference(
-          *ref, path.spline.strokeMiterBounds(config.strokeWidth, config.miterLimit), viewbox,
+          ComputedShadowTreeComponent::Branch::OffscreenStroke, dataHandle, *ref,
+          path.spline.strokeMiterBounds(config.strokeWidth, config.miterLimit), viewbox,
           style.color.getRequired().rgba(), NarrowToFloat((strokeOpacity)));
       if (skPaint) {
         drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint.value(), style, viewbox,
@@ -441,6 +661,9 @@ public:
 
 private:
   RendererSkia& renderer_;
+  InstanceView view_;
+
+  std::vector<SubtreeInfo> subtreeMarkers_;
 };
 
 RendererSkia::RendererSkia(bool verbose) : verbose_(verbose) {}
@@ -460,9 +683,35 @@ void RendererSkia::draw(SVGDocument& document) {
 
   bitmap_.allocPixels(
       SkImageInfo::MakeN32(renderingSize.x, renderingSize.y, SkAlphaType::kUnpremul_SkAlphaType));
-  canvas_ = std::make_unique<SkCanvas>(bitmap_);
+  SkCanvas canvas(bitmap_);
+  rootCanvas_ = &canvas;
+  currentCanvas_ = &canvas;
 
   draw(registry, rootEntity);
+
+  rootCanvas_ = currentCanvas_ = nullptr;
+}
+
+sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
+  Registry& registry = document.registry();
+  const Entity rootEntity = document.rootEntity();
+
+  // TODO: Plumb outWarnings.
+  RendererUtils::prepareDocumentForRendering(document, verbose_);
+
+  const Vector2i renderingSize =
+      registry.get<SizedElementComponent>(rootEntity)
+          .calculateViewportScaledDocumentSize(registry, InvalidSizeBehavior::ReturnDefault);
+
+  SkPictureRecorder recorder;
+  rootCanvas_ = recorder.beginRecording(toSkia(Boxd::WithSize(renderingSize)));
+  currentCanvas_ = rootCanvas_;
+
+  draw(registry, rootEntity);
+
+  rootCanvas_ = currentCanvas_ = nullptr;
+
+  return recorder.finishRecordingAsPicture();
 }
 
 bool RendererSkia::save(const char* filename) {
@@ -476,65 +725,8 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 }
 
 void RendererSkia::draw(Registry& registry, Entity root) {
-  Impl impl(*this);
-  std::vector<SubtreeInfo> subtreeMarkers;
-
-  for (auto view = registry.view<RenderingInstanceComponent>(); auto entity : view) {
-    auto [instance] = view.get(entity);
-
-    if (verbose_) {
-      std::cout << "Rendering "
-                << TypeToString(registry.get<TreeComponent>(instance.dataEntity).type()) << " "
-                << entity << (instance.isShadow(registry) ? " (shadow)" : "") << std::endl;
-    }
-
-    if (instance.clipRect) {
-      canvas_->save();
-      canvas_->clipRect(toSkia(instance.clipRect.value()));
-    }
-
-    canvas_->setMatrix(toSkia(instance.transformCanvasSpace));
-
-    const ComputedStyleComponent& styleComponent =
-        instance.styleHandle(registry).get<ComputedStyleComponent>();
-    const auto& properties = styleComponent.properties();
-
-    if (instance.isolatedLayer) {
-      // Create a new layer if opacity is less than 1.
-      if (properties.opacity.getRequired() < 1.0) {
-        SkPaint opacityPaint;
-        opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
-
-        // TODO: Calculate hint for size of layer.
-        canvas_->saveLayer(nullptr, &opacityPaint);
-      } else {
-        assert(false && "Failed to find reason for isolatedLayer");
-      }
-    }
-
-    if (instance.visible) {
-      if (const auto* path = instance.dataHandle(registry).try_get<ComputedPathComponent>()) {
-        impl.drawPath(instance.dataHandle(registry), instance, *path, styleComponent.properties(),
-                      styleComponent.viewbox(), FontMetrics());
-      }
-    }
-
-    if (instance.subtreeInfo) {
-      subtreeMarkers.push_back(instance.subtreeInfo.value());
-    }
-
-    while (!subtreeMarkers.empty() && subtreeMarkers.back().lastRenderedEntity == entity) {
-      const SubtreeInfo subtreeInfo = subtreeMarkers.back();
-      subtreeMarkers.pop_back();
-
-      // SkCanvas also has restoreToCount, but it just calls restore in a loop.
-      for (int i = 0; i < subtreeInfo.restorePopDepth; ++i) {
-        canvas_->restore();
-      }
-    }
-  }
-
-  canvas_->restoreToCount(1);
+  Impl impl(*this, InstanceView{registry.view<RenderingInstanceComponent>()});
+  impl.drawUntil(registry, entt::null);
 }
 
 }  // namespace donner::svg

@@ -35,7 +35,8 @@
                 "${workspaceFolder}/external/com_google_gtest/googlemock/include",
                 "${workspaceFolder}/external/stb/src",
                 "${workspaceFolder}/external/nlohmann_json/include",
-                "${workspaceFolder}/external/range-v3/include"
+                "${workspaceFolder}/external/range-v3/include",
+                "${workspaceFolder}/bazel-bin/external/stb/_virtual_includes/image"
             ],
             "defines": [],
             "cStandard": "gnu11",

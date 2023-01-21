@@ -111,7 +111,13 @@ void ComputedStyleComponent::computeProperties(EntityHandle handle) {
     auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
     parentStyleComponent.computeProperties(EntityHandle(registry, parent));
 
-    properties_ = properties.inheritFrom(parentStyleComponent.properties());
+    // <pattern> elements can't inherit 'fill' or 'stroke' or it creates recursion in the shadow
+    // tree.
+    const PropertyInheritOptions inheritOptions =
+        registry.all_of<DoNotInheritFillOrStrokeTag>(parent) ? PropertyInheritOptions::NoPaint
+                                                             : PropertyInheritOptions::All;
+
+    properties_ = properties.inheritFrom(parentStyleComponent.properties(), inheritOptions);
     viewbox_ = parentStyleComponent.viewbox_;
   } else {
     properties_ = properties;

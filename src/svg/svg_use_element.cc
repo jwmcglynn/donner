@@ -13,7 +13,8 @@ SVGUseElement SVGUseElement::Create(SVGDocument& document) {
 }
 
 void SVGUseElement::setHref(RcString value) {
-  auto& shadowTree = handle_.emplace_or_replace<ShadowTreeComponent>(value);
+  auto& shadowTree = handle_.emplace_or_replace<ShadowTreeComponent>();
+  shadowTree.setMainHref(value);
   shadowTree.setsContextColors = true;
 
   // Force the shadow tree to be regenerated.
@@ -22,10 +23,12 @@ void SVGUseElement::setHref(RcString value) {
 
 RcString SVGUseElement::href() const {
   if (const auto* component = handle_.try_get<ShadowTreeComponent>()) {
-    return component->href();
-  } else {
-    return "";
+    if (auto maybeMainHref = component->mainHref()) {
+      return maybeMainHref.value();
+    }
   }
+
+  return "";
 }
 
 void SVGUseElement::setX(Lengthd value) {

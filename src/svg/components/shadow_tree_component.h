@@ -1,5 +1,7 @@
 #pragma once
 
+#include <span>
+
 #include "src/base/rc_string.h"
 #include "src/svg/components/document_context.h"
 #include "src/svg/graph/reference.h"
@@ -9,18 +11,22 @@ namespace donner::svg {
 
 class ShadowTreeComponent {
 public:
-  explicit ShadowTreeComponent(Reference href) : reference_(href) {}
+  ShadowTreeComponent() = default;
 
-  RcString href() const { return reference_.href; }
+  std::optional<RcString> mainHref() const {
+    return mainReference_ ? std::make_optional(mainReference_->href) : std::nullopt;
+  }
 
-  std::optional<ResolvedReference> targetEntity(Registry& registry) {
-    return reference_.resolve(registry);
+  void setMainHref(RcString href) { mainReference_ = Reference(href); }
+
+  std::optional<ResolvedReference> mainTargetEntity(Registry& registry) const {
+    return mainReference_ ? mainReference_->resolve(registry) : std::nullopt;
   }
 
   bool setsContextColors = false;
 
 private:
-  Reference reference_;
+  std::optional<Reference> mainReference_;
 };
 
 }  // namespace donner::svg
