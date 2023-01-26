@@ -84,7 +84,6 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"a-fill-010.svg", Params::Skip()},          // UB: rgb(int int int)
             {"a-fill-015.svg", Params::Skip()},          // UB: ICC color
-            {"a-fill-018.svg", Params::Skip()},          // Not impl: <pattern>
             {"a-fill-027.svg", Params::Skip()},          // Not impl: Fallback with icc-color
             {"a-fill-031.svg", Params::Skip()},          // Not impl: <text>
             {"a-fill-032.svg", Params::Skip()},          // Not impl: <text>
@@ -138,7 +137,6 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
-            {"a-stroke-004.svg", Params::Skip()},            // Not impl: <pattern>
             {"a-stroke-007.svg", Params::Skip()},            // Not impl: <text>
             {"a-stroke-008.svg", Params::Skip()},            // Not impl: <text>
             {"a-stroke-009.svg", Params::Skip()},            // Not impl: <pattern>, <text>
@@ -156,7 +154,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
             {"a-stroke-opacity-004.svg", Params::Skip()},   // Not impl: <pattern>
             {"a-stroke-opacity-006.svg", Params::Skip()},   // Not impl: <text>
-            {"a-stroke-width-004.svg", Params::Skip()},     // UB: Nothing should be renderered
+            {"a-stroke-width-004.svg", Params::Skip()},     // UB: Nothing should be rendered
         })),
     TestNameFromFilename);
 

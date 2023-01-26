@@ -30,16 +30,14 @@ functionality.  To do this per-test params may be specified.  Combined together,
 registration appears as:
 
     INSTANTIATE_TEST_SUITE_P(
-      Transform, ResvgTestSuite,
-      ValuesIn(getTestsWithPrefix(
-          "a-transform",
-          {
-              // Larger threshold due to anti-aliasing artifacts.
-              {"a-transform-007.svg", Params::WithThreshold(0.05f)},
-              // Example: Skipped test.
-              {"a-transform-008.svg", Params::Skip()},  
-          })),
-      testNameFromFilename);
+        Transform, ImageComparisonTestFixture,
+        ValuesIn(getTestsWithPrefix(
+            "a-transform",
+            {
+                {"a-transform-007.svg",
+                Params::WithThreshold(0.05f)},  // Larger threshold due to anti-aliasing artifacts.
+            })),
+        TestNameFromFilename);
 
 The Resvg test suite files all start with a letter, either "a-" for attribute, or "e-" for element,
 followed by a dash-delimited name, and then a zero-prefixed number.  So "a-transform" will match
@@ -48,7 +46,7 @@ all tests like "a-transform-007.svg" or "a-transform-origin-001.svg" (hypothetic
 The test name is generated based on the test suite name, "Transform" above and the sanitized
 filename.  For the above example, an example test would be named:
 
-    Transform/ResvgTestSuite.Compare/a_transform_001
+    Transform/ImageComparisonTestFixture.ResvgTest/a_transform_001
 
 To run a test with only one test:
 
