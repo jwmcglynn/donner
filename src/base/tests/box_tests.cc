@@ -8,20 +8,20 @@ namespace donner {
 
 TEST(Box, Construct) {
   Boxd box(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0));
-  EXPECT_EQ(box.top_left, Vector2d(-1.0, -1.0));
-  EXPECT_EQ(box.bottom_right, Vector2d(1.0, 1.0));
+  EXPECT_EQ(box.topLeft, Vector2d(-1.0, -1.0));
+  EXPECT_EQ(box.bottomRight, Vector2d(1.0, 1.0));
 }
 
 TEST(Box, CreateEmpty) {
   Boxd empty = Boxd::CreateEmpty(Vector2d(2.0, 1.0));
-  EXPECT_EQ(empty.top_left, Vector2d(2.0, 1.0));
-  EXPECT_EQ(empty.bottom_right, Vector2d(2.0, 1.0));
+  EXPECT_EQ(empty.topLeft, Vector2d(2.0, 1.0));
+  EXPECT_EQ(empty.bottomRight, Vector2d(2.0, 1.0));
 }
 
 TEST(Box, WithSize) {
   Boxd empty = Boxd::WithSize(Vector2d(4.0, 3.0));
-  EXPECT_EQ(empty.top_left, Vector2d(0, 0));
-  EXPECT_EQ(empty.bottom_right, Vector2d(4.0, 3.0));
+  EXPECT_EQ(empty.topLeft, Vector2d(0, 0));
+  EXPECT_EQ(empty.bottomRight, Vector2d(4.0, 3.0));
 }
 
 TEST(Box, AddPoint) {

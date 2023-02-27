@@ -54,11 +54,23 @@ std::optional<Lengthd::Unit> parseUnit(std::string_view suffix, size_t* charsCon
 
 }  // namespace
 
+/**
+ * Implementation of the LengthParser.
+ */
 class LengthParserImpl : public ParserBase {
 public:
+  /**
+   * Construct a new LengthParser implementation object.
+   *
+   * @param str String to parse.
+   * @param options Parser options.
+   */
   LengthParserImpl(std::string_view str, LengthParser::Options options)
       : ParserBase(str), options_(options) {}
 
+  /**
+   * Parse a length and return the result or error.
+   */
   ParseResult<LengthParser::Result> parse() {
     LengthParser::Result result;
 
@@ -110,6 +122,11 @@ public:
     }
   }
 
+  /**
+   * Check if a unit is required for the given number.
+   *
+   * @param number Number to check.
+   */
   bool unitRequired(double number) const { return !(number == 0.0 || options_.unitOptional); }
 
 private:

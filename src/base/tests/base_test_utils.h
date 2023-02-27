@@ -95,12 +95,12 @@ MATCHER(TransformIsIdentity, "") {
 /**
  * Matches a Box.
  *
- * @param topLeftMatcher Matcher for top_left field.
- * @param bottomRightMatcher Matcher for bottom_right field.
+ * @param topLeftMatcher Matcher for topLeft field.
+ * @param bottomRightMatcher Matcher for bottomRight field.
  */
 MATCHER_P2(BoxEq, topLeftMatcher, bottomRightMatcher, "") {
-  return testing::ExplainMatchResult(topLeftMatcher, arg.top_left, result_listener) &&
-         testing::ExplainMatchResult(bottomRightMatcher, arg.bottom_right, result_listener);
+  return testing::ExplainMatchResult(topLeftMatcher, arg.topLeft, result_listener) &&
+         testing::ExplainMatchResult(bottomRightMatcher, arg.bottomRight, result_listener);
 }
 
 }  // namespace donner

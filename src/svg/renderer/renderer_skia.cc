@@ -66,7 +66,7 @@ SkM44 toSkia(const Transformd& transform) {
 }
 
 SkRect toSkia(const Boxd& box) {
-  return SkRect::MakeLTRB(box.top_left.x, box.top_left.y, box.bottom_right.x, box.bottom_right.y);
+  return SkRect::MakeLTRB(box.topLeft.x, box.topLeft.y, box.bottomRight.x, box.bottomRight.y);
 }
 
 SkColor toSkia(const css::RGBA rgba) {
@@ -338,7 +338,7 @@ public:
       transform = ResolveTransform(maybeTransformComponent, pathBounds, FontMetrics());
 
       // Note that this applies *before* transform.
-      transform *= Transformd::Translate(pathBounds.top_left);
+      transform *= Transformd::Translate(pathBounds.topLeft);
 
       // TODO: Can numbersArePercent be represented by the transform instead?
       numbersArePercent = true;

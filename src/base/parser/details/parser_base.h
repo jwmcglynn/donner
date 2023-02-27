@@ -6,6 +6,11 @@ namespace donner {
 
 class ParserBase {
 public:
+  /**
+   * Create a new parser.
+   *
+   * @param str String to parse.
+   */
   explicit ParserBase(std::string_view str);
 
 protected:
@@ -58,7 +63,7 @@ protected:
   /// The original string.
   const std::string_view str_;
 
-  // A slice of the remaining characters to parse within \ref str_.
+  /// A slice of the remaining characters to parse within \ref str_.
   std::string_view remaining_;
 };
 

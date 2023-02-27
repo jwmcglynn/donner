@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <bit>
 #include <cassert>
@@ -13,7 +14,7 @@
 namespace donner {
 
 /**
- * @brief A reference counted string, that is copy-on-write and implements the small-string
+ * A reference counted string, that is copy-on-write and implements the small-string
  * optimization.
  *
  * Implements a short-string optimization similar to the libc++ std::string class, see
@@ -419,7 +420,7 @@ private:
 template <>
 struct std::hash<donner::RcString> {
   /**
-   * @brief Hash function for RcString.
+   * Hash function for RcString.
    *
    * @param str Input string.
    * @return std::size_t Output hash.

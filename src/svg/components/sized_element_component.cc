@@ -270,7 +270,7 @@ Transformd ComputedSizedElementComponent::computeTransform(EntityHandle handle) 
       }
     }
 
-    Vector2d translation = bounds.top_left - (inheritedViewbox.top_left * scale);
+    Vector2d translation = bounds.topLeft - (inheritedViewbox.topLeft * scale);
     const Vector2d alignMaxOffset = bounds.size() - inheritedViewbox.size() * scale;
 
     const Vector2d alignMultiplier(preserveAspectRatio.alignMultiplierX(),

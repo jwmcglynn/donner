@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <cassert>
 #include <cmath>
@@ -12,6 +13,11 @@
 namespace donner {
 namespace details {
 
+/**
+ * Type traits helper for converting signed types to unsigned types for \ref InRange.
+ *
+ * @tparam T The type to convert.
+ */
 template <typename T>
 struct AddUnsigned {
 private:
@@ -54,25 +60,30 @@ struct AddUnsigned<wchar_t>;
 
 }  // namespace details
 
+/**
+ * Contains a set of math constants for the specified type (float or double).
+ *
+ * @tparam T
+ */
 template <typename T>
 struct MathConstants {};
 
 template <>
 struct MathConstants<float> {
-  static constexpr float kPi = 3.14159265359f;
-  static constexpr float kReciprocalPi = 1.0f / kPi;
-  static constexpr float kHalfPi = kPi / 2.0f;
-  static constexpr float kDegToRad = kPi / 180.0f;
-  static constexpr float kRadToDeg = 180.0f / kPi;
+  static constexpr float kPi = 3.14159265359f;        ///< Pi.
+  static constexpr float kReciprocalPi = 1.0f / kPi;  ///< 1 / Pi.
+  static constexpr float kHalfPi = kPi / 2.0f;        ///< Pi / 2.
+  static constexpr float kDegToRad = kPi / 180.0f;    ///< Degrees to radians ratio.
+  static constexpr float kRadToDeg = 180.0f / kPi;    ///< Radians to degrees ratio.
 };
 
 template <>
 struct MathConstants<double> {
-  static constexpr double kPi = 3.1415926535897932384626433832795028841971693993751;
-  static constexpr double kReciprocalPi = 1.0 / kPi;
-  static constexpr double kHalfPi = kPi / 2.0;
-  static constexpr double kDegToRad = kPi / 180.0;
-  static constexpr double kRadToDeg = 180.0 / kPi;
+  static constexpr double kPi = 3.1415926535897932384626433832795028841971693993751;  ///< Pi.
+  static constexpr double kReciprocalPi = 1.0 / kPi;                                  ///< 1 / Pi.
+  static constexpr double kHalfPi = kPi / 2.0;                                        ///< Pi / 2.
+  static constexpr double kDegToRad = kPi / 180.0;  ///< Degrees to radians ratio.
+  static constexpr double kRadToDeg = 180.0 / kPi;  ///< Radians to degrees ratio.
 };
 
 /**

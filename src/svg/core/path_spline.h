@@ -95,7 +95,7 @@ public:
     Builder& circle(const Vector2d& center, double radius);
 
     /**
-     * @brief Construct the PathSpline.
+     * Construct the PathSpline.
      */
     PathSpline build();
 
