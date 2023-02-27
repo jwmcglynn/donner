@@ -4,6 +4,31 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Doxygen",
+      "type": "shell",
+      "command": "tools/doxygen.sh",
+      "problemMatcher": {
+        "owner": "c",
+        "fileLocation": [
+          "absolute"
+        ],
+        "pattern": {
+          "regexp": "^(.+):([0-9]+): (\\w+): (.+)$",
+          "file": 1,
+          "line": 2,
+          "severity": 3,
+          "message": 4
+        }
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "clear": true
+      }
+    },
+    {
       "label": "xml_tool",
       "type": "shell",
       "command": "bazel",

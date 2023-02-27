@@ -1,6 +1,6 @@
 #include <gmock/gmock.h>
 
-#include "image_comparison_test_fixture.h"
+#include "src/svg/renderer/tests/image_comparison_test_fixture.h"
 
 using testing::ValuesIn;
 

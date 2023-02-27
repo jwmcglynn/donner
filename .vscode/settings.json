@@ -225,12 +225,15 @@
     "pixelmatch",
     "resvg",
     "skia",
+    "Subparser",
+    "SVGSVG",
     "testcase",
     "tparam",
     "transformd",
     "transformf",
     "tspan",
+    "unitless",
     "unpremul",
-    "viewbox",
+    "viewbox"
   ],
 }

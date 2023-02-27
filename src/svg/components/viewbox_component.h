@@ -9,6 +9,7 @@
 namespace donner::svg {
 
 struct ViewboxComponent {
+  /// Stored viewbox, if any.
   std::optional<Boxd> viewbox;
 
   /**

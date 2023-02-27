@@ -13,7 +13,8 @@
 namespace donner {
 
 /**
- * A reference counted string, that is copy-on-write.
+ * @brief A reference counted string, that is copy-on-write and implements the small-string
+ * optimization.
  *
  * Implements a short-string optimization similar to the libc++ std::string class, see
  * https://joellaity.com/2020/01/31/string.html for details.
@@ -417,6 +418,12 @@ private:
 
 template <>
 struct std::hash<donner::RcString> {
+  /**
+   * @brief Hash function for RcString.
+   *
+   * @param str Input string.
+   * @return std::size_t Output hash.
+   */
   std::size_t operator()(const donner::RcString& str) const {
     return std::hash<std::string_view>()(str);
   }

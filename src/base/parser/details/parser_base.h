@@ -6,7 +6,7 @@ namespace donner {
 
 class ParserBase {
 public:
-  ParserBase(std::string_view str);
+  explicit ParserBase(std::string_view str);
 
 protected:
   /**
@@ -55,7 +55,10 @@ protected:
    */
   std::optional<ParseError> readNumbers(std::span<double> resultStorage);
 
+  /// The original string.
   const std::string_view str_;
+
+  // A slice of the remaining characters to parse within \ref str_.
   std::string_view remaining_;
 };
 
