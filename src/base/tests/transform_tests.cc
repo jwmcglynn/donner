@@ -146,7 +146,7 @@ TEST(Transform, TransformBox) {
 }
 
 TEST(Transform, Output) {
-  Transformd t(uninitialized);
+  Transformd t(Transformd::uninitialized);
   t.data[0] = 1.0;
   t.data[1] = -2.0;
   t.data[2] = 3.0;

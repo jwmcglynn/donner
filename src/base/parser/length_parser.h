@@ -9,7 +9,7 @@
 namespace donner {
 
 /**
- * Parser for CSS `<length-percentage>` strings, such as '10px', '30\%', '10em', etc.
+ * Parser for CSS `<length-percentage>` strings, such as "10px", "30%", "10em", etc.
  *
  * For example:
  * ```

@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <ostream>
 
@@ -37,7 +38,18 @@ struct Box {
   Box(const Vector2<T>& topLeft, const Vector2<T>& bottomRight)
       : topLeft(topLeft), bottomRight(bottomRight) {}
 
+  /**
+   * Copy constructor.
+   *
+   * @param other Other box.
+   */
   Box(const Box<T>& other) = default;
+
+  /**
+   * Copy assignment operator.
+   *
+   * @param other Other box.
+   */
   Box<T>& operator=(const Box<T>& other) = default;
 
   /**
@@ -87,35 +99,46 @@ struct Box {
   /// Returns true if the box has zero width or height.
   bool isEmpty() const { return NearZero(width()) || NearZero(height()); }
 
+  /// Return the box moved by subtracting the given vector.
   Box<T> operator-(const Vector2<T>& vec) const { return Box<T>(topLeft - vec, bottomRight - vec); }
 
+  /// Move the box by subtracting the given vector.
   Box<T>& operator-=(const Vector2<T>& vec) {
     topLeft -= vec;
     bottomRight -= vec;
     return *this;
   }
 
+  /// Return the box moved by adding the given vector.
   Box<T> operator+(const Vector2<T>& vec) const { return Box<T>(topLeft + vec, bottomRight + vec); }
 
+  /// Move the box by adding the given vector.
   Box<T>& operator+=(const Vector2<T>& vec) {
     topLeft += vec;
     bottomRight += vec;
     return *this;
   }
 
-  // Comparison.
+  /// @addtogroup Comparison
+  /// @{
+
+  /// Equality operator.
   bool operator==(const Box<T>& other) const {
     return topLeft == other.topLeft && bottomRight == other.bottomRight;
   }
-  bool operator!=(const Box<T>& rhs) const { return !operator==(rhs); }
 
-  // Output.
+  /// Inequality operator.
+  bool operator!=(const Box<T>& rhs) const { return !operator==(rhs); }
+  /// @}
+
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const Box<T>& box) {
     os << box.topLeft << " => " << box.bottomRight;
     return os;
   }
 };
 
+/// Shorthand for \ref Box<double>.
 typedef Box<double> Boxd;
 
 }  // namespace donner

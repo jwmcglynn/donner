@@ -68,6 +68,7 @@ struct AddUnsigned<wchar_t>;
 template <typename T>
 struct MathConstants {};
 
+/// Math constants for float.
 template <>
 struct MathConstants<float> {
   static constexpr float kPi = 3.14159265359f;        ///< Pi.
@@ -77,6 +78,7 @@ struct MathConstants<float> {
   static constexpr float kRadToDeg = 180.0f / kPi;    ///< Radians to degrees ratio.
 };
 
+/// Math constants for double.
 template <>
 struct MathConstants<double> {
   static constexpr double kPi = 3.1415926535897932384626433832795028841971693993751;  ///< Pi.
@@ -216,10 +218,15 @@ inline bool InRange(T var, T start, T end) {
   return static_cast<UnsignedT>(var - start) <= UnsignedT(end - start);
 }
 
+/**
+ * Holds the solution of a quadratic equation, as returned by \ref SolveQuadratic.
+ *
+ * @tparam T
+ */
 template <typename T>
 struct QuadraticSolution {
-  T solution[2] = {};
-  bool hasSolution = false;
+  T solution[2] = {};        ///< Solutions to the equation, valid if \ref hasSolution is true.
+  bool hasSolution = false;  ///< True if the equation has solutions.
 };
 
 /**

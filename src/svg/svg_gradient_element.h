@@ -5,9 +5,17 @@
 
 namespace donner::svg {
 
+/**
+ * @brief Base class for SVG gradient elements, such as \ref SVGLinearGradientElement and \ref
+ * SVGRadialGradientElement.
+ */
 class SVGGradientElement : public SVGElement {
 protected:
-  // SVGGradientElement must be constructed from a derived class.
+  /**
+   * Constructor for SVGGradientElement, which must be constructed from a derived class.
+   *
+   * @param handle The handle to the underlying entity.
+   */
   explicit SVGGradientElement(EntityHandle handle);
 
 public:

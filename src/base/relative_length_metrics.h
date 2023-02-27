@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 namespace donner {
 
@@ -14,9 +15,17 @@ struct FontMetrics {
   double chUnitInEm =
       0.5f;  //!< Equal to the used advance measure of the "0" glyph in the font used to render it.
 
+  /// The value of an "ex" unit.
   double exUnit() const { return exUnitInEm * fontSize; }
+
+  /// The value of a "ch" unit.
   double chUnit() const { return chUnitInEm * fontSize; }
 
+  /**
+   * Construct a FontMetrics with default values for a given font size.
+   *
+   * @param fontSize The font size to use for the default values.
+   */
   static FontMetrics DefaultsWithFontSize(double fontSize) {
     FontMetrics metrics;
     metrics.fontSize = fontSize;
@@ -25,11 +34,15 @@ struct FontMetrics {
   }
 };
 
-struct RelativeLengthMetrics {
-  static constexpr double kDpi = 96.0;
-  static constexpr double kInchesToPixels = kDpi;
-  static constexpr double kPointsToPixels = kDpi / 72.0;
-  static constexpr double kCmToPixels = kDpi / 2.54;
+/**
+ * A container with ratios for converting absolute lengths, such as "cm" or "in", see
+ * https://www.w3.org/TR/css-values/#absolute-lengths.
+ */
+struct AbsoluteLengthMetrics {
+  static constexpr double kDpi = 96.0;  ///< Hardcoded DPI for computing absolute lengths.
+  static constexpr double kInchesToPixels = kDpi;         ///< 1 inch = 96 pixels.
+  static constexpr double kPointsToPixels = kDpi / 72.0;  ///< 1 point = 1/72 inch.
+  static constexpr double kCmToPixels = kDpi / 2.54;      ///< 1 cm = 1/2.54 inch.
 };
 
 }  // namespace donner

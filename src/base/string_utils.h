@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <concepts>
 #include <iterator>
@@ -21,19 +22,56 @@ concept IsCStr = std::is_same_v<T, const char*> || std::is_same_v<T, char*>;
 
 }  // namespace details
 
+/// A concept for types that are string-like, i.e. have a size() and data() method.
 template <typename T>
 concept StringLike = requires(T t, size_t i) {
-  { t.size() } -> std::same_as<size_t>;
-  { t.data() } -> details::IsCStr;
+                       { t.size() } -> std::same_as<size_t>;
+                       { t.data() } -> details::IsCStr;
+                     };
+
+/// String comparison options, e.g. case sensitivity.
+enum class StringComparison {
+  Default,     ///< The default case-sensitive string comparison.
+  IgnoreCase,  ///< Case-insensitive string comparison.
 };
 
-enum class StringComparison { Default, IgnoreCase };
-
+/**
+ * Type traits for case-insensitive string comparison, usable with algorithms that accept an STL
+ * `std::char_traits`.
+ */
 struct CaseInsensitiveCharTraits : public std::char_traits<char> {
+  /**
+   * Compare two characters for equality.
+   *
+   * @param lhs Left-hand side character.
+   * @param rhs Right-hand side character.
+   */
   static bool eq(char lhs, char rhs) { return std::tolower(lhs) == std::tolower(rhs); }
+
+  /**
+   * Compare two characters for inequality.
+   *
+   * @param lhs Left-hand side character.
+   * @param rhs Right-hand side character.
+   */
   static bool ne(char lhs, char rhs) { return std::tolower(lhs) != std::tolower(rhs); }
+
+  /**
+   * Compare two characters for less-than.
+   *
+   * @param lhs Left-hand side character.
+   * @param rhs Right-hand side character.
+   */
   static bool lt(char lhs, char rhs) { return std::tolower(lhs) < std::tolower(rhs); }
 
+  /**
+   * Compare two strings for equality, returning -1 if \p lhs is less than \p rhs, 0 if they are
+   * equal, or 1 if \p lhs is greater than \p rhs.
+   *
+   * @param lhs Left-hand side string.
+   * @param rhs Right-hand side string.
+   * @param sizeToCompare The number of characters to compare.
+   */
   static int compare(const char* lhs, const char* rhs, size_t sizeToCompare) {
     for (size_t i = 0; i < sizeToCompare; ++i) {
       const char lhsCh = std::tolower(lhs[i]);
@@ -48,6 +86,13 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
     return 0;
   }
 
+  /**
+   * Find the first occurrence of a character in a string using a case-insensitive match.
+   *
+   * @param str The string to search.
+   * @param size The size of the string.
+   * @param ch The character to search for.
+   */
   static const char* find(const char* str, size_t size, char ch) {
     const char lowerCh = std::tolower(ch);
     for (size_t i = 0; i < size; ++i) {
@@ -71,8 +116,7 @@ public:
    *
    * @param lhs The first string to compare, can be any case.
    * @param lowercaseRhs string to compare to, must be lowercase.
-   * @return true If the \ref lowercaseRhs is equal to the \ref lhs, ignoring the case of the \ref
-   * lhs.
+   * @return true If the \p lowercaseRhs is equal to the \p lhs, ignoring the case of the \p lhs.
    */
   template <StringLike T, StringLike U>
   static bool EqualsLowercase(const T& lhs, const U& lowercaseRhs) {
@@ -109,7 +153,7 @@ public:
   }
 
   /**
-   * Returns true if \ref str starts with \ref otherStr.
+   * Returns true if \p str starts with \p otherStr.
    *
    * @param str The string to check for a prefix.
    * @param otherStr The prefix to check for.
@@ -126,7 +170,7 @@ public:
   }
 
   /**
-   * Returns true if \ref str ends with \ref otherStr.
+   * Returns true if \p str ends with \p otherStr.
    *
    * @param str The string to check for a suffix.
    * @param otherStr The suffix to check for.
@@ -145,7 +189,7 @@ public:
   }
 
   /**
-   * Returns true if \ref str contains \ref otherStr.
+   * Returns true if \p str contains \p otherStr.
    *
    * @param str The string to check for a suffix.
    * @param otherStr The suffix to check for.
@@ -169,15 +213,15 @@ public:
   }
 
   /**
-   * Splits a string by a given character, returning a range of the split strings as a \ref
-   * std::string_view.
+   * Splits a string by a given character, returning a range of the split strings as a
+   * `std::string_view`.
    *
    * Example:
-   * @code{.cpp}
+   * ```
    * for (auto&& str : StringUtils::Split("a,b,c", ',')) {
    *   // ...
    * }
-   * @endcode
+   * ```
    *
    * @tparam T The string type to split.
    * @param str The string to split.
@@ -217,7 +261,7 @@ private:
     }
   }
 
-  // Helper to filter out empty std::string_views.
+  /// Helper to filter out empty std::string_views.
   static bool StringViewIsNonEmpty(std::string_view str) { return !str.empty(); }
 };
 

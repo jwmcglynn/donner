@@ -127,12 +127,12 @@ struct Length {
           return value * diagonalExtent(viewbox) / 100;
         }
       }
-      case Unit::Cm: return value * RelativeLengthMetrics::kCmToPixels;
-      case Unit::Mm: return value * RelativeLengthMetrics::kCmToPixels / 10.0;
-      case Unit::Q: return value * RelativeLengthMetrics::kCmToPixels / 40.0;
-      case Unit::In: return value * RelativeLengthMetrics::kInchesToPixels;
-      case Unit::Pc: return value * RelativeLengthMetrics::kInchesToPixels / 6.0;
-      case Unit::Pt: return value * RelativeLengthMetrics::kPointsToPixels;
+      case Unit::Cm: return value * AbsoluteLengthMetrics::kCmToPixels;
+      case Unit::Mm: return value * AbsoluteLengthMetrics::kCmToPixels / 10.0;
+      case Unit::Q: return value * AbsoluteLengthMetrics::kCmToPixels / 40.0;
+      case Unit::In: return value * AbsoluteLengthMetrics::kInchesToPixels;
+      case Unit::Pc: return value * AbsoluteLengthMetrics::kInchesToPixels / 6.0;
+      case Unit::Pt: return value * AbsoluteLengthMetrics::kPointsToPixels;
       case Unit::Px: return value;
       // Relative units.
       case Unit::Em: return value * fontMetrics.fontSize;

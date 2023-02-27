@@ -33,7 +33,7 @@ public:
 
       const std::string_view func = maybeFunc.result();
       if (func == "matrix") {
-        Transformd t(uninitialized);
+        Transformd t(Transformd::uninitialized);
         if (auto error = readNumbers(t.data)) {
           return std::move(error.value());
         }

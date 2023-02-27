@@ -25,7 +25,7 @@
         "isDefault": true
       },
       "presentation": {
-        "clear": true
+        "revealProblems": "always"
       }
     },
     {

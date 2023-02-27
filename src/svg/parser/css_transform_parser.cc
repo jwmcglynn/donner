@@ -299,7 +299,7 @@ public:
   }
 
   std::optional<ParseError> parseMatrix(ComponentValueParser& subparser) {
-    Transformd t(uninitialized);
+    Transformd t(Transformd::uninitialized);
     if (auto error = subparser.readNumbers(t.data)) {
       return std::move(error.value());
     }

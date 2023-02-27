@@ -17,12 +17,12 @@ namespace donner {
  * A reference counted string, that is copy-on-write and implements the small-string
  * optimization.
  *
- * Implements a short-string optimization similar to the libc++ std::string class, see
+ * Implements a short-string optimization similar to the libc++ `std::string` class, see
  * https://joellaity.com/2020/01/31/string.html for details.
  */
 class RcString {
 public:
-  /**
+  /*
    * Since we use the low bit to indicate whether the string is a short or long string, aliasing the
    * one-byte size in the first field of ShortStringData with size_t size of LongStringData.
    *
@@ -31,11 +31,21 @@ public:
    */
   static_assert(std::endian::native == std::endian::little, "Only little-endian is supported");
 
+  /// Sentinel value for the maximum value of size_t, used to indicate when the size is not known.
   static constexpr size_t npos = std::string_view::npos;
+  /// String iterator.
   using iterator = std::string_view::iterator;
+  /// Const string iterator.
   using const_iterator = std::string_view::const_iterator;
 
+  /// Create an empty string.
   constexpr RcString() = default;
+
+  /**
+   * Constructs a new RcString object by copying an existing string.
+   *
+   * @param data Input string to copy.
+   */
   explicit RcString(std::string_view data) { initializeStorage(data); }
 
   /**
@@ -56,90 +66,138 @@ public:
    */
   static RcString fromVector(std::vector<char>&& data) { return RcString(std::move(data)); }
 
+  /// Copy constructor.
   constexpr RcString(const RcString& other) : data_(other.data_) {}
+  /// Move constructor.
   constexpr RcString(RcString&& other) : data_(std::move(other.data_)) {}
 
+  /// Copy assignment operator.
   RcString& operator=(const RcString& other) {
     data_ = other.data_;
     return *this;
   }
 
+  /// Move assignment operator.
   RcString& operator=(RcString&& other) {
     data_ = std::move(other.data_);
     return *this;
   }
 
+  /// Assignment operator from a C-style string.
   RcString& operator=(const char* data) {
     initializeStorage(std::string_view(data));
     return *this;
   }
 
+  /// Assignment operator from a `std::string_view`.
   RcString& operator=(std::string_view data) {
     initializeStorage(data);
     return *this;
   }
 
+  /// Cast operator to `std::string_view`.
   operator std::string_view() const {
     return data_.isLong() ? std::string_view(data_.long_.data, data_.long_.size())
                           : std::string_view(data_.short_.data, data_.short_.size());
   }
 
-  // Comparison operators.
+  /// @addtogroup Comparison
+  /// @{
+
+  /// Spaceship equality operator to another \ref RcString.
   constexpr friend auto operator<=>(const RcString& lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
+
+  /// Spaceship equality operator to a C-style string.
   constexpr friend auto operator<=>(const RcString& lhs, const char* rhs) {
     return compareStringViews(lhs, rhs);
   }
+
+  /// Spaceship equality operator to a `std::string_view`.
   constexpr friend auto operator<=>(const RcString& lhs, std::string_view rhs) {
     return compareStringViews(lhs, rhs);
   }
 
+  //
   // Reversed comparison operators.
+  //
+
+  /// Spaceship equality operator to another \ref RcString.
   constexpr friend auto operator<=>(const char* lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
+
+  /// Spaceship equality operator to a C-style string.
   constexpr friend auto operator<=>(std::string_view lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
+  //
   // For gtest, also implement operator== in terms of operator<=>.
+  //
+
+  /// Equality operator to another \ref RcString.
   constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
+
+  /// Equality operator to a C-style string.
   constexpr friend bool operator==(const RcString& lhs, const char* rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
+
+  /// Equality operator to a `std::string_view`.
   constexpr friend bool operator==(const RcString& lhs, std::string_view rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
+
+  /// Reversed equality operator to another \ref RcString.
   constexpr friend bool operator==(const char* lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
+
+  /// Reversed equality operator to a C-style string.
   constexpr friend bool operator==(std::string_view lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
+  /// @}
+
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const RcString& self) {
     return os << std::string_view(self);
   }
 
-  // Concatenation operators.
+  /// @addtogroup Concatenation
+  /// @{
+
+  /// Concatenation operator with another \ref RcString.
   friend std::string operator+(const RcString& lhs, const RcString& rhs) {
     return concatStringViews(lhs, rhs);
   }
+
+  /// Concatenation operator with a C-style string.
   friend std::string operator+(const RcString& lhs, const char* rhs) {
     return concatStringViews(lhs, rhs);
   }
+
+  /// Concatenation operator with a `std::string_view`.
   friend std::string operator+(const RcString& lhs, std::string_view rhs) {
     return concatStringViews(lhs, rhs);
   }
+
+  /// Reversed concatenation operator with a C-style string.
   friend std::string operator+(std::string_view lhs, const RcString& rhs) {
     return concatStringViews(lhs, rhs);
   }
+
+  /// Reversed concatenation operator with a `std::string_view`.
   friend std::string operator+(const char* lhs, const RcString& rhs) {
     return concatStringViews(lhs, rhs);
   }
+
+  /// @}
 
   /**
    * @return a pointer to the string data.
@@ -162,9 +220,13 @@ public:
   std::string str() const { return std::string(data(), size()); }
 
   // Iterators.
+  /// Begin iterator.
   constexpr const_iterator begin() const noexcept { return cbegin(); }
+  /// End iterator.
   constexpr const_iterator end() const noexcept { return cend(); }
+  /// Begin iterator.
   constexpr const_iterator cbegin() const noexcept { return data(); }
+  /// End iterator.
   constexpr const_iterator cend() const noexcept { return data() + size(); }
 
   /**
@@ -417,6 +479,9 @@ private:
 
 }  // namespace donner
 
+/**
+ * Hash function for RcString.
+ */
 template <>
 struct std::hash<donner::RcString> {
   /**

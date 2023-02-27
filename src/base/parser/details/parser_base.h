@@ -1,9 +1,16 @@
+#pragma once
+/// @file
+
 #include <span>
 
 #include "src/base/parser/number_parser.h"
 
 namespace donner {
 
+/**
+ * Base class for parsers, containing common functionality such as maintaining the current
+ * parse location, skipping whitespace, and parsing numbers.
+ */
 class ParserBase {
 public:
   /**

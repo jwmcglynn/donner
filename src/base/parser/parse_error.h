@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <ostream>
 #include <string>
@@ -6,6 +7,9 @@
 
 namespace donner {
 
+/**
+ * Error context for a failed parse, such as the error reason, line, and character offset.
+ */
 struct ParseError {
   /// Magic value for \ref offset to indicate the error occurred at the end of the string.
   static constexpr int kEndOfString = -1;
@@ -34,7 +38,7 @@ struct ParseError {
     }
   }
 
-  // Output.
+  /// Print the error to an ostream.
   friend std::ostream& operator<<(std::ostream& os, const ParseError& error);
 };
 

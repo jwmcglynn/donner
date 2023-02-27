@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <ostream>
 
@@ -8,20 +9,19 @@
 
 namespace donner {
 
-struct UninitializedTag {};
-constexpr UninitializedTag uninitialized;
-
 /**
- * A 2D 3x2 matrix with six parameters, equivalent to the matrix:
+ * A 2D matrix representing an affine transformation.
  *
- * @f[
+ * It stores six parameters, and is equivalent to the 4x4 matrix:
+ *
+ * \f[
  * \begin{bmatrix}
  *   a & c & 0 & e  \\
  *   b & d & 0 & f  \\
  *   0 & 0 & 1 & 0  \\
  *   0 & 0 & 0 & 1  \\
  * \end{bmatrix}
- * @f]
+ * \f]
  *
  * Elements are stored in column-major order.
  *
@@ -29,20 +29,28 @@ constexpr UninitializedTag uninitialized;
  */
 template <typename T>
 struct Transform {
+  /// Tag type for constructing an uninitialized transform.
+  struct UninitializedTag {};
+  /// Tag value for constructing an uninitialized transform.
+  static constexpr UninitializedTag uninitialized = UninitializedTag();
+
   /**
    * Storage for a 3x2 matrix, in column-major order.
    *
    * Elements are stored in the following order:
    *
-   *   0 = scaleX
-   *   1 = skewY
-   *   2 = skewX
-   *   3 = scaleY
-   *   4 = translateX
-   *   5 = translateY
+   * - 0 = scaleX
+   * - 1 = skewY
+   * - 2 = skewX
+   * - 3 = scaleY
+   * - 4 = translateX
+   * - 5 = translateY
+   *
+   * For the layout documented in \ref Transform, this stores `[a b c d e f]`.
    */
-  T data[6];  // For the layout above, stores [a b c d e f]
+  T data[6];
 
+  /// Construct an identity transform.
   Transform() {
     data[0] = T(1);
     data[1] = T(0);
@@ -52,6 +60,13 @@ struct Transform {
     data[5] = T(0);
   }
 
+  /**
+   * Construct an uninitialized transform.
+   *
+   * ```
+   * Transform<T> transform(Transform::uninitialized);
+   * ```
+   */
   explicit Transform(UninitializedTag) {}
 
   /**
@@ -161,14 +176,14 @@ struct Transform {
   /**
    * Transforms a column vector, applying rotations/scaling but not translation.
    *
-   * @f{
+   * \f[
    *   v' = M \begin{bmatrix}
    *            v_x  \\
    *            v_y  \\
    *             0   \\
    *             0
    *          \end{bmatrix}
-   * @f}
+   * \f]
    *
    * @param v Vector to transform.
    * @result Transformed vector.
@@ -181,14 +196,14 @@ struct Transform {
   /**
    * Transforms a position given as a vector.
    *
-   * @f[
+   * \f[
    *  v' = M \begin{bmatrix}
    *           v_x  \\
    *           v_y  \\
    *            0   \\
    *            1
    *         \end{bmatrix}
-   * @f]
+   * \f]
    *
    * @param v Vector to transform.
    * @result Transformed vector.
@@ -221,9 +236,9 @@ struct Transform {
    * Post-multiplies rhs with this transform.
    *
    * Example: Take A, transform by T, transform by R is written as
-   * \code{.cpp}
-   *   R * T * A
-   * \endcode
+   * ```
+   * R * T * A
+   * ```
    *
    * @param rhs Other transform.
    */
@@ -251,6 +266,7 @@ struct Transform {
     return *this;
   }
 
+  /// Assignment operator.
   Transform<T>& operator=(const Transform<T>& other) {
     for (int i = 0; i < 6; ++i) {
       data[i] = other.data[i];
@@ -259,7 +275,7 @@ struct Transform {
     return *this;
   }
 
-  // Output.
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const Transform<T>& t) {
     os << "matrix(" << t.data[0] << " " << t.data[1] << " " << t.data[2] << " " << t.data[3] << " "
        << t.data[4] << " " << t.data[5] << ") =>" << std::endl
@@ -271,8 +287,15 @@ struct Transform {
   }
 };
 
-// Helper typedefs.
+/// @addtogroup Typedefs
+/// @{
+
+/// Shorthand for \ref Transform<float>.
 typedef Transform<float> Transformf;
+
+/// Shorthand for \ref Transform<double>.
 typedef Transform<double> Transformd;
+
+/// @}
 
 }  // namespace donner

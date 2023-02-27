@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <optional>
 #include <string>
@@ -9,7 +10,7 @@
 namespace donner {
 
 /**
- * A parser result, which may contain a result of type @a T, or an error, or both.
+ * A parser result, which may contain a result of type \a T, or an error, or both.
  *
  * @tparam T Result type.
  */
@@ -38,39 +39,80 @@ public:
   ParseResult(T&& result, ParseError&& error)
       : result_(std::move(result)), error_(std::move(error)) {}
 
+  /**
+   * Returns the contained result.
+   *
+   * @pre There is a valid result, i.e. \ref hasResult() returns true.
+   */
   T& result() & {
     UTILS_RELEASE_ASSERT(hasResult());
     return result_.value();
   }
 
+  /**
+   * Returns the contained result.
+   *
+   * @pre There is a valid result, i.e. \ref hasResult() returns true.
+   */
   T&& result() && {
     UTILS_RELEASE_ASSERT(hasResult());
     return std::move(result_.value());
   }
 
+  /**
+   * Returns the contained result.
+   *
+   * @pre There is a valid result, i.e. \ref hasResult() returns true.
+   */
   const T& result() const& {
     UTILS_RELEASE_ASSERT(hasResult());
     return result_.value();
   }
 
+  /**
+   * Returns the contained error.
+   *
+   * @pre There is a valid error, i.e. \ref hasError() returns true.
+   */
   ParseError& error() & {
     UTILS_RELEASE_ASSERT(hasError());
     return error_.value();
   }
 
+  /**
+   * Returns the contained error.
+   *
+   * @pre There is a valid error, i.e. \ref hasError() returns true.
+   */
   ParseError&& error() && {
     UTILS_RELEASE_ASSERT(hasError());
     return std::move(error_.value());
   }
 
+  /**
+   * Returns the contained error.
+   *
+   * @pre There is a valid error, i.e. \ref hasError() returns true.
+   */
   const ParseError& error() const& {
     UTILS_RELEASE_ASSERT(hasError());
     return error_.value();
   }
 
+  /// Returns true if this ParseResult contains a valid result.
   bool hasResult() const { return result_.has_value(); }
+
+  /// Returns true if this ParseResult contains an error.
   bool hasError() const { return error_.has_value(); }
 
+  /**
+   * Map the result of this ParseResult to a new type, by transforming the result with the provided
+   * functor.
+   *
+   * @tparam Target The type to map to.
+   * @tparam Functor The functor type.
+   * @param functor The functor to apply to the result.
+   */
   template <typename Target, typename Functor>
   ParseResult<Target> map(Functor&& functor) {
     if (hasResult()) {
@@ -80,6 +122,14 @@ public:
     }
   }
 
+  /**
+   * Map the error of this ParseResult to a new type, by transforming the error with the provided
+   * functor.
+   *
+   * @tparam Target The type to map to.
+   * @tparam Functor The functor type.
+   * @param functor The functor to apply to the error.
+   */
   template <typename Target, typename Functor>
   ParseResult<Target> mapError(Functor&& functor) {
     if (hasError()) {
