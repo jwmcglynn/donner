@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/base/tests/base_test_utils.h"
 #include "src/css/parser/rule_parser.h"
 #include "src/css/parser/tests/token_test_utils.h"
 
@@ -32,6 +33,46 @@ TEST(RuleParser, ParseRule) {
                   SimpleBlockIsCurly(ElementsAre(TokenIsWhitespace(" "), TokenIsIdent("key"),
                                                  TokenIsColon(), TokenIsWhitespace(" "),
                                                  TokenIsIdent("value"), TokenIsWhitespace(" "))))));
+
+  EXPECT_THAT(RuleParser::ParseRule("selector > list { key: value }"),
+              Optional(QualifiedRuleIs(
+                  ElementsAre(TokenIsIdent("selector"), TokenIsWhitespace(" "), TokenIsDelim('>'),
+                              TokenIsWhitespace(" "), TokenIsIdent("list"), TokenIsWhitespace(" ")),
+                  SimpleBlockIsCurly(ElementsAre(TokenIsWhitespace(" "), TokenIsIdent("key"),
+                                                 TokenIsColon(), TokenIsWhitespace(" "),
+                                                 TokenIsIdent("value"), TokenIsWhitespace(" "))))));
+
+  EXPECT_THAT(RuleParser::ParseRule("a > b { color: red }"),
+              Optional(QualifiedRuleIs(
+                  ElementsAre(TokenIsIdent("a"), TokenIsWhitespace(" "), TokenIsDelim('>'),
+                              TokenIsWhitespace(" "), TokenIsIdent("b"), TokenIsWhitespace(" ")),
+                  SimpleBlockIsCurly(ElementsAre(TokenIsWhitespace(" "), TokenIsIdent("color"),
+                                                 TokenIsColon(), TokenIsWhitespace(" "),
+                                                 TokenIsIdent("red"), TokenIsWhitespace(" "))))));
+
+  {
+    auto maybeRule = RuleParser::ParseRule("a > b { color: red }");
+    ASSERT_TRUE(maybeRule.has_value());
+
+    EXPECT_THAT(maybeRule.value(), ToStringIs(
+                                       R"(QualifiedRule {
+  Token { Ident(a) offset: 0 }
+  Token { Whitespace(' ', len=1) offset: 1 }
+  Token { Delim(>) offset: 2 }
+  Token { Whitespace(' ', len=1) offset: 3 }
+  Token { Ident(b) offset: 4 }
+  Token { Whitespace(' ', len=1) offset: 5 }
+  { SimpleBlock {
+  token='{'
+  Token { Whitespace(' ', len=1) offset: 7 }
+  Token { Ident(color) offset: 8 }
+  Token { Colon offset: 13 }
+  Token { Whitespace(' ', len=1) offset: 14 }
+  Token { Ident(red) offset: 15 }
+  Token { Whitespace(' ', len=1) offset: 18 }
+} }
+})"));
+  }
 }
 
 TEST(RuleParser, ParseRule_AtRule) {

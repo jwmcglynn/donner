@@ -7,11 +7,18 @@
 namespace donner {
 namespace css {
 
+/**
+ * Rule-related parsing routines, including parsing individual rules, lists of rules, and
+ * stylesheets.
+ */
 class RuleParser {
 public:
   /**
    * Parse a CSS stylesheet into a list of rules, per
-   * https://www.w3.org/TR/css-syntax-3/#parse-stylesheet
+   * https://www.w3.org/TR/css-syntax-3/#parse-stylesheet.
+   *
+   * NOTE: This does not parse selectors, in most cases you should use \ref StylesheetParser
+   * instead which handles selectors and returns a \ref Stylesheet object to match against.
    *
    * @param str Input stylesheet string.
    * @return Parsed stylesheet as a list of rules.

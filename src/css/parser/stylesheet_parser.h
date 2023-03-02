@@ -7,6 +7,9 @@
 namespace donner {
 namespace css {
 
+/**
+ * Parse a CSS stylesheet into a list of selectors and declarations.
+ */
 class StylesheetParser {
 public:
   /**

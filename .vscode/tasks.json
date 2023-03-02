@@ -74,11 +74,14 @@
     {
       "label": "css (all)",
       "type": "shell",
-      "command": "bazel build //src/css/... -c dbg",
+      "command": "bazel test //src/css/... -c dbg",
       "problemMatcher": [
         "$gcc"
       ],
-      "group": "build",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
       "presentation": {
         "clear": true
       }
@@ -125,10 +128,7 @@
       "problemMatcher": [
         "$gcc"
       ],
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      }
+      "group": "test"
     },
     {
       "label": "base_parser_tests",

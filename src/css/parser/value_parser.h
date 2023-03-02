@@ -7,6 +7,10 @@
 namespace donner {
 namespace css {
 
+/**
+ * Parse a CSS value, per https://www.w3.org/TR/css-syntax-3/#parse-list-of-component-values. This
+ * is used when parsing CSS-like attributes within XML/HTML, such as SVG presentation attributes.
+ */
 class ValueParser {
 public:
   /**
@@ -14,14 +18,14 @@ public:
    * is used when parsing CSS-like attributes within XML/HTML, such as SVG presentation attributes.
    *
    * For example, in SVG the following provide the same style:
-   * @code{.xml}
+   * ```xml
    * <circle r="10" style="fill:red" />
-   * @endcode
+   * ```
    *
    * and:
-   * @code{.xml}
+   * ```xml
    * <circle r="10" fill="red" />
-   * @endcode
+   * ```
    *
    * This function would parse the string "red" and return a list of component values representing
    * the value.

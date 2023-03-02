@@ -10,6 +10,17 @@
 namespace donner {
 namespace css {
 
+/**
+ * Parse a CSS selector, or list of selectors, and returns a \ref Selector that can be matched
+ * against in the stylesheet.
+ *
+ * Parses either from a string, or from the CSS intermediate representation, a list of
+ * ComponentValues.
+ *
+ * For example, valid selectors may be "div", "div > p", "div > p:first-child", "div >
+ * p:first-child:hover", etc. See https://www.w3.org/TR/selectors-4/#parse-selector for more
+ * details.
+ */
 class SelectorParser {
 public:
   /**

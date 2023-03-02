@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <span>
 
@@ -6,6 +7,10 @@
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
+
+/**
+ * Parse an SVG XML document.
+ */
 
 class XMLParser {
 public:

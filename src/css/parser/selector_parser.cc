@@ -81,6 +81,9 @@ Note that this has some slight modifications to remove spec-specific syntax.
 using SubclassSelector =
     std::variant<IdSelector, ClassSelector, PseudoClassSelector, AttributeSelector>;
 
+/**
+ * Implementation for \ref SelectorParser.
+ */
 class SelectorParserImpl {
 public:
   SelectorParserImpl(std::span<const ComponentValue> components) : components_(components) {}

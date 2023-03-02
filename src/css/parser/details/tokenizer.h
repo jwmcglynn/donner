@@ -12,6 +12,19 @@
 namespace donner::css {
 namespace details {
 
+/**
+ * Tokenizer for CSS, which is called internally by parsers, based on the CSS3 spec:
+ * https://www.w3.org/TR/2021/CRD-css-syntax-3-20211224/
+ *
+ * Compared to the spec, this implementation does not perform the preprocessing step,
+ * https://www.w3.org/TR/2021/CRD-css-syntax-3-20211224/#input-preprocessing, which would do the
+ * following things:
+ * - Simplify newline codepoints, collapsing newline `\r`, `\r\n`, and `\f` into `\n`.
+ * - Replace some unicode codepoints, such as U+0000 NULL with U+FFFD REPLACEMENT CHARACTER.
+ *
+ * As a result, the tokens may include codepoints such as `\r\n` and `\0`, which would not be
+ * present in other parsers.
+ */
 class Tokenizer {
 public:
   explicit Tokenizer(std::string_view str) : str_(str), remaining_(str) {}
