@@ -83,11 +83,23 @@ using SubclassSelector =
 
 /**
  * Implementation for \ref SelectorParser.
+ *
+ * Usage:
+ * ```
+ * SelectorParserImpl parser(components);
+ * auto maybeSelector = parser.parse();
+ * ```
  */
 class SelectorParserImpl {
 public:
+  /**
+   * Construct a new SelectorParserImpl over a list of \ref ComponentValue.
+   */
   SelectorParserImpl(std::span<const ComponentValue> components) : components_(components) {}
 
+  /**
+   * Parse the selector list.
+   */
   ParseResult<Selector> parse() {
     auto maybeSelector = handleComplexSelectorList();
     if (!maybeSelector) {
@@ -98,6 +110,7 @@ public:
     return std::move(maybeSelector.value());
   }
 
+private:
   std::optional<Selector> handleComplexSelectorList() {
     skipWhitespace();
 

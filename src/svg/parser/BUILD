@@ -26,7 +26,7 @@ cc_library(
     deps = [
         "//src/base",
         "//src/base/parser",
-        "//src/css",
+        "//src/css:core",
         "//src/svg/core",
     ],
 )
@@ -40,6 +40,7 @@ cc_test(
         "tests/transform_parser_tests.cc",
         "tests/viewbox_parser_tests.cc",
         "tests/points_list_parser_tests.cc",
+        # TODO(https://github.com/jwmcglynn/donner/issues/7), add missing tests.
         # TODO: angle_parser_tests.cc
         # TODO: length_percentage_parser_tests.cc
     ],

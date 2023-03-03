@@ -5,8 +5,8 @@
 #include <frozen/unordered_set.h>
 
 #include "src/base/parser/length_parser.h"
+#include "src/css/css.h"
 #include "src/css/parser/color_parser.h"
-#include "src/css/parser/declaration_list_parser.h"
 #include "src/css/parser/value_parser.h"
 #include "src/svg/properties/property_parsing.h"
 
@@ -476,8 +476,7 @@ std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration
 }
 
 void PropertyRegistry::parseStyle(std::string_view str) {
-  const std::vector<css::Declaration> declarations =
-      css::DeclarationListParser::ParseOnlyDeclarations(str);
+  const std::vector<css::Declaration> declarations = css::CSS::ParseStyleAttribute(str);
   for (const auto& declaration : declarations) {
     std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
   }

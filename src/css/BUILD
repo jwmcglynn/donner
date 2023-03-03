@@ -1,7 +1,25 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
+# The public API for CSS.
 cc_library(
     name = "css",
+    srcs = [
+        "css.cc",
+    ],
+    hdrs = [
+        "css.h",
+    ],
+    visibility = [
+        "//src/svg:__subpackages__",
+    ],
+    deps = [
+        ":core",
+        "//src/css/parser",
+    ],
+)
+
+cc_library(
+    name = "core",
     srcs = [
         "color.cc",
         "component_value.cc",
@@ -35,7 +53,7 @@ cc_test(
         "tests/specificity_tests.cc",
     ],
     deps = [
-        ":css",
+        ":core",
         "//src/base:base_test_utils",
         "//src/base/parser:parser_test_utils",
         "//src/css/parser",

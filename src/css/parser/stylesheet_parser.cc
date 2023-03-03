@@ -4,8 +4,7 @@
 #include "src/css/parser/rule_parser.h"
 #include "src/css/parser/selector_parser.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 Stylesheet StylesheetParser::Parse(std::string_view str) {
   std::vector<Rule> rules = RuleParser::ParseStylesheet(str);
@@ -33,5 +32,4 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
   return Stylesheet(std::move(selectorRules));
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

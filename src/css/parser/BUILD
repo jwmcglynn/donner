@@ -29,7 +29,7 @@ cc_library(
     deps = [
         "//src/base",
         "//src/base/parser",
-        "//src/css",
+        "//src/css:core",
     ],
 )
 

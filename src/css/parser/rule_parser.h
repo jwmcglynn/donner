@@ -1,11 +1,11 @@
 #pragma once
+/// @file
 
 #include <string_view>
 
 #include "src/css/rule.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 /**
  * Rule-related parsing routines, including parsing individual rules, lists of rules, and
@@ -42,5 +42,4 @@ public:
   static std::optional<Rule> ParseRule(std::string_view str);
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

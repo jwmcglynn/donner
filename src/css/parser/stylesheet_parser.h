@@ -4,16 +4,15 @@
 
 #include "src/css/stylesheet.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 /**
- * Parse a CSS stylesheet into a list of selectors and declarations.
+ * Parse a CSS stylesheet into a list of selectors and their associated declarations.
  */
 class StylesheetParser {
 public:
   /**
-   * Parse a CSS stylesheet into a list of selectors and declarations.
+   * Parse a CSS stylesheet into a list of selectors and their associated declarations.
    *
    * @param str Input stylesheet string.
    * @return Parsed stylesheet.
@@ -21,5 +20,4 @@ public:
   static Stylesheet Parse(std::string_view str);
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css
