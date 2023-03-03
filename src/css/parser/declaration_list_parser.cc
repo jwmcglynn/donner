@@ -7,8 +7,7 @@
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 namespace {
 
@@ -200,5 +199,4 @@ std::vector<Declaration> DeclarationListParser::ParseRuleDeclarations(
   return result;
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

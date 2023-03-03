@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <span>
 #include <string_view>
@@ -7,8 +8,7 @@
 #include "src/css/component_value.h"
 #include "src/css/selector.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 /**
  * Parse a CSS selector, or list of selectors, and returns a \ref Selector that can be matched
@@ -35,5 +35,4 @@ public:
   static ParseResult<Selector> Parse(std::string_view str);
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

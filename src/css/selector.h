@@ -344,16 +344,18 @@ struct PseudoClassSelector {
  * See https://www.w3.org/TR/selectors-4/#attribute-selectors for the full definition.
  *
  * These are used within square brackets on the selector list, such as `a[href^="https://"]` or
- * `h1[title]`.
+ * `h1[title]`, and AttrMatcher represents the separator between the attribute name and string, such
+ * as `^=` or `=`.
  */
 enum class AttrMatcher {
-  // TODO: Support attribute selectors without a matcher, such as `[foo]`.
-  Includes,        // "~="
-  DashMatch,       // "|="
-  PrefixMatch,     // "^="
-  SuffixMatch,     // "$="
-  SubstringMatch,  // "*="
-  Eq,              // "="
+  Includes,     ///< "~=", matches if the attribute value is a whitespace-separated list of values,
+                ///< and one of them exactly matches the matcher value.
+  DashMatch,    ///< "|=", matches if the attribute value either exactly matches, or begins with the
+                ///< value immediately followed by a dash ("-").
+  PrefixMatch,  ///< "^=", matches if the attribute value begins with the matcher value.
+  SuffixMatch,  ///< "$=", matches if the attribute value ends with the matcher value.
+  SubstringMatch,  ///< "*=", matches if the attribute value contains the matcher value.
+  Eq,              ///< "=", matches if the attribute value exactly matches the matcher value.
 };
 
 /// Ostream output operator.
@@ -370,18 +372,53 @@ inline std::ostream& operator<<(std::ostream& os, AttrMatcher matcher) {
   UTILS_UNREACHABLE();
 }
 
+/**
+ * Selectors which match against element attributes, such as `a[href^="https://"]` or `h1[title]`.
+ *
+ * See https://www.w3.org/TR/selectors-4/#attribute-selectors for the full definition.
+ *
+ * Attribute selectors start with a square bracket, specify an attribute name, and an optional
+ * Matcher condition to allow matching against the attribute contents.
+ */
 struct AttributeSelector {
+  /**
+   * Matcher condition for an attribute selector.
+   *
+   * This is set when the selector includes a match operator, such as `^=` or `=`, and includes a
+   * string and an optional case-insensitive flag.
+   *
+   * For a standard case-sensitive matcher, this appears in the source as:
+   * ```
+   * [attr="value"]
+   * ```
+   *
+   * For a case-insensitive matcher, an "i" suffix is added:
+   * ```
+   * [attr="value" i]
+   * ```
+   */
   struct Matcher {
-    AttrMatcher op;
-    RcString value;
-    bool caseInsensitive = false;
+    AttrMatcher op;                ///< The match operator.
+    RcString value;                ///< The value to match against.
+    bool caseInsensitive = false;  ///< Whether to match case-insensitively.
   };
 
-  WqName name;
-  std::optional<Matcher> matcher;
+  WqName name;                     ///< Attribute name.
+  std::optional<Matcher> matcher;  ///< Optional matcher condition. If this is not specified, the
+                                   ///< attribute existing is sufficient for a match.
 
-  AttributeSelector(WqName name) : name(std::move(name)) {}
+  /**
+   * Create an AttributeSelector with the given name.
+   *
+   * @param name The attribute name.
+   */
+  explicit AttributeSelector(WqName name) : name(std::move(name)) {}
 
+  /**
+   * Returns true if the provided element matches this selector.
+   *
+   * @param element The element to check.
+   */
   template <traversal::ElementLike T>
   bool matches(const T& element) const {
     const std::optional<RcString> maybeValue = element.getAttribute(name.name);
@@ -455,6 +492,7 @@ struct AttributeSelector {
     return false;
   }
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const AttributeSelector& obj) {
     os << "AttributeSelector(" << obj.name;
     if (obj.matcher) {
@@ -468,12 +506,30 @@ struct AttributeSelector {
   }
 };
 
+/**
+ * A compound selector is a sequence of simple selectors, which represents a set of conditions that
+ * are combined to match a single element.
+ *
+ * For example, the selector `div#foo.bar` is a compound selector, while `div > #foo` is two
+ * compound selectors separated by a combinator. Combinators are handled as part of \ref
+ * ComplexSelector.
+ */
 struct CompoundSelector {
+  /**
+   * A single entry in a compound selector, which can be any of the simple selectors in this
+   * variant.
+   */
   using Entry = std::variant<PseudoElementSelector, TypeSelector, IdSelector, ClassSelector,
                              PseudoClassSelector, AttributeSelector>;
 
+  /// The list of simple selectors in this compound selector.
   std::vector<Entry> entries;
 
+  /**
+   * Returns true if the provided element matches this selector.
+   *
+   * @param element The element to check.
+   */
   template <traversal::ElementLike T>
   bool matches(const T& element) const {
     for (const auto& entry : entries) {
@@ -503,13 +559,20 @@ struct CompoundSelector {
   }
 };
 
+/**
+ * Between two compound selectors, there can be a combinator, which specifies how the two elements
+ * are associated in the tree.
+ *
+ * By default, a space between compound selectors is a descendant combinator, e.g. `div span` is a
+ * \ref Descendant combinator, while `div > span` is a \ref Child combinator.
+ */
 enum class Combinator {
-  Descendant,         ///< No token.
-  Child,              ///< '>'
-  NextSibling,        ///< '+'
-  SubsequentSibling,  ///< '~'
-  Column,  ///< '||', Note that this is a new feature in CSS Selectors Level 4, however at the
-           ///< version of the spec this was written against,
+  Descendant,         ///< Space-separated, finds descendants in the tree.
+  Child,              ///< '>', finds direct children in the tree.
+  NextSibling,        ///< '+', finds the next sibling in the tree.
+  SubsequentSibling,  ///< '~', finds all subsequent siblings in the tree.
+  Column,  ///< '||', finds the next column in the tree. Note that this is a new feature in CSS
+           ///< Selectors Level 4, however at the version of the spec this was written against,
            ///< https://www.w3.org/TR/2018/WD-selectors-4-20181121/, it was at-risk of being
            ///< removed.
 };
@@ -530,10 +593,19 @@ inline std::ostream& operator<<(std::ostream& os, Combinator combinator) {
   }
 }
 
+/**
+ * A complex selector is a sequence of one or more compound selectors, separated by combinators.
+ *
+ * For example, `div > #foo` is a complex selector, with two compound selectors separated by a \ref
+ * Combinator::Child.
+ */
 struct ComplexSelector {
+  /// A single entry in a complex selector, which is a compound selector and a combinator.
   struct Entry {
-    Combinator combinator;
-    CompoundSelector compoundSelector;
+    Combinator
+        combinator;  ///< The combinator between this compound selector and the next. For the first
+                     ///< Entry, this is set to \ref Combinator::Descendant but it has no effect.
+    CompoundSelector compoundSelector;  ///< The compound selector.
   };
 
   std::vector<Entry> entries;  ///< The entries in the complex selector.

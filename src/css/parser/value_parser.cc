@@ -3,8 +3,7 @@
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 std::vector<ComponentValue> ValueParser::Parse(std::string_view str) {
   details::Tokenizer tokenizer_(str);
@@ -12,5 +11,4 @@ std::vector<ComponentValue> ValueParser::Parse(std::string_view str) {
                                              details::WhitespaceHandling::TrimLeadingAndTrailing);
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css
