@@ -32,6 +32,7 @@ cc_library(
         "declaration.h",
         "rule.h",
         "selector.h",
+        "selector_traversal.h",
         "specificity.h",
         "stylesheet.h",
         "token.h",

@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <compare>
 #include <cstdint>
@@ -7,8 +8,7 @@
 #include "src/css/declaration.h"
 #include "src/css/selector.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 struct SelectorRule {
   Selector selector;
@@ -29,5 +29,4 @@ private:
   std::vector<SelectorRule> rules_;
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

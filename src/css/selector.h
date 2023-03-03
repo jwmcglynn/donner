@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <concepts>
 #include <experimental/coroutine>
@@ -8,129 +9,43 @@
 
 #include "src/base/utils.h"
 #include "src/css/component_value.h"
+#include "src/css/selector_traversal.h"
 #include "src/css/specificity.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
-template <typename T>
-concept ElementLike = requires(T t, std::string_view name) {
-                        { t.parentElement() } -> std::same_as<std::optional<T>>;
-                        { t.previousSibling() } -> std::same_as<std::optional<T>>;
-                        { t.typeString() } -> std::same_as<RcString>;
-                        { t.id() } -> std::same_as<RcString>;
-                        { t.className() } -> std::same_as<RcString>;
-                        { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;
-                      };
-
-namespace details {
-
-template <typename T>
-class Generator {
-public:
-  class Promise;
-  using Handle = std::experimental::coroutine_handle<Promise>;
-  using promise_type = Promise;
-
-public:
-  explicit Generator(Handle h) : coroutine_(h) {}
-  Generator(const Generator&) = delete;
-  Generator(Generator&& oth) noexcept : coroutine_(oth.coroutine_) { oth.coroutine_ = nullptr; }
-  Generator& operator=(const Generator&) = delete;
-  Generator& operator=(Generator&& other) noexcept {
-    coroutine_ = other.coroutine_;
-    other.coroutine_ = nullptr;
-    return *this;
-  }
-
-  ~Generator() {
-    if (coroutine_) {
-      coroutine_.destroy();
-    }
-  }
-
-  bool next() {
-    if (coroutine_) {
-      coroutine_.resume();
-    }
-
-    return !coroutine_.done();
-  }
-
-  T getValue() { return coroutine_.promise().currentValue_.value(); }
-
-  class Promise {
-  public:
-    Promise() = default;
-    ~Promise() = default;
-    Promise(const Promise&) = delete;
-    Promise(Promise&&) = delete;
-    Promise& operator=(const Promise&) = delete;
-    Promise& operator=(Promise&&) = delete;
-
-    auto initial_suspend() noexcept { return std::experimental::suspend_always{}; }
-
-    auto final_suspend() noexcept { return std::experimental::suspend_always{}; }
-
-    auto get_return_object() noexcept { return Generator{Handle::from_promise(*this)}; }
-
-    auto return_void() noexcept { return std::experimental::suspend_never{}; }
-
-    auto yield_value(T value) {
-      currentValue_ = value;
-      return std::experimental::suspend_always{};
-    }
-
-    [[noreturn]] void unhandled_exception() { std::exit(1); }
-
-  private:
-    std::optional<T> currentValue_;
-    friend class Generator;
-  };
-
-private:
-  Handle coroutine_;
-};
-
-template <typename T>
-Generator<T> singleElementGenerator(const std::optional<T> element) {
-  if (element.has_value()) {
-    co_yield element.value();
-  }
-}
-
-template <typename T>
-Generator<T> parentsGenerator(const T& element) {
-  T currentElement = element;
-
-  while (auto parent = currentElement.parentElement()) {
-    currentElement = parent.value();
-    co_yield currentElement;
-  }
-}
-
-template <typename T>
-Generator<T> previousSiblingsGenerator(const T& element) {
-  T currentElement = element;
-
-  while (auto previousSibling = currentElement.previousSibling()) {
-    currentElement = previousSibling.value();
-    co_yield currentElement;
-  }
-}
-
-}  // namespace details
-
+/**
+ * Returned by \ref Selector::matches to indicate whether the selector matched, and if so, the
+ * specificity of the match.
+ *
+ * The `bool` operator can be used to check if the selector matched:
+ * ```
+ * if (auto match = selector.matches(element); match) {
+ *   // ...
+ * }
+ * ```
+ *
+ * To construct, use the static methods: \ref None() and \ref Match().
+ */
 struct SelectorMatchResult {
-  bool matched = false;
-  Specificity specificity;
+  bool matched = false;     ///< True if the selector matched.
+  Specificity specificity;  ///< The specificity of the match, if matched.
 
+  /**
+   * Create a SelectorMatchResult indicating that the selector did not match.
+   */
   static constexpr SelectorMatchResult None() { return SelectorMatchResult(); }
 
+  /**
+   * Create a SelectorMatchResult indicating that the selector matched, with the given specificity.
+   *
+   * @param specificity The specificity of the match.
+   */
   static constexpr SelectorMatchResult Match(Specificity specificity) {
     return SelectorMatchResult(true, specificity);
   }
 
+  /// Returns true if the selector matched.
   explicit operator bool() const { return matched; }
 
 private:
@@ -141,12 +56,30 @@ private:
       : matched(matched), specificity(specificity) {}
 };
 
+/**
+ * A CSS qualified name, which is a name optionally associated with a namespace. See
+ * https://www.w3.org/TR/selectors-4/#type-nmsp for the full definition.
+ *
+ * For example, the following are all valid qualified names:
+ * - `foo`, represents the name `foo` which belongs to the default namespace.
+ * - `|foo`, represents the name `foo` which belongs to no namespace.
+ * - `ns|foo`, represents the name `foo` which belongs to the namespace `ns`.
+ * - `*|foo`, represents the name `foo` which belongs to any namespace.
+ */
 struct WqName {
-  RcString ns;
-  RcString name;
+  RcString
+      ns;  ///< The namespace of the name, or empty if the name belongs to the default namespace.
+  RcString name;  ///< The name.
 
+  /**
+   * Create a WqName with the given namespace and name.
+   *
+   * @param ns The namespace of the name, or empty if the name belongs to the default namespace.
+   * @param name The name.
+   */
   WqName(RcString ns, RcString name) : ns(std::move(ns)), name(std::move(name)) {}
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const WqName& obj) {
     if (!obj.ns.empty()) {
       os << obj.ns << "|";
@@ -157,18 +90,39 @@ struct WqName {
   }
 };
 
+/**
+ * Selectors which start with two colons are called pseudo-elements, e.g. `::before`. They are used
+ * to represent elements which are not directly present in the document tree.
+ *
+ * See https://www.w3.org/TR/selectors-4/#pseudo-elements for the full definition.
+ *
+ * Pseudo-elements are listed in the CSS Pseudo-Elements Module Level 4 spec:
+ * https://www.w3.org/TR/css-pseudo-4/
+ */
 struct PseudoElementSelector {
-  RcString ident;
-  std::optional<std::vector<ComponentValue>> argsIfFunction;
+  RcString ident;  ///< The identifier of the pseudo-element.
+  std::optional<std::vector<ComponentValue>>
+      argsIfFunction;  ///< The arguments to the function, if this is a function.
 
-  PseudoElementSelector(RcString ident) : ident(std::move(ident)) {}
+  /**
+   * Create a PseudoElementSelector with the given identifier.
+   *
+   * @param ident The identifier of the pseudo-element.
+   */
+  explicit PseudoElementSelector(RcString ident) : ident(std::move(ident)) {}
 
-  template <ElementLike T>
+  /**
+   * Returns true if the provided element matches this selector.
+   *
+   * @param element The element to check.
+   */
+  template <traversal::ElementLike T>
   bool matches(const T& element) const {
     // TODO
     return false;
   }
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const PseudoElementSelector& obj) {
     os << "PseudoElementSelector(" << obj.ident;
     if (obj.argsIfFunction.has_value()) {
@@ -183,15 +137,44 @@ struct PseudoElementSelector {
   }
 };
 
+/**
+ * Selector which matches the element type, e.g. `div` or `circle`.  The selector may also include a
+ * namespace, or be a universal selector.
+ *
+ * In the CSS source, this is represented by either a standalone type, or namespace and type
+ * separated by a pipe (`|`). Either the namespace or the type may be a wildcard (`*`).
+ * - `type`
+ * - `*`
+ * - `ns|type`
+ * - `ns|*`
+ * - `*|type`
+ *
+ * TypeSelector represents the parsed representation, and if the namespace is empty the \ref ns
+ * value is empty.
+ */
 struct TypeSelector {
-  RcString ns;
-  RcString name;
+  RcString ns;    ///< The namespace of the selector, the wildcard namespace ("*"), or empty if no
+                  ///< namespace is specified.
+  RcString name;  ///< The name of the selector, or "*" if the selector is a universal selector.
 
+  /**
+   * Create a TypeSelector with the given namespace and name.
+   *
+   * @param ns The namespace of the selector, the wildcard namespace ("*"), or empty if no namespace
+   *   is specified.
+   * @param name The name of the selector, or "*" if the selector is a universal selector.
+   */
   TypeSelector(RcString ns, RcString name) : ns(std::move(ns)), name(std::move(name)) {}
 
+  /// Returns true if this is a universal selector.
   bool isUniversal() const { return name == "*"; }
 
-  template <ElementLike T>
+  /**
+   * Returns true if the provided element matches this selector.
+   *
+   * @param element The element to check.
+   */
+  template <traversal::ElementLike T>
   bool matches(const T& element) const {
     // TODO: Also check the namespace.
     if (UTILS_PREDICT_FALSE(isUniversal())) {
@@ -201,6 +184,7 @@ struct TypeSelector {
     }
   }
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const TypeSelector& obj) {
     os << "TypeSelector(";
     if (!obj.ns.empty()) {
@@ -212,50 +196,134 @@ struct TypeSelector {
   }
 };
 
+/**
+ * Selector which match the element's `id` attribute, for example `#foo` matches an element with
+ * an `id="foo"` attribute.
+ *
+ * See https://www.w3.org/TR/selectors-4/#id-selectors for the full definition.
+ */
 struct IdSelector {
-  RcString name;
+  RcString name;  ///< The id to match, without the leading `#`.
 
-  IdSelector(RcString name) : name(std::move(name)) {}
+  /**
+   * Create an IdSelector with the given name.
+   *
+   * @param name The id to match, without the leading `#`.
+   */
+  explicit IdSelector(RcString name) : name(std::move(name)) {}
 
-  template <ElementLike T>
+  /**
+   * Returns true if the provided element matches this selector, based on a case-sensitive match
+   * of the provided id against the element's `id` attribute.
+   *
+   * @param element The element to check.
+   */
+  template <traversal::ElementLike T>
   bool matches(const T& element) const {
-    return element.id().equalsIgnoreCase(name);
+    return element.id() == name;
   }
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const IdSelector& obj) {
     os << "IdSelector(" << obj.name << ")";
     return os;
   }
 };
 
+/**
+ * Selector which match the element's `class` attribute, for example `.foo` matches an element with
+ * class `foo`.
+ *
+ * See https://www.w3.org/TR/selectors-4/#class-html for the full definition.
+ */
 struct ClassSelector {
-  RcString name;
+  RcString name;  ///< The class to match, without the leading `.`.
 
-  ClassSelector(RcString name) : name(std::move(name)) {}
+  /**
+   * Create a ClassSelector with the given name.
+   *
+   * @param name The class to match, without the leading `.`.
+   */
+  explicit ClassSelector(RcString name) : name(std::move(name)) {}
 
-  template <ElementLike T>
+  /**
+   * Returns true if the provided element matches this selector, based on if the element's `class`
+   * attribute's whitespace-separated list of classes exactly contains this selector's name.
+   *
+   * Comparison is case-sensitive.
+   *
+   * @param element The element to check.
+   */
+  template <traversal::ElementLike T>
   bool matches(const T& element) const {
-    return element.className().equalsIgnoreCase(name);
+    // Matching is equivalent to `[class=~name]`.
+
+    // Returns true if attribute value is a whitespace-separated list of values, and one of them
+    // exactly matches the matcher value.
+    for (auto&& str : StringUtils::Split(element.className(), ' ')) {
+      if (str == name) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const ClassSelector& obj) {
     os << "ClassSelector(" << obj.name << ")";
     return os;
   }
 };
 
+/**
+ * Selectors which start with one colon, e.g. `:hover`, are called pseudo-classes, and they
+ * represent additional state information not directly present in the document tree.
+ *
+ * Each pseudo-class selector has a unique behavior.
+ *
+ * Pseudo-classes are defined in the following specs:
+ * - Linguistic Pseudo-classes, such as `:dir()` and `:lang()`,
+ *   https://www.w3.org/TR/selectors-4/#linguistic-pseudos
+ * - Location Pseudo-classes, such as `:link` and `:visited`,
+ *   https://www.w3.org/TR/selectors-4/#location
+ * - User Action Pseudo-classes, such as `:hover` and `:active`,
+ *   https://www.w3.org/TR/selectors-4/#useraction-pseudos
+ * - Time-dimensional Pseudo-classes, such as `:current` and `:past`,
+ *   https://www.w3.org/TR/selectors-4/#time-pseudos
+ * - Resource State Pseudo-classes, such as `:playing` and `:muted`,
+ *   https://www.w3.org/TR/selectors-4/#resource-pseudos
+ * - Element Display State Pseudo-classes, such as `:open` and `:fullscreen`,
+ *   https://www.w3.org/TR/selectors-4/#display-state-pseudos
+ * - Input Pseudo-classes, such as `:enabled` and `:checked`,
+ *   https://www.w3.org/TR/selectors-4/#input-pseudos
+ * - Tree-Structural Pseudo-classes, such as `:empty` and `:nth-child()`,
+ *   https://www.w3.org/TR/selectors-4/#structural-pseudos
+ */
 struct PseudoClassSelector {
-  RcString ident;
-  std::optional<std::vector<ComponentValue>> argsIfFunction;
+  RcString ident;  ///< The name of the pseudo-class.
+  std::optional<std::vector<ComponentValue>>
+      argsIfFunction;  ///< The arguments of the pseudo-class, if it is a function.
 
-  PseudoClassSelector(RcString ident) : ident(std::move(ident)) {}
+  /**
+   * Create a PseudoClassSelector with the given ident.
+   *
+   * @param ident The name of the pseudo-class.
+   */
+  explicit PseudoClassSelector(RcString ident) : ident(std::move(ident)) {}
 
-  template <ElementLike T>
+  /**
+   * Returns true if the provided element matches this selector.
+   *
+   * @param element The element to check.
+   */
+  template <traversal::ElementLike T>
   bool matches(const T& element) const {
     // TODO
     return false;
   }
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj) {
     os << "PseudoClassSelector(" << obj.ident;
     if (obj.argsIfFunction.has_value()) {
@@ -270,7 +338,16 @@ struct PseudoClassSelector {
   }
 };
 
+/**
+ * For attribute selectors, different match modes are available, which are specified by this enum.
+ *
+ * See https://www.w3.org/TR/selectors-4/#attribute-selectors for the full definition.
+ *
+ * These are used within square brackets on the selector list, such as `a[href^="https://"]` or
+ * `h1[title]`.
+ */
 enum class AttrMatcher {
+  // TODO: Support attribute selectors without a matcher, such as `[foo]`.
   Includes,        // "~="
   DashMatch,       // "|="
   PrefixMatch,     // "^="
@@ -279,6 +356,7 @@ enum class AttrMatcher {
   Eq,              // "="
 };
 
+/// Ostream output operator.
 inline std::ostream& operator<<(std::ostream& os, AttrMatcher matcher) {
   switch (matcher) {
     case AttrMatcher::Includes: return os << "Includes(~=)";
@@ -289,7 +367,7 @@ inline std::ostream& operator<<(std::ostream& os, AttrMatcher matcher) {
     case AttrMatcher::Eq: return os << "Eq(=)";
   }
 
-  assert(false && "Unreachable");
+  UTILS_UNREACHABLE();
 }
 
 struct AttributeSelector {
@@ -304,7 +382,7 @@ struct AttributeSelector {
 
   AttributeSelector(WqName name) : name(std::move(name)) {}
 
-  template <ElementLike T>
+  template <traversal::ElementLike T>
   bool matches(const T& element) const {
     const std::optional<RcString> maybeValue = element.getAttribute(name.name);
     if (!maybeValue) {
@@ -396,7 +474,7 @@ struct CompoundSelector {
 
   std::vector<Entry> entries;
 
-  template <ElementLike T>
+  template <traversal::ElementLike T>
   bool matches(const T& element) const {
     for (const auto& entry : entries) {
       if (!std::visit([&element](auto&& selector) -> bool { return selector.matches(element); },
@@ -408,6 +486,7 @@ struct CompoundSelector {
     return !entries.empty();
   }
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const CompoundSelector& obj) {
     os << "CompoundSelector(";
     bool first = true;
@@ -425,16 +504,22 @@ struct CompoundSelector {
 };
 
 enum class Combinator {
-  Descendant,         //!< No token.
-  Child,              //!< '>'
-  NextSibling,        //!< '+'
-  SubsequentSibling,  //!< '~'
-  Column,  // '||', Note that this is a new feature in CSS Selectors Level 4, however at the
-           // version of the spec this was written against,
-           // https://www.w3.org/TR/2018/WD-selectors-4-20181121/, it was at-risk of being
-           // removed.
+  Descendant,         ///< No token.
+  Child,              ///< '>'
+  NextSibling,        ///< '+'
+  SubsequentSibling,  ///< '~'
+  Column,  ///< '||', Note that this is a new feature in CSS Selectors Level 4, however at the
+           ///< version of the spec this was written against,
+           ///< https://www.w3.org/TR/2018/WD-selectors-4-20181121/, it was at-risk of being
+           ///< removed.
 };
 
+/**
+ * Ostream output operator. Outputs the combinator character, e.g. ' ', '>', '+', '~' or '||'.
+ *
+ * @param os The output stream.
+ * @param combinator The combinator.
+ */
 inline std::ostream& operator<<(std::ostream& os, Combinator combinator) {
   switch (combinator) {
     case Combinator::Descendant: return os << "' '";
@@ -451,7 +536,7 @@ struct ComplexSelector {
     CompoundSelector compoundSelector;
   };
 
-  std::vector<Entry> entries;
+  std::vector<Entry> entries;  ///< The entries in the complex selector.
 
   /**
    * Compute specificity of the ComplexSelector, see
@@ -497,16 +582,16 @@ struct ComplexSelector {
    *
    * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to match
    *           the selector.
-   * @param element Element to match against.
+   * @param targetElement Element to match against.
    * @return true if the element matches the selector, within a SelectorMatchResult which also
    *              contains the specificity.
    */
-  template <ElementLike T>
+  template <traversal::ElementLike T>
   SelectorMatchResult matches(const T& targetElement) const {
     // TODO: Accept :scope elements.
-    using GeneratorCreator = std::function<details::Generator<T>()>;
+    using GeneratorCreator = std::function<traversal::SelectorTraversalGenerator<T>()>;
     GeneratorCreator elementsGenerator =
-        std::bind(&details::singleElementGenerator<T>, targetElement);
+        std::bind(&traversal::singleElementGenerator<T>, targetElement);
 
     // "To match a complex selector against an element, process it compound selector at a time, in
     // right-to-left order."
@@ -516,7 +601,7 @@ struct ComplexSelector {
       // "If any simple selectors in the rightmost compound selector does not match the element,
       // return failure."
       std::optional<T> currentElement;
-      details::Generator<T> elements = elementsGenerator();
+      traversal::SelectorTraversalGenerator<T> elements = elementsGenerator();
       while (elements.next()) {
         const T element = elements.getValue();
         if (entry.compoundSelector.matches(element)) {
@@ -541,16 +626,16 @@ struct ComplexSelector {
       // with the rightmost compound selector and rightmost combinator removed against any one of
       // these elements returns success, then return success. Otherwise, return failure."
       if (entry.combinator == Combinator::Descendant) {
-        elementsGenerator = std::bind(&details::parentsGenerator<T>, currentElement.value());
+        elementsGenerator = std::bind(&traversal::parentsGenerator<T>, currentElement.value());
       } else if (entry.combinator == Combinator::Child) {
         elementsGenerator =
-            std::bind(&details::singleElementGenerator<T>, currentElement->parentElement());
+            std::bind(&traversal::singleElementGenerator<T>, currentElement->parentElement());
       } else if (entry.combinator == Combinator::NextSibling) {
         elementsGenerator =
-            std::bind(&details::singleElementGenerator<T>, currentElement->previousSibling());
+            std::bind(&traversal::singleElementGenerator<T>, currentElement->previousSibling());
       } else if (entry.combinator == Combinator::SubsequentSibling) {
         elementsGenerator =
-            std::bind(&details::previousSiblingsGenerator<T>, currentElement.value());
+            std::bind(&traversal::previousSiblingsGenerator<T>, currentElement.value());
       } else {
         // TODO: Combinator::Column
         return SelectorMatchResult::None();
@@ -561,6 +646,7 @@ struct ComplexSelector {
     return SelectorMatchResult::None();
   }
 
+  /// Output a human-readable representation of the selector.
   friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj) {
     os << "ComplexSelector(";
     bool first = true;
@@ -576,7 +662,15 @@ struct ComplexSelector {
   }
 };
 
+/**
+ * A top-level Selector, which is a list of \ref ComplexSelector.
+ *
+ * This represents the prelude in front of any CSS rule, e.g. `div.foo > span#bar`, which would be a
+ * single \ref ComplexSelector. For a comma-separated list, such as `div.foo > span#bar, span#bar`,
+ * this would be a \ref Selector with two \ref ComplexSelector entries.
+ */
 struct Selector {
+  /// The list of \ref ComplexSelector entries that compose this selector.
   std::vector<ComplexSelector> entries;
 
   /**
@@ -584,10 +678,10 @@ struct Selector {
    *
    * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to match
    * the selector.
-   * @param element Element to match against.
+   * @param targetElement Element to match against.
    * @returns true if any ComplexSelector in the Selector matches the given element.
    */
-  template <ElementLike T>
+  template <traversal::ElementLike T>
   SelectorMatchResult matches(const T& targetElement) const {
     for (const auto& entry : entries) {
       if (auto result = entry.matches(targetElement)) {
@@ -598,6 +692,9 @@ struct Selector {
     return SelectorMatchResult::None();
   }
 
+  /**
+   * Ostream output operator for Selector in a human-readable format.
+   */
   friend std::ostream& operator<<(std::ostream& os, const Selector& obj) {
     os << "Selector(";
     bool first = true;
@@ -613,5 +710,4 @@ struct Selector {
   }
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

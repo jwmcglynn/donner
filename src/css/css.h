@@ -5,6 +5,27 @@
 
 #include "src/css/stylesheet.h"
 
+/**
+ * Donner CSS library, a standalone composable CSS parser.
+ *
+ * This library is designed to be used in other projects, and provides building blocks to add CSS
+ * parsing to any application. This is used by Donner itself to parse SVG stylesheets, but it can be
+ * used for HTML-based CSS as well.
+ *
+ * This library includes support for parsing rules and declarations, as well as matching selectors
+ * against a DOM tree.
+ *
+ * To get started, parse a Stylesheet using \ref CSS::ParseStylesheet, and then use the returned
+ * \ref Stylesheet object to match against a DOM tree:
+ * ```
+ * auto stylesheet = CSS::ParseStylesheet("svg { fill: red; }");
+ * for (const css::SelectorRule& rule : stylesheet.rules()) {
+ *   if (css::SelectorMatchResult match = rule.selector.matches(domNode)) {
+ *     applyDeclaration(rule.declarations, match.specificity);
+ *   }
+ * }
+ * ```
+ */
 namespace donner::css {
 
 /**

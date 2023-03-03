@@ -3,8 +3,7 @@
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 /*
 Parse according to the following CSS selector grammar, from
@@ -78,6 +77,10 @@ Note that this has some slight modifications to remove spec-specific syntax.
 // TODO: Support for pseudo-elements and pseudo-classes, which need custom handling defined by the
 // caller.
 
+/**
+ * Additional constraints that can be added to a \ref CompoundSelector, such as matching an ID,
+ * class, or attribute.
+ */
 using SubclassSelector =
     std::variant<IdSelector, ClassSelector, PseudoClassSelector, AttributeSelector>;
 
@@ -733,5 +736,4 @@ ParseResult<Selector> SelectorParser::Parse(std::string_view str) {
   });
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css
