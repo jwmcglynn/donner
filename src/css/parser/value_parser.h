@@ -2,10 +2,9 @@
 
 #include <string_view>
 
-#include "src/css/declaration.h"
+#include "src/css/component_value.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 /**
  * Parse a CSS value, per https://www.w3.org/TR/css-syntax-3/#parse-list-of-component-values. This
@@ -36,5 +35,4 @@ public:
   static std::vector<ComponentValue> Parse(std::string_view str);
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

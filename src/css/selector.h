@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "src/base/utils.h"
-#include "src/css/declaration.h"
+#include "src/css/component_value.h"
 #include "src/css/specificity.h"
 
 namespace donner {

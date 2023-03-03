@@ -4,7 +4,7 @@
 
 #include "src/base/parser/parse_result.h"
 #include "src/base/transform.h"
-#include "src/css/declaration.h"
+#include "src/css/component_value.h"
 #include "src/svg/core/css_transform.h"
 
 namespace donner::svg {

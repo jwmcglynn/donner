@@ -1,12 +1,57 @@
 #pragma once
+/// @file
 
+#include <optional>
 #include <variant>
 #include <vector>
 
-#include "src/css/declaration.h"
+#include "src/css/component_value.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
+
+/**
+ * Rules starting with an `@` are called At-Rules, and are used to define CSS features such as
+ * `@media`, `@font-face`, `@keyframes`, etc.
+ *
+ * For example, the following is a valid at-rule:
+ * ```css
+ * @media (min-width: 600px) {
+ *  a > b { color: red }
+ * }
+ * ```
+ *
+ * Note that `@charset` is a special rule, which does not show up as an AtRule, but it is used to
+ * inform the parsing behavior. For example, if the first rule is `@charset "utf-8";`, then this
+ * will not show up in the list of rules, but the parser will be in UTF-8 mode.
+ */
+struct AtRule {
+  /// Name of the at-rule, such as `media`, `font-face`, `keyframes`, etc.
+  RcString name;
+
+  /// List of component values before the block definition.
+  std::vector<ComponentValue> prelude;
+
+  /// Block for the at-rule's definition, if any.
+  std::optional<SimpleBlock> block;
+
+  /**
+   * Construct the AtRule with the given name.
+   *
+   * @param name Name of the at-rule.
+   */
+  explicit AtRule(RcString name);
+
+  /// Equality operator.
+  bool operator==(const AtRule& other) const;
+
+  /**
+   * Output a human-readable parsed representation of AtRule to the given stream.
+   *
+   * @param os Output stream.
+   * @param rule AtRule to output.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const AtRule& rule);
+};
 
 /**
  * A QualifiedRule has a list of component values and a block, this is the intermediate
@@ -88,6 +133,58 @@ struct QualifiedRule {
 };
 
 /**
+ * InvalidRule is used to represent a rule which could not be parsed, such as an invalid at-rule.
+ *
+ * For example, the following is an invalid at-rule:
+ * ```css
+ * @charset "123"
+ * ```
+ *
+ * The `@charset` is a valid at-rule, but it is missing a semicolon at the end, so it is invalid.
+ *
+ * The InvalidRule may have a more specific type, such as `ExtraInput`, depending on how the error
+ * was triggered.
+ */
+struct InvalidRule {
+  /**
+   * Type of the invalid rule.
+   */
+  enum class Type {
+    Default,    ///< Default type, no specific information.
+    ExtraInput  ///< The rule had extra input after the end of the rule.
+  };
+
+  /// Type of the invalid rule.
+  Type type;
+
+  /**
+   * Construct an InvalidRule with the given type.
+   *
+   * @param type Type of the invalid rule.
+   */
+  explicit InvalidRule(Type type = Type::Default) : type(type) {}
+
+  /// Equality operator.
+  bool operator==(const InvalidRule& other) const { return type == other.type; }
+
+  /**
+   * Output a human-readable parsed representation of InvalidRule to the given stream.
+   *
+   * For example, `InvalidRule` or `InvalidRule(ExtraInput)`.
+   *
+   * @param os Output stream.
+   * @param invalidRule InvalidRule to output.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const InvalidRule& invalidRule) {
+    os << "InvalidRule";
+    if (invalidRule.type == InvalidRule::Type::ExtraInput) {
+      os << "(ExtraInput)";
+    }
+    return os;
+  }
+};
+
+/**
  * Holds a CSS rule which can either be a standard QualifiedRule, an AtRule, or an InvalidRule if
  * there was a parse error.
  *
@@ -120,5 +217,4 @@ struct Rule {
   }
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

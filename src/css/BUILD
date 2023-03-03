@@ -4,10 +4,13 @@ cc_library(
     name = "css",
     srcs = [
         "color.cc",
+        "component_value.cc",
         "declaration.cc",
+        "rule.cc",
     ],
     hdrs = [
         "color.h",
+        "component_value.h",
         "declaration.h",
         "rule.h",
         "selector.h",

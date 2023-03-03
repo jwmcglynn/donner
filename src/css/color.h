@@ -2,11 +2,11 @@
 
 #include <cassert>
 #include <optional>
+#include <ostream>
 #include <string_view>
 #include <variant>
-#include <vector>
 
-#include "src/css/declaration.h"
+#include "src/css/component_value.h"
 
 namespace donner::css {
 
@@ -48,7 +48,8 @@ struct RGBA {
  *
  * Colors are parsed using \ref ColorParser.
  *
- * Note that non-RGB colors, such as HSL are not yet supported.
+ * Note that non-RGB colors, such as HSL are not yet supported, see bug
+ * https://github.com/jwmcglynn/donner/issues/6.
  */
 struct Color {
   /// Represents the `currentColor` keyword.

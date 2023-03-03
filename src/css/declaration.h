@@ -6,107 +6,10 @@
 #include <variant>
 #include <vector>
 
-#include "src/base/length.h"
 #include "src/base/rc_string.h"
-#include "src/css/token.h"
+#include "src/css/rule.h"
 
 namespace donner::css {
-
-struct ComponentValue;
-
-struct Function {
-  RcString name;
-  std::vector<ComponentValue> values;
-  size_t sourceOffset;
-
-  Function(RcString name, size_t sourceOffset);
-  bool operator==(const Function& other) const;
-
-  friend std::ostream& operator<<(std::ostream& os, const Function& func);
-};
-
-struct SimpleBlock {
-  TokenIndex associatedToken;
-  std::vector<ComponentValue> values;
-  size_t sourceOffset;
-
-  explicit SimpleBlock(TokenIndex associatedToken, size_t sourceOffset);
-  bool operator==(const SimpleBlock& other) const;
-
-  friend std::ostream& operator<<(std::ostream& os, const SimpleBlock& block);
-};
-
-struct ComponentValue {
-  using Type = std::variant<Token, Function, SimpleBlock>;
-  Type value;
-
-  /* implicit */ ComponentValue(Type&& value);
-  bool operator==(const ComponentValue& other) const;
-
-  template <typename T>
-  bool is() const {
-    return std::holds_alternative<T>(value);
-  }
-
-  template <typename T>
-  bool isToken() const {
-    return is<Token>() && get<Token>().is<T>();
-  }
-
-  template <typename T>
-  const T* tryGetToken() const {
-    if (const Token* token = std::get_if<Token>(&value)) {
-      return token->tryGet<T>();
-    } else {
-      return nullptr;
-    }
-  }
-
-  template <typename T>
-  T& get() & {
-    return std::get<T>(value);
-  }
-
-  template <typename T>
-  const T& get() const& {
-    return std::get<T>(value);
-  }
-
-  template <typename T>
-  T&& get() && {
-    return std::move(std::get<T>(value));
-  }
-
-  size_t sourceOffset() const {
-    return std::visit(
-        [](auto&& v) -> size_t {
-          using T = std::remove_cvref_t<decltype(v)>;
-
-          if constexpr (std::is_same_v<Token, T>) {
-            return v.offset();
-          } else {
-            return v.sourceOffset;
-          }
-        },
-        value);
-  }
-
-  friend std::ostream& operator<<(std::ostream& os, const ComponentValue& component) {
-    std::visit([&os](auto&& v) { os << v; }, component.value);
-    return os;
-  }
-};
-
-struct AtRule {
-  RcString name;
-  std::vector<ComponentValue> prelude;
-  std::optional<SimpleBlock> block;
-
-  explicit AtRule(RcString name);
-  bool operator==(const AtRule& other) const;
-
-  friend std::ostream& operator<<(std::ostream& os, const AtRule& rule);
-};
 
 struct Declaration {
   Declaration(RcString name, std::vector<ComponentValue> values = {}, size_t sourceOffset = 0,
@@ -124,23 +27,6 @@ struct Declaration {
   std::vector<ComponentValue> values;
   size_t sourceOffset;
   bool important = false;
-};
-
-struct InvalidRule {
-  enum class Type { Default, ExtraInput };
-
-  explicit InvalidRule(Type type = Type::Default) : type(type) {}
-  bool operator==(const InvalidRule& other) const { return type == other.type; }
-
-  friend std::ostream& operator<<(std::ostream& os, const InvalidRule& invalidRule) {
-    os << "InvalidRule";
-    if (invalidRule.type == InvalidRule::Type::ExtraInput) {
-      os << "(ExtraInput)";
-    }
-    return os;
-  }
-
-  Type type;
 };
 
 struct DeclarationOrAtRule {

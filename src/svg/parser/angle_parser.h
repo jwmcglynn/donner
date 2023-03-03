@@ -3,7 +3,7 @@
 #include <span>
 
 #include "src/base/parser/parse_result.h"
-#include "src/css/declaration.h"
+#include "src/css/component_value.h"
 
 namespace donner::svg {
 

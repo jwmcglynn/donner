@@ -4,7 +4,7 @@
 #include <string_view>
 
 #include "src/base/parser/parse_result.h"
-#include "src/css/declaration.h"
+#include "src/css/component_value.h"
 #include "src/css/selector.h"
 
 namespace donner {

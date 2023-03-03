@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <optional>
 #include <ostream>
 #include <string_view>
 #include <variant>
