@@ -5,9 +5,17 @@
 
 #include "src/css/declaration.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
+/**
+ * Parse a CSS declaration list, which can be either from an HTML/SVG style attribute, or from the
+ * list of component values from within a rule.
+ *
+ * For example, the following is a valid declaration list:
+ * ```
+ * color: red; background-color: blue; font-size: 12px;
+ * ```
+ */
 class DeclarationListParser {
 public:
   /**
@@ -37,5 +45,4 @@ public:
   static std::vector<Declaration> ParseRuleDeclarations(std::span<ComponentValue> components);
 };
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

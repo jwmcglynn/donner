@@ -9,11 +9,14 @@
 
 namespace donner::svg {
 
+/**
+ * Parse a CSS "transform" property, see https://www.w3.org/TR/css-transforms-1/#transform-property
+ */
 class CssTransformParser {
 public:
   /**
-   * Parse a CSS "transform" property.
-   * See https://www.w3.org/TR/css-transforms-1/#transform-property
+   * Parse a CSS "transform" property, see
+   * https://www.w3.org/TR/css-transforms-1/#transform-property
    *
    * @param components CSS ComponentValues for a parsed transform property.
    * @return Parsed CSS transform, or an error.

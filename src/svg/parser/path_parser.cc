@@ -6,8 +6,12 @@
 
 namespace donner::svg {
 
-// Note that this doesn't inherit from ParserBase, since it has a slightly different interpretation
-// of isWhitespace per the spec.
+/**
+ * Implementation of \ref PathParser.
+ *
+ * Note that this doesn't inherit from ParserBase, since it has a slightly different interpretation
+ * of isWhitespace per the spec.
+ */
 class PathParserImpl {
 public:
   PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}

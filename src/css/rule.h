@@ -24,7 +24,7 @@ namespace css {
 struct QualifiedRule {
   /**
    * A list of component values before the block definition. For `a > b { color: red }`, `a > b` is
-   * the prelude, and this would be parsed into five token \ref ComponentValue: `a, ' ', >, b, ' '`.
+   * the prelude, and it would be parsed into five token \ref ComponentValue, `a, ' ', >, b, ' '`.
    */
   std::vector<ComponentValue> prelude;
 
@@ -87,13 +87,33 @@ struct QualifiedRule {
   }
 };
 
+/**
+ * Holds a CSS rule which can either be a standard QualifiedRule, an AtRule, or an InvalidRule if
+ * there was a parse error.
+ *
+ * Examples:
+ * - QualifiedRule: `a > b { color: red }`
+ * - AtRule: `@media (min-width: 600px) { a > b { color: red } }`
+ * - InvalidRule, in this case since `@charset` needs to end with a semicolon: `@charset \"123\"`
+ */
 struct Rule {
+  /// Variant for the different rule types.
   using Type = std::variant<AtRule, QualifiedRule, InvalidRule>;
+
+  /// Rule value.
   Type value;
 
+  /**
+   * Construct a new rule object from any type within the \ref Type variant.
+   *
+   * @param value Rule value.
+   */
   /* implicit */ Rule(Type&& value) : value(value) {}
+
+  /// Equality operator.
   bool operator==(const Rule& other) const = default;
 
+  /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const Rule& rule) {
     std::visit([&os](auto&& v) { os << v; }, rule.value);
     return os;

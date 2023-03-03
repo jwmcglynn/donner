@@ -9,8 +9,19 @@
 
 namespace donner::svg {
 
+/**
+ * Helper class for finding newlines in a string, so that error messages can convert string-relative
+ * offsets into line numbers.
+ *
+ * This supports all newline styles, including `\r\n` and `\r`.
+ */
 class LineOffsets {
 public:
+  /**
+   * Construct a LineOffsets object for the given input string.
+   *
+   * @param input Input string.
+   */
   LineOffsets(std::string_view input) {
     // Compute the offsets for the start of each line. The line isn't considered started until
     // *after* the line break characters.
@@ -28,6 +39,9 @@ public:
     }
   }
 
+  /**
+   * Return the offsets of the start of each line.
+   */
   const std::vector<size_t>& offsets() const { return offsets_; }
 
   /**
