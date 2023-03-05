@@ -33,7 +33,7 @@ struct RenderingInstanceComponent {
   int drawOrder =
       0;  //!< The draw order of the element, computed from the traversal order of the tree.
   bool visible = true;  //!< Whether the element is visible. Note that elements may still influence
-                        //!< rendering behavior when they are hidden, such as <pattern> elements.
+                        //!< rendering behavior when they are hidden, such as \ref pattern elements.
   bool isolatedLayer = false;  //!< True if this instance establishes a new rendering layer, such as
                                //!< if there is opacity.
 

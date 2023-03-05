@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <optional>
 
@@ -8,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * Parameters for a <radialGradient> element.
+ * Parameters for a \ref radialGradient element.
  */
 struct RadialGradientComponent {
   std::optional<Lengthd> cx;

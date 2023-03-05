@@ -27,7 +27,7 @@ struct ComputedCircleComponent {
 };
 
 /**
- * Parameters for a <circle> element.
+ * Parameters for a `<circle>` element.
  */
 struct CircleComponent {
   CircleProperties properties;

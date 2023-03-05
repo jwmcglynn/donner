@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <vector>
 
@@ -11,7 +12,7 @@
 namespace donner::svg {
 
 /**
- * Common parameters for gradient elements, <linearGradient> and <radialGradient>
+ * Common parameters for gradient elements, \ref linearGradient and \ref radialGradient.
  */
 struct GradientComponent {
   std::optional<GradientUnits> gradientUnits;
