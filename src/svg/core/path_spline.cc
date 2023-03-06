@@ -5,6 +5,35 @@
 
 namespace donner::svg {
 
+namespace {
+
+/**
+ * Internal helper function, adds the extrema created by the miter joint
+ * when provided the tangents of the joint, as well as the stroke properties.
+ *
+ * @param box Bounding box handle.
+ * @param currentPoint Line intersection point.
+ * @param tangent0 (Un-normalized) Tangent of first line.
+ * @param tangent1 (Un-normalized) Tangent of second line.
+ * @param strokeWidth Width of stroke.
+ * @param miterLimit Miter limit of the stroke.
+ */
+static void ComputeMiter(Boxd& box, const Vector2d& currentPoint, const Vector2d& tangent0,
+                         const Vector2d& tangent1, double strokeWidth, double miterLimit) {
+  const double intersectionAngle = tangent0.angleWith(-tangent1);
+
+  // If we're under the miter limit, the miter applies. However, don't apply it if the tangents are
+  // colinear, since it would not apply in a consistent direction.
+  const double miterLength = strokeWidth / std::sin(intersectionAngle * 0.5);
+  if (miterLength < miterLimit && !NearEquals(intersectionAngle, MathConstants<double>::kPi)) {
+    // We haven't exceeded the miter limit, compute the extrema.
+    const double jointAngle = (tangent0 - tangent1).angle();
+    box.addPoint(currentPoint + miterLength * Vector2d(std::cos(jointAngle), std::sin(jointAngle)));
+  }
+}
+
+}  // namespace
+
 std::ostream& operator<<(std::ostream& os, PathSpline::CommandType type) {
   switch (type) {
     case PathSpline::CommandType::MoveTo: os << "CommandType::MoveTo"; break;
@@ -127,29 +156,6 @@ Boxd PathSpline::bounds() const {
   }
 
   return box;
-}
-
-// Internal helper function, adds the extrema created by the miter joint
-// when provided the tangents of the joint, as well as the stroke properties.
-//
-// @param box Bounding box handle.
-// @param currentPoint Line intersection point.
-// @param tangent0 (Un-normalized) Tangent of first line.
-// @param tangent1 (Un-normalized) Tangent of second line.
-// @param strokeWidth Width of stroke.
-// @param miterLimit Miter limit of the stroke.
-static void ComputeMiter(Boxd& box, const Vector2d& currentPoint, const Vector2d& tangent0,
-                         const Vector2d& tangent1, double strokeWidth, double miterLimit) {
-  const double intersectionAngle = tangent0.angleWith(-tangent1);
-
-  // If we're under the miter limit, the miter applies. However, don't apply it if the tangents are
-  // colinear, since it would not apply in a consistent direction.
-  const double miterLength = strokeWidth / std::sin(intersectionAngle * 0.5);
-  if (miterLength < miterLimit && !NearEquals(intersectionAngle, MathConstants<double>::kPi)) {
-    // We haven't exceeded the miter limit, compute the extrema.
-    const double jointAngle = (tangent0 - tangent1).angle();
-    box.addPoint(currentPoint + miterLength * Vector2d(std::cos(jointAngle), std::sin(jointAngle)));
-  }
 }
 
 Boxd PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const {
@@ -490,10 +496,10 @@ PathSpline::Builder& PathSpline::Builder::arcTo(const Vector2d& radius, double r
     const double thetaStart = theta + i * thetaIncrement;
     const double thetaEnd = theta + (i + 1) * thetaIncrement;
 
-    const double thetahalf = 0.5 * (thetaEnd - thetaStart);
+    const double thetaHalf = 0.5 * (thetaEnd - thetaStart);
 
-    const double sinHalfThetaHalf = sin(thetahalf * 0.5);
-    const double t = (8.0 / 3.0) * sinHalfThetaHalf * sinHalfThetaHalf / sin(thetahalf);
+    const double sinHalfThetaHalf = sin(thetaHalf * 0.5);
+    const double t = (8.0 / 3.0) * sinHalfThetaHalf * sinHalfThetaHalf / sin(thetaHalf);
 
     const double cosThetaStart = std::cos(thetaStart);
     const double sinThetaStart = std::sin(thetaStart);
