@@ -1,4 +1,4 @@
-ARG VARIANT=bionic
+ARG VARIANT=jammy
 FROM mcr.microsoft.com/vscode/devcontainers/base:${VARIANT}
 
 ARG USERNAME=vscode
@@ -16,7 +16,7 @@ RUN case "${TARGETPLATFORM}" in \
 #
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends software-properties-common
+    && apt-get -y install --no-install-recommends software-properties-common libncurses5
 
 #
 # Install LLVM
