@@ -22,7 +22,7 @@ concept IsCStr = std::is_same_v<T, const char*> || std::is_same_v<T, char*>;
 
 }  // namespace details
 
-/// A concept for types that are string-like, i.e. have a size() and data() method.
+/// A concept for types that are string-like, i.e. have a `size()` and `data()` method.
 template <typename T>
 concept StringLike = requires(T t, size_t i) {
                        { t.size() } -> std::same_as<size_t>;

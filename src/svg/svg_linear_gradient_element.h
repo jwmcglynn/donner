@@ -40,10 +40,14 @@ namespace donner::svg {
  *   <rect fill="url(#MyGradient)" width="300" height="300" />
  * </svg>
  * \endhtmlonly
+ *
+ * Valid child elements: \ref stop
+ *
+ * @see \ref radialGradient, \ref stop
  */
 
 /**
- * @brief DOM object for a \ref linearGradient element.
+ * DOM object for a \ref linearGradient element.
  *
  * ```xml
  * <linearGradient id="MyGradient">
@@ -75,7 +79,7 @@ namespace donner::svg {
  * \htmlonly
  * <svg width="300" height="300">
  *   <style>
- *     text { font-size: 16px; fill: black }
+ *     text { font-size: 16px; font-weight: bold; color: black }
  *   </style>
  *   <defs>
  *     <linearGradient id="ExampleGradient" x1="100" y1="100" x2="200" y2="200"
@@ -102,6 +106,8 @@ namespace donner::svg {
  * | `y1`      | `0%`    | Start Y coordinate. |
  * | `x2`      | `100%`  | End X coordinate. |
  * | `y2`      | `100%`  | End Y coordinate. |
+ *
+ * @see \ref SVGRadialGradientElement, \ref SVGStopElement
  */
 class SVGLinearGradientElement : public SVGGradientElement {
 protected:
