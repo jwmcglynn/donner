@@ -131,7 +131,7 @@ git_repository(
 
 git_repository(
     name = "skia",
-    branch = "main",
+    commit = "aaf2f8dd2bba1260395c90635d83df271e753fbd",
     remote = "https://github.com/jwmcglynn/skia",
 )
 
