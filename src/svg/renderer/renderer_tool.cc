@@ -6,8 +6,7 @@
 #include <vector>
 
 #include "src/svg/renderer/renderer_skia.h"
-#include "src/svg/svg_element.h"
-#include "src/svg/xml/xml_parser.h"
+#include "src/svg/svg.h"
 
 namespace donner::svg {
 

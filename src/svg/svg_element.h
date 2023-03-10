@@ -68,46 +68,112 @@ public:
   /// Get the element id, the value of the "id" attribute.
   RcString id() const;
 
-  /// Set the element id, the value of the "id" attribute.
+  /**
+   * Set the element id, the value of the "id" attribute.
+   *
+   * @param id New id to set.
+   */
   void setId(std::string_view id);
 
   /// Get the element class name, the value of the "class" attribute.
   RcString className() const;
 
-  /// Set the element class name, the value of the "class" attribute.
+  /**
+   * Set the element class name, the value of the "class" attribute.
+   *
+   * @param name New class name to set.
+   */
   void setClassName(std::string_view name);
 
-  /// Get the element style, the value of the "style" attribute.
+  /**
+   * Set the element style, the value of the "style" attribute.
+   *
+   * @param style New style to set.
+   */
   void setStyle(std::string_view style);
 
-  /// Set the value of a presentation attribute, such as "fill" or "stroke".
+  /**
+   * Set the value of a presentation attribute, such as "fill" or "stroke".
+   *
+   * @param name Name of the attribute to set.
+   * @param value New value to set.
+   * @return true if the attribute was set, false if the attribute is not a valid presentation
+   *   attribute for this element, or a \ref ParseError if the value is invalid.
+   */
   ParseResult<bool> trySetPresentationAttribute(std::string_view name, std::string_view value);
 
+  /**
+   * Returns true if the element has an attribute with the given name.
+   *
+   * @param name Name of the attribute to check.
+   * @return true if the attribute exists, false otherwise.
+   */
   bool hasAttribute(std::string_view name) const;
+
+  /**
+   * Get the value of an attribute, if it exists.
+   *
+   * @param name Name of the attribute to get.
+   * @return The value of the attribute, or std::nullopt if the attribute does not exist.
+   */
   std::optional<RcString> getAttribute(std::string_view name) const;
 
+  /**
+   * Get the \ref SVGDocument that holds this element.
+   */
   SVGDocument& ownerDocument();
+
+  /**
+   * Get this element's parent, if it exists. If the parent is not set, this document is either the
+   * root element or has not been inserted into the document tree.
+   *
+   * @return The parent element, or `std::nullopt` if the parent is not set.
+   */
   std::optional<SVGElement> parentElement() const;
+
+  /**
+   * Get the first child of this element, if it exists.
+   *
+   * @return The first child element, or `std::nullopt` if the element has no children.
+   */
   std::optional<SVGElement> firstChild() const;
+
+  /**
+   * Get the last child of this element, if it exists.
+   *
+   * @return The last child element, or `std::nullopt` if the element has no children.
+   */
   std::optional<SVGElement> lastChild() const;
+
+  /**
+   * Get the previous sibling of this element, if it exists.
+   *
+   * @return The previous sibling element, or `std::nullopt` if the element has no previous sibling.
+   */
   std::optional<SVGElement> previousSibling() const;
+
+  /**
+   * Get the next sibling of this element, if it exists.
+   *
+   * @return The next sibling element, or `std::nullopt` if the element has no next sibling.
+   */
   std::optional<SVGElement> nextSibling() const;
 
   /**
-   * Insert @a newNode as a child, before @a referenceNode. If @a referenceNode is std::nullopt,
+   * Insert \p newNode as a child, before \p referenceNode. If \p referenceNode is std::nullopt,
    * append the child.
    *
-   * If @a newNode is already in the tree, it is first removed from its parent. However, if
+   * If \p newNode is already in the tree, it is first removed from its parent. However, if
    * inserting the child will create a cycle, the behavior is undefined.
    *
    * @param newNode New node to insert.
-   * @param referenceNode A child of this node to insert @a newNode before, or std::nullopt. Must be
+   * @param referenceNode A child of this node to insert \p newNode before, or std::nullopt. Must be
    *                      a child of the current node.
    */
   SVGElement insertBefore(SVGElement newNode, std::optional<SVGElement> referenceNode);
 
   /**
-   * Append @a child as a child of the current node.
+   * Append \p child as a child of the current node.
    *
    * If child is already in the tree, it is first removed from its parent. However, if inserting
    * the child will create a cycle, the behavior is undefined.
@@ -117,10 +183,10 @@ public:
   SVGElement appendChild(SVGElement child);
 
   /**
-   * Replace @a oldChild with @a newChild in the tree, removing @a oldChild and inserting @a
+   * Replace \p oldChild with \p newChild in the tree, removing \p oldChild and inserting \p
    * newChild in its place.
    *
-   * If @a newChild is already in the tree, it is first removed from its parent. However, if
+   * If \p newChild is already in the tree, it is first removed from its parent. However, if
    * inserting the child will create a cycle, the behavior is undefined.
    *
    * @param newChild New child to insert.
@@ -129,7 +195,7 @@ public:
   SVGElement replaceChild(SVGElement newChild, SVGElement oldChild);
 
   /**
-   * Remove @a child from this node.
+   * Remove \p child from this node.
    *
    * @param child Child to remove, must be a child of the current node.
    */
@@ -140,8 +206,17 @@ public:
    */
   void remove();
 
+  /**
+   * Returns true if the two SVGElement handles reference the same underlying document.
+   */
   bool operator==(const SVGElement& other) const { return handle_ == other.handle_; }
 
+  /**
+   * Cast this element to its derived type.
+   *
+   * @pre Requires this element to be of type \p Derived::Type.
+   * @return A reference to this element, cast to the derived type.
+   */
   template <typename Derived>
   Derived cast() {
     UTILS_RELEASE_ASSERT(Derived::Type == type());
@@ -151,16 +226,48 @@ public:
     return *reinterpret_cast<Derived*>(this);
   }
 
+  /**
+   * Find the first element in the tree that matches the given CSS selector.
+   *
+   * ```
+   * auto rect = document.querySelector("g.my-group > rect");
+   * ```
+   *
+   * ```
+   * auto element = document.querySelector("#elementId");
+   * ```
+   *
+   * @param selector CSS selector to match.
+   * @return The first matching element, or `std::nullopt` if no element matches.
+   */
   std::optional<SVGElement> querySelector(std::string_view selector);
 
+  /**
+   * Get the computed CSS style of this element, after the CSS cascade.
+   */
   const PropertyRegistry& getComputedStyle() const;
 
 protected:
+  /**
+   * Create a new Entity of the given type.
+   *
+   * @param registry Registry to create the entity in.
+   * @param typeString String representation of the type.
+   * @param Type Type of the entity.
+   */
   static EntityHandle CreateEntity(Registry& registry, RcString typeString, ElementType Type);
 
+  /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() const { return *handle_.registry(); }
+
+  /**
+   * Convert an Entity to an EntityHandle, for advanced use.
+   *
+   * @param entity Entity to convert.
+   */
   EntityHandle toHandle(Entity entity) const { return EntityHandle(registry(), entity); }
 
+  /// The underlying ECS Entity for this element, which holds all data.
   EntityHandle handle_;
 };
 

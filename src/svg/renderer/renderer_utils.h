@@ -24,7 +24,7 @@ public:
    * Write raw RGBA pixel data to a PNG file.
    *
    * @param filename Filename to save to.
-   * @param pixels Span containing RGBA-ordered pixel data.
+   * @param rgbaPixels Span containing RGBA-ordered pixel data.
    * @param width Width of the image.
    * @param height Height of the image.
    * @param strideInPixels Stride in pixels. Defaults to 0, which assumes a stride of width.

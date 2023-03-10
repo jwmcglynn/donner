@@ -17,12 +17,21 @@ namespace donner {
 
 namespace details {
 
+/**
+ * A concept for types that are C-style strings, i.e. `const char*` or `char*`.
+ *
+ * @tparam T C-style string type.
+ */
 template <typename T>
 concept IsCStr = std::is_same_v<T, const char*> || std::is_same_v<T, char*>;
 
 }  // namespace details
 
-/// A concept for types that are string-like, i.e. have a `size()` and `data()` method.
+/**
+ * A concept for types that are string-like, i.e. have a `size()` and `data()` method.
+ *
+ * @tparam T `std::string`-like type.
+ */
 template <typename T>
 concept StringLike = requires(T t, size_t i) {
                        { t.size() } -> std::same_as<size_t>;
@@ -106,16 +115,26 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
 };
 
 /**
- * A collection of string utils, such as case-insensitive comparison and begins/endsWith.
+ * A collection of string utils, such as case-insensitive comparison and StartsWith/EndsWith.
  */
 class StringUtils {
 public:
   /**
-   * Compare two strings. Returns true if the string equals the other all-lowercase string, with a
-   * case insensitive comparison.
+   * Compare two strings with case-insensitive comparison, fast-path assuming that one of the
+   * strings is all-lowercase.
+   *
+   * ```
+   * StringUtils::EqualsLowercase("Hello", "hello"); // true
+   * StringUtils::EqualsLowercase("Hello", "HELLO"); // invalid, rhs must be lowercase
+   * ```
    *
    * @param lhs The first string to compare, can be any case.
    * @param lowercaseRhs string to compare to, must be lowercase.
+   * @pre lowercaseRhs must be an all-lowercase string.
+   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * methods).
+   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * methods).
    * @return true If the \p lowercaseRhs is equal to the \p lhs, ignoring the case of the \p lhs.
    */
   template <StringLike T, StringLike U>
@@ -136,11 +155,20 @@ public:
   }
 
   /**
-   * Returns true if two string are equal with a case-insensitive comparison.
+   * Returns true if two strings are equal, optionally with a case-insensitive comparison.
+   *
+   * ```
+   * StringUtils::Equals("Hello", "hello"); // false
+   * StringUtils::Equals<StringComparison::IgnoreCase>("Hello", "hello"); // true
+   * ```
    *
    * @param lhs The first string to compare.
    * @param rhs The second string to compare.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
+   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * methods).
+   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * methods).
    * @return true If the strings are equal.
    */
   template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
@@ -155,9 +183,18 @@ public:
   /**
    * Returns true if \p str starts with \p otherStr.
    *
+   * ```
+   * StringUtils::StartsWith("Hello", "He"); // true
+   * StringUtils::StartsWith<StringComparison::IgnoreCase>("Hello", "he"); // true
+   * ```
+   *
    * @param str The string to check for a prefix.
    * @param otherStr The prefix to check for.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
+   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * methods).
+   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * methods).
    * @return true If the strings are equal.
    */
   template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
@@ -172,9 +209,18 @@ public:
   /**
    * Returns true if \p str ends with \p otherStr.
    *
+   * ```
+   * StringUtils::EndsWith("Hello", "llo"); // true
+   * StringUtils::EndsWith<StringComparison::IgnoreCase>("Hello", "LLO"); // true
+   * ```
+   *
    * @param str The string to check for a suffix.
    * @param otherStr The suffix to check for.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
+   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * methods).
+   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * methods).
    * @return true If the strings are equal.
    */
   template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
@@ -191,9 +237,18 @@ public:
   /**
    * Returns true if \p str contains \p otherStr.
    *
+   * ```
+   * StringUtils::Contains("Hello world", "ello"); // true
+   * StringUtils::Contains<StringComparison::IgnoreCase>("Hello world", "ELLO"); // true
+   * ```
+   *
    * @param str The string to check for a suffix.
    * @param otherStr The suffix to check for.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
+   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * methods).
+   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * methods).
    * @return true If the strings are equal.
    */
   template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
@@ -216,7 +271,6 @@ public:
    * Splits a string by a given character, returning a range of the split strings as a
    * `std::string_view`.
    *
-   * Example:
    * ```
    * for (auto&& str : StringUtils::Split("a,b,c", ',')) {
    *   // ...
@@ -226,6 +280,7 @@ public:
    * @tparam T The string type to split.
    * @param str The string to split.
    * @param ch The character to split by.
+   * @tparam T The type of the string, must be \ref StringLike (have `size()` and `data() methods).
    * @return A vector of the split string views.
    */
   template <StringLike T>
@@ -249,7 +304,8 @@ private:
    * @param lhs First string to compare.
    * @param rhs Second string to compare.
    * @param sizeToCompare The number of characters to compare, \ref lhs and \ref rhs must be at
-   * least this size.
+   * least this size, e.g `std::min(lhsSize, rhsSize)`.
+   * @tparam Comparison The comparison type to use.
    * @return true If the strings are equal.
    */
   template <StringComparison Comparison>
@@ -261,7 +317,11 @@ private:
     }
   }
 
-  /// Helper to filter out empty std::string_views.
+  /**
+   * Helper to filter out empty std::string_views, used by \ref Split.
+   *
+   * @param str The string view to check.
+   */
   static bool StringViewIsNonEmpty(std::string_view str) { return !str.empty(); }
 };
 

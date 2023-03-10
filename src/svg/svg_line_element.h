@@ -7,12 +7,16 @@
 namespace donner::svg {
 
 /**
- * @defgroup line <line>
+ * @defgroup line '<line>'
  *
- * Creates a line between two points, using the `x1`, `y1`, `x2`, and `y2` attributes. See
- * SVGLineElement.
+ * Creates a line between two points, using the `x1`, `y1`, `x2`, and `y2` attributes.
  *
- * Spec: https://www.w3.org/TR/SVG2/shapes.html#LineElement
+ * - DOM object: SVGLineElement
+ * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#LineElement
+ *
+ * ```xml
+ * <line x1="100" y1="100" x2="200" y2="200" stroke="black" stroke-width="2" />
+ * ```
  *
  * \htmlonly
  * <svg width="300" height="300" style="background-color: white">

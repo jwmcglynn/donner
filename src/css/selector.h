@@ -91,7 +91,7 @@ struct WqName {
 };
 
 /**
- * Selectors which start with two colons are called pseudo-elements, e.g. `::before`. They are used
+ * Selectors which start with two colons are called pseudo-elements, e.g. '::before'. They are used
  * to represent elements which are not directly present in the document tree.
  *
  * See https://www.w3.org/TR/selectors-4/#pseudo-elements for the full definition.

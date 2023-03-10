@@ -10,7 +10,7 @@
 namespace donner::svg {
 
 /**
- * Parameters for a <polygon> or <polyline> element.
+ * Parameters for a \ref xml_polygon or \ref xml_polyline element.
  */
 struct PolyComponent {
   enum class Type { Polygon, Polyline };

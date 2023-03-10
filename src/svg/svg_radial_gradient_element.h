@@ -7,14 +7,15 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_radialGradient <radialGradient>
+ * @defgroup xml_radialGradient '<radialGradient>'
  *
- * Defines the paint server for a radial gradients, see SVGRadialGradientElement.
+ * Defines the paint server for a radial gradients.
  *
- * Spec: https://www.w3.org/TR/SVG2/pservers.html#RadialGradients
+ * - DOM object: SVGRadialGradientElement
+ * - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html#RadialGradients
  *
- * These elements are typically placed within a `<defs>` element, and then referenced by id from a
- * `fill` or `stroke` attribute.
+ * These elements are typically placed within a \ref xml_defs element, and then referenced by id
+ * from a `fill` or `stroke` attribute.
  *
  * ```xml
  * <radialGradient id="MyGradient">

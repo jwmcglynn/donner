@@ -7,6 +7,14 @@
 namespace donner::svg {
 
 /**
+ * @defgroup xy_auto "auto" on rx/ry
+ *
+ * The `rx` and `ry` properties of \ref xml_rect and \ref xml_ellipse can be set to the "auto",
+ * which means that the value of the other property is used. This is handled by the \ref
+ * CalculateRadiusMaybeAuto function.
+ */
+
+/**
  * For elements with two radius properties, such as \ref xml_rect or \ref xml_ellipse which provide
  * `rx` and `ry` properties, compute the current value of `rx` or `ry`, while respecting the "auto"
  * identifier and handling negative values.

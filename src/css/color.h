@@ -142,7 +142,7 @@ struct Color {
 namespace string_literals {
 
 /**
- * String literal operator for constructing a \ref Color from hex values.
+ * String literal operator for constructing a \ref donner::css::Color from hex values.
  *
  * For example:
  * ```
@@ -156,7 +156,8 @@ constexpr Color operator"" _rgb(unsigned long long value) {
 }
 
 /**
- * String literal operator for constructing a \ref Color from hex values, with an alpha channel.
+ * String literal operator for constructing a \ref donner::css::Color from hex values, with an alpha
+ * channel.
  *
  * For example, for 50% opacity red:
  * ```

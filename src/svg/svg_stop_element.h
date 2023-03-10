@@ -7,12 +7,13 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_stop <stop>
+ * @defgroup xml_stop '<stop>'
  *
- * Defines a color stop for a gradient, see SVGStopElement. This is a child element of \ref
- * linearGradient and \ref xml_radialGradient.
+ * Defines a color stop for a gradient. This is a child element of \ref
+ * xml_linearGradient and \ref xml_radialGradient.
  *
- * Spec: https://www.w3.org/TR/SVG2/pservers.html#StopElement
+ * - DOM object: SVGStopElement
+ * - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html#StopElement
  *
  * Each stop element defines an offset and a color. The offset is a percentage of the distance
  * between the start and end of the gradient.

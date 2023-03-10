@@ -102,11 +102,11 @@ struct ComputedShadowTreeComponent {
   }
 
   /**
-   * Create a new computed shadow tree instance, such as the shadow tree for a <use> element or a
-   * <pattern> element.
+   * Create a new computed shadow tree instance, such as the shadow tree for a \ref xml_use element
+   * or a \ref xml_pattern element.
    *
-   * For <pattern> paint servers, there may be multiple shadow trees originating from the same
-   * entity, for both a 'fill' and a 'stroke', so this component can hold multiple shadow trees
+   * For \ref xml_pattern paint servers, there may be multiple shadow trees originating from the
+   * same entity, for both a 'fill' and a 'stroke', so this component can hold multiple shadow trees
    * simultaneously.
    *
    * @param registry The registry.

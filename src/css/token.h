@@ -21,7 +21,10 @@ using TokenIndex = size_t;
  * Indicates if a number is an integer or a floating point number, used for number-containing tokens
  * such as \ref Token::Number and \ref Token::Dimension.
  */
-enum class NumberType { Integer, Number };
+enum class NumberType {
+  Integer,  ///< Integer number (no decimal point).
+  Number,   ///< Floating point number.
+};
 
 /**
  * A CSS token, which are created as a first step when parsing a CSS string. See

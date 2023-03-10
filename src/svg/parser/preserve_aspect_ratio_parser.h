@@ -16,14 +16,16 @@ public:
    * See https://www.w3.org/TR/SVG/coords.html#PreserveAspectRatioAttribute
    *
    * It parses a string containing the following values:
-   *  <align> <meetOrSlice>?
+   * ```
+   * <align> <meetOrSlice>?
    *
-   *  <align> =
-   *    none
-   *    | xMinYMin | xMidYMin | xMaxYMin
-   *    | xMinYMid | xMidYMid | xMaxYMid
-   *    | xMinYMax | xMidYMax | xMaxYMax
-   *  <meetOrSlice> = meet | slice
+   * <align> =
+   *   none
+   *   | xMinYMin | xMidYMin | xMaxYMin
+   *   | xMinYMid | xMidYMid | xMaxYMid
+   *   | xMinYMax | xMidYMax | xMaxYMax
+   * <meetOrSlice> = meet | slice
+   * ```
    *
    * @param str Input string.
    * @return Parsed PreserveAspectRatio.

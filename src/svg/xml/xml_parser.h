@@ -11,7 +11,6 @@ namespace donner::svg {
 /**
  * Parse an SVG XML document.
  */
-
 class XMLParser {
 public:
   /**

@@ -7,11 +7,12 @@
 namespace donner::svg {
 
 /**
- * @defgroup circle <circle>
+ * @defgroup xml_circle '<circle>'
  *
- * Creates a circle centered on `cx`, `cy`, with radius `r`. See SVGCircleElement.
+ * Creates a circle centered on `cx`, `cy`, with radius `r`.
  *
- * Spec: https://www.w3.org/TR/SVG2/shapes.html#CircleElement
+ * - DOM object: SVGCircleElement
+ * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#CircleElement
  *
  * \htmlonly
  * <svg width="300" height="300" style="background-color: white">
@@ -31,7 +32,7 @@ namespace donner::svg {
  */
 
 /**
- * DOM object for a \ref circle element.
+ * DOM object for a \ref xml_circle element.
  *
  * Use the `cx`, `cy`, and `r` attributes to define the circle.
  *
@@ -65,11 +66,11 @@ private:
 public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Circle;
-  /// XML tag name, \ref circle.
+  /// XML tag name, \ref xml_circle.
   static constexpr std::string_view Tag = "circle";
 
   /**
-   * Create a new \ref circle element.
+   * Create a new \ref xml_circle element.
    *
    * @param document Containing document.
    */

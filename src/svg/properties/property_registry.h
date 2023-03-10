@@ -157,6 +157,20 @@ public:
                                                std::optional<ElementType> type = std::nullopt,
                                                EntityHandle handle = EntityHandle());
 
+  /**
+   * Ostream output operator, for debugging which outputs a human-readable representation of all of
+   * the properties.
+   *
+   * Example output:
+   * ```
+   * PropertyRegistry {
+   *   color: Color(0, 255, 0, 255) (set) @ Specificity(0, 0, 0)
+   * }
+   * ```
+   *
+   * @param os Output stream.
+   * @param registry PropertyRegistry to output.
+   */
   friend std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry);
 };
 

@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * Data for a `<style>` element.
+ * Data for a \ref xml_style element.
  *
  * See https://www.w3.org/TR/SVG2/styling.html#StyleElement
  */
@@ -17,13 +17,13 @@ struct StylesheetComponent {
   RcString type;
 
   /**
-   * Returns true if the `<style>` element has either no `type=""` attribute, or if it has been
+   * Returns true if the \ref xml_style element has either no `type` attribute, or if it has been
    * manually set to "text/css".
    */
   bool isCssType() const { return type.empty() || type.equalsIgnoreCase("text/css"); }
 
   /**
-   * Parse the contents of the <style> element.
+   * Parse the contents of the \ref xml_style element.
    *
    * @param str The contents of the `<style>` element.
    */
