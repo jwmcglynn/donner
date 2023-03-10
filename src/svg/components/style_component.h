@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/svg/components/tree_component.h"
 #include "src/svg/properties/property_registry.h"

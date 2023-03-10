@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * Parameters for a \ref radialGradient element.
+ * Parameters for a \ref xml_radialGradient element.
  */
 struct RadialGradientComponent {
   std::optional<Lengthd> cx;

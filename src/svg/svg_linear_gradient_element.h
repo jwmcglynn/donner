@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <optional>
 
@@ -8,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup linearGradient <linearGradient>
+ * @defgroup xml_linearGradient <linearGradient>
  *
  * Defines the paint server for a linear gradients, see SVGLinearGradientElement.
  *
@@ -41,13 +42,13 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * Valid child elements: \ref stop
+ * Valid child elements: \ref xml_stop
  *
- * @see \ref radialGradient, \ref stop
+ * @see \ref xml_radialGradient, \ref xml_stop
  */
 
 /**
- * DOM object for a \ref linearGradient element.
+ * DOM object for a \ref xml_linearGradient element.
  *
  * ```xml
  * <linearGradient id="MyGradient">
@@ -117,11 +118,11 @@ protected:
 public:
   /// Element type.
   static constexpr ElementType Type = ElementType::LinearGradient;
-  /// XML tag name, \ref linearGradient.
+  /// XML tag name, \ref xml_linearGradient.
   static constexpr std::string_view Tag = "linearGradient";
 
   /**
-   * Create a new \ref linearGradient element.
+   * Create a new \ref xml_linearGradient element.
    *
    * @param document Containing document.
    */

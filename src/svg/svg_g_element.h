@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/svg/svg_graphics_element.h"
 

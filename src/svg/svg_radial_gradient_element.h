@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/base/length.h"
 #include "src/svg/svg_gradient_element.h"
@@ -6,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup radialGradient <radialGradient>
+ * @defgroup xml_radialGradient <radialGradient>
  *
  * Defines the paint server for a radial gradients, see SVGRadialGradientElement.
  *
@@ -39,13 +40,13 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * Valid child elements: \ref stop
+ * Valid child elements: \ref xml_stop
  *
- * @see \ref linearGradient, \ref stop
+ * @see \ref xml_linearGradient, \ref xml_stop
  */
 
 /**
- * DOM object for a \ref radialGradient element.
+ * DOM object for a \ref xml_radialGradient element.
  *
  * ```xml
  * <radialGradient id="MyGradient">
@@ -125,11 +126,11 @@ protected:
 public:
   /// Element type.
   static constexpr ElementType Type = ElementType::RadialGradient;
-  /// XML tag name, \ref radialGradient.
+  /// XML tag name, \ref xml_radialGradient.
   static constexpr std::string_view Tag = "radialGradient";
 
   /**
-   * Create a new \ref radialGradient element.
+   * Create a new \ref xml_radialGradient element.
    *
    * @param document Containing document.
    */

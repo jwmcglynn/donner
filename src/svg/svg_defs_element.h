@@ -1,11 +1,12 @@
 #pragma once
+/// @file
 
 #include "src/svg/svg_graphics_element.h"
 
 namespace donner::svg {
 
 class SVGDefsElement : public SVGGraphicsElement {
-protected:
+private:
   explicit SVGDefsElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
 public:

@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <vector>
 
@@ -10,7 +11,7 @@ namespace donner::svg {
 /**
  * Container for a spline, which is a series of points connected by lines and curves.
  *
- * This is used to represent the `d` attribute of the \ref SVGPathElement (\ref path), see
+ * This is used to represent the `d` attribute of the \ref SVGPathElement (\ref xml_path), see
  * https://www.w3.org/TR/SVG2/paths.html#PathData. To parse SVG path data into a PathSpline, use the
  * \ref PathParser.
  *

@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <span>
 #include <string_view>

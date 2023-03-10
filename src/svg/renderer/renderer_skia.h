@@ -1,7 +1,9 @@
 #pragma once
+/// @file
 
 #include <memory>
 
+#include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkGraphics.h"
 #include "include/core/SkImageEncoder.h"

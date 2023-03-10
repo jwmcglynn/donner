@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <optional>
 
@@ -8,6 +9,10 @@
 
 namespace donner::svg {
 
+/**
+ * A component attached to entities that have a `viewbox` attribute, such as \ref xml_svg and \ref
+ * xml_pattern.
+ */
 struct ViewboxComponent {
   /// Stored viewbox, if any.
   std::optional<Boxd> viewbox;

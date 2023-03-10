@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/svg/core/preserve_aspect_ratio.h"
 

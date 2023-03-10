@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/svg/core/gradient.h"
 #include "src/svg/svg_element.h"
@@ -74,7 +75,7 @@ public:
    * \see https://www.w3.org/TR/SVG2/pservers.html#RadialGradientElementHrefAttribute
    *
    * @returns A URL reference to a template gradient element; to be valid, the reference must be to
-   *   a different \ref linearGradient or a \ref radialGradient element.
+   *   a different \ref xml_linearGradient or a \ref xml_radialGradient element.
    */
   std::optional<RcString> href() const;
 
@@ -106,7 +107,7 @@ public:
    *
    * @param value URL reference such as `"#otherId"` to a template gradient element, or
    *   `std::nullopt` to remove the attribute. To be valid, the reference must be to a different
-   *   \ref linearGradient or a \ref radialGradient element.
+   *   \ref xml_linearGradient or a \ref xml_radialGradient element.
    */
   void setHref(std::optional<RcString> value);
 

@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/base/rc_string.h"
 

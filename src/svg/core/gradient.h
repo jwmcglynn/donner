@@ -10,7 +10,7 @@ namespace donner::svg {
  * https://www.w3.org/TR/SVG2/pservers.html#LinearGradientElementGradientUnitsAttribute and
  * https://www.w3.org/TR/SVG2/pservers.html#RadialGradientElementGradientUnitsAttribute.
  *
- * This is used on \ref linearGradient and \ref radialGradient elements.
+ * This is used on \ref xml_linearGradient and \ref xml_radialGradient elements.
  *
  * - For linear gradients, this defines the coordinate system for attributes `x1`, `y1`, `x2`, and
  *   `y2`.
@@ -43,7 +43,7 @@ enum class GradientUnits {
  * Specifies what happens at the start or end of a gradient, when the gradient coordinates are
  * inside the bounds of the referencing element.
  *
- * This is used on \ref linearGradient and \ref radialGradient elements.
+ * This is used on \ref xml_linearGradient and \ref xml_radialGradient elements.
  *
  * \htmlonly
  * <svg width="660" height="150">

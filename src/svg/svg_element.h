@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <functional>
 #include <string_view>
@@ -17,26 +18,69 @@ namespace donner::svg {
 
 class SVGDocument;
 
+/**
+ * Represents an SVG entity belonging to an \ref SVGDocument.
+ *
+ * Each \ref SVGElement may only belong to a single document, and each document can have only one
+ * root. SVGDocument is responsible for managing the lifetime of all elements in the document, by
+ * storing a shared pointer to the internal Registry data-store.
+ *
+ * Data is stored using the Entity Component System (\ref ECS) pattern, which is a data-oriented
+ * design optimized for fast data access and cache locality, particularly during rendering.
+ *
+ * SVGDocument and \ref SVGElement provide a facade over the \ref ECS, and surface a familiar
+ * Document Object Model (DOM) API to traverse and manipulate the document tree, which is internally
+ * stored within Components in the ECS.  This makes \ref SVGElement a thin wrapper around an \ref
+ * Entity, making the object lightweight and usable on the stack.
+ *
+ * \see \ref SVGDocument
+ * \see \ref ECS
+ * \see \ref Component
+ */
 class SVGElement {
 protected:
+  /**
+   * Internal constructor to create an SVGElement from an \ref EntityHandle.
+   *
+   * To create an SVGElement, use the static \ref Create methods on the derived class, such as \ref
+   * SVGCircleElement::Create.
+   *
+   * @param handle EntityHandle to wrap.
+   */
   explicit SVGElement(EntityHandle handle);
 
 public:
+  /// Create another reference to the same SVGElement.
   SVGElement(const SVGElement& other);
+
+  /// Create another reference to the same SVGElement.
   SVGElement& operator=(const SVGElement& other);
 
+  /// Get the ElementType for known XML element types.
   ElementType type() const;
+
+  /// Get the XML tag name string for this element.
   RcString typeString() const;
 
+  /// Get the underlying \ref Entity, for advanced use-cases that require direct access to the ECS.
   Entity entity() const;
 
+  /// Get the element id, the value of the "id" attribute.
   RcString id() const;
+
+  /// Set the element id, the value of the "id" attribute.
   void setId(std::string_view id);
 
+  /// Get the element class name, the value of the "class" attribute.
   RcString className() const;
+
+  /// Set the element class name, the value of the "class" attribute.
   void setClassName(std::string_view name);
 
+  /// Get the element style, the value of the "style" attribute.
   void setStyle(std::string_view style);
+
+  /// Set the value of a presentation attribute, such as "fill" or "stroke".
   ParseResult<bool> trySetPresentationAttribute(std::string_view name, std::string_view value);
 
   bool hasAttribute(std::string_view name) const;

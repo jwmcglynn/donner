@@ -12,7 +12,7 @@
 namespace donner::svg {
 
 /**
- * Common parameters for gradient elements, \ref linearGradient and \ref radialGradient.
+ * Common parameters for gradient elements, \ref xml_linearGradient and \ref xml_radialGradient.
  */
 struct GradientComponent {
   std::optional<GradientUnits> gradientUnits;

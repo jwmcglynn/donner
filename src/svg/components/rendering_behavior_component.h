@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 namespace donner::svg {
 

@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/base/length.h"
 #include "src/svg/svg_element.h"
@@ -6,10 +7,10 @@
 namespace donner::svg {
 
 /**
- * @defgroup stop <stop>
+ * @defgroup xml_stop <stop>
  *
  * Defines a color stop for a gradient, see SVGStopElement. This is a child element of \ref
- * linearGradient and \ref radialGradient.
+ * linearGradient and \ref xml_radialGradient.
  *
  * Spec: https://www.w3.org/TR/SVG2/pservers.html#StopElement
  *
@@ -25,7 +26,7 @@ namespace donner::svg {
  */
 
 /**
- * DOM object for a \ref stop element.
+ * DOM object for a \ref xml_stop element.
  *
  * ```xml
  * <linearGradient id="MyGradient">
@@ -53,11 +54,11 @@ protected:
 public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Stop;
-  /// XML tag name, \ref stop.
+  /// XML tag name, \ref xml_stop.
   static constexpr std::string_view Tag = "stop";
 
   /**
-   * Create a new \ref stop element.
+   * Create a new \ref xml_stop element.
    *
    * @param document Containing document.
    */

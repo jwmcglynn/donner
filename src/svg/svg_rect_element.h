@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include "src/base/length.h"
 #include "src/svg/core/path_spline.h"

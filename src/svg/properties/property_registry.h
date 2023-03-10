@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <span>
 
@@ -60,6 +61,8 @@ public:
 
   /**
    * Return a tuple of all properties within the PropertyRegistry.
+   *
+   * To get the size of the tuple, use \ref numProperties().
    */
   auto allProperties() {
     return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
@@ -67,6 +70,9 @@ public:
                                  strokeMiterlimit, strokeDasharray, strokeDashoffset);
   }
 
+  /**
+   * Return the size of the tuple returned by \ref allProperties().
+   */
   static constexpr size_t numProperties() {
     // If this is at class scope, it fails with a compiler error: "function with deduced return type
     // cannot be used before it is defined".
@@ -85,6 +91,11 @@ public:
 
   /**
    * Inherit the value of each element in the stylesheet.
+   *
+   * @param parent PropertyRegistry from this element's direct parent, where properties will be
+   *   inherited from.
+   * @param options Options for how to inherit properties, which can be used to skip inheritance for
+   *   a category of properties.
    */
   [[nodiscard]] PropertyRegistry inheritFrom(
       const PropertyRegistry& parent,
@@ -139,7 +150,8 @@ public:
    * @param value Value of the attribute, parsed as a CSS value.
    * @param type If set, parses additional presentation attributes for the given element type.
    * @param handle Entity handle to use for parsing additional attributes.
-   * @return true if the attribute name was supported.
+   * @return true if the element supports this attribute and it was parsed successfully, or a \ref
+   *   ParseError if parsing failed.
    */
   ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
                                                std::optional<ElementType> type = std::nullopt,
