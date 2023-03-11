@@ -10,7 +10,7 @@
 namespace donner::svg {
 
 /**
- * Parameters for a <stop> element.
+ * Parameters for a \ref xml_stop element.
  */
 struct StopProperties {
   float offset = 0.0f;

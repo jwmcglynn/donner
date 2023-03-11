@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup line '<line>'
+ * @defgroup xml_line '<line>'
  *
  * Creates a line between two points, using the `x1`, `y1`, `x2`, and `y2` attributes.
  *
@@ -35,7 +35,7 @@ namespace donner::svg {
  */
 
 /**
- * DOM object for a \ref line element.
+ * DOM object for a \ref xml_line element.
  *
  * Use the `x1`, `y1`, `x2`, and `y2` attributes to define the start and end of the line.
  *

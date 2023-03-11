@@ -6,6 +6,12 @@
 #include "src/svg/xml/xml_parser.h"
 
 /**
+ * Top-level Donner namespace, which is split into different sub-namespaces such as \ref donner::svg
+ * and \ref donner::css.
+ */
+namespace donner {
+
+/**
  * Donner SVG library, which can load, manipulate and render SVG files.
  *
  * Loading SVG files can be done using \ref XMLParser:
@@ -56,4 +62,6 @@
  * }
  * ```
  */
-namespace donner::svg {}  // namespace donner::svg
+namespace svg {}  // namespace svg
+
+}  // namespace donner

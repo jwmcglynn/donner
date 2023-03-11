@@ -27,7 +27,7 @@ struct TransformComponent {
 
   /**
    * Get the computed transform, computing it if necessary. If the transform is not set, returns
-   * nullptr, the caller should substite the result for identity in this case.
+   * nullptr, the caller should substitute the result for identity in this case.
    *
    * @param handle Entity handle.
    * @param fontMetrics Font metrics used for resolving lengths in the <transform-list>.

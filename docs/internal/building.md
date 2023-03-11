@@ -1,10 +1,10 @@
-# Building Donner SVG
+# Building Donner
 
-Donner SVG is intended as a hobby project with the latest C++ spec, so it is likely that toolchains that support it won't be pre-installed.
+Donner is intended as a hobby project with the latest C++ spec, so it is likely that toolchains that support it won't be pre-installed.
 
 ## Requirements
 
-* Bazel
+- Bazel
 
 ### Installing Bazel
 

@@ -69,7 +69,7 @@ public:
    * - `gradientUnits`, `spreadMethod`, and `gradientTransform`.
    * - For \ref SVGLinearGradientElement, `x1`, `y1`, `x2`, and `y2`.
    * - For \ref SVGRadialGradientElement, `cx`, `cy`, `r`, `fx`, `fy`, and `fr`.
-   * - `<stop>` child elements, if this element has none itself.
+   * - \ref xml_stop child elements, if this element has none itself.
    *
    * \see https://www.w3.org/TR/SVG2/pservers.html#LinearGradientElementHrefAttribute
    * \see https://www.w3.org/TR/SVG2/pservers.html#RadialGradientElementHrefAttribute

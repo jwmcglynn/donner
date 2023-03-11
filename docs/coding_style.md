@@ -7,7 +7,7 @@ As a baseline, Donner SVG aligns with the [Google C++ coding style](https://goog
 
 Include paths for Donner files are relative to the donner svg directory and use double quotes:
 
-```
+```cpp
 // GOOD:
 #include "src/base/vector2.h"
 
@@ -17,25 +17,25 @@ Include paths for Donner files are relative to the donner svg directory and use 
 ```
 
 STL and third-party dependencies do not use this, and use angle brackets:
-```
+```cpp
 #include <vector>
 #include <gmock/gmock.h>
 ```
 
 ## Naming
 
-* **Folders**: Names are lowercase, and one word is preferred. For multiple words, use lower_snake_case.
-* **Files**: lower_snake_case
-* **Classes**: UpperCamelCase, matching filename. This matches the SVG standard for DOM object naming.
-* **Class methods**: lowerCamelCase, aligning with the SVG standard.
-  * Constructors, and constructor-like static methods continue to use UpperCamelCase.
-* **Free functions**: UpperCamelCase.
-* **Member variables**: lowerCamelCaseWithTrailingUnderscore_.
-* **Parameters and local variables**: lowerCamelCase
-* **Constants**: `k` prefix, and then UpperCamelCase: kExampleConstant
+- **Folders**: Names are lowercase, and one word is preferred. For multiple words, use lower_snake_case.
+- **Files**: lower_snake_case
+- **Classes**: UpperCamelCase, matching filename. This matches the SVG standard for DOM object naming.
+- **Class methods**: lowerCamelCase, aligning with the SVG standard.
+  - Constructors, and constructor-like static methods continue to use UpperCamelCase.
+- **Free functions**: UpperCamelCase.
+- **Member variables**: lowerCamelCaseWithTrailingUnderscore_.
+- **Parameters and local variables**: lowerCamelCase
+- **Constants**: `k` prefix, and then UpperCamelCase: kExampleConstant
 
 `path/to_the/example_class.h`:
-```
+```cpp
 #pragma once
 
 #include <string>
@@ -68,7 +68,7 @@ The column limit is set at 100.
 
 ## Formatting
 
-The .clang-format file is the repo root in the source of truth for formatting.
+The `.clang-format` file is the repo root in the source of truth for formatting.
 
 ## Tests
 

@@ -14,11 +14,11 @@
 namespace donner::svg {
 
 /**
- * Stores an offset/size for elements that are positioned with x/y/width/height attributes with
- * respect to their parent. Used for <svg>, <image> and <foreignObject> by the standard, and also
- * internally with <use> for Donner.
+ * Stores an offset/size for elements that are positioned with `x`/`y`/`width`/`height` attributes
+ * with respect to their parent. Used for \ref xml_svg, \ref xml_image and \ref xml_foreignObject by
+ * the standard, and also internally with \ref use for Donner.
  *
- * If not specified, x/y default to 0, and width/height are std::nullopt.
+ * If not specified, `x`/`y` default to 0, and `width`/`height` are `std::nullopt`.
  */
 struct SizedElementProperties {
   Property<Lengthd> x{"x",
@@ -37,9 +37,9 @@ struct ComputedSizedElementComponent {
                                 Boxd inheritedViewbox, FontMetrics fontMetrics,
                                 std::vector<ParseError>* outWarnings);
 
-  Boxd bounds;            //!< The computed rect of this sized element.
-  Boxd inheritedViewbox;  //!< The viewbox of the parent element, used for preserveAspectRatio
-                          //!< transformations.
+  Boxd bounds;            ///< The computed rect of this sized element.
+  Boxd inheritedViewbox;  ///< The viewbox of the parent element, used for preserveAspectRatio
+                          ///< transformations.
 
   /**
    * If this element establishes a clipping context, returns the clip rect in the parent's
@@ -52,12 +52,12 @@ struct ComputedSizedElementComponent {
   std::optional<Boxd> clipRect(EntityHandle handle) const;
 
   /**
-   * Computes the transformation from the parent's cordinate system into the coordinate system
+   * Computes the transformation from the parent's coordinate system into the coordinate system
    * established by this sized element.
    *
    * @param handle Entity handle.
    * @return Transformd Transformation from the parent's coordinate system into the sized element's
-   * c  oordinate system.
+   * coordinate system.
    */
   Transformd computeTransform(EntityHandle handle) const;
 };
@@ -73,7 +73,8 @@ struct SizedElementComponent {
   std::optional<float> intrinsicAspectRatio(Registry& registry) const;
   Vector2i calculateDocumentSize(Registry& registry) const;
 
-  Vector2i calculateViewportScaledDocumentSize(Registry& registry, InvalidSizeBehavior behavior) const;
+  Vector2i calculateViewportScaledDocumentSize(Registry& registry,
+                                               InvalidSizeBehavior behavior) const;
 
   void computeWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
                                    FontMetrics fontMetrics, std::vector<ParseError>* outWarnings);

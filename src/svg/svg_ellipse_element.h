@@ -68,28 +68,110 @@ namespace donner::svg {
  * | `ry`      | `auto` (\ref xy_auto) | Vertical radius, along the Y axis. |
  */
 class SVGEllipseElement : public SVGGeometryElement {
-protected:
+private:
+  /// Create an SVGEllipseElement wrapper from an entity.
   explicit SVGEllipseElement(EntityHandle handle) : SVGGeometryElement(handle) {}
 
 public:
+  /// Element type.
   static constexpr ElementType Type = ElementType::Ellipse;
+  /// XML tag name, \ref xml_ellipse.
   static constexpr std::string_view Tag = "ellipse";
 
+  /**
+   * Create a new \ref xml_ellipse element.
+   *
+   * @param document Containing document.
+   */
   static SVGEllipseElement Create(SVGDocument& document);
 
+  /**
+   * Set the center X coordinate.
+   *
+   * @param value Coordinate value.
+   */
   void setCx(Lengthd value);
+
+  /**
+   * Set the center Y coordinate.
+   *
+   * @param value Coordinate value.
+   */
   void setCy(Lengthd value);
+
+  /**
+   * Set the horizontal radius, along the X axis.
+   *
+   * @param value Radius value.
+   * @param value Radius value, or `std::nullopt` for `auto`, to use the same value as `ry` (see
+   * \ref xy_auto).
+   */
   void setRx(std::optional<Lengthd> value);
+
+  /**
+   * Set the vertical radius, along the Y axis.
+   *
+   * @param value Radius value, or `std::nullopt` for `auto`, to use the same value as `rx` (see
+   * \ref xy_auto).
+   */
   void setRy(std::optional<Lengthd> value);
 
+  /**
+   * Get the center X coordinate.
+   *
+   * @return Coordinate value.
+   */
   Lengthd cx() const;
+
+  /**
+   * Get the center Y coordinate.
+   *
+   * @return Coordinate value.
+   */
   Lengthd cy() const;
+
+  /**
+   * Get the horizontal radius, along the X axis.
+   *
+   * @return Radius value, or `std::nullopt` for `auto`. To get the computed size, use \ref
+   * computedRx.
+   */
   std::optional<Lengthd> rx() const;
+
+  /**
+   * Get the vertical radius, along the Y axis.
+   *
+   * @return Radius value, or `std::nullopt` for `auto`. To get the computed size, use \ref
+   * computedRy.
+   */
   std::optional<Lengthd> ry() const;
 
+  /**
+   * Get the computed center X coordinate.
+   *
+   * @return Coordinate value.
+   */
   Lengthd computedCx() const;
+
+  /**
+   * Get the computed center Y coordinate.
+   *
+   * @return Coordinate value.
+   */
   Lengthd computedCy() const;
+
+  /**
+   * Get the computed horizontal radius, along the X axis.
+   *
+   * @return Radius value.
+   */
   Lengthd computedRx() const;
+
+  /**
+   * Get the computed vertical radius, along the Y axis.
+   *
+   * @return Radius value.
+   */
   Lengthd computedRy() const;
 
 private:

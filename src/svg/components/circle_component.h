@@ -28,7 +28,7 @@ struct ComputedCircleComponent {
 };
 
 /**
- * Parameters for a `<circle>` element.
+ * Parameters for a \ref xml_circle element.
  */
 struct CircleComponent {
   CircleProperties properties;

@@ -79,7 +79,7 @@ enum class GradientSpreadMethod {
 /**
  * Values for a gradient stop, https://www.w3.org/TR/SVG2/pservers.html#StopElement.
  *
- * This is used on `<stop>` elements.
+ * This is used on \ref xml_stop elements.
  *
  * @related SVGGradientComponent
  */
