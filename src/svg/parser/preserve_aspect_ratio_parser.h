@@ -8,12 +8,17 @@
 
 namespace donner::svg {
 
+/**
+ * Parser for SVG preserveAspectRatio attribute.
+ *
+ * @see https://www.w3.org/TR/SVG/coords.html#PreserveAspectRatioAttribute
+ */
 class PreserveAspectRatioParser {
 public:
   /**
    * Parse an SVG preserveAspectRatio attribute.
    *
-   * See https://www.w3.org/TR/SVG/coords.html#PreserveAspectRatioAttribute
+   * @see https://www.w3.org/TR/SVG/coords.html#PreserveAspectRatioAttribute
    *
    * It parses a string containing the following values:
    * ```
@@ -27,7 +32,7 @@ public:
    * <meetOrSlice> = meet | slice
    * ```
    *
-   * @param str Input string.
+   * @param str Input string, such as "xMidYMid meet".
    * @return Parsed PreserveAspectRatio.
    */
   static ParseResult<PreserveAspectRatio> Parse(std::string_view str);

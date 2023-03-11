@@ -196,10 +196,10 @@ inline std::ostream& operator<<(std::ostream& os, const StrokeDasharray& value) 
  * Defines how this property cascades between the parent and child elements.
  */
 enum class PropertyCascade {
-  None,         //!< Property does not inherit.
-  Inherit,      //!< Property inherits unconditionally.
-  PaintInherit  //!< Property inherits unless the child is instantiated as a paint server. This is
-                //!< handled as a special case to prevent recursion for <pattern>.
+  None,         ///< Property does not inherit.
+  Inherit,      ///< Property inherits unconditionally.
+  PaintInherit  ///< Property inherits unless the child is instantiated as a paint server. This is
+                ///< handled as a special case to prevent recursion for \ref xml_pattern.
 };
 
 /**

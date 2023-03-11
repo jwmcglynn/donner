@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_ellipse `<ellipse>'
+ * @defgroup xml_ellipse '<ellipse>'
  *
  * Creates an ellipse centered on `cx`, `cy`, with radius `rx` and `ry`.
  *
@@ -133,16 +133,16 @@ public:
   /**
    * Get the horizontal radius, along the X axis.
    *
-   * @return Radius value, or `std::nullopt` for `auto`. To get the computed size, use \ref
-   * computedRx.
+   * @return Radius value, or `std::nullopt` for `auto`. To get the computed value, use \ref
+   * computedRx().
    */
   std::optional<Lengthd> rx() const;
 
   /**
    * Get the vertical radius, along the Y axis.
    *
-   * @return Radius value, or `std::nullopt` for `auto`. To get the computed size, use \ref
-   * computedRy.
+   * @return Radius value, or `std::nullopt` for `auto`. To get the computed value, use \ref
+   * computedRy().
    */
   std::optional<Lengthd> ry() const;
 
