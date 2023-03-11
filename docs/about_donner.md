@@ -1,26 +1,28 @@
 # About Donner {#mainpage}
 
-Donner is a modern C++20 SVG rendering library that:
-- Implements **SVG2**-natively
-- Renders using the world-class **Skia** graphics library
-- Allows modifying (and creating) SVG2 files entirely in C++
-- Is designed for performance, using game-industry-vetted techniques such as an **EnTT** ECS-backed DOM tree
+Donner is a modern C++20 SVG rendering library, written as a hobby project which intends to provide an easily embeddable SVG support into apps and games, enabling browser-level functionality without the browser.
 
-Donner also provides a production-grade **CSS3** library, which is usable independent of Donner SVG, that provides a hand-written parser, as well as Selectors (Level 4), to not only support parsing a CSS, but also to match it against a tree.
+Currently, Donner includes:
+- SVG2 core functionality, such as shapes, fills, strokes, and gradients.
+- CSS3 parsing and cascading support, with a hand-rolled library.
+- An [EnTT](https://github.com/skypjack/entt) ECS-backed document tree.
+- A SVG DOM-style API to traverse, inspect, and modify documents in memory.
+- A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
 
-Donner is tested at every layer, and is secure from the start: utilizing fuzzers to ensure that it is resilient to invalid SVG and CSS.
-- This is validated with full CI and coverage analysis
+Donner currently renders with Skia as core functionality is being implemented.  While Skia is powerful, it adds a lot of code size so alternative approaches may be considered in the future.
 
-## Donner's Goals
+Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
-- Have minimal dependencies, so it can be integrated into existing applications
-- Expose the SVG DOM, so that applications can manipulate SVGs dynamically
-- Implement the [SVG 2 Specification](https://www.w3.org/TR/SVG/)
+# Documentation
 
-## Donner's Non-Goals
+- [API Documentation](namespaces.html)
+- [System Architecture](architecture.md)
 
-- Provide a feature-complete implementation of the SVG spec. Donner aims to be compatible, but may implement a subset of the features for performance reasons
-- Compile on a broad range of platforms/compilers. Donner is primarily intended as a playground for C++17/C++20, compiling with the latest clang/libc++. (This may be subject to change)
+## Project Goals
+
+- Have minimal dependencies, so it can be integrated into existing applications, assuming a modern compiler.
+- Expose the SVG DOM, so that applications can manipulate SVGs dynamically.
+- Implement the [SVG 2 Specification](https://www.w3.org/TR/SVG2/).
 
 ## Building
 

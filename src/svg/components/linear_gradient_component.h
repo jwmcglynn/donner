@@ -9,7 +9,7 @@
 namespace donner::svg {
 
 /**
- * Parameters for a `<linearGradient>` element.
+ * Parameters for a \ref linearGradient element.
  */
 struct LinearGradientComponent {
   std::optional<Lengthd> x1;

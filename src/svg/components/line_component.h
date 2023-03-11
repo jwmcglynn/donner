@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * Parameters for a <line> element.
+ * Parameters for a \ref xml_line element.
  */
 struct LineComponent {
   Lengthd x1;
