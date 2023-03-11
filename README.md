@@ -5,6 +5,8 @@
 
 Donner is a modern C++20 SVG rendering library, written as a hobby project which intends to provide an easily embeddable SVG support into apps and games, enabling browser-level functionality without the browser.
 
+<img src="src/svg/renderer/testdata/golden/Ghostscript_Tiger.png" width="400" height="400" alt="Ghostscript Tiger Example Image">
+
 Currently, Donner includes:
 - SVG2 core functionality, such as shapes, fills, strokes, and gradients.
 - CSS3 parsing and cascading support, with a hand-rolled library.
