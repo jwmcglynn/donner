@@ -13,7 +13,7 @@ Donner currently renders with Skia as core functionality is being implemented.  
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
-# Documentation
+## Documentation
 
 - [API Documentation](namespaces.html)
 - [System Architecture](architecture.md)

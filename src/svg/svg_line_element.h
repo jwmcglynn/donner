@@ -69,11 +69,11 @@ protected:
 public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Line;
-  /// XML tag name, \ref line.
+  /// XML tag name, \ref xml_line.
   static constexpr std::string_view Tag = "line";
 
   /**
-   * Create a new \ref line element.
+   * Create a new \ref xml_line element.
    *
    * @param document Containing document.
    */
