@@ -7,8 +7,10 @@
 
 namespace donner::svg {
 
+// clang-format off
 /**
- * @defgroup xml_rect '<rect>'
+ * @page xml_rect '<rect>'
+ * @ingroup basic_shapes
  *
  * Creates a rectangle with the top-left corner at (`x`, `y`) and the specified `width` and
  * `height`, optionally with rounded corners.
@@ -21,10 +23,10 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
+ * <svg id="xml_rect" width="300" height="300" style="background-color: white">
  *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     rect { stroke-width: 2px }
+ *     #xml_rect text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_rect rect { stroke-width: 2px }
  *   </style>
  *
  *   <rect x="10" y="50" width="280" height="200" fill="none" stroke="black" />
@@ -40,59 +42,11 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
+ * <svg id="xml_rect_r" width="300" height="300" style="background-color: white">
  *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
- *     rect { stroke-width: 2px }
- *   </style>
- *
- *   <rect x="10" y="50" width="280" height="200" rx="100" ry="100" fill="none" stroke="black" />
- *   <line x1="10" y1="150" x2="110" y2="150" />
- *   <text x="50" y="170">rx</text>
- *   <line x1="110" y1="150" x2="110" y2="50" />
- *   <text x="120" y="100">ry</text>
- * </svg>
- * \endhtmlonly
- */
-
-// clang-format off
-/**
- * DOM object for the \ref xml_rect element.
- *
- * Use the `x`, `y`, `width` and `height` attributes to specify the rectangle's position and size,
- * and optionally round the corners with the `rx` and `ry` attributes.
- *
- *
- * ```xml
- * <rect x="10" y="50" width="280" height="200" fill="none" stroke="black" />
- * ```
- *
- * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
- *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     rect { stroke-width: 2px }
- *   </style>
- *
- *   <rect x="10" y="50" width="280" height="200" fill="none" stroke="black" />
- *   <circle cx="10" cy="50" r="3" fill="black" />
- *   <text x="20" y="70">x,y</text>
- *   <text x="140" y="40">width</text>
- *   <text x="20" y="150">height</text>
- * </svg>
- * \endhtmlonly
- *
- * ```xml
- * <rect x="10" y="50" width="280" height="200" rx="50" ry="40" fill="none" stroke="black" />
- * ```
- *
- * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
- *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
- *     rect { stroke-width: 2px }
+ *     #xml_rect_r text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_rect_r line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
+ *     #xml_rect_r rect { stroke-width: 2px }
  *   </style>
  *
  *   <rect x="10" y="50" width="280" height="200" rx="100" ry="100" fill="none" stroke="black" />
@@ -113,6 +67,53 @@ namespace donner::svg {
  * | `ry`      | `auto` (\ref xy_auto) | For rounded corners, the radius of the curve along the Y axis. |
  */
 // clang-format on
+
+/**
+ * DOM object for the \ref xml_rect element.
+ *
+ * Use the `x`, `y`, `width` and `height` attributes to specify the rectangle's position and size,
+ * and optionally round the corners with the `rx` and `ry` attributes.
+ *
+ *
+ * ```xml
+ * <rect x="10" y="50" width="280" height="200" fill="none" stroke="black" />
+ * ```
+ *
+ * \htmlonly
+ * <svg id="xml_rect" width="300" height="300" style="background-color: white">
+ *   <style>
+ *     #xml_rect text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_rect rect { stroke-width: 2px }
+ *   </style>
+ *
+ *   <rect x="10" y="50" width="280" height="200" fill="none" stroke="black" />
+ *   <circle cx="10" cy="50" r="3" fill="black" />
+ *   <text x="20" y="70">x,y</text>
+ *   <text x="140" y="40">width</text>
+ *   <text x="20" y="150">height</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * ```xml
+ * <rect x="10" y="50" width="280" height="200" rx="50" ry="40" fill="none" stroke="black" />
+ * ```
+ *
+ * \htmlonly
+ * <svg id="xml_rect_r" width="300" height="300" style="background-color: white">
+ *   <style>
+ *     #xml_rect_r text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_rect_r line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
+ *     #xml_rect_r rect { stroke-width: 2px }
+ *   </style>
+ *
+ *   <rect x="10" y="50" width="280" height="200" rx="100" ry="100" fill="none" stroke="black" />
+ *   <line x1="10" y1="150" x2="110" y2="150" />
+ *   <text x="50" y="170">rx</text>
+ *   <line x1="110" y1="150" x2="110" y2="50" />
+ *   <text x="120" y="100">ry</text>
+ * </svg>
+ * \endhtmlonly
+ */
 class SVGRectElement : public SVGGeometryElement {
 private:
   /// Create an SVGRectElement wrapper from an entity.

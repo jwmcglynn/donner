@@ -7,7 +7,8 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_circle '<circle>'
+ * @page xml_circle '<circle>'
+ * @ingroup basic_shapes
  *
  * Creates a circle centered on `cx`, `cy`, with radius `r`.
  *
@@ -15,33 +16,11 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#CircleElement
  *
  * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
+ * <svg id="xml_circle" width="300" height="300" style="background-color: white">
  *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
- *     circle { stroke-width: 2px }
- *   </style>
- *
- *   <circle cx="150" cy="150" r="140" fill="none" stroke="black" />
- *   <circle cx="150" cy="150" r="3" fill="black" />
- *   <text x="160" y="153">cx,cy</text>
- *   <line x1="150" y1="150" x2="150" y2="10" stroke="black" />
- *   <text x="160" y="80">r</text>
- * </svg>
- * \endhtmlonly
- */
-
-/**
- * DOM object for a \ref xml_circle element.
- *
- * Use the `cx`, `cy`, and `r` attributes to define the circle.
- *
- * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
- *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
- *     circle { stroke-width: 2px }
+ *     #xml_circle text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_circle line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
+ *     #xml_circle circle { stroke-width: 2px }
  *   </style>
  *
  *   <circle cx="150" cy="150" r="140" fill="none" stroke="black" />
@@ -57,6 +36,28 @@ namespace donner::svg {
  * | `cx`      | `0`     | Center X coordinate. |
  * | `cy`      | `0`     | Center Y coordinate. |
  * | `r`       | `0`     | Radius of the circle. |
+ */
+
+/**
+ * DOM object for a \ref xml_circle element.
+ *
+ * Use the `cx`, `cy`, and `r` attributes to define the circle.
+ *
+ * \htmlonly
+ * <svg id="xml_circle" width="300" height="300" style="background-color: white">
+ *   <style>
+ *     #xml_circle text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_circle line { stroke: black; stroke-width: 2px; stroke-dasharray: 6,4 }
+ *     #xml_circle circle { stroke-width: 2px }
+ *   </style>
+ *
+ *   <circle cx="150" cy="150" r="140" fill="none" stroke="black" />
+ *   <circle cx="150" cy="150" r="3" fill="black" />
+ *   <text x="160" y="153">cx,cy</text>
+ *   <line x1="150" y1="150" x2="150" y2="10" stroke="black" />
+ *   <text x="160" y="80">r</text>
+ * </svg>
+ * \endhtmlonly
  */
 class SVGCircleElement : public SVGGeometryElement {
 private:

@@ -10,11 +10,12 @@ namespace donner::svg {
 
 // clang-format off
 /**
- * @defgroup path_data Path data syntax
+ * @page path_data Path data syntax
+ * @ingroup data_formats
  *
- * The `d` attribute of a \ref xml_path element defines the shape of the path. It is a sequence of
+ * \details The `d` attribute of a \ref xml_path element defines the shape of the path. It is a sequence of
  * commands, each of which is a single letter followed by a sequence of numbers, such as `M 40 50`.
- * To parse the `d` attribute, use \ref PathParser.
+ * To parse the `d` attribute, use \ref PathParser::Parse.
  * 
  * If the letter is uppercase, the coordinates that follow are absolute coordinates. If the letter
  * is lowercase, the coordinates are relative to the current point.

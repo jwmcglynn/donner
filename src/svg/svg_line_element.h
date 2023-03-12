@@ -7,7 +7,8 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_line '<line>'
+ * @page xml_line '<line>'
+ * @ingroup basic_shapes
  *
  * Creates a line between two points, using the `x1`, `y1`, `x2`, and `y2` attributes.
  *
@@ -19,30 +20,9 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
+ * <svg id="xml_line" width="300" height="300" style="background-color: white">
  *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *   </style>
- *   <line x1="100" y1="100" x2="200" y2="200" stroke="black" stroke-width="2" />
- *
- *   <circle cx="100" cy="100" r="3" fill="black" />
- *   <text x="110" y="103">x1,y1</text>
- *
- *   <circle cx="200" cy="200" r="3" fill="black" />
- *   <text x="210" y="203">x2,y2</text>
- * </svg>
- * \endhtmlonly
- */
-
-/**
- * DOM object for a \ref xml_line element.
- *
- * Use the `x1`, `y1`, `x2`, and `y2` attributes to define the start and end of the line.
- *
- * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
- *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_line text { font-size: 16px; font-weight: bold; color: black }
  *   </style>
  *   <line x1="100" y1="100" x2="200" y2="200" stroke="black" stroke-width="2" />
  *
@@ -60,6 +40,27 @@ namespace donner::svg {
  * | `y1`      | `0`     | Start Y coordinate. |
  * | `x2`      | `0`     | End X coordinate. |
  * | `y2`      | `0`     | End Y coordinate. |
+ */
+
+/**
+ * DOM object for a \ref xml_line element.
+ *
+ * Use the `x1`, `y1`, `x2`, and `y2` attributes to define the start and end of the line.
+ *
+ * \htmlonly
+ * <svg id="xml_line" width="300" height="300" style="background-color: white">
+ *   <style>
+ *     #xml_line text { font-size: 16px; font-weight: bold; color: black }
+ *   </style>
+ *   <line x1="100" y1="100" x2="200" y2="200" stroke="black" stroke-width="2" />
+ *
+ *   <circle cx="100" cy="100" r="3" fill="black" />
+ *   <text x="110" y="103">x1,y1</text>
+ *
+ *   <circle cx="200" cy="200" r="3" fill="black" />
+ *   <text x="210" y="203">x2,y2</text>
+ * </svg>
+ * \endhtmlonly
  */
 class SVGLineElement : public SVGGeometryElement {
 protected:

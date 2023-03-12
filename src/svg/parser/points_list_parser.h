@@ -9,14 +9,29 @@
 namespace donner::svg {
 
 /**
- * Parse a SVG "points" attribute, used to specify line paths for `<polyline>` and `<polygon>`
- * elements. See https://www.w3.org/TR/SVG2/shapes.html#DataTypePoints
+ * @page poly_points Polyline/polygon points list
+ * @ingroup data_formats
+ *
+ * \details The `points` attribute is used to specify line paths for \ref xml_polyline and \ref
+ * xml_polygon.
+ *
+ * It specifies a list of numbers separated by whitespace or commas, for example: "10,20 30,40".
+ * Numbers are the same as the CSS number type: "... an integer, or zero or more decimal digits
+ * followed by a dot (.) followed by one or more decimal digits and optionally an exponent composed
+ * of "e" or "E" and an integer".
+ *
+ * To parse a points list, use \ref PointsListParser::Parse.
+ */
+
+/**
+ * Parse a SVG "points" attribute, used to specify line paths for \ref xml_polyline and \ref
+ * xml_polygon elements. See https://www.w3.org/TR/SVG2/shapes.html#DataTypePoints
  */
 class PointsListParser {
 public:
   /**
-   * Parse a SVG "points" attribute, used to specify line paths for `<polyline>` and `<polygon>`
-   * elements. See https://www.w3.org/TR/SVG2/shapes.html#DataTypePoints
+   * Parse a SVG "points" attribute, used to specify line paths for \ref xml_polyline and \ref
+   * xml_polygon elements. See https://www.w3.org/TR/SVG2/shapes.html#DataTypePoints
    *
    * ```
    * <points> = [ <number>+ ]#

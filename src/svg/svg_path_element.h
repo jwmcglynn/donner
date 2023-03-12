@@ -7,7 +7,8 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_path '<path>'
+ * @page xml_path '<path>'
+ * @ingroup basic_shapes
  *
  * Defines a shape using a path, which can include straight lines, curves, and sub-paths.
  *
@@ -19,16 +20,17 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
+ * <svg id="xml_path" width="300" height="300" style="background-color: white">
  *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     path { stroke-width: 2px; stroke: black; fill: none }
- *     circle { r: 3px; fill: black }
- *     line { stroke-width: 2px; stroke: red; stroke-dasharray: 6,4 }
+ *     #xml_path text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_path path { stroke-width: 2px; stroke: black; fill: none }
+ *     #xml_path circle { r: 3px; fill: black }
+ *     #xml_path line { stroke-width: 2px; stroke: red; stroke-dasharray: 6,4 }
  *   </style>
  *   <path d="M 40 50 V 250 C 100 100 115 75 190 125" />
- *   <circle cx="40" cy="50" />
+ *   <circle cx="40" cy="50" style="fill: red" />
  *   <text x="50" y="53">M 40 50</text>
+ *   <polygon points="0,0 5,10 10,0" transform="translate(35,150)" fill="red" />
  *   <circle cx="40" cy="250" />
  *   <text x="50" y="253">V 250</text>
  *   <circle cx="190" cy="125" />
@@ -42,7 +44,9 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * @see \ref path_data
+ * | Attribute | Default | Description  |
+ * | --------: | :-----: | :----------- |
+ * | `d`       | (none)  | Path data, see \ref path_data. |
  */
 
 /**
@@ -56,16 +60,17 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg width="300" height="300" style="background-color: white">
+ * <svg id="xml_path" width="300" height="300" style="background-color: white">
  *   <style>
- *     text { font-size: 16px; font-weight: bold; color: black }
- *     path { stroke-width: 2px; stroke: black; fill: none }
- *     circle { r: 3px; fill: black }
- *     line { stroke-width: 2px; stroke: red; stroke-dasharray: 6,4 }
+ *     #xml_path text { font-size: 16px; font-weight: bold; color: black }
+ *     #xml_path path { stroke-width: 2px; stroke: black; fill: none }
+ *     #xml_path circle { r: 3px; fill: black }
+ *     #xml_path line { stroke-width: 2px; stroke: red; stroke-dasharray: 6,4 }
  *   </style>
  *   <path d="M 40 50 V 250 C 100 100 115 75 190 125" />
- *   <circle cx="40" cy="50" />
+ *   <circle cx="40" cy="50" style="fill: red" />
  *   <text x="50" y="53">M 40 50</text>
+ *   <polygon points="0,0 5,10 10,0" transform="translate(35,150)" fill="red" />
  *   <circle cx="40" cy="250" />
  *   <text x="50" y="253">V 250</text>
  *   <circle cx="190" cy="125" />
