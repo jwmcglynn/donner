@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<script>
+  var Module = {
+    onRuntimeInitialized: function () {
+      // Returns a greeting for us to print
+      console.log(Module.HelloClass.SayHello());
+
+      var hello = new Module.HelloClass();
+      hello.doThing();
+    }
+  };
+</script>
+<script src="hello_world.js"></script>
+
+<canvas width="300" height="300" style="border:1px solid #000000;">
+</canvas>
+
+<p>
+  Page loaded, check the console.
+</p>

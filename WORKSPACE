@@ -178,3 +178,24 @@ new_git_repository(
     commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
     remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
 )
+
+# wasm build (emscripten)
+
+http_archive(
+    name = "emsdk",
+    sha256 = "01f7348b3c02e635095127dff7689fd4d80dfc3736ae659f433e13e68b3ce67a",
+    strip_prefix = "emsdk-04944ddff6b04c2c1251c054a7bb9db48a2abd1f/bazel",
+    url = "https://github.com/emscripten-core/emsdk/archive/04944ddff6b04c2c1251c054a7bb9db48a2abd1f.tar.gz",
+)
+
+load("@emsdk//:deps.bzl", emsdk_deps = "deps")
+
+emsdk_deps()
+
+load("@emsdk//:emscripten_deps.bzl", emsdk_emscripten_deps = "emscripten_deps")
+
+emsdk_emscripten_deps(emscripten_version = "3.1.34")
+
+load("@emsdk//:toolchains.bzl", "register_emscripten_toolchains")
+
+register_emscripten_toolchains()

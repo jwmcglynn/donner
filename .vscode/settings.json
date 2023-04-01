@@ -1,5 +1,6 @@
 {
   "files.associations": {
+    "*.dox": "cpp",
     "__bit_reference": "cpp",
     "__config": "cpp",
     "__debug": "cpp",
@@ -105,7 +106,8 @@
     "coroutine": "cpp",
     "__bits": "cpp",
     "cassert": "cpp",
-    "version": "cpp"
+    "version": "cpp",
+    "__verbose_abort": "cpp"
   },
   "files.exclude": {
     "bazel-*": true
