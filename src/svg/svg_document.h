@@ -26,7 +26,6 @@ class SVGSVGElement;
  *
  * \see \ref SVGElement
  * \see \ref ECS
- * \see \ref Component
  */
 class SVGDocument {
 public:

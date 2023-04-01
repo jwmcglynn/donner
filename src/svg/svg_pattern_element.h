@@ -10,6 +10,67 @@
 
 namespace donner::svg {
 
+/**
+ * @defgroup xml_pattern '<pattern>'
+ *
+ * Defines a paint server containing a repeated pattern, which is tiled to fill the area.
+ *
+ * - DOM object: SVGPatternElement
+ * - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html#Patterns
+ *
+ * These elements are typically placed within a \ref xml_defs element, and then referenced by id
+ * from a `fill` or `stroke` attribute.
+ *
+ * ```xml
+ * <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ *   <circle cx="5" cy="5" r="5" fill="red" />
+ * </pattern>
+ * ```
+ *
+ * To reference it with a fill:
+ * ```xml
+ * <rect fill="url(#MyPattern)" width="300" height="300" />
+ * ```
+ *
+ * \htmlonly
+ * <svg width="300" height="300">
+ *   <defs>
+ *     <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ *       <circle cx="5" cy="5" r="5" fill="red" />
+ *     </pattern>
+ *   </defs>
+ *   <rect fill="url(#MyPattern)" width="300" height="300" />
+ * </svg>
+ * \endhtmlonly
+ *
+ * \todo: Add documentation for parameters.
+ */
+
+/**
+ * DOM object for a \ref xml_pattern element.
+ *
+ * ```xml
+ * <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ *   <circle cx="5" cy="5" r="5" fill="red" />
+ * </pattern>
+ * ```
+ *
+ * To reference it with a fill:
+ * ```xml
+ * <rect fill="url(#MyPattern)" width="300" height="300" />
+ * ```
+ *
+ * \htmlonly
+ * <svg width="300" height="300">
+ *   <defs>
+ *     <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ *       <circle cx="5" cy="5" r="5" fill="red" />
+ *     </pattern>
+ *   </defs>
+ *   <rect fill="url(#MyPattern)" width="300" height="300" />
+ * </svg>
+ * \endhtmlonly
+ */
 class SVGPatternElement : public SVGElement {
 protected:
   explicit SVGPatternElement(EntityHandle handle) : SVGElement(handle) {}

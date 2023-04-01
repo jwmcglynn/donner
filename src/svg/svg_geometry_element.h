@@ -16,6 +16,12 @@ namespace donner::svg {
  * Basic shapes have the DOM base class \ref SVGGeometryElement.
  */
 
+/**
+ * Base class for all \ref basic_shapes.
+ *
+ * This is the DOM base class for all basic shapes, such as \ref SVGCircleElement, \ref
+ * SVGRectElement, \ref SVGPathElement, etc.
+ */
 class SVGGeometryElement : public SVGGraphicsElement {
 protected:
   /**
