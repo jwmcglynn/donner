@@ -38,16 +38,6 @@ bool IsValidPaintServer(EntityHandle handle) {
   return handle.any_of<ComputedGradientComponent, ComputedPatternComponent>();
 }
 
-// TODO: Remove duplication of this helper?
-Transformd ResolveTransform(const ComputedTransformComponent* maybeTransformComponent,
-                            const Boxd& viewbox, const FontMetrics& fontMetrics) {
-  if (maybeTransformComponent) {
-    return maybeTransformComponent->rawCssTransform.compute(viewbox, fontMetrics);
-  } else {
-    return Transformd();
-  }
-}
-
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose)

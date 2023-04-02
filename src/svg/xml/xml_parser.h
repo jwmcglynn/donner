@@ -24,7 +24,7 @@ public:
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
   static ParseResult<SVGDocument> ParseSVG(std::span<char> str,
-                                           std::vector<ParseError>* outWarnings = nullptr);
+                                           std::vector<ParseError>* outWarnings = nullptr) noexcept;
 };
 
 }  // namespace donner::svg

@@ -1,9 +1,13 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
+ENABLE_EXCEPTIONS_OPTS = ["-fexceptions"]
+
 cc_library(
     name = "xml",
     srcs = ["xml_parser.cc"],
     hdrs = ["xml_parser.h"],
+    copts = ENABLE_EXCEPTIONS_OPTS,
+    linkopts = ENABLE_EXCEPTIONS_OPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":xml_details",

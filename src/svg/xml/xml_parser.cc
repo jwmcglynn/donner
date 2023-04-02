@@ -54,9 +54,8 @@ using SVGElements = entt::type_list<  //
     SVGUseElement>;
 
 template <typename T>
-concept HasPathLength = requires(T element, std::optional<double> value) {
-  element.setPathLength(value);
-};
+concept HasPathLength =
+    requires(T element, std::optional<double> value) { element.setPathLength(value); };
 
 std::string_view TypeToString(rapidxml_ns::node_type type) {
   switch (type) {
@@ -697,7 +696,7 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
 }  // namespace
 
 ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
-                                             std::vector<ParseError>* outWarnings) {
+                                             std::vector<ParseError>* outWarnings) noexcept {
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;
 

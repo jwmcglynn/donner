@@ -1,11 +1,18 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
+ENABLE_EXCEPTIONS_OPTS = ["-fexceptions"]
+
 cc_library(
     name = "rapidxml_ns",
     hdrs = [
         "rapidxml_ns.hpp",
     ],
-    copts = ["-isystem rapidxml_ns"],
+    defines = [
+        # By default, this is set to 64*1024, which exhausts the wasm stack stack size.
+        "RAPIDXML_STATIC_POOL_SIZE=8192",
+    ],
+    copts = ["-isystem rapidxml_ns"] + ENABLE_EXCEPTIONS_OPTS,
+    linkopts = ENABLE_EXCEPTIONS_OPTS,
     include_prefix = "rapidxml_ns",
     visibility = ["//visibility:public"],
 )

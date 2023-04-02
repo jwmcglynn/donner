@@ -2,7 +2,7 @@
 /// @file
 
 #include <concepts>
-#include <experimental/coroutine>
+#include <coroutine>
 #include <functional>
 #include <variant>
 #include <vector>
@@ -45,7 +45,7 @@ public:
 
   /// The internal handle used to store the coroutine, used to construct \ref
   /// SelectorTraversalGenerator from a `co_yield` expression.
-  using Handle = std::experimental::coroutine_handle<Promise>;
+  using Handle = std::coroutine_handle<Promise>;
 
   /// The internal object which stores the current value.
   using promise_type = Promise;
@@ -118,13 +118,13 @@ public:
     Promise& operator=(Promise&&) = delete;       ///< Copying or moving promises is not allowed.
 
     /**
-     * Called when the coroutine is first created, returns `std::experimental::suspend_always` to
+     * Called when the coroutine is first created, returns `std::suspend_always` to
      * indicate this operation is lazily started.
      */
-    auto initial_suspend() noexcept { return std::experimental::suspend_always{}; }
+    auto initial_suspend() noexcept { return std::suspend_always{}; }
 
     /// Called when the coroutine is finished.
-    auto final_suspend() noexcept { return std::experimental::suspend_always{}; }
+    auto final_suspend() noexcept { return std::suspend_always{}; }
 
     /**
      * On coroutine construction, the runtime first creates the Handle, then this Promise followed
@@ -135,12 +135,12 @@ public:
     }
 
     /// Called when the coroutine returns, does nothing.
-    auto return_void() noexcept { return std::experimental::suspend_never{}; }
+    auto return_void() noexcept { return std::suspend_never{}; }
 
     /// Yield a value, and suspend the coroutine.
     auto yield_value(T value) {
       currentValue_ = value;
-      return std::experimental::suspend_always{};
+      return std::suspend_always{};
     }
 
     /// On unhandled  exception, crash.
