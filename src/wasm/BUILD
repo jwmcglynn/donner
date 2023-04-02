@@ -11,9 +11,9 @@ WASM_LINKOPTS = [
 ]
 
 cc_binary(
-    name = "hello_world",
+    name = "debugger_bin",
     srcs = [
-        "hello_world.cc",
+        "debugger_main.cc",
     ],
     linkopts = DEFAULT_EMSCRIPTEN_LINKOPTS + WASM_LINKOPTS,
     # This target won't build successfully on its own because of missing emscripten
@@ -22,21 +22,21 @@ cc_binary(
 )
 
 wasm_cc_binary(
-    name = "hello_world_wasm",
-    cc_target = ":hello_world",
+    name = "debugger_wasm",
+    cc_target = ":debugger_bin",
     outputs = [
-        "hello_world.js",
-        "hello_world.wasm",
+        "debugger_bin.js",
+        "debugger_bin.wasm",
     ],
 )
 
 web_package(
-    name = "hello_world_web",
+    name = "debugger_web_package",
     srcs = [
         "index.html",
     ],
     wasm_deps = [
-        "hello_world_wasm",
+        ":debugger_wasm",
     ],
 )
 
@@ -47,5 +47,5 @@ py_binary(
 
 serve_http(
     name = "serve_http",
-    dir = ":hello_world_web",
+    dir = ":debugger_web_package",
 )
