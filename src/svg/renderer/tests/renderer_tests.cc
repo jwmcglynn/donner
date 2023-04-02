@@ -86,7 +86,9 @@ protected:
     diffImage.resize(strideInPixels * height * 4);
 
     pixelmatch::Options options;
-    options.threshold = 0.0f;
+    options.threshold = 0.1f;  // Apply a non-zero threshold to account for anti-aliasing
+                               // differences between platforms. Without this, macOS/Linux would be
+                               // unable to use each other's goldens.
     const int mismatchedPixels = pixelmatch::pixelmatch(
         goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
 
