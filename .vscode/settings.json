@@ -107,7 +107,8 @@
     "__bits": "cpp",
     "cassert": "cpp",
     "version": "cpp",
-    "__verbose_abort": "cpp"
+    "__verbose_abort": "cpp",
+    "expected": "cpp"
   },
   "files.exclude": {
     "bazel-*": true
