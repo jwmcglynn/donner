@@ -26,6 +26,7 @@
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/renderer/renderer_image_io.h"
 #include "src/svg/renderer/renderer_utils.h"
 
 namespace donner::svg {
@@ -715,8 +716,8 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
 }
 
 bool RendererSkia::save(const char* filename) {
-  return RendererUtils::writeRgbaPixelsToPngFile(filename, pixelData(), bitmap_.width(),
-                                                 bitmap_.height());
+  return RendererImageIO::writeRgbaPixelsToPngFile(filename, pixelData(), bitmap_.width(),
+                                                   bitmap_.height());
 }
 
 std::span<const uint8_t> RendererSkia::pixelData() const {

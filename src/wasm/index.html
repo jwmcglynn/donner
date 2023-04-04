@@ -3,7 +3,7 @@
   var Module = {
     onRuntimeInitialized: function () {
       var donner = new Module.Donner();
-      donner.loadSVG(`
+      donner.loadSVG("secondCanvas", `
         <svg class="e2ecs" viewBox="0 0 600 300" xmlns="http://www.w3.org/2000/svg">
           <style>
             .e2ecs { background: white; }
@@ -52,7 +52,10 @@
 </script>
 <script src="debugger_bin.js"></script>
 
-<canvas width="300" height="300" style="border:1px solid #000000;">
+<canvas id="mainCanvas" width="300" height="300" style="border:1px solid #000000;">
+</canvas>
+
+<canvas id="secondCanvas" width="300" height="300" style="border:1px solid #000000;">
 </canvas>
 
 <p>

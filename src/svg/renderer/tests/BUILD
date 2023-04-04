@@ -22,6 +22,7 @@ cc_library(
     deps = [
         ":renderer_test_utils",
         "//src/svg/renderer",
+        "//src/svg/renderer:renderer_image_io",
         "//src/svg/xml",
         "@com_google_gtest//:gtest",
         "@pixelmatch-cpp17",
@@ -40,6 +41,7 @@ cc_test(
     deps = [
         ":renderer_test_utils",
         "//src/svg/renderer",
+        "//src/svg/renderer:renderer_image_io",
         "//src/svg/xml",
         "@com_google_gtest//:gtest_main",
         "@pixelmatch-cpp17",

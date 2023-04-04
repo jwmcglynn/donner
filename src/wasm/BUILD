@@ -39,6 +39,8 @@ cc_binary(
     # headers etc. Therefore, we hide it from wildcards.
     tags = ["manual"],
     deps = [
+        "//src/svg/renderer",
+        "//src/svg/renderer/wasm_canvas",
         "//src/svg/xml",
     ],
 )

@@ -8,8 +8,8 @@
 // Skia
 #include "include/core/SkPicture.h"
 //
+#include "src/svg/renderer/renderer_image_io.h"
 #include "src/svg/renderer/renderer_skia.h"
-#include "src/svg/renderer/renderer_utils.h"
 #include "src/svg/renderer/tests/renderer_test_utils.h"
 #include "src/svg/xml/xml_parser.h"
 
@@ -119,8 +119,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     const std::filesystem::path actualImagePath =
         std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
     std::cout << "Actual rendering: " << actualImagePath.string() << std::endl;
-    RendererUtils::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), renderer.pixelData(),
-                                            width, height, strideInPixels);
+    RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(),
+                                              renderer.pixelData(), width, height, strideInPixels);
 
     std::cout << "Expected: " << goldenImageFilename << std::endl;
 
@@ -128,8 +128,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
         std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
     std::cerr << "Diff: " << diffFilePath.string() << std::endl;
 
-    RendererUtils::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width, height,
-                                            strideInPixels);
+    RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
+                                              height, strideInPixels);
 
     std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)" << std::endl;
 

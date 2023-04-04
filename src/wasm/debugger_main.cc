@@ -4,6 +4,8 @@
 
 #include <iostream>
 
+#include "src/svg/renderer/renderer_wasm_canvas.h"
+#include "src/svg/renderer/wasm_canvas/canvas.h"
 #include "src/svg/svg.h"
 
 using namespace donner::svg;
@@ -39,7 +41,7 @@ class DonnerBindings {
 public:
   DonnerBindings() = default;
 
-  bool loadSVG(const std::string& svg) {
+  bool loadSVG(const std::string& canvasId, const std::string& svg) {
     fileData_.resize(svg.size() + 1);
     std::memcpy(fileData_.data(), svg.data(), svg.size());
 
@@ -66,6 +68,9 @@ public:
     std::cout << "Tree:" << std::endl;
     DumpTree(document.svgElement(), 0);
 
+    RendererWasmCanvas renderer("#secondCanvas");
+    renderer.draw(document);
+
     return true;
   }
 
@@ -79,12 +84,13 @@ EMSCRIPTEN_BINDINGS(Donner) {
 }
 
 int main() {
-  const auto document = emscripten::val::global("document");
-  const auto canvas = document.call<emscripten::val, std::string>("querySelector", "canvas");
+  using namespace donner::canvas;
 
-  auto ctx = canvas.call<emscripten::val, std::string>("getContext", "2d");
+  Canvas canvas = Canvas::Create("#mainCanvas");
+  CanvasRenderingContext2D ctx = canvas.getContext2D();
 
-  ctx.set("fillStyle", "green");
-  ctx.call<void>("fillRect", 10, 10, 150, 100);
+  ctx.setFillStyle("red");
+  ctx.fillRect(10, 10, 150, 100);
+
   return 0;
 }
