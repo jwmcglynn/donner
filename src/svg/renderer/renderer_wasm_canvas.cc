@@ -18,44 +18,14 @@
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/renderer/common/rendering_instance_view.h"
 #include "src/svg/renderer/renderer_utils.h"
 
 namespace donner::svg {
 
-namespace {
-
-struct InstanceView {
-public:
-  using ViewType =
-      entt::basic_view<Entity, entt::get_t<RenderingInstanceComponent>, entt::exclude_t<>, void>;
-  using Iterator = ViewType::iterator;
-
-  explicit InstanceView(const ViewType& view)
-      : view_(view), current_(view.begin()), end_(view.end()) {}
-
-  bool done() const { return current_ == end_; }
-  void advance() { ++current_; }
-
-  Entity currentEntity() const {
-    assert(!done());
-    return *current_;
-  }
-
-  const RenderingInstanceComponent& get() const {
-    return view_.get<RenderingInstanceComponent>(currentEntity());
-  }
-
-private:
-  const ViewType& view_;
-  Iterator current_;
-  Iterator end_;
-};
-
-}  // namespace
-
 class RendererWasmCanvas::Impl {
 public:
-  Impl(RendererWasmCanvas& renderer, InstanceView&& view)
+  Impl(RendererWasmCanvas& renderer, RenderingInstanceView&& view)
       : renderer_(renderer), ctx_(renderer.canvas_.getContext2D()), view_(std::move(view)) {}
 
   void drawUntil(Registry& registry, Entity endEntity) {
@@ -113,10 +83,10 @@ public:
   void drawPathFill(EntityHandle dataHandle, const ComputedPathComponent& path,
                     const ResolvedPaintServer& paint, const PropertyRegistry& style,
                     const Boxd& viewbox) {
+    const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
-      ctx_.setFillStyle("#00FF00");
-      // skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(),
-      // fillOpacity)));
+      ctx_.setFillStyle(
+          solid->color.resolve(style.color.getRequired().rgba(), fillOpacity).toHexString());
 
       ctx_.fill(path.spline);
     }
@@ -125,11 +95,11 @@ public:
   void drawPathStroke(EntityHandle dataHandle, const ComputedPathComponent& path,
                       const ResolvedPaintServer& paint, const PropertyRegistry& style,
                       const Boxd& viewbox, const FontMetrics& fontMetrics) {
-    if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
-      ctx_.setStrokeStyle("#00FF00");
+    const float strokeOpacity = NarrowToFloat(style.strokeOpacity.get().value());
 
-      // skPaint.setColor(
-      //     toSkia(solid->color.resolve(style.color.getRequired().rgba(), strokeOpacity)));
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
+      ctx_.setStrokeStyle(
+          solid->color.resolve(style.color.getRequired().rgba(), strokeOpacity).toHexString());
 
       ctx_.stroke(path.spline);
     }
@@ -138,7 +108,7 @@ public:
 private:
   RendererWasmCanvas& renderer_;
   canvas::CanvasRenderingContext2D ctx_;
-  InstanceView view_;
+  RenderingInstanceView view_;
 
   std::vector<SubtreeInfo> subtreeMarkers_;
 };
@@ -173,7 +143,7 @@ int RendererWasmCanvas::height() const {
 }
 
 void RendererWasmCanvas::draw(Registry& registry, Entity root) {
-  Impl impl(*this, InstanceView{registry.view<RenderingInstanceComponent>()});
+  Impl impl(*this, RenderingInstanceView{registry.view<RenderingInstanceComponent>()});
   impl.drawUntil(registry, entt::null);
 }
 

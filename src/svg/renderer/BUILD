@@ -29,6 +29,7 @@ cc_library(
         ":renderer_utils",
         "//src/svg",
         "//src/svg/core",
+        "//src/svg/renderer/common",
         "@skia//:skia_core",
     ],
 )
@@ -44,6 +45,7 @@ cc_library(
         ":renderer_utils",
         "//src/svg",
         "//src/svg/core",
+        "//src/svg/renderer/common",
         "//src/svg/renderer/wasm_canvas",
     ],
 )

@@ -20,12 +20,12 @@
 #include "src/svg/components/radial_gradient_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
-#include "src/svg/components/rendering_instance_component.h"
 #include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/sized_element_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/renderer/common/rendering_instance_view.h"
 #include "src/svg/renderer/renderer_image_io.h"
 #include "src/svg/renderer/renderer_utils.h"
 
@@ -135,38 +135,12 @@ SkTileMode toSkia(GradientSpreadMethod spreadMethod) {
   }
 }
 
-struct InstanceView {
-public:
-  using ViewType =
-      entt::basic_view<Entity, entt::get_t<RenderingInstanceComponent>, entt::exclude_t<>, void>;
-  using Iterator = ViewType::iterator;
-
-  explicit InstanceView(const ViewType& view)
-      : view_(view), current_(view.begin()), end_(view.end()) {}
-
-  bool done() const { return current_ == end_; }
-  void advance() { ++current_; }
-
-  Entity currentEntity() const {
-    assert(!done());
-    return *current_;
-  }
-
-  const RenderingInstanceComponent& get() const {
-    return view_.get<RenderingInstanceComponent>(currentEntity());
-  }
-
-private:
-  const ViewType& view_;
-  Iterator current_;
-  Iterator end_;
-};
-
 }  // namespace
 
 class RendererSkia::Impl {
 public:
-  Impl(RendererSkia& renderer, InstanceView&& view) : renderer_(renderer), view_(std::move(view)) {}
+  Impl(RendererSkia& renderer, RenderingInstanceView&& view)
+      : renderer_(renderer), view_(std::move(view)) {}
 
   void drawUntil(Registry& registry, Entity endEntity) {
     bool foundEndEntity = false;
@@ -662,7 +636,7 @@ public:
 
 private:
   RendererSkia& renderer_;
-  InstanceView view_;
+  RenderingInstanceView view_;
 
   std::vector<SubtreeInfo> subtreeMarkers_;
 };
@@ -726,7 +700,7 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 }
 
 void RendererSkia::draw(Registry& registry, Entity root) {
-  Impl impl(*this, InstanceView{registry.view<RenderingInstanceComponent>()});
+  Impl impl(*this, RenderingInstanceView{registry.view<RenderingInstanceComponent>()});
   impl.drawUntil(registry, entt::null);
 }
 
