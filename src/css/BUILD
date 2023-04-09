@@ -50,6 +50,7 @@ cc_library(
 cc_test(
     name = "css_tests",
     srcs = [
+        "tests/color_tests.cc",
         "tests/selector_tests.cc",
         "tests/specificity_tests.cc",
     ],
