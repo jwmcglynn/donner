@@ -9,8 +9,6 @@
 #include "src/svg/renderer/wasm_canvas/canvas.h"
 #include "src/svg/svg_document.h"
 
-typedef struct HTMLCanvasElement HTMLCanvasElement;
-
 namespace donner::svg {
 
 class RendererWasmCanvas {
