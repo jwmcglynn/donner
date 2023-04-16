@@ -1,9 +1,21 @@
 #pragma once
+/// @file
 
 #include <gmock/gmock.h>
 
 namespace donner {
 
+/**
+ * Matches the string representation of an object, by calling `testing::PrintToString` and comparing
+ * the results with the expected value.
+ *
+ * Example:
+ * ```
+ * EXPECT_THAT(myObject, ToStringIs("MyObject(foo)"));
+ * ```
+ *
+ * @param expected Expected string representation.
+ */
 MATCHER_P(ToStringIs, expected, "") {
   const std::string argString = testing::PrintToString(arg);
   const std::string expectedString = expected;
@@ -25,6 +37,11 @@ MATCHER_P(ToStringIs, expected, "") {
 /**
  * Matches a Vector.
  *
+ * Example:
+ * ```
+ * EXPECT_THAT(Vector2i(1, 2), Vector2Eq(1, 2));
+ * ```
+ *
  * @param xMatcher X coordinate matcher.
  * @param yMatcher Y coordinate matcher.
  */
@@ -36,8 +53,8 @@ MATCHER_P2(Vector2Eq, xMatcher, yMatcher, "") {
 /**
  * Matches a Vector2 with DoubleNear(0.01).
  *
- * @param xValue X coordinate.
- * @param yValue Y coordinate.
+ * @param xValue X coordinate, note that this is not a matcher.
+ * @param yValue Y coordinate, note that this is not a matcher.
  */
 MATCHER_P2(Vector2Near, xValue, yValue, "") {
   return testing::ExplainMatchResult(testing::DoubleNear(xValue, 0.01), arg.x, result_listener) &&
@@ -45,9 +62,14 @@ MATCHER_P2(Vector2Near, xValue, yValue, "") {
 }
 
 /**
- * Matches if two vectors are equal when normalized.
+ * Matches if two vectors are equal when both are normalized, within an error of 0.01.
  *
- * @param expectedVector Expected value vector.
+ * Example:
+ * ```
+ * EXPECT_THAT(Vector2d(1.0, 2.0), NormalizedEq(Vector2d(2.0, 4.0)));
+ * ```
+ *
+ * @param expectedVector Expected value vector, which will be normalized.
  */
 MATCHER_P(NormalizedEq, expectedVector, "") {
   const auto normalized = arg.normalize();
@@ -63,7 +85,9 @@ MATCHER_P(NormalizedEq, expectedVector, "") {
  * Matches a transform with near-equals comparison.
  *
  * Example:
+ * ```
  * EXPECT_THAT(result, TransformEq(Transformd::Scale({2.0, 2.0})));
+ * ```
  *
  * @param other Transform object to compare.
  */
@@ -73,9 +97,19 @@ MATCHER_P(TransformEq, other, "transform eq " + testing::PrintToString(other)) {
 }
 
 /**
- * Matches a transform per-element.
+ * Matches a transform per-element, with a near-equals comparison using a threshold of 0.0001.
+ *
+ * Example:
+ * ```
+ * EXPECT_THAT(result, TransformIs(1.0, 0.0, 0.0, 1.0, 0.0, 0.0));
+ * ```
  *
  * @param d0 Corresponds to Transform::data[0]
+ * @param d1 Corresponds to Transform::data[1]
+ * @param d2 Corresponds to Transform::data[2]
+ * @param d3 Corresponds to Transform::data[3]
+ * @param d4 Corresponds to Transform::data[4]
+ * @param d5 Corresponds to Transform::data[5]
  */
 MATCHER_P6(TransformIs, d0, d1, d2, d3, d4, d5, "") {
   return testing::ExplainMatchResult(
