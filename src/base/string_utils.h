@@ -3,16 +3,13 @@
 
 #include <concepts>
 #include <iterator>
+#include <ranges>
 #include <string>
 #include <string_view>
 
-// TODO(toolchain): Switch to <ranges> once libc++ supports std::views::split and
-// std::views::transform.
-#include <range/v3/range/conversion.hpp>
-#include <range/v3/view/filter.hpp>
+// TODO(toolchain): Switch to <ranges> once libc++ supports std::views::split, which should be
+// coming in Clang 17.
 #include <range/v3/view/split.hpp>
-#include <range/v3/view/transform.hpp>
-
 namespace donner {
 
 namespace details {
@@ -289,10 +286,13 @@ public:
     // outside this function, it results in a compile error since the `.begin()` method cannot be
     // resolved.
     const std::string_view strView(str.data(), str.size());
-    return strView | ranges::cpp20::views::split(ch) |
-           ranges::cpp20::views::transform(
-               [](auto&& rng) { return std::string_view(&*rng.begin(), ranges::distance(rng)); }) |
-           ranges::cpp20::views::filter(StringViewIsNonEmpty) | ranges::to_vector;
+    auto splitRange = strView | ranges::cpp20::views::split(ch) |
+                      std::views::transform([](auto&& rng) {
+                        return std::string_view(&*rng.begin(), std::ranges::distance(rng));
+                      }) |
+                      std::views::filter(StringViewIsNonEmpty);
+
+    return std::vector<std::string_view>{splitRange.begin(), splitRange.end()};
   }
 
 private:
