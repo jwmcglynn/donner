@@ -2,6 +2,7 @@
 
 // Skia
 #include "include/core/SkPath.h"
+#include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkStream.h"

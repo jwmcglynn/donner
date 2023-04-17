@@ -30,7 +30,7 @@ cc_library(
         "//src/svg",
         "//src/svg/core",
         "//src/svg/renderer/common",
-        "@skia//:skia_core",
+        "@skia//:skia_public",
     ],
 )
 

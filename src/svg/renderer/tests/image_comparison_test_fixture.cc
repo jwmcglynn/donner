@@ -6,6 +6,7 @@
 #include <fstream>
 
 // Skia
+#include "include/core/SkData.h"
 #include "include/core/SkPicture.h"
 //
 #include "src/svg/renderer/renderer_image_io.h"
