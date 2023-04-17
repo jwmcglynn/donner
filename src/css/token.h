@@ -316,8 +316,16 @@ struct Token {
   };
 
   /**
-   * `<bad-url-token>`
-   * TODO
+   * `<bad-url-token>`, which represents an invalid `url()` function. For example, `url(whitespace
+   * in middle)`, `url(()` or `url(not\u001Fprintable)` will all result in a \ref BadUrl token.
+   *
+   * Bad URLs may be created when:
+   * - There is whitespace in the middle of the url, such as `url(foo bar.png)`.
+   * - There is an extra '(' in the URL, such as `url(foo(bar.png)`.
+   * - There is a non-printable character in the URL, such as `url(foo\u001Fbar.png)`.
+   *
+   * NOTE: This expects that the contents of the `url()` are not quoted, if they are quoted this
+   * will tokenize as a \ref Function instead.
    */
   struct BadUrl {
     /// Equality operator.
