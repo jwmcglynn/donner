@@ -268,6 +268,10 @@ struct Transform {
 
   /// Assignment operator.
   Transform<T>& operator=(const Transform<T>& other) {
+    if (this == &other) {
+      return *this;
+    }
+
     for (int i = 0; i < 6; ++i) {
       data[i] = other.data[i];
     }

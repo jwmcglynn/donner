@@ -29,11 +29,36 @@ struct Vector2 {
   /// Default constructor for a zero vector.
   Vector2() = default;
 
+  /// Construct a vector from a given x and y component.
+  constexpr Vector2(T x, T y) : x(x), y(y) {}
+
+  /// Destructor.
+  ~Vector2() = default;
+
   /// Copy constructor.
   Vector2(const Vector2<T>& other) = default;
 
-  /// Construct a vector from a given x and y component.
-  constexpr Vector2(T x, T y) : x(x), y(y) {}
+  /// Copy assignment operator.
+  Vector2<T>& operator=(const Vector2<T>& other) = default;
+
+  /// Move constructor.
+  Vector2(Vector2<T>&& other) noexcept = default;
+
+  /// Move assignment operator.
+  Vector2<T>& operator=(Vector2<T>&& other) noexcept = default;
+
+  /**
+   * Assignment operator from a vector of a different type.
+   *
+   * @tparam S The type of the other vector's components.
+   * @param rhs The vector to copy.
+   */
+  template <typename S>
+  Vector2<T>& operator=(const Vector2<S>& rhs) {
+    x = T(rhs.x);
+    y = T(rhs.y);
+    return *this;
+  }
 
   /**
    * Construct a vector from a vector of a different type, by implicitly casting each component.
@@ -42,7 +67,7 @@ struct Vector2 {
    * @param other The other vector.
    */
   template <typename S>
-  Vector2(const Vector2<S>& other) : x(other.x), y(other.y) {}
+  /*implicit*/ Vector2(const Vector2<S>& other) : x(other.x), y(other.y) {}
 
   /**
    * Construct a vector from components of a different type, by implicitly casting each component.
@@ -52,7 +77,9 @@ struct Vector2 {
    * @param y The y component.
    */
   template <typename S>
-  Vector2(S x, S y) : x(x), y(y) {}
+  Vector2(S x, S y)
+      : x(x),
+        y(y) {}  // NOLINT: Suppress bugprone-easily-swappable-parameters, order is well-known.
 
   /// Returns the length of the vector.
   UTILS_NO_DISCARD T length() const { return static_cast<T>(sqrt(double(x * x + y * y))); }
@@ -143,30 +170,6 @@ struct Vector2 {
 
   /// @addtogroup Operators
   /// @{
-
-  /**
-   * Assignment operator.
-   *
-   * @param rhs The vector to copy.
-   */
-  Vector2<T>& operator=(const Vector2<T>& rhs) {
-    x = rhs.x;
-    y = rhs.y;
-    return *this;
-  }
-
-  /**
-   * Assignment operator from a vector of a different type.
-   *
-   * @tparam S The type of the other vector's components.
-   * @param rhs The vector to copy.
-   */
-  template <typename S>
-  Vector2<T>& operator=(const Vector2<S>& rhs) {
-    x = T(rhs.x);
-    y = T(rhs.y);
-    return *this;
-  }
 
   /// Unary negation.
   Vector2<T> operator-() const { return Vector2<T>(-x, -y); }

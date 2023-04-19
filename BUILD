@@ -4,6 +4,12 @@ refresh_compile_commands(
     name = "refresh_compile_commands",
 )
 
+filegroup(
+    name = "clang_tidy_config",
+    srcs = [".clang-tidy"],
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "debug_build",
     values = {

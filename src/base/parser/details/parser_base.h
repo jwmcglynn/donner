@@ -68,10 +68,10 @@ protected:
   std::optional<ParseError> readNumbers(std::span<double> resultStorage);
 
   /// The original string.
-  const std::string_view str_;
+  const std::string_view str_;  // NOLINT: Protected visibility for inheriting parsers to use.
 
   /// A slice of the remaining characters to parse within \ref str_.
-  std::string_view remaining_;
+  std::string_view remaining_;  // NOLINT: Protected visibility for inheriting parsers to use.
 };
 
 }  // namespace donner

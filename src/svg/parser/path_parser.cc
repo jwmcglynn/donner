@@ -1,5 +1,6 @@
 #include "src/svg/parser/path_parser.h"
 
+#include <array>
 #include <span>
 
 #include "src/base/parser/number_parser.h"
@@ -134,7 +135,7 @@ private:
     bool relative = true;
     if (std::isupper(ch)) {
       relative = false;
-      ch = std::tolower(ch);
+      ch = static_cast<char>(std::tolower(ch));
     }
 
     Token token;
@@ -399,8 +400,8 @@ private:
         return error;
       }
 
-      bool largeArcFlag;
-      bool sweepFlag;
+      bool largeArcFlag = false;
+      bool sweepFlag = false;
 
       skipCommaWhitespace();
       if (auto error = readFlag(&largeArcFlag)) {
@@ -412,7 +413,7 @@ private:
       }
       skipCommaWhitespace();
 
-      double endCoords[2];
+      std::array<double, 2> endCoords;
       if (auto error = readNumbers(endCoords)) {
         return error;
       }

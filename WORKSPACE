@@ -56,6 +56,14 @@ load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_
 
 hedron_compile_commands_setup()
 
+## Developer tools
+
+git_repository(
+    name = "bazel_clang_tidy",
+    commit = "674fac7640ae0469b7a58017018cb1497c26e2bf",
+    remote = "https://github.com/erenon/bazel_clang_tidy.git",
+)
+
 ##
 ## Third-party dependencies.
 ##

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -225,7 +226,8 @@ inline bool InRange(T var, T start, T end) {
  */
 template <typename T>
 struct QuadraticSolution {
-  T solution[2] = {};        ///< Solutions to the equation, valid if \ref hasSolution is true.
+  std::array<T, 2> solution =
+      {};                    ///< Solutions to the equation, valid if \ref hasSolution is true.
   bool hasSolution = false;  ///< True if the equation has solutions.
 };
 

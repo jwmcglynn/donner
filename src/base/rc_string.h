@@ -41,6 +41,9 @@ public:
   /// Create an empty string.
   constexpr RcString() = default;
 
+  /// Destructor.
+  ~RcString() = default;
+
   /**
    * Constructs a new RcString object by copying an existing string.
    *
@@ -69,7 +72,7 @@ public:
   /// Copy constructor.
   constexpr RcString(const RcString& other) : data_(other.data_) {}
   /// Move constructor.
-  constexpr RcString(RcString&& other) : data_(std::move(other.data_)) {}
+  constexpr RcString(RcString&& other) noexcept : data_(std::move(other.data_)) {}
 
   /// Copy assignment operator.
   RcString& operator=(const RcString& other) {
@@ -78,7 +81,7 @@ public:
   }
 
   /// Move assignment operator.
-  RcString& operator=(RcString&& other) {
+  RcString& operator=(RcString&& other) noexcept {
     data_ = std::move(other.data_);
     return *this;
   }
@@ -286,11 +289,21 @@ private:
   static constexpr size_t kMaxSize = size_t(1) << ((sizeof(size_t) * 8) - 1);
 
   struct LongStringData {
-    constexpr LongStringData() : storage(nullptr) {}
-    LongStringData(std::shared_ptr<std::vector<char>> storage, std::string_view view)
-        : shiftedSize((view.size() << 1) | 1), data(view.data()), storage(std::move(storage)) {}
+    struct InitOnlySharedPtr {};
+
+    // Only initialize the storage field, leave everything else unset.
+    constexpr LongStringData(InitOnlySharedPtr) : storage(nullptr) {}
+
+    LongStringData(std::shared_ptr<std::vector<char>> storageRef, std::string_view view)
+        : shiftedSize((view.size() << 1) | 1), data(view.data()), storage(std::move(storageRef)) {}
 
     ~LongStringData() { storage = nullptr; }
+
+    // Default move and copy constructors.
+    LongStringData(const LongStringData&) = default;
+    LongStringData& operator=(const LongStringData&) = default;
+    LongStringData(LongStringData&&) = default;
+    LongStringData& operator=(LongStringData&&) = default;
 
     size_t shiftedSize;
     const char* data;
@@ -399,7 +412,7 @@ private:
     constexpr Storage() : short_() {
       // Call the empty LongStringData constructor, to clear the field containing the shared_ptr so
       // we don't need to zero the entire short_ buffer.
-      new (&long_) LongStringData();
+      new (&long_) LongStringData(LongStringData::InitOnlySharedPtr());
     }
     explicit Storage(std::shared_ptr<std::vector<char>> storage, std::string_view view)
         : long_(std::move(storage), view) {}
@@ -415,7 +428,7 @@ private:
       }
     }
 
-    constexpr Storage(Storage&& other) {
+    constexpr Storage(Storage&& other) noexcept {
       if (other.isLong()) {
         // Specifically use the placement new operator since long_ has not been initialized yet.
         new (&long_) LongStringData(std::move(other.long_));
@@ -443,7 +456,7 @@ private:
       return *this;
     }
 
-    Storage& operator=(Storage&& other) {
+    Storage& operator=(Storage&& other) noexcept {
       if (this != &other) {
         clear();
 
@@ -468,7 +481,7 @@ private:
       }
 
       // Initialize empty long string, to clear the shared_ptr.
-      new (&long_) LongStringData();
+      new (&long_) LongStringData(LongStringData::InitOnlySharedPtr());
     }
 
     constexpr bool isLong() const { return (short_.shiftedSizeByte & 1) == 1; }

@@ -38,6 +38,9 @@ struct Box {
   Box(const Vector2<T>& topLeft, const Vector2<T>& bottomRight)
       : topLeft(topLeft), bottomRight(bottomRight) {}
 
+  /// Destructor.
+  ~Box() = default;
+
   /**
    * Copy constructor.
    *
@@ -51,6 +54,20 @@ struct Box {
    * @param other Other box.
    */
   Box<T>& operator=(const Box<T>& other) = default;
+
+  /**
+   * Move constructor.
+   *
+   * @param other Other box.
+   */
+  Box(Box<T>&& other) noexcept = default;
+
+  /**
+   * Move assignment operator.
+   *
+   * @param other Other box.
+   */
+  Box<T>& operator=(Box<T>&& other) noexcept = default;
 
   /**
    * Create an empty box that is centered on the given point.

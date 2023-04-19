@@ -45,3 +45,10 @@ build:asan-fuzzer --copt=-fsanitize=fuzzer-no-link
 build:asan-fuzzer --copt=-fno-omit-frame-pointer
 build:asan-fuzzer --copt=-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 build:asan-fuzzer --test_env=UBSAN_OPTIONS=print_stacktrace=1
+
+# Required for bazel_clang_tidy to operate as expected
+build:clang-tidy --aspects @bazel_clang_tidy//clang_tidy:clang_tidy.bzl%clang_tidy_aspect
+build:clang-tidy --output_groups=report
+
+# Optionally override the .clang-tidy config file target
+build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config

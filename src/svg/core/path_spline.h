@@ -270,7 +270,8 @@ public:
   friend std::ostream& operator<<(std::ostream& os, const PathSpline& spline);
 
 private:
-  PathSpline(std::vector<Vector2d>&& points, std::vector<Command>&& commands);
+  PathSpline(std::vector<Vector2d>&& points,
+             std::vector<Command>&& commands);  // NOLINT: Internal constructor.
 
   /**
    * Get the start point of a command.

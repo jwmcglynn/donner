@@ -80,8 +80,8 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    */
   static int compare(const char* lhs, const char* rhs, size_t sizeToCompare) {
     for (size_t i = 0; i < sizeToCompare; ++i) {
-      const char lhsCh = std::tolower(lhs[i]);
-      const char rhsCh = std::tolower(rhs[i]);
+      const char lhsCh = static_cast<char>(std::tolower(lhs[i]));
+      const char rhsCh = static_cast<char>(std::tolower(rhs[i]));
       if (lhsCh < rhsCh) {
         return -1;
       } else if (lhsCh > rhsCh) {
@@ -100,7 +100,7 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    * @param ch The character to search for.
    */
   static const char* find(const char* str, size_t size, char ch) {
-    const char lowerCh = std::tolower(ch);
+    const char lowerCh = static_cast<char>(std::tolower(ch));
     for (size_t i = 0; i < size; ++i) {
       if (std::tolower(str[i]) == lowerCh) {
         return &str[i];

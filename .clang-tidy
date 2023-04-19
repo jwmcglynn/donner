@@ -1,0 +1,22 @@
+UseColor: true
+
+Checks: >
+    bugprone-*,
+    -bugprone-easily-swappable-parameters,
+    -bugprone-branch-clone,
+    cppcoreguidelines-*,
+    -cppcoreguidelines-avoid-magic-numbers,
+    -cppcoreguidelines-pro-type-union-access,
+    -cppcoreguidelines-macro-usage,
+    -cppcoreguidelines-init-variables,
+    -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+    -cppcoreguidelines-non-private-member-variables-in-classes,
+    google-*,
+    -google-readability-casting,
+    -google-explicit-constructor,
+    -google-runtime-int,
+    performance-*,
+
+HeaderFilterRegex: "src"
+
+WarningsAsErrors: "*"
