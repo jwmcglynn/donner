@@ -11,6 +11,7 @@ Checks: >
     -cppcoreguidelines-init-variables,
     -cppcoreguidelines-pro-bounds-pointer-arithmetic,
     -cppcoreguidelines-non-private-member-variables-in-classes,
+    -cppcoreguidelines-avoid-c-arrays,
     google-*,
     -google-readability-casting,
     -google-explicit-constructor,

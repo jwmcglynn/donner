@@ -292,7 +292,8 @@ private:
     struct InitOnlySharedPtr {};
 
     // Only initialize the storage field, leave everything else unset.
-    constexpr LongStringData(InitOnlySharedPtr) : storage(nullptr) {}
+    constexpr LongStringData(InitOnlySharedPtr)
+        : storage(nullptr) {}  // NOLINT: Only one field is initialized as an optimization.
 
     LongStringData(std::shared_ptr<std::vector<char>> storageRef, std::string_view view)
         : shiftedSize((view.size() << 1) | 1), data(view.data()), storage(std::move(storageRef)) {}
