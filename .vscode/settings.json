@@ -358,4 +358,5 @@
     "whitesmoke",
     "yellowgreen"
   ],
+  "sourcegraph.url": "http://127.0.0.1:3080",
 }
