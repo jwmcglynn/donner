@@ -2,7 +2,6 @@
   "recommendations": [
     "bazelbuild.vscode-bazel",
     "cschlosser.doxdocgen",
-    "cssho.vscode-svgviewer",
     "github.copilot",
     "hbenl.vscode-test-explorer",
     "matepek.vscode-catch2-test-adapter",
