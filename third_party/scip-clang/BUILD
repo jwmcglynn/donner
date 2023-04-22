@@ -17,7 +17,7 @@ native_binary(
         "@platforms//os:linux": "@scip-clang-linux-repo//file",
         "//conditions:default": None,
     }),
-    out = "scip-clang",
+    out = "scip-clang-bin",
 )
 
 genrule(
