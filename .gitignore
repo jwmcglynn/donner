@@ -3,6 +3,7 @@ bazel-*
 compile_commands.json
 coverage-report
 generated-doxygen
+index.scip
 
 # VS Code
 # See https://www.toptal.com/developers/gitignore/api/visualstudiocode

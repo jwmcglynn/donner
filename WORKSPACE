@@ -47,7 +47,7 @@ llvm_register_toolchains()
 git_repository(
     name = "hedron_compile_commands",
     # branch = "main",
-    commit = "e085566bf35e020402a2e32258360b16446fbad8",
+    commit = "b33a4b05c2287372c8e932c55ff4d3a37e6761ed",
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
     shallow_since = "1638167585 -0800",
 )
@@ -157,6 +157,10 @@ git_repository(
     remote = "https://github.com/jwmcglynn/skia",
 )
 
+load("@skia//bazel:deps.bzl", "git_repos_from_deps")
+
+git_repos_from_deps()
+
 # Skia dependencies
 
 http_archive(
@@ -209,8 +213,28 @@ emsdk_deps()
 
 load("@emsdk//:emscripten_deps.bzl", emsdk_emscripten_deps = "emscripten_deps")
 
-emsdk_emscripten_deps(emscripten_version = "3.1.34")
+# Version should match "latest-arm64-linux" in https://github.com/emscripten-core/emsdk/blob/main/emscripten-releases-tags.json
+emsdk_emscripten_deps(emscripten_version = "3.1.33")
 
 load("@emsdk//:toolchains.bzl", "register_emscripten_toolchains")
 
 register_emscripten_toolchains()
+
+# scip-clang for Sourcegraph
+
+load("//third_party/scip-clang:defs.bzl", "gen_scip_clang")
+
+gen_scip_clang()
+
+# Python pip dependencies (for tools)
+
+load("@rules_python//python:pip.bzl", "pip_parse")
+
+pip_parse(
+    name = "pip_deps",
+    requirements_lock = "//tools/python:requirements.txt",
+)
+
+load("@pip_deps//:requirements.bzl", "install_deps")
+
+install_deps()
