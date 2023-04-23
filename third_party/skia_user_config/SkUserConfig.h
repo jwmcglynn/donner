@@ -24,7 +24,7 @@
     based on the presence or absence of NDEBUG, but that decision can be changed
     here.
 */
-#ifndef SK_DEBUG
+#if !defined(SK_DEBUG) && !defined(SK_RELEASE)
     #define SK_RELEASE
 #endif
 //#define SK_DEBUG
