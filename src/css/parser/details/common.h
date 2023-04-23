@@ -13,20 +13,6 @@ static constexpr char32_t kUnicodeReplacementCharacter = 0xFFFD;
 /// https://www.w3.org/TR/css-syntax-3/#maximum-allowed-code-point
 static constexpr char32_t kUnicodeMaximumAllowedCodepoint = 0x10FFFF;
 
-static inline bool StringLowercaseEq(std::string_view str, std::string_view matcher) {
-  if (str.size() != matcher.size()) {
-    return false;
-  }
-
-  for (size_t i = 0; i < str.size(); ++i) {
-    if (std::tolower(str[i]) != matcher[i]) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 /// Returns true if the codepoint is a surrogate, per
 /// https://infra.spec.whatwg.org/#surrogate
 static inline bool IsSurrogateCodepoint(char32_t ch) {

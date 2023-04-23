@@ -360,7 +360,7 @@ private:
 
     // If `name`'s value is an ASCII case-insensitive match for "url", and the next input code point
     // is U+0028 LEFT PARENTHESIS ((), consume it.
-    if (StringLowercaseEq(name, "url") && hasParen) {
+    if (name.equalsLowercase("url") && hasParen) {
       size_t i = 1;
       size_t remainingSize = afterName.size();
 

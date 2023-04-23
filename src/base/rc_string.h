@@ -236,11 +236,16 @@ public:
    * Returns true if the string equals another all-lowercase string, with a case insensitive
    * comparison.
    *
-   * @param other string to compare to, must be lowercase.
+   * Example:
+   * ```
+   * RcString("EXAMPLe").equalsLowercase("example"); // true
+   * ```
+   *
+   * @param lowercaseOther string to compare to, must be lowercase.
    * @return true If the strings are equal (case insensitive).
    */
-  bool equalsLowercase(std::string_view other) const {
-    return StringUtils::EqualsLowercase(*this, other);
+  bool equalsLowercase(std::string_view lowercaseOther) const {
+    return StringUtils::EqualsLowercase(*this, lowercaseOther);
   }
 
   /**

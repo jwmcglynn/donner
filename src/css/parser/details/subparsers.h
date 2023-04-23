@@ -287,7 +287,7 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
       // Scan for important.
       if (Token* valueToken = std::get_if<Token>(&componentValue.value)) {
         if (lastWasImportantBang && valueToken->is<Token::Ident>() &&
-            StringLowercaseEq(valueToken->get<Token::Ident>().value, "important")) {
+            valueToken->get<Token::Ident>().value.equalsLowercase("important")) {
           declaration.important = true;
           lastWasImportantBang = false;
         } else {
