@@ -85,7 +85,13 @@ struct QualifiedRule {
    * Constructor, takes ownership of the prelude and block.
    */
   QualifiedRule(std::vector<ComponentValue>&& prelude, SimpleBlock&& block)
-      : prelude(prelude), block(block) {}
+      : prelude(std::move(prelude)), block(std::move(block)) {}
+
+  // Copy and move constructors.
+  QualifiedRule(const QualifiedRule& other) = default;
+  QualifiedRule& operator=(const QualifiedRule& other) = default;
+  QualifiedRule(QualifiedRule&& other) = default;
+  QualifiedRule& operator=(QualifiedRule&& other) = default;
 
   /// Equality operator.
   bool operator==(const QualifiedRule& other) const = default;
@@ -205,7 +211,13 @@ struct Rule {
    *
    * @param value Rule value.
    */
-  /* implicit */ Rule(Type&& value) : value(value) {}
+  /* implicit */ Rule(Type&& value) : value(std::move(value)) {}
+
+  // Copy and move constructors and operators.
+  Rule(const Rule& other) = default;
+  Rule(Rule&& other) noexcept = default;
+  Rule& operator=(const Rule& other) = default;
+  Rule& operator=(Rule&& other) noexcept = default;
 
   /// Equality operator.
   bool operator==(const Rule& other) const = default;

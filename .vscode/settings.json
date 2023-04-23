@@ -108,7 +108,8 @@
     "cassert": "cpp",
     "version": "cpp",
     "__verbose_abort": "cpp",
-    "expected": "cpp"
+    "expected": "cpp",
+    "format": "cpp"
   },
   "files.exclude": {
     "bazel-*": true

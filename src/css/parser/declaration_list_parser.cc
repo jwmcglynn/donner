@@ -48,31 +48,51 @@ private:
 };
 
 template <details::DeclarationTokenizer T>
+struct ParseUntilSemicolonOrEOF {
+  using Item = typename T::Item;
+  using ItemType = typename T::ItemType;
+
+  explicit ParseUntilSemicolonOrEOF(T& tokenizer)
+      : tokenizer_(tokenizer), next_(tokenizer_.next()) {}
+
+  ~ParseUntilSemicolonOrEOF() {
+    while (!isEOF()) {
+      next_ = std::move(tokenizer_.next());
+    }
+  }
+
+  ItemType next() {
+    assert(!isEOF());
+
+    ItemType result(std::move(next_.value));
+    if (!tokenizer_.isEOF()) {
+      next_ = std::move(tokenizer_.next());
+    } else {
+      eof_ = true;
+    }
+    return result;
+  }
+
+  bool isEOF() const {
+    return eof_ || next_.template isToken<Token::Semicolon>() ||
+           next_.template isToken<Token::EofToken>();
+  }
+
+private:
+  T& tokenizer_;
+  Item next_;
+  bool eof_ = false;
+};
+
+template <details::DeclarationTokenizer T>
 std::optional<Declaration> parseDeclarationGeneric(T& tokenizer, Token&& token) {
   if (token.is<Token::Ident>()) {
     // <ident-token>: Initialize a temporary list initially filled with the current input token.
     Token::Ident ident = std::move(token.get<Token::Ident>());
-    std::vector<typename T::ItemType> declarationInput;
 
-    // TODO: Find a way to construct the declaration input without copying. Maybe make this a
-    // lazily-instantiated tokenizer wrapper, like `Tokenizer::BlockScopeGuard`.
-
-    // As long as the next input token is anything other than a <semicolon-token> or
-    // <EOF-token>, consume a component value and append it to the temporary list. Consume a
-    // declaration from the temporary list. If anything was returned, append it to the list of
-    // declarations.
-    while (!tokenizer.isEOF()) {
-      typename T::Item listItem = tokenizer.next();
-      if (!listItem.template isToken<Token::Semicolon>() &&
-          !listItem.template isToken<Token::EofToken>()) {
-        declarationInput.emplace_back(std::move(std::move(listItem.value)));
-      } else {
-        break;
-      }
-    }
-
-    SubTokenizer<typename T::ItemType> subTokenizer(declarationInput);
-    return consumeDeclaration(subTokenizer, std::move(ident), token.offset());
+    // A declaration list ends when it reaches a <semicolon-token> or <EOF-token>.
+    ParseUntilSemicolonOrEOF<T> declarationInputTokenizer(tokenizer);
+    return consumeDeclaration(declarationInputTokenizer, std::move(ident), token.offset());
   } else {
     // anything else: This is a parse error. Reconsume the current input token. As long as the
     // next input token is anything other than a <semicolon-token> or <EOF-token>, consume a

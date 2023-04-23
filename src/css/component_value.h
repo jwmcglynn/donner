@@ -117,6 +117,12 @@ struct ComponentValue {
    */
   /* implicit */ ComponentValue(Type&& value);
 
+  // Copy and move constructors.
+  ComponentValue(const ComponentValue&) = default;
+  ComponentValue& operator=(const ComponentValue&) = default;
+  ComponentValue(ComponentValue&&) noexcept = default;
+  ComponentValue& operator=(ComponentValue&&) noexcept = default;
+
   /// Equality operator.
   bool operator==(const ComponentValue& other) const;
 

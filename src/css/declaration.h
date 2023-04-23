@@ -36,6 +36,12 @@ struct Declaration {
         sourceOffset(sourceOffset),
         important(important) {}
 
+  // Copy and move constructors and assignment operators.
+  Declaration(const Declaration& other) = default;
+  Declaration(Declaration&& other) noexcept = default;
+  Declaration& operator=(const Declaration& other) = default;
+  Declaration& operator=(Declaration&& other) noexcept = default;
+
   /// Equality operator.
   bool operator==(const Declaration& other) const = default;
 

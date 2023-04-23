@@ -41,13 +41,13 @@ public:
   Specificity(const Specificity& other) = default;
 
   /// Move constructor.
-  Specificity(Specificity&& other) = default;
+  Specificity(Specificity&& other) noexcept = default;
 
   /// Assignment operator.
   Specificity& operator=(const Specificity& other) = default;
 
   /// Move assignment operator.
-  Specificity& operator=(Specificity&& other) = default;
+  Specificity& operator=(Specificity&& other) noexcept = default;
 
   /**
    * Ostream output operator.
