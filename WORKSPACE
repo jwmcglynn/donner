@@ -70,24 +70,26 @@ git_repository(
 
 git_repository(
     name = "com_google_gtest",
-    branch = "main",
     remote = "https://github.com/google/googletest",
+    tag = "v1.13.0",
 )
 
-# Use absl at head.
-git_repository(
-    name = "com_google_absl",
-    branch = "master",
-    remote = "https://github.com/abseil/abseil-cpp",
+# From the gtest v1.13.0 branch: https://github.com/google/googletest/blob/b796f7d44681514f58a683a3a71ff17c94edb0c1/WORKSPACE
+http_archive(
+    name = "com_google_absl",  # 2023-01-10T21:08:25Z
+    sha256 = "f9a4e749f42c386a32a90fddf0e2913ed408d10c42f7f33ccf4c59ac4f0d1d05",
+    strip_prefix = "abseil-cpp-52835439ca90d86b27bf8cd1708296e95604d724",
+    urls = ["https://github.com/abseil/abseil-cpp/archive/52835439ca90d86b27bf8cd1708296e95604d724.zip"],
 )
 
+# From the gtest v1.13.0 branch: https://github.com/google/googletest/blob/b796f7d44681514f58a683a3a71ff17c94edb0c1/WORKSPACE
 # Note this must use a commit from the `abseil` branch of the RE2 project.
 # https://github.com/google/re2/tree/abseil
 http_archive(
-    name = "com_googlesource_code_re2",
-    sha256 = "31909cc52353e2ed16aaa4e8a16aa5cd5b755a91be833833b5acd4523c809e37",
-    strip_prefix = "re2-11073deb73b3d01018308863c0bcdfd0d51d3e70",
-    urls = ["https://github.com/google/re2/archive/11073deb73b3d01018308863c0bcdfd0d51d3e70.zip"],  # 2022-06-09
+    name = "com_googlesource_code_re2",  # 2022-12-21T14:29:10Z
+    sha256 = "b9ce3a51beebb38534d11d40f8928d40509b9e18a735f6a4a97ad3d014c87cb5",
+    strip_prefix = "re2-d0b1f8f2ecc2ea74956c7608b6f915175314ff0e",
+    urls = ["https://github.com/google/re2/archive/d0b1f8f2ecc2ea74956c7608b6f915175314ff0e.zip"],
 )
 
 git_repository(
