@@ -1,0 +1,25 @@
+[project]
+name = "donner"
+version = "1.0.0"
+
+# Optional, adding this will enable direct links from the documentation
+# to your source code.
+git_repo_url = "https://github.com/jwmcglynn/donner/"
+git_default_branch = "main"
+
+[paths]
+compile_commands = "compile_commands.json"
+output_dir = "hdoc-output"
+
+[includes]
+paths = []
+use_system_includes = true
+
+[ignore]
+paths = [
+  "/third_party/",
+  "/external/",
+]
+
+[pages]
+homepage = "README.md"
