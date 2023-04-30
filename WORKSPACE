@@ -11,16 +11,21 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 ## Toolchain
 ##
 
-BAZEL_TOOLCHAIN_TAG = "0.8.2"
+# BAZEL_TOOLCHAIN_TAG = "0.8.2"
 
-BAZEL_TOOLCHAIN_SHA = "0fc3a2b0c9c929920f4bed8f2b446a8274cad41f5ee823fd3faa0d7641f20db0"
+# BAZEL_TOOLCHAIN_SHA = "0fc3a2b0c9c929920f4bed8f2b446a8274cad41f5ee823fd3faa0d7641f20db0"
 
-http_archive(
+# http_archive(
+#     name = "com_grail_bazel_toolchain",
+#     canonical_id = BAZEL_TOOLCHAIN_TAG,
+#     sha256 = BAZEL_TOOLCHAIN_SHA,
+#     strip_prefix = "bazel-toolchain-{tag}".format(tag = BAZEL_TOOLCHAIN_TAG),
+#     url = "https://github.com/grailbio/bazel-toolchain/archive/refs/tags/{tag}.tar.gz".format(tag = BAZEL_TOOLCHAIN_TAG),
+# )
+
+local_repository(
     name = "com_grail_bazel_toolchain",
-    canonical_id = BAZEL_TOOLCHAIN_TAG,
-    sha256 = BAZEL_TOOLCHAIN_SHA,
-    strip_prefix = "bazel-toolchain-{tag}".format(tag = BAZEL_TOOLCHAIN_TAG),
-    url = "https://github.com/grailbio/bazel-toolchain/archive/refs/tags/{tag}.tar.gz".format(tag = BAZEL_TOOLCHAIN_TAG),
+    path = "third_party/bazel-toolchain",
 )
 
 load("@com_grail_bazel_toolchain//toolchain:deps.bzl", "bazel_toolchain_dependencies")
