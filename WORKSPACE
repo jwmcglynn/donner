@@ -23,9 +23,10 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 #     url = "https://github.com/grailbio/bazel-toolchain/archive/refs/tags/{tag}.tar.gz".format(tag = BAZEL_TOOLCHAIN_TAG),
 # )
 
-local_repository(
+git_repository(
     name = "com_grail_bazel_toolchain",
-    path = "third_party/bazel-toolchain",
+    branch = "main",
+    remote = "https://github.com/jwmcglynn/bazel-toolchain.git",
 )
 
 load("@com_grail_bazel_toolchain//toolchain:deps.bzl", "bazel_toolchain_dependencies")
@@ -245,3 +246,16 @@ pip_parse(
 load("@pip_deps//:requirements.bzl", "install_deps")
 
 install_deps()
+
+# hdoc
+
+new_local_repository(
+    name = "hdoc",
+    build_file = "third_party/BUILD.hdoc",
+    path = "third_party/hdoc",
+    workspace_file = "third_party/WORKSPACE.hdoc",
+)
+
+load("@//third_party:hdoc.bzl", "hdoc_dependencies")
+
+hdoc_dependencies()

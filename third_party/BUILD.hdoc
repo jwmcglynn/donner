@@ -1,0 +1,36 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+cc_binary(
+    name = "hdoc",
+    srcs = [
+        "src/main.cpp",
+        "src/frontend/Frontend.cpp",
+        "src/indexer/Indexer.cpp",
+        "src/indexer/MatcherUtils.cpp",
+        "src/indexer/Matchers.cpp",
+        #"src/serde/HTMLWriter.cpp",
+        "src/serde/JSONDeserializer.cpp",
+        "src/serde/SerdeUtils.cpp",
+        "src/serde/Serialization.cpp",
+        #"src/support/MarkdownConverter.cpp",
+        "src/support/ParallelExecutor.cpp",
+        "src/support/StringUtils.cpp",
+    ] + glob(["src/**/*.hpp"]),
+    includes = ["src"],
+    visibility = ["//visibility:public"],
+    deps = [
+        #"@cmark-gfm",
+        "@argparse",
+        "@spdlog",
+        "@tomlplusplus",
+        "@rapidjson",
+        "@llvm_toolchain_llvm//:lib_clangAST",
+        "@llvm_toolchain_llvm//:lib_clangBasic",
+        "@llvm_toolchain_llvm//:lib_clangFrontend",
+        "@llvm_toolchain_llvm//:lib_clangIndex",
+        "@llvm_toolchain_llvm//:lib_clangTooling",
+        "@llvm_toolchain_llvm//:lib_clangToolingCore",
+        "@llvm_toolchain_llvm//:lib_clangToolingInclusions",
+        "@llvm_toolchain_llvm//:libclang_include",
+    ],
+)

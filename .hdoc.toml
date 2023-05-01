@@ -23,3 +23,6 @@ paths = [
 
 [pages]
 homepage = "README.md"
+
+[debug]
+dump_json_payload = true
