@@ -34,6 +34,7 @@ cc_binary(
     srcs = [
         "debugger_main.cc",
     ],
+    copts = ["-frtti"],
     linkopts = WASM_LINKOPTS,
     # This target won't build successfully on its own because of missing emscripten
     # headers etc. Therefore, we hide it from wildcards.
