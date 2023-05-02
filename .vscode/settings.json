@@ -113,7 +113,8 @@
     "rope": "cpp",
     "__std_stream": "cpp",
     "barrier": "cpp",
-    "strstream": "cpp"
+    "strstream": "cpp",
+    "slist": "cpp"
   },
   "files.exclude": {
     "bazel-*": true,
@@ -370,6 +371,16 @@
     "editor.defaultFormatter": "ms-python.black-formatter"
   },
   "python.formatting.provider": "none",
+  "cSpell.ignorePaths": [
+    "package-lock.json",
+    "node_modules",
+    "vscode-extension",
+    ".git/objects",
+    ".vscode",
+    ".vscode-insiders",
+    "external",
+    "third_party"
+  ],
   "workbench.colorCustomizations": {
     "activityBar.activeBackground": "#65c89b",
     "activityBar.background": "#65c89b",
@@ -389,14 +400,4 @@
     "titleBar.inactiveBackground": "#42b88399",
     "titleBar.inactiveForeground": "#15202b99"
   },
-  "cSpell.ignorePaths": [
-    "package-lock.json",
-    "node_modules",
-    "vscode-extension",
-    ".git/objects",
-    ".vscode",
-    ".vscode-insiders",
-    "external",
-    "third_party"
-  ],
 }

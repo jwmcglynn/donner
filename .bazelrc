@@ -12,9 +12,13 @@ build:libc++ --define force_libcpp=enabled
 
 # C++20
 build:c++20 --cxxopt=-std=c++20 --cxxopt=-fexperimental-library --copt=-fno-rtti --host_copt=-fno-rtti --linkopt=-lc++abi --linkopt=-lc++
+build:c++20 --host_cxxopt=-std=c++20
 
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
+
+# Generates documentation
+build:doc --aspects=//tools/aspects:hdoc_aspect.bzl%hdoc_aspect
 
 build --config=libc++ --config=c++20 --define absl=1
 

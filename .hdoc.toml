@@ -13,7 +13,7 @@ output_dir = "hdoc-output"
 
 [includes]
 paths = []
-use_system_includes = true
+use_system_includes = false
 
 [ignore]
 paths = [
