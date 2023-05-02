@@ -336,7 +336,7 @@ def _hdoc_aspect_impl(target, ctx):
         outputs = [hdoc_file],
         inputs = depset(
             [compdb_file, ctx.file._hdoc_toml],
-            transitive = [target[CcInfo].compilation_context.headers] + _rule_sources(ctx),
+            transitive = [target[CcInfo].compilation_context.headers, depset(_rule_sources(ctx))],
         ),
         arguments = [ctx.executable._hdoc.path, "--verbose", "--compile-commands", compdb_file.path, "--config", ctx.file._hdoc_toml.path, "--output", hdoc_file.path],
         progress_message = "Generating hdoc for " + ctx.label.name,
