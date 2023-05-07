@@ -15,6 +15,7 @@ cc_binary(
         #"src/support/MarkdownConverter.cpp",
         "src/support/ParallelExecutor.cpp",
         "src/support/StringUtils.cpp",
+        "src/support/PathUtils.cpp",
     ] + glob(["src/**/*.hpp"]),
     includes = ["src"],
     visibility = ["//visibility:public"],
