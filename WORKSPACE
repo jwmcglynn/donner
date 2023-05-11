@@ -77,9 +77,9 @@ git_repository(
 # From the gtest v1.13.0 branch: https://github.com/google/googletest/blob/b796f7d44681514f58a683a3a71ff17c94edb0c1/WORKSPACE
 http_archive(
     name = "com_google_absl",  # 2023-01-10T21:08:25Z
-    sha256 = "f9a4e749f42c386a32a90fddf0e2913ed408d10c42f7f33ccf4c59ac4f0d1d05",
-    strip_prefix = "abseil-cpp-52835439ca90d86b27bf8cd1708296e95604d724",
-    urls = ["https://github.com/abseil/abseil-cpp/archive/52835439ca90d86b27bf8cd1708296e95604d724.zip"],
+    sha256 = "d62d0df0846c3507a3c5b70e843110514629447db32efc57ea8aa2bdc74a6eaa",
+    strip_prefix = "abseil-cpp-2526926b9275076b03159e7e0a9f1f32b9ed8d09",
+    urls = ["https://github.com/abseil/abseil-cpp/archive/2526926b9275076b03159e7e0a9f1f32b9ed8d09.zip"],
 )
 
 # From the gtest v1.13.0 branch: https://github.com/google/googletest/blob/b796f7d44681514f58a683a3a71ff17c94edb0c1/WORKSPACE
