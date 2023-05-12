@@ -114,7 +114,10 @@
     "__std_stream": "cpp",
     "barrier": "cpp",
     "strstream": "cpp",
-    "slist": "cpp"
+    "slist": "cpp",
+    "__std_stream": "cpp",
+    "barrier": "cpp",
+    "strstream": "cpp",
   },
   "files.exclude": {
     "bazel-*": true,
