@@ -1,7 +1,7 @@
 import hashlib
 import requests
 
-tag = "v0.0.6"
+tag = "v0.1.0"
 release_url = f"https://github.com/sourcegraph/scip-clang/releases/download/{tag}"
 all_os = ["darwin", "linux"]
 
