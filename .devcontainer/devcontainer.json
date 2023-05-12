@@ -7,24 +7,28 @@
       "VARIANT": "jammy"
     }
   },
-  "settings": {
-    // Use zsh by default.
-    "terminal.integrated.profiles.linux": {
-      "zsh": {
-        "path": "zsh"
-      }
+  "customizations": {
+    "vscode": {
+      "settings": {
+        // Use zsh by default.
+        "terminal.integrated.profiles.linux": {
+          "zsh": {
+            "path": "zsh"
+          }
+        }
+      },
+      // Install bazel and helpful extensions for running tests.
+      "extensions": [
+        "bazelbuild.vscode-bazel",
+        "cschlosser.doxdocgen",
+        "hbenl.vscode-test-explorer",
+        "github.copilot",
+        "matepek.vscode-catch2-test-adapter",
+        "ms-vscode.cpptools",
+        "vadimcn.vscode-lldb",
+      ],
     }
   },
-  // Install bazel and helpful extensions for running tests.
-  "extensions": [
-    "bazelbuild.vscode-bazel",
-    "cschlosser.doxdocgen",
-    "hbenl.vscode-test-explorer",
-    "github.copilot",
-    "matepek.vscode-catch2-test-adapter",
-    "ms-vscode.cpptools",
-    "vadimcn.vscode-lldb",
-  ],
   // Connect as non-root user.
   "remoteUser": "vscode",
   // For sharing shell history out of the container.
