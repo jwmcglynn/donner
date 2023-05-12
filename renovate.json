@@ -2,5 +2,19 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:base"
+  ],
+  "schedule": [
+    "on the 1st through 7th day of the month"
+  ],
+  "labels": [
+    "bot"
+  ],
+  "packageRules": [
+    {
+      "packagePatterns": [
+        "^com_google_absl$"
+      ],
+      "enabled": false
+    }
   ]
 }
