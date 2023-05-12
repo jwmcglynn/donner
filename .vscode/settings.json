@@ -109,7 +109,10 @@
     "version": "cpp",
     "__verbose_abort": "cpp",
     "expected": "cpp",
-    "format": "cpp"
+    "format": "cpp",
+    "__std_stream": "cpp",
+    "barrier": "cpp",
+    "strstream": "cpp"
   },
   "files.exclude": {
     "bazel-*": true
