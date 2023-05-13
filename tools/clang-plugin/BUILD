@@ -5,14 +5,23 @@ cc_binary(
     srcs = [
         "main.cc",
     ],
-    copts = [
-        "-stdlib=libstdc++",
-        "-D_GLIBCXX_USE_CXX11_ABI=1",
+    copts = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "-stdlib=libstdc++",
+            "-D_GLIBCXX_USE_CXX11_ABI=1",
+        ],
+    }) + [
+        "-fno-rtti",
     ],
-    linkopts = [
-        "-stdlib=libstdc++",
-        "-lstdc++",
-    ],
+    includes = ["src"],
+    linkopts = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "-stdlib=libstdc++",
+            "-lstdc++",
+        ],
+    }),
     deps = [
         "@llvm_toolchain_llvm//:lib_clangAST",
         "@llvm_toolchain_llvm//:lib_clangBasic",

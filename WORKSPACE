@@ -26,7 +26,7 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 git_repository(
     name = "com_grail_bazel_toolchain",
     #branch = "main",
-    commit = "5f3ca08aa5442a0be37c93400dbe3ea3ee352e16",
+    commit = "84b0a84c4b79f4f4eb795c7dd5c808406f0b7bb7",
     remote = "https://github.com/jwmcglynn/bazel-toolchain.git",
 )
 

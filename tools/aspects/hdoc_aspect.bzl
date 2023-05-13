@@ -373,12 +373,12 @@ hdoc_aspect = aspect(
         ),
         "_hdoc": attr.label(
             default = Label("@hdoc//:hdoc"),
-            cfg = "host",
+            cfg = "exec",
             executable = True,
         ),
         "_wrap_hdoc": attr.label(
             default = Label("//tools/aspects:wrap_hdoc"),
-            cfg = "host",
+            cfg = "exec",
             executable = True,
         ),
     },
