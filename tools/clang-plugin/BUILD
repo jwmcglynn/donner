@@ -5,6 +5,14 @@ cc_binary(
     srcs = [
         "main.cc",
     ],
+    copts = [
+        "-stdlib=libstdc++",
+        "-D_GLIBCXX_USE_CXX11_ABI=1",
+    ],
+    linkopts = [
+        "-stdlib=libstdc++",
+        "-lstdc++",
+    ],
     deps = [
         "@llvm_toolchain_llvm//:lib_clangAST",
         "@llvm_toolchain_llvm//:lib_clangBasic",

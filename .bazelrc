@@ -11,8 +11,12 @@ build:libc++ --action_env=BAZEL_LINKLIBS=-lc++abi:-lc++
 build:libc++ --define force_libcpp=enabled
 
 # C++20
-build:c++20 --cxxopt=-std=c++20 --cxxopt=-fexperimental-library --copt=-fno-rtti --host_copt=-fno-rtti --linkopt=-lc++abi --linkopt=-lc++
-build:c++20 --host_cxxopt=-std=c++20
+build:c++20 --cxxopt=-std=c++20 --cxxopt=-fexperimental-library --copt=-fno-rtti
+
+# Host toolchain using libstdc++ instead of libc++, for libclang support
+build:host_libstdc++ --host_cxxopt=-std=c++20 --host_cxxopt=-stdlib=libstdc++ --host_linkopt=-lstdc++
+
+build:linux --config=host_libstdc++
 
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd

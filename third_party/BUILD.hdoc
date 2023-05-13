@@ -19,6 +19,14 @@ cc_binary(
     ] + glob(["src/**/*.hpp"]),
     includes = ["src"],
     visibility = ["//visibility:public"],
+    linkopts = [
+        "-stdlib=libstdc++",
+        "-lstdc++",
+    ],
+    copts = [
+        "-stdlib=libstdc++",
+        "-D_GLIBCXX_USE_CXX11_ABI=1",
+    ],
     deps = [
         #"@cmark-gfm",
         "@argparse",
