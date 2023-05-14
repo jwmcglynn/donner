@@ -8,10 +8,11 @@ It does this by attaching an aspect to the following rules:
 - cc_test
 - cc_inc_library
 - cc_proto_library
-
+- objc_library
+- objc_binary
 
 The aspect generates compile_commands entries for each source file in the target by:
-#
+
 - Finding the compiler for the target's action (C_COMPILE_ACTION_NAME, CPP_COMPILE_ACTION_NAME)
 - Getting the compile flags for the target and all of its dependencies
 - Creating a compile_variables struct to get the toolchain compile flags
