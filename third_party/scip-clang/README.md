@@ -1,10 +1,11 @@
 To update to a newer version, run:
 
 ```sh
-bazel run //third_party/scip-clang:fetch_new_version
-```
+bazel run //third_party/scip-clang:fetch_new_version -- <tag>
 
-To update the version of scip-clang, edit the `tag` variable in `fetch_new_version.py`.
+# Example:
+bazel run //third_party/scip-clang:fetch_new_version -- 0.1.1
+```
 
 ## Updating Sourcegraph Code Intelligence
 

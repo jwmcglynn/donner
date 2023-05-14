@@ -1,6 +1,6 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 
-VERSION = "v0.1.0"
+VERSION = "v0.1.1"
 
 SCIP_CLANG_VERSIONS = {
     "v0.0.6": {
@@ -10,6 +10,10 @@ SCIP_CLANG_VERSIONS = {
     "v0.1.0": {
         "darwin": "26ed4fd6c2f5e776f90d83d8ee3699fb1aadae90f8454b7e77c8d65b400e7597",
         "linux": "f886050545fbae393d50d60a439d09fa01ab2d1971e2ebd630da08cdb22f0d61",
+    },
+    "v0.1.1": {
+        "darwin": "832c1b2858b8be3665355407dd660590e31dc4cd96e508f98cc7df6ebcb80663",
+        "linux": "3e2e5cc79cf27846de3d1157235f5651459063803f13b9c5713a07e997a0c465",
     },
 }
 
