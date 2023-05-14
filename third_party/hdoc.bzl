@@ -2,6 +2,18 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 
 def hdoc_dependencies():
+    """hdoc_dependencies defines the dependencies needed to build hdoc.
+
+    It loads the necessary Bazel repository rules and calls them to fetch:
+
+    - argparse: For command line argument parsing.
+    - spdlog: Fast C++ logging library.
+    - tomlplusplus: C++ TOML parser for config files.
+    - rapidjson: JSON serialization library.
+
+    These are defined as maybe() calls so that if a dependency is already
+    registered, it will be skipped.
+    """
     maybe(
         http_archive,
         name = "argparse",
@@ -78,11 +90,3 @@ cc_library(
 )
         """,
     )
-    pass
-    # maybe(
-    #     http_archive,
-    #     name = "cmark-gfm",
-    #     sha256 = "b17d86164c0822b5db3818780b44cb130ff30e9c6ec6a64f199b6d142684dba0",
-    #     strip_prefix = "cmark-gfm-0.29.0.gfm.6",
-    #     urls = ["https://github.com/github/cmark-gfm/archive/refs/tags/0.29.0.gfm.6.tar.gz"],
-    # )

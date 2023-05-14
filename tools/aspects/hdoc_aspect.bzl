@@ -1,3 +1,55 @@
+"""
+Defines the hdoc_aspect bazel aspect, which runs the hdoc tool on all C/C++ targets.
+
+It does this by attaching an aspect to the following rules:
+
+- cc_library
+- cc_binary
+- cc_test
+- cc_inc_library
+- cc_proto_library
+
+
+The aspect generates compile_commands entries for each source file in the target by:
+#
+- Finding the compiler for the target's action (C_COMPILE_ACTION_NAME, CPP_COMPILE_ACTION_NAME)
+- Getting the compile flags for the target and all of its dependencies
+- Creating a compile_variables struct to get the toolchain compile flags
+- Concatenating all flags and the source file path into a compile command
+
+
+These entries are then provided in the CompilationAspectInfo provider.
+
+To use this aspect in your project, add the following to your .bazelrc:
+
+```bzl
+# Generates documentation
+build:doc --aspects=//tools/aspects:hdoc_aspect.bzl%hdoc_aspect
+```
+
+Then, to generate the documentation, run:
+
+```bash
+bazel build //path/to:target --config=doc --output_groups=hdoc
+```
+"""
+
+# This is based off https://github.com/grailbio/bazel-compilation-database, which is provided with the following license:
+#
+# Copyright 2017 GRAIL, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load(
     "@bazel_tools//tools/build_defs/cc:action_names.bzl",
