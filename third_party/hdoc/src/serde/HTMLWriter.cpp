@@ -85,6 +85,8 @@ hdoc::serde::HTMLWriter::HTMLWriter(const hdoc::types::Index*  index,
   };
 
   std::vector<BundledFile> bundledFiles = {
+#if 0
+      // TODO: Re-enable this once assets are bundled.
       {___assets_apple_touch_icon_png_len, ___assets_apple_touch_icon_png, cfg->outputDir / "apple-touch-icon.png"},
       {___assets_favicon_16x16_png_len, ___assets_favicon_16x16_png, cfg->outputDir / "favicon-16x16.png"},
       {___assets_favicon_32x32_png_len, ___assets_favicon_32x32_png, cfg->outputDir / "favicon-32x32.png"},
@@ -97,6 +99,7 @@ hdoc::serde::HTMLWriter::HTMLWriter(const hdoc::types::Index*  index,
       {___assets_auto_render_min_js_len, ___assets_auto_render_min_js, cfg->outputDir / "auto-render.min.js"},
       {___assets_highlight_min_js_len, ___assets_highlight_min_js, cfg->outputDir / "highlight.min.js"},
       {___assets_index_min_js_len, ___assets_index_min_js, cfg->outputDir / "index.min.js"},
+#endif
   };
 
   for (const auto& file : bundledFiles) {
@@ -170,7 +173,8 @@ static void printNewPage(const hdoc::types::Config&   cfg,
   auto aside      = CTML::Node("aside.column is-one-fifth");
   auto menuUL     = CTML::Node("ul.menu-list");
 
-  menuUL.AddChild(CTML::Node("p.is-size-4", cfg.projectName + (cfg.projectVersion == "" ? "" : " " + cfg.projectVersion)));
+  menuUL.AddChild(
+      CTML::Node("p.is-size-4", cfg.projectName + (cfg.projectVersion == "" ? "" : " " + cfg.projectVersion)));
   menuUL.AddChild(CTML::Node("p.menu-label", "Navigation"));
   menuUL.AddChild(CTML::Node("li").AddChild(CTML::Node("a", "Home").SetAttr("href", "index.html")));
   menuUL.AddChild(CTML::Node("li").AddChild(CTML::Node("a", "Search").SetAttr("href", "search.html")));

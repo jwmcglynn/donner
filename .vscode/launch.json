@@ -20,6 +20,17 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "hdoc_tests",
+      "program": "${workspaceFolder}/bazel-bin/external/hdoc/hdoc-tests",
+      "cwd": "${workspaceFolder}",
+      "args": [],
+      "sourceMap": {
+        ".": "${workspaceFolder}",
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "base_tests",
       "program": "${workspaceFolder}/bazel-bin/src/base/base_tests",
       "args": [

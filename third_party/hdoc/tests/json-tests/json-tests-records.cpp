@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "doctest.h"
+#include "doctest/doctest.h"
 #include "rapidjson/document.h"
 #include "rapidjson/prettywriter.h"
 

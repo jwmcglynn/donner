@@ -1,22 +1,48 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@donner//third_party:hdoc.bzl", "asset_to_cpp")
 
-cc_binary(
-    name = "hdoc",
+asset_to_cpp(
+    name = "hdoc-payload-schema",
+    src = "schemas/hdoc-payload-schema.json",
+    out = "hdoc-payload-schema.cpp",
+    variable_name = "___schemas_hdoc_payload_schema_json",
+)
+
+cc_library(
+    name = "hdoc_lib",
     srcs = [
-        "src/main.cpp",
         "src/frontend/Frontend.cpp",
         "src/indexer/Indexer.cpp",
         "src/indexer/MatcherUtils.cpp",
         "src/indexer/Matchers.cpp",
-        #"src/serde/HTMLWriter.cpp",
         "src/serde/JSONDeserializer.cpp",
         "src/serde/SerdeUtils.cpp",
         "src/serde/Serialization.cpp",
-        #"src/support/MarkdownConverter.cpp",
         "src/support/ParallelExecutor.cpp",
-        "src/support/StringUtils.cpp",
         "src/support/PathUtils.cpp",
-    ] + glob(["src/**/*.hpp"]),
+        "src/support/StringUtils.cpp",
+        ":hdoc-payload-schema",
+    ],
+    hdrs = [
+        "src/frontend/Frontend.hpp",
+        "src/indexer/Indexer.hpp",
+        "src/indexer/MatcherUtils.hpp",
+        "src/indexer/Matchers.hpp",
+        "src/serde/HTMLWriter.hpp",
+        "src/serde/JSONDeserializer.hpp",
+        "src/serde/JSONSerializer.hpp",
+        "src/serde/SerdeUtils.hpp",
+        "src/serde/Serialization.hpp",
+        "src/support/ParallelExecutor.hpp",
+        "src/support/PathUtils.hpp",
+        "src/support/StringUtils.hpp",
+        "src/types/Config.hpp",
+        "src/types/Index.hpp",
+        "src/types/SerializedMarkdownFile.hpp",
+        "src/types/Symbols.hpp",
+        "src/version.hpp",
+        "tests/TestUtils.hpp",
+    ],
     copts = select({
         "@platforms//os:macos": [],
         "//conditions:default": [
@@ -35,13 +61,8 @@ cc_binary(
             "-lstdc++",
         ],
     }),
-    visibility = ["//visibility:public"],
     deps = [
-        #"@cmark-gfm",
         "@argparse",
-        "@spdlog",
-        "@tomlplusplus",
-        "@rapidjson",
         "@llvm_toolchain_llvm//:lib_clangAST",
         "@llvm_toolchain_llvm//:lib_clangBasic",
         "@llvm_toolchain_llvm//:lib_clangFrontend",
@@ -50,5 +71,105 @@ cc_binary(
         "@llvm_toolchain_llvm//:lib_clangToolingCore",
         "@llvm_toolchain_llvm//:lib_clangToolingInclusions",
         "@llvm_toolchain_llvm//:libclang_include",
+        "@rapidjson",
+        "@spdlog",
+        "@tomlplusplus",
+    ],
+)
+
+cc_library(
+    name = "ctml",
+    hdrs = [
+        "subprojects/ctml/ctml.hpp",
+    ],
+    strip_include_prefix = "subprojects/ctml",
+)
+
+cc_library(
+    name = "html_output",
+    srcs = [
+        "src/serde/HTMLWriter.cpp",
+        "src/support/MarkdownConverter.cpp",
+    ],
+    hdrs = [
+        "src/serde/CppReferenceURLs.hpp",
+        "src/serde/HTMLWriter.hpp",
+        "src/support/MarkdownConverter.hpp",
+    ],
+    includes = ["src"],
+    deps = [
+        ":ctml",
+        ":hdoc_lib",
+        "@cmark-gfm",
+        "@llvm_toolchain_llvm//:lib_LLVMSupport",
+        "@llvm_toolchain_llvm//:lib_clangBasic",
+        "@llvm_toolchain_llvm//:lib_clangFormat",
+        "@llvm_toolchain_llvm//:libclang_include",
+        "@spdlog",
+    ],
+)
+
+cc_binary(
+    name = "hdoc",
+    srcs = [
+        "src/main.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":hdoc_lib",
+        ":html_output",
+    ],
+)
+
+cc_test(
+    name = "hdoc-tests",
+    srcs = [
+        "tests/TestUtils.cpp",
+        "tests/TestUtils.hpp",
+        "tests/hdoc-tests-main.cpp",
+        "tests/index-tests/test-comments-enums.cpp",
+        "tests/index-tests/test-comments-functions.cpp",
+        "tests/index-tests/test-comments-namespaces.cpp",
+        "tests/index-tests/test-comments-records.cpp",
+        "tests/index-tests/test-comments-templates.cpp",
+        "tests/index-tests/test-constructors.cpp",
+        "tests/index-tests/test-enums.cpp",
+        "tests/index-tests/test-functions.cpp",
+        "tests/index-tests/test-inheritance.cpp",
+        "tests/index-tests/test-namespaces.cpp",
+        "tests/index-tests/test-operators.cpp",
+        "tests/index-tests/test-records.cpp",
+        "tests/index-tests/test-templates.cpp",
+        "tests/index-tests/test-typedefs.cpp",
+        "tests/index-tests/test-unions.cpp",
+        "tests/json-tests/json-tests-enums.cpp",
+        "tests/json-tests/json-tests-functions.cpp",
+        "tests/json-tests/json-tests-namespaces.cpp",
+        "tests/json-tests/json-tests-records.cpp",
+        "tests/json-tests/json-tests-schema-validation.cpp",
+        "tests/unit-tests/test.cpp",
+    ],
+    copts = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "-stdlib=libstdc++",
+            "-D_GLIBCXX_USE_CXX11_ABI=1",
+        ],
+    }) + [
+        "-fno-rtti",
+    ],
+    linkopts = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "-stdlib=libstdc++",
+            "-lstdc++",
+        ],
+    }),
+    linkstatic = 1,
+    deps = [
+        ":hdoc_lib",
+        ":html_output",
+        "@doctest//doctest",
+        "@llvm_toolchain_llvm//:lib_clangFormat",
     ],
 )

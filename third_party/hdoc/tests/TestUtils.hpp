@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "doctest.h"
+#include "doctest/doctest.h"
 #include "types/Config.hpp"
 #include "types/Index.hpp"
 

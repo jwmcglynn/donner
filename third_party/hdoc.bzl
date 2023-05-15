@@ -1,6 +1,34 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 
+def _asset_to_cpp_impl(ctx):
+    # Run xxd -i to convert the input file to a C++ array.
+    optional_args = [
+        "-n",
+        ctx.attr.variable_name,
+    ] if ctx.attr.variable_name else []
+
+    ctx.actions.run(
+        inputs = [ctx.file.src],
+        outputs = [ctx.outputs.out],
+        executable = "xxd",
+        arguments = [
+            "-i",
+        ] + optional_args + [
+            ctx.file.src.path,
+            ctx.outputs.out.path,
+        ],
+    )
+
+asset_to_cpp = rule(
+    implementation = _asset_to_cpp_impl,
+    attrs = {
+        "src": attr.label(mandatory = True, allow_single_file = True),
+        "out": attr.output(mandatory = True),
+        "variable_name": attr.string(),
+    },
+)
+
 def hdoc_dependencies():
     """hdoc_dependencies defines the dependencies needed to build hdoc.
 
@@ -89,4 +117,19 @@ cc_library(
     defines = ["RAPIDJSON_HAS_STDSTRING"],
 )
         """,
+    )
+
+    maybe(
+        http_archive,
+        name = "doctest",
+        strip_prefix = "doctest-2.4.11",
+        urls = ["https://github.com/doctest/doctest/archive/v2.4.11.tar.gz"],
+    )
+
+    maybe(
+        http_archive,
+        name = "cmark-gfm",
+        strip_prefix = "cmark-gfm-0.29.0.gfm.11",
+        urls = ["https://github.com/github/cmark-gfm/archive/0.29.0.gfm.11.tar.gz"],
+        build_file = "//third_party:cmark-gfm.BUILD",
     )

@@ -8,7 +8,8 @@
 #include "rapidjson/stringbuffer.h"
 #include "spdlog/spdlog.h"
 
-extern uint8_t ___schemas_hdoc_payload_schema_json[];
+extern uint8_t      ___schemas_hdoc_payload_schema_json[];
+extern unsigned int ___schemas_hdoc_payload_schema_json_len;
 
 namespace hdoc {
 namespace serde {
@@ -32,12 +33,12 @@ std::optional<rapidjson::Document> JSONDeserializer::parseJSONToDocument() const
 }
 
 bool JSONDeserializer::validateJSON(const rapidjson::Document& inputJSON) const {
-#if 0
-  const std::string   schemaJSON = reinterpret_cast<char*>(___schemas_hdoc_payload_schema_json);
+  const std::string   schemaJSON(reinterpret_cast<char*>(___schemas_hdoc_payload_schema_json),
+                               ___schemas_hdoc_payload_schema_json_len);
   rapidjson::Document sd;
 
   if (sd.Parse(schemaJSON).HasParseError()) {
-    spdlog::error("JSON schema bundled with hdoc is not valid");
+    spdlog::error("JSON schema bundled with hdoc is not valid, error: {}", sd.GetParseError());
     return false;
   }
 
@@ -53,21 +54,18 @@ bool JSONDeserializer::validateJSON(const rapidjson::Document& inputJSON) const 
   }
 
   return true;
-#endif
-  // Not implemented
-  return true;
 }
 
 void JSONDeserializer::deserializeJSONPayload(const rapidjson::Document&                        inputJSON,
                                               hdoc::types::Index&                               idx,
                                               hdoc::types::Config&                              cfg,
                                               std::vector<hdoc::types::SerializedMarkdownFile>& mdFiles) const {
-  cfg.projectName          = inputJSON["config"]["projectName"].GetString();
-  cfg.timestamp            = inputJSON["config"]["timestamp"].GetString();
-  cfg.hdocVersion          = inputJSON["config"]["hdocVersion"].GetString();
-  cfg.gitRepoURL           = inputJSON["config"]["gitRepoURL"].GetString();
-  cfg.gitDefaultBranch     = inputJSON["config"]["gitDefaultBranch"].GetString();
-  cfg.binaryType           = static_cast<hdoc::types::BinaryType>(inputJSON["config"]["binaryType"].GetInt64());
+  cfg.projectName      = inputJSON["config"]["projectName"].GetString();
+  cfg.timestamp        = inputJSON["config"]["timestamp"].GetString();
+  cfg.hdocVersion      = inputJSON["config"]["hdocVersion"].GetString();
+  cfg.gitRepoURL       = inputJSON["config"]["gitRepoURL"].GetString();
+  cfg.gitDefaultBranch = inputJSON["config"]["gitDefaultBranch"].GetString();
+  cfg.binaryType       = static_cast<hdoc::types::BinaryType>(inputJSON["config"]["binaryType"].GetInt64());
 
   const auto functionsArray = inputJSON["index"]["functions"].GetArray();
   for (auto it = functionsArray.begin(); it != functionsArray.End(); it++) {
