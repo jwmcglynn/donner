@@ -11,7 +11,7 @@ def _asset_to_cpp_impl(ctx):
     ctx.actions.run(
         inputs = [ctx.file.src],
         outputs = [ctx.outputs.out],
-        executable = "xxd",
+        executable = ctx.executable._xxd,
         arguments = [
             "-i",
         ] + optional_args + [
@@ -26,6 +26,11 @@ asset_to_cpp = rule(
         "src": attr.label(mandatory = True, allow_single_file = True),
         "out": attr.output(mandatory = True),
         "variable_name": attr.string(),
+        "_xxd": attr.label(
+            executable = True,
+            default = "@donner//third_party/xxd",
+            cfg = "exec",
+        ),
     },
 )
 
