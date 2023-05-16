@@ -1,12 +1,63 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+# TODO(https://github.com/jwmcglynn/donner/issues/35): We must build hdoc and all dependencies with
+# these flags, since libclang's static libraries require libstdc++ and the donner default (libc++)
+# is not ABI compatible.
+#
+# This should be replaced with a config transition.
+LIBCLANG_COPTS = select({
+    "@platforms//os:macos": [],
+    "//conditions:default": [
+        "-stdlib=libstdc++",
+        "-D_GLIBCXX_USE_CXX11_ABI=1",
+    ],
+}) + [
+    "-fno-rtti",
+    "-std=c++20",
+]
+
+LIBCLANG_LINKOPTS = select({
+    "@platforms//os:macos": [],
+    "//conditions:default": [
+        "-stdlib=libstdc++",
+        "-lstdc++",
+    ],
+})
+
+def _sanitize_filename(filename):
+    """Returns a sanitized version of the given filename.
+
+    This is used to generate C++ symbols from filenames, so that they can be used as identifiers.
+    """
+    return "".join(
+        [ch if ch.isalnum() else "_" for ch in filename.elems()],
+    )
 
 def _asset_to_cpp_impl(ctx):
-    # Run xxd -i to convert the input file to a C++ array.
-    optional_args = [
-        "-n",
-        ctx.attr.variable_name,
-    ] if ctx.attr.variable_name else []
+    """Run `xxd -i` to convert the input file to a C array.
+
+    This is used to embed assets in the binary with the same symbols as hdoc's original Meson build
+    system.
+
+    For the given filename, an array will be defined based on the original filename, with all
+    non-alphanumeric characters replaced with underscore.
+
+    For example, `schemas/hdoc-payload-schema.json` will have two constants defined in the output
+    file:
+    - `___schemas_hdoc_payload_schema_json`
+    - `___schemas_hdoc_payload_schema_json_len`
+
+    To use them, add the following `extern` declarations to your code:
+
+    ```cpp
+    extern uint8_t      ___schemas_hdoc_payload_schema_json[];
+    extern unsigned int ___schemas_hdoc_payload_schema_json_len;
+    ```
+    """
+
+    variable_name = "___" + _sanitize_filename(ctx.file.src.short_path.removeprefix("../hdoc/"))
 
     ctx.actions.run(
         inputs = [ctx.file.src],
@@ -14,7 +65,8 @@ def _asset_to_cpp_impl(ctx):
         executable = ctx.executable._xxd,
         arguments = [
             "-i",
-        ] + optional_args + [
+            "-n",
+            variable_name,
             ctx.file.src.path,
             ctx.outputs.out.path,
         ],
@@ -25,7 +77,6 @@ asset_to_cpp = rule(
     attrs = {
         "src": attr.label(mandatory = True, allow_single_file = True),
         "out": attr.output(mandatory = True),
-        "variable_name": attr.string(),
         "_xxd": attr.label(
             executable = True,
             default = "@donner//third_party/xxd",
@@ -33,6 +84,33 @@ asset_to_cpp = rule(
         ),
     },
 )
+
+def bundle_assets(name, srcs, **kwargs):
+    """Create a cc_library containing the given assets, converted to C arrays with asset_to_cpp.
+
+    Args:
+        name: The name of the cc_library to create.
+        srcs: A list of filenames pointing to the assets to convert to C arrays.
+        **kwargs: Additional arguments to pass to cc_library.
+    """
+
+    assets = []
+    for src in srcs:
+        filename = _sanitize_filename(src)
+        asset_to_cpp(
+            name = name + "_" + filename,
+            src = src,
+            out = _sanitize_filename(src) + ".cpp",
+        )
+
+        assets.append(":" + name + "_" + filename)
+
+    cc_library(
+        name = name,
+        srcs = assets,
+        visibility = ["//visibility:public"],
+        **kwargs
+    )
 
 def hdoc_dependencies():
     """hdoc_dependencies defines the dependencies needed to build hdoc.
@@ -73,6 +151,7 @@ cc_library(
         urls = ["https://github.com/gabime/spdlog/archive/v1.9.2.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS")
 
 cc_library(
     name = "spdlog",
@@ -81,6 +160,8 @@ cc_library(
     strip_include_prefix = "include",
     visibility = ["//visibility:public"],
     defines = ["SPDLOG_COMPILED_LIB"],
+    copts = LIBCLANG_COPTS,
+    linkopts = LIBCLANG_LINKOPTS,
 )
         """,
     )
@@ -93,6 +174,7 @@ cc_library(
         urls = ["https://github.com/marzer/tomlplusplus/archive/v3.2.0.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS")
 
 cc_library(
     name = "tomlplusplus",
@@ -101,6 +183,8 @@ cc_library(
     strip_include_prefix = "include",
     visibility = ["//visibility:public"],
     defines = ["TOML_HEADER_ONLY=0"],
+    copts = LIBCLANG_COPTS,
+    linkopts = LIBCLANG_LINKOPTS,
 )
         """,
     )
@@ -113,6 +197,7 @@ cc_library(
         urls = ["https://github.com/Tencent/rapidjson/archive/27c3a8dc0e2c9218fe94986d249a12b5ed838f1d.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS")
 
 cc_library(
     name = "rapidjson",
@@ -120,6 +205,8 @@ cc_library(
     strip_include_prefix = "include",
     visibility = ["//visibility:public"],
     defines = ["RAPIDJSON_HAS_STDSTRING"],
+    copts = LIBCLANG_COPTS,
+    linkopts = LIBCLANG_LINKOPTS,
 )
         """,
     )

@@ -1,11 +1,10 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("@donner//third_party:hdoc.bzl", "asset_to_cpp")
+load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS", "asset_to_cpp", "bundle_assets")
 
 asset_to_cpp(
     name = "hdoc-payload-schema",
     src = "schemas/hdoc-payload-schema.json",
     out = "hdoc-payload-schema.cpp",
-    variable_name = "___schemas_hdoc_payload_schema_json",
 )
 
 cc_library(
@@ -43,24 +42,10 @@ cc_library(
         "src/version.hpp",
         "tests/TestUtils.hpp",
     ],
-    copts = select({
-        "@platforms//os:macos": [],
-        "//conditions:default": [
-            "-stdlib=libstdc++",
-            "-D_GLIBCXX_USE_CXX11_ABI=1",
-        ],
-    }) + [
-        "-fno-rtti",
-        "-std=c++20",
-    ],
+    copts = LIBCLANG_COPTS,
     includes = ["src"],
-    linkopts = select({
-        "@platforms//os:macos": [],
-        "//conditions:default": [
-            "-stdlib=libstdc++",
-            "-lstdc++",
-        ],
-    }),
+    linkopts = LIBCLANG_LINKOPTS,
+    linkstatic = 1,
     deps = [
         "@argparse",
         "@llvm_toolchain_llvm//:lib_clangAST",
@@ -85,6 +70,24 @@ cc_library(
     strip_include_prefix = "subprojects/ctml",
 )
 
+bundle_assets(
+    name = "html_assets",
+    srcs = [
+        "assets/apple-touch-icon.png",
+        "assets/auto-render.min.js",
+        "assets/favicon.ico",
+        "assets/favicon-16x16.png",
+        "assets/favicon-32x32.png",
+        "assets/highlight.min.js",
+        "assets/index.min.js",
+        "assets/katex.min.css",
+        "assets/katex.min.js",
+        "assets/search.js",
+        "assets/styles.css",
+        "assets/worker.js",
+    ],
+)
+
 cc_library(
     name = "html_output",
     srcs = [
@@ -96,10 +99,13 @@ cc_library(
         "src/serde/HTMLWriter.hpp",
         "src/support/MarkdownConverter.hpp",
     ],
+    copts = LIBCLANG_COPTS,
     includes = ["src"],
+    linkopts = LIBCLANG_LINKOPTS,
     deps = [
         ":ctml",
         ":hdoc_lib",
+        ":html_assets",
         "@cmark-gfm",
         "@llvm_toolchain_llvm//:lib_LLVMSupport",
         "@llvm_toolchain_llvm//:lib_clangBasic",
@@ -114,6 +120,8 @@ cc_binary(
     srcs = [
         "src/main.cpp",
     ],
+    copts = LIBCLANG_COPTS,
+    linkopts = LIBCLANG_LINKOPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":hdoc_lib",
@@ -149,22 +157,8 @@ cc_test(
         "tests/json-tests/json-tests-schema-validation.cpp",
         "tests/unit-tests/test.cpp",
     ],
-    copts = select({
-        "@platforms//os:macos": [],
-        "//conditions:default": [
-            "-stdlib=libstdc++",
-            "-D_GLIBCXX_USE_CXX11_ABI=1",
-        ],
-    }) + [
-        "-fno-rtti",
-    ],
-    linkopts = select({
-        "@platforms//os:macos": [],
-        "//conditions:default": [
-            "-stdlib=libstdc++",
-            "-lstdc++",
-        ],
-    }),
+    copts = LIBCLANG_COPTS,
+    linkopts = LIBCLANG_LINKOPTS,
     linkstatic = 1,
     deps = [
         ":hdoc_lib",
