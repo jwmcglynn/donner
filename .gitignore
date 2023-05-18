@@ -16,3 +16,6 @@ index.scip
 
 # macOS
 .DS_Store
+
+# Hdoc
+hdoc-payload.json

@@ -11,16 +11,23 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 ## Toolchain
 ##
 
-BAZEL_TOOLCHAIN_TAG = "0.8.2"
+# BAZEL_TOOLCHAIN_TAG = "0.8.2"
 
-BAZEL_TOOLCHAIN_SHA = "0fc3a2b0c9c929920f4bed8f2b446a8274cad41f5ee823fd3faa0d7641f20db0"
+# BAZEL_TOOLCHAIN_SHA = "0fc3a2b0c9c929920f4bed8f2b446a8274cad41f5ee823fd3faa0d7641f20db0"
 
-http_archive(
+# http_archive(
+#     name = "com_grail_bazel_toolchain",
+#     canonical_id = BAZEL_TOOLCHAIN_TAG,
+#     sha256 = BAZEL_TOOLCHAIN_SHA,
+#     strip_prefix = "bazel-toolchain-{tag}".format(tag = BAZEL_TOOLCHAIN_TAG),
+#     url = "https://github.com/grailbio/bazel-toolchain/archive/refs/tags/{tag}.tar.gz".format(tag = BAZEL_TOOLCHAIN_TAG),
+# )
+
+git_repository(
     name = "com_grail_bazel_toolchain",
-    canonical_id = BAZEL_TOOLCHAIN_TAG,
-    sha256 = BAZEL_TOOLCHAIN_SHA,
-    strip_prefix = "bazel-toolchain-{tag}".format(tag = BAZEL_TOOLCHAIN_TAG),
-    url = "https://github.com/grailbio/bazel-toolchain/archive/refs/tags/{tag}.tar.gz".format(tag = BAZEL_TOOLCHAIN_TAG),
+    #branch = "main",
+    commit = "84b0a84c4b79f4f4eb795c7dd5c808406f0b7bb7",
+    remote = "https://github.com/jwmcglynn/bazel-toolchain.git",
 )
 
 load("@com_grail_bazel_toolchain//toolchain:deps.bzl", "bazel_toolchain_dependencies")
@@ -240,3 +247,16 @@ pip_parse(
 load("@pip_deps//:requirements.bzl", "install_deps")
 
 install_deps()
+
+# hdoc
+
+new_local_repository(
+    name = "hdoc",
+    build_file = "third_party/BUILD.hdoc",
+    path = "third_party/hdoc",
+    workspace_file = "third_party/WORKSPACE.hdoc",
+)
+
+load("@//third_party:hdoc.bzl", "hdoc_dependencies")
+
+hdoc_dependencies()

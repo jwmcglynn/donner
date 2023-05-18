@@ -17,3 +17,8 @@ config_setting(
     },
     visibility = ["//visibility:public"],
 )
+
+exports_files(
+    [".hdoc.toml"],
+    visibility = ["//visibility:public"],
+)

@@ -110,12 +110,18 @@
     "__verbose_abort": "cpp",
     "expected": "cpp",
     "format": "cpp",
+    "rope": "cpp",
     "__std_stream": "cpp",
     "barrier": "cpp",
-    "strstream": "cpp"
+    "strstream": "cpp",
+    "slist": "cpp",
+    "__std_stream": "cpp",
+    "barrier": "cpp",
+    "strstream": "cpp",
   },
   "files.exclude": {
-    "bazel-*": true
+    "bazel-*": true,
+    "external/hdoc": true
   },
   "editor.tabSize": 2,
   // C++ extension settings
@@ -363,4 +369,48 @@
     "yellowgreen"
   ],
   "sourcegraph.url": "http://127.0.0.1:3080",
+  "peacock.color": "#42b883",
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "python.formatting.provider": "none",
+  "cSpell.ignorePaths": [
+    "package-lock.json",
+    "node_modules",
+    "vscode-extension",
+    ".git/objects",
+    ".vscode",
+    ".vscode-insiders",
+    "external",
+    "third_party"
+  ],
+  "cSpell.ignorePaths": [
+    "package-lock.json",
+    "node_modules",
+    "vscode-extension",
+    ".git/objects",
+    ".vscode",
+    ".vscode-insiders",
+    "external",
+    "third_party"
+  ],
+  "workbench.colorCustomizations": {
+    "activityBar.activeBackground": "#65c89b",
+    "activityBar.background": "#65c89b",
+    "activityBar.foreground": "#15202b",
+    "activityBar.inactiveForeground": "#15202b99",
+    "activityBarBadge.background": "#945bc4",
+    "activityBarBadge.foreground": "#e7e7e7",
+    "commandCenter.border": "#15202b99",
+    "sash.hoverBorder": "#65c89b",
+    "statusBar.background": "#42b883",
+    "statusBar.foreground": "#15202b",
+    "statusBarItem.hoverBackground": "#359268",
+    "statusBarItem.remoteBackground": "#42b883",
+    "statusBarItem.remoteForeground": "#15202b",
+    "titleBar.activeBackground": "#42b883",
+    "titleBar.activeForeground": "#15202b",
+    "titleBar.inactiveBackground": "#42b88399",
+    "titleBar.inactiveForeground": "#15202b99"
+  },
 }

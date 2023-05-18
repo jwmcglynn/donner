@@ -13,7 +13,7 @@ output_dir = "hdoc-output"
 
 [includes]
 paths = []
-use_system_includes = true
+use_system_includes = false
 
 [ignore]
 paths = [
@@ -23,3 +23,6 @@ paths = [
 
 [pages]
 homepage = "README.md"
+
+[debug]
+dump_json_payload = true
