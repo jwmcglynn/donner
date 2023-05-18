@@ -6,8 +6,8 @@
 namespace donner::css {
 
 std::vector<ComponentValue> ValueParser::Parse(std::string_view str) {
-  details::Tokenizer tokenizer_(str);
-  return details::parseListOfComponentValues(tokenizer_,
+  details::Tokenizer tokenizer(str);
+  return details::parseListOfComponentValues(tokenizer,
                                              details::WhitespaceHandling::TrimLeadingAndTrailing);
 }
 
