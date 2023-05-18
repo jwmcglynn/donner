@@ -4,7 +4,7 @@ To update to a newer version, run:
 bazel run //third_party/scip-clang:fetch_new_version -- <tag>
 
 # Example:
-bazel run //third_party/scip-clang:fetch_new_version -- 0.1.1
+bazel run //third_party/scip-clang:fetch_new_version -- v0.1.2
 ```
 
 ## Updating Sourcegraph Code Intelligence

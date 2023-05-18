@@ -15,6 +15,10 @@ SCIP_CLANG_VERSIONS = {
         "darwin": "832c1b2858b8be3665355407dd660590e31dc4cd96e508f98cc7df6ebcb80663",
         "linux": "3e2e5cc79cf27846de3d1157235f5651459063803f13b9c5713a07e997a0c465",
     },
+    "v0.1.2": {
+        "darwin": "a186e3afc3bb47d54f8df5a84b937f2f7b1d07f70569efee35317587bdf9b98b",
+        "linux": "be7c9660060f53042bd8d8a136d9176742c6eb2a76f807d97cd17fdf971f9eca",
+    },
 }
 
 def gen_scip_clang(name = "gen_scip_clang", version = VERSION):
