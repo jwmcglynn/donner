@@ -33,11 +33,16 @@ ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> 
                                            bool allowUserUnits) {
   if (components.size() == 1) {
     return ParseLengthPercentage(components.front(), allowUserUnits);
+  } else if (components.empty()) {
+    ParseError err;
+    err.reason = "Unexpected end of input";
+    err.offset = ParseError::kEndOfString;
+    return err;
   }
 
   ParseError err;
-  err.reason = "Unexpected end of input";
-  err.offset = ParseError::kEndOfString;
+  err.reason = "Unexpected token when parsing length or percentage";
+  err.offset = components[1].sourceOffset();
   return err;
 }
 

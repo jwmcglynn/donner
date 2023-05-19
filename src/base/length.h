@@ -2,6 +2,7 @@
 /// @file
 
 #include "src/base/box.h"
+#include "src/base/math_utils.h"
 #include "src/base/relative_length_metrics.h"
 
 namespace donner {
@@ -87,6 +88,33 @@ struct Length {
    */
   explicit Length(T value, Unit unit = Unit::None) : value(value), unit(unit) {}
 
+  /// Equality operator, using near-equals comparison for the value.
+  bool operator==(const Length& other) const {
+    if (unit != other.unit) {
+      return false;
+    }
+
+    return NearEquals(value, other.value);
+  }
+
+  /// Spaceship operator, first ordered by the unit if they are not the same, then by the value
+  /// (with a near-equals comparison).
+  bool operator<=>(const Length& other) const {
+    if (unit != other.unit) {
+      return unit <=> other.unit;
+    }
+    if (NearEquals(value, other.value)) {
+      return 0;
+    }
+    return value <=> other.value;
+  }
+
+  /// Returns true if the length is an absolute dimension (not a percentage or relative unit).
+  bool isAbsoluteSize() const {
+    return unit == Unit::None || unit == Unit::Cm || unit == Unit::Mm || unit == Unit::Q ||
+           unit == Unit::In || unit == Unit::Pc || unit == Unit::Pt || unit == Unit::Px;
+  }
+
   /**
    * Selects which extent of the viewbox to use for percentage and viewbox-relative length
    * conversions, see \ref toPixels().
@@ -96,12 +124,6 @@ struct Length {
     Y,     ///< Use Y component of viewbox for percentage calculations.
     Mixed  ///< Use diagonal extent of viewbox.
   };
-
-  /// Returns true if the length is an absolute dimension (not a percentage or relative unit).
-  bool isAbsoluteSize() const {
-    return unit == Unit::None || unit == Unit::Cm || unit == Unit::Mm || unit == Unit::Q ||
-           unit == Unit::In || unit == Unit::Pc || unit == Unit::Pt || unit == Unit::Px;
-  }
 
   /**
    * Convert the length to pixels, following the ratios at

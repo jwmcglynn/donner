@@ -34,15 +34,14 @@ cc_library(
 cc_test(
     name = "parser_tests",
     srcs = [
-        "tests/path_parser_tests.cc",
-        "tests/preserve_aspect_ratio_parser_tests.cc",
+        "tests/angle_parser_tests.cc",
         "tests/css_transform_parser_tests.cc",
+        "tests/length_percentage_parser_tests.cc",
+        "tests/path_parser_tests.cc",
+        "tests/points_list_parser_tests.cc",
+        "tests/preserve_aspect_ratio_parser_tests.cc",
         "tests/transform_parser_tests.cc",
         "tests/viewbox_parser_tests.cc",
-        "tests/points_list_parser_tests.cc",
-        "tests/angle_parser_tests.cc",
-        # TODO(https://github.com/jwmcglynn/donner/issues/7), add missing tests.
-        # TODO: length_percentage_parser_tests.cc
     ],
     deps = [
         ":parser",
