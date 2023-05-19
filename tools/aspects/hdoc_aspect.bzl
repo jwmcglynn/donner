@@ -338,6 +338,7 @@ def _hdoc_aspect_impl(target, ctx):
             OutputGroupInfo(
                 compdb_files = depset(transitive = all_compdb_files),
                 header_files = depset(transitive = all_header_files),
+                hdoc = depset(transitive = all_hdoc_files),
                 direct_src_files = [],
             ),
         ]
@@ -440,4 +441,44 @@ hdoc_aspect = aspect(
     toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
     implementation = _hdoc_aspect_impl,
     apply_to_generating_rules = True,
+)
+
+def _hdoc_generate_impl(ctx):
+    hdoc_deps = []
+    hdoc_files = []
+    for dep in ctx.attr.deps:
+        hdoc_deps.append(dep[OutputGroupInfo].hdoc)
+        hdoc_files += [
+            file.path
+            for file in dep[OutputGroupInfo].hdoc.to_list()
+        ]
+
+    output = ctx.actions.declare_directory("hdoc-output")
+
+    ctx.actions.run(
+        executable = ctx.executable._hdoc_exporter,
+        inputs = depset(
+            [ctx.file._hdoc_toml],
+            transitive = hdoc_deps,
+        ),
+        outputs = [output],
+        arguments = ["--verbose", "--output", output.path, "--config", ctx.file._hdoc_toml.path, "--input"] + hdoc_files,
+    )
+
+    return [DefaultInfo(files = depset([output]))]
+
+hdoc_generate = rule(
+    implementation = _hdoc_generate_impl,
+    attrs = {
+        "deps": attr.label_list(aspects = [hdoc_aspect]),
+        "_hdoc_exporter": attr.label(
+            default = Label("@hdoc//:hdoc-exporter"),
+            cfg = "exec",
+            executable = True,
+        ),
+        "_hdoc_toml": attr.label(
+            default = Label("//:.hdoc.toml"),
+            allow_single_file = True,
+        ),
+    },
 )

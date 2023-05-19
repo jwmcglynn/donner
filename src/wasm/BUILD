@@ -1,6 +1,6 @@
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load(":web_package.bzl", "web_package")
-load(":serve_http.bzl", "serve_http")
+load("//tools/http:serve_http.bzl", "serve_http")
 
 DEFAULT_EMSCRIPTEN_LINKOPTS = [
     "--bind",  # Compiles the source code using the Embind bindings to connect C/C++ and JavaScript
@@ -63,11 +63,6 @@ web_package(
     wasm_deps = [
         ":debugger_wasm",
     ],
-)
-
-py_binary(
-    name = "simple_webserver",
-    srcs = ["simple_webserver.py"],
 )
 
 serve_http(

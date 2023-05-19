@@ -1,39 +1,27 @@
 def _web_package_impl(ctx):
     output_dir = ctx.actions.declare_directory(ctx.attr.out if ctx.attr.out else ctx.attr.name)
-    outs = []
 
-    # Create the output directory if it doesn't exist
-    ctx.actions.run_shell(
-        inputs = [],
-        outputs = [output_dir],
-        command = "mkdir -p {}".format(output_dir.path),
-    )
+    commands = ["mkdir -p {}".format(output_dir.path)]
 
     # Copy files to the output directory
     for input_file in ctx.files.srcs:
-        output_path = output_dir.short_path + "/" + input_file.basename
-        output_file = ctx.actions.declare_file(output_path)
-        outs.append(output_file)
-
-        ctx.actions.run_shell(
-            inputs = [input_file],
-            outputs = [output_file],
-            command = "cp {} {}".format(input_file.path, output_file.path),
-        )
+        output_path = output_dir.path + "/" + input_file.basename
+        commands.append("cp {} {}".format(input_file.path, output_path))
 
     # Copy wasm files to the output directory
     for wasm_dep in ctx.files.wasm_deps:
-        output_path = output_dir.short_path + "/" + wasm_dep.basename
-        output_file = ctx.actions.declare_file(output_path)
-        outs.append(output_file)
+        output_path = output_dir.path + "/" + wasm_dep.basename
+        commands.append("cp {} {}".format(wasm_dep.path, output_path))
 
-        ctx.actions.run_shell(
-            inputs = [wasm_dep],
-            outputs = [output_file],
-            command = "cp {} {}".format(wasm_dep.path, output_file.path),
-        )
+    ctx.actions.run_shell(
+        inputs = ctx.files.srcs + ctx.files.wasm_deps,
+        outputs = [output_dir],
+        command = " && ".join(commands),
+    )
 
-    return [DefaultInfo(files = depset([output_dir], transitive = [depset(outs)]))]
+    return [DefaultInfo(
+        files = depset([output_dir]),
+    )]
 
 web_package = rule(
     implementation = _web_package_impl,

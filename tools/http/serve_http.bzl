@@ -7,7 +7,8 @@ def _serve_http_impl(ctx):
     # Create a shell script that runs the simple_webserver binary with the dir directory
     ctx.actions.write(script, "\n".join([
         "#!/bin/bash",
-        "{} --dir \"$(dirname {})\"".format(simple_webserver.short_path, dir.short_path),
+        "echo \"Directory {}\"".format(dir.path),
+        "{} --dir {}".format(simple_webserver.short_path, dir.short_path),
     ]), is_executable = True)
 
     # The datafile must be in the runfiles for the executable to see it.
@@ -19,8 +20,9 @@ serve_http = rule(
     implementation = _serve_http_impl,
     attrs = {
         "dir": attr.label(allow_files = True),
+        "subdir": attr.string(default = ""),
         "_simple_webserver": attr.label(
-            default = "//src/wasm:simple_webserver",
+            default = "//tools/http:simple_webserver",
             executable = True,
             cfg = "exec",
         ),

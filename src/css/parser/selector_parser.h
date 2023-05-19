@@ -27,7 +27,7 @@ public:
    * Parse CSS selector from a list of ComponentValues, see
    * https://www.w3.org/TR/selectors-4/#parse-selector.
    */
-  static ParseResult<Selector> Parse(std::span<const ComponentValue> components);
+  static ParseResult<Selector> ParseComponents(std::span<const ComponentValue> components);
 
   /**
    * Parse CSS selector from a string.

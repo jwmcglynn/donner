@@ -722,7 +722,7 @@ private:
   std::optional<ParseError> error_;
 };
 
-ParseResult<Selector> SelectorParser::Parse(std::span<const ComponentValue> components) {
+ParseResult<Selector> SelectorParser::ParseComponents(std::span<const ComponentValue> components) {
   SelectorParserImpl parser(components);
   return parser.parse();
 }
@@ -730,7 +730,7 @@ ParseResult<Selector> SelectorParser::Parse(std::span<const ComponentValue> comp
 ParseResult<Selector> SelectorParser::Parse(std::string_view str) {
   details::Tokenizer tokenizer_(str);
   std::vector<ComponentValue> components = details::parseListOfComponentValues(tokenizer_);
-  return Parse(components).mapError<Selector>([str](ParseError&& err) {
+  return ParseComponents(components).mapError<Selector>([str](ParseError&& err) {
     err.offset = err.resolveOffset(str);
     return std::move(err);
   });

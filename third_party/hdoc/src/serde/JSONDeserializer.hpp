@@ -21,6 +21,9 @@ public:
   /// if the JSON is malformed in the process.
   std::optional<rapidjson::Document> parseJSONToDocument() const;
 
+  /// Parse a file into a rapidjson::Document, checking if the JSON is malformed in the process.
+  std::optional<rapidjson::Document> parseJSONToDocument(const std::string& path) const;
+
   /// Validate inputJSON against hdoc's schema, which is bundled with the binary.
   bool validateJSON(const rapidjson::Document& inputJSON) const;
 

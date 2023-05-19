@@ -14,4 +14,8 @@ std::string serializeToJSON(const hdoc::types::Index& index, const hdoc::types::
 /// Returns true if the deserialization succeeded, and false if it didn't.
 bool deserializeFromJSON(hdoc::types::Index& index, hdoc::types::Config& cfg);
 
+/// @brief Deserializes a hdoc index fragment from a JSON string, merging with the existing index.
+/// Returns true if the deserialization succeeded, and false if it didn't.
+bool deserializeFromJSONFragment(hdoc::types::Index& index, hdoc::types::Config& cfg, const std::string& jsonFile);
+
 } // namespace hdoc::serde

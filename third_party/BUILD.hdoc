@@ -129,6 +129,20 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "hdoc-exporter",
+    srcs = [
+        "src/exporter-main.cpp",
+    ],
+    copts = LIBCLANG_COPTS,
+    linkopts = LIBCLANG_LINKOPTS,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":hdoc_lib",
+        ":html_output",
+    ],
+)
+
 cc_test(
     name = "hdoc-tests",
     srcs = [

@@ -13,7 +13,7 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
   for (auto&& rule : rules) {
     // If the rule is a QualifiedRule, then we need to parse the selector and add it to our list.
     if (QualifiedRule* qualifiedRule = std::get_if<QualifiedRule>(&rule.value)) {
-      auto selectorResult = SelectorParser::Parse(qualifiedRule->prelude);
+      auto selectorResult = SelectorParser::ParseComponents(qualifiedRule->prelude);
       // Ignore errors.
       if (selectorResult.hasError()) {
         continue;

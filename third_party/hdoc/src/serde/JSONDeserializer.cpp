@@ -15,14 +15,18 @@ namespace hdoc {
 namespace serde {
 
 std::optional<rapidjson::Document> JSONDeserializer::parseJSONToDocument() const {
+  return parseJSONToDocument("hdoc-payload.json");
+}
+
+std::optional<rapidjson::Document> JSONDeserializer::parseJSONToDocument(const std::string& path) const {
   rapidjson::Document         doc;
   std::string                 jsonContents;
-  const std::filesystem::path hdocPayloadPath = std::filesystem::path("hdoc-payload.json");
-  if (std::filesystem::exists(hdocPayloadPath) == false) {
+  const std::filesystem::path payloadPath = std::filesystem::path(path);
+  if (std::filesystem::exists(payloadPath) == false) {
     spdlog::error("hdoc-payload.json is missing from the current directory, unable to parse. Aborting.");
     return std::nullopt;
   }
-  slurpFile(hdocPayloadPath, jsonContents);
+  slurpFile(payloadPath, jsonContents);
 
   if (doc.Parse(jsonContents).HasParseError()) {
     spdlog::error("JSON payload has a parse error and is unreadable. Aborting.");
