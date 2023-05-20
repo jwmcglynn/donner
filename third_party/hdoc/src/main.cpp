@@ -36,11 +36,6 @@ int main(int argc, char** argv) {
   indexer.printStats();
   const hdoc::types::Index* index = indexer.dump();
 
-  for (const auto& id : getSortedIDs(map2vec(index->records), index->records)) {
-    const auto& c = index->records.entries.at(id);
-    std::cerr << c.name << std::endl;
-  }
-
 #if 0
   hdoc::serde::HTMLWriter htmlWriter(index, &cfg, pool);
   htmlWriter.printFunctions();

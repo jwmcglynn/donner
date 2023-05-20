@@ -142,6 +142,12 @@ int main(int argc, char** argv) {
 
   // Collect paths to markdown files
   cfg.homepage = std::filesystem::path(toml["pages"]["homepage"].value_or(""));
+  {
+    std::filesystem::path homepagePath(cfg.homepage);
+    if (std::filesystem::exists(homepagePath) == false || std::filesystem::is_regular_file(homepagePath) == false) {
+      spdlog::warn("A path to the homepage file in .hdoc.toml either doesn't exist or isn't a file, ignoring it.");
+    }
+  }
   if (const auto& mdPaths = toml["pages"]["paths"].as_array()) {
     for (const auto& md : *mdPaths) {
       std::string s = md.value_or(std::string(""));

@@ -71,6 +71,23 @@ void JSONDeserializer::deserializeJSONPayload(const rapidjson::Document&        
   cfg.gitDefaultBranch = inputJSON["config"]["gitDefaultBranch"].GetString();
   cfg.binaryType       = static_cast<hdoc::types::BinaryType>(inputJSON["config"]["binaryType"].GetInt64());
 
+  deserializeJSONPayloadFragment(inputJSON, idx, cfg, mdFiles);
+
+  const auto markdownFilesArray = inputJSON["markdownFiles"].GetArray();
+  for (auto it = markdownFilesArray.begin(); it != markdownFilesArray.End(); it++) {
+    hdoc::types::SerializedMarkdownFile mdFile;
+    auto                                json = it->GetObject();
+    mdFile.isHomepage                        = json["isHomepage"].GetBool();
+    mdFile.contents                          = json["contents"].GetString();
+    mdFile.filename                          = json["filename"].GetString();
+    mdFiles.emplace_back(mdFile);
+  }
+}
+
+void JSONDeserializer::deserializeJSONPayloadFragment(const rapidjson::Document&                        inputJSON,
+                                                      hdoc::types::Index&                               idx,
+                                                      hdoc::types::Config&                              cfg,
+                                                      std::vector<hdoc::types::SerializedMarkdownFile>& mdFiles) const {
   const auto functionsArray = inputJSON["index"]["functions"].GetArray();
   for (auto it = functionsArray.begin(); it != functionsArray.End(); it++) {
     hdoc::types::FunctionSymbol s = this->deserializeFunctionSymbol(*it);
@@ -97,16 +114,6 @@ void JSONDeserializer::deserializeJSONPayload(const rapidjson::Document&        
     hdoc::types::NamespaceSymbol s = this->deserializeNamespaceSymbol(*it);
     idx.namespaces.reserve(s.ID);
     idx.namespaces.update(s.ID, s);
-  }
-
-  const auto markdownFilesArray = inputJSON["markdownFiles"].GetArray();
-  for (auto it = markdownFilesArray.begin(); it != markdownFilesArray.End(); it++) {
-    hdoc::types::SerializedMarkdownFile mdFile;
-    auto                                json = it->GetObject();
-    mdFile.isHomepage                        = json["isHomepage"].GetBool();
-    mdFile.contents                          = json["contents"].GetString();
-    mdFile.filename                          = json["filename"].GetString();
-    mdFiles.emplace_back(mdFile);
   }
 }
 

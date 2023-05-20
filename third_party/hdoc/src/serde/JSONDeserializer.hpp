@@ -33,6 +33,14 @@ public:
                               hdoc::types::Index&                               idx,
                               hdoc::types::Config&                              cfg,
                               std::vector<hdoc::types::SerializedMarkdownFile>& mdFiles) const;
+
+  /// Deserialize inputJSON into hdoc's data structures, but only the data part, merging with a previous index.
+  /// This assumes the document has been validated.
+  void deserializeJSONPayloadFragment(const rapidjson::Document&                        inputJSON,
+                                      hdoc::types::Index&                               idx,
+                                      hdoc::types::Config&                              cfg,
+                                      std::vector<hdoc::types::SerializedMarkdownFile>& mdFiles) const;
+
   /// Deserialize a JSON value into a hdoc::types::Symbol
   void                         deserialize(hdoc::types::Symbol& base, const rapidjson::Value& obj) const;
   hdoc::types::FunctionSymbol  deserializeFunctionSymbol(const rapidjson::Value& obj) const;

@@ -458,7 +458,7 @@ def _hdoc_generate_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._hdoc_exporter,
         inputs = depset(
-            [ctx.file._hdoc_toml],
+            [ctx.file._hdoc_toml] + ctx.files.files,
             transitive = hdoc_deps,
         ),
         outputs = [output],
@@ -471,6 +471,7 @@ hdoc_generate = rule(
     implementation = _hdoc_generate_impl,
     attrs = {
         "deps": attr.label_list(aspects = [hdoc_aspect]),
+        "files": attr.label_list(allow_files = True),
         "_hdoc_exporter": attr.label(
             default = Label("@hdoc//:hdoc-exporter"),
             cfg = "exec",

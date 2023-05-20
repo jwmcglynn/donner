@@ -22,7 +22,17 @@ paths = [
 ]
 
 [pages]
-homepage = "README.md"
+homepage = "docs/about_donner.md"
+paths = [
+  "docs/architecture.md",
+  "docs/code_analysis.md",
+  "docs/coding_style.md",
+  "docs/ecs.md",
+  "docs/updating_Sourcegraph.md",
+  "docs/updating_WORKSPACE.md",
+  "docs/internal/building.md",
+  "docs/internal/fuzzing.md",
+]
 
 [debug]
 dump_json_payload = true

@@ -67,15 +67,16 @@ bool deserializeFromJSONFragment(hdoc::types::Index& index, hdoc::types::Config&
     return false;
   }
 
-  const bool passedSchemaValidation = jsonDeserializer.validateJSON(*doc);
+  /*const bool passedSchemaValidation = jsonDeserializer.validateJSON(*doc);
   if (passedSchemaValidation == false) {
     spdlog::error("JSON schema validation of the input JSON file failed. Aborting.");
     return false;
-  }
+  }*/
 
   std::vector<hdoc::types::SerializedMarkdownFile> serializedFiles;
   jsonDeserializer.deserializeJSONPayload(*doc, index, cfg, serializedFiles);
 
+#if 0
   if (serializedFiles.size() > 0) {
     std::filesystem::path markdownFilesDir = std::filesystem::path("hdoc-markdown-dump");
     std::filesystem::create_directories(markdownFilesDir);
@@ -93,6 +94,7 @@ bool deserializeFromJSONFragment(hdoc::types::Index& index, hdoc::types::Config&
       cfg.mdPaths.emplace_back(markdownFilesDir / f.filename);
     }
   }
+#endif
   return true;
 }
 
