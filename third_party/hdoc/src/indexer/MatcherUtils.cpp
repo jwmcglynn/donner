@@ -15,6 +15,7 @@
 #include "spdlog/spdlog.h"
 
 #include <filesystem>
+#include <optional>
 
 unsigned int getLineNumber(const clang::comments::Comment* comment, clang::ASTContext& ctx) {
   auto&                                  sm  = ctx.getSourceManager();
