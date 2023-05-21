@@ -15,11 +15,11 @@ enum class WhitespaceHandling { Keep, TrimLeadingAndTrailing };
 
 template <typename T, typename TokenType = Token>
 concept TokenizerLike = requires(T t) {
-                          { t.next() } -> std::same_as<TokenType>;
-                          { t.isEOF() } -> std::same_as<bool>;
-                        };
+  { t.next() } -> std::same_as<TokenType>;
+  { t.isEOF() } -> std::same_as<bool>;
+};
 
-static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
+[[maybe_unused]] static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
   if (startTokenIndex == Token::indexOf<Token::CurlyBracket>()) {
     return Token::indexOf<Token::CloseCurlyBracket>();
   } else if (startTokenIndex == Token::indexOf<Token::SquareBracket>()) {
@@ -168,18 +168,16 @@ concept DecayedSameAs = std::is_same_v<std::decay_t<T>, U>;
 
 template <typename T, typename ItemType>
 concept DeclarationTokenizerItem = requires(T t, ParseMode parseMode) {
-                                     { t.value } -> DecayedSameAs<ItemType>;
-                                     { t.offset() } -> std::same_as<size_t>;
-                                     {
-                                       t.asComponentValue(parseMode)
-                                       } -> std::same_as<ComponentValue>;
-                                   };
+  { t.value } -> DecayedSameAs<ItemType>;
+  { t.offset() } -> std::same_as<size_t>;
+  { t.asComponentValue(parseMode) } -> std::same_as<ComponentValue>;
+};
 
 template <typename T>
 concept DeclarationTokenizer = requires(T t) {
-                                 { t.next() } -> DeclarationTokenizerItem<typename T::ItemType>;
-                                 { t.isEOF() } -> std::same_as<bool>;
-                               };
+  { t.next() } -> DeclarationTokenizerItem<typename T::ItemType>;
+  { t.isEOF() } -> std::same_as<bool>;
+};
 
 template <TokenizerLike<Token> T>
 struct DeclarationTokenTokenizer {

@@ -11,7 +11,7 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":xml_details",
-        "//src/svg",
+        "//src/svg:svg_core",
         "//src/svg/parser",
         "@rapidxml_ns",
     ],

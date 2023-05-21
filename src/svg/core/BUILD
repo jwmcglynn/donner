@@ -19,6 +19,7 @@ cc_library(
     ],
     deps = [
         "//src/base",
+        "//src/css:core",
     ],
 )
 

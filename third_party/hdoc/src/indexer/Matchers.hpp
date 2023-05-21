@@ -7,6 +7,7 @@
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchersMacros.h"
 
+#include "support/PathUtils.hpp"
 #include "types/Config.hpp"
 #include "types/Index.hpp"
 
@@ -31,7 +32,7 @@ AST_MATCHER_P2(clang::Decl, shouldBeIgnored, std::vector<std::string>, ignoreLis
     return false;
   }
 
-  auto filename = std::filesystem::relative(std::filesystem::path(fileEntry->getName().str()), rootDir).string();
+  const std::string filename = hdoc::utils::pathToRelative(fileEntry->getName().str(), rootDir.string());
   for (const auto& substr : ignoreList) {
     if (filename.find(substr) != std::string::npos) {
       return true;

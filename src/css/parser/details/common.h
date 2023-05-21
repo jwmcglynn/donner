@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cctype>
 #include <string_view>
 #include <tuple>
@@ -20,7 +21,7 @@ static inline bool IsSurrogateCodepoint(char32_t ch) {
 }
 
 /// Returns true if the codepoint is a valid UTF-8 codepoint.
-static inline bool IsValidCodepoint(char32_t ch) {
+[[maybe_unused]] static inline bool IsValidCodepoint(char32_t ch) {
   return (ch <= kUnicodeMaximumAllowedCodepoint && !IsSurrogateCodepoint(ch));
 }
 
@@ -39,7 +40,7 @@ static inline int Utf8SequenceLength(char leadingCh) {
   }
 }
 
-static inline std::tuple<char32_t, int> Utf8NextCodepoint(std::string_view str) {
+[[maybe_unused]] static inline std::tuple<char32_t, int> Utf8NextCodepoint(std::string_view str) {
   const int codepointSize = Utf8SequenceLength(str[0]);
   if (codepointSize > str.size()) {
     return {kUnicodeReplacementCharacter, str.size()};

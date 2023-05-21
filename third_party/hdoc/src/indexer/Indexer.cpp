@@ -21,79 +21,6 @@ bool isChild(const hdoc::types::Symbol& ns, const hdoc::types::Symbol& s) {
   return s.parentNamespaceID.raw() == ns.ID.raw();
 }
 
-class ExecRootCompilationDatabase : public clang::tooling::CompilationDatabase {
-public:
-  ExecRootCompilationDatabase(std::unique_ptr<clang::tooling::JSONCompilationDatabase> DB, llvm::StringRef ExecRoot)
-      : DB(std::move(DB)), ExecRoot(ExecRoot) {}
-
-  std::vector<clang::tooling::CompileCommand> getCompileCommands(llvm::StringRef FilePath) const override {
-    // If FilePath starts with ExecRoot, replace it.
-    std::string filePathVar = FilePath.str();
-    {
-      size_t pos = filePathVar.find(ExecRoot);
-      if (pos != std::string::npos) {
-        filePathVar.replace(pos, ExecRoot.size(), "_EXEC_ROOT_");
-      }
-    }
-
-    spdlog::info("FilePath: {}", filePathVar);
-    const std::string searchString = "_EXEC_ROOT_";
-
-    auto Commands = DB->getCompileCommands(FilePath);
-    for (auto& Command : Commands) {
-      if (Command.Directory == searchString) {
-        Command.Directory = ExecRoot;
-        spdlog::info("Directory: {}", Command.Directory);
-      }
-
-      size_t pos = Command.Filename.find(searchString);
-      if (pos != std::string::npos) {
-        Command.Filename.replace(pos, searchString.size(), ExecRoot);
-      }
-    }
-    return Commands;
-  }
-
-  std::vector<std::string> getAllFiles() const override {
-    const std::string searchString = "_EXEC_ROOT_";
-
-    auto Files = DB->getAllFiles();
-    for (std::string& file : Files) {
-      size_t pos = file.find(searchString);
-      if (pos != std::string::npos) {
-        file.replace(pos, searchString.size(), ExecRoot);
-      }
-
-      spdlog::info("File: {}", file);
-    }
-
-    return Files;
-  }
-
-  std::vector<clang::tooling::CompileCommand> getAllCompileCommands() const override {
-    const std::string searchString = "_EXEC_ROOT_";
-
-    auto Commands = DB->getAllCompileCommands();
-    for (auto& Command : Commands) {
-      if (Command.Directory == "_EXEC_ROOT_") {
-        Command.Directory = ExecRoot;
-      }
-
-      size_t pos = Command.Filename.find(searchString);
-      if (pos != std::string::npos) {
-        Command.Filename.replace(pos, searchString.size(), ExecRoot);
-      }
-
-      spdlog::info("Directory1: {}", Command.Directory);
-    }
-    return Commands;
-  }
-
-private:
-  std::unique_ptr<clang::tooling::JSONCompilationDatabase> DB;
-  std::string                                              ExecRoot;
-};
-
 } // namespace
 
 void hdoc::indexer::Indexer::run() {
@@ -107,8 +34,6 @@ void hdoc::indexer::Indexer::run() {
     spdlog::error("Unable to initialize compilation database ({})", err);
     return;
   }
-
-  // const ExecRootCompilationDatabase cmpdb(std::move(rawCompdb), this->cfg->rootDir.string());
 
   hdoc::indexer::matchers::FunctionMatcher  FunctionFinder(&this->index, this->cfg);
   hdoc::indexer::matchers::RecordMatcher    RecordFinder(&this->index, this->cfg);
@@ -131,8 +56,6 @@ void hdoc::indexer::Indexer::run() {
     spdlog::info("Appending {} to list of include paths.", d);
     includePaths.emplace_back("-isystem" + d);
   }
-
-  std::cerr << "rootDirlast=" << this->cfg->rootDir << std::endl;
 
   hdoc::indexer::ParallelExecutor tool(*cmpdb,
                                        includePaths,

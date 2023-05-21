@@ -1,7 +1,7 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
-    name = "svg",
+    name = "svg_core",
     srcs = [
         "svg_circle_element.cc",
         "svg_defs_element.cc",
@@ -27,7 +27,6 @@ cc_library(
         "svg_use_element.cc",
     ],
     hdrs = [
-        "svg.h",
         "svg_circle_element.h",
         "svg_defs_element.h",
         "svg_document.h",
@@ -62,5 +61,23 @@ cc_library(
         "//src/svg/components",
         "//src/svg/core",
         "//src/svg/parser",
+    ],
+)
+
+cc_library(
+    name = "svg",
+    hdrs = [
+        "svg.h",
+    ],
+    visibility = [
+        "//:__pkg__",
+        "//src/svg/properties/tests:__pkg__",
+        "//src/svg/renderer:__subpackages__",
+        "//src/svg/tests:__pkg__",
+        "//src/svg/xml:__pkg__",
+    ],
+    deps = [
+        ":svg_core",
+        "//src/svg/xml",
     ],
 )

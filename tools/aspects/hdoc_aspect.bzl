@@ -107,8 +107,9 @@ def _is_objcpp_target(srcs):
 
 def _sources(ctx, target):
     srcs = []
-    if hasattr(ctx.rule.attr, "srcs"):
-        srcs += [f for src in ctx.rule.attr.srcs for f in src.files.to_list()]
+
+    #if hasattr(ctx.rule.attr, "srcs"):
+    #    srcs += [f for src in ctx.rule.attr.srcs for f in src.files.to_list()]
     if hasattr(ctx.rule.attr, "hdrs"):
         srcs += [f for src in ctx.rule.attr.hdrs for f in src.files.to_list()]
 
@@ -193,7 +194,7 @@ def _cc_compile_commands(ctx, target, feature_configuration, cc_toolchain):
             action_name = CPP_COMPILE_ACTION_NAME,
             variables = compile_variables,
         )
-        compile_flags.append("-x c++")  # Force language mode for header files.
+        compile_flags.append("-x c++-header")  # Force language mode for header files.
     else:
         compile_variables = cc_common.create_compile_variables(
             feature_configuration = feature_configuration,
@@ -302,7 +303,7 @@ def _rule_sources(ctx):
     srcs = []
     if hasattr(ctx.rule.attr, "srcs"):
         for src in ctx.rule.attr.srcs:
-            srcs += [src for src in src.files.to_list() if src.is_source]
+            srcs += [s for s in src.files.to_list() if s.is_source]
     return srcs
 
 def _hdoc_aspect_impl(target, ctx):
@@ -364,6 +365,11 @@ def _hdoc_aspect_impl(target, ctx):
     extra_includes = ["-isystem{}".format(d) for d in cc_toolchain.built_in_include_directories]
     extra_includes_str = " " + " ".join(extra_includes)
 
+    compiler = cc_common.get_tool_for_action(
+        feature_configuration = feature_configuration,
+        action_name = C_COMPILE_ACTION_NAME,
+    )
+
     srcs = []
     for compile_command in compile_commands:
         exec_root_marker = "_EXEC_ROOT_"
@@ -390,9 +396,20 @@ def _hdoc_aspect_impl(target, ctx):
         outputs = [hdoc_file],
         inputs = depset(
             [compdb_file, ctx.file._hdoc_toml],
-            transitive = [target[CcInfo].compilation_context.headers, depset(_rule_sources(ctx))],
+            transitive = [target[CcInfo].compilation_context.headers, depset(_rule_sources(ctx)), cc_toolchain.all_files],
         ),
-        arguments = [ctx.executable._hdoc.path, "--verbose", "--compile-commands", compdb_file.path, "--config", ctx.file._hdoc_toml.path, "--output", hdoc_file.path],
+        arguments = [
+            ctx.executable._hdoc.path,
+            "--verbose",
+            "--cxx",
+            compiler,
+            "--compile-commands",
+            compdb_file.path,
+            "--config",
+            ctx.file._hdoc_toml.path,
+            "--output",
+            hdoc_file.path,
+        ],
         progress_message = "Generating hdoc for " + ctx.label.name,
     )
 

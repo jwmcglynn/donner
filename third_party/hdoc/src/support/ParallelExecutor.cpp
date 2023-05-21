@@ -76,7 +76,7 @@ void hdoc::indexer::ParallelExecutor::execute(std::unique_ptr<clang::tooling::Fr
           Tool.appendArgumentsAdjuster(clang::tooling::getClangStripDependencyFileAdjuster());
           Tool.appendArgumentsAdjuster(clang::tooling::getClangSyntaxOnlyAdjuster());
           Tool.appendArgumentsAdjuster(clang::tooling::getInsertArgumentAdjuster(
-              this->includePaths, clang::tooling::ArgumentInsertPosition::END));
+              this->includePaths, clang::tooling::ArgumentInsertPosition::BEGIN));
 
           clang::TextDiagnosticPrinter stderrPrinter(llvm::errs(), new clang::DiagnosticOptions());
           Tool.setDiagnosticConsumer(&stderrPrinter);

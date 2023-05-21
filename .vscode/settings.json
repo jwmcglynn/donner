@@ -115,9 +115,8 @@
     "barrier": "cpp",
     "strstream": "cpp",
     "slist": "cpp",
-    "__std_stream": "cpp",
-    "barrier": "cpp",
-    "strstream": "cpp",
+    "csetjmp": "cpp",
+    "cuchar": "cpp"
   },
   "files.exclude": {
     "bazel-*": true,

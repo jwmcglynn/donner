@@ -13,13 +13,14 @@ output_dir = "hdoc-output"
 
 [includes]
 paths = []
-use_system_includes = false
+use_system_includes = true
 
 [ignore]
 paths = [
   "/third_party/",
   "/external/",
 ]
+ignore_private_members = true
 
 [pages]
 homepage = "docs/about_donner.md"

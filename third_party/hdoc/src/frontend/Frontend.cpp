@@ -33,6 +33,7 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
   program.add_argument("--compile-commands").help("Path to compile_commands.json file");
   program.add_argument("--output").help("Path to output file").default_value("hdoc-payload.json");
   program.add_argument("--config").help("Path to .hdoc.toml file");
+  program.add_argument("--cxx").help("Path to C++ compiler");
   //  program.add_argument("--oss").help("Show open source notices").default_value(false).implicit_value(true);
 
   // Parse command line arguments
@@ -65,7 +66,7 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
 
   // Check that the current directory contains a .hdoc.toml file
   cfg->rootDir = std::filesystem::current_path();
-  
+
   std::filesystem::path configFile;
   if (auto config = program.present<std::string>("--config")) {
     configFile = std::filesystem::path(*config);
@@ -80,6 +81,8 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
       return;
     }
   }
+
+  const std::optional<std::string> cxx = program.present<std::string>("--cxx");
 
   // Parse configuration file
   toml::table toml;
@@ -165,21 +168,28 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
     llvm::FileRemover tempFileRemove(tempFile);
 
     // Try to find the default system C++ compiler.
-    const auto compilerPath = llvm::sys::findProgramByName("c++");
-    if (!compilerPath) {
-      spdlog::error("Unable to find system default C++ compiler to find system includes.");
-      return;
+    llvm::StringRef compilerPath;
+    if (cxx) {
+      compilerPath = *cxx;
+    } else {
+      const auto maybeCompilerPath = llvm::sys::findProgramByName("c++");
+      if (!maybeCompilerPath) {
+        spdlog::error("Unable to find system default C++ compiler to find system includes.");
+        return;
+      }
+
+      compilerPath = *maybeCompilerPath;
     }
 
     // The following flags make the compiler dump its default include paths.
     // This works on all clang and gcc versions we've tried, but it might break with a more exotic compiler.
     // The actual output we care about goes to tempFile, and we use /dev/null as a stand-in for the file the compiler
     // reads.
-    llvm::SmallVector<llvm::StringRef> compilerFlags = {compilerPath.get(), "-E", "-Wp,-v", "-xc++", "/dev/null"};
+    llvm::SmallVector<llvm::StringRef> compilerFlags = {compilerPath, "-E", "-Wp,-v", "-xc++", "/dev/null"};
     llvm::Optional<llvm::StringRef>    redirects[]   = {llvm::None, {"/dev/null"}, {tempFile}}; // stdin, stdout, stderr
 
     std::string errMsg = "";
-    int rc = llvm::sys::ExecuteAndWait(compilerPath.get(), compilerFlags, llvm::None, redirects, 0, 0, &errMsg);
+    int         rc     = llvm::sys::ExecuteAndWait(compilerPath, compilerFlags, llvm::None, redirects, 0, 0, &errMsg);
     if (rc != 0) {
       spdlog::error("Failed to determine the system include paths ({}, {}).", rc, errMsg);
       return;
@@ -191,7 +201,7 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
       return;
     }
 
-    llvm::StringRef                    compilerOutput = buf->get()->getBuffer();
+    llvm::StringRef compilerOutput = buf->get()->getBuffer();
     llvm::SmallVector<llvm::StringRef> lines;
     compilerOutput.split(lines, "\n");
 
@@ -205,7 +215,12 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
       // If we have found the beginning of the include list, filter it to only lines that have include paths.
       if (searchListFound == true) {
         if (line.startswith(" ")) {
-          cfg->includePaths.emplace_back(std::string(line.trim()));
+          llvm::StringRef lineTrim = line.trim();
+          if (lineTrim.endswith(" (framework directory)")) {
+            lineTrim = lineTrim.drop_back(23);
+          }
+
+          cfg->includePaths.emplace_back(std::string(lineTrim));
         }
       }
 
