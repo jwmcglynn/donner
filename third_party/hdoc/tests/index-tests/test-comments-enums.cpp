@@ -54,7 +54,7 @@ TEST_CASE("Enum class decl with comments") {
   hdoc::types::EnumSymbol s = index.enums.entries.begin()->second;
   CHECK(s.name == "Foo");
   CHECK(s.briefComment == "");
-  CHECK(s.docComment == "aaa aaa aaa aaa bbb bbb bbb bbb");
+  CHECK(s.docComment == "aaa aaa aaa aaa\n\nbbb bbb bbb bbb");
   CHECK(s.ID.str().size() == 16);
   CHECK(s.parentNamespaceID.raw() == 0);
   CHECK(s.type == "enum class");
@@ -126,8 +126,10 @@ TEST_CASE("Enum class decl with long doc comment") {
   CHECK(s.name == "Foo");
   CHECK(s.briefComment == "foo bar baz");
   CHECK(
-      s.docComment ==
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut ultricies, elit non laoreet sodales, nibh velit lacinia nulla, ultricies finibus ex diam eget erat. Vestibulum mattis neque quis neque eleifend.");
+      s.docComment == R"(Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+Ut ultricies, elit non laoreet sodales, nibh velit lacinia
+nulla, ultricies finibus ex diam eget erat. Vestibulum mattis
+neque quis neque eleifend.)");
   CHECK(s.ID.str().size() == 16);
   CHECK(s.parentNamespaceID.raw() == 0);
   CHECK(s.type == "enum class");

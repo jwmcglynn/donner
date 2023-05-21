@@ -340,9 +340,10 @@ TEST_CASE("Function has math commands in function and parameter names") {
   hdoc::types::FunctionSymbol s = index.functions.entries.begin()->second;
   CHECK(s.name == "calculate2DEuclideanDistance");
   CHECK(s.briefComment == "");
-  CHECK(
-      s.docComment ==
-      R"(Calculate Euclidean distance in $\R^2$. Corresponds to the following formula: $$ d(x,y) = \sqrt{(x_2-x_1)^2 + (y_2-y_1)^2} $$)");
+  CHECK(s.docComment ==
+        R"(Calculate Euclidean distance in $\R^2$.
+Corresponds to the following formula:
+$$ d(x,y) = \sqrt{(x_2-x_1)^2 + (y_2-y_1)^2} $$)");
   CHECK(s.ID.str().size() == 16);
   CHECK(s.parentNamespaceID.raw() == 0);
 

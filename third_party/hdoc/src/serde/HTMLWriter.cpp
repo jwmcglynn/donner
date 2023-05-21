@@ -178,7 +178,6 @@ static void printNewPage(const hdoc::types::Config&   cfg,
   if (cfg.gitRepoURL != "") {
     menuUL.AddChild(CTML::Node("li").AddChild(CTML::Node("a", "Repository").SetAttr("href", cfg.gitRepoURL)));
   }
-  menuUL.AddChild(CTML::Node("li").AddChild(CTML::Node("a", "Made with hdoc").SetAttr("href", "https://hdoc.io")));
 
   // Add paths to markdown pages converted to HTML, if any were provided
   if (cfg.mdPaths.size() > 0) {
@@ -467,7 +466,8 @@ static void printFunction(const hdoc::types::FunctionSymbol& f,
     main.AddChild(CTML::Node("p", f.briefComment));
   }
   if (f.docComment != "") {
-    main.AddChild(CTML::Node("p", f.docComment));
+    auto converter = hdoc::utils::MarkdownConverter::fromString(f.docComment);
+    main.AddChild(CTML::Node("p").AddChild(converter.getHTMLNode()));
   }
   main.AddChild(getDeclaredAtNode(f, gitRepoURL, gitDefaultBranch));
 
@@ -691,7 +691,8 @@ void hdoc::serde::HTMLWriter::printRecord(const hdoc::types::RecordSymbol& c) co
     main.AddChild(CTML::Node("p", c.briefComment));
   }
   if (c.docComment != "") {
-    main.AddChild(CTML::Node("p", c.docComment));
+    auto converter = hdoc::utils::MarkdownConverter::fromString(c.docComment);
+    main.AddChild(CTML::Node("p").AddChild(converter.getHTMLNode()));
   }
   main.AddChild(getDeclaredAtNode(c, this->cfg->gitRepoURL, this->cfg->gitDefaultBranch));
 
@@ -1047,8 +1048,8 @@ void hdoc::serde::HTMLWriter::printProjectIndex() const {
 
   // If index markdown page was supplied, convert it to markdown and print it
   if (this->cfg->homepage != "") {
-    hdoc::utils::MarkdownConverter converter(this->cfg->homepage);
-    main = converter.getHTMLNode();
+    auto converter = hdoc::utils::MarkdownConverter::fromFile(this->cfg->homepage);
+    main           = converter.getHTMLNode();
   }
   // Otherwise, create a simple page with links to the documentation
   else {
@@ -1068,10 +1069,10 @@ void hdoc::serde::HTMLWriter::printProjectIndex() const {
 void hdoc::serde::HTMLWriter::processMarkdownFiles() const {
   for (const auto& f : this->cfg->mdPaths) {
     spdlog::info("Processing markdown file {}", f.string());
-    hdoc::utils::MarkdownConverter converter(f);
-    CTML::Node                     main      = converter.getHTMLNode();
-    std::string                    filename  = "doc" + f.filename().replace_extension("html").string();
-    std::string                    pageTitle = f.filename().stem().string();
+    auto        converter = hdoc::utils::MarkdownConverter::fromFile(f);
+    CTML::Node  main      = converter.getHTMLNode();
+    std::string filename  = "doc" + f.filename().replace_extension("html").string();
+    std::string pageTitle = f.filename().stem().string();
     printNewPage(*this->cfg, main, this->cfg->outputDir / filename, pageTitle);
   }
 }

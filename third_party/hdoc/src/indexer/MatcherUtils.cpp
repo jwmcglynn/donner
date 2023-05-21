@@ -16,6 +16,18 @@
 
 #include <filesystem>
 
+unsigned int getLineNumber(const clang::comments::Comment* comment, clang::ASTContext& ctx) {
+  auto&                                  sm  = ctx.getSourceManager();
+  std::pair<clang::FileID, unsigned int> loc = sm.getDecomposedLoc(comment->getBeginLoc());
+  return sm.getLineNumber(loc.first, loc.second);
+}
+
+unsigned int getEndLineNumber(const clang::comments::Comment* comment, clang::ASTContext& ctx) {
+  auto&                                  sm  = ctx.getSourceManager();
+  std::pair<clang::FileID, unsigned int> loc = sm.getDecomposedLoc(comment->getEndLoc());
+  return sm.getLineNumber(loc.first, loc.second);
+}
+
 /// When hdoc is run by multiple threads, we use a VFS (virtual file system) to access
 /// files safely. The working directory of the parser is changed during indexing, and
 /// other threads have no visibility of this. Consequently, canonical paths
@@ -304,6 +316,9 @@ std::string getCommandName(const unsigned& CommandID) {
 std::string getParaCommentContents(const clang::comments::Comment* comment, clang::ASTContext& ctx) {
   std::string text;
   bool        prevCommentWasDoxygenCommand = false;
+
+  std::optional<unsigned int> prevLine;
+
   for (auto c = comment->child_begin(); c != comment->child_end(); ++c) {
     if (const auto* icc = llvm::dyn_cast<clang::comments::InlineCommandComment>(*c)) {
       text += clang::Lexer::getSourceText(clang::CharSourceRange::getTokenRange(icc->getCommandNameRange()),
@@ -325,12 +340,27 @@ std::string getParaCommentContents(const clang::comments::Comment* comment, clan
     } else if (const auto* tc = llvm::dyn_cast<clang::comments::TextComment>(*c)) {
       if (!tc->isWhitespace()) {
         std::string current_text = tc->getText().str();
+
+        unsigned int precedingLines = 0;
+        {
+          const unsigned int line = getLineNumber(tc, ctx);
+          if (prevLine && line > *prevLine) {
+            precedingLines = line - *prevLine;
+          }
+
+          prevLine = getEndLineNumber(tc, ctx);
+        }
+
         hdoc::utils::ltrim(current_text); // Remove leading whitespace (indentation)
         if (c == comment->child_begin() || prevCommentWasDoxygenCommand == true) {
           text += current_text;
           prevCommentWasDoxygenCommand = false;
         } else {
-          text += " " + current_text; // Add a space if it isn't the first line of the comment
+          for (unsigned int i = 0; i < precedingLines; i++) {
+            text += "\n";
+          }
+
+          text += current_text;
         }
       }
     }
@@ -349,13 +379,50 @@ std::string getCommentContents(const clang::comments::Comment* comment, clang::A
 
 template <typename T>
 void processSymbolComment(T& sym, const clang::comments::Comment* comment, clang::ASTContext& ctx) {
+  std::optional<unsigned int> prevLine;
+
   for (auto c = comment->child_begin(); c != comment->child_end(); ++c) {
     // Top-level paragraph comment is typically function description
     if (const auto* paraComment = llvm::dyn_cast<clang::comments::ParagraphComment>(*c)) {
       if (paraComment->isWhitespace()) {
         continue;
       }
-      sym.docComment += getParaCommentContents(paraComment, ctx) + " ";
+
+      unsigned int precedingLines = 0;
+      {
+        const unsigned int line = getLineNumber(paraComment, ctx);
+        if (prevLine && line > *prevLine && !sym.docComment.empty()) {
+          precedingLines = line - *prevLine;
+        }
+      }
+      prevLine = getEndLineNumber(paraComment, ctx);
+
+      for (unsigned int i = 0; i < precedingLines; ++i) {
+        sym.docComment += "\n";
+      }
+
+      sym.docComment += getParaCommentContents(paraComment, ctx);
+    }
+
+    // Regions which are opened/closed with a tag, such as \htmlonly:
+    // ```
+    // \htmlonly
+    // <p>Some HTML</p>
+    // \endhtmlonly
+    // ```
+    //
+    // Which appear as a VerbatimBlockComment in the AST.
+    if (const auto* vb = llvm::dyn_cast<clang::comments::VerbatimBlockComment>(*c)) {
+      llvm::StringRef commandName = vb->getCommandName(ctx.getCommentCommandTraits());
+      if (commandName == "htmlonly") {
+        sym.docComment += "\n";
+        for (unsigned i = 0; i < vb->getNumLines(); ++i) {
+          sym.docComment += "\n";
+          sym.docComment += vb->getText(i).str();
+        }
+      } else {
+        spdlog::warn("Unhandled verbatim block comment: {}", commandName.str());
+      }
     }
 
     // Match function parameter names with params in FunctionSymbol
