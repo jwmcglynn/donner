@@ -17,6 +17,25 @@ public:
   }
 };
 
+/**
+ * Attaches a Markdown extension to a parser.
+ *
+ * @param parser Cmark parser object.
+ * @param extensionName Name of the extension to attach, e.g. "table". The core extensions can be found in
+ * https://github.com/github/cmark-gfm/tree/master/extensions.
+ * @return true if the extension was successfully attached, false otherwise.
+ */
+bool attachExtension(cmark_parser* parser, const char* extensionName) {
+  cmark_syntax_extension* extension = cmark_find_syntax_extension(extensionName);
+  if (extension) {
+    cmark_parser_attach_syntax_extension(parser, extension);
+    return true;
+  } else {
+    spdlog::warn("Unable to locate Markdown {} extension.", extensionName);
+    return false;
+  }
+}
+
 } // namespace
 
 hdoc::utils::MarkdownConverter hdoc::utils::MarkdownConverter::fromString(const std::string& mdString) {
@@ -34,13 +53,12 @@ hdoc::utils::MarkdownConverter hdoc::utils::MarkdownConverter::fromFile(const st
 hdoc::utils::MarkdownConverter::MarkdownConverter(const std::string& content, std::optional<std::string> mdPath) {
   static OneTimeInit oneTimeInit;
 
-  this->markdownParser                   = cmark_parser_new(CMARK_OPT_DEFAULT | CMARK_OPT_UNSAFE);
-  cmark_syntax_extension* tableExtension = cmark_find_syntax_extension("table");
-  if (tableExtension) {
-    cmark_parser_attach_syntax_extension(this->markdownParser, tableExtension);
-  } else {
-    spdlog::warn("Unable to locate Markdown table extension.");
-    return;
+  this->markdownParser = cmark_parser_new(CMARK_OPT_DEFAULT | CMARK_OPT_UNSAFE);
+
+  for (const char* extension : {"autolink", "strikethrough", "tagfilter", "tasklist", "table"}) {
+    if (!attachExtension(this->markdownParser, extension)) {
+      return;
+    }
   }
 
   // Parse the raw Markdown into nodes, and then render it into HTML.
