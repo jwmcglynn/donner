@@ -37,9 +37,10 @@ struct Config {
   bool                     ignorePrivateMembers = false; ///< Should private members of records be ignored?
   std::filesystem::path    homepage;                     ///< Path to "homepage" markdown file
   std::vector<std::filesystem::path> mdPaths;            ///< Paths to markdown pages
+  std::vector<std::filesystem::path> imagePaths;         ///< Paths to images
 
-  uint32_t    debugLimitNumIndexedFiles; ///< Limit the number of files to index (0 == index all files)
-  std::string outputFilename;            ///< Save JSON output to this file
+  uint32_t    debugLimitNumIndexedFiles;                 ///< Limit the number of files to index (0 == index all files)
+  std::string outputFilename;                            ///< Save JSON output to this file
 
   /// @brief Returns a string with the form "PROJECT_NAME PROJECT_VERSION documentation"
   /// if this->projectVersion has a value, otherwise returns "PROJECT_NAME documentation".

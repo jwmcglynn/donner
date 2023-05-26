@@ -34,7 +34,11 @@ exports_files(
 
 hdoc_generate(
     name = "hdoc",
-    files = glob(["docs/**/*.md"]),
+    files = glob([
+        "docs/**/*.md",
+        "docs/**/*.svg",
+        "docs/**/*.png",
+    ]),
     visibility = ["//visibility:public"],
     deps = [
         "//src/svg",

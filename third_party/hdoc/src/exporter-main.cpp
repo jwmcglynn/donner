@@ -160,7 +160,13 @@ int main(int argc, char** argv) {
         spdlog::warn("A path to a markdown file in .hdoc.toml either doesn't exist or isn't a file, ignoring it.");
         continue;
       }
-      cfg.mdPaths.emplace_back(mdPath);
+
+      // If this is a .md file, add it to the list of markdown files.  Otherwise add to the list of image files.
+      if (mdPath.extension() == ".md") {
+        cfg.mdPaths.emplace_back(mdPath);
+      } else {
+        cfg.imagePaths.emplace_back(mdPath);
+      }
     }
   }
 

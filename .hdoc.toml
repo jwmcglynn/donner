@@ -33,6 +33,8 @@ paths = [
   "docs/updating_WORKSPACE.md",
   "docs/internal/building.md",
   "docs/internal/fuzzing.md",
+  "docs/img/Donner - Container.svg",
+  "docs/img/Donner - System Context.svg"
 ]
 
 [debug]

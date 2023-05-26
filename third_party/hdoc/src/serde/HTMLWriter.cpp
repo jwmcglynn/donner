@@ -19,22 +19,6 @@
 #include "support/StringUtils.hpp"
 #include "types/Symbols.hpp"
 
-/// Implementation of to_string() for Clang member variable access specifier
-static std::string to_string(const clang::AccessSpecifier& access) {
-  switch (access) {
-  case clang::AccessSpecifier::AS_public:
-    return "public";
-  case clang::AccessSpecifier::AS_protected:
-    return "protected";
-  case clang::AccessSpecifier::AS_private:
-    return "private";
-  case clang::AccessSpecifier::AS_none:
-    return "none";
-  default:
-    return "unknown";
-  }
-}
-
 extern uint8_t      ___assets_styles_css[];
 extern uint8_t      ___assets_favicon_ico[];
 extern uint8_t      ___assets_favicon_32x32_png[];
@@ -59,6 +43,41 @@ extern unsigned int ___assets_katex_min_js_len;
 extern unsigned int ___assets_auto_render_min_js_len;
 extern unsigned int ___assets_highlight_min_js_len;
 extern unsigned int ___assets_index_min_js_len;
+
+namespace {
+
+/// Implementation of to_string() for Clang member variable access specifier
+std::string to_string(const clang::AccessSpecifier& access) {
+  switch (access) {
+  case clang::AccessSpecifier::AS_public:
+    return "public";
+  case clang::AccessSpecifier::AS_protected:
+    return "protected";
+  case clang::AccessSpecifier::AS_private:
+    return "private";
+  case clang::AccessSpecifier::AS_none:
+    return "none";
+  default:
+    return "unknown";
+  }
+}
+
+/**
+ * Create a directory if it doesn't exist, including all parent paths. If the directory already exists, this is a no-op.
+ */
+void ensureDirectoryExists(const std::filesystem::path& path) {
+  std::error_code ec;
+  if (!std::filesystem::exists(path)) {
+    if (!std::filesystem::create_directories(path, ec)) {
+      spdlog::error("Creation of directory {} failed with the following error message: '{}'. Exiting.",
+                    path.string(),
+                    ec.message());
+      std::exit(1);
+    }
+  }
+}
+
+} // namespace
 
 hdoc::serde::HTMLWriter::HTMLWriter(const hdoc::types::Index*  index,
                                     const hdoc::types::Config* cfg,
@@ -1074,5 +1093,18 @@ void hdoc::serde::HTMLWriter::processMarkdownFiles() const {
     std::string filename  = "doc" + f.filename().replace_extension("html").string();
     std::string pageTitle = f.filename().stem().string();
     printNewPage(*this->cfg, main, this->cfg->outputDir / filename, pageTitle);
+  }
+
+  // Copy imagePaths using std::filesystem.
+  for (const auto& f : this->cfg->imagePaths) {
+    ensureDirectoryExists(this->cfg->outputDir / f.parent_path());
+
+    spdlog::info("Copying image file {}", f.string());
+
+    std::error_code ec;
+    std::filesystem::copy(f, this->cfg->outputDir / f, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) {
+      spdlog::error("Failed to copy image file {}: {}", f.string(), ec.message());
+    }
   }
 }
