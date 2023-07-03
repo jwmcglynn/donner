@@ -94,9 +94,9 @@ http_archive(
 # https://github.com/google/re2/tree/abseil
 http_archive(
     name = "com_googlesource_code_re2",  # 2022-12-21T14:29:10Z
-    sha256 = "1d10e8f8746bb5cbd5ac8908b8e48da68598fb8fe2b7650bd7aff583d2ee06cd",
-    strip_prefix = "re2-2d39b703d02645076fead8fa409a1711f0e84381",
-    urls = ["https://github.com/google/re2/archive/2d39b703d02645076fead8fa409a1711f0e84381.zip"],
+    sha256 = "cea788ff034b09eae288098a645af2fc9b9715c78d1d656a4a1d2ab32a9273bc",
+    strip_prefix = "re2-1c1ffbe3c6b2bd26f65b1c1b7bc71d16ba162cf1",
+    urls = ["https://github.com/google/re2/archive/1c1ffbe3c6b2bd26f65b1c1b7bc71d16ba162cf1.zip"],
 )
 
 git_repository(
