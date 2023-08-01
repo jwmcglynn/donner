@@ -211,9 +211,9 @@ new_git_repository(
 
 http_archive(
     name = "emsdk",
-    sha256 = "96a46920b2483e69b9e828354e70bb414c2ce5f6f689e0998cc84feced11b45b",
-    strip_prefix = "emsdk-e28e47659cf095b5570aa58343d2245ede5d7322/bazel",
-    url = "https://github.com/emscripten-core/emsdk/archive/e28e47659cf095b5570aa58343d2245ede5d7322.tar.gz",
+    sha256 = "52763f556d08ba0c0cde1840102e1e5fcf828b98924c4e77f629ad1d7d400933",
+    strip_prefix = "emsdk-ef2a8e929d5337755e9b1d1e1d4ad859dc694eee/bazel",
+    url = "https://github.com/emscripten-core/emsdk/archive/ef2a8e929d5337755e9b1d1e1d4ad859dc694eee.tar.gz",
 )
 
 load("@emsdk//:deps.bzl", emsdk_deps = "deps")
