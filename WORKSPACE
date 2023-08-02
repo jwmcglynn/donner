@@ -78,7 +78,7 @@ git_repository(
 git_repository(
     name = "com_google_gtest",
     remote = "https://github.com/google/googletest",
-    tag = "v1.13.0",
+    tag = "v1.14.0",
 )
 
 # From the gtest v1.13.0 branch: https://github.com/google/googletest/blob/b796f7d44681514f58a683a3a71ff17c94edb0c1/WORKSPACE
