@@ -1,5 +1,18 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_setting")
+load("@donner//third_party:hdoc.bzl", "asset_to_cpp", "bundle_assets", "libclang_cc_binary", "libclang_cc_test", "require_libclang")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS", "asset_to_cpp", "bundle_assets")
+
+bool_setting(
+    name = "setting_libclang_build",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "libclang_build",
+    flag_values = {
+        ":setting_libclang_build": "true",
+    },
+)
 
 asset_to_cpp(
     name = "hdoc-payload-schema",
@@ -42,10 +55,9 @@ cc_library(
         "src/version.hpp",
         "tests/TestUtils.hpp",
     ],
-    copts = LIBCLANG_COPTS,
     includes = ["src"],
-    linkopts = LIBCLANG_LINKOPTS,
     linkstatic = 1,
+    target_compatible_with = require_libclang(),
     deps = [
         "@argparse",
         "@llvm_toolchain_llvm//:lib_clangAST",
@@ -99,9 +111,8 @@ cc_library(
         "src/serde/HTMLWriter.hpp",
         "src/support/MarkdownConverter.hpp",
     ],
-    copts = LIBCLANG_COPTS,
     includes = ["src"],
-    linkopts = LIBCLANG_LINKOPTS,
+    target_compatible_with = require_libclang(),
     deps = [
         ":ctml",
         ":hdoc_lib",
@@ -116,35 +127,43 @@ cc_library(
 )
 
 cc_binary(
-    name = "hdoc",
+    name = "hdoc-bin",
     srcs = [
         "src/main.cpp",
     ],
-    copts = LIBCLANG_COPTS,
-    linkopts = LIBCLANG_LINKOPTS,
-    visibility = ["//visibility:public"],
+    target_compatible_with = require_libclang(),
     deps = [
         ":hdoc_lib",
         ":html_output",
     ],
+)
+
+libclang_cc_binary(
+    name = "hdoc",
+    actual_binary = ":hdoc-bin",
+    visibility = ["//visibility:public"],
 )
 
 cc_binary(
-    name = "hdoc-exporter",
+    name = "hdoc-exporter-bin",
     srcs = [
         "src/exporter-main.cpp",
     ],
-    copts = LIBCLANG_COPTS,
-    linkopts = LIBCLANG_LINKOPTS,
-    visibility = ["//visibility:public"],
+    target_compatible_with = require_libclang(),
     deps = [
         ":hdoc_lib",
         ":html_output",
     ],
 )
 
+libclang_cc_binary(
+    name = "hdoc-exporter",
+    actual_binary = ":hdoc-exporter-bin",
+    visibility = ["//visibility:public"],
+)
+
 cc_test(
-    name = "hdoc-tests",
+    name = "hdoc-tests-bin",
     srcs = [
         "tests/TestUtils.cpp",
         "tests/TestUtils.hpp",
@@ -171,13 +190,17 @@ cc_test(
         "tests/json-tests/json-tests-schema-validation.cpp",
         "tests/unit-tests/test.cpp",
     ],
-    copts = LIBCLANG_COPTS,
-    linkopts = LIBCLANG_LINKOPTS,
     linkstatic = 1,
+    target_compatible_with = require_libclang(),
     deps = [
         ":hdoc_lib",
         ":html_output",
         "@doctest//doctest",
         "@llvm_toolchain_llvm//:lib_clangFormat",
     ],
+)
+
+libclang_cc_test(
+    name = "hdoc-tests",
+    actual_test = ":hdoc-tests-bin",
 )

@@ -16,7 +16,7 @@ RUN case "${TARGETPLATFORM}" in \
 #
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends software-properties-common libncurses5
+    && apt-get -y install --no-install-recommends software-properties-common libncurses-dev
 
 #
 # Install java

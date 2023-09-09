@@ -2,29 +2,96 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
-# TODO(https://github.com/jwmcglynn/donner/issues/35): We must build hdoc and all dependencies with
-# these flags, since libclang's static libraries require libstdc++ and the donner default (libc++)
-# is not ABI compatible.
-#
-# This should be replaced with a config transition.
-LIBCLANG_COPTS = select({
-    "@platforms//os:macos": [],
-    "//conditions:default": [
-        "-stdlib=libstdc++",
-        "-D_GLIBCXX_USE_CXX11_ABI=1",
-    ],
-}) + [
-    "-fno-rtti",
-    "-std=c++20",
-]
+def require_libclang():
+    return select({
+        "@hdoc//:libclang_build": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    })
 
-LIBCLANG_LINKOPTS = select({
-    "@platforms//os:macos": [],
-    "//conditions:default": [
-        "-stdlib=libstdc++",
-        "-lstdc++",
+def _libclang_transition_impl(settings, _attr):
+    cpu = settings["//command_line_option:cpu"]
+    is_apple = cpu.startswith("darwin_")
+
+    return {
+        "//command_line_option:cxxopt": ([] if is_apple else [
+            "-stdlib=libstdc++",
+            "-D_GLIBCXX_USE_CXX11_ABI=1",
+        ]) + [
+            "-fno-rtti",
+            "-std=c++20",
+        ],
+        "//command_line_option:linkopt": [] if is_apple else [
+            "-stdlib=libstdc++",
+            "-lstdc++",
+        ],
+        "@hdoc//:setting_libclang_build": True,
+    }
+
+_libclang_transition = transition(
+    implementation = _libclang_transition_impl,
+    inputs = ["//command_line_option:cpu"],
+    outputs = [
+        "//command_line_option:cxxopt",
+        "//command_line_option:linkopt",
+        "@hdoc//:setting_libclang_build",
     ],
-})
+)
+
+def _libclang_cc_binary_impl(ctx):
+    actual_binary = ctx.attr.actual_binary[0]
+    outfile = ctx.actions.declare_file(ctx.label.name)
+    cc_binary_outfile = actual_binary[DefaultInfo].files.to_list()[0]
+
+    ctx.actions.run_shell(
+        inputs = [cc_binary_outfile],
+        outputs = [outfile],
+        command = "cp %s %s" % (cc_binary_outfile.path, outfile.path),
+    )
+    return [
+        DefaultInfo(
+            executable = outfile,
+            data_runfiles = actual_binary[DefaultInfo].data_runfiles,
+        ),
+    ]
+
+libclang_cc_binary = rule(
+    implementation = _libclang_cc_binary_impl,
+    attrs = {
+        "actual_binary": attr.label(cfg = _libclang_transition),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+    executable = True,
+)
+
+def _libclang_cc_test_impl(ctx):
+    actual_test = ctx.executable.actual_test
+    outfile = ctx.actions.declare_file(ctx.label.name)
+
+    ctx.actions.run_shell(
+        inputs = [actual_test],
+        outputs = [outfile],
+        command = "cp %s %s" % (actual_test.path, outfile.path),
+    )
+    return [
+        DefaultInfo(
+            executable = outfile,
+            runfiles = ctx.attr.actual_test[0][DefaultInfo].default_runfiles,
+        ),
+    ]
+
+libclang_cc_test = rule(
+    implementation = _libclang_cc_test_impl,
+    attrs = {
+        "actual_test": attr.label(cfg = _libclang_transition, executable = True),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+    executable = True,
+    test = True,
+)
 
 def _sanitize_filename(filename):
     """Returns a sanitized version of the given filename.
@@ -151,7 +218,6 @@ cc_library(
         urls = ["https://github.com/gabime/spdlog/archive/v1.12.0.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS")
 
 cc_library(
     name = "spdlog",
@@ -160,8 +226,6 @@ cc_library(
     strip_include_prefix = "include",
     visibility = ["//visibility:public"],
     defines = ["SPDLOG_COMPILED_LIB"],
-    copts = LIBCLANG_COPTS,
-    linkopts = LIBCLANG_LINKOPTS,
 )
         """,
     )
@@ -174,7 +238,6 @@ cc_library(
         urls = ["https://github.com/marzer/tomlplusplus/archive/v3.3.0.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS")
 
 cc_library(
     name = "tomlplusplus",
@@ -183,8 +246,6 @@ cc_library(
     strip_include_prefix = "include",
     visibility = ["//visibility:public"],
     defines = ["TOML_HEADER_ONLY=0"],
-    copts = LIBCLANG_COPTS,
-    linkopts = LIBCLANG_LINKOPTS,
 )
         """,
     )
@@ -197,7 +258,6 @@ cc_library(
         urls = ["https://github.com/Tencent/rapidjson/archive/476ffa2fd272243275a74c36952f210267dc3088.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS")
 
 cc_library(
     name = "rapidjson",
@@ -205,8 +265,6 @@ cc_library(
     strip_include_prefix = "include",
     visibility = ["//visibility:public"],
     defines = ["RAPIDJSON_HAS_STDSTRING"],
-    copts = LIBCLANG_COPTS,
-    linkopts = LIBCLANG_LINKOPTS,
 )
         """,
     )
