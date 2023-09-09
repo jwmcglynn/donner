@@ -81,23 +81,9 @@ git_repository(
     tag = "v1.14.0",
 )
 
-# From the gtest v1.13.0 branch: https://github.com/google/googletest/blob/b796f7d44681514f58a683a3a71ff17c94edb0c1/WORKSPACE
-http_archive(
-    name = "com_google_absl",  # 2023-01-10T21:08:25Z
-    sha256 = "f9a4e749f42c386a32a90fddf0e2913ed408d10c42f7f33ccf4c59ac4f0d1d05",
-    strip_prefix = "abseil-cpp-52835439ca90d86b27bf8cd1708296e95604d724",
-    urls = ["https://github.com/abseil/abseil-cpp/archive/52835439ca90d86b27bf8cd1708296e95604d724.zip"],
-)
+load("@com_google_gtest//:googletest_deps.bzl", "googletest_deps")
 
-# From the gtest v1.13.0 branch: https://github.com/google/googletest/blob/b796f7d44681514f58a683a3a71ff17c94edb0c1/WORKSPACE
-# Note this must use a commit from the `abseil` branch of the RE2 project.
-# https://github.com/google/re2/tree/abseil
-http_archive(
-    name = "com_googlesource_code_re2",  # 2022-12-21T14:29:10Z
-    sha256 = "aeb2855ad3631b316086b4c32262409dad30679930b2c99e19618023cbe12bca",
-    strip_prefix = "re2-a807e8a3aac2cc33c77b7071efea54fcabe38e0c",
-    urls = ["https://github.com/google/re2/archive/a807e8a3aac2cc33c77b7071efea54fcabe38e0c.zip"],
-)
+googletest_deps()
 
 git_repository(
     name = "pixelmatch-cpp17",
