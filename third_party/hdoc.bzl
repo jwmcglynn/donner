@@ -192,9 +192,9 @@ cc_library(
     maybe(
         http_archive,
         name = "rapidjson",
-        sha256 = "558683755fc99c3dc7930f679b9f617af9d03dc600b7a79f6314ecf4cea18aac",
-        strip_prefix = "rapidjson-a95e013b97ca6523f32da23f5095fcc9dd6067e5",
-        urls = ["https://github.com/Tencent/rapidjson/archive/a95e013b97ca6523f32da23f5095fcc9dd6067e5.tar.gz"],
+        sha256 = "1249f4c57903330c47750674b3e412a5d6bef003cb672f3a20f9832342a83425",
+        strip_prefix = "rapidjson-476ffa2fd272243275a74c36952f210267dc3088",
+        urls = ["https://github.com/Tencent/rapidjson/archive/476ffa2fd272243275a74c36952f210267dc3088.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@donner//third_party:hdoc.bzl", "LIBCLANG_COPTS", "LIBCLANG_LINKOPTS")
