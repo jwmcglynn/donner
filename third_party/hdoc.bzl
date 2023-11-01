@@ -233,9 +233,9 @@ cc_library(
     maybe(
         http_archive,
         name = "tomlplusplus",
-        sha256 = "fc1a5eb410f3c67e90e5ad1264a1386d020067cfb01b633cc8c0441789aa6cf2",
-        strip_prefix = "tomlplusplus-3.3.0",
-        urls = ["https://github.com/marzer/tomlplusplus/archive/v3.3.0.tar.gz"],
+        sha256 = "8517f65938a4faae9ccf8ebb36631a38c1cadfb5efa85d9a72e15b9e97d25155",
+        strip_prefix = "tomlplusplus-3.4.0",
+        urls = ["https://github.com/marzer/tomlplusplus/archive/v3.4.0.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
