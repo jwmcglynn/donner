@@ -33,7 +33,7 @@ jobs:
       with:
         auth: ${{ secrets.GIST_SECRET }}
         gistID: 91f7f490a72af9c06506c8176729d218
-        filename: loc.json
+        filename: loc.svg
         label: Lines of Code
         message: ${{ env.CODE_LINES }}
         color: lightgrey
@@ -43,7 +43,7 @@ jobs:
       with:
         auth: ${{ secrets.GIST_SECRET }}
         gistID: 91f7f490a72af9c06506c8176729d218
-        filename: comments.json
+        filename: comments.svg
         label: Comments
         message: ${{ env.COMMENT_LINES }}
         color: green
