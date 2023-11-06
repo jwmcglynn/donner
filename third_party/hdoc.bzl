@@ -195,9 +195,9 @@ def hdoc_dependencies():
     maybe(
         http_archive,
         name = "argparse",
-        sha256 = "cd563293580b9dc592254df35b49cf8a19b4870ff5f611c7584cf967d9e6031e",
-        strip_prefix = "argparse-2.9",
-        urls = ["https://github.com/p-ranav/argparse/archive/refs/tags/v2.9.tar.gz"],
+        sha256 = "ba7b465759bb01069d57302855eaf4d1f7d677f21ad7b0b00b92939645c30f47",
+        strip_prefix = "argparse-3.0",
+        urls = ["https://github.com/p-ranav/argparse/archive/refs/tags/v3.0.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
