@@ -1,5 +1,9 @@
 exports_files([
-    "BUILD.nlohmann_json",
-    "BUILD.hdoc",
+    "BUILD.css-parsing-tests",
     "BUILD.cmark-gfm",
+    "BUILD.frozen",
+    "BUILD.hdoc",
+    "BUILD.nlohmann_json",
+    "BUILD.rapidxml_ns",
+    "WORKSPACE.hdoc",
 ])
