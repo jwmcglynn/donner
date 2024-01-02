@@ -197,9 +197,9 @@ new_git_repository(
 
 http_archive(
     name = "emsdk",
-    sha256 = "6615d8a4b98f4fc1e6107878b7f65828b2c07649d8b0dc1e661b83bb6ddf7ca3",
-    strip_prefix = "emsdk-d42c740aa51b961d6e18b649754d2cae8807a277/bazel",
-    url = "https://github.com/emscripten-core/emsdk/archive/d42c740aa51b961d6e18b649754d2cae8807a277.tar.gz",
+    sha256 = "746ab9ab1be6236800c2ecc92aa19ff359c80e4c7dc8a99f78a563877b6331e9",
+    strip_prefix = "emsdk-9347bc393b94a17b93450bbc98bc3f66cef2aeb0/bazel",
+    url = "https://github.com/emscripten-core/emsdk/archive/9347bc393b94a17b93450bbc98bc3f66cef2aeb0.tar.gz",
 )
 
 load("@emsdk//:deps.bzl", emsdk_deps = "deps")
@@ -209,7 +209,7 @@ emsdk_deps()
 load("@emsdk//:emscripten_deps.bzl", emsdk_emscripten_deps = "emscripten_deps")
 
 # Version should match "latest-arm64-linux" in https://github.com/emscripten-core/emsdk/blob/main/emscripten-releases-tags.json
-emsdk_emscripten_deps(emscripten_version = "3.1.33")
+emsdk_emscripten_deps(emscripten_version = "3.1.47")
 
 load("@emsdk//:toolchains.bzl", "register_emscripten_toolchains")
 
