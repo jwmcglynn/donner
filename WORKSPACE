@@ -76,16 +76,6 @@ git_repository(
 ##
 
 git_repository(
-    name = "com_google_gtest",
-    remote = "https://github.com/google/googletest",
-    tag = "v1.14.0",
-)
-
-load("@com_google_gtest//:googletest_deps.bzl", "googletest_deps")
-
-googletest_deps()
-
-git_repository(
     name = "pixelmatch-cpp17",
     branch = "main",
     remote = "https://github.com/jwmcglynn/pixelmatch-cpp17",

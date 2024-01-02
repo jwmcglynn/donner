@@ -4,3 +4,12 @@
 #
 # For more details, please check https://github.com/bazelbuild/bazel/issues/18958
 ###############################################################################
+
+"""Donner is a modern C++20 SVG rendering library which intends to provide easily
+embeddable SVG support into apps and games, enabling browser-level functionalit
+ without the browser."""
+
+module(name = "donner")
+
+bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.14.0.bcr.1", dev_dependency = True)
+bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20230125.1")
