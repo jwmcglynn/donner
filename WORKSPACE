@@ -93,13 +93,13 @@ git_repository(
 
 new_local_repository(
     name = "css-parsing-tests",
-    build_file = "third_party/BUILD.css-parsing-tests",
+    build_file = "//third_party:BUILD.css-parsing-tests",
     path = "third_party/css-parsing-tests",
 )
 
 new_local_repository(
     name = "rapidxml_ns",
-    build_file = "third_party/BUILD.rapidxml_ns",
+    build_file = "//third_party:BUILD.rapidxml_ns",
     path = "third_party/rapidxml_ns",
 )
 
@@ -111,7 +111,7 @@ git_repository(
 
 new_local_repository(
     name = "frozen",
-    build_file = "third_party/BUILD.frozen",
+    build_file = "//third_party:BUILD.frozen",
     path = "third_party/frozen",
 )
 
@@ -238,9 +238,9 @@ install_deps()
 
 new_local_repository(
     name = "hdoc",
-    build_file = "third_party/BUILD.hdoc",
+    build_file = "//third_party:BUILD.hdoc",
     path = "third_party/hdoc",
-    workspace_file = "third_party/WORKSPACE.hdoc",
+    workspace_file = "//third_party:WORKSPACE.hdoc",
 )
 
 load("@//third_party:hdoc.bzl", "hdoc_dependencies")

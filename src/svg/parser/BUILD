@@ -4,6 +4,7 @@ load("//build_defs:rules.bzl", "donner_cc_fuzzer")
 cc_library(
     name = "parser",
     srcs = [
+        "angle_parser.cc",
         "css_transform_parser.cc",
         "length_percentage_parser.cc",
         "path_parser.cc",
