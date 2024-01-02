@@ -3,7 +3,6 @@ exports_files([
     "BUILD.cmark-gfm",
     "BUILD.frozen",
     "BUILD.hdoc",
-    "BUILD.nlohmann_json",
     "BUILD.rapidxml_ns",
     "WORKSPACE.hdoc",
 ])

@@ -105,19 +105,6 @@ new_local_repository(
     path = "third_party/frozen",
 )
 
-new_git_repository(
-    name = "nlohmann_json",
-    build_file = "@//third_party:BUILD.nlohmann_json",
-    remote = "https://github.com/nlohmann/json",
-    tag = "v3.9.1",
-)
-
-git_repository(
-    name = "bazel_skylib",
-    commit = "560d7b2359aecb066d81041cb532b82d7354561b",
-    remote = "https://github.com/bazelbuild/bazel-skylib",
-)
-
 git_repository(
     name = "range-v3",
     branch = "master",

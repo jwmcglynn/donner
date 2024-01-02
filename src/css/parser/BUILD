@@ -72,7 +72,7 @@ cc_test(
     deps = [
         ":parser",
         "@com_google_gtest//:gtest_main",
-        "@nlohmann_json",
+        "@nlohmann_json//:json",
     ],
 )
 
