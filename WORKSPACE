@@ -209,7 +209,7 @@ emsdk_deps()
 load("@emsdk//:emscripten_deps.bzl", emsdk_emscripten_deps = "emscripten_deps")
 
 # Version should match "latest-arm64-linux" in https://github.com/emscripten-core/emsdk/blob/main/emscripten-releases-tags.json
-emsdk_emscripten_deps(emscripten_version = "3.1.33")
+emsdk_emscripten_deps(emscripten_version = "3.1.47")
 
 load("@emsdk//:toolchains.bzl", "register_emscripten_toolchains")
 
