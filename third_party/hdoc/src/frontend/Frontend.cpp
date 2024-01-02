@@ -13,7 +13,7 @@
 
 #include "argparse/argparse.hpp"
 #include "spdlog/spdlog.h"
-#include "toml++/toml.h"
+#include "toml++/toml.hpp"
 #include "version.hpp"
 
 #include "llvm/Support/FileSystem.h"
@@ -201,7 +201,7 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
       return;
     }
 
-    llvm::StringRef compilerOutput = buf->get()->getBuffer();
+    llvm::StringRef                    compilerOutput = buf->get()->getBuffer();
     llvm::SmallVector<llvm::StringRef> lines;
     compilerOutput.split(lines, "\n");
 

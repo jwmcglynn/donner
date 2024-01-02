@@ -241,7 +241,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
     name = "tomlplusplus",
-    hdrs = glob(["include/**/*.h", "include/**/*.inl"]),
+    hdrs = glob(["include/**/*.h", "include/**/*.hpp", "include/**/*.inl"]),
     srcs = glob(["src/**/*.cpp"]),
     strip_include_prefix = "include",
     visibility = ["//visibility:public"],
