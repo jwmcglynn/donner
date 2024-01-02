@@ -12,7 +12,7 @@
 
 #include "argparse/argparse.hpp"
 #include "spdlog/spdlog.h"
-#include "toml++/toml.h"
+#include "toml++/toml.hpp"
 #include "version.hpp"
 
 #include <iostream>
