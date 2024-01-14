@@ -53,6 +53,7 @@ wasm_cc_binary(
         "debugger_bin.js",
         "debugger_bin.wasm",
     ],
+    tags = ["wasm"],
 )
 
 web_package(
@@ -60,6 +61,7 @@ web_package(
     srcs = [
         "index.html",
     ],
+    tags = ["wasm"],
     wasm_deps = [
         ":debugger_wasm",
     ],
@@ -68,4 +70,5 @@ web_package(
 serve_http(
     name = "serve_http",
     dir = ":debugger_web_package",
+    tags = ["wasm"],
 )

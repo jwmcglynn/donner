@@ -39,6 +39,9 @@ hdoc_generate(
         "docs/**/*.svg",
         "docs/**/*.png",
     ]),
+    tags = [
+        "docs",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//src/svg",
@@ -50,4 +53,7 @@ hdoc_generate(
 serve_http(
     name = "hdoc_serve",
     dir = ":hdoc",
+    tags = [
+        "docs",
+    ],
 )

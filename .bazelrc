@@ -6,6 +6,9 @@ build --enable_platform_specific_config
 build --features=-libtool
 build --host_features=-libtool
 
+# Disable docs and wasm by default.
+build --build_tag_filters=-docs,-wasm
+
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 
