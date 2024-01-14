@@ -11,20 +11,6 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 ## Bazel and IntelliSense
 ##
 
-# Hedron's Compile Commands Extractor for Bazel
-# https://github.com/hedronvision/bazel-compile-commands-extractor
-git_repository(
-    name = "hedron_compile_commands",
-    # branch = "main",
-    commit = "b33a4b05c2287372c8e932c55ff4d3a37e6761ed",
-    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
-    shallow_since = "1638167585 -0800",
-)
-
-load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
-
-hedron_compile_commands_setup()
-
 ## Developer tools
 
 git_repository(
