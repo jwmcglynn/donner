@@ -1,5 +1,11 @@
 build --enable_platform_specific_config
 
+# Tell Bazel to pass the right flags for llvm-ar, not libtool. Only needed if you are building on darwin.
+# See https://github.com/bazelbuild/bazel/blob/5c75d0acec21459bbb13520817e3806e1507e907/tools/cpp/unix_cc_toolchain_config.bzl#L1000-L1024
+# Context: https://github.com/grailbio/bazel-toolchain/issues/238
+build --features=-libtool
+build --host_features=-libtool
+
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 

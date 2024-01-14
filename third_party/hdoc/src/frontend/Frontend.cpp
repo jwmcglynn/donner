@@ -186,10 +186,10 @@ hdoc::frontend::Frontend::Frontend(int argc, char** argv, hdoc::types::Config* c
     // The actual output we care about goes to tempFile, and we use /dev/null as a stand-in for the file the compiler
     // reads.
     llvm::SmallVector<llvm::StringRef> compilerFlags = {compilerPath, "-E", "-Wp,-v", "-xc++", "/dev/null"};
-    llvm::Optional<llvm::StringRef>    redirects[]   = {llvm::None, {"/dev/null"}, {tempFile}}; // stdin, stdout, stderr
+    std::optional<llvm::StringRef>     redirects[] = {std::nullopt, {"/dev/null"}, {tempFile}}; // stdin, stdout, stderr
 
     std::string errMsg = "";
-    int         rc     = llvm::sys::ExecuteAndWait(compilerPath, compilerFlags, llvm::None, redirects, 0, 0, &errMsg);
+    int         rc     = llvm::sys::ExecuteAndWait(compilerPath, compilerFlags, std::nullopt, redirects, 0, 0, &errMsg);
     if (rc != 0) {
       spdlog::error("Failed to determine the system include paths ({}, {}).", rc, errMsg);
       return;
