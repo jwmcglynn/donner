@@ -1,6 +1,6 @@
 {
   "lockFileVersion": 3,
-  "moduleFileHash": "f382b90718b695c1793a1429a802e21689614c12827ccde972eb8f1a362ecf20",
+  "moduleFileHash": "4b94c0bab70c14642d41ef813f919771ccd5ebf55f6fdeb1c773969f9dc11f5a",
   "flags": {
     "cmdRegistries": [
       "https://bcr.bazel.build/"
@@ -32,7 +32,7 @@
           "usingModule": "<root>",
           "location": {
             "file": "@@//:MODULE.bazel",
-            "line": 40,
+            "line": 54,
             "column": 21
           },
           "imports": {
@@ -50,7 +50,7 @@
               "devDependency": false,
               "location": {
                 "file": "@@//:MODULE.bazel",
-                "line": 42,
+                "line": 56,
                 "column": 15
               }
             }
@@ -65,6 +65,8 @@
         "com_google_absl": "abseil-cpp@20230802.0",
         "com_google_gtest": "googletest@1.14.0.bcr.1",
         "nlohmann_json": "nlohmann_json@3.11.3",
+        "pixelmatch-cpp17": "pixelmatch-cpp17@_",
+        "stb": "stb@_",
         "rules_go": "rules_go@0.44.2",
         "toolchains_llvm": "toolchains_llvm@_",
         "zstd": "zstd@1.5.5",
@@ -248,6 +250,33 @@
           },
           "remote_patch_strip": 0
         }
+      }
+    },
+    "pixelmatch-cpp17@_": {
+      "name": "pixelmatch-cpp17",
+      "version": "",
+      "key": "pixelmatch-cpp17@_",
+      "repoName": "pixelmatch-cpp17",
+      "executionPlatformsToRegister": [],
+      "toolchainsToRegister": [],
+      "extensionUsages": [],
+      "deps": {
+        "rules_cc": "rules_cc@0.0.9",
+        "bazel_tools": "bazel_tools@_",
+        "local_config_platform": "local_config_platform@_"
+      }
+    },
+    "stb@_": {
+      "name": "stb",
+      "version": "",
+      "key": "stb@_",
+      "repoName": "stb",
+      "executionPlatformsToRegister": [],
+      "toolchainsToRegister": [],
+      "extensionUsages": [],
+      "deps": {
+        "bazel_tools": "bazel_tools@_",
+        "local_config_platform": "local_config_platform@_"
       }
     },
     "rules_go@0.44.2": {

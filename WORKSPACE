@@ -23,12 +23,6 @@ git_repository(
 ## Third-party dependencies.
 ##
 
-git_repository(
-    name = "pixelmatch-cpp17",
-    branch = "main",
-    remote = "https://github.com/jwmcglynn/pixelmatch-cpp17",
-)
-
 new_local_repository(
     name = "css-parsing-tests",
     build_file = "//third_party:BUILD.css-parsing-tests",
@@ -57,13 +51,6 @@ git_repository(
     name = "range-v3",
     branch = "master",
     remote = "https://github.com/ericniebler/range-v3",
-)
-
-git_repository(
-    name = "stb",
-    branch = "master",
-    init_submodules = True,
-    remote = "https://github.com/nitronoid/rules_stb",
 )
 
 local_repository(
