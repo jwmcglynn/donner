@@ -1,0 +1,32 @@
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+proto_library(
+    name = "bloaty_proto",
+    srcs = [
+        "src/bloaty.proto",
+    ],
+)
+
+cc_proto_library(
+    name = "bloaty_cc_proto",
+    deps = [":bloaty_proto"],
+)
+
+cc_binary(
+    name = "bloaty",
+    srcs = glob([
+        "src/**/*.h",
+        "src/**/*.cc",
+        "third_party/freebsd_elf/*.h",
+        "third_party/lief_pe/*.h",
+        "third_party/darwin_xnu_macho/**/*.h",
+    ]),
+    includes = ["src"],
+    deps = [
+        ":bloaty_cc_proto",
+        "@com_google_absl//absl/debugging:symbolize",
+        "@com_google_absl//absl/numeric:int128",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:optional",
+    ],
+)

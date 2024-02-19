@@ -1,0 +1,5 @@
+workspace(name = "bloaty")
+
+load(":bloaty.bzl", "bloaty_dependencies")
+
+bloaty_dependencies()

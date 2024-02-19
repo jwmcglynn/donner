@@ -4,6 +4,8 @@ compile_commands.json
 coverage-report
 generated-doxygen
 index.scip
+*.bloaty.csv
+build-binary-size
 
 # VS Code
 # See https://www.toptal.com/developers/gitignore/api/visualstudiocode
