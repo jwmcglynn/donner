@@ -101,7 +101,7 @@ public:
   void setPatternUnits(PatternUnits value);
   void setPatternContentUnits(PatternContentUnits value);
   void setPatternTransform(Transformd transform);
-  void setHref(std::optional<RcString> value);
+  void setHref(const std::optional<RcString>& value);
 
 protected:
   void invalidateTransform();

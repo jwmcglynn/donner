@@ -108,7 +108,7 @@ void SVGPatternElement::setPatternTransform(Transformd transform) {
   component.transform.set(CssTransform(transform), css::Specificity::Override());
 }
 
-void SVGPatternElement::setHref(std::optional<RcString> value) {
+void SVGPatternElement::setHref(const std::optional<RcString>& value) {
   handle_.get_or_emplace<PatternComponent>().href = value;
   // Force the shadow tree to be regenerated.
   handle_.remove<ComputedShadowTreeComponent>();

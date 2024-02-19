@@ -82,7 +82,7 @@ struct Color {
    *
    * @param value The color value.
    */
-  /* implicit */ constexpr Color(Type value) : value(std::move(value)) {}
+  /* implicit */ constexpr Color(Type value) : value(value) {}
 
   /// Equality operator.
   bool operator==(const Color& other) const;
@@ -122,7 +122,7 @@ struct Color {
   RGBA resolve(RGBA currentColor, float opacity) const {
     RGBA value = isCurrentColor() ? currentColor : rgba();
     if (opacity != 1.0f) {
-      value.a = static_cast<uint8_t>(value.a * opacity);
+      value.a = static_cast<uint8_t>(static_cast<float>(value.a) * opacity);
     }
     return value;
   }
