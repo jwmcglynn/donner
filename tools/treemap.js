@@ -1,5 +1,29 @@
-const CSS_PREFIX = 'webtreemap-';
-const NODE_CSS_CLASS = CSS_PREFIX + 'node';
+/**
+ * treemap.js is based on webtreemap, a tool for visualizing hierarchial data as a tree diagram.
+ *
+ * This library uses JSON as a datasource, using webtreemap-compatible JSON files which may be
+ * produced by binary_size_analysis.py.
+ *
+ * Transpiled with ChatGPT 4 from https://github.com/evmar/webtreemap/blob/master/src/treemap.ts
+ *
+ * ORIGINAL LICENSE: https://github.com/evmar/webtreemap/blob/master/LICENSE.txt
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work for additional information regarding
+ * copyright ownership. The ASF licenses this file to you under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the
+ * License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied.  See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+const CSS_PREFIX = "webtreemap-";
+const NODE_CSS_CLASS = CSS_PREFIX + "node";
 
 const DEFAULT_CSS = `
 .webtreemap-node {
@@ -23,7 +47,7 @@ const DEFAULT_CSS = `
 `;
 
 function addCSS(parent) {
-  const style = document.createElement('style');
+  const style = document.createElement("style");
   style.innerText = DEFAULT_CSS;
   parent.appendChild(style);
 }
@@ -53,7 +77,7 @@ function getAddress(el) {
 }
 
 function px(x) {
-  return Math.round(x) + 'px';
+  return Math.round(x) + "px";
 }
 
 function defaultOptions(options) {
@@ -61,15 +85,13 @@ function defaultOptions(options) {
     padding: options.padding || [14, 3, 3, 3],
     lowerBound: options.lowerBound === undefined ? 0.1 : options.lowerBound,
     applyMutations: options.applyMutations || (() => null),
-    caption: options.caption || ((node) => node.id || ''),
-    showNode:
-      options.showNode ||
-      ((node, width, height) => {
+    caption: options.caption || ((node) => node.id || ""),
+    showNode: options.showNode
+      || ((node, width, height) => {
         return width > 20 && height >= opts.padding[0];
       }),
-    showChildren:
-      options.showChildren ||
-      ((node, width, height) => {
+    showChildren: options.showChildren
+      || ((node, width, height) => {
         return width > 40 && height > 40;
       }),
   };
@@ -84,11 +106,11 @@ class TreeMap {
 
   ensureDOM(node) {
     if (node.dom) return node.dom;
-    const dom = document.createElement('div');
+    const dom = document.createElement("div");
     dom.className = NODE_CSS_CLASS;
     if (this.options.caption) {
-      const caption = document.createElement('div');
-      caption.className = CSS_PREFIX + 'caption';
+      const caption = document.createElement("div");
+      caption.className = CSS_PREFIX + "caption";
       caption.innerText = this.options.caption(node);
       dom.appendChild(caption);
     }
@@ -111,7 +133,7 @@ class TreeMap {
       const nextSum = sum + size;
       const score = Math.max(
         (smax * space * space) / (nextSum * nextSum),
-        (nextSum * nextSum) / (smin * space * space)
+        (nextSum * nextSum) / (smin * space * space),
       );
 
       if (lastScore && score > lastScore) {
@@ -122,7 +144,6 @@ class TreeMap {
     }
     return { end, sum };
   }
-
 
   layoutChildren(node, level, width, height) {
     const total = node.size;
@@ -180,7 +201,6 @@ class TreeMap {
     }
   }
 
-
   render(container) {
     addCSS(container);
     const dom = this.ensureDOM(this.node);
@@ -211,13 +231,13 @@ class TreeMap {
       width -= padLeft + padRight;
       height -= padTop + padBottom;
 
-      if (!node.children) throw new Error('bad address');
+      if (!node.children) throw new Error("bad address");
       for (const c of node.children) {
-        if (c.dom) c.dom.style.zIndex = '0';
+        if (c.dom) c.dom.style.zIndex = "0";
       }
       node = node.children[index];
       const style = node.dom.style;
-      style.zIndex = '1';
+      style.zIndex = "1";
       style.left = px(padLeft - 1);
       style.width = px(width);
       style.top = px(padTop - 1);
@@ -232,12 +252,15 @@ function webtreemapRender(container, node, options) {
 }
 
 function humanSizeCaption(node) {
-  let units = ['', 'k', 'm', 'g'];
+  let units = ["", "k", "m", "g"];
   let unit = 0;
   let size = node.size;
   while (size > 1024 && unit < units.length - 1) {
     size = size / 1024;
     unit++;
   }
-  return `${node.id || ''} (${size.toFixed(1)}${units[unit]})`;
+  return `${node.id || ""} (${size.toFixed(1)}${units[unit]})`;
 }
+
+
+module.exports = { webtreemapRender, humanSizeCaption };
