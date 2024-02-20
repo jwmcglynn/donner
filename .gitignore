@@ -21,3 +21,7 @@ build-binary-size
 
 # Hdoc
 hdoc-payload.json
+
+# Node
+node_modules
+package-lock.json

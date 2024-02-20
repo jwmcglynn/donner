@@ -1,0 +1,29 @@
+{
+  "lineWidth": 100,
+  "indentWidth": 2,
+  "typescript": {
+  },
+  "json": {
+  },
+  "markdown": {
+  },
+  "toml": {
+  },
+  "dockerfile": {
+  },
+  "prettier": {
+    "lineWidth": 100
+  },
+  "excludes": [
+    "**/node_modules",
+    "**/*-lock.json"
+  ],
+  "plugins": [
+    "https://plugins.dprint.dev/typescript-0.89.1.wasm",
+    "https://plugins.dprint.dev/json-0.19.1.wasm",
+    "https://plugins.dprint.dev/markdown-0.16.3.wasm",
+    "https://plugins.dprint.dev/toml-0.6.0.wasm",
+    "https://plugins.dprint.dev/dockerfile-0.3.0.wasm",
+    "https://plugins.dprint.dev/prettier-0.38.1.json@ae9b60b1ca7e22223cb47325b3d42c681444b46863d28ed92edc426f8a177e58"
+  ]
+}

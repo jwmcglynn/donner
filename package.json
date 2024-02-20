@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "jest": "^29.7.0",
+    "n": "^9.2.0"
+  },
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest-environment-jsdom": "^29.7.0",
+    "npm-run-all": "latest"
+  }
+}
