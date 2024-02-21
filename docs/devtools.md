@@ -1,5 +1,15 @@
 # Devtools
 
+## Code coverage
+
+To generate code coverage locally:
+
+```sh
+tools/coverage.sh
+```
+
+Thn open `coverage-report/index.html` in a browser.
+
 ## Binary size
 
 To generate a binary size report, run:
