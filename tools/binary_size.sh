@@ -4,12 +4,8 @@ cd "$(bazel info workspace)"
 
 mkdir -p build-binary-size
 
-#bazel build -c opt //src/svg/xml:xml_tool //src/svg/renderer:renderer_tool
-
-#du -h bazel-bin/src/svg/xml/xml_tool
-#du -h bazel-bin/src/svg/renderer/renderer_tool
-
-bazel build -c opt --strip=never --copt=-g //src/svg/xml:xml_tool.stripped //src/svg/renderer:renderer_tool
+# Build the binary to analyze, xml_tool
+bazel build -c opt --strip=never --copt=-g //src/svg/xml:xml_tool.stripped
 
 cp -f bazel-bin/src/svg/xml/xml_tool build-binary-size/xml_tool
 
@@ -31,6 +27,15 @@ fi
 # Bloaty docs at https://github.com/google/bloaty/blob/main/doc/using.md
 # To see file -> symbol tree: -d donner_package,compileunits,symbols
 # To see symbols only: -d donner_package,symbol
-bazel run -c dbg --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty.csv
+bazel run --ui_event_filters=-info,-stdout,-stderr --noshow_progress --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty.csv
 
 python3 tools/binary_size_analysis.py build-binary-size/xml_tool.bloaty.csv build-binary-size/binary_size_report.html
+
+echo ""
+echo "Showing summary"
+echo ""
+
+bazel run --ui_event_filters=-info,-stdout,-stderr --noshow_progress --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 10 $DEBUG_FILE_ARG build-binary-size/xml_tool
+
+echo ""
+echo "Saved binary size report to build-binary-size/binary_size_report.html"
