@@ -25,7 +25,20 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - uses: mattnotmitt/doxygen-action@edge
+      - name: Install graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install graphviz -y
+
+      - name: Install Doxygen
+        run: |
+          mkdir -p ${{ github.workspace }}/doxygen
+          curl -L https://www.doxygen.nl/files/doxygen-1.10.0.linux.bin.tar.gz | tar xz -C ${{ github.workspace }}/doxygen
+          echo "${{ github.workspace }}/doxygen/doxygen-1.10.0/bin" >> $GITHUB_PATH # Add Doxygen to PATH
+
+      - name: Generate Doxygen documentation
+        run: |
+          doxygen Doxyfile
 
       - name: Setup Pages
         uses: actions/configure-pages@v2
