@@ -28,13 +28,15 @@ paths = [
   "docs/architecture.md",
   "docs/code_analysis.md",
   "docs/coding_style.md",
+  "docs/devtools/index.md",
+  "docs/devtools/updating_Sourcegraph.md",
   "docs/ecs.md",
-  "docs/updating_Sourcegraph.md",
-  "docs/updating_WORKSPACE.md",
+  "docs/img/Donner - Container.svg",
+  "docs/img/Donner - System Context.svg",
   "docs/internal/building.md",
   "docs/internal/fuzzing.md",
-  "docs/img/Donner - Container.svg",
-  "docs/img/Donner - System Context.svg"
+  "docs/updating_dependencies.md",
+  "docs/updating_dependencies.md",
 ]
 
 [debug]

@@ -77,6 +77,8 @@ class DoxygenAwesomeDarkModeToggle extends HTMLElement {
                 $(window).resize(function(){
                     document.getElementById("MSearchBox").parentNode.appendChild(toggleButton)
                 })
+
+                DoxygenAwesomeDarkModeToggle.enableDarkMode(DoxygenAwesomeDarkModeToggle.darkModeEnabled)
             })
         })
     }

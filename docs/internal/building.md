@@ -14,7 +14,7 @@ The recommended way to use Bazel is to install **Bazelisk**, which will automati
 2. Download the latest releases, and install it as `~/bin/bazel`
 3. `chmod +x ~/bin/bazel`
 4. Update your `~/.bashrc` (or equivalent) to add this directory to your path:
-   ```
+   ```sh
    export PATH=$PATH:$HOME/bin
    ```
 
@@ -22,7 +22,7 @@ The recommended way to use Bazel is to install **Bazelisk**, which will automati
 
 Verify that you can build with
 
-```
+```sh
 bazel build //...
 ```
 

@@ -1,6 +1,9 @@
 # About Donner
 
-Donner is a modern C++20 SVG rendering library, written as a hobby project which intends to provide an easily embeddable SVG support into apps and games, enabling browser-level functionality without the browser.
+Donner is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
+
+\htmlonly <style>img[src="Ghostscript_Tiger.png"]{width:50%;}</style> \endhtmlonly
+![Rendered with Donner](Ghostscript_Tiger.png)
 
 Currently, Donner includes:
 
@@ -32,13 +35,13 @@ Donner is built using [Bazel](https://bazel.build/), and builds are tested on Li
 
 To run the tests, run:
 
-```
+```sh
 bazel test //...
 ```
 
 To render an SVG as an image, try the renderer tool:
 
-```
+```sh
 bazel run //src/svg/renderer:renderer_tool -- src/svg/renderer/testdata/Ghostscript_Tiger.svg
 ```
 

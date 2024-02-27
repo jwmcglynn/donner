@@ -33,6 +33,7 @@ build:macos --linkopt=-exported_symbols_list --linkopt=/dev/null
 
 # Generates documentation
 build:doc --aspects=//tools/aspects:hdoc_aspect.bzl%hdoc_aspect
+build:doc --build_tag_filters=docs
 
 build --config=libc++ --config=c++20 --define absl=1
 

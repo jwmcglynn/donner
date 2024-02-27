@@ -2,11 +2,7 @@
 
 ## High-level Architecture
 
-<figure>
-
 ![System context diagram, Donner SVG Library](/docs/img/Donner%20-%20System%20Context.svg)
-<figcaption>[System context diagram, Donner SVG Library]</figcaption>
-</figure>
 
 At its core, Donner is an SVG engine. Instead of treating SVGs as static images, they are dynamic scenes which can be modified, animated, or transformed.
 
@@ -16,12 +12,7 @@ Donner allows loading SVGs, interacting with them through the Donner API, and th
 
 Donner does not render the document itself, but instead uses Skia to do the rendering, which is the same library that Chrome uses. Skia technically supports rendering SVGs, but Donner provides a more browser-like feature set.
 
-
-<figure>
-
 ![Container diagram, Donner SVG Library](/docs/img/Donner%20-%20Container.svg)
-<figcaption>[Container diagram, Donner SVG Library]</figcaption>
-</figure>
 
 - Parser
   - Parses XML with rapidxml_ns
