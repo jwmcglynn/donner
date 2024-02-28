@@ -2,6 +2,18 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
+namespace donner::svg::components {
+
+void InstantiateLineComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<LineComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [component, style] = view.get(entity);
+    component.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                              outWarnings);
+  }
+}
+
+}  // namespace donner::svg::components
+
 namespace donner::svg {
 
 template <>
@@ -10,14 +22,6 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Line>(
   // In SVG2, <line> still has normal attributes, not presentation attributes that can be specified
   // in CSS.
   return false;
-}
-
-void InstantiateLineComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
-  for (auto view = registry.view<LineComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [component, style] = view.get(entity);
-    component.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
-                                              outWarnings);
-  }
 }
 
 }  // namespace donner::svg

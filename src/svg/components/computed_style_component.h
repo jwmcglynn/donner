@@ -4,7 +4,7 @@
 #include "src/svg/properties/property_registry.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct ComputedStyleComponent {
   ComputedStyleComponent() {}
@@ -26,4 +26,4 @@ private:
   std::optional<Boxd> viewbox_;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

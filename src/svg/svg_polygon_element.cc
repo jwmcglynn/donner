@@ -8,22 +8,24 @@ namespace donner::svg {
 
 SVGPolygonElement SVGPolygonElement::Create(SVGDocument& document) {
   EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
-  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  handle.emplace<components::RenderingBehaviorComponent>(
+      components::RenderingBehavior::NoTraverseChildren);
   return SVGPolygonElement(handle);
 }
 
 void SVGPolygonElement::setPoints(std::vector<Vector2d> points) {
   invalidate();
-  handle_.emplace_or_replace<PolyComponent>(PolyComponent::Type::Polygon).points =
-      std::move(points);
+  handle_.emplace_or_replace<components::PolyComponent>(components::PolyComponent::Type::Polygon)
+      .points = std::move(points);
 }
 
 const std::vector<Vector2d>& SVGPolygonElement::points() const {
-  return handle_.get_or_emplace<PolyComponent>(PolyComponent::Type::Polygon).points;
+  return handle_.get_or_emplace<components::PolyComponent>(components::PolyComponent::Type::Polygon)
+      .points;
 }
 
 void SVGPolygonElement::invalidate() const {
-  handle_.remove<ComputedPathComponent>();
+  handle_.remove<components::ComputedPathComponent>();
 }
 
 }  // namespace donner::svg

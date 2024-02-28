@@ -7,11 +7,11 @@
 namespace donner::svg {
 
 SVGGradientElement::SVGGradientElement(EntityHandle handle) : SVGElement(handle) {
-  handle_.emplace<GradientComponent>();
+  handle_.emplace<components::GradientComponent>();
 }
 
 std::optional<RcString> SVGGradientElement::href() const {
-  auto maybeHref = handle_.get_or_emplace<GradientComponent>().href;
+  auto maybeHref = handle_.get_or_emplace<components::GradientComponent>().href;
   if (maybeHref) {
     return maybeHref.value().href;
   } else {
@@ -20,26 +20,27 @@ std::optional<RcString> SVGGradientElement::href() const {
 }
 
 GradientUnits SVGGradientElement::gradientUnits() const {
-  return handle_.get_or_emplace<GradientComponent>().gradientUnits.value_or(GradientUnits::Default);
+  return handle_.get_or_emplace<components::GradientComponent>().gradientUnits.value_or(
+      GradientUnits::Default);
 }
 
 GradientSpreadMethod SVGGradientElement::spreadMethod() const {
-  return handle_.get_or_emplace<GradientComponent>().spreadMethod.value_or(
+  return handle_.get_or_emplace<components::GradientComponent>().spreadMethod.value_or(
       GradientSpreadMethod::Default);
 }
 
 void SVGGradientElement::setHref(std::optional<RcString> value) {
-  handle_.get_or_emplace<GradientComponent>().href = value;
+  handle_.get_or_emplace<components::GradientComponent>().href = value;
   // Force the shadow tree to be regenerated.
-  handle_.remove<ComputedShadowTreeComponent>();
+  handle_.remove<components::ComputedShadowTreeComponent>();
 }
 
 void SVGGradientElement::setGradientUnits(GradientUnits value) {
-  handle_.get_or_emplace<GradientComponent>().gradientUnits = value;
+  handle_.get_or_emplace<components::GradientComponent>().gradientUnits = value;
 }
 
 void SVGGradientElement::setSpreadMethod(GradientSpreadMethod value) {
-  handle_.get_or_emplace<GradientComponent>().spreadMethod = value;
+  handle_.get_or_emplace<components::GradientComponent>().spreadMethod = value;
 }
 
 }  // namespace donner::svg

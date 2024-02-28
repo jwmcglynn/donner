@@ -5,7 +5,7 @@
 #include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/computed_style_component.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Parameters for a \ref xml_line element.
@@ -38,4 +38,4 @@ struct LineComponent {
 
 void InstantiateLineComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

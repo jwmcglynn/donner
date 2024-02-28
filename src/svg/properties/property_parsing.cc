@@ -61,7 +61,7 @@ PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
 ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::string_view name,
                                          std::optional<ElementType> type, EntityHandle handle) {
   if (StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
-    auto& transform = handle.get_or_emplace<TransformComponent>();
+    auto& transform = handle.get_or_emplace<components::TransformComponent>();
     auto maybeError = Parse(
         params,
         [](const PropertyParseFnParams& params) {

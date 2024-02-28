@@ -6,7 +6,7 @@
 #include "src/base/length.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Parameters for a \ref xml_radialGradient element.
@@ -36,4 +36,4 @@ struct ComputedRadialGradientComponent {
   void inheritAttributes(EntityHandle handle, EntityHandle base);
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -8,20 +8,20 @@ SVGGraphicsElement::SVGGraphicsElement(EntityHandle handle) : SVGElement(handle)
 
 Transformd SVGGraphicsElement::transform() const {
   computeTransform();
-  return handle_.get<ComputedTransformComponent>().transform;
+  return handle_.get<components::ComputedTransformComponent>().transform;
 }
 
 void SVGGraphicsElement::setTransform(Transformd transform) {
-  auto& component = handle_.get_or_emplace<TransformComponent>();
+  auto& component = handle_.get_or_emplace<components::TransformComponent>();
   component.transform.set(CssTransform(transform), css::Specificity::Override());
 }
 
 void SVGGraphicsElement::invalidateTransform() {
-  handle_.remove<ComputedTransformComponent>();
+  handle_.remove<components::ComputedTransformComponent>();
 }
 
 void SVGGraphicsElement::computeTransform() const {
-  auto& transform = handle_.get_or_emplace<TransformComponent>();
+  auto& transform = handle_.get_or_emplace<components::TransformComponent>();
   transform.compute(handle_, FontMetrics());
 }
 

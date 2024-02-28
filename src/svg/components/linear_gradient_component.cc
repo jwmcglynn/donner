@@ -3,7 +3,7 @@
 #include "src/svg/components/gradient_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 void LinearGradientComponent::inheritAttributes(EntityHandle handle, EntityHandle base) {
   handle.emplace_or_replace<ComputedLinearGradientComponent>().inheritAttributes(handle, base);
@@ -34,6 +34,10 @@ void ComputedLinearGradientComponent::inheritAttributes(EntityHandle handle, Ent
     y2 = linearGradient.y2.value();
   }
 }
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::LinearGradient>(

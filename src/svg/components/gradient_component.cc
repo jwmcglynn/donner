@@ -10,7 +10,7 @@
 #include "src/svg/components/tree_component.h"
 #include "src/svg/graph/recursion_guard.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -175,4 +175,4 @@ void InstantiateGradientComponents(Registry& registry, std::vector<ParseError>* 
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -3,10 +3,10 @@
 
 #include "src/base/rc_string.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct ClassComponent {
   RcString className;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

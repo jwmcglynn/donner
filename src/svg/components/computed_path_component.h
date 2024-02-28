@@ -7,10 +7,10 @@
 #include "src/base/parser/parse_error.h"
 #include "src/svg/core/path_spline.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct ComputedPathComponent {
   PathSpline spline;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

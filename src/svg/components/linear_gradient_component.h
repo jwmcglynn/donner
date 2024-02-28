@@ -6,7 +6,7 @@
 #include "src/base/length.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Parameters for a \ref linearGradient element.
@@ -29,4 +29,4 @@ struct ComputedLinearGradientComponent {
   void inheritAttributes(EntityHandle handle, EntityHandle base);
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

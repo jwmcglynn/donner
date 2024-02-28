@@ -10,7 +10,7 @@
 #include "src/svg/properties/property.h"
 #include "src/svg/properties/rx_ry_properties.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Parameters for a <rect> element.
@@ -65,4 +65,4 @@ struct RectComponent {
 
 void InstantiateComputedRectComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

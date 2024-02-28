@@ -3,10 +3,10 @@
 
 #include "src/svg/core/preserve_aspect_ratio.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct PreserveAspectRatioComponent {
   PreserveAspectRatio preserveAspectRatio;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

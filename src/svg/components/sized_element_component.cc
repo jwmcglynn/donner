@@ -9,7 +9,7 @@
 #include "src/svg/components/viewbox_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -376,18 +376,22 @@ Vector2d SizedElementComponent::calculateRawDocumentSize(Registry& registry) con
   return transform.transformPosition(viewboxSize);
 }
 
+}  // namespace donner::svg::components
+
+namespace donner::svg {
+
 // SVGSVGElement shares this component.
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::SVG>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return ParseSizedElementPresentationAttribute(handle, name, params);
+  return components::ParseSizedElementPresentationAttribute(handle, name, params);
 }
 
 // SVGUseElement shares this component.
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Use>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return ParseSizedElementPresentationAttribute(handle, name, params);
+  return components::ParseSizedElementPresentationAttribute(handle, name, params);
 }
 
 }  // namespace donner::svg

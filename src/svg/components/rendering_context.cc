@@ -21,7 +21,7 @@
 #include "src/svg/components/stop_component.h"
 #include "src/svg/components/transform_component.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -412,4 +412,4 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
       });
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

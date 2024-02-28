@@ -2,7 +2,7 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 void RadialGradientComponent::inheritAttributes(EntityHandle handle, EntityHandle base) {
   handle.emplace_or_replace<ComputedRadialGradientComponent>().inheritAttributes(handle, base);
@@ -39,6 +39,10 @@ void ComputedRadialGradientComponent::inheritAttributes(EntityHandle handle, Ent
     fr = radialGradient.fr.value();
   }
 }
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::RadialGradient>(

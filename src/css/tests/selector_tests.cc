@@ -24,7 +24,7 @@ struct FakeElement {
   FakeElement(svg::Registry& registry, svg::Entity entity) : registry_(registry), entity_(entity) {}
 
   RcString typeString() const {
-    return registry_.get().get<svg::TreeComponent>(entity_).typeString();
+    return registry_.get().get<svg::components::TreeComponent>(entity_).typeString();
   }
   RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
   RcString className() const {
@@ -38,13 +38,13 @@ struct FakeElement {
   }
 
   std::optional<FakeElement> parentElement() {
-    auto& tree = registry_.get().get<svg::TreeComponent>(entity_);
+    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
     return tree.parent() != entt::null ? std::make_optional(FakeElement(registry_, tree.parent()))
                                        : std::nullopt;
   }
 
   std::optional<FakeElement> previousSibling() {
-    auto& tree = registry_.get().get<svg::TreeComponent>(entity_);
+    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
     return tree.previousSibling() != entt::null
                ? std::make_optional(FakeElement(registry_, tree.previousSibling()))
                : std::nullopt;
@@ -59,7 +59,8 @@ class SelectorTests : public testing::Test {
 protected:
   svg::Entity createEntity(std::string_view typeString) {
     auto entity = registry_.create();
-    registry_.emplace<svg::TreeComponent>(entity, svg::ElementType::Unknown, RcString(typeString));
+    registry_.emplace<svg::components::TreeComponent>(entity, svg::ElementType::Unknown,
+                                                      RcString(typeString));
     return entity;
   }
 
@@ -86,7 +87,9 @@ protected:
   }
 
   FakeElement element(svg::Entity entity) { return FakeElement(registry_, entity); }
-  svg::TreeComponent& tree(svg::Entity entity) { return registry_.get<svg::TreeComponent>(entity); }
+  svg::components::TreeComponent& tree(svg::Entity entity) {
+    return registry_.get<svg::components::TreeComponent>(entity);
+  }
 
   svg::Registry registry_;
 };

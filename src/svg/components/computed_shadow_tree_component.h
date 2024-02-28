@@ -18,7 +18,7 @@
 
 // TODO: Automatically delete ComputedShadowTreeComponent when ShadowTreeComponent is removed.
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace details {
 
@@ -298,4 +298,4 @@ private:
   std::vector<BranchStorage> branches_;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

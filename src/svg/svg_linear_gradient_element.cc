@@ -9,41 +9,42 @@ namespace donner::svg {
 SVGLinearGradientElement SVGLinearGradientElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
   EntityHandle handle = CreateEntity(registry, RcString(Tag), Type);
-  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::Nonrenderable);
-  handle.emplace<LinearGradientComponent>();
+  handle.emplace<components::RenderingBehaviorComponent>(
+      components::RenderingBehavior::Nonrenderable);
+  handle.emplace<components::LinearGradientComponent>();
   return SVGLinearGradientElement(handle);
 }
 
 void SVGLinearGradientElement::setX1(std::optional<Lengthd> value) {
-  handle_.get<LinearGradientComponent>().x1 = value;
+  handle_.get<components::LinearGradientComponent>().x1 = value;
 }
 
 void SVGLinearGradientElement::setY1(std::optional<Lengthd> value) {
-  handle_.get<LinearGradientComponent>().y1 = value;
+  handle_.get<components::LinearGradientComponent>().y1 = value;
 }
 
 void SVGLinearGradientElement::setX2(std::optional<Lengthd> value) {
-  handle_.get<LinearGradientComponent>().x2 = value;
+  handle_.get<components::LinearGradientComponent>().x2 = value;
 }
 
 void SVGLinearGradientElement::setY2(std::optional<Lengthd> value) {
-  handle_.get<LinearGradientComponent>().y2 = value;
+  handle_.get<components::LinearGradientComponent>().y2 = value;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::x1() const {
-  return handle_.get<LinearGradientComponent>().x1;
+  return handle_.get<components::LinearGradientComponent>().x1;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::y1() const {
-  return handle_.get<LinearGradientComponent>().y1;
+  return handle_.get<components::LinearGradientComponent>().y1;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::x2() const {
-  return handle_.get<LinearGradientComponent>().x2;
+  return handle_.get<components::LinearGradientComponent>().x2;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::y2() const {
-  return handle_.get<LinearGradientComponent>().y2;
+  return handle_.get<components::LinearGradientComponent>().y2;
 }
 
 }  // namespace donner::svg

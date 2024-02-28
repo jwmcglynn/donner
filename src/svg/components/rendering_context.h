@@ -9,7 +9,7 @@
 #include "src/svg/components/id_component.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 class SVGDocument;
 
@@ -48,4 +48,4 @@ private:
   entt::sigh<void(Registry&, std::vector<ParseError>*)> instantiateComputedComponents_;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

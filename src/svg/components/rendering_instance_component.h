@@ -8,7 +8,7 @@
 #include "src/svg/properties/paint_server.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct SubtreeInfo {
   Entity lastRenderedEntity;
@@ -94,4 +94,4 @@ struct RenderingInstanceComponent {
   bool isShadow(Registry& registry) const { return entt::to_entity(registry, *this) != dataEntity; }
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

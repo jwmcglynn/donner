@@ -31,9 +31,9 @@ concept IsCStr = std::is_same_v<T, const char*> || std::is_same_v<T, char*>;
  */
 template <typename T>
 concept StringLike = requires(T t, size_t i) {
-                       { t.size() } -> std::same_as<size_t>;
-                       { t.data() } -> details::IsCStr;
-                     };
+  { t.size() } -> std::same_as<size_t>;
+  { t.data() } -> details::IsCStr;
+};
 
 /// String comparison options, e.g. case sensitivity.
 enum class StringComparison {

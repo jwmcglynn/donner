@@ -5,7 +5,7 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -73,12 +73,26 @@ ComputedEllipseComponent::ComputedEllipseComponent(
   }
 }
 
+void InstantiateComputedEllipseComponents(Registry& registry,
+                                          std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<EllipseComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [ellipse, style] = view.get(entity);
+    ellipse.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                            outWarnings);
+  }
+}
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
+
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Ellipse>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  const auto it = kProperties.find(frozen::string(name));
-  if (it != kProperties.end()) {
-    EllipseProperties& properties = handle.get_or_emplace<EllipseComponent>().properties;
+  const auto it = components::kProperties.find(frozen::string(name));
+  if (it != components::kProperties.end()) {
+    components::EllipseProperties& properties =
+        handle.get_or_emplace<components::EllipseComponent>().properties;
     auto maybeError = it->second(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
@@ -89,15 +103,6 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Ellipse>(
   }
 
   return false;
-}
-
-void InstantiateComputedEllipseComponents(Registry& registry,
-                                          std::vector<ParseError>* outWarnings) {
-  for (auto view = registry.view<EllipseComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [ellipse, style] = view.get(entity);
-    ellipse.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
-                                            outWarnings);
-  }
 }
 
 }  // namespace donner::svg

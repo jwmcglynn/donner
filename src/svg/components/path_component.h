@@ -7,7 +7,7 @@
 #include "src/svg/properties/property.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct PathComponent {
   Property<RcString> d{"d", []() -> std::optional<RcString> { return RcString(); }};
@@ -22,4 +22,4 @@ struct PathComponent {
 
 void InstantiateComputedPathComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -9,7 +9,7 @@
 #include "src/svg/graph/reference.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Common parameters for gradient elements, \ref xml_linearGradient and \ref xml_radialGradient.
@@ -37,4 +37,4 @@ void EvaluateConditionalGradientShadowTrees(Registry& registry);
 
 void InstantiateGradientComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -7,7 +7,7 @@
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/core/gradient.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Parameters for a \ref xml_stop element.
@@ -49,4 +49,4 @@ struct StopComponent {
 
 void InstantiateStopComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -11,19 +11,19 @@ SVGStyleElement SVGStyleElement::Create(SVGDocument& document) {
 }
 
 void SVGStyleElement::setType(RcString type) {
-  auto& stylesheetComponent = handle_.get_or_emplace<StylesheetComponent>();
+  auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
   stylesheetComponent.type = type;
 }
 
 void SVGStyleElement::setContents(std::string_view style) {
   if (isCssType()) {
-    auto& stylesheetComponent = handle_.get_or_emplace<StylesheetComponent>();
+    auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
     stylesheetComponent.parseStylesheet(style);
   }
 }
 
 bool SVGStyleElement::isCssType() const {
-  auto* stylesheetComponent = handle_.try_get<StylesheetComponent>();
+  auto* stylesheetComponent = handle_.try_get<components::StylesheetComponent>();
   if (stylesheetComponent) {
     return stylesheetComponent->isCssType();
   } else {

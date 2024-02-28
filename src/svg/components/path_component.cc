@@ -4,7 +4,7 @@
 #include "src/svg/parser/path_parser.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -86,21 +86,6 @@ std::optional<ParseError> PathComponent::computePath(EntityHandle handle) {
   return computePathWithPrecomputedStyle(handle, style);
 }
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Path>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  if (name == "d") {
-    auto maybeError = ParseDFromAttributes(handle.get_or_emplace<PathComponent>(), params);
-    if (maybeError) {
-      return std::move(maybeError).value();
-    } else {
-      // Property found and parsed successfully.
-      return true;
-    }
-  }
-  return false;
-}
-
 void InstantiateComputedPathComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
   for (auto view = registry.view<PathComponent, ComputedStyleComponent>(); auto entity : view) {
     auto [path, style] = view.get(entity);
@@ -109,6 +94,26 @@ void InstantiateComputedPathComponents(Registry& registry, std::vector<ParseErro
       outWarnings->emplace_back(std::move(maybeError.value()));
     }
   }
+}
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::Path>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  if (name == "d") {
+    auto maybeError = components::ParseDFromAttributes(
+        handle.get_or_emplace<components::PathComponent>(), params);
+    if (maybeError) {
+      return std::move(maybeError).value();
+    } else {
+      // Property found and parsed successfully.
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace donner::svg

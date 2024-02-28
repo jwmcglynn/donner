@@ -9,7 +9,7 @@
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -160,4 +160,4 @@ void ComputedStyleComponent::computeProperties(EntityHandle handle) {
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

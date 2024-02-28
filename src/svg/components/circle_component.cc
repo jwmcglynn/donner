@@ -5,7 +5,7 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -64,12 +64,25 @@ ComputedCircleComponent::ComputedCircleComponent(
   }
 }
 
+void InstantiateComputedCircleComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<CircleComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [circle, style] = view.get(entity);
+    circle.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                           outWarnings);
+  }
+}
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
+
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  const auto it = kProperties.find(frozen::string(name));
-  if (it != kProperties.end()) {
-    CircleProperties& properties = handle.get_or_emplace<CircleComponent>().properties;
+  const auto it = components::kProperties.find(frozen::string(name));
+  if (it != components::kProperties.end()) {
+    components::CircleProperties& properties =
+        handle.get_or_emplace<components::CircleComponent>().properties;
     auto maybeError = it->second(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
@@ -80,14 +93,6 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
   }
 
   return false;
-}
-
-void InstantiateComputedCircleComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
-  for (auto view = registry.view<CircleComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [circle, style] = view.get(entity);
-    circle.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
-                                           outWarnings);
-  }
 }
 
 }  // namespace donner::svg

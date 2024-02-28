@@ -15,55 +15,58 @@ namespace donner::svg {
 SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
   EntityHandle handle = CreateEntity(registry, RcString(Tag), Type);
-  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::ShadowOnlyChildren)
+  handle
+      .emplace<components::RenderingBehaviorComponent>(
+          components::RenderingBehavior::ShadowOnlyChildren)
       .appliesTransform = false;
-  handle.emplace<PatternComponent>();
-  handle.emplace<SizedElementComponent>();
-  handle.emplace<DoNotInheritFillOrStrokeTag>();
-  handle.emplace<ViewboxComponent>();
+  handle.emplace<components::PatternComponent>();
+  handle.emplace<components::SizedElementComponent>();
+  handle.emplace<components::DoNotInheritFillOrStrokeTag>();
+  handle.emplace<components::ViewboxComponent>();
   return SVGPatternElement(handle);
 }
 
 std::optional<Boxd> SVGPatternElement::viewbox() const {
-  return handle_.get<ViewboxComponent>().viewbox;
+  return handle_.get<components::ViewboxComponent>().viewbox;
 }
 
 PreserveAspectRatio SVGPatternElement::preserveAspectRatio() const {
-  return handle_.get<PreserveAspectRatioComponent>().preserveAspectRatio;
+  return handle_.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 }
 
 Lengthd SVGPatternElement::x() const {
-  return handle_.get<SizedElementComponent>().properties.x.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.x.getRequired();
 }
 
 Lengthd SVGPatternElement::y() const {
-  return handle_.get<SizedElementComponent>().properties.y.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGPatternElement::width() const {
-  return handle_.get<SizedElementComponent>().properties.width.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.width.getRequired();
 }
 
 std::optional<Lengthd> SVGPatternElement::height() const {
-  return handle_.get<SizedElementComponent>().properties.height.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.height.getRequired();
 }
 
 PatternUnits SVGPatternElement::patternUnits() const {
-  return handle_.get_or_emplace<PatternComponent>().patternUnits.value_or(PatternUnits::Default);
+  return handle_.get_or_emplace<components::PatternComponent>().patternUnits.value_or(
+      PatternUnits::Default);
 }
 
 PatternContentUnits SVGPatternElement::patternContentUnits() const {
-  return handle_.get_or_emplace<PatternComponent>().patternContentUnits.value_or(
+  return handle_.get_or_emplace<components::PatternComponent>().patternContentUnits.value_or(
       PatternContentUnits::Default);
 }
 
 Transformd SVGPatternElement::patternTransform() const {
   computeTransform();
-  return handle_.get<ComputedTransformComponent>().transform;
+  return handle_.get<components::ComputedTransformComponent>().transform;
 }
 
 std::optional<RcString> SVGPatternElement::href() const {
-  auto maybeHref = handle_.get_or_emplace<PatternComponent>().href;
+  auto maybeHref = handle_.get_or_emplace<components::PatternComponent>().href;
   if (maybeHref) {
     return maybeHref.value().href;
   } else {
@@ -72,54 +75,59 @@ std::optional<RcString> SVGPatternElement::href() const {
 }
 
 void SVGPatternElement::setViewbox(std::optional<Boxd> viewbox) {
-  handle_.get<ViewboxComponent>().viewbox = viewbox;
+  handle_.get<components::ViewboxComponent>().viewbox = viewbox;
 }
 
 void SVGPatternElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  handle_.get_or_emplace<PreserveAspectRatioComponent>().preserveAspectRatio = preserveAspectRatio;
+  handle_.get_or_emplace<components::PreserveAspectRatioComponent>().preserveAspectRatio =
+      preserveAspectRatio;
 }
 
 void SVGPatternElement::setX(Lengthd value) {
-  handle_.get<SizedElementComponent>().properties.x.set(value, css::Specificity::Override());
+  handle_.get<components::SizedElementComponent>().properties.x.set(value,
+                                                                    css::Specificity::Override());
 }
 
 void SVGPatternElement::setY(Lengthd value) {
-  handle_.get<SizedElementComponent>().properties.y.set(value, css::Specificity::Override());
+  handle_.get<components::SizedElementComponent>().properties.y.set(value,
+                                                                    css::Specificity::Override());
 }
 
 void SVGPatternElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get<SizedElementComponent>().properties.width.set(value, css::Specificity::Override());
+  handle_.get<components::SizedElementComponent>().properties.width.set(
+      value, css::Specificity::Override());
 }
 
 void SVGPatternElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get<SizedElementComponent>().properties.height.set(value, css::Specificity::Override());
+  handle_.get<components::SizedElementComponent>().properties.height.set(
+      value, css::Specificity::Override());
 }
 
 void SVGPatternElement::setPatternUnits(PatternUnits value) {
-  handle_.get_or_emplace<PatternComponent>().patternUnits = value;
+  handle_.get_or_emplace<components::PatternComponent>().patternUnits = value;
 }
 
 void SVGPatternElement::setPatternContentUnits(PatternContentUnits value) {
-  handle_.get_or_emplace<PatternComponent>().patternContentUnits = value;
+  handle_.get_or_emplace<components::PatternComponent>().patternContentUnits = value;
 }
 
 void SVGPatternElement::setPatternTransform(Transformd transform) {
-  auto& component = handle_.get_or_emplace<TransformComponent>();
+  auto& component = handle_.get_or_emplace<components::TransformComponent>();
   component.transform.set(CssTransform(transform), css::Specificity::Override());
 }
 
 void SVGPatternElement::setHref(const std::optional<RcString>& value) {
-  handle_.get_or_emplace<PatternComponent>().href = value;
+  handle_.get_or_emplace<components::PatternComponent>().href = value;
   // Force the shadow tree to be regenerated.
-  handle_.remove<ComputedShadowTreeComponent>();
+  handle_.remove<components::ComputedShadowTreeComponent>();
 }
 
 void SVGPatternElement::invalidateTransform() {
-  handle_.remove<ComputedTransformComponent>();
+  handle_.remove<components::ComputedTransformComponent>();
 }
 
 void SVGPatternElement::computeTransform() const {
-  auto& transform = handle_.get_or_emplace<TransformComponent>();
+  auto& transform = handle_.get_or_emplace<components::TransformComponent>();
   transform.compute(handle_, FontMetrics());
 }
 

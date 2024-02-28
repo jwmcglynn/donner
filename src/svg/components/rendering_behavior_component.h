@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 enum class RenderingBehavior { Default, Nonrenderable, NoTraverseChildren, ShadowOnlyChildren };
 
@@ -12,4 +12,4 @@ struct RenderingBehaviorComponent {
   explicit RenderingBehaviorComponent(RenderingBehavior behavior) : behavior(behavior) {}
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

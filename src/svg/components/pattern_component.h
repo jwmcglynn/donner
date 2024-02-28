@@ -8,7 +8,7 @@
 #include "src/svg/graph/reference.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Parameters for <pattern> elements which are not captured by \ref ViewBoxComponent and \ref
@@ -36,4 +36,4 @@ void EvaluateConditionalPatternShadowTrees(Registry& registry);
 
 void InstantiatePatternComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

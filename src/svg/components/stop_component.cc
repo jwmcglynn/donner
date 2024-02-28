@@ -4,7 +4,7 @@
 #include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/properties/property_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -70,18 +70,23 @@ ComputedStopComponent::ComputedStopComponent(
   }
 }
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Stop>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  StopProperties& properties = handle.get_or_emplace<StopComponent>().properties;
-  return ParseProperty(name, params, properties);
-}
-
 void InstantiateStopComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
   for (auto view = registry.view<StopComponent, ComputedStyleComponent>(); auto entity : view) {
     auto [component, style] = view.get(entity);
     component.computeWithPrecomputedStyle(EntityHandle(registry, entity), style, outWarnings);
   }
+}
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::Stop>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  components::StopProperties& properties =
+      handle.get_or_emplace<components::StopComponent>().properties;
+  return components::ParseProperty(name, params, properties);
 }
 
 }  // namespace donner::svg

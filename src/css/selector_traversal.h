@@ -21,13 +21,13 @@ namespace donner::css::traversal {
  */
 template <typename T>
 concept ElementLike = requires(T t, std::string_view name) {
-                        { t.parentElement() } -> std::same_as<std::optional<T>>;
-                        { t.previousSibling() } -> std::same_as<std::optional<T>>;
-                        { t.typeString() } -> std::same_as<RcString>;
-                        { t.id() } -> std::same_as<RcString>;
-                        { t.className() } -> std::same_as<RcString>;
-                        { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;
-                      };
+  { t.parentElement() } -> std::same_as<std::optional<T>>;
+  { t.previousSibling() } -> std::same_as<std::optional<T>>;
+  { t.typeString() } -> std::same_as<RcString>;
+  { t.id() } -> std::same_as<RcString>;
+  { t.className() } -> std::same_as<RcString>;
+  { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;
+};
 
 /**
  * Selectors may need to traverse the tree in different ways to match, and this is abstracted away

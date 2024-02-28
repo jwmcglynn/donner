@@ -5,7 +5,7 @@
 #include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/properties/property_registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Data for a \ref xml_style element.
@@ -30,4 +30,4 @@ struct StylesheetComponent {
   void parseStylesheet(std::string_view str) { stylesheet = css::CSS::ParseStylesheet(str); }
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -9,7 +9,7 @@
 #include "src/svg/graph/recursion_guard.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -137,6 +137,10 @@ void InstantiatePatternComponents(Registry& registry, std::vector<ParseError>* o
     computedPattern.initialize(EntityHandle(registry, entity));
   }
 }
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Pattern>(

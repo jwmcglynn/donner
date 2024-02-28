@@ -9,91 +9,94 @@ namespace donner::svg {
 
 SVGEllipseElement SVGEllipseElement::Create(SVGDocument& document) {
   EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
-  handle.emplace<RenderingBehaviorComponent>(RenderingBehavior::NoTraverseChildren);
+  handle.emplace<components::RenderingBehaviorComponent>(
+      components::RenderingBehavior::NoTraverseChildren);
   return SVGEllipseElement(handle);
 }
 
 void SVGEllipseElement::setCx(Lengthd value) {
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
   properties.cx.set(value, css::Specificity::Override());
 }
 
 void SVGEllipseElement::setCy(Lengthd value) {
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
   properties.cy.set(value, css::Specificity::Override());
 }
 
 void SVGEllipseElement::setRx(std::optional<Lengthd> value) {
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
   properties.rx.set(value, css::Specificity::Override());
 }
 
 void SVGEllipseElement::setRy(std::optional<Lengthd> value) {
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
   properties.ry.set(value, css::Specificity::Override());
 }
 
 Lengthd SVGEllipseElement::cx() const {
-  const auto* component = handle_.try_get<EllipseComponent>();
+  const auto* component = handle_.try_get<components::EllipseComponent>();
   return component ? component->properties.cx.getRequired() : Lengthd();
 }
 
 Lengthd SVGEllipseElement::cy() const {
-  const auto* component = handle_.try_get<EllipseComponent>();
+  const auto* component = handle_.try_get<components::EllipseComponent>();
   return component ? component->properties.cy.getRequired() : Lengthd();
 }
 
 std::optional<Lengthd> SVGEllipseElement::rx() const {
-  const auto* component = handle_.try_get<EllipseComponent>();
+  const auto* component = handle_.try_get<components::EllipseComponent>();
   return component ? component->properties.rx.get() : std::nullopt;
 }
 
 std::optional<Lengthd> SVGEllipseElement::ry() const {
-  const auto* component = handle_.try_get<EllipseComponent>();
+  const auto* component = handle_.try_get<components::EllipseComponent>();
   return component ? component->properties.ry.get() : std::nullopt;
 }
 
 Lengthd SVGEllipseElement::computedCx() const {
   compute();
-  return handle_.get<ComputedEllipseComponent>().properties.cx.getRequired();
+  return handle_.get<components::ComputedEllipseComponent>().properties.cx.getRequired();
 }
 
 Lengthd SVGEllipseElement::computedCy() const {
   compute();
-  return handle_.get<ComputedEllipseComponent>().properties.cy.getRequired();
+  return handle_.get<components::ComputedEllipseComponent>().properties.cy.getRequired();
 }
 
 Lengthd SVGEllipseElement::computedRx() const {
   compute();
 
-  const ComputedStyleComponent& style = handle_.get<ComputedStyleComponent>();
-  return std::get<0>(handle_.get<ComputedEllipseComponent>().properties.calculateRx(style.viewbox(),
-                                                                                    FontMetrics()));
+  const components::ComputedStyleComponent& style =
+      handle_.get<components::ComputedStyleComponent>();
+  return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRx(
+      style.viewbox(), FontMetrics()));
 }
 
 Lengthd SVGEllipseElement::computedRy() const {
   compute();
 
-  const ComputedStyleComponent& style = handle_.get_or_emplace<ComputedStyleComponent>();
-  return std::get<0>(handle_.get<ComputedEllipseComponent>().properties.calculateRy(style.viewbox(),
-                                                                                    FontMetrics()));
+  const components::ComputedStyleComponent& style =
+      handle_.get_or_emplace<components::ComputedStyleComponent>();
+  return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRy(
+      style.viewbox(), FontMetrics()));
 }
 
 void SVGEllipseElement::invalidate() const {
-  handle_.remove<ComputedEllipseComponent>();
-  handle_.remove<ComputedPathComponent>();
+  handle_.remove<components::ComputedEllipseComponent>();
+  handle_.remove<components::ComputedPathComponent>();
 }
 
 void SVGEllipseElement::compute() const {
-  auto& ellipse = handle_.get_or_emplace<EllipseComponent>();
+  auto& ellipse = handle_.get_or_emplace<components::EllipseComponent>();
   ellipse.computePath(handle_, FontMetrics());
 }
 

@@ -1,6 +1,6 @@
 #include "src/svg/components/viewbox_component.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 Transformd ViewboxComponent::computeTransform(Boxd size,
                                               PreserveAspectRatio preserveAspectRatio) const {
@@ -26,4 +26,4 @@ Transformd ViewboxComponent::computeTransform(Boxd size,
          Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

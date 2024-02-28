@@ -7,7 +7,7 @@
 #include "src/base/transform.h"
 #include "src/svg/core/preserve_aspect_ratio.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * A component attached to entities that have a `viewbox` attribute, such as \ref xml_svg and \ref
@@ -27,4 +27,4 @@ struct ViewboxComponent {
   Transformd computeTransform(Boxd size, PreserveAspectRatio preserveAspectRatio) const;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -4,7 +4,7 @@
 #include "src/base/rc_string.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 class TreeComponent {
 public:
@@ -84,4 +84,4 @@ private:
   Entity nextSibling_{entt::null};
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

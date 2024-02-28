@@ -5,7 +5,7 @@
 #include "src/svg/properties/property_registry.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct StyleComponent {
   PropertyRegistry properties;
@@ -25,4 +25,4 @@ struct StyleComponent {
  */
 struct DoNotInheritFillOrStrokeTag {};
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

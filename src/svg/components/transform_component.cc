@@ -4,7 +4,7 @@
 #include "src/svg/parser/css_transform_parser.h"
 #include "src/svg/parser/transform_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
                                                      const ComputedStyleComponent& style,
@@ -79,4 +79,4 @@ void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnin
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

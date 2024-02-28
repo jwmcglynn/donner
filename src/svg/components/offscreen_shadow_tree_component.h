@@ -8,7 +8,7 @@
 #include "src/svg/graph/reference.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 class OffscreenShadowTreeComponent {
 public:
@@ -44,4 +44,4 @@ private:
   std::map<ShadowBranchType, Reference> branches_;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -3,10 +3,10 @@
 
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 struct EvaluatedReferenceComponent {
   EntityHandle target;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

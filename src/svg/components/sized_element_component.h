@@ -11,7 +11,7 @@
 #include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /**
  * Stores an offset/size for elements that are positioned with `x`/`y`/`width`/`height` attributes
@@ -85,4 +85,4 @@ private:
   Vector2d calculateRawDocumentSize(Registry& registry) const;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

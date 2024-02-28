@@ -10,7 +10,12 @@
 
 namespace donner::svg {
 
+// Forward declarations
 class SVGDocument;
+
+}  // namespace donner::svg
+
+namespace donner::svg::components {
 
 class DocumentContext {
 public:
@@ -41,4 +46,4 @@ private:
   std::unordered_map<RcString, Entity> idToEntity_;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

@@ -5,7 +5,7 @@
 namespace donner::svg {
 
 std::optional<double> SVGGeometryElement::pathLength() const {
-  if (const auto* component = handle_.try_get<PathLengthComponent>()) {
+  if (const auto* component = handle_.try_get<components::PathLengthComponent>()) {
     return component->value;
   } else {
     return std::nullopt;
@@ -14,9 +14,9 @@ std::optional<double> SVGGeometryElement::pathLength() const {
 
 void SVGGeometryElement::setPathLength(std::optional<double> value) {
   if (value) {
-    handle_.emplace_or_replace<PathLengthComponent>(value.value());
+    handle_.emplace_or_replace<components::PathLengthComponent>(value.value());
   } else {
-    handle_.remove<PathLengthComponent>();
+    handle_.remove<components::PathLengthComponent>();
   }
 }
 

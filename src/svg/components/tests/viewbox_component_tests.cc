@@ -7,7 +7,7 @@
 using testing::DoubleNear;
 using testing::Pointwise;
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 TEST(ViewboxComponent, OptionalNone) {
   Boxd viewbox({0, 0}, {100, 100});
@@ -217,4 +217,4 @@ TEST(ViewboxComponent, MinMaxSlice) {
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components

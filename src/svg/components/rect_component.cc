@@ -5,7 +5,7 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 namespace {
 
@@ -162,12 +162,25 @@ void RectComponent::computePathWithPrecomputedStyle(EntityHandle handle,
   }
 }
 
+void InstantiateComputedRectComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<RectComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [rect, style] = view.get(entity);
+    rect.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                         outWarnings);
+  }
+}
+
+}  // namespace donner::svg::components
+
+namespace donner::svg {
+
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Rect>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  const auto it = kProperties.find(frozen::string(name));
-  if (it != kProperties.end()) {
-    RectProperties& properties = handle.get_or_emplace<RectComponent>().properties;
+  const auto it = components::kProperties.find(frozen::string(name));
+  if (it != components::kProperties.end()) {
+    components::RectProperties& properties =
+        handle.get_or_emplace<components::RectComponent>().properties;
     auto maybeError = it->second(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
@@ -178,14 +191,6 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Rect>(
   }
 
   return false;
-}
-
-void InstantiateComputedRectComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
-  for (auto view = registry.view<RectComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [rect, style] = view.get(entity);
-    rect.computePathWithPrecomputedStyle(EntityHandle(registry, entity), style, FontMetrics(),
-                                         outWarnings);
-  }
 }
 
 }  // namespace donner::svg
