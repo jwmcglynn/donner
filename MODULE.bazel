@@ -16,7 +16,7 @@ bazel_dep(name = "rules_cc", version = "0.0.9")
 bazel_dep(name = "bazel_skylib", version = "1.5.0")
 
 # Core dependencies
-bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240116.0")  # Used for number parsing
+bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240116.1")  # Used for number parsing
 
 # Test dependencies
 bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.14.0.bcr.1", dev_dependency = True)
