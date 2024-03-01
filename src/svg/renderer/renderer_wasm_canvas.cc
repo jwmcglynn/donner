@@ -34,15 +34,18 @@ public:
     while (!view_.done() && !foundEndEntity) {
       foundEndEntity = view_.currentEntity() == endEntity;
 
-      const RenderingInstanceComponent& instance = view_.get();
+      const components::RenderingInstanceComponent& instance = view_.get();
       [[maybe_unused]] const Entity entity = view_.currentEntity();
       view_.advance();
 
       if (renderer_.verbose_) {
         std::cout << "Rendering "
-                  << TypeToString(registry.get<TreeComponent>(instance.dataEntity).type()) << " ";
+                  << TypeToString(
+                         registry.get<components::TreeComponent>(instance.dataEntity).type())
+                  << " ";
 
-        if (const auto* idComponent = registry.try_get<IdComponent>(instance.dataEntity)) {
+        if (const auto* idComponent =
+                registry.try_get<components::IdComponent>(instance.dataEntity)) {
           std::cout << "id=" << idComponent->id << " ";
         }
 
@@ -56,11 +59,12 @@ public:
         std::cout << std::endl;
       }
 
-      const ComputedStyleComponent& styleComponent =
-          instance.styleHandle(registry).get<ComputedStyleComponent>();
+      const auto& styleComponent =
+          instance.styleHandle(registry).get<components::ComputedStyleComponent>();
 
       if (instance.visible) {
-        if (const auto* path = instance.dataHandle(registry).try_get<ComputedPathComponent>()) {
+        if (const auto* path =
+                instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
           drawPath(instance.dataHandle(registry), instance, *path, styleComponent.properties(),
                    styleComponent.viewbox(), FontMetrics());
         }
@@ -68,8 +72,8 @@ public:
     }
   }
 
-  void drawPath(EntityHandle dataHandle, const RenderingInstanceComponent& instance,
-                const ComputedPathComponent& path, const PropertyRegistry& style,
+  void drawPath(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                const components::ComputedPathComponent& path, const PropertyRegistry& style,
                 const Boxd& viewbox, const FontMetrics& fontMetrics) {
     if (HasPaint(instance.resolvedFill)) {
       drawPathFill(dataHandle, path, instance.resolvedFill, style, viewbox);
@@ -80,8 +84,8 @@ public:
     }
   }
 
-  void drawPathFill(EntityHandle dataHandle, const ComputedPathComponent& path,
-                    const ResolvedPaintServer& paint, const PropertyRegistry& style,
+  void drawPathFill(EntityHandle dataHandle, const components::ComputedPathComponent& path,
+                    const components::ResolvedPaintServer& paint, const PropertyRegistry& style,
                     const Boxd& viewbox) {
     const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
@@ -92,8 +96,8 @@ public:
     }
   }
 
-  void drawPathStroke(EntityHandle dataHandle, const ComputedPathComponent& path,
-                      const ResolvedPaintServer& paint, const PropertyRegistry& style,
+  void drawPathStroke(EntityHandle dataHandle, const components::ComputedPathComponent& path,
+                      const components::ResolvedPaintServer& paint, const PropertyRegistry& style,
                       const Boxd& viewbox, const FontMetrics& fontMetrics) {
     const float strokeOpacity = NarrowToFloat(style.strokeOpacity.get().value());
 
@@ -110,7 +114,7 @@ private:
   canvas::CanvasRenderingContext2D ctx_;
   RenderingInstanceView view_;
 
-  std::vector<SubtreeInfo> subtreeMarkers_;
+  std::vector<components::SubtreeInfo> subtreeMarkers_;
 };
 
 RendererWasmCanvas::RendererWasmCanvas(std::string_view canvasId, bool verbose)
@@ -125,9 +129,9 @@ void RendererWasmCanvas::draw(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize =
-      registry.get<SizedElementComponent>(rootEntity)
-          .calculateViewportScaledDocumentSize(registry, InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = registry.get<components::SizedElementComponent>(rootEntity)
+                                     .calculateViewportScaledDocumentSize(
+                                         registry, components::InvalidSizeBehavior::ReturnDefault);
 
   canvas_.setSize(renderingSize);
 
@@ -143,7 +147,7 @@ int RendererWasmCanvas::height() const {
 }
 
 void RendererWasmCanvas::draw(Registry& registry, Entity root) {
-  Impl impl(*this, RenderingInstanceView{registry.view<RenderingInstanceComponent>()});
+  Impl impl(*this, RenderingInstanceView{registry.view<components::RenderingInstanceComponent>()});
   impl.drawUntil(registry, entt::null);
 }
 
