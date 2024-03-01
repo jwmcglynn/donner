@@ -76,7 +76,7 @@ git_override(
     commit = "ceeb5dbdefb8839a1e29cc242bc1fe755a43609c",
 )
 
-bazel_dep(name = "rules_proto", version = "6.0.0-rc1", dev_dependency = True)
+bazel_dep(name = "rules_proto", version = "6.0.0-rc2", dev_dependency = True)
 
 bazel_dep(name = "bloaty", version = "0.0.0", dev_dependency = True)
 git_override(
