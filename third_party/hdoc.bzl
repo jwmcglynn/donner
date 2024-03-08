@@ -253,9 +253,9 @@ cc_library(
     maybe(
         http_archive,
         name = "rapidjson",
-        sha256 = "7b9ec36b549b076c9edc33b7b851d457cbf1683d44984166c788cc44370290f8",
-        strip_prefix = "rapidjson-6089180ecb704cb2b136777798fa1be303618975",
-        urls = ["https://github.com/Tencent/rapidjson/archive/6089180ecb704cb2b136777798fa1be303618975.tar.gz"],
+        sha256 = "bc23236d26360ab2eccea85619068e757517269ce626c5bbc97c6881b921763a",
+        strip_prefix = "rapidjson-5ec44fb9206695e5293f610b0a46d21851d0c966",
+        urls = ["https://github.com/Tencent/rapidjson/archive/5ec44fb9206695e5293f610b0a46d21851d0c966.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
