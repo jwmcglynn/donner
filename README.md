@@ -37,7 +37,7 @@ Donner focuses on security and performance, which is validated with code coverag
 ## Documentation
 
 - [About Donner](docs/about_donner.md)
-- [API Documentation](https://jwmcglynn.github.io/donner/)
+- [API Documentation](https://jwmcglynn.github.io/donner/namespaces.html)
 - [System Architecture](docs/architecture.md)
 - [Building Donner](docs/internal/building.md)
 

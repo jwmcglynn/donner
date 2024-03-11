@@ -3,7 +3,7 @@
 Doxygen may be generated with:
 
 ```sh
-tools/doxygen.md
+tools/doxygen.sh
 ```
 
 ### Experimental hdoc documentation
