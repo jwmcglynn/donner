@@ -16,5 +16,8 @@
       ],
       "enabled": false
     }
+  ],
+  "ignorePaths": [
+    "**/third_party/doxygen-awesome-css/**"
   ]
 }
