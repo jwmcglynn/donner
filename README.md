@@ -25,7 +25,7 @@ This theme is an attempt to update the visuals of Doxygen without changing its o
 - 🧩 No changes to the HTML structure of Doxygen are required
 - 📱 Improved mobile usability
 - 🌘 Dark mode support!
-- 🥇 Works best with **doxygen 1.9.1** - **1.9.4** and **1.9.6** - **1.9.8**
+- 🥇 Works best with **doxygen 1.9.1** - **1.9.4** and **1.9.6** - **1.10.0**
 
 ## Examples
 
@@ -37,6 +37,7 @@ Some websites using this theme:
 - [Zephyr](https://docs.zephyrproject.org/latest/doxygen/html/index.html)
 - [FELTOR](https://mwiesenberger.github.io/feltor/dg/html/modules.html)
 - [Spatial Audio Framework (SAF)](https://leomccormack.github.io/Spatial_Audio_Framework/index.html)
+- [Randolf Richardson's C++ classes](https://www.randolf.ca/c++/docs/)
 - [libCloudSync](https://jothepro.github.io/libCloudSync/)
 - [libsl3](https://a4z.github.io/libsl3/)
 
@@ -59,7 +60,7 @@ For projects that use git, add the repository as a submodule and check out the d
 ```sh
 git submodule add https://github.com/jothepro/doxygen-awesome-css.git
 cd doxygen-awesome-css
-git checkout v2.3.1
+git checkout v2.3.2
 ```
 
 ### npm/xpm dependency
@@ -69,7 +70,7 @@ to your project:
 
 ```sh
 cd your-project
-npm install https://github.com/jothepro/doxygen-awesome-css#v2.3.1 --save-dev
+npm install https://github.com/jothepro/doxygen-awesome-css#v2.3.2 --save-dev
 
 ls -l node_module/@jothepro/doxygen-awesome-css
 ```
@@ -146,6 +147,7 @@ Tested with
 - Safari 17, Safari for iOS 16
 - Firefox 118, Firefox 120 for Android, Firefox 119 for iOS
 - Edge 119
+- Opera 108
 
 
 The theme does not strive to be backward compatible with (significantly) older browser versions.
