@@ -54,14 +54,14 @@ PROJECT_NUMBER         =
 # for a project that appears at the top of each page and should give viewer a
 # quick idea about the purpose of the project. Keep the description short.
 
-PROJECT_BRIEF          = C++20 library for loading and rendering SVGs
+PROJECT_BRIEF          = C++20 SVG rendering library
 
 # With the PROJECT_LOGO tag one can specify a logo or an icon that is included
 # in the documentation. The maximum height of the logo should not exceed 55
 # pixels and the maximum width should not exceed 200 pixels. Doxygen will copy
 # the logo to the output directory.
 
-PROJECT_LOGO           =
+PROJECT_LOGO           = icon.png
 
 # The OUTPUT_DIRECTORY tag is used to specify the (relative or absolute) path
 # into which the generated documentation will be written. If a relative path is
@@ -1329,7 +1329,8 @@ HTML_STYLESHEET        =
 # documentation.
 # This tag requires that the tag GENERATE_HTML is set to YES.
 
-HTML_EXTRA_STYLESHEET  = third_party/doxygen-awesome-css/doxygen-awesome.css
+HTML_EXTRA_STYLESHEET  = third_party/doxygen-awesome-css/doxygen-awesome.css \
+                         third_party/doxygen-awesome-css/doxygen-awesome-sidebar-only.css
 
 # The HTML_EXTRA_FILES tag can be used to specify one or more extra images or
 # other source files which should be copied to the HTML output directory. Note
@@ -1342,6 +1343,8 @@ HTML_EXTRA_STYLESHEET  = third_party/doxygen-awesome-css/doxygen-awesome.css
 HTML_EXTRA_FILES       = third_party/doxygen-awesome-css/doxygen-awesome-fragment-copy-button.js \
                          third_party/doxygen-awesome-css/doxygen-awesome-darkmode-toggle.js \
                          third_party/doxygen-awesome-css/doxygen-awesome-paragraph-link.js \
+                         third_party/doxygen-awesome-css/doxygen-awesome-interactive-toc.js \
+                         third_party/doxygen-awesome-css/doxygen-awesome-tabs.js \
                          src/svg/renderer/testdata/golden/Ghostscript_Tiger.png
 
 # The HTML_COLORSTYLE tag can be used to specify if the generated HTML output
@@ -1684,7 +1687,7 @@ ENUM_VALUES_PER_LINE   = 4
 # Minimum value: 0, maximum value: 1500, default value: 250.
 # This tag requires that the tag GENERATE_HTML is set to YES.
 
-TREEVIEW_WIDTH         = 250
+TREEVIEW_WIDTH         = 300
 
 # If the EXT_LINKS_IN_WINDOW option is set to YES, doxygen will open links to
 # external symbols imported via tag files in a separate window.
