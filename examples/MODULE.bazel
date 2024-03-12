@@ -1,0 +1,11 @@
+"""
+Examples directory for donner, this builds and uses donner from the directory above.
+
+Donner libraries are accessible with deps=["@donner"]
+"""
+
+bazel_dep(name = "donner", version = "0.0.0")
+local_path_override(
+    module_name = "donner",
+    path = "..",
+)

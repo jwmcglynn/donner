@@ -212,6 +212,17 @@ public:
   bool operator==(const SVGElement& other) const { return handle_ == other.handle_; }
 
   /**
+   * Return true if this element "is a" instance of type, if it be cast to a specific type with \ref
+   * cast.
+   *
+   * @tparam Derived Type to check.
+   */
+  template <typename Derived>
+  bool isa() const {
+    return Derived::Type == type();
+  }
+
+  /**
    * Cast this element to its derived type.
    *
    * @pre Requires this element to be of type \p Derived::Type.

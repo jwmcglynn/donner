@@ -19,6 +19,7 @@ Donner focuses on security and performance, which is validated with code coverag
 
 ## Documentation
 
+- [Getting started](getting_started.md)
 - [API Documentation](namespaces.html)
 - [System Architecture](architecture.md)
 - [Devtools](devtools/index.md), such as binary size and code coverage

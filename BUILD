@@ -2,6 +2,27 @@ load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile
 load("//tools/aspects:hdoc_aspect.bzl", "hdoc_generate")
 load("//tools/http:serve_http.bzl", "serve_http")
 
+##
+## Main library
+##
+
+#
+# Donner main library, packages together the SVG library and associated renderer.
+#
+cc_library(
+    name = "donner",
+    include_prefix = "donner",
+    strip_include_prefix = "src",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/svg/renderer",
+    ],
+)
+
+##
+## Devtools
+##
+
 refresh_compile_commands(
     name = "refresh_compile_commands",
 )
