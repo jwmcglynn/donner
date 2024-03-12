@@ -607,11 +607,13 @@ a.anchor {
 
 #main-menu > li:last-child {
     margin-right: 0;
+    margin-top: 70px; /* TODO: Find a better solution to fix searchbar position */
 }
 
 @media screen and (max-width: 767px) {
     #main-menu > li:last-child {
         height: 50px;
+        margin-top: unset;
     }
 }
 
