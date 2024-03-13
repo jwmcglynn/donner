@@ -15,6 +15,30 @@
 
 namespace donner::svg {
 
+namespace detail {
+
+template <typename T, std::size_t... I>
+auto tuple_remove_const(T tuple, std::index_sequence<I...>) {
+  using TupleType = std::remove_reference_t<T>;
+
+  // Using const_cast to transform each tuple element from 'const T&' to 'T&'
+  return std::forward_as_tuple(
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+      (const_cast<
+          std::remove_const_t<std::remove_reference_t<std::tuple_element_t<I, TupleType>>>&>(
+          std::get<I>(tuple)))...);
+}
+
+template <typename... Args>
+auto as_mutable(const std::tuple<Args...>& tuple) {
+  auto result = tuple_remove_const(tuple, std::index_sequence_for<Args...>{});
+  static_assert(!std::is_const_v<std::remove_reference_t<decltype(std::get<0>(result))>>,
+                "Expected non-const reference");
+  return result;
+}
+
+}  // namespace detail
+
 class PropertyRegistry;
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const PropertyParseFnParams& params);
@@ -64,10 +88,19 @@ public:
    *
    * To get the size of the tuple, use \ref numProperties().
    */
-  auto allProperties() {
+  auto allProperties() const {
     return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
                                  stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
                                  strokeMiterlimit, strokeDasharray, strokeDashoffset);
+  }
+
+  /**
+   * Return a mutable tuple of all properties within the PropertyRegistry.
+   *
+   * @see allProperties()
+   */
+  auto allPropertiesMutable() {
+    return detail::as_mutable(allProperties());
   }
 
   /**
@@ -82,7 +115,7 @@ public:
   }
 
   template <size_t Start, size_t End, class F>
-  static constexpr void forEachProperty(F&& f) {
+  static constexpr void forEachProperty(const F& f) {
     if constexpr (Start < End) {
       f(std::integral_constant<size_t, Start>{});
       forEachProperty<Start + 1, End>(f);
@@ -103,15 +136,16 @@ public:
     PropertyRegistry result;
     result.unparsedProperties = unparsedProperties;  // Unparsed properties are not inherited.
 
-    auto resultProperties = result.allProperties();
-    const auto parentProperties = const_cast<PropertyRegistry&>(parent).allProperties();
-    const auto selfProperties = const_cast<PropertyRegistry*>(this)->allProperties();
+    auto resultProperties = result.allPropertiesMutable();
+    const auto parentProperties = parent.allProperties();
+    const auto selfProperties = allProperties();
 
     forEachProperty<0, numProperties()>(
         [&resultProperties, &parentProperties, &selfProperties, options](auto i) {
-          std::get<i.value>(resultProperties) =
-              std::get<i.value>(selfProperties)
-                  .inheritFrom(std::get<i.value>(parentProperties), options);
+          auto res = std::get<i.value>(selfProperties)
+                         .inheritFrom(std::get<i.value>(parentProperties), options);
+
+          std::get<i.value>(resultProperties) = res;
         });
 
     return result;
@@ -120,7 +154,7 @@ public:
   void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
     std::apply([&viewbox, &fontMetrics](
                    auto&&... property) { (property.resolveUnits(viewbox, fontMetrics), ...); },
-               allProperties());
+               std::tuple(allPropertiesMutable()));
   }
 
   /**
