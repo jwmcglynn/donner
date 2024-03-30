@@ -4,10 +4,10 @@ Donner uses a data-oriented Entity Component System (ECS) design pattern to stor
 
 ## Entities
 
-Entities are the primary data structure in ECS. They are simply a unique identifier for a set of components. In Donner, entities are represented by a 32-bit unsigned integer.
+Entities are the primary data structure in ECS. They are simply a unique identifier for a set of components. In Donner, entities are represented by a 32-bit unsigned integer, using a typedef for `entt::entity`.
 
 ```cpp
-enum class Entity : std::uint32_t {};
+using Entity = entt::entity;
 ```
 
 An entity is created by calling `registry.create()` without any components. Here is how the `Entity` is created for SVG elements.

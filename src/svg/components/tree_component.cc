@@ -8,7 +8,7 @@ void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity refe
   assert(newNode != entt::null && "newNode is null");
   // referenceNode may be null.
 
-  const Entity self = entt::to_entity(registry, *this);
+  const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
 
   auto& newTree = registry.get<TreeComponent>(newNode);
   newTree.remove(registry);

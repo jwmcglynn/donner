@@ -284,29 +284,7 @@ void InstantiatePaintShadowTree(Registry& registry, Entity entity,
 
 }  // namespace
 
-RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {
-  // Set up render tree signals.
-  {
-    entt::sink sink(evaluateConditionalComponents_);
-    sink.connect<&EvaluateConditionalGradientShadowTrees>();
-    sink.connect<&EvaluateConditionalPatternShadowTrees>();
-  }
-
-  {
-    entt::sink sink(instantiateComputedComponents_);
-    sink.connect<&InstantiateComputedCircleComponents>();
-    sink.connect<&InstantiateComputedEllipseComponents>();
-    sink.connect<&InstantiateComputedPathComponents>();
-    sink.connect<&InstantiateComputedRectComponents>();
-    sink.connect<&InstantiateLineComponents>();
-    sink.connect<&InstantiatePolyComponents>();
-
-    // Should instantiate <stop> before gradients.
-    sink.connect<&InstantiateStopComponents>();
-    sink.connect<&InstantiateGradientComponents>();
-    sink.connect<&InstantiatePatternComponents>();
-  }
-}
+RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
 
 void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
   createComputedComponents(outWarnings);
@@ -315,7 +293,8 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
 void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
-  evaluateConditionalComponents_.publish(registry_);
+  EvaluateConditionalGradientShadowTrees(registry_);
+  EvaluateConditionalPatternShadowTrees(registry_);
 
   // Instantiate shadow trees.
   for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
@@ -395,13 +374,23 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
   ComputeAllTransforms(registry_, outWarnings);
 
-  instantiateComputedComponents_.publish(registry_, outWarnings);
+  InstantiateComputedCircleComponents(registry_, outWarnings);
+  InstantiateComputedEllipseComponents(registry_, outWarnings);
+  InstantiateComputedPathComponents(registry_, outWarnings);
+  InstantiateComputedRectComponents(registry_, outWarnings);
+  InstantiateLineComponents(registry_, outWarnings);
+  InstantiatePolyComponents(registry_, outWarnings);
+
+  // Should instantiate <stop> before gradients.
+  InstantiateStopComponents(registry_, outWarnings);
+  InstantiateGradientComponents(registry_, outWarnings);
+  InstantiatePatternComponents(registry_, outWarnings);
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
   registry_.clear<RenderingInstanceComponent>();
 
-  const Entity rootEntity = registry_.ctx<DocumentContext>().rootEntity;
+  const Entity rootEntity = registry_.ctx().get<DocumentContext>().rootEntity;
 
   RenderingContextImpl impl(registry_, verbose);
   impl.traverseTree(Transformd(), rootEntity);

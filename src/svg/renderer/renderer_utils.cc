@@ -9,8 +9,11 @@ namespace donner::svg {
 void RendererUtils::prepareDocumentForRendering(SVGDocument& document, bool verbose,
                                                 std::vector<ParseError>* outWarnings) {
   Registry& registry = document.registry();
-  registry.ctx_or_set<components::RenderingContext>(registry).instantiateRenderTree(verbose,
-                                                                                    outWarnings);
+  if (!registry.ctx().contains<components::RenderingContext>()) {
+    registry.ctx().emplace<components::RenderingContext>(registry);
+  }
+
+  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(verbose, outWarnings);
 }
 
 }  // namespace donner::svg

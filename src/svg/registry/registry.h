@@ -15,7 +15,7 @@ namespace donner::svg {
  *
  * \see \ref Registry
  */
-enum class Entity : std::uint32_t {};
+using Entity = entt::entity;
 
 /// Compare two \ref Entity values.
 inline auto operator<=>(Entity lhs, Entity rhs) {
@@ -28,14 +28,14 @@ inline std::ostream& operator<<(std::ostream& os, const Entity& entity) {
 }
 
 /// Registry type for the SVG \ref ECS.
-using Registry = entt::basic_registry<Entity>;
+using Registry = entt::basic_registry<Entity, std::allocator<Entity>>;
 
 /**
  * Convenience handle for a \ref Entity with an attached \ref Registry.
  *
  * Allows calling functions typically on \ref Registry without having to pass around two values.
  */
-using EntityHandle = entt::basic_handle<Entity>;
+using EntityHandle = entt::basic_handle<Registry>;
 
 /**
  * SVG element types, corresponds to each XML element name, such as \ref xml_circle, \ref xml_svg,

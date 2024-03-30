@@ -82,7 +82,8 @@ struct RenderingInstanceComponent {
    * @return A handle for the style entity.
    */
   EntityHandle styleHandle(Registry& registry) const {
-    return EntityHandle(registry, entt::to_entity(registry, *this));
+    return EntityHandle(registry,
+                        entt::to_entity(registry.storage<RenderingInstanceComponent>(), *this));
   }
 
   /**
@@ -91,7 +92,9 @@ struct RenderingInstanceComponent {
    * @param registry The registry to use.
    * @return True if this is a shadow tree instance.
    */
-  bool isShadow(Registry& registry) const { return entt::to_entity(registry, *this) != dataEntity; }
+  bool isShadow(Registry& registry) const {
+    return entt::to_entity(registry.storage<RenderingInstanceComponent>(), *this) != dataEntity;
+  }
 };
 
 }  // namespace donner::svg::components

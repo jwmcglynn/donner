@@ -101,7 +101,7 @@ Boxd CalculateBounds(EntityHandle handle, const SizedElementProperties& properti
       size = viewbox->viewbox->size();
     }
 
-    const DocumentContext& ctx = registry.ctx<DocumentContext>();
+    const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
     if (ctx.rootEntity == handle.entity()) {
       // This is the root <svg> element.
       const Vector2i documentSize =
@@ -188,7 +188,8 @@ std::optional<float> SizedElementComponent::intrinsicAspectRatio(Registry& regis
   // TODO(svg views): Do not handle "2. If an SVG View is active", this feature is not supported.
 
   // > 3. If the ‘viewBox’ on the ‘svg’ element is correctly specified:
-  if (const auto* viewbox = registry.try_get<ViewboxComponent>(entt::to_entity(registry, *this));
+  if (const auto* viewbox = registry.try_get<ViewboxComponent>(
+          entt::to_entity(registry.storage<SizedElementComponent>(), *this));
       viewbox && viewbox->viewbox) {
     // > 1. let viewbox be the viewbox defined by the ‘viewBox’ attribute on the ‘svg’ element
     // > 2. return viewbox.width / viewbox.height
@@ -206,7 +207,7 @@ Vector2i SizedElementComponent::calculateDocumentSize(Registry& registry) const 
 Vector2i SizedElementComponent::calculateViewportScaledDocumentSize(
     Registry& registry, InvalidSizeBehavior behavior) const {
   const Vector2d documentSize = calculateDocumentSize(registry);
-  const DocumentContext& ctx = registry.ctx<DocumentContext>();
+  const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
 
   std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
   if (documentSize.x <= 0.0 || documentSize.y <= 0.0) {
@@ -297,7 +298,7 @@ void SizedElementComponent::compute(EntityHandle handle) {
 }
 
 Vector2d SizedElementComponent::calculateRawDocumentSize(Registry& registry) const {
-  const DocumentContext& ctx = registry.ctx<DocumentContext>();
+  const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
 
   const std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
   const Boxd canvasMaxBounds = Boxd::WithSize(

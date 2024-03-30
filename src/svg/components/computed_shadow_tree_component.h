@@ -124,7 +124,8 @@ struct ComputedShadowTreeComponent {
                                          std::vector<ParseError>* outWarnings) {
     assert((!mainBranch_ || branchType != Branch::Main) && "Only one main branch is allowed.");
 
-    const Entity shadowHostEntity = entt::to_entity(registry, *this);
+    const Entity shadowHostEntity =
+        entt::to_entity(registry.storage<ComputedShadowTreeComponent>(), *this);
 
     BranchStorage storage;
     storage.branchType = branchType;

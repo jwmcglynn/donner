@@ -126,7 +126,7 @@ void ComputedStyleComponent::computeProperties(EntityHandle handle) {
   // If we don't have a parent, inherit the one from the root entity (which may also be this
   // entity).
   if (!viewbox_) {
-    const Entity rootEntity = registry.ctx<DocumentContext>().rootEntity;
+    const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
     const Vector2i documentSize =
         registry.get<SizedElementComponent>(rootEntity)
             .calculateViewportScaledDocumentSize(registry, InvalidSizeBehavior::ZeroSize);

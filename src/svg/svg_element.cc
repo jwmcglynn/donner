@@ -105,7 +105,7 @@ std::optional<RcString> SVGElement::getAttribute(std::string_view name) const {
 }
 
 SVGDocument& SVGElement::ownerDocument() {
-  return registry().ctx<components::DocumentContext>().document();
+  return registry().ctx().get<components::DocumentContext>().document();
 }
 
 std::optional<SVGElement> SVGElement::parentElement() const {
