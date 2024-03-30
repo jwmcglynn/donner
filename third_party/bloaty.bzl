@@ -15,9 +15,9 @@ def bloaty_dependencies():
     maybe(
         http_archive,
         name = "rapidjson",
-        sha256 = "1249f4c57903330c47750674b3e412a5d6bef003cb672f3a20f9832342a83425",
-        strip_prefix = "rapidjson-476ffa2fd272243275a74c36952f210267dc3088",
-        urls = ["https://github.com/Tencent/rapidjson/archive/476ffa2fd272243275a74c36952f210267dc3088.tar.gz"],
+        sha256 = "bc23236d26360ab2eccea85619068e757517269ce626c5bbc97c6881b921763a",
+        strip_prefix = "rapidjson-5ec44fb9206695e5293f610b0a46d21851d0c966",
+        urls = ["https://github.com/Tencent/rapidjson/archive/5ec44fb9206695e5293f610b0a46d21851d0c966.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
