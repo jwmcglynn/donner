@@ -55,7 +55,7 @@ void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity refe
 void TreeComponent::appendChild(Registry& registry, Entity child) {
   assert(child != entt::null && "child is null");
 
-  const Entity self = entt::to_entity(registry, *this);
+  const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
   UTILS_RELEASE_ASSERT(child != self);
 
   auto& childTree = registry.get<TreeComponent>(child);
@@ -82,7 +82,7 @@ void TreeComponent::replaceChild(Registry& registry, Entity newChild, Entity old
   assert(newChild != entt::null && "newChild is null");
   assert(oldChild != entt::null && "oldChild is null");
 
-  const Entity self = entt::to_entity(registry, *this);
+  const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
   UTILS_RELEASE_ASSERT(newChild != self);
 
   auto& oldChildTree = registry.get<TreeComponent>(oldChild);
@@ -97,7 +97,7 @@ void TreeComponent::removeChild(Registry& registry, Entity child) {
   assert(child != entt::null && "child is null");
 
   auto& childTree = registry.get<TreeComponent>(child);
-  const Entity self = entt::to_entity(registry, *this);
+  const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
   UTILS_RELEASE_ASSERT(childTree.parent_ == self);
   childTree.remove(registry);
 }
@@ -105,7 +105,7 @@ void TreeComponent::removeChild(Registry& registry, Entity child) {
 void TreeComponent::remove(Registry& registry) {
   if (parent_ != entt::null) {
     auto& parentTree = registry.get<TreeComponent>(parent_);
-    const Entity self = entt::to_entity(registry, *this);
+    const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
 
     // Remove from parent.
     if (parentTree.firstChild_ == self) {

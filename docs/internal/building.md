@@ -27,3 +27,19 @@ bazel build //...
 ```
 
 All other dependencies will be downloaded on-demand.
+
+## Other build types
+
+### WASM Builds (experimental)
+
+WASM, or WebAssembly, enables running Donner on the web using the browser's Canvas API as the rendering backend. To enable building wasm, add `--build_tag_filters=wasm` to your build. Note that this currently requires Linux, but works within docker on macOS (including Apple silicon).
+
+```sh
+bazel build --build_tag_filters=wasm //...
+```
+
+To try the wasm demo:
+
+```sh
+bazel run --build_tag_filters=wasm //src/wasm:serve_http
+```
