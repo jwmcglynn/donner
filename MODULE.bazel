@@ -39,6 +39,21 @@ git_override(
 
 # Skia dependencies
 bazel_dep(name = "rules_go", version = "0.46.0")
+bazel_dep(name = "rules_python", version = "0.31.0", dev_dependency = True)
+
+pip = use_extension(
+    "@rules_python//python/extensions:pip.bzl",
+    "pip",
+    dev_dependency = True,
+)
+
+pip.parse(
+    hub_name = "pip_deps",
+    python_version = "3.11",
+    requirements_lock = "//tools/python:requirements.txt",
+)
+
+use_repo(pip, "pip_deps")
 
 #
 # Toolchain
