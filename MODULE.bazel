@@ -62,8 +62,8 @@ use_repo(pip, "pip_deps")
 bazel_dep(name = "toolchains_llvm", version = "0.0.0")
 git_override(
     module_name = "toolchains_llvm",
-    remote = "https://github.com/jwmcglynn/bazel-toolchain",
-    commit = "637ee3d0e6bb2b4f76f95f0a2bafd79429cbdaaf",
+    remote = "https://github.com/jwmcglynn/toolchains_llvm",
+    commit = "ac1836bde88f7a55e3d6c0161844d98ae9bf861e",
 )
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")

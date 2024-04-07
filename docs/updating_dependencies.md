@@ -1,5 +1,33 @@
 # Updating Dependencies
 
+## Bazel llvm_toolchain
+
+Donner uses a modified version of llvm_toolchain for its libclang-based tools (such as [hdoc](devtools/generating_documentation.md)).
+
+To update to a new version, modify `MODULE.bazel`:
+
+```py
+git_override(
+    module_name = "toolchains_llvm",
+    remote = "https://github.com/jwmcglynn/toolchains_llvm",
+    commit = "ac1836bde88f7a55e3d6c0161844d98ae9bf861e",
+)
+```
+
+To locally test changes, assuming repro is cloned locally next to the `donner` directory:
+
+```diff
+- git_override(
+-     module_name = "toolchains_llvm",
+-     remote = "https://github.com/jwmcglynn/toolchains_llvm",
+-     commit = "ac1836bde88f7a55e3d6c0161844d98ae9bf861e",
+- )
++ local_path_override(
++     module_name = "toolchains_llvm",
++     path = "../toolchains_llvm",
++ )
+```
+
 ## Skia version
 
 There's a fork of the skia library at https://github.com/jwmcglynn/skia, which contains fixes for build errors compared to the upstream version.
