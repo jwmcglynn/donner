@@ -7,6 +7,10 @@ index.scip
 *.bloaty.csv
 build-binary-size
 
+# The Bzlmod lockfile is platform-dependent with Python and thus hard
+# to keep up-to-date in CI. It still speeds up local development.
+MODULE.bazel.lock
+
 # VS Code
 # See https://www.toptal.com/developers/gitignore/api/visualstudiocode
 .vscode/*
