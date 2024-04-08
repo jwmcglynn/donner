@@ -3,12 +3,6 @@ build --enable_platform_specific_config
 # Disable layering check since toolchains_llvm has issues with it.
 build --features=-layering_check
 
-# Tell Bazel to pass the right flags for llvm-ar, not libtool. Only needed if you are building on darwin.
-# See https://github.com/bazelbuild/bazel/blob/5c75d0acec21459bbb13520817e3806e1507e907/tools/cpp/unix_cc_toolchain_config.bzl#L1000-L1024
-# Context: https://github.com/grailbio/bazel-toolchain/issues/238
-build --features=-libtool
-build --host_features=-libtool
-
 # Disable docs and wasm by default.
 build --build_tag_filters=-docs,-wasm
 

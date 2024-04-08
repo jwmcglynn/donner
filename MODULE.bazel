@@ -60,10 +60,17 @@ use_repo(pip, "pip_deps")
 #
 
 bazel_dep(name = "toolchains_llvm", version = "0.0.0")
+
+# To use a local copy of the toolchains_llvm repository, uncomment the following and comment the
+# git_repository below.
+# local_path_override(
+#     module_name = "toolchains_llvm",
+#     path = "../toolchains_llvm",
+# )
 git_override(
     module_name = "toolchains_llvm",
     remote = "https://github.com/jwmcglynn/toolchains_llvm",
-    commit = "ac1836bde88f7a55e3d6c0161844d98ae9bf861e",
+    commit = "179c4b21a8ef20c3651e404d52a8621d5b414a8f",
 )
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
