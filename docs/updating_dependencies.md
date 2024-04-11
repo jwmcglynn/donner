@@ -39,7 +39,7 @@ git fetch upstream
 git checkout -b new_upstream upstream/main
 ```
 
-To test it against a local Donner WORKSPACE, modify the `skia` repository to point to your local skia repo:
+To test it against a local Donner MODULE.bazel, modify the `skia` repository to point to your local skia repo:
 
 ```diff
 - git_repository(

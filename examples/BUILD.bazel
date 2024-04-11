@@ -4,7 +4,7 @@ cc_binary(
     name = "svg_to_png",
     srcs = ["svg_to_png.cc"],
     deps = [
-        "//:donner",
+        "@donner",
     ],
 )
 
@@ -12,6 +12,6 @@ cc_binary(
     name = "svg_tree_interaction",
     srcs = ["svg_tree_interaction.cc"],
     deps = [
-        "//:donner",
+        "@donner",
     ],
 )

@@ -75,6 +75,7 @@ cc_library(
         "//src/svg/renderer:__subpackages__",
         "//src/svg/tests:__pkg__",
         "//src/svg/xml:__pkg__",
+        "//tools:__pkg__",
     ],
     deps = [
         ":svg_core",

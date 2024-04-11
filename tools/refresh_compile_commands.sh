@@ -1,4 +1,4 @@
 #!/bin/bash -e
 cd "$(dirname "$0")/.."
 
-bazel run //:refresh_compile_commands
+bazel run //tools:refresh_compile_commands

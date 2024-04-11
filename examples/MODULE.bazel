@@ -9,3 +9,12 @@ local_path_override(
     module_name = "donner",
     path = "..",
 )
+
+bazel_dep(name = "rules_cc", version = "0.0.9")
+
+bazel_dep(name = "stb", version = "0.0.0")
+git_override(
+    module_name = "stb",
+    remote = "https://github.com/jwmcglynn/rules_stb",
+    commit = "075e5a470e31e46a7318cc308c79dba205a6b2eb",
+)
