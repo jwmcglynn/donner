@@ -131,7 +131,7 @@ use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 
 register_toolchains("@llvm_toolchain//:all", dev_dependency = True)
 
-bazel_dep(name = "zstd", version = "1.5.5.bcr.1", dev_dependency = True)
+bazel_dep(name = "zstd", version = "1.5.6", dev_dependency = True)
 
 #
 # Devtools
