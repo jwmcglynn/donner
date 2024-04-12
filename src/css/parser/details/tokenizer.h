@@ -365,7 +365,7 @@ private:
       size_t remainingSize = afterName.size();
 
       // While the next two input code points are whitespace, consume the next input code point.
-      while (i + 1 < remainingSize && isWhitespace(afterName[i]) &&
+      while (i + 2 < remainingSize && isWhitespace(afterName[i]) &&
              isWhitespace(afterName[i + 1])) {
         ++i;
       }
@@ -374,7 +374,7 @@ private:
       // ('), or whitespace followed by U+0022 QUOTATION MARK (") or U+0027 APOSTROPHE ('), then
       // create a <function-token> with its value set to `name` and return it.
       if (isQuote(afterName[i]) ||
-          (i + 1 < remainingSize && isWhitespace(afterName[i]) && isQuote(afterName[i + 1]))) {
+          (i + 2 < remainingSize && isWhitespace(afterName[i]) && isQuote(afterName[i + 1]))) {
         return token<Token::Function>(nameCharsConsumed + 1, std::move(name));
       }
 
