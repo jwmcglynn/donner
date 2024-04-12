@@ -48,13 +48,13 @@ public:
       // Whitespace defined by https://www.w3.org/TR/css-syntax-3/#whitespace
       // Note that this also includes whitespace that is normally converted during the preprocessing
       // step which is not performed here.
-      case ' ':
-      case '\t':
-      case '\f':
-      case '\r':
+      case ' ': [[fallthrough]];
+      case '\t': [[fallthrough]];
+      case '\f': [[fallthrough]];
+      case '\r': [[fallthrough]];
       case '\n': return consumeWhitespace(); break;
 
-      case '"':
+      case '"': [[fallthrough]];
       case '\'': return consumeQuotedString(); break;
 
       case '#': {
@@ -73,7 +73,7 @@ public:
         break;
       }
 
-      case '+':
+      case '+': [[fallthrough]];
       case '.': {
         if (isNumberStart(remaining_)) {
           return consumeNumericToken();
@@ -138,15 +138,19 @@ public:
       case ',': return token<Token::Comma>(1);
       case ':': return token<Token::Colon>(1);
       case ';': return token<Token::Semicolon>(1);
+      default: {
+        if (std::isdigit(remaining_[0])) {
+          return consumeNumericToken();
+        } else if (isNameStartCodepoint(remaining_[0])) {
+          return consumeIdentLikeToken();
+        } else {
+          return token<Token::Delim>(1, remaining_[0]);
+        }
+        break;
+      }
     }
 
-    if (std::isdigit(remaining_[0])) {
-      return consumeNumericToken();
-    } else if (isNameStartCodepoint(remaining_[0])) {
-      return consumeIdentLikeToken();
-    } else {
-      return token<Token::Delim>(1, remaining_[0]);
-    }
+    UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
   }
 
   bool isEOF() const { return remaining_.empty() && !nextToken_; }
@@ -365,7 +369,7 @@ private:
       size_t remainingSize = afterName.size();
 
       // While the next two input code points are whitespace, consume the next input code point.
-      while (i + 2 < remainingSize && isWhitespace(afterName[i]) &&
+      while (i + 1 < remainingSize && isWhitespace(afterName[i]) &&
              isWhitespace(afterName[i + 1])) {
         ++i;
       }
@@ -373,8 +377,8 @@ private:
       // If the next one or two input code points are U+0022 QUOTATION MARK ("), U+0027 APOSTROPHE
       // ('), or whitespace followed by U+0022 QUOTATION MARK (") or U+0027 APOSTROPHE ('), then
       // create a <function-token> with its value set to `name` and return it.
-      if (isQuote(afterName[i]) ||
-          (i + 2 < remainingSize && isWhitespace(afterName[i]) && isQuote(afterName[i + 1]))) {
+      if ((i < remainingSize && isQuote(afterName[i])) ||
+          (i + 1 < remainingSize && isWhitespace(afterName[i]) && isQuote(afterName[i + 1]))) {
         return token<Token::Function>(nameCharsConsumed + 1, std::move(name));
       }
 

@@ -384,10 +384,22 @@ TEST(Tokenizer, Url) {
   EXPECT_THAT(AllTokens(Tokenizer("uRL(mixed-case)")),
               ElementsAre(Token(Token::Url("mixed-case"), 0)));
 
-  // If EOF is hit, returns the remaining data.
+  // Test improperly terminated URLs.
   EXPECT_THAT(AllTokens(Tokenizer("url(")),
               ElementsAre(Token(Token::Url(""), 0),
                           Token(Token::ErrorToken(Token::ErrorToken::Type::EofInUrl), 4)));
+  EXPECT_THAT(AllTokens(Tokenizer("url( ")),
+              ElementsAre(Token(Token::Url(""), 0),
+                          Token(Token::ErrorToken(Token::ErrorToken::Type::EofInUrl), 5)));
+  EXPECT_THAT(AllTokens(Tokenizer("url(  ")),
+              ElementsAre(Token(Token::Url(""), 0),
+                          Token(Token::ErrorToken(Token::ErrorToken::Type::EofInUrl), 6)));
+  EXPECT_THAT(AllTokens(Tokenizer("url(  \"")),
+              ElementsAre(Token(Token::Function("url"), 0), Token(Token::Whitespace("  "), 4),
+                          Token(Token::String(""), 6),
+                          Token(Token::ErrorToken(Token::ErrorToken::Type::EofInString), 7)));
+
+  // If EOF is hit, returns the remaining data.
   EXPECT_THAT(AllTokens(Tokenizer("url(asdf")),
               ElementsAre(Token(Token::Url("asdf"), 0),
                           Token(Token::ErrorToken(Token::ErrorToken::Type::EofInUrl), 8)));
