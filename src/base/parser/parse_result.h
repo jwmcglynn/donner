@@ -20,17 +20,17 @@ public:
   /**
    * Construct from a successful result.
    */
-  ParseResult(T&& result) : result_(std::move(result)) {}
+  /* implicit */ ParseResult(T&& result) : result_(std::move(result)) {}
 
   /**
    * Construct from a successful result.
    */
-  ParseResult(const T& result) : result_(result) {}
+  /* implicit */ ParseResult(const T& result) : result_(result) {}
 
   /**
    * Construct from an error.
    */
-  ParseResult(ParseError&& error) : error_(std::move(error)) {}
+  /* implicit */ ParseResult(ParseError&& error) : error_(std::move(error)) {}
 
   /**
    * Return a result, but also an error. Used in the case where partial parse results may be
@@ -100,10 +100,10 @@ public:
   }
 
   /// Returns true if this ParseResult contains a valid result.
-  bool hasResult() const { return result_.has_value(); }
+  bool hasResult() const noexcept { return result_.has_value(); }
 
   /// Returns true if this ParseResult contains an error.
-  bool hasError() const { return error_.has_value(); }
+  bool hasError() const noexcept { return error_.has_value(); }
 
   /**
    * Map the result of this ParseResult to a new type, by transforming the result with the provided
@@ -114,7 +114,7 @@ public:
    * @param functor The functor to apply to the result.
    */
   template <typename Target, typename Functor>
-  ParseResult<Target> map(Functor&& functor) {
+  ParseResult<Target> map(const Functor& functor) && {
     if (hasResult()) {
       return ParseResult<Target>(functor(std::move(result_.value())));
     } else {
@@ -131,7 +131,7 @@ public:
    * @param functor The functor to apply to the error.
    */
   template <typename Target, typename Functor>
-  ParseResult<Target> mapError(Functor&& functor) {
+  ParseResult<Target> mapError(const Functor& functor) && {
     if (hasError()) {
       return ParseResult<Target>(functor(std::move(error_.value())));
     } else {

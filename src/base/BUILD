@@ -33,15 +33,45 @@ cc_test(
     srcs = [
         "tests/base_test_utils_tests.cc",
         "tests/box_tests.cc",
+        "tests/length_tests.cc",
         "tests/math_utils_tests.cc",
         "tests/rc_string_tests.cc",
         "tests/string_utils_tests.cc",
         "tests/transform_tests.cc",
+        "tests/utils_tests.cc",
         "tests/vector2_tests.cc",
     ],
     deps = [
         ":base",
         ":base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "base_tests_ndebug",
+    srcs = [
+        "tests/utils_tests.cc",
+        "utils.h",
+    ],
+    defines = [
+        "NDEBUG",
+    ],
+    deps = [
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "rc_string_tests_with_exceptions",
+    srcs = [
+        "tests/rc_string_tests.cc",
+    ],
+    copts = [
+        "-fexceptions",
+    ],
+    deps = [
+        ":base",
         "@com_google_gtest//:gtest_main",
     ],
 )

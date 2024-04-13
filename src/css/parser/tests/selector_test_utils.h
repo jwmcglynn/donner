@@ -30,8 +30,10 @@ public:
   explicit MultiSelectorMatcher(std::vector<testing::Matcher<const EntryType&>>&& matchers)
       : matchers_(std::move(matchers)) {}
 
-  bool MatchAndExplain(const SelectorType& selector,
-                       testing::MatchResultListener* result_listener) const {
+  virtual ~MultiSelectorMatcher() = default;
+
+  virtual bool MatchAndExplain(const SelectorType& selector,
+                               testing::MatchResultListener* result_listener) const {
     const bool listenerInterested = result_listener->IsInterested();
 
     if (selector.entries.size() != matchers_.size()) {

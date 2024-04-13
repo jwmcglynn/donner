@@ -18,9 +18,9 @@ public:
    * consumed to parse it.
    */
   struct Result {
-    double number;         ///< The parsed result.
-    size_t consumedChars;  ///< The number of characters of the input string that were consumed to
-                           ///< parse the number.
+    double number = 0.0;       ///< The parsed result.
+    size_t consumedChars = 0;  ///< The number of characters of the input string that were consumed
+                               ///< to parse the number.
   };
 
   /**

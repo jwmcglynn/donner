@@ -32,7 +32,7 @@ struct ParseError {
    */
   int resolveOffset(std::string_view sourceString) const {
     if (offset == kEndOfString) {
-      return sourceString.size();
+      return static_cast<int>(sourceString.size());
     } else {
       return offset;
     }

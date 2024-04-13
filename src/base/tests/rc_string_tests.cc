@@ -1,8 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <unordered_map>
+
 #include "src/base/rc_string.h"
 #include "src/base/utils.h"
 
+#pragma clang diagnostic ignored "-Wself-assign-overloaded"
+#pragma clang diagnostic ignored "-Wself-move"
 namespace donner {
 
 TEST(RcString, Construct) {
@@ -43,7 +47,7 @@ TEST(RcString, Construct) {
   }
 }
 
-TEST(RcString, Construct_FromVector) {
+TEST(RcString, ConstructFromVector) {
   std::vector<char> vec = {'h', 'e', 'l', 'l', 'o'};
   RcString str = RcString::fromVector(std::move(vec));
 
@@ -54,7 +58,7 @@ TEST(RcString, Copy) {
   // Copy from short.
   {
     RcString str("hello");
-    RcString str2(str);
+    RcString str2(str);  // NOLINT(performance-unnecessary-copy-initialization)
     EXPECT_EQ(str, "hello");
     EXPECT_EQ(str2, "hello");
   }
@@ -71,7 +75,7 @@ TEST(RcString, Copy) {
   // Copy from long.
   {
     RcString str("test STRING that is longer than 30 characters");
-    RcString str2(str);
+    RcString str2(str);  // NOLINT(performance-unnecessary-copy-initialization)
     EXPECT_EQ(str, "test STRING that is longer than 30 characters");
     EXPECT_EQ(str2, "test STRING that is longer than 30 characters");
   }
@@ -101,6 +105,17 @@ TEST(RcString, Copy) {
     str = str2;
     EXPECT_EQ(str, "short");
     EXPECT_EQ(str2, "short");
+  }
+
+  // Test assigning to self
+  {
+    RcString strShort("hello");
+    strShort = strShort;
+    EXPECT_EQ(strShort, "hello");
+
+    RcString strLong("test STRING that is longer than 30 characters");
+    strLong = strLong;
+    EXPECT_EQ(strLong, "test STRING that is longer than 30 characters");
   }
 }
 
@@ -155,6 +170,17 @@ TEST(RcString, Move) {
     str = std::move(str2);
     EXPECT_EQ(str, "short");
     EXPECT_EQ(str2, "");
+  }
+
+  // Test moving to self
+  {
+    RcString strShort("hello");
+    strShort = std::move(strShort);
+    EXPECT_EQ(strShort, "hello");
+
+    RcString strLong("test STRING that is longer than 30 characters");
+    strLong = std::move(strLong);
+    EXPECT_EQ(strLong, "test STRING that is longer than 30 characters");
   }
 }
 
@@ -234,6 +260,38 @@ TEST(RcString, Size) {
   }
 }
 
+TEST(RcString, Str) {
+  {
+    RcString str("test");
+    EXPECT_EQ(str.str(), "test");
+  }
+
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    EXPECT_EQ(str.str(), "test STRING that is longer than 30 characters");
+  }
+}
+
+TEST(RcString, Iterators) {
+  {
+    RcString str("test");
+    EXPECT_EQ(str.begin(), str.cbegin());
+    EXPECT_EQ(str.end(), str.cend());
+
+    EXPECT_EQ(*str.begin(), 't');
+    EXPECT_EQ(*(str.end() - 1), 't');
+  }
+
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    EXPECT_EQ(str.begin(), str.cbegin());
+    EXPECT_EQ(str.end(), str.cend());
+
+    EXPECT_EQ(*str.begin(), 't');
+    EXPECT_EQ(*(str.end() - 1), 's');
+  }
+}
+
 TEST(RcString, EqualsLowercase) {
   EXPECT_TRUE(RcString().equalsLowercase(""));
   EXPECT_TRUE(RcString("heLlo").equalsLowercase("hello"));
@@ -281,7 +339,7 @@ TEST(RcString, Substr) {
 #endif
 }
 
-TEST(RcString, Substr_SmallStringOptimization) {
+TEST(RcString, SubstrSmallStringOptimization) {
   // If the substr range is large enough, the substr will contain a reference.
   {
     const RcString original("test string that is longer than 30 characters");
@@ -323,6 +381,25 @@ TEST(RcString, Dedup) {
 TEST(RcString, Output) {
   EXPECT_EQ((std::ostringstream() << RcString("")).str(), "");
   EXPECT_EQ((std::ostringstream() << RcString("hello world")).str(), "hello world");
+}
+
+TEST(RcString, HashMap) {
+  RcString shortKey = "hello";
+  RcString longKey = "test STRING that is longer than 30 characters";
+
+  std::unordered_map<RcString, int> map;
+  map[shortKey] = 1;
+  map[longKey] = 2;
+
+  EXPECT_EQ(map[shortKey], 1);
+  EXPECT_EQ(map[longKey], 2);
+
+  RcString invalidKey = "invalid";
+  EXPECT_EQ(map.count(invalidKey), 0);
+
+#if UTILS_EXCEPTIONS_ENABLED()
+  EXPECT_THROW(map.at(invalidKey), std::out_of_range);
+#endif
 }
 
 }  // namespace donner

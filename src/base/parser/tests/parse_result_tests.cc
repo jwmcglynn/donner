@@ -78,7 +78,8 @@ TEST(ParseResult, ResultAndError) {
 
 TEST(ParseResult, Map) {
   ParseResult<int> withResult = 42;
-  EXPECT_THAT(withResult.map<int>([](int result) { return result * 2; }), ParseResultIs(84));
+  EXPECT_THAT(std::move(withResult).map<int>([](int result) { return result * 2; }),
+              ParseResultIs(84));
 
   ParseResult<int> withError = []() -> ParseResult<int> {
     ParseError error;
@@ -86,7 +87,7 @@ TEST(ParseResult, Map) {
     return error;
   }();
 
-  EXPECT_THAT(withError.map<int>([](int result) { return result * 2; }),
+  EXPECT_THAT(std::move(withError).map<int>([](int result) { return result * 2; }),
               ParseErrorIs("Test error please ignore"));
 }
 
@@ -97,7 +98,7 @@ TEST(ParseResult, MapError) {
   };
 
   ParseResult<int> withResult = 42;
-  EXPECT_THAT(withResult.mapError<int>(mapFn), ParseResultIs(42));
+  EXPECT_THAT(std::move(withResult).mapError<int>(mapFn), ParseResultIs(42));
 
   ParseResult<int> withError = []() -> ParseResult<int> {
     ParseError error;
@@ -105,7 +106,7 @@ TEST(ParseResult, MapError) {
     return error;
   }();
 
-  EXPECT_THAT(withError.mapError<int>(mapFn), ParseErrorIs("Updated message"));
+  EXPECT_THAT(std::move(withError).mapError<int>(mapFn), ParseErrorIs("Updated message"));
 }
 
 TEST(ParseResultTestUtils, PrintTo) {

@@ -52,10 +52,10 @@ public:
       case '\t': [[fallthrough]];
       case '\f': [[fallthrough]];
       case '\r': [[fallthrough]];
-      case '\n': return consumeWhitespace(); break;
+      case '\n': return consumeWhitespace();
 
       case '"': [[fallthrough]];
-      case '\'': return consumeQuotedString(); break;
+      case '\'': return consumeQuotedString();
 
       case '#': {
         const size_t remainingChars = remaining_.size();
@@ -70,7 +70,6 @@ public:
         } else {
           return token<Token::Delim>(1, '#');
         }
-        break;
       }
 
       case '+': [[fallthrough]];
@@ -146,7 +145,6 @@ public:
         } else {
           return token<Token::Delim>(1, remaining_[0]);
         }
-        break;
       }
     }
 
@@ -522,21 +520,20 @@ private:
       case '7': return 7;
       case '8': return 8;
       case '9': return 9;
-      case 'a':
+      case 'a': [[fallthrough]];
       case 'A': return 10;
-      case 'b':
+      case 'b': [[fallthrough]];
       case 'B': return 11;
-      case 'c':
+      case 'c': [[fallthrough]];
       case 'C': return 12;
-      case 'd':
+      case 'd': [[fallthrough]];
       case 'D': return 13;
-      case 'e':
+      case 'e': [[fallthrough]];
       case 'E': return 14;
-      case 'f':
+      case 'f': [[fallthrough]];
       case 'F': return 15;
+      default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
     }
-
-    UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
   }
 
   /// Check if two code points are a valid escape, per
@@ -611,7 +608,7 @@ private:
     }
   }
 
-  const std::string_view str_;
+  std::string_view str_;
   std::string_view remaining_;
 
   std::optional<Token> nextToken_;

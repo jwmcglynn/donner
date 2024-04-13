@@ -7,11 +7,11 @@
 namespace donner {
 
 ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Options options) {
-  NumberParser::Result result;
   auto begin = str.begin();
 
   if (str.size() >= 2 && str[0] == '0' && (str[1] == 'x' || str[1] == 'X')) {
     // Detected a hex value, only parse the first 0.
+    NumberParser::Result result;
     result.number = 0.0;
     result.consumedChars = 1;
     return result;
@@ -26,6 +26,7 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     ++begin;
   }
 
+  NumberParser::Result result;
   auto [strAdvance, ec] = absl::from_chars(
       begin, str.end(), result.number, absl::chars_format::fixed | absl::chars_format::scientific);
 

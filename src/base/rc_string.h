@@ -100,8 +100,7 @@ public:
 
   /// Cast operator to `std::string_view`.
   operator std::string_view() const {
-    return data_.isLong() ? std::string_view(data_.long_.data, data_.long_.size())
-                          : std::string_view(data_.short_.data, data_.short_.size());
+    return data_.isLong() ? data_.long_.view() : data_.short_.view();
   }
 
   /// @addtogroup Comparison
@@ -205,7 +204,7 @@ public:
   /**
    * @return a pointer to the string data.
    */
-  const char* data() const { return data_.isLong() ? data_.long_.data : data_.short_.data; }
+  const char* data() const { return data_.isLong() ? data_.long_.data : &data_.short_.data[0]; }
 
   /**
    * @return if the string is empty.
@@ -297,8 +296,8 @@ private:
     struct InitOnlySharedPtr {};
 
     // Only initialize the storage field, leave everything else unset.
-    constexpr LongStringData(InitOnlySharedPtr)
-        : storage(nullptr) {}  // NOLINT: Only one field is initialized as an optimization.
+    // NOLINTNEXTLINE: Only one field is initialized as an optimization.
+    constexpr LongStringData(InitOnlySharedPtr) : storage(nullptr) {}
 
     LongStringData(std::shared_ptr<std::vector<char>> storageRef, std::string_view view)
         : shiftedSize((view.size() << 1) | 1), data(view.data()), storage(std::move(storageRef)) {}
@@ -324,13 +323,14 @@ private:
                 "Short string capacity must leave one bit for long string flag.");
 
   struct ShortStringData {
-    constexpr ShortStringData() : shiftedSizeByte(0) {}
+    constexpr ShortStringData() {}  // NOLINT(cppcoreguidelines-pro-type-member-init): data is not
+                                    // initialized by default due to use in union
 
-    uint8_t shiftedSizeByte;
+    uint8_t shiftedSizeByte = 0;
     char data[kShortStringCapacity];
 
     size_t size() const { return shiftedSizeByte >> 1; }
-    std::string_view view() const { return std::string_view(data, size()); }
+    std::string_view view() const { return std::string_view(&data[0], size()); }
   };
 
   static_assert(sizeof(LongStringData) == sizeof(ShortStringData),

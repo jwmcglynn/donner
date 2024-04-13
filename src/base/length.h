@@ -99,12 +99,12 @@ struct Length {
 
   /// Spaceship operator, first ordered by the unit if they are not the same, then by the value
   /// (with a near-equals comparison).
-  bool operator<=>(const Length& other) const {
+  std::partial_ordering operator<=>(const Length& other) const {
     if (unit != other.unit) {
-      return unit <=> other.unit;
+      return std::partial_ordering(unit <=> other.unit);
     }
     if (NearEquals(value, other.value)) {
-      return 0;
+      return std::partial_ordering::equivalent;
     }
     return value <=> other.value;
   }
