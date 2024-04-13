@@ -17,6 +17,7 @@ def _libclang_transition_impl(settings, _attr):
             "-stdlib=libstdc++",
             "-D_GLIBCXX_USE_CXX11_ABI=1",
         ]) + [
+            "-fexceptions",
             "-fno-rtti",
             "-std=c++20",
         ],
