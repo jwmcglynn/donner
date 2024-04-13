@@ -115,6 +115,7 @@ TEST(NumberParser, StopsParsingAtCharacter) {
 
   // Hex should not parse either.
   EXPECT_THAT(NumberParser::Parse("0x1"), ParseResultIs(Result{0.0, 1}));
+  EXPECT_THAT(NumberParser::Parse("0X2"), ParseResultIs(Result{0.0, 1}));
 }
 
 TEST(NumberParser, InfAndNaN) {
