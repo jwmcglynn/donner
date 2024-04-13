@@ -152,5 +152,5 @@ bazel_dep(name = "bloaty", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "bloaty",
     remote = "https://github.com/jwmcglynn/bloaty",
-    commit = "b723cd162ee37837a79b0e6a31da04a858f2f67a",
+    commit = "1fe6c78dd0d78980f12402d159ab1b8fe5813ad8",
 )
