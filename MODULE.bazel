@@ -58,12 +58,6 @@ new_local_repository(
     path = "third_party/frozen",
 )
 
-git_repository(
-    name = "range-v3",
-    branch = "master",
-    remote = "https://github.com/ericniebler/range-v3",
-)
-
 ##
 ## Test dependencies
 ##

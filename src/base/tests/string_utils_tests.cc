@@ -1,8 +1,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <range/v3/range/conversion.hpp>
-
 #include "src/base/rc_string.h"
 #include "src/base/string_utils.h"
 

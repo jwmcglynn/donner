@@ -14,9 +14,6 @@ cc_library(
         "vector2.h",
     ],
     visibility = ["//:__subpackages__"],
-    deps = [
-        "@range-v3",
-    ],
 )
 
 cc_library(
