@@ -5,7 +5,7 @@
 namespace donner::svg::components {
 
 void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity referenceNode) {
-  assert(newNode != entt::null && "newNode is null");
+  UTILS_RELEASE_ASSERT_MSG(newNode != entt::null, "newNode is null");
   // referenceNode may be null.
 
   const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
@@ -53,7 +53,7 @@ void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity refe
 }
 
 void TreeComponent::appendChild(Registry& registry, Entity child) {
-  assert(child != entt::null && "child is null");
+  UTILS_RELEASE_ASSERT_MSG(child != entt::null, "child is null");
 
   const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
   UTILS_RELEASE_ASSERT(child != self);
@@ -79,8 +79,8 @@ void TreeComponent::appendChild(Registry& registry, Entity child) {
 }
 
 void TreeComponent::replaceChild(Registry& registry, Entity newChild, Entity oldChild) {
-  assert(newChild != entt::null && "newChild is null");
-  assert(oldChild != entt::null && "oldChild is null");
+  UTILS_RELEASE_ASSERT_MSG(newChild != entt::null, "newChild is null");
+  UTILS_RELEASE_ASSERT_MSG(oldChild != entt::null, "oldChild is null");
 
   const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);
   UTILS_RELEASE_ASSERT(newChild != self);
@@ -94,7 +94,7 @@ void TreeComponent::replaceChild(Registry& registry, Entity newChild, Entity old
 }
 
 void TreeComponent::removeChild(Registry& registry, Entity child) {
-  assert(child != entt::null && "child is null");
+  UTILS_RELEASE_ASSERT_MSG(child != entt::null, "child is null");
 
   auto& childTree = registry.get<TreeComponent>(child);
   const Entity self = entt::to_entity(registry.storage<TreeComponent>(), *this);

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "src/base/rc_string.h"
+#include "src/base/utils.h"
 
 namespace donner {
 
@@ -272,7 +273,12 @@ TEST(RcString, Substr) {
 
   EXPECT_EQ(RcString("asdf").substr(0, 10), "asdf")
       << "Should return the maximum number of characters possible";
+
+#if UTILS_EXCEPTIONS_ENABLED()
   EXPECT_THROW(RcString("asdf").substr(10), std::out_of_range) << "Invalid start position.";
+#else
+  EXPECT_DEATH(RcString("asdf").substr(10), "") << "Invalid start position.";
+#endif
 }
 
 TEST(RcString, Substr_SmallStringOptimization) {

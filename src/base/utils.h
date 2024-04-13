@@ -116,3 +116,14 @@
 #define UTILS_RELEASE_ASSERT(x) assert(x)
 #define UTILS_RELEASE_ASSERT_MSG(x, msg) assert((x) && (msg))
 #endif
+
+/**
+ * \def UTILS_EXCEPTIONS_ENABLED()
+ *
+ * Returns true if exceptions are enabled, false otherwise.
+ */
+#if defined(__cpp_exceptions) && __cpp_exceptions == 199711
+#define UTILS_EXCEPTIONS_ENABLED() true
+#else
+#define UTILS_EXCEPTIONS_ENABLED() false
+#endif

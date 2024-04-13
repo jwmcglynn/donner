@@ -659,7 +659,10 @@ private:
     assert(!components_.empty() && components_.front().isToken<TokenType>());
     advance();
   }
-  void expectAndConsumeDelim(char value) { assert(tryConsumeDelim(value)); }
+  void expectAndConsumeDelim(char value) {
+    [[maybe_unused]] const bool didConsumeDelim = tryConsumeDelim(value);
+    assert(didConsumeDelim && "Failed to consume delimiter");
+  }
 
   void advance(size_t amount = 1) { components_ = components_.subspan(amount); }
 

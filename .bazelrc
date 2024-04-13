@@ -6,6 +6,10 @@ build --features=-layering_check
 # Disable docs and wasm by default.
 build --build_tag_filters=-docs,-wasm
 
+# Disable exceptions and rtti
+build --copt=-fno-exceptions
+build --copt=-fno-rtti
+
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 
@@ -39,13 +43,22 @@ build:binary-size -c opt --copt=-Oz --copt=-g --strip=never
 
 # Coverage builds
 coverage --config=coverage
+coverage --combined_report=lcov
+coverage --instrumentation_filter="//src[:/]"
+
+coverage:macos --test_env=COVERAGE_GCOV_PATH=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata
+coverage:macos --test_env=LLVM_COV=/Library/Developer/CommandLineTools/usr/bin/llvm-cov
+
+build:coverage --cxxopt=-DNDEBUG
+build:coverage --instrument_test_targets
+build:coverage --experimental_generate_llvm_lcov
+build:coverage --copt=-ffile-compilation-dir=.
 build:coverage --action_env=BAZEL_USE_LLVM_NATIVE_COVERAGE=1
 build:coverage --action_env=GCOV=llvm-profdata
 build:coverage --action_env=BAZEL_LLVM_COV=llvm-cov
-build:coverage --experimental_generate_llvm_lcov
-build:coverage --collect_code_coverage
-build:coverage --combined_report=lcov
-build:coverage --instrumentation_filter="//src[:/]"
+
+test:coverage --collect_code_coverage
+test:coverage --nocache_test_results
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --linkopt -ldl

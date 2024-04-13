@@ -1,12 +1,12 @@
 #!/bin/bash -e
-cd "$(dirname "$0")/.."
 
-JAVA_HOME=$(dirname $(dirname $(which java)))
-
-bazel coverage -s \
-    --local_test_jobs=1 \
-    --nocache_test_results \
-    //src/...
+# Print help message
+if [[ $1 == "--help" ]]; then
+  echo "Usage: $0 [TARGETS...]"
+  echo "Run coverage analysis on the specified Bazel targets."
+  echo "If no targets are specified, coverage is run on '//src/...'."
+  exit 0
+fi
 
 # Error if genhtml is not found
 if ! which genhtml > /dev/null; then
@@ -14,9 +14,19 @@ if ! which genhtml > /dev/null; then
     exit 1
 fi
 
-genhtml bazel-out/_coverage/_coverage_report.dat \
+JAVA_HOME=$(dirname $(dirname $(which java)))
+
+TARGETS=${@:-//src/...}
+
+(
+  cd $(bazel info workspace)
+  bazel coverage $TARGETS
+
+  genhtml $(bazel info output_path)/_coverage/_coverage_report.dat \
     --highlight \
     --legend \
+    --branch-coverage \
     --output-directory coverage-report
+)
 
 echo "Coverage report saved to coverage-report/index.html"
