@@ -1,5 +1,7 @@
 #include "src/base/parser/length_parser.h"
 
+#include <algorithm>
+
 #include "src/base/parser/details/parser_base.h"
 
 namespace donner {

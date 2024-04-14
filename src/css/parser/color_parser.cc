@@ -1,5 +1,6 @@
 #include "src/css/parser/color_parser.h"
 
+#include <algorithm>
 #include <numeric>
 
 #include "src/base/math_utils.h"
