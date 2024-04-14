@@ -4,6 +4,7 @@
 
 #include "src/base/parser/parse_error.h"
 #include "src/svg/xml/details/line_offsets.h"
+#include "src/svg/xml/xml_parser.h"
 
 namespace donner::svg {
 
@@ -15,8 +16,11 @@ struct ParserOrigin {
 
 class XMLParserContext {
 public:
-  XMLParserContext(std::string_view input, std::vector<ParseError>* warningsStorage)
-      : input_(input), lineOffsets_(input), warnings_(warningsStorage) {}
+  XMLParserContext(std::string_view input, std::vector<ParseError>* warningsStorage,
+                   const XMLParser::Options& options)
+      : input_(input), lineOffsets_(input), warnings_(warningsStorage), options_(options) {}
+
+  XMLParser::Options options() const { return options_; }
 
   void setNamespacePrefix(std::string_view namespacePrefix) { namespacePrefix_ = namespacePrefix; }
 
@@ -72,6 +76,7 @@ private:
   std::string_view input_;
   LineOffsets lineOffsets_;
   std::vector<ParseError>* warnings_;
+  XMLParser::Options options_;
 
   std::string_view namespacePrefix_;
 };

@@ -16,7 +16,7 @@ Entity SVGDocument::rootEntity() const {
   return registry_->ctx().get<components::DocumentContext>().rootEntity;
 }
 
-SVGSVGElement SVGDocument::svgElement() {
+SVGSVGElement SVGDocument::svgElement() const {
   return SVGSVGElement(EntityHandle(*registry_, rootEntity()));
 }
 

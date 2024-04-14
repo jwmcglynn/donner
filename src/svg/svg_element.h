@@ -53,8 +53,17 @@ public:
   /// Create another reference to the same SVGElement.
   SVGElement(const SVGElement& other);
 
+  /// Move constructor.
+  SVGElement(SVGElement&& other) noexcept;
+
+  /// Destructor.
+  ~SVGElement() noexcept = default;
+
   /// Create another reference to the same SVGElement.
   SVGElement& operator=(const SVGElement& other);
+
+  /// Move assignment operator.
+  SVGElement& operator=(SVGElement&& other) noexcept;
 
   /// Get the ElementType for known XML element types.
   ElementType type() const;
@@ -117,6 +126,30 @@ public:
    * @return The value of the attribute, or std::nullopt if the attribute does not exist.
    */
   std::optional<RcString> getAttribute(std::string_view name) const;
+
+  /**
+   * Set the value of a generic attribute, which may be either a presentation attribute or custom
+   * user-provided attribute.
+   *
+   * This API supports a superset of \ref trySetPresentationAttribute, however its parse errors are
+   * ignored. If the attribute is not a presentation attribute, or there are parse errors the
+   * attribute will be stored as a custom attribute instead.
+   *
+   * @param name Name of the attribute to set.
+   * @param value New value to set.
+   */
+  void setAttribute(std::string_view name, std::string_view value);
+
+  /**
+   * Remove an attribute, which may be either a presentation attribute or custom user-provided
+   * attribute.
+   *
+   * If this is a presentation attribute, the presentation attributes value will be removed
+   * (internally by setting the value to 'inherit').
+   *
+   * @param name Name of the attribute to remove.
+   */
+  void removeAttribute(std::string_view name);
 
   /**
    * Get the \ref SVGDocument that holds this element.
@@ -212,6 +245,11 @@ public:
   bool operator==(const SVGElement& other) const { return handle_ == other.handle_; }
 
   /**
+   * Returns true if the two SVGElement handles reference the same underlying document.
+   */
+  bool operator!=(const SVGElement& other) const { return handle_ != other.handle_; }
+
+  /**
    * Return true if this element "is a" instance of type, if it be cast to a specific type with \ref
    * cast.
    *
@@ -234,7 +272,7 @@ public:
     // Derived must inherit from SVGElement, and have no additional members.
     static_assert(std::is_base_of_v<SVGElement, Derived>);
     static_assert(sizeof(SVGElement) == sizeof(Derived));
-    return *reinterpret_cast<Derived*>(this);
+    return *reinterpret_cast<Derived*>(this);  // NOLINT: Reinterpret cast validated by assert.
   }
 
   /**

@@ -5,15 +5,24 @@ ENABLE_EXCEPTIONS_OPTS = ["-fexceptions"]
 cc_library(
     name = "xml",
     srcs = ["xml_parser.cc"],
-    hdrs = ["xml_parser.h"],
     copts = ENABLE_EXCEPTIONS_OPTS,
     linkopts = ENABLE_EXCEPTIONS_OPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":xml_details",
+        ":xml_header",
         "//src/svg:svg_core",
         "//src/svg/parser",
         "@rapidxml_ns",
+    ],
+)
+
+cc_library(
+    name = "xml_header",
+    hdrs = ["xml_parser.h"],
+    deps = [
+        "//src/svg:svg_core",
+        "//src/svg/parser",
     ],
 )
 
@@ -37,6 +46,7 @@ cc_library(
         "details/xml_parser_context.h",
     ],
     deps = [
+        ":xml_header",
         "//src/svg/parser",
     ],
 )

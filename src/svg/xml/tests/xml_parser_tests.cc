@@ -3,6 +3,7 @@
 
 #include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/svg/renderer/renderer_utils.h"
+#include "src/svg/svg_element.h"
 #include "src/svg/xml/xml_parser.h"
 
 using testing::AllOf;
@@ -16,9 +17,11 @@ MATCHER_P3(ParseWarningIs, line, offset, errorMessageMatcher, "") {
 namespace donner::svg {
 
 namespace {
-static std::span<char> spanFromString(std::string& data) {
+
+std::span<char> mutableSpanFromString(std::string& data) {
   return std::span<char>(data.data(), data.size());
 }
+
 }  // namespace
 
 TEST(XmlParser, Simple) {
@@ -27,7 +30,7 @@ TEST(XmlParser, Simple) {
 </svg>)";
 
   std::vector<ParseError> warnings;
-  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+  EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(simpleXml), &warnings), NoParseError());
 
   EXPECT_THAT(warnings, ElementsAre());
 }
@@ -40,9 +43,57 @@ TEST(XmlParser, Style) {
 </svg>)";
 
   std::vector<ParseError> warnings;
-  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+  EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(simpleXml), &warnings), NoParseError());
 
   EXPECT_THAT(warnings, ElementsAre());
+}
+
+TEST(XmlParser, Attributes) {
+  const std::string kAttributeXml =
+      R"(<svg id="svg1" xmlns="http://www.w3.org/2000/svg">
+  <rect stroke="red" user-attribute="value" />
+</svg>)";
+
+  XMLParser::Options options;
+  {
+    options.disableUserAttributes = false;
+
+    // Copy attributeXml before parsing since it will be modified.
+    std::string attributeXml = kAttributeXml;
+
+    std::vector<ParseError> warnings;
+    auto documentResult =
+        XMLParser::ParseSVG(mutableSpanFromString(attributeXml), &warnings, options);
+    ASSERT_THAT(documentResult, NoParseError());
+
+    EXPECT_THAT(warnings, ElementsAre());
+
+    const SVGElement rect = documentResult.result().svgElement().querySelector("rect").value();
+
+    EXPECT_THAT(rect.getAttribute("stroke"), testing::Optional(RcString("red")));
+    EXPECT_THAT(rect.getAttribute("user-attribute"), testing::Optional(RcString("value")));
+  }
+
+  {
+    options.disableUserAttributes = true;
+
+    // Copy attributeXml before parsing since it will be modified.
+    std::string attributeXml = kAttributeXml;
+
+    std::vector<ParseError> warnings;
+    auto documentResult =
+        XMLParser::ParseSVG(mutableSpanFromString(attributeXml), &warnings, options);
+    ASSERT_THAT(documentResult, NoParseError());
+
+    EXPECT_THAT(warnings,
+                ElementsAre(ParseWarningIs(
+                    2, 37, "Unknown attribute 'user-attribute' (disableUserAttributes: true)")));
+
+    const SVGElement rect = documentResult.result().svgElement().querySelector("rect").value();
+
+    EXPECT_THAT(rect.getAttribute("stroke"), testing::Optional(RcString("red")));
+    EXPECT_THAT(rect.getAttribute("user-attribute"), testing::Eq(std::nullopt));
+  }
 }
 
 TEST(XmlParser, XmlParseErrors) {
@@ -50,17 +101,18 @@ TEST(XmlParser, XmlParseErrors) {
     std::string badXml = R"(<!)";
 
     std::vector<ParseError> warnings;
-    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(badXml), &warnings),
+    EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(badXml), &warnings),
                 AllOf(ParseErrorPos(1, 2), ParseErrorIs("unexpected end of data")));
   }
 
   {
-    std::string badXml = R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+    std::string badXml =
+        R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
   <path></invalid>
 </svg>)";
 
     std::vector<ParseError> warnings;
-    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(badXml), &warnings),
+    EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(badXml), &warnings),
                 AllOf(ParseErrorPos(2, 17), ParseErrorIs("invalid closing tag name")));
   }
 }
@@ -74,7 +126,7 @@ TEST(XmlParser, Warning) {
   // TODO: Add another test to verify warnings from XMLParser and not during render-tree
   // instantiation.
   std::vector<ParseError> warnings;
-  auto documentResult = XMLParser::ParseSVG(spanFromString(simpleXml));
+  auto documentResult = XMLParser::ParseSVG(mutableSpanFromString(simpleXml));
   ASSERT_THAT(documentResult, NoParseError());
   RendererUtils::prepareDocumentForRendering(documentResult.result(), /*verbose*/ false, &warnings);
   // TODO: Map this offset back to absolute values (2, 24)
@@ -88,7 +140,7 @@ TEST(XmlParser, InvalidXmlns) {
 </svg>)";
 
   std::vector<ParseError> warnings;
-  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(simpleXml), &warnings), NoParseError());
+  EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(simpleXml), &warnings), NoParseError());
 
   EXPECT_THAT(warnings, ElementsAre(ParseErrorIs("Unexpected namespace 'invalid'")));
 }
@@ -100,7 +152,7 @@ TEST(XmlParser, PrefixedXmlns) {
 </svg:svg>)";
 
   std::vector<ParseError> warnings;
-  EXPECT_THAT(XMLParser::ParseSVG(spanFromString(xmlnsXml), &warnings), NoParseError());
+  EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(xmlnsXml), &warnings), NoParseError());
 
   EXPECT_THAT(warnings, ElementsAre());
 }
@@ -114,7 +166,7 @@ TEST(XmlParser, MismatchedNamespace) {
 
     std::vector<ParseError> warnings;
     EXPECT_THAT(
-        XMLParser::ParseSVG(spanFromString(mismatchedSvgXmlnsXml), &warnings),
+        XMLParser::ParseSVG(mutableSpanFromString(mismatchedSvgXmlnsXml), &warnings),
         AllOf(ParseErrorPos(1, 1),
               ParseErrorIs("<svg> has a mismatched namespace prefix. Expected 'svg', found ''")));
   }
@@ -126,7 +178,8 @@ TEST(XmlParser, MismatchedNamespace) {
 </svg:svg>)";
 
     std::vector<ParseError> warnings;
-    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(mismatchedXmlnsXml), &warnings), NoParseError());
+    EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(mismatchedXmlnsXml), &warnings),
+                NoParseError());
 
     EXPECT_THAT(
         warnings,
@@ -141,7 +194,7 @@ TEST(XmlParser, MismatchedNamespace) {
 </svg:svg>)";
 
     std::vector<ParseError> warnings;
-    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(invalidNsXml), &warnings),
+    EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(invalidNsXml), &warnings),
                 AllOf(ParseErrorPos(2, 3), ParseErrorIs("No namespace definition found")));
   }
 
@@ -152,7 +205,7 @@ TEST(XmlParser, MismatchedNamespace) {
 </svg:svg>)";
 
     std::vector<ParseError> warnings;
-    EXPECT_THAT(XMLParser::ParseSVG(spanFromString(invalidAttributeNsXml), &warnings),
+    EXPECT_THAT(XMLParser::ParseSVG(mutableSpanFromString(invalidAttributeNsXml), &warnings),
                 NoParseError());
 
     EXPECT_THAT(warnings,

@@ -60,4 +60,43 @@ TEST(ElementStyleTests, StyleInheritance) {
               Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0xFF, 0, 0xFF))))));
 }
 
+TEST(ElementStyleTests, AttributeMatchers) {
+  // Using presentation attributes always works.
+  EXPECT_THAT(instantiateSubtreeElement(R"(
+      <rect fill="red" />
+      <style>
+        rect[fill=red] { stroke: lime }
+      </style>
+    )")
+                  ->getComputedStyle()
+                  .stroke.get(),
+              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0xFF, 0, 0xFF))))));
+
+  // User attributes are not parsed by default, the `rect[test="value"]` matcher should have no
+  // effect.
+  EXPECT_THAT(instantiateSubtreeElement(R"(
+      <rect fill="red" test="value" />
+      <style>
+        rect[test="value"] { stroke: lime }
+      </style>
+    )")
+                  ->getComputedStyle()
+                  .stroke.get(),
+              Optional(PaintServer(PaintServer::None())));
+
+  // It will work if user attributes are enabled.
+  XMLParser::Options disableUserAttributesOptions;
+  disableUserAttributesOptions.disableUserAttributes = false;
+
+  EXPECT_THAT(instantiateSubtreeElement(R"(
+      <rect fill="red" test="value" />
+      <style>
+        rect[test="value"] { stroke: lime }
+      </style>
+    )",
+                                        disableUserAttributesOptions)
+                  ->getComputedStyle()
+                  .stroke.get(),
+              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0xFF, 0, 0xFF))))));
+}
 }  // namespace donner::svg

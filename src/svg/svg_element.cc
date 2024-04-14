@@ -1,6 +1,7 @@
 #include "src/svg/svg_element.h"
 
 #include "src/css/parser/selector_parser.h"
+#include "src/svg/components/attributes_component.h"
 #include "src/svg/components/class_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/document_context.h"
@@ -37,7 +38,16 @@ static std::optional<SVGElement> querySelectorSearch(const css::Selector& select
 SVGElement::SVGElement(EntityHandle handle) : handle_(handle) {}
 
 SVGElement::SVGElement(const SVGElement& other) = default;
+SVGElement::SVGElement(SVGElement&& other) noexcept {
+  *this = std::move(other);
+}
+
 SVGElement& SVGElement::operator=(const SVGElement& other) = default;
+SVGElement& SVGElement::operator=(SVGElement&& other) noexcept {
+  handle_ = other.handle_;
+  other.handle_ = EntityHandle();
+  return *this;
+}
 
 ElementType SVGElement::type() const {
   return handle_.get<components::TreeComponent>().type();
@@ -65,6 +75,8 @@ void SVGElement::setId(std::string_view id) {
   if (!id.empty()) {
     handle_.emplace<components::IdComponent>(RcString(id));
   }
+
+  handle_.get_or_emplace<components::AttributesComponent>().setAttribute("id", RcString(id));
 }
 
 RcString SVGElement::className() const {
@@ -82,26 +94,79 @@ void SVGElement::setClassName(std::string_view name) {
   } else {
     handle_.remove<components::ClassComponent>();
   }
+
+  handle_.get_or_emplace<components::AttributesComponent>().setAttribute("class", RcString(name));
 }
 
 void SVGElement::setStyle(std::string_view style) {
   handle_.get_or_emplace<components::StyleComponent>().setStyle(style);
+
+  handle_.get_or_emplace<components::AttributesComponent>().setAttribute("style", RcString(style));
 }
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
                                                           std::string_view value) {
-  return handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
-      handle_, name, value);
+  ParseResult<bool> trySetResult =
+      handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(handle_,
+                                                                                       name, value);
+
+  if (trySetResult.hasResult() && trySetResult.result()) {
+    // Set succeeded, so store the attribute value.
+    handle_.get_or_emplace<components::AttributesComponent>().setAttribute(RcString(name),
+                                                                           RcString(value));
+    return true;
+  }
+
+  return trySetResult;
 }
 
 bool SVGElement::hasAttribute(std::string_view name) const {
-  // TODO
-  return false;
+  return handle_.get_or_emplace<components::AttributesComponent>().hasAttribute(RcString(name));
 }
 
 std::optional<RcString> SVGElement::getAttribute(std::string_view name) const {
-  // TODO
-  return std::nullopt;
+  return handle_.get_or_emplace<components::AttributesComponent>().getAttribute(RcString(name));
+}
+
+void SVGElement::setAttribute(std::string_view name, std::string_view value) {
+  // First check some special cases which will never be presentation attributes.
+  if (name == "id") {
+    return setId(value);
+  } else if (name == "class") {
+    return setClassName(value);
+  } else if (name == "style") {
+    return setStyle(value);
+  }
+
+  // If it's not in the list above, it may be presentation attribute.
+  const ParseResult<bool> trySetResult = trySetPresentationAttribute(name, value);
+  if (trySetResult.hasResult() && trySetResult.result()) {
+    // Early-return since if this succeed, the attribute has already been stored.
+    return;
+  }
+
+  // Otherwise store as a generic attribute.
+  return handle_.get_or_emplace<components::AttributesComponent>().setAttribute(RcString(name),
+                                                                                RcString(value));
+}
+
+void SVGElement::removeAttribute(std::string_view name) {
+  // First check some special cases which will never be presentation attributes.
+  if (name == "id") {
+    setId("");
+  } else if (name == "class") {
+    setClassName("");
+  } else if (name == "style") {
+    setStyle("");
+  } else {
+    [[maybe_unused]] ParseResult<bool> trySetResult =
+        handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
+            handle_, name, "initial");
+    // Ignore return result, since it's fine if the attribute doesn't exist.
+  }
+
+  // Remove any storage for this attribute.
+  handle_.get_or_emplace<components::AttributesComponent>().removeAttribute(RcString(name));
 }
 
 SVGDocument& SVGElement::ownerDocument() {
@@ -184,7 +249,7 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
     return std::nullopt;
   }
 
-  const css::Selector selector = std::move(selectorResult.result());
+  const css::Selector& selector = selectorResult.result();
   return querySelectorSearch(selector, *this);
 }
 

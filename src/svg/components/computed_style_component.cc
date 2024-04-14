@@ -1,5 +1,6 @@
 #include "src/svg/components/computed_style_component.h"
 
+#include "src/svg/components/attributes_component.h"
 #include "src/svg/components/class_component.h"
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/shadow_entity_component.h"
@@ -50,13 +51,19 @@ struct ShadowedElementAdapter {
   }
 
   bool hasAttribute(std::string_view name) const {
-    // TODO
-    return false;
+    if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
+      return component->hasAttribute(RcString(name));
+    } else {
+      return false;
+    }
   }
 
   std::optional<RcString> getAttribute(std::string_view name) const {
-    // TODO
-    return std::nullopt;
+    if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
+      return component->getAttribute(RcString(name));
+    } else {
+      return std::nullopt;
+    }
   }
 
 private:

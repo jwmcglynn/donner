@@ -83,7 +83,7 @@ protected:
   }
 
   void setAttribute(svg::Entity entity, const std::string& name, RcString value) {
-    registry_.get_or_emplace<FakeElementData>(entity).attributes[name] = value;
+    registry_.get_or_emplace<FakeElementData>(entity).attributes[name] = std::move(value);
   }
 
   FakeElement element(svg::Entity entity) { return FakeElement(registry_, entity); }

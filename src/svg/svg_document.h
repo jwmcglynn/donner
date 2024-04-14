@@ -44,7 +44,7 @@ public:
   Entity rootEntity() const;
 
   /// Get the root \ref xml_svg element of the document.
-  SVGSVGElement svgElement();
+  SVGSVGElement svgElement() const;
 
   /**
    * Set the canvas size to a fixed width and height, in pixels.

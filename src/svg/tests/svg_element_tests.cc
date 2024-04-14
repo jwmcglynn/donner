@@ -19,9 +19,17 @@ class SVGElementTests : public testing::Test {
 protected:
   SVGElementTests() { document_.setCanvasSize(800, 600); }
 
+  /// Creates a \ref SVGUnknownElement element with typeString "unknown"
   SVGGraphicsElement create() { return SVGUnknownElement::Create(document_, "unknown"); }
 
-  std::vector<SVGElement> children(SVGElement element) {
+  /// Create an element with the given ID.
+  SVGGraphicsElement createWithId(std::string_view id) {
+    SVGGraphicsElement result = create();
+    result.setId(id);
+    return result;
+  }
+
+  std::vector<SVGElement> children(const SVGElement& element) {
     std::vector<SVGElement> result;
     for (auto cur = element.firstChild(); cur; cur = cur->nextSibling()) {
       result.push_back(cur.value());
@@ -44,6 +52,94 @@ protected:
 
   SVGDocument document_;
 };
+
+TEST_F(SVGElementTests, Equality) {
+  SVGElement element1 = create();
+  SVGElement element2 = create();
+  EXPECT_EQ(element1, element1);
+  EXPECT_EQ(element2, element2);
+  EXPECT_NE(element1, element2);
+}
+
+TEST_F(SVGElementTests, Assign) {
+  SVGElement element1 = create();
+  SVGElement element2 = create();
+  SVGElement element3 = create();
+  EXPECT_NE(element1, element2);
+  EXPECT_NE(element1, element3);
+
+  element1 = element2;
+  EXPECT_EQ(element1, element2);
+
+  // Now test with a move.
+  element3 = std::move(element2);
+  EXPECT_EQ(element1, element3);
+  EXPECT_NE(element2, element3);  // element2 should be invalid.
+}
+
+TEST_F(SVGElementTests, Id) {
+  auto element = create();
+  EXPECT_EQ(element.id(), "");
+
+  element.setId("test");
+  EXPECT_EQ(element.id(), "test");
+  EXPECT_THAT(element.getAttribute("id"), testing::Optional(RcString("test")));
+
+  element.setId("");
+  EXPECT_EQ(element.id(), "");
+  EXPECT_THAT(element.getAttribute("id"), testing::Optional(RcString("")));
+
+  // createWithId is a helper that does the same thing
+  EXPECT_EQ(createWithId("asdf").id(), "asdf");
+
+  // Now verify setAttribute can affect the return value of \ref SVGElement::id.
+  element.setAttribute("id", "abcd");
+  EXPECT_EQ(element.id(), "abcd");
+}
+
+TEST_F(SVGElementTests, Type) {
+  auto element = create();
+  EXPECT_EQ(element.type(), ElementType::Unknown);
+  EXPECT_EQ(element.typeString(), "unknown");
+}
+
+TEST_F(SVGElementTests, ClassName) {
+  auto element = create();
+  EXPECT_EQ(element.className(), "");
+
+  element.setClassName("test");
+  EXPECT_EQ(element.className(), "test");
+
+  EXPECT_THAT(element.getAttribute("class"), testing::Optional(RcString("test")));
+
+  // Now verify setAttribute can affect the return value of \ref SVGElement::className.
+  element.setAttribute("class", "abcd");
+  EXPECT_EQ(element.className(), "abcd");
+}
+
+TEST_F(SVGElementTests, Style) {
+  auto element = create();
+  EXPECT_THAT(element.getAttribute("style"), testing::Eq(std::nullopt));
+
+  element.setStyle("color: red");
+  EXPECT_THAT(element.getAttribute("style"), testing::Optional(RcString("color: red")));
+}
+
+// TODO: trySetPresentationAttribute test
+
+TEST_F(SVGElementTests, Attributes) {
+  auto element = create();
+  EXPECT_THAT(element.getAttribute("foo"), testing::Eq(std::nullopt));
+  EXPECT_FALSE(element.hasAttribute("foo"));
+
+  element.setAttribute("foo", "bar");
+  EXPECT_THAT(element.getAttribute("foo"), testing::Optional(RcString("bar")));
+  EXPECT_TRUE(element.hasAttribute("foo"));
+
+  element.removeAttribute("foo");
+  EXPECT_THAT(element.getAttribute("foo"), testing::Eq(std::nullopt));
+  EXPECT_FALSE(element.hasAttribute("foo"));
+}
 
 // Basic tests for each function, extensive coverage exists in tree_component_tests.cc
 TEST_F(SVGElementTests, TreeOperations) {
@@ -77,17 +173,6 @@ TEST_F(SVGElementTests, TreeOperations) {
   EXPECT_EQ(child2.ownerDocument(), document_);
   EXPECT_EQ(child3.ownerDocument(), document_);
   EXPECT_EQ(child4.ownerDocument(), document_);
-}
-
-TEST_F(SVGElementTests, Id) {
-  auto element = create();
-  EXPECT_EQ(element.id(), "");
-
-  element.setId("test");
-  EXPECT_EQ(element.id(), "test");
-
-  element.setId("");
-  EXPECT_EQ(element.id(), "");
 }
 
 TEST_F(SVGElementTests, Transform) {

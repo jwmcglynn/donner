@@ -70,6 +70,10 @@ std::string_view TypeToString(rapidxml_ns::node_type type) {
   }
 }
 
+bool IsAlwaysGenericAttribute(std::string_view name) {
+  return name == "id" || name == "class" || name == "style";
+}
+
 static std::optional<double> ParseNumberNoSuffix(std::string_view str) {
   const auto maybeResult = NumberParser::Parse(str);
   if (maybeResult.hasResult()) {
@@ -138,28 +142,28 @@ static std::optional<float> ParseStopOffset(XMLParserContext& context, std::stri
   }
 }
 
-static void ParsePresentationAttribute(XMLParserContext& context, SVGElement element,
+static void ParsePresentationAttribute(XMLParserContext& context, SVGElement& element,
                                        std::string_view namespacePrefix, std::string_view name,
                                        std::string_view value) {
   auto result = element.trySetPresentationAttribute(name, value);
   if (result.hasError()) {
     context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
   } else if (!result.result()) {
-    ParseError err;
-    err.reason = "Unknown attribute '" + std::string(name) + "'";
-    context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    if (context.options().disableUserAttributes) {
+      ParseError err;
+      err.reason = "Unknown attribute '" + std::string(name) + "' (disableUserAttributes: true)";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    } else {
+      element.setAttribute(name, value);
+    }
   }
 }
 
-static void ParseUnconditionalCommonAttribute(XMLParserContext& context, SVGElement element,
+static void ParseUnconditionalCommonAttribute(XMLParserContext& context, SVGElement& element,
                                               std::string_view namespacePrefix,
                                               std::string_view name, std::string_view value) {
-  if (name == "id") {
-    element.setId(value);
-  } else if (name == "class") {
-    element.setClassName(value);
-  } else if (name == "style") {
-    element.setStyle(value);
+  if (IsAlwaysGenericAttribute(name)) {
+    element.setAttribute(name, value);
   } else {
     ParsePresentationAttribute(context, element, namespacePrefix, name, value);
   }
@@ -696,11 +700,12 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
 }  // namespace
 
 ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
-                                             std::vector<ParseError>* outWarnings) noexcept {
+                                             std::vector<ParseError>* outWarnings,
+                                             XMLParser::Options options) noexcept {
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;
 
-  XMLParserContext context(std::string_view(str.data(), str.size()), outWarnings);
+  XMLParserContext context(std::string_view(str.data(), str.size()), outWarnings, options);
 
   rapidxml_ns::xml_document<> xmlDocument;
   try {
