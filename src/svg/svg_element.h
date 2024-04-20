@@ -102,7 +102,12 @@ public:
   void setStyle(std::string_view style);
 
   /**
-   * Set the value of a presentation attribute, such as "fill" or "stroke".
+   * Set the value of a presentation attribute, such as "fill" or "stroke". Note that this accepts
+   * the CSS value, not the XML attribute value.
+   *
+   * For example, for the following XML attributes they need to be mapped as follows before calling:
+   * - `gradientTransform` -> `transform`
+   * - `patternTransform` -> `transform`
    *
    * @param name Name of the attribute to set.
    * @param value New value to set.
@@ -128,8 +133,8 @@ public:
   std::optional<RcString> getAttribute(std::string_view name) const;
 
   /**
-   * Set the value of a generic attribute, which may be either a presentation attribute or custom
-   * user-provided attribute.
+   * Set the value of a generic XML attribute, which may be either a presentation attribute or
+   * custom user-provided attribute.
    *
    * This API supports a superset of \ref trySetPresentationAttribute, however its parse errors are
    * ignored. If the attribute is not a presentation attribute, or there are parse errors the

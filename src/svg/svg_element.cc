@@ -106,9 +106,20 @@ void SVGElement::setStyle(std::string_view style) {
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
                                                           std::string_view value) {
+  std::string_view actualName = name;
+
+  // gradientTransform and patternTransform are special, since they map to the "transform"
+  // presentation attribute. When doing this mapping, store the XML attribute with the user-visible
+  // attribute name and internally map it to "transform".
+  if (((type() == ElementType::LinearGradient || type() == ElementType::RadialGradient) &&
+       name == "gradientTransform") ||
+      (type() == ElementType::Pattern && name == "patternTransform")) {
+    actualName = "transform";
+  }
+
   ParseResult<bool> trySetResult =
-      handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(handle_,
-                                                                                       name, value);
+      handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
+          handle_, actualName, value);
 
   if (trySetResult.hasResult() && trySetResult.result()) {
     // Set succeeded, so store the attribute value.

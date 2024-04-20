@@ -9,6 +9,7 @@ cc_library(
     linkopts = ENABLE_EXCEPTIONS_OPTS,
     visibility = ["//visibility:public"],
     deps = [
+        ":attribute_parser",
         ":xml_details",
         ":xml_header",
         "//src/svg:svg_core",
@@ -66,4 +67,17 @@ cc_binary(
     name = "xml_tool",
     srcs = ["xml_tool.cc"],
     deps = [":xml"],
+)
+
+cc_library(
+    name = "attribute_parser",
+    srcs = ["attribute_parser.cc"],
+    hdrs = ["attribute_parser.h"],
+    visibility = [
+        "//src/svg:__subpackages__",
+    ],
+    deps = [
+        ":xml_details",
+        "//src/svg:svg_core",
+    ],
 )

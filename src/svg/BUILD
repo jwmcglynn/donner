@@ -27,6 +27,7 @@ cc_library(
         "svg_use_element.cc",
     ],
     hdrs = [
+        "all_svg_elements.h",
         "svg_circle_element.h",
         "svg_defs_element.h",
         "svg_document.h",
