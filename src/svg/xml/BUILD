@@ -2,6 +2,9 @@ load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 ENABLE_EXCEPTIONS_OPTS = ["-fexceptions"]
 
+#
+# Parses SVG XML files into an SVGDocument.
+#
 cc_library(
     name = "xml",
     srcs = ["xml_parser.cc"],
@@ -18,6 +21,33 @@ cc_library(
     ],
 )
 
+#
+# Helper type for an XML attribute name with an optional namespace.
+#
+cc_library(
+    name = "xml_attribute",
+    hdrs = ["xml_attribute.h"],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = [
+        "//src/base",
+    ],
+)
+
+#
+# Tool to parse XML files and output details about its structure.
+#
+cc_binary(
+    name = "xml_tool",
+    srcs = ["xml_tool.cc"],
+    deps = [":xml"],
+)
+
+##
+## Internal libraries
+##
+
 cc_library(
     name = "xml_header",
     hdrs = ["xml_parser.h"],
@@ -28,14 +58,12 @@ cc_library(
 )
 
 cc_test(
-    name = "xml_tests",
+    name = "xml_attribute_tests",
     srcs = [
-        "tests/xml_parser_tests.cc",
+        "tests/xml_attribute_tests.cc",
     ],
     deps = [
-        ":xml",
-        "//src/base/parser:parser_test_utils",
-        "//src/svg/renderer:renderer_utils",
+        ":xml_attribute",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -61,12 +89,6 @@ cc_test(
         ":xml_details",
         "@com_google_gtest//:gtest_main",
     ],
-)
-
-cc_binary(
-    name = "xml_tool",
-    srcs = ["xml_tool.cc"],
-    deps = [":xml"],
 )
 
 cc_library(

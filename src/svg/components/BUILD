@@ -95,6 +95,7 @@ cc_library(
         "//src/svg/parser",
         "//src/svg/properties",
         "//src/svg/registry",
+        "//src/svg/xml:xml_attribute",
     ],
 )
 
