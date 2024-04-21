@@ -98,6 +98,16 @@ protected:
     return maybeSelector.result().matches(element).matched;
   }
 
+  bool doesNotMatch(std::string_view selector, FakeElement element) {
+    auto maybeSelector = SelectorParser::Parse(selector);
+    EXPECT_THAT(maybeSelector, NoParseError());
+    if (maybeSelector.hasError()) {
+      return false;
+    }
+
+    return !maybeSelector.result().matches(element).matched;
+  }
+
   void setId(svg::Entity entity, std::string_view id) {
     registry_.get_or_emplace<FakeElementData>(entity).id = id;
   }
@@ -278,6 +288,62 @@ TEST_F(SelectorTests, AttributeMatch) {
   EXPECT_FALSE(matches("[dash=INVALID i]", element(root)));
   EXPECT_TRUE(matches("[long=\"THE QUICK BROWN FOX\" i]", element(root)));
   EXPECT_FALSE(matches("[long=\"THE QUICK BROWN\" i]", element(root)));
+}
+
+TEST_F(SelectorTests, PseudoClassSelector) {
+  // <root>
+  // -> midA = <mid>
+  //   -> childA = <a>
+  //   -> childB = <b>
+  //   -> childC = <c>
+  // -> midB = <mid>
+  //  -> childD = <d>
+  auto root = createEntity("root");
+  auto midA = createEntity("mid");
+  auto midB = createEntity("mid");
+  auto childA = createEntity("a");
+  auto childB = createEntity("b");
+  auto childC = createEntity("c");
+  auto childD = createEntity("d");
+
+  tree(root).appendChild(registry_, midA);
+  tree(root).appendChild(registry_, midB);
+  tree(midA).appendChild(registry_, childA);
+  tree(midA).appendChild(registry_, childB);
+  tree(midA).appendChild(registry_, childC);
+  tree(midB).appendChild(registry_, childD);
+
+  // :root
+  EXPECT_TRUE(matches(":root", element(root)));
+  EXPECT_TRUE(doesNotMatch(":root", element(midA)));
+  EXPECT_TRUE(matches(":root > mid", element(midA)));
+  EXPECT_TRUE(matches(":root > mid", element(midB)));
+  EXPECT_TRUE(doesNotMatch(":root > a", element(childA)));
+
+  // :empty
+  EXPECT_TRUE(doesNotMatch(":empty", element(root)));
+  EXPECT_TRUE(matches(":empty", element(childA)));
+
+  // :first-child
+  EXPECT_TRUE(matches(":first-child", element(root)));
+  EXPECT_TRUE(matches(":first-child", element(midA)));
+  EXPECT_TRUE(doesNotMatch(":first-child", element(midB)));
+  EXPECT_TRUE(matches(":first-child", element(childA)));
+
+  // :last-child
+  EXPECT_TRUE(matches(":last-child", element(root)));
+  EXPECT_TRUE(doesNotMatch(":last-child", element(midA)));
+  EXPECT_TRUE(matches(":last-child", element(midB)));
+  EXPECT_TRUE(doesNotMatch(":last-child", element(childA)));
+  EXPECT_TRUE(matches(":last-child", element(childC)));
+  EXPECT_TRUE(matches(":last-child", element(childD)));
+
+  // :only-child
+  EXPECT_TRUE(matches(":only-child", element(root)));
+  EXPECT_TRUE(doesNotMatch(":only-child", element(midA)));
+  EXPECT_TRUE(doesNotMatch(":only-child", element(midB)));
+  EXPECT_TRUE(doesNotMatch(":only-child", element(childA)));
+  EXPECT_TRUE(matches(":only-child", element(childD)));
 }
 
 }  // namespace donner::css
