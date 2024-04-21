@@ -4,9 +4,11 @@
 #include <map>
 
 #include "src/base/parser/tests/parse_result_test_utils.h"
+#include "src/base/rc_string.h"
 #include "src/css/parser/selector_parser.h"
 #include "src/css/selector.h"
 #include "src/svg/components/tree_component.h"
+#include "src/svg/xml/xml_attribute.h"
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
@@ -17,7 +19,7 @@ struct FakeElementData {
   RcString id;
   RcString className;
 
-  std::map<std::string, RcString> attributes;
+  std::map<svg::XMLAttribute, RcString> attributes;
 };
 
 struct FakeElement {
@@ -31,9 +33,10 @@ struct FakeElement {
     return registry_.get().get_or_emplace<FakeElementData>(entity_).className;
   }
 
-  std::optional<RcString> getAttribute(std::string_view name) const {
+  std::optional<RcString> getAttribute(const svg::XMLAttributeRef& name) const {
     const auto& data = registry_.get().get_or_emplace<FakeElementData>(entity_);
-    const auto it = data.attributes.find(std::string(name));
+    const auto it = data.attributes.find(
+        svg::XMLAttribute(RcString(name.namespacePrefix), RcString(name.name)));
     return it != data.attributes.end() ? std::make_optional(it->second) : std::nullopt;
   }
 
@@ -82,7 +85,7 @@ protected:
     registry_.get_or_emplace<FakeElementData>(entity).className = className;
   }
 
-  void setAttribute(svg::Entity entity, const std::string& name, RcString value) {
+  void setAttribute(svg::Entity entity, const svg::XMLAttribute& name, RcString value) {
     registry_.get_or_emplace<FakeElementData>(entity).attributes[name] = std::move(value);
   }
 
@@ -135,13 +138,13 @@ TEST_F(SelectorTests, AttributeMatch) {
   auto child1 = createEntity("a");
 
   tree(root).appendChild(registry_, child1);
-  setAttribute(root, "attr", "value");
-  setAttribute(root, "list", "abc def a");
-  setAttribute(child1, "list", "ABC DEF A");
-  setAttribute(root, "dash", "one-two-three");
-  setAttribute(child1, "dash", "ONE-two-THree");
-  setAttribute(root, "long", "the quick brown fox");
-  setAttribute(child1, "long", "THE QUICK BROWN FOX");
+  setAttribute(root, svg::XMLAttribute("attr"), "value");
+  setAttribute(root, svg::XMLAttribute("list"), "abc def a");
+  setAttribute(child1, svg::XMLAttribute("list"), "ABC DEF A");
+  setAttribute(root, svg::XMLAttribute("dash"), "one-two-three");
+  setAttribute(child1, svg::XMLAttribute("dash"), "ONE-two-THree");
+  setAttribute(root, svg::XMLAttribute("long"), "the quick brown fox");
+  setAttribute(child1, svg::XMLAttribute("long"), "THE QUICK BROWN FOX");
 
   // No matcher: Matches if the attribute exists.
   EXPECT_TRUE(matches("[attr]", element(root)));

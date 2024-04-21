@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "src/base/length.h"
+#include "src/base/transform.h"
 #include "src/svg/core/pattern.h"
 #include "src/svg/core/preserve_aspect_ratio.h"
 #include "src/svg/svg_element.h"

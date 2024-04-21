@@ -19,6 +19,12 @@ namespace donner {
  *
  * Implements a short-string optimization similar to the libc++ `std::string` class, see
  * https://joellaity.com/2020/01/31/string.html for details.
+ *
+ * USAGE NOTES:
+ * - This class is not thread-safe, and should not be shared between threads without
+ * synchronization.
+ * - \ref data() is not guaranteed to remain stable across references, and should not be stored
+ * longer than the original RcString which created it.
  */
 class RcString {
 public:

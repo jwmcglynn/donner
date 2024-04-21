@@ -93,7 +93,7 @@ TEST_F(SVGElementTests, Id) {
   EXPECT_EQ(createWithId("asdf").id(), "asdf");
 
   // Now verify setAttribute can affect the return value of \ref SVGElement::id.
-  element.setAttribute("id", "abcd");
+  element.setAttribute(RcString("id"), "abcd");
   EXPECT_EQ(element.id(), "abcd");
 }
 
@@ -113,7 +113,7 @@ TEST_F(SVGElementTests, ClassName) {
   EXPECT_THAT(element.getAttribute("class"), testing::Optional(RcString("test")));
 
   // Now verify setAttribute can affect the return value of \ref SVGElement::className.
-  element.setAttribute("class", "abcd");
+  element.setAttribute(RcString("class"), "abcd");
   EXPECT_EQ(element.className(), "abcd");
 }
 
@@ -132,7 +132,7 @@ TEST_F(SVGElementTests, Attributes) {
   EXPECT_THAT(element.getAttribute("foo"), testing::Eq(std::nullopt));
   EXPECT_FALSE(element.hasAttribute("foo"));
 
-  element.setAttribute("foo", "bar");
+  element.setAttribute(RcString("foo"), "bar");
   EXPECT_THAT(element.getAttribute("foo"), testing::Optional(RcString("bar")));
   EXPECT_TRUE(element.hasAttribute("foo"));
 

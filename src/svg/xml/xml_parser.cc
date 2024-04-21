@@ -96,8 +96,8 @@ ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
       continue;
     }
 
-    if (auto error =
-            AttributeParser::ParseAndSetAttribute(context, element, namespacePrefix, name, value)) {
+    if (auto error = AttributeParser::ParseAndSetAttribute(
+            context, element, XMLAttribute(RcString(namespacePrefix), RcString(name)), value)) {
       return std::move(error.value());
     }
   }

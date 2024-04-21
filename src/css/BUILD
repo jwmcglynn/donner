@@ -43,6 +43,7 @@ cc_library(
     ],
     deps = [
         "//src/base",
+        "//src/svg/xml:xml_attribute",
         "@frozen",
     ],
 )

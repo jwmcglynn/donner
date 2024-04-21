@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "src/base/transform.h"
 #include "src/svg/svg_element.h"
 
 namespace donner::svg {

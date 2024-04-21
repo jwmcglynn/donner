@@ -2,6 +2,7 @@
 
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
+#include "src/svg/xml/xml_attribute.h"
 
 namespace donner::css {
 
@@ -324,7 +325,7 @@ private:
               prefixLength = 2;
             } else {
               advance();
-              return TypeSelector{"", "*"};
+              return TypeSelector{svg::XMLAttribute{"*"}};
             }
             break;
         }
@@ -337,13 +338,13 @@ private:
           auto maybeNsPrefix = handleNsPrefix();
           if (maybeNsPrefix.has_value()) {
             expectAndConsumeDelim('*');
-            return TypeSelector{std::move(maybeNsPrefix.value()), "*"};
+            return TypeSelector{svg::XMLAttribute(maybeNsPrefix.value(), "*")};
           }
         } else {
           // Just a <wq-name>.
           auto maybeWqName = handleWqName();
           if (maybeWqName.has_value()) {
-            return TypeSelector{std::move(maybeWqName->ns), std::move(maybeWqName->name)};
+            return TypeSelector{std::move(maybeWqName->name)};
           }
         }
       }
@@ -459,7 +460,7 @@ private:
 
     if (const Token* secondToken = next<Token>(); secondToken && secondToken->is<Token::Ident>()) {
       advance();
-      return WqName{std::move(ns), secondToken->get<Token::Ident>().value};
+      return WqName{svg::XMLAttribute(ns, secondToken->get<Token::Ident>().value)};
     }
 
     setError(ns.empty() ? "Expected ident when parsing name"

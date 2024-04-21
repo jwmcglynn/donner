@@ -11,6 +11,7 @@
 #include "src/css/component_value.h"
 #include "src/css/selector_traversal.h"
 #include "src/css/specificity.h"
+#include "src/svg/xml/xml_attribute.h"
 
 namespace donner::css {
 
@@ -67,9 +68,7 @@ private:
  * - `*|foo`, represents the name `foo` which belongs to any namespace.
  */
 struct WqName {
-  RcString
-      ns;  ///< The namespace of the name, or empty if the name belongs to the default namespace.
-  RcString name;  ///< The name.
+  svg::XMLAttribute name;
 
   /**
    * Create a WqName with the given namespace and name.
@@ -77,17 +76,10 @@ struct WqName {
    * @param ns The namespace of the name, or empty if the name belongs to the default namespace.
    * @param name The name.
    */
-  WqName(RcString ns, RcString name) : ns(std::move(ns)), name(std::move(name)) {}
+  WqName(svg::XMLAttribute&& name) : name(std::move(name)) {}
 
   /// Ostream output operator.
-  friend std::ostream& operator<<(std::ostream& os, const WqName& obj) {
-    if (!obj.ns.empty()) {
-      os << obj.ns << "|";
-    }
-
-    os << obj.name;
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, const WqName& obj) { return os << obj.name; }
 };
 
 /**
@@ -153,9 +145,16 @@ struct PseudoElementSelector {
  * value is empty.
  */
 struct TypeSelector {
-  RcString ns;    ///< The namespace of the selector, the wildcard namespace ("*"), or empty if no
-                  ///< namespace is specified.
-  RcString name;  ///< The name of the selector, or "*" if the selector is a universal selector.
+  /**
+   * Selector itself, which may contain wildcards.
+   *
+   * In this context, the members have the following meanings:
+   * - \ref XMLAttribute::namespacePrefix The namespace of the selector, the wildcard namespace
+   ("*"), or empty if no namespace is specified.
+   * - \ref XMLAttribute::name The name of the selector, or "*" if the selector is a universal
+   selector.
+   */
+  svg::XMLAttribute name;
 
   /**
    * Create a TypeSelector with the given namespace and name.
@@ -164,10 +163,10 @@ struct TypeSelector {
    *   is specified.
    * @param name The name of the selector, or "*" if the selector is a universal selector.
    */
-  TypeSelector(RcString ns, RcString name) : ns(std::move(ns)), name(std::move(name)) {}
+  TypeSelector(svg::XMLAttribute&& name) : name(std::move(name)) {}
 
   /// Returns true if this is a universal selector.
-  bool isUniversal() const { return name == "*"; }
+  bool isUniversal() const { return name.name == "*"; }
 
   /**
    * Returns true if the provided element matches this selector.
@@ -180,19 +179,13 @@ struct TypeSelector {
     if (UTILS_PREDICT_FALSE(isUniversal())) {
       return true;
     } else {
-      return element.typeString().equalsIgnoreCase(name);
+      return element.typeString().equalsIgnoreCase(name.name);
     }
   }
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const TypeSelector& obj) {
-    os << "TypeSelector(";
-    if (!obj.ns.empty()) {
-      os << obj.ns << "|";
-    }
-
-    os << obj.name << ")";
-    return os;
+    return os << "TypeSelector(" << obj.name << ")";
   }
 };
 

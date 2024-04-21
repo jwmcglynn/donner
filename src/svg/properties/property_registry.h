@@ -99,9 +99,7 @@ public:
    *
    * @see allProperties()
    */
-  auto allPropertiesMutable() {
-    return detail::as_mutable(allProperties());
-  }
+  auto allPropertiesMutable() { return detail::as_mutable(allProperties()); }
 
   /**
    * Return the size of the tuple returned by \ref allProperties().

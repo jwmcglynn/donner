@@ -519,7 +519,7 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
 }
 
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
-  os << "PropertyRegistry {" << std::endl;
+  os << "PropertyRegistry {\n";
 
   const auto resultProperties = const_cast<PropertyRegistry&>(registry).allProperties();
   PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>(
@@ -530,7 +530,7 @@ std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
         }
       });
 
-  return os << "}" << std::endl;
+  return os << "}\n";
 }
 
 }  // namespace donner::svg

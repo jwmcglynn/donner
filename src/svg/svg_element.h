@@ -1,14 +1,13 @@
 #pragma once
 /// @file
 
-#include <functional>
 #include <string_view>
 
 #include "src/base/rc_string.h"
-#include "src/base/transform.h"
 #include "src/base/utils.h"
 #include "src/svg/properties/property_registry.h"
 #include "src/svg/registry/registry.h"
+#include "src/svg/xml/xml_attribute.h"
 
 namespace donner {
 struct ParseError;
@@ -122,7 +121,7 @@ public:
    * @param name Name of the attribute to check.
    * @return true if the attribute exists, false otherwise.
    */
-  bool hasAttribute(std::string_view name) const;
+  bool hasAttribute(const XMLAttributeRef& name) const;
 
   /**
    * Get the value of an attribute, if it exists.
@@ -130,7 +129,7 @@ public:
    * @param name Name of the attribute to get.
    * @return The value of the attribute, or std::nullopt if the attribute does not exist.
    */
-  std::optional<RcString> getAttribute(std::string_view name) const;
+  std::optional<RcString> getAttribute(const XMLAttributeRef& name) const;
 
   /**
    * Set the value of a generic XML attribute, which may be either a presentation attribute or
@@ -143,7 +142,7 @@ public:
    * @param name Name of the attribute to set.
    * @param value New value to set.
    */
-  void setAttribute(std::string_view name, std::string_view value);
+  void setAttribute(const XMLAttribute& name, std::string_view value);
 
   /**
    * Remove an attribute, which may be either a presentation attribute or custom user-provided
@@ -154,7 +153,7 @@ public:
    *
    * @param name Name of the attribute to remove.
    */
-  void removeAttribute(std::string_view name);
+  void removeAttribute(const XMLAttributeRef& name);
 
   /**
    * Get the \ref SVGDocument that holds this element.

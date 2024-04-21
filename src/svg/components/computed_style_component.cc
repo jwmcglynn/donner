@@ -9,6 +9,7 @@
 #include "src/svg/components/stylesheet_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/xml/xml_attribute.h"
 
 namespace donner::svg::components {
 
@@ -50,17 +51,17 @@ struct ShadowedElementAdapter {
     }
   }
 
-  bool hasAttribute(std::string_view name) const {
+  bool hasAttribute(const XMLAttributeRef& name) const {
     if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
-      return component->hasAttribute(RcString(name));
+      return component->hasAttribute(name);
     } else {
       return false;
     }
   }
 
-  std::optional<RcString> getAttribute(std::string_view name) const {
+  std::optional<RcString> getAttribute(const XMLAttributeRef& name) const {
     if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
-      return component->getAttribute(RcString(name));
+      return component->getAttribute(name);
     } else {
       return std::nullopt;
     }
