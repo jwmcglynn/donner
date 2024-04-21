@@ -26,8 +26,23 @@ struct ShadowedElementAdapter {
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
+  std::optional<ShadowedElementAdapter> firstChild() const {
+    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).firstChild();
+    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+  }
+
+  std::optional<ShadowedElementAdapter> lastChild() const {
+    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).lastChild();
+    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+  }
+
   std::optional<ShadowedElementAdapter> previousSibling() const {
     const Entity target = registry_.get().get<TreeComponent>(treeEntity_).previousSibling();
+    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+  }
+
+  std::optional<ShadowedElementAdapter> nextSibling() const {
+    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).nextSibling();
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 

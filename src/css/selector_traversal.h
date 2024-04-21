@@ -20,9 +20,12 @@ namespace donner::css::traversal {
  * `previousSibling()`, and type and class information to match against the respective selectors.
  */
 template <typename T>
-concept ElementLike = requires(T t, std::string_view name) {
+concept ElementLike = requires(const T t, std::string_view name) {
   { t.parentElement() } -> std::same_as<std::optional<T>>;
+  { t.firstChild() } -> std::same_as<std::optional<T>>;
+  { t.lastChild() } -> std::same_as<std::optional<T>>;
   { t.previousSibling() } -> std::same_as<std::optional<T>>;
+  { t.nextSibling() } -> std::same_as<std::optional<T>>;
   { t.typeString() } -> std::same_as<RcString>;
   { t.id() } -> std::same_as<RcString>;
   { t.className() } -> std::same_as<RcString>;

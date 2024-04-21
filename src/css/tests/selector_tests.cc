@@ -40,16 +40,37 @@ struct FakeElement {
     return it != data.attributes.end() ? std::make_optional(it->second) : std::nullopt;
   }
 
-  std::optional<FakeElement> parentElement() {
+  std::optional<FakeElement> parentElement() const {
     auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
     return tree.parent() != entt::null ? std::make_optional(FakeElement(registry_, tree.parent()))
                                        : std::nullopt;
   }
 
-  std::optional<FakeElement> previousSibling() {
+  std::optional<FakeElement> firstChild() const {
+    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
+    return tree.firstChild() != entt::null
+               ? std::make_optional(FakeElement(registry_, tree.firstChild()))
+               : std::nullopt;
+  }
+
+  std::optional<FakeElement> lastChild() const {
+    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
+    return tree.lastChild() != entt::null
+               ? std::make_optional(FakeElement(registry_, tree.lastChild()))
+               : std::nullopt;
+  }
+
+  std::optional<FakeElement> previousSibling() const {
     auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
     return tree.previousSibling() != entt::null
                ? std::make_optional(FakeElement(registry_, tree.previousSibling()))
+               : std::nullopt;
+  }
+
+  std::optional<FakeElement> nextSibling() const {
+    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
+    return tree.nextSibling() != entt::null
+               ? std::make_optional(FakeElement(registry_, tree.nextSibling()))
                : std::nullopt;
   }
 

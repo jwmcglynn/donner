@@ -312,7 +312,27 @@ struct PseudoClassSelector {
    */
   template <traversal::ElementLike T>
   bool matches(const T& element) const {
-    // TODO
+    if (!argsIfFunction.has_value()) {
+      if (ident.equalsLowercase("root")) {
+        return !element.parentElement().has_value();
+      } else if (ident.equalsLowercase("empty")) {
+        return !element.firstChild().has_value();
+      } else if (ident.equalsLowercase("first-child")) {
+        return !element.previousSibling().has_value();
+      } else if (ident.equalsLowercase("last-child")) {
+        return !element.nextSibling().has_value();
+      } else if (ident.equalsLowercase("only-child")) {
+        return !element.previousSibling().has_value() && !element.nextSibling().has_value();
+      }
+    } else {
+      // It's a function.
+      if (ident.equalsLowercase("nth-child")) {
+        // TODO
+      } else if (ident.equalsLowercase("nth-last-child")) {
+        // TODO
+      }
+    }
+
     return false;
   }
 
@@ -337,8 +357,8 @@ struct PseudoClassSelector {
  * See https://www.w3.org/TR/selectors-4/#attribute-selectors for the full definition.
  *
  * These are used within square brackets on the selector list, such as `a[href^="https://"]` or
- * `h1[title]`, and AttrMatcher represents the separator between the attribute name and string, such
- * as `^=` or `=`.
+ * `h1[title]`, and AttrMatcher represents the separator between the attribute name and string,
+ * such as `^=` or `=`.
  */
 enum class AttrMatcher {
   Includes,     ///< "~=", matches if the attribute value is a whitespace-separated list of values,
@@ -429,8 +449,8 @@ struct AttributeSelector {
 
     switch (m.op) {
       case AttrMatcher::Includes:
-        // Returns true if attribute value is a whitespace-separated list of values, and one of them
-        // exactly matches the matcher value.
+        // Returns true if attribute value is a whitespace-separated list of values, and one of
+        // them exactly matches the matcher value.
         for (auto&& str : StringUtils::Split(value, ' ')) {
           if (m.caseInsensitive) {
             if (StringUtils::Equals<StringComparison::IgnoreCase>(str, m.value)) {
@@ -500,8 +520,8 @@ struct AttributeSelector {
 };
 
 /**
- * A compound selector is a sequence of simple selectors, which represents a set of conditions that
- * are combined to match a single element.
+ * A compound selector is a sequence of simple selectors, which represents a set of conditions
+ * that are combined to match a single element.
  *
  * For example, the selector `div#foo.bar` is a compound selector, while `div > #foo` is two
  * compound selectors separated by a combinator. Combinators are handled as part of \ref
@@ -589,15 +609,15 @@ inline std::ostream& operator<<(std::ostream& os, Combinator combinator) {
 /**
  * A complex selector is a sequence of one or more compound selectors, separated by combinators.
  *
- * For example, `div > #foo` is a complex selector, with two compound selectors separated by a \ref
- * Combinator::Child.
+ * For example, `div > #foo` is a complex selector, with two compound selectors separated by a
+ * \ref Combinator::Child.
  */
 struct ComplexSelector {
   /// A single entry in a complex selector, which is a compound selector and a combinator.
   struct Entry {
-    Combinator
-        combinator;  ///< The combinator between this compound selector and the next. For the first
-                     ///< Entry, this is set to \ref Combinator::Descendant but it has no effect.
+    Combinator combinator;  ///< The combinator between this compound selector and the next. For
+                            ///< the first Entry, this is set to \ref Combinator::Descendant but
+                            ///< it has no effect.
     CompoundSelector compoundSelector;  ///< The compound selector.
   };
 
@@ -645,8 +665,8 @@ struct ComplexSelector {
    * Match a selector against an element, following the rules in the spec:
    * https://www.w3.org/TR/selectors-4/#match-against-element
    *
-   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to match
-   *           the selector.
+   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to
+   * match the selector.
    * @param targetElement Element to match against.
    * @return true if the element matches the selector, within a SelectorMatchResult which also
    *              contains the specificity.
@@ -687,9 +707,10 @@ struct ComplexSelector {
       }
 
       // "Otherwise, consider all possible elements that could be related to this element by the
-      // rightmost combinator. If the operation of matching the selector consisting of this selector
-      // with the rightmost compound selector and rightmost combinator removed against any one of
-      // these elements returns success, then return success. Otherwise, return failure."
+      // rightmost combinator. If the operation of matching the selector consisting of this
+      // selector with the rightmost compound selector and rightmost combinator removed against
+      // any one of these elements returns success, then return success. Otherwise, return
+      // failure."
       if (entry.combinator == Combinator::Descendant) {
         elementsGenerator = std::bind(&traversal::parentsGenerator<T>, currentElement.value());
       } else if (entry.combinator == Combinator::Child) {
@@ -730,9 +751,9 @@ struct ComplexSelector {
 /**
  * A top-level Selector, which is a list of \ref ComplexSelector.
  *
- * This represents the prelude in front of any CSS rule, e.g. `div.foo > span#bar`, which would be a
- * single \ref ComplexSelector. For a comma-separated list, such as `div.foo > span#bar, span#bar`,
- * this would be a \ref Selector with two \ref ComplexSelector entries.
+ * This represents the prelude in front of any CSS rule, e.g. `div.foo > span#bar`, which would be
+ * a single \ref ComplexSelector. For a comma-separated list, such as `div.foo > span#bar,
+ * span#bar`, this would be a \ref Selector with two \ref ComplexSelector entries.
  */
 struct Selector {
   /// The list of \ref ComplexSelector entries that compose this selector.
@@ -741,8 +762,8 @@ struct Selector {
   /**
    * Match an element against a Selector.
    *
-   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to match
-   * the selector.
+   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to
+   * match the selector.
    * @param targetElement Element to match against.
    * @returns true if any ComplexSelector in the Selector matches the given element.
    */
