@@ -82,7 +82,7 @@ nlohmann::json tokenToJson(const Token& token) {
               t.type == NumberType::Integer ? "integer" : "number"};
     } else if constexpr (std::is_same_v<Type, Token::Dimension>) {
       return {"dimension", t.valueString, t.value,
-              t.type == NumberType::Integer ? "integer" : "number", t.suffix};
+              t.type == NumberType::Integer ? "integer" : "number", t.suffixString};
     } else if constexpr (std::is_same_v<Type, Token::Whitespace>) {
       return " ";
     } else if constexpr (std::is_same_v<Type, Token::CDO>) {

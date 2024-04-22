@@ -4,17 +4,17 @@ namespace donner::svg {
 
 ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseOptions options) {
   if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
-    if (dimension->suffix.equalsLowercase("deg")) {
+    if (dimension->suffixString.equalsLowercase("deg")) {
       return dimension->value * MathConstants<double>::kDegToRad;
-    } else if (dimension->suffix.equalsLowercase("grad")) {
+    } else if (dimension->suffixString.equalsLowercase("grad")) {
       return dimension->value * MathConstants<double>::kPi / 200.0;
-    } else if (dimension->suffix.equalsLowercase("rad")) {
+    } else if (dimension->suffixString.equalsLowercase("rad")) {
       return dimension->value;
-    } else if (dimension->suffix.equalsLowercase("turn")) {
+    } else if (dimension->suffixString.equalsLowercase("turn")) {
       return dimension->value * MathConstants<double>::kPi * 2.0;
     } else {
       ParseError err;
-      err.reason = "Unsupported angle unit '" + dimension->suffix + "'";
+      err.reason = "Unsupported angle unit '" + dimension->suffixString + "'";
       err.offset = component.sourceOffset();
       return err;
     }

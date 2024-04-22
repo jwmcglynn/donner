@@ -37,6 +37,9 @@ public:
   /// Default constructor, creates a specificity of (0, 0, 0).
   constexpr Specificity() = default;
 
+  /// Destructor.
+  ~Specificity() = default;
+
   /// Copy constructor.
   Specificity(const Specificity& other) = default;
 

@@ -342,7 +342,7 @@ public:
     } else if (angleToken.is<Token::Dimension>()) {
       // TODO: Factor this out into a DimensionUtils or Angle type.
       const auto& dimension = angleToken.get<Token::Dimension>();
-      const RcString suffix = dimension.suffix;
+      const RcString suffix = dimension.suffixString;
 
       if (suffix.equalsLowercase("deg")) {
         return dimension.value;
@@ -354,7 +354,7 @@ public:
         return dimension.value * 360.0;
       } else {
         ParseError err;
-        err.reason = "Angle has unexpected dimension '" + dimension.suffix + "'";
+        err.reason = "Angle has unexpected dimension '" + dimension.suffixString + "'";
         err.offset = angleToken.offset();
         return err;
       }

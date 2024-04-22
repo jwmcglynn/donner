@@ -459,15 +459,15 @@ struct Token {
      * Create a Dimension token.
      *
      * @param value The parsed number value.
-     * @param suffix The unit suffix, such as 'px'.
+     * @param suffixString The unit suffix, such as 'px'.
      * @param suffixUnit The parsed unit, if it is a known suffix.
      * @param valueString The original string value.
      * @param type The type of number, either integer or floating point.
      */
-    Dimension(double value, RcString suffix, std::optional<Lengthd::Unit> suffixUnit,
+    Dimension(double value, RcString suffixString, std::optional<Lengthd::Unit> suffixUnit,
               RcString valueString, NumberType type)
         : value(value),
-          suffix(std::move(suffix)),
+          suffixString(std::move(suffixString)),
           suffixUnit(suffixUnit),
           valueString(std::move(valueString)),
           type(type) {}
@@ -487,12 +487,12 @@ struct Token {
      * @param obj Object to output.
      */
     friend std::ostream& operator<<(std::ostream& os, const Dimension& obj) {
-      return os << "Dimension(" << obj.value << obj.suffix << ", str='" << obj.valueString << "', "
-                << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
+      return os << "Dimension(" << obj.value << obj.suffixString << ", str='" << obj.valueString
+                << "', " << (obj.type == NumberType::Integer ? "integer" : "number") << ")";
     }
 
-    double value;     ///< The parsed number value.
-    RcString suffix;  //!< Raw string of the unit suffix, e.g. 'px'.
+    double value;           ///< The parsed number value.
+    RcString suffixString;  //!< Raw string of the unit suffix, e.g. 'px'.
     std::optional<Lengthd::Unit>
         suffixUnit;  //!< The parsed unit of the suffix, if known. If the input string has an
                      //!< invalid suffix, and \ref LengthParser failed to identify it, this will
