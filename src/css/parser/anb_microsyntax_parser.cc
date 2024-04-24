@@ -11,21 +11,6 @@ namespace donner::css {
 
 namespace {
 
-std::span<const css::ComponentValue>
-trimWhitespace(std::span<const css::ComponentValue> components) {
-  while (!components.empty() &&
-         components.front().isToken<Token::Whitespace>()) {
-    components = components.subspan(1);
-  }
-
-  while (!components.empty() &&
-         components.back().isToken<Token::Whitespace>()) {
-    components = components.subspan(0, components.size() - 1);
-  }
-
-  return components;
-}
-
 /**
  * Token for the An+B CSS microsyntax parser.
  */
@@ -93,10 +78,9 @@ struct AnbToken {
     SignlessInteger
   };
 
-  Type type;                //!< The type of the An+B token
-  std::optional<int> value; //!< The token value
-  std::optional<int>
-      digitValue; //!< The digit value, if this is a token that has Digit in it.
+  Type type;                      //!< The type of the An+B token
+  std::optional<int> value;       //!< The token value
+  std::optional<int> digitValue;  //!< The digit value, if this is a token that has Digit in it.
 
   /**
    * Token for the An+B CSS microsyntax parser.
@@ -117,19 +101,16 @@ struct AnbToken {
   void assertInvariants() {
     if (value.has_value()) {
       assert(type == Type::NDimension || type == Type::NDashDimension ||
-             type == Type::NDashDigitDimension ||
-             type == Type::NDashDigitIdent ||
+             type == Type::NDashDigitDimension || type == Type::NDashDigitIdent ||
              type == Type::DashNDashDigitIdent || type == Type::Integer ||
              type == Type::SignedInteger || type == Type::SignlessInteger);
     } else {
-      assert(type == Type::Even || type == Type::Odd || type == Type::Plus ||
-             type == Type::Minus || type == Type::N || type == Type::MinusN ||
-             type == Type::MinusNMinus);
+      assert(type == Type::Even || type == Type::Odd || type == Type::Plus || type == Type::Minus ||
+             type == Type::N || type == Type::MinusN || type == Type::MinusNMinus);
     }
 
     if (digitValue.has_value()) {
-      assert(type == Type::NDashDigitDimension ||
-             type == Type::NDashDigitIdent ||
+      assert(type == Type::NDashDigitDimension || type == Type::NDashDigitIdent ||
              type == Type::NDashDigitDimension);
     }
   }
@@ -138,36 +119,34 @@ struct AnbToken {
 class AnbMicrosyntaxParserImpl {
 public:
   AnbMicrosyntaxParserImpl(std::span<const css::ComponentValue> components)
-      : components_(trimWhitespace(components)) {}
+      : components_(components) {}
 
   ParseResult<AnbValue> parse() {
+    skipWhitespace();
+
     if (components_.empty()) {
       ParseError err;
       err.reason = "An+B microsyntax expected, found empty list";
       return err;
     }
 
-    int nextToken = 0;
-
-    auto firstTokenResult = tokenAt(nextToken++);
+    auto firstTokenResult = consumeToken();
     if (firstTokenResult.hasError()) {
       return std::move(firstTokenResult.error());
     }
 
-    const bool hasLeadingPlus =
-        firstTokenResult.result().type == AnbToken::Type::Plus;
+    const bool hasLeadingPlus = firstTokenResult.result().type == AnbToken::Type::Plus;
     if (hasLeadingPlus) {
-      firstTokenResult = tokenAt(nextToken++);
+      firstTokenResult = consumeToken();
     }
 
     if (firstTokenResult.hasError()) {
       return std::move(firstTokenResult.error());
     }
 
-    const AnbToken &firstToken = firstTokenResult.result();
-    nextToken = skipWhitespace(nextToken);
-    const std::optional<AnbToken> maybeSecondToken = maybeTokenAt(nextToken++);
-    nextToken = skipWhitespace(nextToken);
+    const AnbToken& firstToken = firstTokenResult.result();
+    skipWhitespace();
+    const std::optional<AnbToken::Type> maybeSecondTokenType = peekNextTokenType();
 
     if (!hasLeadingPlus) {
       // odd | even |
@@ -184,63 +163,64 @@ public:
 
       // <n-dimension> |
       else if (firstToken.type == AnbToken::Type::NDimension) {
-        if (!maybeSecondToken.has_value()) {
+        if (!maybeSecondTokenType.has_value()) {
           return AnbValue(firstToken.value.value(), 0);
         }
         // <n-dimension> <signed-integer> |
-        else if (maybeSecondToken->type == AnbToken::Type::SignedInteger) {
-          return AnbValue(firstToken.value.value(),
-                          maybeSecondToken->value.value());
+        else if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
+          return AnbValue(firstToken.value.value(), consumeToken().result().value.value());
         }
         // <n-dimension> ['+' | '-'] <signless-integer>
-        else if (maybeSecondToken->type == AnbToken::Type::Plus ||
-                 maybeSecondToken->type == AnbToken::Type::Minus) {
-          nextToken = skipWhitespace(nextToken);
+        else if (maybeSecondTokenType == AnbToken::Type::Plus ||
+                 maybeSecondTokenType == AnbToken::Type::Minus) {
+          const AnbToken& secondToken = consumeToken().result();
+          skipWhitespace();
 
-          if (const auto thirdToken = maybeTokenAt(nextToken);
-              thirdToken.has_value() &&
-              thirdToken->type == AnbToken::Type::SignlessInteger) {
+          if (peekNextTokenType() == AnbToken::Type::SignlessInteger) {
+            const AnbToken& thirdToken = consumeToken().result();
+
             // A is the dimension's value. B is the integer's value. If a '-'
             // was provided between the two, B is instead the negation of the
             // integer's value.
-            return AnbValue(firstToken.value.value(),
-                            maybeSecondToken->type == AnbToken::Type::Minus
-                                ? -thirdToken->value.value()
-                                : thirdToken->value.value());
+            return AnbValue(firstToken.value.value(), secondToken.type == AnbToken::Type::Minus
+                                                          ? -thirdToken.value.value()
+                                                          : thirdToken.value.value());
           }
         }
       }
       // -n |
       else if (firstToken.type == AnbToken::Type::MinusN) {
-        if (!maybeSecondToken.has_value()) {
+        if (!maybeSecondTokenType.has_value()) {
           return AnbValue(-1, 0);
-        }
-        // -n <signed-integer> |
-        else if (maybeSecondToken->type == AnbToken::Type::SignedInteger) {
-          return AnbValue(-1, maybeSecondToken->value.value());
-        }
-        // -n ['+' | '-'] <signless-integer>
-        else if (firstToken.type == AnbToken::Type::MinusN &&
-                 (maybeSecondToken->type == AnbToken::Type::Plus ||
-                  maybeSecondToken->type == AnbToken::Type::Minus)) {
-          nextToken = skipWhitespace(nextToken);
+        } else {
+          const AnbToken& secondToken = consumeToken().result();
 
-          if (const auto thirdToken = maybeTokenAt(nextToken);
-              thirdToken.has_value() &&
-              thirdToken->type == AnbToken::Type::SignlessInteger) {
-            // A is -1. B is the integer's value. If a '-' was provided between
-            // the two, B is instead the negation of the integer's value.
-            return AnbValue(-1, maybeSecondToken->type == AnbToken::Type::Minus
-                                    ? -thirdToken->value.value()
-                                    : thirdToken->value.value());
+          // -n <signed-integer> |
+          if (secondToken.type == AnbToken::Type::SignedInteger) {
+            return AnbValue(-1, secondToken.value.value());
+          }
+          // -n ['+' | '-'] <signless-integer>
+          else if (firstToken.type == AnbToken::Type::MinusN &&
+                   (secondToken.type == AnbToken::Type::Plus ||
+                    secondToken.type == AnbToken::Type::Minus)) {
+            skipWhitespace();
+
+            if (peekNextTokenType() == AnbToken::Type::SignlessInteger) {
+              const AnbToken& thirdToken = consumeToken().result();
+
+              // A is -1. B is the integer's value. If a '-' was provided between
+              // the two, B is instead the negation of the integer's value.
+              return AnbValue(-1, secondToken.type == AnbToken::Type::Minus
+                                      ? -thirdToken.value.value()
+                                      : thirdToken.value.value());
+            }
           }
         }
       }
 
       // <ndashdigit-dimension> |
       else if (firstToken.type == AnbToken::Type::NDashDigitDimension) {
-        return AnbValue(firstToken.value.value(),
-                        -firstToken.digitValue.value());
+        return AnbValue(firstToken.value.value(), -firstToken.digitValue.value());
       }
       // <dashndashdigit-ident> |
       else if (firstToken.type == AnbToken::Type::DashNDashDigitIdent) {
@@ -249,16 +229,13 @@ public:
 
       // <ndash-dimension> <signless-integer> |
       else if (firstToken.type == AnbToken::Type::NDashDimension &&
-               maybeSecondToken.has_value() &&
-               maybeSecondToken->type == AnbToken::Type::SignlessInteger) {
-        return AnbValue(firstToken.value.value(),
-                        -maybeSecondToken->value.value());
+               maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
+        return AnbValue(firstToken.value.value(), -consumeToken().result().value.value());
       }
       // -n- <signless-integer> |
       else if (firstToken.type == AnbToken::Type::MinusNMinus &&
-               maybeSecondToken.has_value() &&
-               maybeSecondToken->type == AnbToken::Type::SignlessInteger) {
-        return AnbValue(-1, -maybeSecondToken->value.value());
+               maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
+        return AnbValue(-1, -consumeToken().result().value.value());
       }
     }
 
@@ -276,31 +253,28 @@ public:
     }
     // '+'? n <signed-integer> |
     else if (firstToken.type == AnbToken::Type::N &&
-             maybeSecondToken.has_value() &&
-             maybeSecondToken->type == AnbToken::Type::SignedInteger) {
-      return AnbValue(1, maybeSecondToken->value.value());
+             maybeSecondTokenType == AnbToken::Type::SignedInteger) {
+      return AnbValue(1, consumeToken().result().value.value());
     }
     // '+'? n- <signless-integer> |
     else if (firstToken.type == AnbToken::Type::N &&
-             maybeSecondToken.has_value() &&
-             maybeSecondToken->type == AnbToken::Type::SignlessInteger) {
-      return AnbValue(1, -maybeSecondToken->value.value());
+             maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
+      return AnbValue(1, -consumeToken().result().value.value());
     }
     // '+'? n ['+' | '-'] <signless-integer> |
     else if (firstToken.type == AnbToken::Type::N &&
-             maybeSecondToken.has_value() &&
-             (maybeSecondToken->type == AnbToken::Type::Plus ||
-              maybeSecondToken->type == AnbToken::Type::Minus)) {
-      nextToken = skipWhitespace(nextToken);
+             (maybeSecondTokenType == AnbToken::Type::Plus ||
+              maybeSecondTokenType == AnbToken::Type::Minus)) {
+      const AnbToken& secondToken = consumeToken().result();
 
-      if (const auto thirdToken = maybeTokenAt(nextToken);
-          thirdToken.has_value() &&
-          thirdToken->type == AnbToken::Type::SignlessInteger) {
+      if (const auto maybeThirdTokenType = peekNextTokenType();
+          maybeThirdTokenType == AnbToken::Type::SignlessInteger) {
+        const AnbToken& thirdToken = consumeToken().result();
+
         // A is 1, respectively. B is the integer's value. If a '-' was provided
         // between the two, B is instead the negation of the integer's value.
-        return AnbValue(1, maybeSecondToken->type == AnbToken::Type::Minus
-                               ? -thirdToken->value.value()
-                               : thirdToken->value.value());
+        return AnbValue(1, secondToken.type == AnbToken::Type::Minus ? -thirdToken.value.value()
+                                                                     : thirdToken.value.value());
       }
     }
 
@@ -310,21 +284,42 @@ public:
     return err;
   }
 
-  std::optional<AnbToken> maybeTokenAt(int index) {
-    if (index < components_.size()) {
-      if (const auto anbTokenResult = tokenAt(index);
-          anbTokenResult.hasResult()) {
-        return anbTokenResult.result();
+  std::span<const css::ComponentValue> remainingComponents() const { return components_; }
+
+private:
+  ParseResult<AnbToken> consumeToken() {
+    auto result = parseNextToken();
+    if (result.hasError()) {
+      return result;
+    } else {
+      components_ = components_.subspan(1);
+      return result;
+    }
+  }
+
+  void skipWhitespace() {
+    const int numSkipped = skipWhitespace(0);
+    components_ = components_.subspan(numSkipped);
+  }
+
+  std::optional<AnbToken::Type> peekNextTokenType() {
+    if (!components_.empty()) {
+      if (const auto anbTokenResult = parseNextToken(); anbTokenResult.hasResult()) {
+        return anbTokenResult.result().type;
       }
     }
 
     return std::nullopt;
   }
 
-  ParseResult<AnbToken> tokenAt(int index) {
-    assert(index < components_.size() && "Index out of bounds");
+  ParseResult<AnbToken> parseNextToken() {
+    if (components_.empty()) {
+      ParseError err;
+      err.reason = "An+B microsyntax unexpected end of list";
+      return err;
+    }
 
-    const ComponentValue &component = components_[index];
+    const ComponentValue& component = components_[0];
 
     if (!component.is<Token>()) {
       ParseError err;
@@ -335,7 +330,7 @@ public:
 
     auto token = component.get<Token>();
     if (token.is<Token::Delim>()) {
-      const auto &delim = token.get<Token::Delim>();
+      const auto& delim = token.get<Token::Delim>();
 
       // '+' or '-'
       if (delim.value == '+') {
@@ -355,18 +350,16 @@ public:
         // <ndashdigit-dimension> is a <dimension-token> with its type flag set
         // to "integer", and a unit that is an ASCII case-insensitive match for
         // "n-*", where "*" is a series of one or more digits
-        else if (StringUtils::StartsWith(dimension.suffixString,
-                                         std::string_view("n-")) &&
-                 startsWithDigit(dimension.suffixString.substr(2))) {
+        else if (StringUtils::StartsWith(dimension.suffixString, std::string_view("n-")) &&
+                 isAllDigits(dimension.suffixString.substr(2))) {
           return AnbToken(AnbToken::Type::NDashDigitDimension, dimension.value,
                           parseDigits(dimension.suffixString.substr(2)));
         }
         // <ndash-dimension> is a <dimension-token> with its type flag set to
         // "integer", and a unit that is an ASCII case-insensitive match for
         // "n-"
-        else if (StringUtils::StartsWith(dimension.suffixString,
-                                         std::string_view("n-")) &&
-                 startsWithDigit(dimension.suffixString.substr(2))) {
+        else if (StringUtils::StartsWith(dimension.suffixString, std::string_view("n-")) &&
+                 isAllDigits(dimension.suffixString.substr(2))) {
           return AnbToken(AnbToken::Type::NDashDimension, dimension.value,
                           parseDigits(dimension.suffixString.substr(2)));
         }
@@ -392,7 +385,7 @@ public:
       // case-insensitive match for "n-*", where "*" is a series of one or more
       // digits
       else if (StringUtils::StartsWith(ident.value, std::string_view("n-")) &&
-               startsWithDigit(ident.value.substr(2))) {
+               isAllDigits(ident.value.substr(2))) {
         return AnbToken(AnbToken::Type::NDashDigitIdent, std::nullopt,
                         parseDigits(ident.value.substr(2)));
       }
@@ -400,15 +393,14 @@ public:
       // case-insensitive match for "-n-*", where "*" is a series of one or more
       // digits
       else if (StringUtils::StartsWith(ident.value, std::string_view("-n-")) &&
-               startsWithDigit(ident.value.substr(3))) {
+               isAllDigits(ident.value.substr(3))) {
         return AnbToken(AnbToken::Type::DashNDashDigitIdent, std::nullopt,
                         parseDigits(ident.value.substr(3)));
       }
 
     } else if (token.is<Token::Number>()) {
       auto number = std::move(token.get<Token::Number>());
-      assert(!number.valueString.empty() &&
-             "Parsed number should not have empty valueString");
+      assert(!number.valueString.empty() && "Parsed number should not have empty valueString");
 
       const std::string_view numberStr(number.valueString);
 
@@ -438,8 +430,7 @@ public:
   }
 
   int skipWhitespace(int nextToken) {
-    while (nextToken < components_.size() &&
-           components_[nextToken].isToken<Token::Whitespace>()) {
+    while (nextToken < components_.size() && components_[nextToken].isToken<Token::Whitespace>()) {
       nextToken++;
     }
 
@@ -447,8 +438,18 @@ public:
   }
 
 private:
-  bool startsWithDigit(std::string_view str) {
-    return !str.empty() && std::isdigit(str[0]);
+  bool isAllDigits(std::string_view str) {
+    if (str.empty()) {
+      return false;
+    }
+
+    for (int i = 0; i < str.size(); i++) {
+      if (!std::isdigit(str[i])) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   int parseDigits(std::string_view str) {
@@ -468,12 +469,14 @@ private:
   std::span<const css::ComponentValue> components_;
 };
 
-} // namespace
+}  // namespace
 
-ParseResult<AnbValue>
-AnbMicrosyntaxParser::Parse(std::span<const css::ComponentValue> components) {
+ParseResult<AnbMicrosyntaxParser::Result> AnbMicrosyntaxParser::Parse(
+    std::span<const css::ComponentValue> components) {
   AnbMicrosyntaxParserImpl parser(components);
-  return parser.parse();
+  return parser.parse().map<AnbMicrosyntaxParser::Result>([&parser](const AnbValue& value) {
+    return AnbMicrosyntaxParser::Result{value, parser.remainingComponents()};
+  });
 }
 
-} // namespace donner::css
+}  // namespace donner::css

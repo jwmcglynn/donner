@@ -26,6 +26,11 @@ struct AnbValue {
  */
 class AnbMicrosyntaxParser {
 public:
+  struct Result {
+    AnbValue value;
+    std::span<const ComponentValue> remainingComponents;
+  };
+
   /**
    * Parse the CSS An+B microsyntax, per https://www.w3.org/TR/css-syntax-3/#anb-microsyntax
    *
@@ -38,7 +43,7 @@ public:
    * @param components List of component values to parse.
    * @return Parsed value as a list of component values.
    */
-  static ParseResult<AnbValue> Parse(std::span<const ComponentValue> components);
+  static ParseResult<Result> Parse(std::span<const ComponentValue> components);
 };
 
 }  // namespace donner::css
