@@ -242,40 +242,39 @@ public:
     // Either does or does not have leading plus.
     // If there is a leading plus, firstToken will be the first non-'+' token.
 
-    // '+'? n
-    if (firstToken.type == AnbToken::Type::N) {
-      return AnbValue(1, 0);
-    }
-
     // '+'? <ndashdigit-ident> |
-    else if (firstToken.type == AnbToken::Type::NDashDigitIdent) {
+    if (firstToken.type == AnbToken::Type::NDashDigitIdent) {
       return AnbValue(1, -firstToken.value.value());
-    }
-    // '+'? n <signed-integer> |
-    else if (firstToken.type == AnbToken::Type::N &&
-             maybeSecondTokenType == AnbToken::Type::SignedInteger) {
-      return AnbValue(1, consumeToken().result().value.value());
+    } else if (firstToken.type == AnbToken::Type::N) {
+      // '+'? n
+      if (!maybeSecondTokenType.has_value()) {
+        return AnbValue(1, 0);
+      }
+
+      const AnbToken& secondToken = consumeToken().result();
+
+      // '+'? n <signed-integer> |
+      if (secondToken.type == AnbToken::Type::SignedInteger) {
+        return AnbValue(1, secondToken.value.value());
+      }
+      // '+'? n ['+' | '-'] <signless-integer> |
+      else if (secondToken.type == AnbToken::Type::Plus ||
+               secondToken.type == AnbToken::Type::Minus) {
+        if (const auto maybeThirdTokenType = peekNextTokenType();
+            maybeThirdTokenType == AnbToken::Type::SignlessInteger) {
+          const AnbToken& thirdToken = consumeToken().result();
+
+          // A is 1, respectively. B is the integer's value. If a '-' was provided
+          // between the two, B is instead the negation of the integer's value.
+          return AnbValue(1, secondToken.type == AnbToken::Type::Minus ? -thirdToken.value.value()
+                                                                       : thirdToken.value.value());
+        }
+      }
     }
     // '+'? n- <signless-integer> |
     else if (firstToken.type == AnbToken::Type::N &&
              maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
       return AnbValue(1, -consumeToken().result().value.value());
-    }
-    // '+'? n ['+' | '-'] <signless-integer> |
-    else if (firstToken.type == AnbToken::Type::N &&
-             (maybeSecondTokenType == AnbToken::Type::Plus ||
-              maybeSecondTokenType == AnbToken::Type::Minus)) {
-      const AnbToken& secondToken = consumeToken().result();
-
-      if (const auto maybeThirdTokenType = peekNextTokenType();
-          maybeThirdTokenType == AnbToken::Type::SignlessInteger) {
-        const AnbToken& thirdToken = consumeToken().result();
-
-        // A is 1, respectively. B is the integer's value. If a '-' was provided
-        // between the two, B is instead the negation of the integer's value.
-        return AnbValue(1, secondToken.type == AnbToken::Type::Minus ? -thirdToken.value.value()
-                                                                     : thirdToken.value.value());
-      }
     }
 
     ParseError err;
