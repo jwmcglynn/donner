@@ -19,6 +19,10 @@ struct ShadowedElementAdapter {
   ShadowedElementAdapter(Registry& registry, Entity treeEntity, Entity dataEntity)
       : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity) {}
 
+  bool operator==(const ShadowedElementAdapter& other) const {
+    return treeEntity_ == other.treeEntity_;
+  }
+
   Entity entity() const { return treeEntity_; }
 
   std::optional<ShadowedElementAdapter> parentElement() const {

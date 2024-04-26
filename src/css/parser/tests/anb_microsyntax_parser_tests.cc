@@ -50,6 +50,9 @@ TEST(AnbMicrosyntaxParser, Simple) {
               ParseResultIs(AllOf(AnbValueIs(2, 1), NoComponentsRemaining())));
 }
 
+/**
+ * Examples from the An+B microsyntax spec: https://www.w3.org/TR/css-syntax-3/#anb-microsyntax
+ */
 TEST(AnbMicrosyntaxParser, ExamplesFromSpec) {
   // Example 4
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("2n+0")),
@@ -98,8 +101,11 @@ TEST(AnbMicrosyntaxParser, ExamplesFromSpec) {
               ParseResultIs(AllOf(AnbValueIs(-1, 6), NoComponentsRemaining())));
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+6")),
               ParseResultIs(AllOf(AnbValueIs(0, 6), NoComponentsRemaining())));
+
+  // Invalid whitespace
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("3 n")),
-              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+              ParseResultIs(AllOf(AnbValueIs(0, 3), NumRemainingTokens(1))))
+      << "Last 'n' is not parsed";
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+ 2n")),
               ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+ 2")),

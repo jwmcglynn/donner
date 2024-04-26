@@ -9,6 +9,7 @@
 
 #include "src/base/utils.h"
 #include "src/css/component_value.h"
+#include "src/css/parser/anb_microsyntax_parser.h"
 #include "src/css/selector_traversal.h"
 #include "src/css/specificity.h"
 #include "src/svg/xml/xml_attribute.h"
@@ -326,10 +327,28 @@ struct PseudoClassSelector {
       }
     } else {
       // It's a function.
-      if (ident.equalsLowercase("nth-child")) {
-        // TODO
+
+      const std::optional<T> maybeParent = element.parentElement();
+      if (!maybeParent) {
+        return false;
+      }
+
+      if (ident.equalsLowercase("nth-child") && argsIfFunction) {
+        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ false);
+        if (auto result = AnbMicrosyntaxParser::Parse(argsIfFunction.value()); result.hasResult()) {
+          AnbMicrosyntaxParser::Result anbResult = result.result();
+          return anbResult.value.evaluate(childIndex);
+        }
+
+        return false;
       } else if (ident.equalsLowercase("nth-last-child")) {
-        // TODO
+        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ true);
+        if (auto result = AnbMicrosyntaxParser::Parse(argsIfFunction.value()); result.hasResult()) {
+          AnbMicrosyntaxParser::Result anbResult = result.result();
+          return anbResult.value.evaluate(childIndex);
+        }
+
+        return false;
       }
     }
 
@@ -348,6 +367,29 @@ struct PseudoClassSelector {
     }
     os << ")";
     return os;
+  }
+
+private:
+  template <traversal::ElementLike T>
+  static int getIndexInParent(const T& parent, const T& element, bool fromEnd) {
+    int childIndex = 1;
+    if (!fromEnd) {
+      for (std::optional<T> child = parent.firstChild(); child;
+           child = child.value().nextSibling(), ++childIndex) {
+        if (child.value() == element) {
+          return childIndex;
+        }
+      }
+    } else {
+      for (std::optional<T> child = parent.lastChild(); child;
+           child = child.value().previousSibling(), ++childIndex) {
+        if (child.value() == element) {
+          return childIndex;
+        }
+      }
+    }
+
+    UTILS_UNREACHABLE();  // Should not be reached if the element is a child of the parent.
   }
 };
 

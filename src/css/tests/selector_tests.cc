@@ -25,6 +25,8 @@ struct FakeElementData {
 struct FakeElement {
   FakeElement(svg::Registry& registry, svg::Entity entity) : registry_(registry), entity_(entity) {}
 
+  bool operator==(const FakeElement& other) const { return entity_ == other.entity_; }
+
   RcString typeString() const {
     return registry_.get().get<svg::components::TreeComponent>(entity_).typeString();
   }
@@ -290,7 +292,7 @@ TEST_F(SelectorTests, AttributeMatch) {
   EXPECT_FALSE(matches("[long=\"THE QUICK BROWN\" i]", element(root)));
 }
 
-TEST_F(SelectorTests, PseudoClassSelector) {
+TEST_F(SelectorTests, PseudoClassSelectorSimple) {
   // <root>
   // -> midA = <mid>
   //   -> childA = <a>
@@ -344,6 +346,42 @@ TEST_F(SelectorTests, PseudoClassSelector) {
   EXPECT_TRUE(doesNotMatch(":only-child", element(midB)));
   EXPECT_TRUE(doesNotMatch(":only-child", element(childA)));
   EXPECT_TRUE(matches(":only-child", element(childD)));
+}
+
+TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
+  // <root>
+  // -> mid1 = <mid>
+  //   -> child1
+  //      ...
+  //   -> child8
+  auto root = createEntity("root");
+  auto mid1 = createEntity("mid");
+  std::map<std::string, svg::Entity> children;
+
+  tree(root).appendChild(registry_, mid1);
+  for (int i = 1; i <= 8; ++i) {
+    const std::string id = "child" + std::to_string(i);
+    children[id] = createEntity("type" + std::to_string(i % 2 + 1));
+    tree(mid1).appendChild(registry_, children[id]);
+  }
+
+  // :nth-child(...)
+  EXPECT_TRUE(matches(":nth-child(1)", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":nth-child(1)", element(root))) << "Should not match root element";
+
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n)", element(children["child1"])));
+  EXPECT_TRUE(matches(":nth-child(2n)", element(children["child2"])));
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n)", element(children["child3"])));
+
+  // :nth-last-child(...)
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(1)", element(children["child1"])));
+  EXPECT_TRUE(matches(":nth-last-child(1)", element(children["child8"])));
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(1)", element(root))) << "Should not match root element";
+
+  EXPECT_TRUE(matches(":nth-last-child(2n)", element(children["child1"])));       // 8
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", element(children["child2"])));  // 7
+  EXPECT_TRUE(matches(":nth-last-child(2n)", element(children["child7"])));       // 2
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", element(children["child8"])));  // 1
 }
 
 }  // namespace donner::css

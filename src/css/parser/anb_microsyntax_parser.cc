@@ -157,7 +157,8 @@ public:
       }
       // <integer> |
       else if (firstToken.type == AnbToken::Type::Integer ||
-               firstToken.type == AnbToken::Type::SignedInteger) {
+               firstToken.type == AnbToken::Type::SignedInteger ||
+               firstToken.type == AnbToken::Type::SignlessInteger) {
         return AnbValue(0, firstToken.value.value());
       }
 

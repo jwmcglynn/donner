@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <iostream>
+
 #include "src/base/parser/parse_result.h"
 #include "src/css/component_value.h"
 
@@ -10,7 +12,17 @@ struct AnbValue {
   int a = 0;
   int b = 0;
 
-  int evaluate(int n) const noexcept { return a * n + b; }
+  int evaluate(int index) const noexcept {
+    std::cout << "AnbValue::evaluate(" << index << ") = matching " << a << "n+" << b << "\n";
+    // Return true if index matches any combination of a*n+b
+    if (a == 0) {
+      std::cout << "-> " << (index == b ? "true\n" : "false\n");
+      return index == b;
+    } else {
+      std::cout << "-> " << ((index - b) % a == 0 ? "true\n" : "false\n");
+      return (index - b) % a == 0;
+    }
+  }
 
   bool operator==(const AnbValue& other) const noexcept = default;
 
