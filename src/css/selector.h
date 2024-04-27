@@ -13,7 +13,7 @@
 #include "src/css/details/anb_value.h"
 #include "src/css/selector_traversal.h"
 #include "src/css/specificity.h"
-#include "src/svg/xml/xml_attribute.h"
+#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::css {
 
@@ -70,7 +70,7 @@ private:
  * - `*|foo`, represents the name `foo` which belongs to any namespace.
  */
 struct WqName {
-  svg::XMLAttribute name;
+  svg::XMLQualifiedName name;
 
   /**
    * Create a WqName with the given namespace and name.
@@ -78,7 +78,7 @@ struct WqName {
    * @param ns The namespace of the name, or empty if the name belongs to the default namespace.
    * @param name The name.
    */
-  WqName(svg::XMLAttribute&& name) : name(std::move(name)) {}
+  WqName(svg::XMLQualifiedName&& name) : name(std::move(name)) {}
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const WqName& obj) { return os << obj.name; }
@@ -151,12 +151,12 @@ struct TypeSelector {
    * Selector itself, which may contain wildcards.
    *
    * In this context, the members have the following meanings:
-   * - \ref XMLAttribute::namespacePrefix The namespace of the selector, the wildcard namespace
+   * - \ref XMLQualifiedName::namespacePrefix The namespace of the selector, the wildcard namespace
    ("*"), or empty if no namespace is specified.
-   * - \ref XMLAttribute::name The name of the selector, or "*" if the selector is a universal
+   * - \ref XMLQualifiedName::name The name of the selector, or "*" if the selector is a universal
    selector.
    */
-  svg::XMLAttribute name;
+  svg::XMLQualifiedName name;
 
   /**
    * Create a TypeSelector with the given namespace and name.
@@ -165,7 +165,7 @@ struct TypeSelector {
    *   is specified.
    * @param name The name of the selector, or "*" if the selector is a universal selector.
    */
-  TypeSelector(svg::XMLAttribute&& name) : name(std::move(name)) {}
+  TypeSelector(svg::XMLQualifiedName&& name) : name(std::move(name)) {}
 
   /// Returns true if this is a universal selector.
   bool isUniversal() const { return name.name == "*"; }

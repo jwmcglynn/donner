@@ -2,7 +2,7 @@
 /// @file
 
 #include "src/svg/xml/details/xml_parser_context.h"
-#include "src/svg/xml/xml_attribute.h"
+#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::svg {
 
@@ -21,7 +21,7 @@ public:
    */
   static std::optional<ParseError> ParseAndSetAttribute(XMLParserContext& context,
                                                         SVGElement& element,
-                                                        const XMLAttribute& name,
+                                                        const XMLQualifiedName& name,
                                                         std::string_view value) noexcept;
 };
 

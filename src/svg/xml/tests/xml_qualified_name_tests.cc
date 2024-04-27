@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "src/svg/xml/xml_attribute.h"
+#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::svg {
 
@@ -9,31 +9,31 @@ namespace donner::svg {
 // - Copy and move operators.
 // - Cast operators.
 
-TEST(XMLAttributeTest, WorksInMap) {
-  std::map<XMLAttribute, int> attrMap;
+TEST(XMLQualifiedNameTest, WorksInMap) {
+  std::map<XMLQualifiedName, int> attrMap;
 
-  attrMap[XMLAttribute("id")] = 1;
-  attrMap[XMLAttribute("myNamespace", "data-count")] = 5;
-
-  EXPECT_EQ(attrMap.size(), 2);
-  EXPECT_EQ(attrMap[XMLAttribute("id")], 1);
-  EXPECT_EQ(attrMap[XMLAttribute("myNamespace", "data-count")], 5);
-}
-
-TEST(XMLAttributeTest, WorksInUnorderedMap) {
-  std::unordered_map<XMLAttribute, int> attrMap;
-
-  attrMap[XMLAttribute("", "id")] = 1;
-  attrMap[XMLAttribute("myNamespace", "data-count")] = 5;
+  attrMap[XMLQualifiedName("id")] = 1;
+  attrMap[XMLQualifiedName("myNamespace", "data-count")] = 5;
 
   EXPECT_EQ(attrMap.size(), 2);
-  EXPECT_EQ(attrMap[XMLAttribute("", "id")], 1);
-  EXPECT_EQ(attrMap[XMLAttribute("myNamespace", "data-count")], 5);
+  EXPECT_EQ(attrMap[XMLQualifiedName("id")], 1);
+  EXPECT_EQ(attrMap[XMLQualifiedName("myNamespace", "data-count")], 5);
 }
 
-TEST(XMLAttributeTest, ComparisonOperators) {
-  const XMLAttribute attr1("", "class");
-  const XMLAttribute attr2("", "href");
+TEST(XMLQualifiedNameTest, WorksInUnorderedMap) {
+  std::unordered_map<XMLQualifiedName, int> attrMap;
+
+  attrMap[XMLQualifiedName("", "id")] = 1;
+  attrMap[XMLQualifiedName("myNamespace", "data-count")] = 5;
+
+  EXPECT_EQ(attrMap.size(), 2);
+  EXPECT_EQ(attrMap[XMLQualifiedName("", "id")], 1);
+  EXPECT_EQ(attrMap[XMLQualifiedName("myNamespace", "data-count")], 5);
+}
+
+TEST(XMLQualifiedNameTest, ComparisonOperators) {
+  const XMLQualifiedName attr1("", "class");
+  const XMLQualifiedName attr2("", "href");
 
   EXPECT_TRUE(attr1 == attr1);
   EXPECT_FALSE(attr1 == attr2);
@@ -45,10 +45,10 @@ TEST(XMLAttributeTest, ComparisonOperators) {
   EXPECT_FALSE(attr2 < attr1);
 }
 
-TEST(XMLAttributeTest, ComparisonOperatorsWithNamespaces) {
-  XMLAttribute xlinkHref("xlink", "href");
-  XMLAttribute xlinkClass("xlink", "class");
-  XMLAttribute svgHref("svg", "href");
+TEST(XMLQualifiedNameTest, ComparisonOperatorsWithNamespaces) {
+  XMLQualifiedName xlinkHref("xlink", "href");
+  XMLQualifiedName xlinkClass("xlink", "class");
+  XMLQualifiedName svgHref("svg", "href");
 
   EXPECT_TRUE(xlinkHref == xlinkHref);
   EXPECT_FALSE(xlinkHref == xlinkClass);
@@ -63,11 +63,11 @@ TEST(XMLAttributeTest, ComparisonOperatorsWithNamespaces) {
   EXPECT_FALSE(xlinkHref < svgHref);
 }
 
-TEST(XMLAttributeTest, ComparisonOperatorsBetweenNamespacedAndNonNamespaced) {
-  XMLAttribute href("", "href");
-  XMLAttributeRef href2("href");
-  XMLAttribute xlinkHref("xlink", "href");
-  XMLAttributeRef xlinkHref2("xlink", "href");
+TEST(XMLQualifiedNameTest, ComparisonOperatorsBetweenNamespacedAndNonNamespaced) {
+  XMLQualifiedName href("", "href");
+  XMLQualifiedNameRef href2("href");
+  XMLQualifiedName xlinkHref("xlink", "href");
+  XMLQualifiedNameRef xlinkHref2("xlink", "href");
 
   EXPECT_FALSE(href == xlinkHref);
   EXPECT_FALSE(href2 == xlinkHref2);
@@ -90,37 +90,37 @@ TEST(XMLAttributeTest, ComparisonOperatorsBetweenNamespacedAndNonNamespaced) {
   EXPECT_FALSE(xlinkHref < href2);
 }
 
-TEST(XMLAttributeRefTest, WorksInMap) {
-  std::map<XMLAttributeRef, int> attrMap;
+TEST(XMLQualifiedNameRefTest, WorksInMap) {
+  std::map<XMLQualifiedNameRef, int> attrMap;
 
   attrMap["class"] = 123;
-  attrMap[XMLAttributeRef("", "id")] = 1;
-  attrMap[XMLAttributeRef("myNamespace", "data-count")] = 5;
+  attrMap[XMLQualifiedNameRef("", "id")] = 1;
+  attrMap[XMLQualifiedNameRef("myNamespace", "data-count")] = 5;
 
   EXPECT_EQ(attrMap.size(), 3);
   EXPECT_EQ(attrMap["class"], 123);
-  EXPECT_EQ(attrMap[XMLAttributeRef("", "id")], 1);
-  EXPECT_EQ(attrMap[XMLAttributeRef("myNamespace", "data-count")], 5);
+  EXPECT_EQ(attrMap[XMLQualifiedNameRef("", "id")], 1);
+  EXPECT_EQ(attrMap[XMLQualifiedNameRef("myNamespace", "data-count")], 5);
 }
 
-TEST(XMLAttributeRefTest, WorksInUnorderedMap) {
-  std::unordered_map<XMLAttributeRef, int> attrMap;
+TEST(XMLQualifiedNameRefTest, WorksInUnorderedMap) {
+  std::unordered_map<XMLQualifiedNameRef, int> attrMap;
 
   attrMap["class"] = 123;
-  attrMap[XMLAttributeRef("", "id")] = 1;
-  attrMap[XMLAttributeRef("myNamespace", "data-count")] = 5;
+  attrMap[XMLQualifiedNameRef("", "id")] = 1;
+  attrMap[XMLQualifiedNameRef("myNamespace", "data-count")] = 5;
 
   EXPECT_EQ(attrMap.size(), 3);
   EXPECT_EQ(attrMap["class"], 123);
-  EXPECT_EQ(attrMap[XMLAttributeRef("id")], 1);
-  EXPECT_EQ(attrMap[XMLAttributeRef("myNamespace", "data-count")], 5);
+  EXPECT_EQ(attrMap[XMLQualifiedNameRef("id")], 1);
+  EXPECT_EQ(attrMap[XMLQualifiedNameRef("myNamespace", "data-count")], 5);
 }
 
-TEST(XMLAttributeRefTest, ComparisonOperators) {
-  const XMLAttribute attrClass("", "class");
-  const XMLAttributeRef attrClass2("class");
-  const XMLAttribute attrHref("", "href");
-  const XMLAttributeRef attrHref2("href");
+TEST(XMLQualifiedNameRefTest, ComparisonOperators) {
+  const XMLQualifiedName attrClass("", "class");
+  const XMLQualifiedNameRef attrClass2("class");
+  const XMLQualifiedName attrHref("", "href");
+  const XMLQualifiedNameRef attrHref2("href");
 
   EXPECT_TRUE(attrClass == attrClass);
   EXPECT_TRUE(attrClass2 == attrClass2);
@@ -158,13 +158,13 @@ TEST(XMLAttributeRefTest, ComparisonOperators) {
   EXPECT_FALSE(attrHref < attrClass2);
 }
 
-TEST(XMLAttributeRefTest, ComparisonOperatorsWithNamespaces) {
-  XMLAttribute xlinkHref("xlink", "href");
-  XMLAttributeRef xlinkHref2("xlink", "href");
-  XMLAttribute xlinkClass("xlink", "class");
-  XMLAttributeRef xlinkClass2("xlink", "class");
-  XMLAttribute svgHref("svg", "href");
-  XMLAttributeRef svgHref2("svg", "href");
+TEST(XMLQualifiedNameRefTest, ComparisonOperatorsWithNamespaces) {
+  XMLQualifiedName xlinkHref("xlink", "href");
+  XMLQualifiedNameRef xlinkHref2("xlink", "href");
+  XMLQualifiedName xlinkClass("xlink", "class");
+  XMLQualifiedNameRef xlinkClass2("xlink", "class");
+  XMLQualifiedName svgHref("svg", "href");
+  XMLQualifiedNameRef svgHref2("svg", "href");
 
   EXPECT_TRUE(xlinkHref == xlinkHref);
   EXPECT_TRUE(xlinkHref2 == xlinkHref2);
@@ -212,11 +212,11 @@ TEST(XMLAttributeRefTest, ComparisonOperatorsWithNamespaces) {
   EXPECT_FALSE(xlinkHref2 < svgHref);
 }
 
-TEST(XMLAttributeRefTest, ComparisonOperatorsBetweenNamespacedAndNonNamespaced) {
-  XMLAttribute href("", "href");
-  XMLAttributeRef href2("href");
-  XMLAttribute xlinkHref("xlink", "href");
-  XMLAttributeRef xlinkHref2("xlink", "href");
+TEST(XMLQualifiedNameRefTest, ComparisonOperatorsBetweenNamespacedAndNonNamespaced) {
+  XMLQualifiedName href("", "href");
+  XMLQualifiedNameRef href2("href");
+  XMLQualifiedName xlinkHref("xlink", "href");
+  XMLQualifiedNameRef xlinkHref2("xlink", "href");
 
   EXPECT_FALSE(href == xlinkHref);
   EXPECT_FALSE(href2 == xlinkHref2);

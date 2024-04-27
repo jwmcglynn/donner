@@ -25,8 +25,8 @@ cc_library(
 # Helper type for an XML attribute name with an optional namespace.
 #
 cc_library(
-    name = "xml_attribute",
-    hdrs = ["xml_attribute.h"],
+    name = "xml_qualified_name",
+    hdrs = ["xml_qualified_name.h"],
     visibility = [
         "//visibility:public",
     ],
@@ -58,12 +58,12 @@ cc_library(
 )
 
 cc_test(
-    name = "xml_attribute_tests",
+    name = "xml_qualified_name_tests",
     srcs = [
-        "tests/xml_attribute_tests.cc",
+        "tests/xml_qualified_name_tests.cc",
     ],
     deps = [
-        ":xml_attribute",
+        ":xml_qualified_name",
         "@com_google_gtest//:gtest_main",
     ],
 )

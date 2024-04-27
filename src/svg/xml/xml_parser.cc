@@ -97,7 +97,7 @@ ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
     }
 
     if (auto error = AttributeParser::ParseAndSetAttribute(
-            context, element, XMLAttribute(RcString(namespacePrefix), RcString(name)), value)) {
+            context, element, XMLQualifiedName(RcString(namespacePrefix), RcString(name)), value)) {
       return std::move(error.value());
     }
   }

@@ -27,7 +27,7 @@ cc_library(
         "//src/svg/graph",
         "//src/svg/parser",
         "//src/svg/registry",
-        "//src/svg/xml:xml_attribute",
+        "//src/svg/xml:xml_qualified_name",
         "@frozen",
     ],
 )
