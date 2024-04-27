@@ -181,7 +181,7 @@ struct TypeSelector {
     if (UTILS_PREDICT_FALSE(isUniversal())) {
       return true;
     } else {
-      return element.typeString().equalsIgnoreCase(name.name);
+      return element.xmlTypeName().equalsIgnoreCase(name.name);
     }
   }
 

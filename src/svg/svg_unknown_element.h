@@ -12,7 +12,7 @@ protected:
 public:
   static constexpr ElementType Type = ElementType::Unknown;
 
-  static SVGUnknownElement Create(SVGDocument& document, RcString typeString);
+  static SVGUnknownElement Create(SVGDocument& document, const XMLQualifiedNameRef& xmlTypeName);
 };
 
 }  // namespace donner::svg

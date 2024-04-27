@@ -56,7 +56,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Stop;
   /// XML tag name, \ref xml_stop.
-  static constexpr std::string_view Tag = "stop";
+  static constexpr XMLQualifiedNameRef Tag{"stop"};
 
   /**
    * Create a new \ref xml_stop element.

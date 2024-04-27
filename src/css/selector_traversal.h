@@ -10,6 +10,7 @@
 #include "src/base/utils.h"
 #include "src/css/component_value.h"
 #include "src/css/specificity.h"
+#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::css::traversal {
 
@@ -27,7 +28,7 @@ concept ElementLike = requires(const T t, const T otherT, std::string_view name)
   { t.lastChild() } -> std::same_as<std::optional<T>>;
   { t.previousSibling() } -> std::same_as<std::optional<T>>;
   { t.nextSibling() } -> std::same_as<std::optional<T>>;
-  { t.typeString() } -> std::same_as<RcString>;
+  { t.xmlTypeName() } -> std::same_as<svg::XMLQualifiedNameRef>;
   { t.id() } -> std::same_as<RcString>;
   { t.className() } -> std::same_as<RcString>;
   { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;

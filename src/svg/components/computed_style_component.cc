@@ -50,8 +50,8 @@ struct ShadowedElementAdapter {
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
-  RcString typeString() const {
-    return registry_.get().get<TreeComponent>(treeEntity_).typeString();
+  XMLQualifiedNameRef xmlTypeName() const {
+    return registry_.get().get<TreeComponent>(treeEntity_).xmlTypeName();
   }
 
   RcString id() const {

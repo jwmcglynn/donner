@@ -9,7 +9,7 @@ namespace donner::svg {
 
 SVGUseElement SVGUseElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  return SVGUseElement(CreateEntity(registry, RcString(Tag), Type));
+  return SVGUseElement(CreateEntity(registry, Tag, Type));
 }
 
 void SVGUseElement::setHref(RcString value) {

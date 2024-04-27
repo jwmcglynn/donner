@@ -100,14 +100,15 @@ struct XMLQualifiedNameRef {
    *
    * @param name The attribute name.
    */
-  /* implicit */ XMLQualifiedNameRef(std::string_view name) : namespacePrefix(), name(name) {}
+  /* implicit */ constexpr XMLQualifiedNameRef(std::string_view name)
+      : namespacePrefix(), name(name) {}
 
   /**
    * Construct from an attribute name as a const char*, assumes no namespacePrefix.
    *
    * @param name The attribute name.
    */
-  /* implicit */ XMLQualifiedNameRef(const char* name) : namespacePrefix(), name(name) {}
+  /* implicit */ constexpr XMLQualifiedNameRef(const char* name) : namespacePrefix(), name(name) {}
 
   /**
    * Construct from an attribute with a namespace prefix.
@@ -169,6 +170,25 @@ struct XMLQualifiedNameRef {
 
   friend bool operator==(const XMLQualifiedNameRef& lhs, const XMLQualifiedName& rhs) {
     return lhs.namespacePrefix == rhs.namespacePrefix && lhs.name == rhs.name;
+  }
+
+  /// Equality operator for a string, assuming the parameter is lowercase.
+  bool equalsIgnoreCase(std::string_view other) const {
+    // TODO: How should we support namespaces here?
+    return namespacePrefix.empty() &&
+           StringUtils::Equals<StringComparison::IgnoreCase>(name, other);
+  }
+
+  /// Convert to string operator.
+  std::string toString() const {
+    std::string str;
+    if (!namespacePrefix.empty()) {
+      str += namespacePrefix;
+      str += "|";
+    }
+
+    str += name;
+    return str;
   }
 };
 

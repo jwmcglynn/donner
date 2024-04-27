@@ -21,7 +21,7 @@ public:
    */
   static std::optional<ParseError> ParseAndSetAttribute(XMLParserContext& context,
                                                         SVGElement& element,
-                                                        const XMLQualifiedName& name,
+                                                        const XMLQualifiedNameRef& name,
                                                         std::string_view value) noexcept;
 };
 

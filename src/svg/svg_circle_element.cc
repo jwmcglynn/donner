@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 SVGCircleElement SVGCircleElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), RcString(Tag), Type);
+  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   return SVGCircleElement(handle);

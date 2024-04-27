@@ -128,7 +128,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::RadialGradient;
   /// XML tag name, \ref xml_radialGradient.
-  static constexpr std::string_view Tag = "radialGradient";
+  static constexpr XMLQualifiedNameRef Tag{"radialGradient"};
 
   /**
    * Create a new \ref xml_radialGradient element.

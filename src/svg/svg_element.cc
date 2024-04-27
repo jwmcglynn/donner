@@ -11,7 +11,6 @@
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/svg_document.h"
-#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::svg {
 
@@ -54,8 +53,8 @@ ElementType SVGElement::type() const {
   return handle_.get<components::TreeComponent>().type();
 }
 
-RcString SVGElement::typeString() const {
-  return handle_.get<components::TreeComponent>().typeString();
+XMLQualifiedNameRef SVGElement::xmlTypeName() const {
+  return handle_.get<components::TreeComponent>().xmlTypeName();
 }
 
 Entity SVGElement::entity() const {
@@ -145,7 +144,7 @@ std::optional<RcString> SVGElement::getAttribute(const XMLQualifiedNameRef& name
   return handle_.get_or_emplace<components::AttributesComponent>().getAttribute(name);
 }
 
-void SVGElement::setAttribute(const XMLQualifiedName& name, std::string_view value) {
+void SVGElement::setAttribute(const XMLQualifiedNameRef& name, std::string_view value) {
   // First check some special cases which will never be presentation attributes.
   if (name == XMLQualifiedNameRef("id")) {
     return setId(value);
@@ -286,9 +285,10 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
   return computedStyle.properties();
 }
 
-EntityHandle SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
+EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& xmlTypeName,
+                                      ElementType type) {
   Entity entity = registry.create();
-  registry.emplace<components::TreeComponent>(entity, type, std::move(typeString));
+  registry.emplace<components::TreeComponent>(entity, type, xmlTypeName);
   registry.emplace<components::TransformComponent>(entity);
   return EntityHandle(registry, entity);
 }

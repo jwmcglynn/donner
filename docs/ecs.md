@@ -13,10 +13,11 @@ using Entity = entt::entity;
 An entity is created by calling `registry.create()` without any components. Here is how the `Entity` is created for SVG elements.
 
 ```cpp
-EntityHandle SVGElement::CreateEntity(Registry& registry, RcString typeString, ElementType type) {
+EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& xmlTypeName,
+                                      ElementType type) {
   Entity entity = registry.create();
-  registry.emplace<TreeComponent>(entity, type, std::move(typeString));
-  registry.emplace<TransformComponent>(entity);
+  registry.emplace<components::TreeComponent>(entity, type, xmlTypeName);
+  registry.emplace<components::TransformComponent>(entity);
   return EntityHandle(registry, entity);
 }
 ```
@@ -27,11 +28,11 @@ Components are the data associated with an entity, which are efficiently stored 
 
 ```cpp
 // Get an entity's component by reference.
-TransformComponent& transform = registry.get<TransformComponent>(entity);
+auto& transform = registry.get<components::TransformComponent>(entity);
 
 // Iterate over all TransformComponents for all entities.
-for (auto entity : registry.view<TransformComponent>()) {
-  TransformComponent& transform = view.get(entity);
+for (auto entity : registry.view<components::TransformComponent>()) {
+  components::TransformComponent& transform = view.get(entity);
 }
 ```
 
@@ -48,12 +49,15 @@ For a real-world example, here is how the `ViewboxComponent` is created for SVG 
 
 ```cpp
 struct ViewboxComponent {
-  // Contains viewbox dimensions.
+  /// Stored viewbox, if any.
   std::optional<Boxd> viewbox;
 
-  /*
+  /**
    * Computes the transform for the given Viewbox per
    * https://www.w3.org/TR/SVG2/coords.html#ComputingAViewportsTransform
+   *
+   * @param size The position and size of the element.
+   * @param preserveAspectRatio The preserveAspectRatio property.
    */
   Transformd computeTransform(Boxd size, PreserveAspectRatio preserveAspectRatio) const;
 };

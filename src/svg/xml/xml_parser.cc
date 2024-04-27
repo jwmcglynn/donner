@@ -7,6 +7,7 @@
 #include "src/svg/all_svg_elements.h"
 #include "src/svg/xml/attribute_parser.h"
 #include "src/svg/xml/details/xml_parser_context.h"
+#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::svg {
 
@@ -97,7 +98,7 @@ ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
     }
 
     if (auto error = AttributeParser::ParseAndSetAttribute(
-            context, element, XMLQualifiedName(RcString(namespacePrefix), RcString(name)), value)) {
+            context, element, XMLQualifiedNameRef(namespacePrefix, name), value)) {
       return std::move(error.value());
     }
   }
@@ -111,8 +112,8 @@ ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
 
 template <size_t I = 0, typename... Types>
 ParseResult<SVGElement> CreateElement(XMLParserContext& context, SVGDocument& svgDocument,
-                                      std::string_view tagName, rapidxml_ns::xml_node<>* node,
-                                      entt::type_list<Types...>) {
+                                      const svg::XMLQualifiedNameRef& tagName,
+                                      rapidxml_ns::xml_node<>* node, entt::type_list<Types...>) {
   if constexpr (I != sizeof...(Types)) {
     if (tagName == std::tuple_element<I, std::tuple<Types...>>::type::Tag) {
       return ParseAttributes(
@@ -121,8 +122,7 @@ ParseResult<SVGElement> CreateElement(XMLParserContext& context, SVGDocument& sv
 
     return CreateElement<I + 1>(context, svgDocument, tagName, node, entt::type_list<Types...>());
   } else {
-    return ParseAttributes(context, SVGUnknownElement::Create(svgDocument, RcString(tagName)),
-                           node);
+    return ParseAttributes(context, SVGUnknownElement::Create(svgDocument, tagName), node);
   }
 }
 

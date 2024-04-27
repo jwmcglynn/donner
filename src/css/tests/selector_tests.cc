@@ -8,7 +8,6 @@
 #include "src/css/parser/selector_parser.h"
 #include "src/css/selector.h"
 #include "src/svg/components/tree_component.h"
-#include "src/svg/xml/xml_qualified_name.h"
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
@@ -27,8 +26,8 @@ struct FakeElement {
 
   bool operator==(const FakeElement& other) const { return entity_ == other.entity_; }
 
-  RcString typeString() const {
-    return registry_.get().get<svg::components::TreeComponent>(entity_).typeString();
+  svg::XMLQualifiedNameRef xmlTypeName() const {
+    return registry_.get().get<svg::components::TreeComponent>(entity_).xmlTypeName();
   }
   RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
   RcString className() const {
@@ -86,7 +85,7 @@ protected:
   svg::Entity createEntity(std::string_view typeString) {
     auto entity = registry_.create();
     registry_.emplace<svg::components::TreeComponent>(entity, svg::ElementType::Unknown,
-                                                      RcString(typeString));
+                                                      svg::XMLQualifiedNameRef(typeString));
     return entity;
   }
 

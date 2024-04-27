@@ -4,9 +4,10 @@
 
 namespace donner::svg {
 
-SVGUnknownElement SVGUnknownElement::Create(SVGDocument& document, RcString typeString) {
+SVGUnknownElement SVGUnknownElement::Create(SVGDocument& document,
+                                            const XMLQualifiedNameRef& xmlTypeName) {
   Registry& registry = document.registry();
-  return SVGUnknownElement(CreateEntity(registry, std::move(typeString), Type));
+  return SVGUnknownElement(CreateEntity(registry, xmlTypeName, Type));
 }
 
 }  // namespace donner::svg

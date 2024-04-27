@@ -197,7 +197,7 @@ private:
                             Entity lightTarget, Entity shadowParent) {
     const Entity shadow = registry.create();
     const TreeComponent& lightTargetTree = registry.get<TreeComponent>(lightTarget);
-    registry.emplace<TreeComponent>(shadow, lightTargetTree.type(), lightTargetTree.typeString());
+    registry.emplace<TreeComponent>(shadow, lightTargetTree.type(), lightTargetTree.xmlTypeName());
     registry.emplace<ShadowEntityComponent>(shadow, lightTarget);
     registry.emplace<ComputedStyleComponent>(shadow);
 

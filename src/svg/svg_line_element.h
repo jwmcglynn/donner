@@ -71,7 +71,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Line;
   /// XML tag name, \ref xml_line.
-  static constexpr std::string_view Tag = "line";
+  static constexpr XMLQualifiedNameRef Tag{"line"};
 
   /**
    * Create a new \ref xml_line element.

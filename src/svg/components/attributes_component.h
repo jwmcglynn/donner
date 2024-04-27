@@ -29,11 +29,13 @@ struct AttributesComponent {
     return (it != attributes_.end()) ? std::make_optional(it->second.value) : std::nullopt;
   }
 
-  void setAttribute(const XMLQualifiedName& name, const RcString& value) {
-    auto [xmlAttrStorageIt, _inserted] = attrNameStorage_.insert(name);
+  void setAttribute(const XMLQualifiedNameRef& name, const RcString& value) {
+    XMLQualifiedName nameAllocated(RcString(name.namespacePrefix), RcString(name.name));
+
+    auto [xmlAttrStorageIt, _inserted] = attrNameStorage_.insert(nameAllocated);
     const XMLQualifiedNameRef attrRef = *xmlAttrStorageIt;
 
-    auto [attrIt, newAttrInserted] = attributes_.emplace(attrRef, Storage(name, value));
+    auto [attrIt, newAttrInserted] = attributes_.emplace(attrRef, Storage(nameAllocated, value));
     if (!newAttrInserted) {
       attrIt->second.value = value;
     }

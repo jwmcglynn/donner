@@ -36,7 +36,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Defs;
   /// XML tag name, \ref xml_defs.
-  static constexpr std::string_view Tag = "defs";
+  static constexpr XMLQualifiedNameRef Tag{"defs"};
 
   /**
    * Create a new \ref xml_defs element.

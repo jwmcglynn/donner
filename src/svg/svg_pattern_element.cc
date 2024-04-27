@@ -14,7 +14,7 @@ namespace donner::svg {
 
 SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  EntityHandle handle = CreateEntity(registry, RcString(Tag), Type);
+  EntityHandle handle = CreateEntity(registry, Tag, Type);
   handle
       .emplace<components::RenderingBehaviorComponent>(
           components::RenderingBehavior::ShadowOnlyChildren)

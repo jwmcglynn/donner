@@ -3,12 +3,15 @@
 
 #include "src/base/rc_string.h"
 #include "src/svg/registry/registry.h"
+#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::svg::components {
 
 class TreeComponent {
 public:
-  TreeComponent(ElementType type, RcString typeString) : type_(type), typeString_(typeString) {}
+  TreeComponent(ElementType type, const XMLQualifiedNameRef& xmlTypeName)
+      : type_(type),
+        xmlTypeName_(RcString(xmlTypeName.namespacePrefix), RcString(xmlTypeName.name)) {}
 
   /**
    * Insert \a newNode as a child, before \a referenceNode. If \a referenceNode is entt::null,
@@ -65,7 +68,7 @@ public:
 
   ElementType type() const { return type_; }
 
-  RcString typeString() const { return typeString_; }
+  XMLQualifiedNameRef xmlTypeName() const { return xmlTypeName_; }
 
   Entity parent() const { return parent_; }
   Entity firstChild() const { return firstChild_; }
@@ -75,7 +78,7 @@ public:
 
 private:
   ElementType type_;
-  RcString typeString_;
+  XMLQualifiedName xmlTypeName_;
 
   Entity parent_{entt::null};
   Entity firstChild_{entt::null};

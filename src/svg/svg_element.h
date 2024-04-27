@@ -68,7 +68,7 @@ public:
   ElementType type() const;
 
   /// Get the XML tag name string for this element.
-  RcString typeString() const;
+  XMLQualifiedNameRef xmlTypeName() const;
 
   /// Get the underlying \ref Entity, for advanced use-cases that require direct access to the ECS.
   Entity entity() const;
@@ -142,7 +142,7 @@ public:
    * @param name Name of the attribute to set.
    * @param value New value to set.
    */
-  void setAttribute(const XMLQualifiedName& name, std::string_view value);
+  void setAttribute(const XMLQualifiedNameRef& name, std::string_view value);
 
   /**
    * Remove an attribute, which may be either a presentation attribute or custom user-provided
@@ -305,10 +305,11 @@ protected:
    * Create a new Entity of the given type.
    *
    * @param registry Registry to create the entity in.
-   * @param typeString String representation of the type.
+   * @param xmlTypeName XML element type, e.g. "svg" or "rect", which an optional namespace.
    * @param Type Type of the entity.
    */
-  static EntityHandle CreateEntity(Registry& registry, RcString typeString, ElementType Type);
+  static EntityHandle CreateEntity(Registry& registry, const XMLQualifiedNameRef& xmlTypeName,
+                                   ElementType Type);
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() const { return *handle_.registry(); }

@@ -5,7 +5,6 @@
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 #include "src/css/selector.h"
-#include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::css {
 

@@ -123,7 +123,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Rect;
   /// XML tag name, \ref xml_rect.
-  static constexpr std::string_view Tag = "rect";
+  static constexpr XMLQualifiedNameRef Tag{"rect"};
 
   /**
    * Create a new \ref xml_rect element.

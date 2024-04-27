@@ -120,7 +120,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::LinearGradient;
   /// XML tag name, \ref xml_linearGradient.
-  static constexpr std::string_view Tag = "linearGradient";
+  static constexpr XMLQualifiedNameRef Tag{"linearGradient"};
 
   /**
    * Create a new \ref xml_linearGradient element.

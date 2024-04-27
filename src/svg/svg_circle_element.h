@@ -68,7 +68,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Circle;
   /// XML tag name, \ref xml_circle.
-  static constexpr std::string_view Tag = "circle";
+  static constexpr XMLQualifiedNameRef Tag{"circle"};
 
   /**
    * Create a new \ref xml_circle element.

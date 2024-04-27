@@ -8,7 +8,7 @@ namespace donner::svg {
 
 SVGLinearGradientElement SVGLinearGradientElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
-  EntityHandle handle = CreateEntity(registry, RcString(Tag), Type);
+  EntityHandle handle = CreateEntity(registry, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::Nonrenderable);
   handle.emplace<components::LinearGradientComponent>();
