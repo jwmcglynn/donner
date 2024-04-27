@@ -30,6 +30,7 @@ cc_library(
         "color.h",
         "component_value.h",
         "declaration.h",
+        "details/anb_value.h",
         "rule.h",
         "selector.h",
         "selector_traversal.h",

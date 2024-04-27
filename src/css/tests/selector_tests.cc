@@ -351,9 +351,10 @@ TEST_F(SelectorTests, PseudoClassSelectorSimple) {
 TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   // <root>
   // -> mid1 = <mid>
-  //   -> child1
+  //   -> child1 = <type1>
+  //   -> child2 = <type2> (alternating 1/2 based on if number if even)
   //      ...
-  //   -> child8
+  //   -> child8 = <type2>
   auto root = createEntity("root");
   auto mid1 = createEntity("mid");
   std::map<std::string, svg::Entity> children;
@@ -361,17 +362,26 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   tree(root).appendChild(registry_, mid1);
   for (int i = 1; i <= 8; ++i) {
     const std::string id = "child" + std::to_string(i);
-    children[id] = createEntity("type" + std::to_string(i % 2 + 1));
+    children[id] = createEntity("type" + std::to_string((i - 1) % 2 + 1));
     tree(mid1).appendChild(registry_, children[id]);
   }
 
-  // :nth-child(...)
+  // :nth-child(An+B) without a selector
   EXPECT_TRUE(matches(":nth-child(1)", element(children["child1"])));
   EXPECT_TRUE(doesNotMatch(":nth-child(1)", element(root))) << "Should not match root element";
 
   EXPECT_TRUE(doesNotMatch(":nth-child(2n)", element(children["child1"])));
   EXPECT_TRUE(matches(":nth-child(2n)", element(children["child2"])));
   EXPECT_TRUE(doesNotMatch(":nth-child(2n)", element(children["child3"])));
+
+  // :nth-child(An+B of S) with a selector
+  EXPECT_TRUE(matches(":nth-child(1 of type1)", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":nth-child(1 of type2)", element(children["child1"])));
+
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", element(children["child2"])));
+  EXPECT_TRUE(matches(":nth-child(2n of type1)", element(children["child3"])));
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", element(children["child5"])));
 
   // :nth-last-child(...)
   EXPECT_TRUE(doesNotMatch(":nth-last-child(1)", element(children["child1"])));

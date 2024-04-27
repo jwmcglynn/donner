@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cassert>
 #include <concepts>
 #include <coroutine>
 #include <functional>
@@ -9,7 +10,7 @@
 
 #include "src/base/utils.h"
 #include "src/css/component_value.h"
-#include "src/css/parser/anb_microsyntax_parser.h"
+#include "src/css/details/anb_value.h"
 #include "src/css/selector_traversal.h"
 #include "src/css/specificity.h"
 #include "src/svg/xml/xml_attribute.h"
@@ -271,6 +272,15 @@ struct ClassSelector {
 };
 
 /**
+ * An+B microsyntax value with an optional selector, for pseudo-class selectors such as
+ *`:nth-child(An+B of S)`.
+ */
+struct AnbValueAndSelector {
+  AnbValue value;                        //!< The An+B value.
+  std::optional<TypeSelector> selector;  //!< The optional selector.
+};
+
+/**
  * Selectors which start with one colon, e.g. `:hover`, are called pseudo-classes, and they
  * represent additional state information not directly present in the document tree.
  *
@@ -298,6 +308,9 @@ struct PseudoClassSelector {
   RcString ident;  ///< The name of the pseudo-class.
   std::optional<std::vector<ComponentValue>>
       argsIfFunction;  ///< The arguments of the pseudo-class, if it is a function.
+  std::optional<AnbValueAndSelector>
+      anbValueAndSelectorIfAnb;  ///< The An+B value and selector of the pseudo-class, for An+B
+                                 ///< pseudo-classes such as `:nth-child`.
 
   /**
    * Create a PseudoClassSelector with the given ident.
@@ -333,22 +346,14 @@ struct PseudoClassSelector {
         return false;
       }
 
-      if (ident.equalsLowercase("nth-child") && argsIfFunction) {
-        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ false);
-        if (auto result = AnbMicrosyntaxParser::Parse(argsIfFunction.value()); result.hasResult()) {
-          AnbMicrosyntaxParser::Result anbResult = result.result();
-          return anbResult.value.evaluate(childIndex);
-        }
-
-        return false;
-      } else if (ident.equalsLowercase("nth-last-child")) {
-        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ true);
-        if (auto result = AnbMicrosyntaxParser::Parse(argsIfFunction.value()); result.hasResult()) {
-          AnbMicrosyntaxParser::Result anbResult = result.result();
-          return anbResult.value.evaluate(childIndex);
-        }
-
-        return false;
+      if (ident.equalsLowercase("nth-child") && anbValueAndSelectorIfAnb) {
+        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ false,
+                                                anbValueAndSelectorIfAnb->selector);
+        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
+      } else if (ident.equalsLowercase("nth-last-child") && anbValueAndSelectorIfAnb) {
+        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ true,
+                                                anbValueAndSelectorIfAnb->selector);
+        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
       }
     }
 
@@ -365,31 +370,53 @@ struct PseudoClassSelector {
       }
       os << "]";
     }
+    if (obj.anbValueAndSelectorIfAnb.has_value()) {
+      os << " anbValue[" << obj.anbValueAndSelectorIfAnb.value().value;
+      if (obj.anbValueAndSelectorIfAnb->selector.has_value()) {
+        os << " of " << obj.anbValueAndSelectorIfAnb->selector.value();
+      }
+      os << "]";
+    }
     os << ")";
     return os;
   }
 
 private:
   template <traversal::ElementLike T>
-  static int getIndexInParent(const T& parent, const T& element, bool fromEnd) {
+  static int getIndexInParent(const T& parent, const T& element, bool fromEnd,
+                              std::optional<TypeSelector> matchingType) {
     int childIndex = 1;
     if (!fromEnd) {
       for (std::optional<T> child = parent.firstChild(); child;
-           child = child.value().nextSibling(), ++childIndex) {
+           child = child.value().nextSibling()) {
+        if (matchingType && !matchingType->matches(child.value())) {
+          continue;
+        }
+
         if (child.value() == element) {
           return childIndex;
+        } else {
+          ++childIndex;
         }
       }
     } else {
       for (std::optional<T> child = parent.lastChild(); child;
-           child = child.value().previousSibling(), ++childIndex) {
+           child = child.value().previousSibling()) {
+        if (matchingType && !matchingType->matches(child.value())) {
+          continue;
+        }
+
         if (child.value() == element) {
           return childIndex;
+        } else {
+          ++childIndex;
         }
       }
     }
 
-    UTILS_UNREACHABLE();  // Should not be reached if the element is a child of the parent.
+    assert(matchingType &&
+           "Should only reach end of child list if there is a TypeSelector skipping elements");
+    return -1;
   }
 };
 

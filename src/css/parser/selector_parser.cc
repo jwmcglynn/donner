@@ -1,7 +1,10 @@
 #include "src/css/parser/selector_parser.h"
 
+#include "src/base/utils.h"
+#include "src/css/parser/anb_microsyntax_parser.h"
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
+#include "src/css/selector.h"
 #include "src/svg/xml/xml_attribute.h"
 
 namespace donner::css {
@@ -114,6 +117,19 @@ public:
     return std::move(maybeSelector.value());
   }
 
+  /**
+   * Parse a An+B microsyntax type suffix, in form of "of S", where S is a type selector.
+   */
+  ParseResult<TypeSelector> parseMicrosyntaxTypeSuffix() {
+    auto maybeType = handleMicrosyntaxTypeSuffix();
+    if (!maybeType) {
+      assert(error_.has_value());
+      return std::move(error_.value());
+    }
+
+    return std::move(maybeType.value());
+  }
+
 private:
   std::optional<Selector> handleComplexSelectorList() {
     skipWhitespace();
@@ -146,6 +162,35 @@ private:
     }
 
     return result;
+  }
+
+  std::optional<TypeSelector> handleMicrosyntaxTypeSuffix() {
+    skipWhitespace();
+
+    if (const Token* token = next<Token>()) {
+      if (token->is<Token::Ident>() && token->get<Token::Ident>().value.equalsLowercase("of")) {
+        advance();
+      } else {
+        setError("Expected 'of' keyword");
+        return std::nullopt;
+      }
+    }
+
+    skipWhitespace();
+
+    auto typeSelector = handleTypeSelector();
+    if (!typeSelector) {
+      return std::nullopt;
+    }
+
+    skipWhitespace();
+
+    if (isEOF()) {
+      return std::move(typeSelector.value());
+    } else {
+      setError("Expected end of microsyntax type suffix");
+      return std::nullopt;
+    }
   }
 
   std::optional<ComplexSelector> handleComplexSelector() {
@@ -353,6 +398,52 @@ private:
     return std::nullopt;
   }
 
+  std::optional<AnbValueAndSelector> parseAnbArgumentsIfNeeded(
+      const PseudoClassSelector& pseudoClass) {
+    if (!pseudoClass.argsIfFunction) {
+      return std::nullopt;
+    }
+
+    const bool anbSupported = pseudoClass.ident.equalsLowercase("nth-of-type") ||
+                              pseudoClass.ident.equalsLowercase("nth-last-of-type");
+    const bool anbSupportedWithOptionalSelector =
+        pseudoClass.ident.equalsLowercase("nth-child") ||
+        pseudoClass.ident.equalsLowercase("nth-last-child");
+    if (!anbSupported && !anbSupportedWithOptionalSelector) {
+      return std::nullopt;
+    }
+
+    // Parse the arguments for known pseudo-classes
+    ParseResult<AnbMicrosyntaxParser::Result> anbParseResult =
+        AnbMicrosyntaxParser::Parse(pseudoClass.argsIfFunction.value());
+    if (anbParseResult.hasError()) {
+      // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
+      return std::nullopt;
+    }
+
+    const auto& anbResult = anbParseResult.result();
+
+    if (anbResult.remainingComponents.empty()) {
+      return AnbValueAndSelector{anbResult.value, std::nullopt};
+    } else if (anbSupportedWithOptionalSelector) {
+      SelectorParserImpl parser(anbResult.remainingComponents);
+
+      ParseResult<TypeSelector> typeResult = parser.parseMicrosyntaxTypeSuffix();
+      if (typeResult.hasError()) {
+        // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
+        return std::nullopt;
+      }
+
+      return AnbValueAndSelector{anbResult.value, std::move(typeResult.result())};
+    } else {
+      // Extra components, but parsing them is not supported. Discard the An+B value.
+      // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
+      return std::nullopt;
+    }
+
+    UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
+  }
+
   std::optional<SubclassSelector> handleSubclassSelector() {
     // <subclass-selector> = <id-selector> | <class-selector> |
     //                       <attribute-selector> | <pseudo-class-selector>
@@ -368,7 +459,14 @@ private:
       } else if (nextDelimIs('.')) {
         return handleClassSelector();
       } else if (nextTokenIs<Token::Colon>()) {
-        return handlePseudoClassSelector();
+        if (auto maybePseudoClass = handlePseudoClassSelector()) {
+          PseudoClassSelector& pseudoClass = maybePseudoClass.value();
+          pseudoClass.anbValueAndSelectorIfAnb = parseAnbArgumentsIfNeeded(pseudoClass);
+          return pseudoClass;
+        } else {
+          // Error is set by handlePseudoClassSelector.
+          return std::nullopt;
+        }
       }
     } else if (nextIs<SimpleBlock>()) {
       return handleAttributeSelector();
