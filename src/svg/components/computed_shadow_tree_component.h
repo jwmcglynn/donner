@@ -1,12 +1,9 @@
 #pragma once
 /// @file
 
-#include <map>
 #include <span>
-#include <unordered_map>
 
 #include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/document_context.h"
 #include "src/svg/components/offscreen_shadow_tree_component.h"
 #include "src/svg/components/shadow_entity_component.h"
 #include "src/svg/components/shadow_tree_component.h"

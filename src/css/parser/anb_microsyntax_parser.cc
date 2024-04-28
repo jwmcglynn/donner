@@ -1,12 +1,5 @@
 #include "src/css/parser/anb_microsyntax_parser.h"
 
-#include <algorithm>
-#include <ratio>
-
-#include "src/base/math_utils.h"
-#include "src/css/parser/details/subparsers.h"
-#include "src/css/parser/details/tokenizer.h"
-
 namespace donner::css {
 
 namespace {

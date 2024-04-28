@@ -86,7 +86,7 @@ TEST_F(TreeComponentTests, InsertBefore) {
   EXPECT_THAT(children(root), ElementsAre(child2, child4, child1, child3));
 }
 
-TEST_F(TreeComponentTests, InsertBefore_Errors) {
+TEST_F(TreeComponentTests, InsertBeforeErrors) {
   auto root = createEntity();
   EXPECT_DEATH({ tree(root).insertBefore(registry_, entt::null, entt::null); }, "newNode is null");
 
@@ -98,7 +98,7 @@ TEST_F(TreeComponentTests, InsertBefore_Errors) {
   EXPECT_DEATH({ tree(root).insertBefore(registry_, child1, node1); }, "");
 }
 
-TEST_F(TreeComponentTests, InsertBefore_WithSelf) {
+TEST_F(TreeComponentTests, InsertBeforeWithSelf) {
   auto root = createEntity();
   EXPECT_DEATH({ tree(root).insertBefore(registry_, entt::null, entt::null); }, "newNode is null");
 
@@ -108,7 +108,7 @@ TEST_F(TreeComponentTests, InsertBefore_WithSelf) {
   EXPECT_DEATH({ tree(root).insertBefore(registry_, child1, child1); }, "");
 }
 
-TEST_F(TreeComponentTests, InsertBefore_WithRoot) {
+TEST_F(TreeComponentTests, InsertBeforeWithRoot) {
   auto root = createEntity();
   EXPECT_DEATH({ tree(root).insertBefore(registry_, entt::null, entt::null); }, "newNode is null");
 
@@ -136,7 +136,7 @@ TEST_F(TreeComponentTests, AppendChild) {
   EXPECT_THAT(children(root), ElementsAre(child1, child2));
 }
 
-TEST_F(TreeComponentTests, AppendChild_Errors) {
+TEST_F(TreeComponentTests, AppendChildErrors) {
   auto root = createEntity();
   EXPECT_DEATH({ tree(root).appendChild(registry_, entt::null); }, "child is null");
 
@@ -177,7 +177,7 @@ TEST_F(TreeComponentTests, ReplaceChild) {
   EXPECT_THAT(children(root), ElementsAre(child4, child2, child1));
 }
 
-TEST_F(TreeComponentTests, ReplaceChild_Errors) {
+TEST_F(TreeComponentTests, ReplaceChildErrors) {
   auto root = createEntity();
   auto child1 = createEntity();
   EXPECT_DEATH({ tree(root).replaceChild(registry_, entt::null, child1); }, "newChild is null");
@@ -193,7 +193,7 @@ TEST_F(TreeComponentTests, ReplaceChild_Errors) {
   EXPECT_DEATH({ tree(root).replaceChild(registry_, child2, node1); }, "");
 }
 
-TEST_F(TreeComponentTests, ReplaceChild_ReplaceSelf) {
+TEST_F(TreeComponentTests, ReplaceChildReplaceSelf) {
   auto root = createEntity();
   auto child1 = createEntity();
   auto child2 = createEntity();
@@ -248,7 +248,7 @@ TEST_F(TreeComponentTests, RemoveChild) {
   EXPECT_THAT(children(root), ElementsAre(child3));
 }
 
-TEST_F(TreeComponentTests, RemoveChild_Errors) {
+TEST_F(TreeComponentTests, RemoveChildErrors) {
   auto root = createEntity();
   EXPECT_DEATH({ tree(root).removeChild(registry_, entt::null); }, "child is null");
 

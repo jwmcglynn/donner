@@ -6,8 +6,8 @@
 #include "src/base/parser/length_parser.h"
 #include "src/base/parser/number_parser.h"
 #include "src/base/parser/parse_error.h"
-#include "src/svg/all_svg_elements.h"
-#include "src/svg/parser/points_list_parser.h"
+#include "src/svg/all_svg_elements.h"           // IWYU pragma: keep
+#include "src/svg/parser/points_list_parser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "src/svg/parser/preserve_aspect_ratio_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
 #include "src/svg/xml/details/xml_parser_context.h"

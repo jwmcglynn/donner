@@ -3,9 +3,6 @@
 
 #include <concepts>
 #include <coroutine>
-#include <functional>
-#include <variant>
-#include <vector>
 
 #include "src/base/utils.h"
 #include "src/css/component_value.h"
