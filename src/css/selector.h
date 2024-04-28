@@ -518,19 +518,49 @@ struct AttributeSelector {
    */
   template <traversal::ElementLike T>
   bool matches(const T& element) const {
-    const std::optional<RcString> maybeValue = element.getAttribute(name.name);
-    if (!maybeValue) {
+    if (name.name.namespacePrefix != "*") {
+      const std::optional<RcString> maybeValue = element.getAttribute(name.name);
+      if (!maybeValue) {
+        return false;
+      }
+
+      // If there's no additional condition, the attribute existing constitutes a match.
+      return !matcher || valueMatches(matcher.value(), maybeValue.value());
+    } else {
+      // TODO: Make this enumerate attributes without allocations.
+      // Wildcard may return multiple matches.
+      const std::vector<svg::XMLQualifiedNameRef> attributes =
+          element.findMatchingAttributes(name.name);
+
+      for (const auto& attributeName : attributes) {
+        const std::optional<RcString> maybeValue = element.getAttribute(attributeName);
+        assert(maybeValue.has_value() && "Element should exist from findMatchingAttributes");
+
+        // If there's no additional condition, the attribute existing constitutes a match.
+        if (!matcher || valueMatches(matcher.value(), maybeValue.value())) {
+          return true;
+        }
+      }
+
       return false;
     }
+  }
 
-    // If there's no additional condition, the attribute existing constitutes a match.
-    if (!matcher) {
-      return true;
+  /// Ostream output operator.
+  friend std::ostream& operator<<(std::ostream& os, const AttributeSelector& obj) {
+    os << "AttributeSelector(" << obj.name;
+    if (obj.matcher) {
+      os << " " << obj.matcher->op << " " << obj.matcher->value;
+      if (obj.matcher->caseInsensitive) {
+        os << " (case-insensitive)";
+      }
     }
+    os << ")";
+    return os;
+  }
 
-    const Matcher& m = matcher.value();
-    const RcString& value = maybeValue.value();
-
+private:
+  static bool valueMatches(const Matcher& m, const RcString& value) {
     switch (m.op) {
       case AttrMatcher::Includes:
         // Returns true if attribute value is a whitespace-separated list of values, and one of
@@ -587,19 +617,6 @@ struct AttributeSelector {
     }
 
     return false;
-  }
-
-  /// Ostream output operator.
-  friend std::ostream& operator<<(std::ostream& os, const AttributeSelector& obj) {
-    os << "AttributeSelector(" << obj.name;
-    if (obj.matcher) {
-      os << " " << obj.matcher->op << " " << obj.matcher->value;
-      if (obj.matcher->caseInsensitive) {
-        os << " (case-insensitive)";
-      }
-    }
-    os << ")";
-    return os;
   }
 };
 

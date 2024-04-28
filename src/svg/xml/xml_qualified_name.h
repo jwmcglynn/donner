@@ -48,10 +48,10 @@ struct XMLQualifiedName {
 
   /// Comparison operator.
   std::strong_ordering operator<=>(const XMLQualifiedName& other) const {
-    if (namespacePrefix != other.namespacePrefix) {
-      return namespacePrefix <=> other.namespacePrefix;
+    if (name != other.name) {
+      return name <=> other.name;
     }
-    return name <=> other.name;
+    return namespacePrefix <=> other.namespacePrefix;
   }
 
   /// Equality operator for gtest.
@@ -131,10 +131,11 @@ struct XMLQualifiedNameRef {
 
   /// Comparison operator.
   std::strong_ordering operator<=>(const XMLQualifiedNameRef& other) const {
-    if (namespacePrefix != other.namespacePrefix) {
-      return namespacePrefix <=> other.namespacePrefix;
+    if (name != other.name) {
+      return name <=> other.name;
     }
-    return name <=> other.name;
+
+    return namespacePrefix <=> other.namespacePrefix;
   }
 
   /// Equality operator for gtest.
@@ -143,27 +144,37 @@ struct XMLQualifiedNameRef {
   /// Friend operator for \ref XMLQualifiedName comparison.
   friend std::strong_ordering operator<=>(const XMLQualifiedNameRef& lhs,
                                           const XMLQualifiedName& rhs) {
-    if (lhs.namespacePrefix != rhs.namespacePrefix) {
-      return lhs.namespacePrefix <=> rhs.namespacePrefix;
+    if (lhs.name != rhs.name) {
+      return lhs.name <=> rhs.name;
     }
-    return lhs.name <=> rhs.name;
+    return lhs.namespacePrefix <=> rhs.namespacePrefix;
   }
 
   friend std::strong_ordering operator<=>(const XMLQualifiedName& lhs,
                                           const XMLQualifiedNameRef& rhs) {
-    if (lhs.namespacePrefix != rhs.namespacePrefix) {
-      return lhs.namespacePrefix <=> rhs.namespacePrefix;
+    if (lhs.name != rhs.name) {
+      return lhs.name <=> rhs.name;
     }
-    return lhs.name <=> rhs.name;
+    return lhs.namespacePrefix <=> rhs.namespacePrefix;
   }
 
   /// Friend operator for \ref XMLQualifiedName equality for gtest.
   friend bool operator==(const XMLQualifiedName& lhs, const XMLQualifiedNameRef& rhs) {
-    return lhs.namespacePrefix == rhs.namespacePrefix && lhs.name == rhs.name;
+    return lhs.name == rhs.name && lhs.namespacePrefix == rhs.namespacePrefix;
   }
 
   friend bool operator==(const XMLQualifiedNameRef& lhs, const XMLQualifiedName& rhs) {
-    return lhs.namespacePrefix == rhs.namespacePrefix && lhs.name == rhs.name;
+    return lhs.name == rhs.name && lhs.namespacePrefix == rhs.namespacePrefix;
+  }
+
+  /// Ostream output operator.
+  friend std::ostream& operator<<(std::ostream& os, const XMLQualifiedNameRef& obj) {
+    if (!obj.namespacePrefix.empty()) {
+      os << obj.namespacePrefix << "|";
+    }
+
+    os << obj.name;
+    return os;
   }
 
   /// Convert to string operator.

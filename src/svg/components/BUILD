@@ -102,6 +102,7 @@ cc_library(
 cc_test(
     name = "components_tests",
     srcs = [
+        "tests/attributes_component_tests.cc",
         "tests/tree_component_tests.cc",
         "tests/viewbox_component_tests.cc",
     ],

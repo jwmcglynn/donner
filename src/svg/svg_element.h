@@ -132,6 +132,15 @@ public:
   std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const;
 
   /**
+   * Find attributes matching the given name matcher.
+   *
+   * @param matcher Matcher to use to find attributes. If \ref XMLQualifiedNameRef::namespacePrefix
+   * is "*", the matcher will match any namespace with the given attribute name.
+   * @return A vector of attributes matching the given name matcher.
+   */
+  std::vector<XMLQualifiedNameRef> findMatchingAttributes(const XMLQualifiedNameRef& matcher) const;
+
+  /**
    * Set the value of a generic XML attribute, which may be either a presentation attribute or
    * custom user-provided attribute.
    *

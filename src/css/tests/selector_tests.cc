@@ -7,6 +7,7 @@
 #include "src/base/rc_string.h"
 #include "src/css/parser/selector_parser.h"
 #include "src/css/selector.h"
+#include "src/svg/components/attributes_component.h"
 #include "src/svg/components/tree_component.h"
 
 using testing::ElementsAre;
@@ -17,8 +18,6 @@ namespace donner::css {
 struct FakeElementData {
   RcString id;
   RcString className;
-
-  std::map<svg::XMLQualifiedName, RcString> attributes;
 };
 
 struct FakeElement {
@@ -35,10 +34,16 @@ struct FakeElement {
   }
 
   std::optional<RcString> getAttribute(const svg::XMLQualifiedNameRef& name) const {
-    const auto& data = registry_.get().get_or_emplace<FakeElementData>(entity_);
-    const auto it = data.attributes.find(
-        svg::XMLQualifiedName(RcString(name.namespacePrefix), RcString(name.name)));
-    return it != data.attributes.end() ? std::make_optional(it->second) : std::nullopt;
+    return registry_.get()
+        .get_or_emplace<svg::components::AttributesComponent>(entity_)
+        .getAttribute(name);
+  }
+
+  std::vector<svg::XMLQualifiedNameRef> findMatchingAttributes(
+      const svg::XMLQualifiedNameRef& matcher) const {
+    return registry_.get()
+        .get_or_emplace<svg::components::AttributesComponent>(entity_)
+        .findMatchingAttributes(matcher);
   }
 
   std::optional<FakeElement> parentElement() const {
@@ -117,8 +122,9 @@ protected:
     registry_.get_or_emplace<FakeElementData>(entity).className = className;
   }
 
-  void setAttribute(svg::Entity entity, const svg::XMLQualifiedName& name, RcString value) {
-    registry_.get_or_emplace<FakeElementData>(entity).attributes[name] = std::move(value);
+  void setAttribute(svg::Entity entity, const svg::XMLQualifiedName& name, const RcString& value) {
+    registry_.get_or_emplace<svg::components::AttributesComponent>(entity).setAttribute(name,
+                                                                                        value);
   }
 
   FakeElement element(svg::Entity entity) { return FakeElement(registry_, entity); }
@@ -190,6 +196,7 @@ TEST_F(SelectorTests, AttributeMatch) {
 
   tree(root).appendChild(registry_, child1);
   setAttribute(root, svg::XMLQualifiedName("attr"), "value");
+  setAttribute(child1, svg::XMLQualifiedName("my-namespace", "attr"), "value2");
   setAttribute(root, svg::XMLQualifiedName("list"), "abc def a");
   setAttribute(child1, svg::XMLQualifiedName("list"), "ABC DEF A");
   setAttribute(root, svg::XMLQualifiedName("dash"), "one-two-three");
@@ -197,10 +204,33 @@ TEST_F(SelectorTests, AttributeMatch) {
   setAttribute(root, svg::XMLQualifiedName("long"), "the quick brown fox");
   setAttribute(child1, svg::XMLQualifiedName("long"), "THE QUICK BROWN FOX");
 
+  // Use the same attribute name with different namespaces on root.
+  setAttribute(root, svg::XMLQualifiedName("dupe"), "value1");
+  setAttribute(root, svg::XMLQualifiedName("my-namespace", "dupe"), "value2");
+
   // No matcher: Matches if the attribute exists.
   EXPECT_TRUE(matches("[attr]", element(root)));
   EXPECT_FALSE(matches("[attr]", element(child1)));
   EXPECT_FALSE(matches("[doesNotExist]", element(root)));
+
+  // Attribute namespaces
+  EXPECT_TRUE(matches("[*|attr]", element(root)));
+  EXPECT_TRUE(matches("[*|attr]", element(child1)));
+  EXPECT_TRUE(doesNotMatch("[*|none]", element(child1)));
+
+  EXPECT_TRUE(matches("[|attr]", element(root)));
+  EXPECT_TRUE(doesNotMatch("[|attr]", element(child1)));
+  EXPECT_TRUE(doesNotMatch("[my-namespace|attr]", element(root)));
+  EXPECT_TRUE(matches("[my-namespace|attr]", element(child1)));
+
+  EXPECT_TRUE(doesNotMatch("[*|attr=invalid]", element(root)));
+  EXPECT_TRUE(doesNotMatch("[*|attr=invalid]", element(child1)));
+
+  // Attribute namespaces will match values from both attributes
+  EXPECT_TRUE(matches("[*|attr ^= value]", element(root)));
+  EXPECT_TRUE(matches("[*|attr ^= value]", element(child1)));
+  EXPECT_TRUE(matches("[*|dupe = value1]", element(root)));
+  EXPECT_TRUE(matches("[*|dupe = value2]", element(root)));
 
   // Includes [attr ~= str]: Matches if the attribute is a space-separated list of strings and one
   // of them exactly matches.

@@ -144,6 +144,11 @@ std::optional<RcString> SVGElement::getAttribute(const XMLQualifiedNameRef& name
   return handle_.get_or_emplace<components::AttributesComponent>().getAttribute(name);
 }
 
+std::vector<XMLQualifiedNameRef> SVGElement::findMatchingAttributes(
+    const XMLQualifiedNameRef& matcher) const {
+  return handle_.get_or_emplace<components::AttributesComponent>().findMatchingAttributes(matcher);
+}
+
 void SVGElement::setAttribute(const XMLQualifiedNameRef& name, std::string_view value) {
   // First check some special cases which will never be presentation attributes.
   if (name == XMLQualifiedNameRef("id")) {

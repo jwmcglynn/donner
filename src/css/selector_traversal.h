@@ -18,18 +18,22 @@ namespace donner::css::traversal {
  * `previousSibling()`, and type and class information to match against the respective selectors.
  */
 template <typename T>
-concept ElementLike = requires(const T t, const T otherT, std::string_view name) {
-  { t.operator==(otherT) } -> std::same_as<bool>;
-  { t.parentElement() } -> std::same_as<std::optional<T>>;
-  { t.firstChild() } -> std::same_as<std::optional<T>>;
-  { t.lastChild() } -> std::same_as<std::optional<T>>;
-  { t.previousSibling() } -> std::same_as<std::optional<T>>;
-  { t.nextSibling() } -> std::same_as<std::optional<T>>;
-  { t.xmlTypeName() } -> std::same_as<svg::XMLQualifiedNameRef>;
-  { t.id() } -> std::same_as<RcString>;
-  { t.className() } -> std::same_as<RcString>;
-  { t.getAttribute(name) } -> std::same_as<std::optional<RcString>>;
-};
+concept ElementLike =
+    requires(const T t, const T otherT, const svg::XMLQualifiedNameRef attribName) {
+      { t.operator==(otherT) } -> std::same_as<bool>;
+      { t.parentElement() } -> std::same_as<std::optional<T>>;
+      { t.firstChild() } -> std::same_as<std::optional<T>>;
+      { t.lastChild() } -> std::same_as<std::optional<T>>;
+      { t.previousSibling() } -> std::same_as<std::optional<T>>;
+      { t.nextSibling() } -> std::same_as<std::optional<T>>;
+      { t.xmlTypeName() } -> std::same_as<svg::XMLQualifiedNameRef>;
+      { t.id() } -> std::same_as<RcString>;
+      { t.className() } -> std::same_as<RcString>;
+      { t.getAttribute(attribName) } -> std::same_as<std::optional<RcString>>;
+      {
+        t.findMatchingAttributes(attribName)
+      } -> std::same_as<std::vector<svg::XMLQualifiedNameRef>>;
+    };
 
 /**
  * Selectors may need to traverse the tree in different ways to match, and this is abstracted away
