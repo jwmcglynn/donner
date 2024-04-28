@@ -82,10 +82,10 @@ private:
 
 class SelectorTests : public testing::Test {
 protected:
-  svg::Entity createEntity(std::string_view typeString) {
+  svg::Entity createEntity(svg::XMLQualifiedNameRef xmlTypeName) {
     auto entity = registry_.create();
     registry_.emplace<svg::components::TreeComponent>(entity, svg::ElementType::Unknown,
-                                                      svg::XMLQualifiedNameRef(typeString));
+                                                      svg::XMLQualifiedNameRef(xmlTypeName));
     return entity;
   }
 
@@ -132,12 +132,31 @@ protected:
 TEST_F(SelectorTests, TypeMatch) {
   auto root = createEntity("rect");
   auto child1 = createEntity("a");
+  auto child2 = createEntity("elm");
+  auto child3 = createEntity(svg::XMLQualifiedNameRef("my-namespace", "elm"));
 
   tree(root).appendChild(registry_, child1);
 
   EXPECT_TRUE(matches("rect", element(root)));
   EXPECT_TRUE(matches("a", element(child1)));
   EXPECT_FALSE(matches("rect", element(child1)));
+
+  EXPECT_TRUE(matches("*", element(root)));
+  EXPECT_TRUE(matches("*", element(child1)));
+
+  // Namespace matching.
+  EXPECT_TRUE(matches("|a", element(child1)));
+  EXPECT_FALSE(matches("|a", element(child2)));
+
+  EXPECT_TRUE(matches("|elm", element(child2)));
+  EXPECT_FALSE(matches("my-namespace|elm", element(child2)));
+
+  EXPECT_FALSE(matches("|elm", element(child3)));
+  EXPECT_TRUE(matches("my-namespace|elm", element(child3)));
+
+  // Wildcards match both.
+  EXPECT_TRUE(matches("*|elm", element(child2)));
+  EXPECT_TRUE(matches("*|elm", element(child3)));
 }
 
 TEST_F(SelectorTests, Combinators) {
@@ -361,7 +380,8 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   tree(root).appendChild(registry_, mid1);
   for (int i = 1; i <= 8; ++i) {
     const std::string id = "child" + std::to_string(i);
-    children[id] = createEntity("type" + std::to_string((i - 1) % 2 + 1));
+    const std::string typeName = "type" + std::to_string((i - 1) % 2 + 1);
+    children[id] = createEntity(svg::XMLQualifiedNameRef(typeName));
     tree(mid1).appendChild(registry_, children[id]);
   }
 

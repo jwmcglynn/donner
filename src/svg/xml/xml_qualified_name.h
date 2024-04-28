@@ -57,12 +57,6 @@ struct XMLQualifiedName {
   /// Equality operator for gtest.
   bool operator==(const XMLQualifiedName& other) const = default;
 
-  /// Equality operator for a string, assuming the parameter is lowercase.
-  bool equalsIgnoreCase(std::string_view other) const {
-    // TODO: How should we support namespaces here?
-    return namespacePrefix.empty() && name.equalsIgnoreCase(other);
-  }
-
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const XMLQualifiedName& obj) {
     if (!obj.namespacePrefix.empty()) {
@@ -170,13 +164,6 @@ struct XMLQualifiedNameRef {
 
   friend bool operator==(const XMLQualifiedNameRef& lhs, const XMLQualifiedName& rhs) {
     return lhs.namespacePrefix == rhs.namespacePrefix && lhs.name == rhs.name;
-  }
-
-  /// Equality operator for a string, assuming the parameter is lowercase.
-  bool equalsIgnoreCase(std::string_view other) const {
-    // TODO: How should we support namespaces here?
-    return namespacePrefix.empty() &&
-           StringUtils::Equals<StringComparison::IgnoreCase>(name, other);
   }
 
   /// Convert to string operator.

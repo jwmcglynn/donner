@@ -148,27 +148,27 @@ struct PseudoElementSelector {
  */
 struct TypeSelector {
   /**
-   * Selector itself, which may contain wildcards.
+   * Selector matcher itself, which may contain wildcards.
    *
    * In this context, the members have the following meanings:
-   * - \ref XMLQualifiedName::namespacePrefix The namespace of the selector, the wildcard namespace
-   ("*"), or empty if no namespace is specified.
-   * - \ref XMLQualifiedName::name The name of the selector, or "*" if the selector is a universal
-   selector.
+   * - \ref XMLQualifiedName::namespacePrefix The namespace matcher of the selector, the wildcard
+   * namespace ("*"), or empty if no namespace is specified.
+   * - \ref XMLQualifiedName::name The name matcher of the selector, or "*" if the selector is a
+   * universal selector.
    */
-  svg::XMLQualifiedName name;
+  svg::XMLQualifiedName matcher;
 
   /**
    * Create a TypeSelector with the given namespace and name.
    *
    * @param ns The namespace of the selector, the wildcard namespace ("*"), or empty if no namespace
    *   is specified.
-   * @param name The name of the selector, or "*" if the selector is a universal selector.
+   * @param matcher The selector matcher, or "*" if the selector is a universal selector.
    */
-  TypeSelector(svg::XMLQualifiedName&& name) : name(std::move(name)) {}
+  TypeSelector(svg::XMLQualifiedName&& matcher) : matcher(std::move(matcher)) {}
 
   /// Returns true if this is a universal selector.
-  bool isUniversal() const { return name.name == "*"; }
+  bool isUniversal() const { return matcher.name == "*"; }
 
   /**
    * Returns true if the provided element matches this selector.
@@ -177,17 +177,32 @@ struct TypeSelector {
    */
   template <traversal::ElementLike T>
   bool matches(const T& element) const {
-    // TODO: Also check the namespace.
-    if (UTILS_PREDICT_FALSE(isUniversal())) {
-      return true;
-    } else {
-      return element.xmlTypeName().equalsIgnoreCase(name.name);
+    const svg::XMLQualifiedNameRef elementName = element.xmlTypeName();
+
+    // Match namespace.
+    const bool namespaceMatched =
+        (matcher.namespacePrefix == "*" ||
+         matcher.namespacePrefix.equalsIgnoreCase(elementName.namespacePrefix));
+    if (!namespaceMatched) {
+      return false;
     }
+
+    // Match type name.
+    if (isUniversal()) {
+      return true;
+    }
+
+    return matcher.name.equalsIgnoreCase(elementName.name);
+  }
+
+  template <traversal::ElementLike T>
+  bool namespaceMatches(const T& element) const {
+    const svg::XMLQualifiedNameRef elementName = element.xmlTypeName();
   }
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const TypeSelector& obj) {
-    return os << "TypeSelector(" << obj.name << ")";
+    return os << "TypeSelector(" << obj.matcher << ")";
   }
 };
 

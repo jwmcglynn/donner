@@ -265,7 +265,7 @@ MATCHER_P2(TypeSelectorIsImpl, ns, name, "") {
 
   if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
     if (const TypeSelector* selector = std::get_if<TypeSelector>(&arg)) {
-      return selector->name == svg::XMLQualifiedNameRef(ns, name);
+      return selector->matcher == svg::XMLQualifiedNameRef(ns, name);
     }
 
     return false;
