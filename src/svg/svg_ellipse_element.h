@@ -103,7 +103,6 @@ public:
   /**
    * Set the horizontal radius, along the X axis.
    *
-   * @param value Radius value.
    * @param value Radius value, or `std::nullopt` for `auto`, to use the same value as `ry` (see
    * \ref xy_auto).
    */

@@ -13,7 +13,11 @@ namespace donner::svg::components {
  * Parameters for a \ref xml_polygon or \ref xml_polyline element.
  */
 struct PolyComponent {
-  enum class Type { Polygon, Polyline };
+  /// Polygon type, either a closed polygon or a polyline (list of line segments)
+  enum class Type {
+    Polygon,  //!< \ref xml_polygon closed shape
+    Polyline  //!< \ref xml_polyline list of line segments
+  };
 
   explicit PolyComponent(Type type) : type(type) {}
 

@@ -5,8 +5,6 @@
 #include <coroutine>
 
 #include "src/base/utils.h"
-#include "src/css/component_value.h"
-#include "src/css/specificity.h"
 #include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::css::traversal {
@@ -182,7 +180,7 @@ SelectorTraversalGenerator<T> singleElementGenerator(const std::optional<T> elem
  * @param element The element to start from, which is not yielded.
  */
 template <ElementLike T>
-SelectorTraversalGenerator<T> parentsGenerator(const T& element) {
+SelectorTraversalGenerator<T> parentsGenerator(T element) {
   T currentElement = element;
 
   while (auto parent = currentElement.parentElement()) {
@@ -198,7 +196,7 @@ SelectorTraversalGenerator<T> parentsGenerator(const T& element) {
  * @param element The element to start from, which is not yielded.
  */
 template <ElementLike T>
-SelectorTraversalGenerator<T> previousSiblingsGenerator(const T& element) {
+SelectorTraversalGenerator<T> previousSiblingsGenerator(T element) {
   T currentElement = element;
 
   while (auto previousSibling = currentElement.previousSibling()) {

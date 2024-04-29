@@ -193,14 +193,14 @@ struct XMLQualifiedNameRef {
 }  // namespace donner::svg
 
 /**
- * Hash function for \ref XMLQualifiedNameRef.
+ * Hash function for \ref donner::svg::XMLQualifiedNameRef.
  */
 template <>
 struct std::hash<donner::svg::XMLQualifiedNameRef> {
   /**
    * Hash function for \ref XMLQualifiedName.
    *
-   * @param str Input attribute.
+   * @param attr Input attribute.
    * @return std::size_t Output hash.
    */
   std::size_t operator()(const donner::svg::XMLQualifiedNameRef& attr) const {
@@ -212,14 +212,14 @@ struct std::hash<donner::svg::XMLQualifiedNameRef> {
 };
 
 /**
- * Hash function for \ref XMLQualifiedName.
+ * Hash function for \ref donner::svg::XMLQualifiedName.
  */
 template <>
 struct std::hash<donner::svg::XMLQualifiedName> {
   /**
    * Hash function for \ref XMLQualifiedName.
    *
-   * @param str Input attribute.
+   * @param attr Input attribute.
    * @return std::size_t Output hash.
    */
   std::size_t operator()(const donner::svg::XMLQualifiedName& attr) const {

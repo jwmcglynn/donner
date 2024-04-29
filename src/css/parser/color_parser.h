@@ -6,6 +6,7 @@
 
 #include "src/base/parser/parse_result.h"
 #include "src/css/color.h"
+#include "src/css/component_value.h"
 
 namespace donner::css {
 

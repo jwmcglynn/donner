@@ -1,13 +1,10 @@
 #pragma once
 /// @file
 
-#include <cassert>
 #include <optional>
 #include <ostream>
 #include <string_view>
 #include <variant>
-
-#include "src/css/component_value.h"
 
 namespace donner::css {
 

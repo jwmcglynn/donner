@@ -342,6 +342,9 @@ private:
             return Combinator::Column;
           }
         }
+        default:
+          // No match, return nullopt below
+          break;
       }
     }
 
@@ -372,6 +375,7 @@ private:
               return TypeSelector{svg::XMLQualifiedName{"*"}};
             }
             break;
+          default: break;
         }
       }
 
@@ -724,6 +728,7 @@ private:
           advance();
           return AttrMatcher::Eq;
         }
+        default: break;
       }
     }
 

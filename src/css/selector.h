@@ -75,8 +75,7 @@ struct WqName {
   /**
    * Create a WqName with the given namespace and name.
    *
-   * @param ns The namespace of the name, or empty if the name belongs to the default namespace.
-   * @param name The name.
+   * @param name The name with optional namespace
    */
   WqName(svg::XMLQualifiedName&& name) : name(std::move(name)) {}
 
@@ -143,27 +142,26 @@ struct PseudoElementSelector {
  * - `ns|*`
  * - `*|type`
  *
- * TypeSelector represents the parsed representation, and if the namespace is empty the \ref ns
- * value is empty.
+ * TypeSelector represents the parsed representation, if no namespace is provided it will be an
+ * empty string.
  */
 struct TypeSelector {
   /**
    * Selector matcher itself, which may contain wildcards.
    *
    * In this context, the members have the following meanings:
-   * - \ref XMLQualifiedName::namespacePrefix The namespace matcher of the selector, the wildcard
-   * namespace ("*"), or empty if no namespace is specified.
-   * - \ref XMLQualifiedName::name The name matcher of the selector, or "*" if the selector is a
-   * universal selector.
+   * - \ref svg::XMLQualifiedName::namespacePrefix The namespace matcher of the selector, the
+   * wildcard namespace ("*"), or empty if no namespace is specified.
+   * - \ref svg::XMLQualifiedName::name The name matcher of the selector, or "*" if the selector is
+   * a universal selector.
    */
   svg::XMLQualifiedName matcher;
 
   /**
    * Create a TypeSelector with the given namespace and name.
    *
-   * @param ns The namespace of the selector, the wildcard namespace ("*"), or empty if no namespace
-   *   is specified.
-   * @param matcher The selector matcher, or "*" if the selector is a universal selector.
+   * @param matcher Selector matcher, which may be a wildcard. If the namespace is "*", it will
+   * match every namespaces. If the name is "*", it will match every attribute in its namespace.
    */
   TypeSelector(svg::XMLQualifiedName&& matcher) : matcher(std::move(matcher)) {}
 
@@ -193,11 +191,6 @@ struct TypeSelector {
     }
 
     return matcher.name.equalsIgnoreCase(elementName.name);
-  }
-
-  template <traversal::ElementLike T>
-  bool namespaceMatches(const T& element) const {
-    const svg::XMLQualifiedNameRef elementName = element.xmlTypeName();
   }
 
   /// Ostream output operator.
