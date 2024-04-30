@@ -441,6 +441,48 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", element(children["child2"])));  // 7
   EXPECT_TRUE(matches(":nth-last-child(2n)", element(children["child7"])));       // 2
   EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", element(children["child8"])));  // 1
+
+  // :nth-of-type(...)
+  EXPECT_TRUE(matches(":nth-of-type(1)", element(children["child1"])));
+  EXPECT_TRUE(matches(":nth-of-type(1)", element(children["child2"])));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(1)", element(children["child3"])));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(1)", element(children["child4"])));
+
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(2)", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(2)", element(children["child2"])));
+  EXPECT_TRUE(matches(":nth-of-type(2)", element(children["child3"])));
+  EXPECT_TRUE(matches(":nth-of-type(2)", element(children["child4"])));
+
+  // [of S] is not supported
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(1 of type1)", element(children["child1"])));
+
+  // :nth-last-of-type(...)
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child2"])));
+  EXPECT_TRUE(matches(":nth-last-of-type(1)", element(children["child8"])));
+  EXPECT_TRUE(matches(":nth-last-of-type(1)", element(children["child7"])));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child6"])));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child5"])));
+
+  // [of S] is not supported
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1 of type2)", element(children["child8"])));
+
+  // :first-of-type
+  EXPECT_TRUE(matches(":first-of-type", element(children["child1"])));
+  EXPECT_TRUE(matches(":first-of-type", element(children["child2"])));
+  EXPECT_TRUE(doesNotMatch(":first-of-type", element(children["child3"])));
+  EXPECT_TRUE(doesNotMatch(":first-of-type", element(children["child4"])));
+
+  // :last-of-type
+  EXPECT_TRUE(doesNotMatch(":last-of-type", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":last-of-type", element(children["child2"])));
+  EXPECT_TRUE(matches(":last-of-type", element(children["child8"])));
+  EXPECT_TRUE(matches(":last-of-type", element(children["child7"])));
+
+  // :only-of-type
+  EXPECT_TRUE(doesNotMatch(":only-of-type", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":only-of-type", element(children["child2"])));
+  EXPECT_TRUE(matches(":only-of-type", element(mid1)));
 }
 
 }  // namespace donner::css

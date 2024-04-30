@@ -165,6 +165,15 @@ struct TypeSelector {
    */
   TypeSelector(svg::XMLQualifiedName&& matcher) : matcher(std::move(matcher)) {}
 
+  /**
+   * Create a TypeSelector with the given namespace and name.
+   *
+   * @param matcher Selector matcher, which may be a wildcard. If the namespace is "*", it will
+   * match every namespaces. If the name is "*", it will match every attribute in its namespace.
+   */
+  TypeSelector(const svg::XMLQualifiedNameRef& matcher)
+      : matcher(RcString(matcher.namespacePrefix), RcString(matcher.name)) {}
+
   /// Returns true if this is a universal selector.
   bool isUniversal() const { return matcher.name == "*"; }
 
@@ -345,6 +354,13 @@ struct PseudoClassSelector {
         return !element.nextSibling().has_value();
       } else if (ident.equalsLowercase("only-child")) {
         return !element.previousSibling().has_value() && !element.nextSibling().has_value();
+      } else if (ident.equalsLowercase("first-of-type")) {
+        return isFirstOfType(element, element.xmlTypeName());
+      } else if (ident.equalsLowercase("last-of-type")) {
+        return isLastOfType(element, element.xmlTypeName());
+      } else if (ident.equalsLowercase("only-of-type")) {
+        return isFirstOfType(element, element.xmlTypeName()) &&
+               isLastOfType(element, element.xmlTypeName());
       }
     } else {
       // It's a function.
@@ -361,6 +377,14 @@ struct PseudoClassSelector {
       } else if (ident.equalsLowercase("nth-last-child") && anbValueAndSelectorIfAnb) {
         const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ true,
                                                 anbValueAndSelectorIfAnb->selector);
+        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
+      } else if (ident.equalsLowercase("nth-of-type") && anbValueAndSelectorIfAnb) {
+        const int childIndex =
+            getIndexInParent(*maybeParent, element, /*fromEnd*/ false, element.xmlTypeName());
+        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
+      } else if (ident.equalsLowercase("nth-last-of-type") && anbValueAndSelectorIfAnb) {
+        const int childIndex =
+            getIndexInParent(*maybeParent, element, /*fromEnd*/ true, element.xmlTypeName());
         return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
       }
     }
@@ -425,6 +449,30 @@ private:
     assert(matchingType &&
            "Should only reach end of child list if there is a TypeSelector skipping elements");
     return -1;
+  }
+
+  template <traversal::ElementLike T>
+  static bool isFirstOfType(const T& element, const svg::XMLQualifiedNameRef& type) {
+    for (std::optional<T> child = element.previousSibling(); child;
+         child = child.value().previousSibling()) {
+      if (child.value().xmlTypeName() == type) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  template <traversal::ElementLike T>
+  static bool isLastOfType(const T& element, const svg::XMLQualifiedNameRef& type) {
+    for (std::optional<T> child = element.nextSibling(); child;
+         child = child.value().nextSibling()) {
+      if (child.value().xmlTypeName() == type) {
+        return false;
+      }
+    }
+
+    return true;
   }
 };
 
