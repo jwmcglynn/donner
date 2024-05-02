@@ -1,5 +1,7 @@
 #include "src/css/parser/anb_microsyntax_parser.h"
 
+#include "src/base/string_utils.h"
+
 namespace donner::css {
 
 namespace {
@@ -27,6 +29,9 @@ struct AnbToken {
 
     /// The token is a 'n' <ident-token>
     N,
+
+    /// The token is a 'n-' <ident-token>
+    NMinus,
 
     /// The token is a '-n' <ident-token>
     MinusN,
@@ -58,12 +63,8 @@ struct AnbToken {
     /// more digits
     DashNDashDigitIdent,
 
-    /// <integer> is a <number-token> with its type flag set to "integer"
-    Integer,
-
     /// <signed-integer> is a <number-token> with its type flag set to
-    /// "integer",
-    /// and whose representation starts with "+" or "-"
+    /// "integer", and whose representation starts with "+" or "-"
     SignedInteger,
 
     /// <signless-integer> is a <number-token> with its type flag set to
@@ -94,17 +95,18 @@ struct AnbToken {
   void assertInvariants() {
     if (value.has_value()) {
       assert(type == Type::NDimension || type == Type::NDashDimension ||
-             type == Type::NDashDigitDimension || type == Type::NDashDigitIdent ||
-             type == Type::DashNDashDigitIdent || type == Type::Integer ||
-             type == Type::SignedInteger || type == Type::SignlessInteger);
+             type == Type::NDashDigitDimension || type == Type::SignedInteger ||
+             type == Type::SignlessInteger);
     } else {
       assert(type == Type::Even || type == Type::Odd || type == Type::Plus || type == Type::Minus ||
-             type == Type::N || type == Type::MinusN || type == Type::MinusNMinus);
+             type == Type::N || type == Type::NMinus || type == Type::MinusN ||
+             type == Type::MinusNMinus || type == Type::NDashDigitIdent ||
+             type == Type::DashNDashDigitIdent);
     }
 
     if (digitValue.has_value()) {
       assert(type == Type::NDashDigitDimension || type == Type::NDashDigitIdent ||
-             type == Type::NDashDigitDimension);
+             type == Type::DashNDashDigitIdent);
     }
   }
 };
@@ -130,6 +132,9 @@ public:
 
     const bool hasLeadingPlus = firstTokenResult.result().type == AnbToken::Type::Plus;
     if (hasLeadingPlus) {
+      // From the spec: When a plus sign (+) precedes an ident starting with "n", there must be no
+      // whitespace between the two tokens, or else the tokens do not match the above grammar.
+      // Whitespace is valid (and ignored) between any other two tokens.
       firstTokenResult = consumeToken();
     }
 
@@ -149,8 +154,7 @@ public:
         return AnbValue(2, 0);
       }
       // <integer> |
-      else if (firstToken.type == AnbToken::Type::Integer ||
-               firstToken.type == AnbToken::Type::SignedInteger ||
+      else if (firstToken.type == AnbToken::Type::SignedInteger ||
                firstToken.type == AnbToken::Type::SignlessInteger) {
         return AnbValue(0, firstToken.value.value());
       }
@@ -194,9 +198,8 @@ public:
             return AnbValue(-1, secondToken.value.value());
           }
           // -n ['+' | '-'] <signless-integer>
-          else if (firstToken.type == AnbToken::Type::MinusN &&
-                   (secondToken.type == AnbToken::Type::Plus ||
-                    secondToken.type == AnbToken::Type::Minus)) {
+          else if (secondToken.type == AnbToken::Type::Plus ||
+                   secondToken.type == AnbToken::Type::Minus) {
             skipWhitespace();
 
             if (peekNextTokenType() == AnbToken::Type::SignlessInteger) {
@@ -238,7 +241,7 @@ public:
 
     // '+'? <ndashdigit-ident> |
     if (firstToken.type == AnbToken::Type::NDashDigitIdent) {
-      return AnbValue(1, -firstToken.value.value());
+      return AnbValue(1, -firstToken.digitValue.value());
     } else if (firstToken.type == AnbToken::Type::N) {
       // '+'? n
       if (!maybeSecondTokenType.has_value()) {
@@ -254,6 +257,8 @@ public:
       // '+'? n ['+' | '-'] <signless-integer> |
       else if (secondToken.type == AnbToken::Type::Plus ||
                secondToken.type == AnbToken::Type::Minus) {
+        skipWhitespace();
+
         if (const auto maybeThirdTokenType = peekNextTokenType();
             maybeThirdTokenType == AnbToken::Type::SignlessInteger) {
           const AnbToken& thirdToken = consumeToken().result();
@@ -266,7 +271,7 @@ public:
       }
     }
     // '+'? n- <signless-integer> |
-    else if (firstToken.type == AnbToken::Type::N &&
+    else if (firstToken.type == AnbToken::Type::NMinus &&
              maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
       return AnbValue(1, -consumeToken().result().value.value());
     }
@@ -343,7 +348,8 @@ private:
         // <ndashdigit-dimension> is a <dimension-token> with its type flag set
         // to "integer", and a unit that is an ASCII case-insensitive match for
         // "n-*", where "*" is a series of one or more digits
-        else if (StringUtils::StartsWith(dimension.suffixString, std::string_view("n-")) &&
+        else if (StringUtils::StartsWith<StringComparison::IgnoreCase>(dimension.suffixString,
+                                                                       std::string_view("n-")) &&
                  isAllDigits(dimension.suffixString.substr(2))) {
           return AnbToken(AnbToken::Type::NDashDigitDimension, dimension.value,
                           parseDigits(dimension.suffixString.substr(2)));
@@ -351,10 +357,8 @@ private:
         // <ndash-dimension> is a <dimension-token> with its type flag set to
         // "integer", and a unit that is an ASCII case-insensitive match for
         // "n-"
-        else if (StringUtils::StartsWith(dimension.suffixString, std::string_view("n-")) &&
-                 isAllDigits(dimension.suffixString.substr(2))) {
-          return AnbToken(AnbToken::Type::NDashDimension, dimension.value,
-                          parseDigits(dimension.suffixString.substr(2)));
+        else if (StringUtils::EqualsLowercase(dimension.suffixString, std::string_view("n-"))) {
+          return AnbToken(AnbToken::Type::NDashDimension, dimension.value);
         }
       }
     } else if (token.is<Token::Ident>()) {
@@ -373,6 +377,8 @@ private:
         return AnbToken(AnbToken::Type::MinusN, std::nullopt);
       } else if (ident.value.equalsLowercase("-n-")) {
         return AnbToken(AnbToken::Type::MinusNMinus, std::nullopt);
+      } else if (ident.value.equalsLowercase("n-")) {
+        return AnbToken(AnbToken::Type::NMinus, std::nullopt);
       }
       // <ndashdigit-ident> is an <ident-token> whose value is an ASCII
       // case-insensitive match for "n-*", where "*" is a series of one or more
@@ -406,12 +412,9 @@ private:
         }
         // <signless-integer> is a <number-token> with its type flag set to
         // "integer", and whose representation starts with a digit
-        else if (std::isdigit(numberStr[0])) {
-          return AnbToken(AnbToken::Type::SignlessInteger, number.value);
-        }
-        // <integer> is a <number-token> with its type flag set to "integer"
         else {
-          return AnbToken(AnbToken::Type::Integer, number.value);
+          assert(std::isdigit(numberStr[0]));
+          return AnbToken(AnbToken::Type::SignlessInteger, number.value);
         }
       }
     }
@@ -446,13 +449,11 @@ private:
   }
 
   int parseDigits(std::string_view str) {
+    assert(!str.empty() && std::isdigit(str[0]) && "First character must be a digit");
+
     int value = 0;
     for (int i = 0; i < str.size(); i++) {
-      if (!std::isdigit(str[i])) {
-        assert(i != 0 && "First character must be a digit");
-        return value;
-      }
-
+      assert(std::isdigit(str[i]));
       value = value * 10 + (str[i] - '0');
     }
 

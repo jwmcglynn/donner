@@ -119,6 +119,119 @@ TEST(AnbMicrosyntaxParser, DigitParsing) {
               ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
 }
 
-// TODO: Add more tests
+TEST(AnbMicrosyntaxParser, SpecialTokens) {
+  // Starting with '-n', which parses as an <ident-token>
+  // '-n' <signed-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n")),
+              ParseResultIs(AllOf(AnbValueIs(-1, 0), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n- 2")),
+              ParseResultIs(AllOf(AnbValueIs(-1, -2), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n+2")),
+              ParseResultIs(AllOf(AnbValueIs(-1, 2), NoComponentsRemaining())));
+
+  // -n ['+' | '-'] <signless-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n + 3")),
+              ParseResultIs(AllOf(AnbValueIs(-1, 3), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n - 3")),
+              ParseResultIs(AllOf(AnbValueIs(-1, -3), NoComponentsRemaining())));
+
+  // Failure mode: '-n' and any other token, or unexpected EOF.
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n n")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n +")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+
+  // 'n-' followed by a digit parses as an <ident-token> with embedded numbers
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n-2")),
+              ParseResultIs(AllOf(AnbValueIs(1, -2), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n-2")),
+              ParseResultIs(AllOf(AnbValueIs(1, -2), NoComponentsRemaining())));
+
+  // '-n-' <signless-integer>, needs a space to be parsed as two tokens
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n- 123")),
+              ParseResultIs(AllOf(AnbValueIs(-1, -123), NoComponentsRemaining())));
+
+  // Failure mode: Not followed by a <signless-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n- +123")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+
+  // Starting with '-n-' followed by a digit, parses as an <ident-token> with embedded numbers
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n-2")),
+              ParseResultIs(AllOf(AnbValueIs(-1, -2), NoComponentsRemaining())));
+
+  // '+'? n <signed-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n + 123")),
+              ParseResultIs(AllOf(AnbValueIs(1, 123), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n + 123")),
+              ParseResultIs(AllOf(AnbValueIs(1, 123), NoComponentsRemaining())));
+
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n - 123")),
+              ParseResultIs(AllOf(AnbValueIs(1, -123), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n - 123")),
+              ParseResultIs(AllOf(AnbValueIs(1, -123), NoComponentsRemaining())));
+
+  // Failure mode: Not followed by an integer, '+' or '-'
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n n")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+
+  // Failure mode: Invalid token after '+' or '-'
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n + n")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+
+  // '+'? n- <signless-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n- 2")),
+              ParseResultIs(AllOf(AnbValueIs(1, -2), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n- 2")),
+              ParseResultIs(AllOf(AnbValueIs(1, -2), NoComponentsRemaining())));
+
+  // Failure mode: Not a signless integer
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n- +2")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+}
+
+TEST(AnbMicrosyntaxParser, UnexpectedEndOfStream) {
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+")),
+              ParseErrorIs("An+B microsyntax unexpected end of list"));
+}
+
+TEST(AnbMicrosyntaxParser, DimensionTokens) {
+  // <n-dimension> <signed-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("123n -2")),
+              ParseResultIs(AllOf(AnbValueIs(123, -2), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("123n +2")),
+              ParseResultIs(AllOf(AnbValueIs(123, 2), NoComponentsRemaining())));
+
+  // <n-dimension> ['+' | '-'] <signless-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("123n - 3")),
+              ParseResultIs(AllOf(AnbValueIs(123, -3), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("123n + 3")),
+              ParseResultIs(AllOf(AnbValueIs(123, 3), NoComponentsRemaining())));
+
+  // <n-dimension> failure
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("123n 1")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+
+  // <ndashdigit-dimension>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("123n-1")),
+              ParseResultIs(AllOf(AnbValueIs(123, -1), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+123n-1")),
+              ParseResultIs(AllOf(AnbValueIs(123, -1), NoComponentsRemaining())));
+
+  // With a space parses as two tokens but has the same value
+  // <ndash-dimension> <signless-integer>
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("123n- 1")),
+              ParseResultIs(AllOf(AnbValueIs(123, -1), NoComponentsRemaining())));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+123n- 1")),
+              ParseResultIs(AllOf(AnbValueIs(123, -1), NoComponentsRemaining())));
+
+  // Failure mode: Not a signless integer
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+123n- +2")),
+              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+}
+
+TEST(AnbMicrosyntaxParser, FunctionTokenInvalid) {
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("func()")),
+              ParseErrorIs("Expected CSS token when parsing An+B microsyntax"));
+}
 
 }  // namespace donner::css
