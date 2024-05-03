@@ -122,3 +122,14 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "anb_microsyntax_parser_fuzzer",
+    srcs = [
+        "tests/anb_microsyntax_parser_fuzzer.cc",
+    ],
+    corpus = "tests/anb_microsyntax_parser_corpus",
+    deps = [
+        ":parser",
+    ],
+)

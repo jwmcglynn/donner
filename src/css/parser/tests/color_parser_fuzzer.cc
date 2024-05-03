@@ -1,7 +1,6 @@
 #include "src/css/parser/color_parser.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   auto result =
@@ -11,5 +10,4 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   return 0;
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

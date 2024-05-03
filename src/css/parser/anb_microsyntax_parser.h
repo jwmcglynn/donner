@@ -19,6 +19,12 @@ public:
     std::span<const ComponentValue>
         remainingComponents;  //!< The remaining components after the end of the An+B value, if not
                               //!< all were consumed.
+
+    /// Ostream operator.
+    friend std::ostream& operator<<(std::ostream& out, const Result& result) {
+      return out << "Result{An+B value: " << result.value << ", "
+                 << result.remainingComponents.size() << " remaining components}";
+    }
   };
 
   /**

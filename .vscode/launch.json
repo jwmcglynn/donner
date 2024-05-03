@@ -173,6 +173,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "anb_microsyntax_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/src/css/parser/anb_microsyntax_parser_fuzzer",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "src/css/parser/tests/anb_microsyntax_parser_corpus/crash-ed705e365ccd3fba8d30135aa52aed5ed12f7cc7",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "properties_tests",
       "program": "${workspaceFolder}/bazel-bin/src/svg/properties/tests/properties_tests",
       "args": [

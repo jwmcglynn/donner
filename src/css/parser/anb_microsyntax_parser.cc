@@ -142,7 +142,7 @@ public:
       return std::move(firstTokenResult.error());
     }
 
-    const AnbToken& firstToken = firstTokenResult.result();
+    const AnbToken firstToken = firstTokenResult.result();
     skipWhitespace();
     const std::optional<AnbToken::Type> maybeSecondTokenType = peekNextTokenType();
 
@@ -171,11 +171,11 @@ public:
         // <n-dimension> ['+' | '-'] <signless-integer>
         else if (maybeSecondTokenType == AnbToken::Type::Plus ||
                  maybeSecondTokenType == AnbToken::Type::Minus) {
-          const AnbToken& secondToken = consumeToken().result();
+          const AnbToken secondToken = consumeToken().result();
           skipWhitespace();
 
           if (peekNextTokenType() == AnbToken::Type::SignlessInteger) {
-            const AnbToken& thirdToken = consumeToken().result();
+            const AnbToken thirdToken = consumeToken().result();
 
             // A is the dimension's value. B is the integer's value. If a '-'
             // was provided between the two, B is instead the negation of the
@@ -193,17 +193,17 @@ public:
         } else {
           // -n <signed-integer> |
           if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
-            const AnbToken& secondToken = consumeToken().result();
+            const AnbToken secondToken = consumeToken().result();
             return AnbValue(-1, secondToken.value.value());
           }
           // -n ['+' | '-'] <signless-integer>
           else if (maybeSecondTokenType == AnbToken::Type::Plus ||
                    maybeSecondTokenType == AnbToken::Type::Minus) {
-            const AnbToken& secondToken = consumeToken().result();
+            const AnbToken secondToken = consumeToken().result();
             skipWhitespace();
 
             if (peekNextTokenType() == AnbToken::Type::SignlessInteger) {
-              const AnbToken& thirdToken = consumeToken().result();
+              const AnbToken thirdToken = consumeToken().result();
 
               // A is -1. B is the integer's value. If a '-' was provided between
               // the two, B is instead the negation of the integer's value.
@@ -212,7 +212,7 @@ public:
                                       : thirdToken.value.value());
             } else {
               ParseError err;
-              err.reason = "Unexpected end of list when parsing An+B microsyntax";
+              err.reason = "An+B microsyntax unexpected end of list";
               err.offset = ParseError::kEndOfString;
               return err;
             }
@@ -255,18 +255,18 @@ public:
 
       // '+'? n <signed-integer> |
       if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
-        const AnbToken& secondToken = consumeToken().result();
+        const AnbToken secondToken = consumeToken().result();
         return AnbValue(1, secondToken.value.value());
       }
       // '+'? n ['+' | '-'] <signless-integer> |
       else if (maybeSecondTokenType == AnbToken::Type::Plus ||
                maybeSecondTokenType == AnbToken::Type::Minus) {
-        const AnbToken& secondToken = consumeToken().result();
+        const AnbToken secondToken = consumeToken().result();
         skipWhitespace();
 
         if (const auto maybeThirdTokenType = peekNextTokenType();
             maybeThirdTokenType == AnbToken::Type::SignlessInteger) {
-          const AnbToken& thirdToken = consumeToken().result();
+          const AnbToken thirdToken = consumeToken().result();
 
           // A is 1, respectively. B is the integer's value. If a '-' was provided
           // between the two, B is instead the negation of the integer's value.
@@ -281,12 +281,17 @@ public:
       return AnbValue(1, -consumeToken().result().value.value());
     }
 
-    assert(!components_.empty());
-
-    ParseError err;
-    err.reason = "Unexpected token when parsing An+B microsyntax";
-    err.offset = components_.front().sourceOffset();
-    return err;
+    if (components_.empty()) {
+      ParseError err;
+      err.reason = "An+B microsyntax unexpected end of list";
+      err.offset = ParseError::kEndOfString;
+      return err;
+    } else {
+      ParseError err;
+      err.reason = "Unexpected token when parsing An+B microsyntax";
+      err.offset = components_.front().sourceOffset();
+      return err;
+    }
   }
 
   std::span<const css::ComponentValue> remainingComponents() const { return components_; }

@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "src/base/parser/tests/parse_result_test_utils.h"
+#include "src/css/details/anb_value.h"
 #include "src/css/parser/anb_microsyntax_parser.h"
 #include "src/css/parser/details/subparsers.h"
 
@@ -139,7 +140,7 @@ TEST(AnbMicrosyntaxParser, SpecialTokens) {
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n n")),
               ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n +")),
-              ParseErrorIs("Unexpected end of list when parsing An+B microsyntax"));
+              ParseErrorIs("An+B microsyntax unexpected end of list"));
 
   // 'n-' followed by a digit parses as an <ident-token> with embedded numbers
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n-2")),
@@ -170,6 +171,9 @@ TEST(AnbMicrosyntaxParser, SpecialTokens) {
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n - 123")),
               ParseResultIs(AllOf(AnbValueIs(1, -123), NoComponentsRemaining())));
 
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n+0\x10")),
+              ParseResultIs(AllOf(AnbValueIs(1, 0), NumRemainingTokens(1))));
+
   // Failure mode: Not followed by an integer, '+' or '-'
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n n")),
               ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
@@ -187,10 +191,16 @@ TEST(AnbMicrosyntaxParser, SpecialTokens) {
   // Failure mode: Not a signless integer
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+n- +2")),
               ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+
+  // Failure mode: Unexpected end of string
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n-")),
+              ParseErrorIs("An+B microsyntax unexpected end of list"));
 }
 
 TEST(AnbMicrosyntaxParser, UnexpectedEndOfStream) {
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("+")),
+              ParseErrorIs("An+B microsyntax unexpected end of list"));
+  EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("++")),
               ParseErrorIs("An+B microsyntax unexpected end of list"));
 }
 
