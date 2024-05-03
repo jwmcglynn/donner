@@ -4,13 +4,13 @@ name: CI
 # events but only for the main branch
 on:
   push:
-    branches: [ '*' ]
+    branches: ["*"]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
     inputs:
       debug_enabled:
-        description: 'Run the build with tmate debugging enabled (https://github.com/marketplace/actions/debugging-with-tmate)'
+        description: "Run the build with tmate debugging enabled (https://github.com/marketplace/actions/debugging-with-tmate)"
         required: false
         default: false
 
@@ -23,38 +23,38 @@ jobs:
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-    - uses: actions/checkout@v4
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v4
 
-    - name: Install Clang dependencies
-      run: |
-        sudo apt-get install -y libncurses5
+      - name: Install Clang dependencies
+        run: |
+          sudo apt-get install -y libncurses5
 
-    - name: Install bazelisk
-      run: |
-        mkdir -p "${GITHUB_WORKSPACE}/bin/"
-        wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O "${GITHUB_WORKSPACE}/bin/bazel"
-        chmod +x "${GITHUB_WORKSPACE}/bin/bazel"
+      - name: Install bazelisk
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/bin/"
+          wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O "${GITHUB_WORKSPACE}/bin/bazel"
+          chmod +x "${GITHUB_WORKSPACE}/bin/bazel"
 
-    # Enable tmate debugging of manually-triggered workflows if the input option was provided
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v3
-      if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug_enabled }}
-      with:
-        limit-access-to-actor: true
+      # Enable tmate debugging of manually-triggered workflows if the input option was provided
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug_enabled }}
+        with:
+          limit-access-to-actor: true
 
-    - name: Build
-      run: |
-        "${GITHUB_WORKSPACE}/bin/bazel" build //...
+      - name: Build
+        run: |
+          "${GITHUB_WORKSPACE}/bin/bazel" build //...
 
-    - name: Test
-      run: |
-        "${GITHUB_WORKSPACE}/bin/bazel" test //... @hdoc//...
+      - name: Test
+        run: |
+          "${GITHUB_WORKSPACE}/bin/bazel" test --test_output=errors //... @hdoc//...
 
-    - name: Build docs
-      run: |
-        "${GITHUB_WORKSPACE}/bin/bazel" build --build_tag_filters=docs //...
+      - name: Build docs
+        run: |
+          "${GITHUB_WORKSPACE}/bin/bazel" build --build_tag_filters=docs //...
 
-    - name: Build wasm
-      run: |
-        "${GITHUB_WORKSPACE}/bin/bazel" build --build_tag_filters=wasm //...
+      - name: Build wasm
+        run: |
+          "${GITHUB_WORKSPACE}/bin/bazel" build --build_tag_filters=wasm //...
