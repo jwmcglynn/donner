@@ -191,15 +191,15 @@ public:
         if (!maybeSecondTokenType.has_value()) {
           return AnbValue(-1, 0);
         } else {
-          const AnbToken& secondToken = consumeToken().result();
-
           // -n <signed-integer> |
-          if (secondToken.type == AnbToken::Type::SignedInteger) {
+          if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
+            const AnbToken& secondToken = consumeToken().result();
             return AnbValue(-1, secondToken.value.value());
           }
           // -n ['+' | '-'] <signless-integer>
-          else if (secondToken.type == AnbToken::Type::Plus ||
-                   secondToken.type == AnbToken::Type::Minus) {
+          else if (maybeSecondTokenType == AnbToken::Type::Plus ||
+                   maybeSecondTokenType == AnbToken::Type::Minus) {
+            const AnbToken& secondToken = consumeToken().result();
             skipWhitespace();
 
             if (peekNextTokenType() == AnbToken::Type::SignlessInteger) {
@@ -210,6 +210,11 @@ public:
               return AnbValue(-1, secondToken.type == AnbToken::Type::Minus
                                       ? -thirdToken.value.value()
                                       : thirdToken.value.value());
+            } else {
+              ParseError err;
+              err.reason = "Unexpected end of list when parsing An+B microsyntax";
+              err.offset = ParseError::kEndOfString;
+              return err;
             }
           }
         }
@@ -248,15 +253,15 @@ public:
         return AnbValue(1, 0);
       }
 
-      const AnbToken& secondToken = consumeToken().result();
-
       // '+'? n <signed-integer> |
-      if (secondToken.type == AnbToken::Type::SignedInteger) {
+      if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
+        const AnbToken& secondToken = consumeToken().result();
         return AnbValue(1, secondToken.value.value());
       }
       // '+'? n ['+' | '-'] <signless-integer> |
-      else if (secondToken.type == AnbToken::Type::Plus ||
-               secondToken.type == AnbToken::Type::Minus) {
+      else if (maybeSecondTokenType == AnbToken::Type::Plus ||
+               maybeSecondTokenType == AnbToken::Type::Minus) {
+        const AnbToken& secondToken = consumeToken().result();
         skipWhitespace();
 
         if (const auto maybeThirdTokenType = peekNextTokenType();
@@ -275,6 +280,8 @@ public:
              maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
       return AnbValue(1, -consumeToken().result().value.value());
     }
+
+    assert(!components_.empty());
 
     ParseError err;
     err.reason = "Unexpected token when parsing An+B microsyntax";

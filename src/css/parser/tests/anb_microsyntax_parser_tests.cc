@@ -139,7 +139,7 @@ TEST(AnbMicrosyntaxParser, SpecialTokens) {
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n n")),
               ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("-n +")),
-              ParseErrorIs("Unexpected token when parsing An+B microsyntax"));
+              ParseErrorIs("Unexpected end of list when parsing An+B microsyntax"));
 
   // 'n-' followed by a digit parses as an <ident-token> with embedded numbers
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("n-2")),
