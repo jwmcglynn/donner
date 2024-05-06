@@ -80,7 +80,7 @@ git_override(
 )
 
 # Skia dependencies
-bazel_dep(name = "rules_go", version = "0.47.0")
+bazel_dep(name = "rules_go", version = "0.47.1")
 bazel_dep(name = "rules_python", version = "0.31.0", dev_dependency = True)
 
 pip = use_extension(
