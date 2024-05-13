@@ -74,6 +74,7 @@ namespace donner::svg {
  */
 class SVGPatternElement : public SVGElement {
 protected:
+  /// Create an SVGPatternElement wrapper from an entity.
   explicit SVGPatternElement(EntityHandle handle) : SVGElement(handle) {}
 
 public:

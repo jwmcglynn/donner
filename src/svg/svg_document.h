@@ -65,6 +65,7 @@ public:
   bool operator==(const SVGDocument& other) const;
 
 private:
+  /// Owned reference to the registry, which contains all information about the loaded document.
   std::shared_ptr<Registry> registry_;
 };
 
