@@ -77,7 +77,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Ellipse;
   /// XML tag name, \ref xml_ellipse.
-  static constexpr XMLQualifiedNameRef Tag{"ellipse"};
+  static constexpr std::string_view Tag{"ellipse"};
 
   /**
    * Create a new \ref xml_ellipse element.

@@ -93,7 +93,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Path;
   /// XML tag name, \ref xml_path.
-  static constexpr XMLQualifiedNameRef Tag{"path"};
+  static constexpr std::string_view Tag{"path"};
 
   /**
    * Create a new \ref xml_path element.

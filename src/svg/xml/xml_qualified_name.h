@@ -6,6 +6,7 @@
  */
 
 #include "src/base/rc_string.h"
+#include "src/base/rc_string_or_ref.h"
 
 namespace donner::svg {
 
@@ -85,16 +86,16 @@ struct XMLQualifiedName {
  * an \ref RcString.
  */
 struct XMLQualifiedNameRef {
-  std::string_view namespacePrefix;  //!< The namespace prefix of the attribute, or an empty string
-                                     //!< if no namespace (default namespace).
-  std::string_view name;             //!< The attribute name.
+  RcStringOrRef namespacePrefix;  //!< The namespace prefix of the attribute, or an empty string
+                                  //!< if no namespace (default namespace).
+  RcStringOrRef name;             //!< The attribute name.
 
   /**
    * Construct from an attribute name as a string_view, assumes no namespacePrefix.
    *
    * @param name The attribute name.
    */
-  /* implicit */ constexpr XMLQualifiedNameRef(std::string_view name)
+  /* implicit */ constexpr XMLQualifiedNameRef(const RcStringOrRef& name)
       : namespacePrefix(), name(name) {}
 
   /**
@@ -105,13 +106,21 @@ struct XMLQualifiedNameRef {
   /* implicit */ constexpr XMLQualifiedNameRef(const char* name) : namespacePrefix(), name(name) {}
 
   /**
+   * Construct from an attribute name as a \ref std::string_view, assumes no namespacePrefix.
+   *
+   * @param name The attribute name.
+   */
+  /* implicit */ constexpr XMLQualifiedNameRef(std::string_view name)
+      : namespacePrefix(), name(name) {}
+
+  /**
    * Construct from an attribute with a namespace prefix.
    *
    * @param namespacePrefix The namespace of the name, or empty if the name belongs to the default
    * namespace.
    * @param name The attribute name.
    */
-  constexpr XMLQualifiedNameRef(std::string_view namespacePrefix, std::string_view name)
+  constexpr XMLQualifiedNameRef(const RcStringOrRef& namespacePrefix, const RcStringOrRef& name)
       : namespacePrefix(namespacePrefix), name(name) {}
 
   /**

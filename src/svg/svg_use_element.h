@@ -13,7 +13,7 @@ protected:
 
 public:
   static constexpr ElementType Type = ElementType::Use;
-  static constexpr XMLQualifiedNameRef Tag{"use"};
+  static constexpr std::string_view Tag{"use"};
 
   static SVGUseElement Create(SVGDocument& document);
 

@@ -12,7 +12,7 @@ protected:
 
 public:
   static constexpr ElementType Type = ElementType::Style;
-  static constexpr XMLQualifiedNameRef Tag{"style"};
+  static constexpr std::string_view Tag{"style"};
 
   static SVGStyleElement Create(SVGDocument& document);
 

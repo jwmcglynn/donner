@@ -93,7 +93,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Polyline;
   /// XML tag name, \ref xml_polyline.
-  static constexpr XMLQualifiedNameRef Tag{"polyline"};
+  static constexpr std::string_view Tag{"polyline"};
 
   /**
    * Create a new \ref xml_polyline element.

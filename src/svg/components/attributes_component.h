@@ -5,7 +5,7 @@
 #include <optional>
 #include <set>
 
-#include "src/base/rc_string.h"
+#include "src/base/rc_string_or_ref.h"
 #include "src/svg/xml/xml_qualified_name.h"
 
 namespace donner::svg::components {

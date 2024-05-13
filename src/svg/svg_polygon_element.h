@@ -93,7 +93,7 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Polygon;
   /// XML tag name, \ref xml_polygon.
-  static constexpr XMLQualifiedNameRef Tag{"polygon"};
+  static constexpr std::string_view Tag{"polygon"};
 
   /**
    * Create a new \ref xml_polygon element.

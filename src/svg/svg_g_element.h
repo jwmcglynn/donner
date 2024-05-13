@@ -11,7 +11,7 @@ protected:
 
 public:
   static constexpr ElementType Type = ElementType::G;
-  static constexpr XMLQualifiedNameRef Tag{"g"};
+  static constexpr std::string_view Tag{"g"};
 
   static SVGGElement Create(SVGDocument& document);
 };
