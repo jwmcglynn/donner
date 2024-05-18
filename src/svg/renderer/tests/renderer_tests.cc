@@ -9,6 +9,21 @@
 #include "src/svg/renderer/tests/renderer_test_utils.h"
 #include "src/svg/xml/xml_parser.h"
 
+// clang-format off
+/**
+ * @file
+ *
+ * Renderer image comparison tests, which render an SVG file and compare the result to a golden
+ * image checked into the repo.
+ *
+ * If this test fails, update goldens with the following command:
+ * ```sh
+ * # Set this environment variable to the donner root directory
+ * UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //src/svg/renderer/tests:renderer_tests
+ * ```
+ */
+// clang-format on
+
 namespace donner::svg {
 
 namespace {
@@ -157,7 +172,7 @@ TEST_F(RendererTests, RadialConical2) {
   renderAndCompare(document, "src/svg/renderer/testdata/golden/radial-conical-2.png");
 }
 
-TEST_F(RendererTests, Ghostscript_Tiger) {
+TEST_F(RendererTests, GhostscriptTiger) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/Ghostscript_Tiger.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/Ghostscript_Tiger.png");
 }
@@ -225,6 +240,16 @@ TEST_F(RendererTests, PokerChips) {
 TEST_F(RendererTests, QuadBezier) {
   SVGDocument document = loadSVG("src/svg/renderer/testdata/quadbezier1.svg");
   renderAndCompare(document, "src/svg/renderer/testdata/golden/quadbezier1.png");
+}
+
+TEST_F(RendererTests, DonnerIcon) {
+  SVGDocument document = loadSVG("donner_icon.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/donner_icon.png");
+}
+
+TEST_F(RendererTests, DonnerSplash) {
+  SVGDocument document = loadSVG("donner_splash.svg");
+  renderAndCompare(document, "src/svg/renderer/testdata/golden/donner_splash.png");
 }
 
 TEST_F(RendererTests, SVG2_e_use_001) {

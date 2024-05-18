@@ -1,4 +1,9 @@
+# Enables using platform-specific configs such as build:linux and build:macos in this .baezlrc file
 build --enable_platform_specific_config
+
+##
+## Build config
+##
 
 # Disable layering check since toolchains_llvm has issues with it.
 build --features=-layering_check
@@ -84,3 +89,10 @@ build:clang-tidy --output_groups=report
 
 # Optionally override the .clang-tidy config file target
 build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
+
+##
+## Test config
+##
+
+# Outputs test failures from failing tests instead just linking to test.log.
+test --test_output=errors

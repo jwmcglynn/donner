@@ -47,3 +47,14 @@ exports_files(
     [".hdoc.toml"],
     visibility = ["//visibility:public"],
 )
+
+# Logo SVGs, which are consumed by the renderer tests.
+filegroup(
+    name = "logo_svgs",
+    srcs = glob([
+        "*.svg",
+    ]),
+    visibility = [
+        "//src:__subpackages__",
+    ],
+)
