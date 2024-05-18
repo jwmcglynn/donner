@@ -43,3 +43,19 @@ To try the wasm demo:
 ```sh
 bazel run --build_tag_filters=wasm //src/wasm:serve_http
 ```
+
+## Build reports
+
+See the latest [Build report](../build_report.md).
+
+To generate a build report locally, run:
+
+```sh
+python3 tools/generate_build_report.py
+```
+
+To regenerate the checked-in build report at `docs/build_report.md`:
+
+```sh
+python3 tools/generate_build_report.py --save docs/build_report.md
+```
