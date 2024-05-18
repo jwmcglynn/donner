@@ -2,8 +2,8 @@
 
 Donner is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
 
-\htmlonly <style>img[src="Ghostscript_Tiger.png"]{width:50%;}</style> \endhtmlonly
-![Rendered with Donner](Ghostscript_Tiger.png)
+\htmlonly <style>img[src="donner_splash.svg"]{width:50%;}</style> \endhtmlonly
+![Donner splash image](donner_splash.svg)
 
 Currently, Donner includes:
 

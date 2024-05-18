@@ -61,7 +61,7 @@ PROJECT_BRIEF          = "C++20 SVG rendering library"
 # pixels and the maximum width should not exceed 200 pixels. Doxygen will copy
 # the logo to the output directory.
 
-PROJECT_LOGO           = icon.png
+PROJECT_LOGO           = donner_icon.svg
 
 # With the PROJECT_ICON tag one can specify an icon that is included in the tabs
 # when the HTML document is shown. Doxygen will copy the logo to the output
@@ -1378,7 +1378,8 @@ HTML_EXTRA_FILES       = third_party/doxygen-awesome-css/doxygen-awesome-fragmen
                          third_party/doxygen-awesome-css/doxygen-awesome-paragraph-link.js \
                          third_party/doxygen-awesome-css/doxygen-awesome-interactive-toc.js \
                          third_party/doxygen-awesome-css/doxygen-awesome-tabs.js \
-                         src/svg/renderer/testdata/golden/Ghostscript_Tiger.png
+                         donner_icon.svg \
+                         donner_splash.svg
 
 # The HTML_COLORSTYLE tag can be used to specify if the generated HTML output
 # should be rendered with a dark or light theme.
