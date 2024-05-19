@@ -1,5 +1,9 @@
 # Donner build report
 
+Generated with: tools/generate_build_report.py --all --save docs/build_report.md
+
+Git revision: [540504f5b7ebbfbc71dafc3c49780643ff9e2cfd](https://github.com/jwmcglynn/donner/commit/540504f5b7ebbfbc71dafc3c49780643ff9e2cfd)
+
 ## Lines of code
 ```
 $ tools/cloc.sh
@@ -68,8 +72,6 @@ Saved report to build-binary-size/binary_size_report.html
 
 ![Binary size bar graph](binary_size_bargraph.svg)
 
-
-
 ## Code coverage
 ```
 $ tools/coverage.sh --quiet
@@ -77,7 +79,7 @@ Analyzing coverage for: //src/...
 Overall coverage rate:
   lines......: 90.7% (16726 of 18439 lines)
   functions......: 87.9% (3057 of 3476 functions)
-  branches......: 67.5% (4179 of 6192 branches)
+  branches......: 68.5% (4259 of 6214 branches)
 Coverage report saved to coverage-report/index.html
 ```
 
