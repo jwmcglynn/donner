@@ -18,7 +18,7 @@ Total binary size of xml_tool
 
 Saved report to build-binary-size/binary_size_report.html
 
-`bloaty -d compileunits` -n 20` output
+`bloaty -d compileunits -n 20` output
 ```
     FILE SIZE        VM SIZE    
  --------------  -------------- 
@@ -77,7 +77,7 @@ Analyzing coverage for: //src/...
 Overall coverage rate:
   lines......: 90.7% (16726 of 18439 lines)
   functions......: 87.9% (3057 of 3476 functions)
-  branches......: 65.6% (4057 of 6186 branches)
+  branches......: 67.5% (4179 of 6192 branches)
 Coverage report saved to coverage-report/index.html
 ```
 

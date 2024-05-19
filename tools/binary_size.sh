@@ -52,7 +52,7 @@ python3 tools/binary_size_analysis.py build-binary-size/xml_tool.bloaty.csv buil
 
 # Output summary
 echo ""
-echo '`bloaty -d compileunits` -n 20` output'
+echo '`bloaty -d compileunits -n 20` output'
 echo '```'
 
 bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/xml_tool
