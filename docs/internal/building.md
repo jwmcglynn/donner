@@ -51,11 +51,11 @@ See the latest [Build report](../build_report.md).
 To generate a build report locally, run:
 
 ```sh
-python3 tools/generate_build_report.py
+python3 tools/generate_build_report.py --all
 ```
 
 To regenerate the checked-in build report at `docs/build_report.md`:
 
 ```sh
-python3 tools/generate_build_report.py --save docs/build_report.md
+python3 tools/generate_build_report.py --all --save docs/build_report.md
 ```
