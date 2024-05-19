@@ -15,8 +15,10 @@ bazel build $BAZEL_QUIET_OPTIONS -c opt --strip=never --copt=-g //src/svg/xml:xm
 cp -f bazel-bin/src/svg/xml/xml_tool build-binary-size/xml_tool
 
 # Print human-readable binary size of xml_tool.stripped
+echo '```'
 echo "Total binary size of xml_tool"
 du -h build-binary-size/xml_tool
+echo '```'
 echo ""
 
 # On macOS run dsymutil to generate debug symbols
@@ -34,15 +36,25 @@ else
   exit 1
 fi
 
-# Bloaty docs at https://github.com/google/bloaty/blob/main/doc/using.md
+# See bloaty docs at https://github.com/google/bloaty/blob/main/doc/using.md
 # To see file -> symbol tree: -d donner_package,compileunits,symbols
 # To see symbols only: -d donner_package,symbol
-bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty.csv
 
+# Output an <svg> with a barchart of the binart size by directory
+bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty_compileunits.csv
+python3 tools/python/generate_size_barchart_svg.py build-binary-size/xml_tool.bloaty_compileunits.csv > build-binary-size/binary_size_bargraph.svg
+
+echo ""
+
+# Create the binary_size_report webtreemap
+bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty.csv
 python3 tools/binary_size_analysis.py build-binary-size/xml_tool.bloaty.csv build-binary-size/binary_size_report.html
 
+# Output summary
 echo ""
-echo "Top compile units by size:"
-echo ""
+echo '`bloaty -d compileunits` -n 20` output'
+echo '```'
 
-bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 10 $DEBUG_FILE_ARG build-binary-size/xml_tool
+bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/xml_tool
+
+echo '```'
