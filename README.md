@@ -10,7 +10,7 @@ Donner is an under-development modern C++20 SVG rendering library which provides
 ## TODO
 
 - [x] [Build reports](docs/build_report.md), https://github.com/jwmcglynn/donner/issues/145
-- [ ] Documentation for current status
+- [ ] Documentation for current status, https://github.com/jwmcglynn/donner/issues/149
 - [ ] Documentation for how to use
 - [x] Documentation for how to build
 - [ ] Performance benchmark
