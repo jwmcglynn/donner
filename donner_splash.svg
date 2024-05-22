@@ -306,24 +306,12 @@
         fill: url(#radial-gradient-3);
       }
 
-      .cls-72 {
-        fill: url(#radial-gradient-6);
-      }
-
       .cls-73 {
         fill: url(#radial-gradient-9);
       }
 
       .cls-74 {
         fill: url(#radial-gradient-8);
-      }
-
-      .cls-75 {
-        fill: url(#radial-gradient-5);
-      }
-
-      .cls-76 {
-        fill: url(#radial-gradient-7);
       }
 
       .cls-77 {
@@ -421,12 +409,12 @@
       <stop offset=".17" stop-color="#0180d3"/>
       <stop offset=".58" stop-color="#0271a1" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="radial-gradient-5" cx="601.99" cy="300.5" fx="601.99" fy="300.5" r="25.74" gradientTransform="translate(20.87 99.61) scale(1 .54)" gradientUnits="userSpaceOnUse">
+    <radialGradient id="radial-gradient-logo-hit-burst-1" cx="601.99" cy="300.5" fx="601.99" fy="300.5" r="25.74" gradientTransform="translate(20.87 99.61) scale(1 .54)" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#f7971f"/>
       <stop offset="1" stop-color="#f7971f" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="radial-gradient-6" cx="591.99" cy="304.55" fx="591.99" fy="304.55" r="25.74" gradientTransform="translate(99.58 112.71) scale(.79 .54)" xlink:href="#radial-gradient-5"/>
-    <radialGradient id="radial-gradient-7" cx="298.93" cy="104.9" fx="298.93" fy="104.9" r="25.74" gradientTransform="translate(339.12 54.93) rotate(90) scale(1 .54)" xlink:href="#radial-gradient-5"/>
+    <radialGradient id="radial-gradient-logo-hit-burst-2" cx="591.99" cy="304.55" fx="591.99" fy="304.55" r="25.74" gradientTransform="translate(99.58 112.71) scale(.79 .54)" xlink:href="#radial-gradient-logo-hit-burst-1"/>
+    <radialGradient id="radial-gradient-logo-hit-burst-3" cx="298.93" cy="104.9" fx="298.93" fy="104.9" r="25.74" gradientTransform="translate(339.12 54.93) rotate(90) scale(1 .54)" xlink:href="#radial-gradient-logo-hit-burst-1"/>
     <linearGradient id="linear-gradient" x1="288.7" y1="349.76" x2="309" y2="428.03" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#fff"/>
       <stop offset=".14" stop-color="#ffd738"/>
@@ -680,7 +668,8 @@
       <stop offset="1" stop-color="#fce409" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="radial-gradient-59" cx="671.28" cy="288.29" fx="671.28" fy="288.29" r="1.72" gradientTransform="translate(86.7 56.86) scale(.7)" xlink:href="#radial-gradient-53"/>
-    <radialGradient id="radial-gradient-60" cx="700.53" cy="273.43" fx="700.53" fy="273.43" gradientTransform="translate(86.7 56.86) scale(.7)" xlink:href="#radial-gradient-53"/>
+    <radialGradient id="
+    0" cx="700.53" cy="273.43" fx="700.53" fy="273.43" gradientTransform="translate(86.7 56.86) scale(.7)" xlink:href="#radial-gradient-53"/>
     <radialGradient id="radial-gradient-61" cx="733.25" cy="264.63" fx="733.25" fy="264.63" r="1.15" gradientTransform="translate(86.7 56.86) scale(.7)" xlink:href="#radial-gradient-53"/>
     <radialGradient id="radial-gradient-62" cx="833.74" cy="263.86" fx="833.74" fy="263.86" r="1.15" gradientTransform="translate(86.7 56.86) scale(.7)" xlink:href="#radial-gradient-53"/>
     <radialGradient id="radial-gradient-63" cx="394.8" cy="314.06" fx="394.8" fy="314.06" r="1.44" gradientUnits="userSpaceOnUse">
@@ -722,9 +711,9 @@
       <ellipse class="cls-1" cx="454.79" cy="303.26" rx="182.66" ry="210.32"/>
     </g>
     <g id="Lightning_logo_hit_bursts" data-name="Lightning logo hit bursts">
-      <ellipse class="cls-75" cx="622.86" cy="262.16" rx="25.44" ry="14.51" transform="translate(-39.9 130.15) rotate(-11.56)"/>
-      <ellipse class="cls-72" cx="568.32" cy="277.44" rx="20.14" ry="14.51" transform="translate(-44.07 119.53) rotate(-11.56)"/>
-      <ellipse class="cls-76" cx="282.38" cy="353.86" rx="14.51" ry="25.44" transform="translate(-12.53 10.37) rotate(-2.06)"/>
+      <ellipse cx="622.86" cy="262.16" rx="25.44" ry="14.51" fill="url(#radial-gradient-logo-hit-burst-1)" transform="translate(-39.9 130.15) rotate(-11.56)"/>
+      <ellipse cx="568.32" cy="277.44" rx="20.14" ry="14.51" fill="url(#radial-gradient-logo-hit-burst-2)" transform="translate(-44.07 119.53) rotate(-11.56)"/>
+      <ellipse cx="282.38" cy="353.86" rx="14.51" ry="25.44" fill="url(#radial-gradient-logo-hit-burst-3)" transform="translate(-12.53 10.37) rotate(-2.06)"/>
     </g>
     <g id="Donner">
       <path class="cls-5" d="M302.82,346.89c-12.62,3.25-31.41,8.1-31.41,8.1v78.51s21.1-4.66,30.67-6.87c9.57-2.21,29.93-11.53,29.69-35.33l-.25-23.8c0-16.44-16.09-23.86-28.71-20.61ZM312.81,396.98c.09,8.65-7.31,12.04-10.79,12.84-3.48.8-11.14,2.5-11.14,2.5v-44.9s6.83-1.76,11.41-2.94c4.58-1.18,10.43,1.52,10.43,7.49l.09,8.65c.02,1.71-.09,6.53-.09,7.73,0,5.97.09-6.86.09,8.65Z"/>
