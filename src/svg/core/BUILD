@@ -7,6 +7,7 @@ cc_library(
     ],
     hdrs = [
         "css_transform.h",
+        "filter.h",
         "gradient.h",
         "path_spline.h",
         "pattern.h",

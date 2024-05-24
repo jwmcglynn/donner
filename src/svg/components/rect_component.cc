@@ -3,10 +3,10 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include "src/svg/components/computed_path_component.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
 namespace donner::svg::components {
-
 namespace {
 
 using RectPresentationAttributeParseFn =

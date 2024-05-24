@@ -30,7 +30,7 @@ enum class GradientUnits {
    */
   ObjectBoundingBox,
   /**
-   * The default value for the `"gradientUnits"` attribute, which is `ObjectBoundingBox`.
+   * The default value for the `"gradientUnits"` attribute, which is `objectBoundingBox`.
    */
   Default = ObjectBoundingBox,
 };

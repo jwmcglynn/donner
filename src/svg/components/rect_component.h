@@ -4,9 +4,7 @@
 #include <optional>
 
 #include "src/base/length.h"
-#include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/computed_style_component.h"
-#include "src/svg/properties/presentation_attribute_parsing.h"
 #include "src/svg/properties/property.h"
 #include "src/svg/properties/rx_ry_properties.h"
 

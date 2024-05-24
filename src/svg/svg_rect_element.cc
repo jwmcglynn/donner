@@ -1,5 +1,6 @@
 #include "src/svg/svg_rect_element.h"
 
+#include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"

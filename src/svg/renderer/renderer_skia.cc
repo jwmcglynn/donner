@@ -9,12 +9,12 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 //
+#include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/computed_shadow_tree_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/gradient_component.h"
 #include "src/svg/components/id_component.h"  // For verbose logging.
 #include "src/svg/components/linear_gradient_component.h"
-#include "src/svg/components/path_component.h"
 #include "src/svg/components/path_length_component.h"
 #include "src/svg/components/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
