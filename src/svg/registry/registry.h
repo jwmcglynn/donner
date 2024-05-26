@@ -45,6 +45,7 @@ enum class ElementType {
   Circle,          //!< \ref xml_circle
   Defs,            //!< \ref xml_defs
   Ellipse,         //!< \ref xml_ellipse
+  FeGaussianBlur,  //!< \ref xml_feGaussianBlur
   Filter,          //!< \ref xml_filter
   G,               //!< \ref xml_g
   Line,            //!< \ref xml_line
@@ -71,6 +72,8 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
     case ElementType::Ellipse:
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
+    case ElementType::FeGaussianBlur:
+      return fn(std::integral_constant<ElementType, ElementType::FeGaussianBlur>());
     case donner::svg::ElementType::Filter:
       return fn(std::integral_constant<ElementType, ElementType::Filter>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());

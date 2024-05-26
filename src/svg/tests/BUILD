@@ -7,6 +7,7 @@ cc_test(
         "svg_circle_element_tests.cc",
         "svg_element_tests.cc",
         "svg_ellipse_element_tests.cc",
+        "svg_filter_element_tests.cc",
         "svg_path_element_tests.cc",
         "svg_rect_element_tests.cc",
     ],
