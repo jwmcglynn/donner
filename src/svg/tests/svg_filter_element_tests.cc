@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/svg/svg_fe_gaussian_blur_element.h"
 #include "src/svg/svg_filter_element.h"
 #include "src/svg/tests/xml_test_utils.h"
 
@@ -98,6 +99,14 @@ TEST(SVGFilterElementTests, PrimitiveUnits) {
         instantiateSubtreeElementAs<SVGFilterElement>(R"(<filter primitiveUnits="invalid" />)");
     EXPECT_THAT(filter->primitiveUnits(), testing::Eq(PrimitiveUnits::Default));
   }
+}
+
+// TODO: Move to another file
+TEST(SVGFEGaussianBlurElement, SetStdDeviation) {
+  auto blur = instantiateSubtreeElementAs<SVGFEGaussianBlurElement>(
+      "<feGaussianBlur stdDeviation=\"3\" />");
+  EXPECT_EQ(blur->stdDeviationX(), 3.0);
+  EXPECT_EQ(blur->stdDeviationY(), 3.0);
 }
 
 }  // namespace donner::svg

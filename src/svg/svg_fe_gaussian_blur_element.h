@@ -65,8 +65,37 @@ public:
 
   // TODO: Add attributes
   // - in
-  // - stdDeviation
   // - edgeMode
+
+  /**
+   * Get the X-axis of the standard deviation, which is used to control the blur level.
+   *
+   * @return X-axis value of stdDeviation.
+   */
+  double stdDeviationX() const;
+
+  /**
+   * Get the Y-axis of the standard deviation, which is used to control the blur level.
+   *
+   * @return Y-axis value of stdDeviation.
+   */
+  double stdDeviationY() const;
+
+  /**
+   * Set the standard deviation, which is used to control the blur level.
+   *
+   * Negative values or a value of zero disables the effect of the given filter primitive (i.e., the
+   * result is the filter input image).
+   *
+   * If the value is 0 in only one of X or Y, then the effect is that the blur is only applied in
+   * the direction that has a non-zero value.
+   *
+   * The initial value is (0, 0).
+   *
+   * @param valueX X-axis value of stdDeviation.
+   * @param valueY Y-axis value of stdDeviation.
+   */
+  void setStdDeviation(double valueX, double valueY);
 };
 
 }  // namespace donner::svg
