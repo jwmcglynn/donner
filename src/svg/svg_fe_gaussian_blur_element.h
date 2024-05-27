@@ -53,7 +53,7 @@ protected:
 public:
   /// Element type.
   static constexpr ElementType Type = ElementType::FeGaussianBlur;
-  /// XML tag name, \ref xml_filter.
+  /// XML tag name, \ref xml_feGaussianBlur.
   static constexpr std::string_view Tag{"feGaussianBlur"};
 
   /**
