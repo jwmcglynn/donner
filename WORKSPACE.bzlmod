@@ -61,16 +61,3 @@ register_emscripten_toolchains()
 load("//third_party/scip-clang:defs.bzl", "gen_scip_clang")
 
 gen_scip_clang()
-
-# hdoc
-
-new_local_repository(
-    name = "hdoc",
-    build_file = "//third_party:BUILD.hdoc",
-    path = "third_party/hdoc",
-    workspace_file = "//third_party:WORKSPACE.hdoc",
-)
-
-load("@//third_party:hdoc.bzl", "hdoc_dependencies")
-
-hdoc_dependencies()

@@ -1,5 +1,0 @@
-workspace(name = "hdoc")
-
-load(":hdoc.bzl", "hdoc_dependencies")
-
-hdoc_dependencies()

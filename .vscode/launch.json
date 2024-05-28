@@ -17,55 +17,6 @@
         ".": "${workspaceFolder}/third_party/hdoc"
       }
     },
-    // bazel-out/darwin_arm64-opt-exec-2B5CBBC6/bin/external/hdoc/hdoc-exporter --verbose --output bazel-out/darwin_arm64-fastbuild/bin/hdoc-output --config .hdoc.toml --input bazel-out/darwin_arm64-fastbuild/bin/external/range-v3/concepts.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/range-v3/meta.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/range-v3/std.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/range-v3/range-v3.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/base/base.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/entt/entt.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/registry/registry.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/components/document_context.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/components/transform_component.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/config.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/core_headers.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/atomic_hook.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/meta/type_traits.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/base_internal.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/cycleclock_internal.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/dynamic_annotations.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/log_severity.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/errno_saver.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/raw_logging_internal.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/spinlock_wait.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/base.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/endian.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/strings/internal.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/base/throw_delegate.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/memory/memory.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/numeric/bits.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/numeric/int128.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/com_google_absl/absl/strings/strings.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/base/parser/parser.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/frozen/frozen.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/css/core.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/core/core.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/parser/parser.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/css/parser/parser.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/css/css.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/graph/graph.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/properties/properties.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/components/components.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/svg_core.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/xml/xml_details.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/external/rapidxml_ns/rapidxml_ns.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/xml/xml.hdoc-payload.json bazel-out/darwin_arm64-fastbuild/bin/src/svg/svg.hdoc-payload.json
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "hdoc-exporter",
-      "program": "${workspaceFolder}/bazel-bin/external/hdoc/hdoc-exporter",
-      "cwd": "${workspaceFolder}",
-      "args": [
-        "--verbose",
-        "--output",
-        "${workspaceFolder}/hdoc-output",
-        "--config",
-        "${workspaceFolder}/.hdoc.toml",
-        "--input",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/base/base.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/registry/registry.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/components/document_context.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/components/transform_component.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/base/parser/parser.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/external/frozen/frozen.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/css/core.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/core/core.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/parser/parser.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/css/parser/parser.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/css/css.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/graph/graph.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/properties/properties.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/components/components.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/svg_core.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/xml/xml_details.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/external/rapidxml_ns/rapidxml_ns.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/xml/xml.hdoc-payload.json",
-        "${workspaceFolder}/bazel-out/darwin_arm64-fastbuild/bin/src/svg/svg.hdoc-payload.json"
-      ],
-      "sourceMap": {
-        ".": "${workspaceFolder}/third_party/hdoc"
-      }
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "hdoc_tests",
-      "program": "${workspaceFolder}/bazel-bin/external/hdoc/hdoc-tests",
-      "cwd": "${workspaceFolder}",
-      "args": [],
-      "sourceMap": {
-        ".": "${workspaceFolder}",
-      }
-    },
     {
       "type": "lldb",
       "request": "launch",

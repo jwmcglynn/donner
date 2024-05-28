@@ -2,7 +2,7 @@
 
 ## Bazel llvm_toolchain
 
-Donner uses a modified version of llvm_toolchain for its libclang-based tools (such as [hdoc](devtools/generating_documentation.md)).
+Donner uses a modified version of llvm_toolchain to prototype libclang-based tools (such as the archived [hdoc](https://github.com/jwmcglynn/donner/blob/hdoc-archive/docs/devtools/generating_documentation.md) experiment, in the `hdoc-archive` branch).
 
 To update to a new version, modify `MODULE.bazel`:
 
