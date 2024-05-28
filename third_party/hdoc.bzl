@@ -214,9 +214,9 @@ cc_library(
     maybe(
         http_archive,
         name = "spdlog",
-        sha256 = "534f2ee1a4dcbeb22249856edfb2be76a1cf4f708a20b0ac2ed090ee24cfdbc9",
-        strip_prefix = "spdlog-1.13.0",
-        urls = ["https://github.com/gabime/spdlog/archive/v1.13.0.tar.gz"],
+        sha256 = "1586508029a7d0670dfcb2d97575dcdc242d3868a259742b69f100801ab4e16b",
+        strip_prefix = "spdlog-1.14.1",
+        urls = ["https://github.com/gabime/spdlog/archive/v1.14.1.tar.gz"],
         build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
