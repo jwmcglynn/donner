@@ -19,7 +19,7 @@ void slurpFile(const std::filesystem::path& path, std::string& str) {
 
   // Reserve space in the string to avoid reallocations during slurping
   t.seekg(0, std::ios::end);
-  spdlog::warn("Slurping file: {} ({} bytes)", path.string(), t.tellg());
+  spdlog::warn("Slurping file: {} ({} bytes)", path.string(), static_cast<size_t>(t.tellg()));
   str.reserve(t.tellg());
   t.seekg(0, std::ios::beg);
 

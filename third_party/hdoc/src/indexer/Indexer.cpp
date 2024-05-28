@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <iostream>
 
+#include "spdlog/fmt/std.h"
 #include "spdlog/spdlog.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Tooling/ArgumentsAdjusters.h"
