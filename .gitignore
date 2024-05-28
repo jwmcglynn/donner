@@ -23,9 +23,6 @@ MODULE.bazel.lock
 # macOS
 .DS_Store
 
-# Hdoc
-hdoc-payload.json
-
 # Node
 node_modules
 package-lock.json

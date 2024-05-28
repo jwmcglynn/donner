@@ -43,11 +43,6 @@ filegroup(
     visibility = ["//tools:__pkg__"],
 )
 
-exports_files(
-    [".hdoc.toml"],
-    visibility = ["//visibility:public"],
-)
-
 # Logo SVGs, which are consumed by the renderer tests.
 filegroup(
     name = "logo_svgs",
