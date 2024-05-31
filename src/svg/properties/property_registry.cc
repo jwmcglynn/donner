@@ -8,6 +8,7 @@
 #include "src/css/css.h"
 #include "src/css/parser/color_parser.h"
 #include "src/css/parser/value_parser.h"
+#include "src/svg/filter/filter_effect.h"
 #include "src/svg/properties/property_parsing.h"
 
 namespace donner::svg {
@@ -306,15 +307,72 @@ ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
   return result;
 }
 
+ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
+  // TODO: Handle parsing a list of filter effects
+  // https://www.w3.org/TR/filter-effects/#FilterProperty
+  if (components.empty()) {
+    ParseError err;
+    err.reason = "Invalid filter value";
+    return err;
+  }
+
+  const css::ComponentValue& firstComponent = components.front();
+  if (firstComponent.is<css::Token>()) {
+    const auto& token = firstComponent.get<css::Token>();
+    if (token.is<css::Token::Ident>()) {
+      const RcString& name = token.get<css::Token::Ident>().value;
+
+      if (name.equalsLowercase("none")) {
+        return FilterEffect(FilterEffect::None());
+      }
+    } else if (token.is<css::Token::Url>()) {
+      const auto& url = token.get<css::Token::Url>();
+
+      return FilterEffect(FilterEffect::ElementReference(url.value));
+    }
+  } else if (firstComponent.is<css::Function>()) {
+    const auto& function = firstComponent.get<css::Function>();
+    if (function.name.equalsLowercase("blur")) {
+      // Parse optional length value as the stdDeviation.
+      if (function.values.empty()) {
+        return FilterEffect(FilterEffect::Blur(Lengthd(0.0, Lengthd::Unit::Px)));
+      } else if (function.values.size() == 1) {
+        const auto& arg = function.values.front();
+        if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
+          if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
+            ParseError err;
+            err.reason = "Invalid unit on length";
+            err.offset = arg.sourceOffset();
+            return err;
+          } else {
+            return FilterEffect(
+                FilterEffect::Blur(Lengthd(dimension->value, dimension->suffixUnit.value())));
+          }
+        } else {
+          ParseError err;
+          err.reason = "Invalid blur value";
+          err.offset = arg.sourceOffset();
+          return err;
+        }
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid filter value";
+  err.offset = firstComponent.sourceOffset();
+  return err;
+}
+
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-static constexpr frozen::unordered_set<frozen::string, 14> kValidPresentationAttributes = {
-    "cx", "cy", "height", "width",     "x",          "y",           "r", "rx",
-    "ry", "d",  "fill",   "transform", "stop-color", "stop-opacity"
+static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAttributes = {
+    "cx",   "cy",        "height",     "width",        "x",     "y", "r", "rx", "ry", "d",
+    "fill", "transform", "stop-color", "stop-opacity", "filter"
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 15> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 16> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
        auto maybeError = Parse(
@@ -447,6 +505,13 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 15> kPro
              return ParseLengthPercentage(params.components(), params.allowUserUnits());
            },
            &registry.strokeDashoffset);
+     }},  //
+    {"filter",
+     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const PropertyParseFnParams& params) { return ParseFilter(params.components()); },
+           &registry.filter);
      }},  //
 };
 

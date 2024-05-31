@@ -122,7 +122,10 @@ protected:
                                                 height, strideInPixels);
 
       FAIL() << "Computed image diff and expected version in " << goldenImageFilename
-             << " do not match, " << mismatchedPixels << " pixels different.";
+             << " do not match, " << mismatchedPixels << " pixels different.\n\n"
+             << "To update the golden image, run the following command:\n"
+             << "  UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run "
+                "//src/svg/renderer/tests:renderer_tests";
     }
   }
 };

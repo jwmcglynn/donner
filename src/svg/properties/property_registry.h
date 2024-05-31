@@ -8,6 +8,7 @@
 #include "src/css/color.h"
 #include "src/css/declaration.h"
 #include "src/css/stylesheet.h"
+#include "src/svg/filter/filter_effect.h"
 #include "src/svg/properties/paint_server.h"
 #include "src/svg/properties/property.h"
 #include "src/svg/properties/property_parsing.h"
@@ -81,6 +82,10 @@ public:
       "stroke-dashoffset",
       []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
 
+  // Filter
+  Property<FilterEffect> filter{
+      "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
+
   std::map<RcString, UnparsedProperty> unparsedProperties;
 
   /**
@@ -91,7 +96,7 @@ public:
   auto allProperties() const {
     return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
                                  stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
-                                 strokeMiterlimit, strokeDasharray, strokeDashoffset);
+                                 strokeMiterlimit, strokeDasharray, strokeDashoffset, filter);
   }
 
   /**

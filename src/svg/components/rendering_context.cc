@@ -128,7 +128,8 @@ public:
     }
 
     // Create a new layer if opacity is less than 1.
-    if (properties.opacity.getRequired() < 1.0) {
+    if (properties.opacity.getRequired() < 1.0 ||
+        !properties.filter.getRequired().is<FilterEffect::None>()) {
       instance.isolatedLayer = true;
 
       // TODO: Calculate hint for size of layer.

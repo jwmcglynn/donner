@@ -8,6 +8,7 @@
 #include "include/core/SkStream.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
+#include "include/effects/SkImageFilters.h"
 //
 #include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/computed_shadow_tree_component.h"
@@ -193,6 +194,11 @@ public:
 
           // TODO: Calculate hint for size of layer.
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
+        } else if (!properties.filter.getRequired().is<FilterEffect::None>()) {
+          // TODO: Hardcode a blur.
+          SkPaint blurPaint;
+          blurPaint.setImageFilter(SkImageFilters::Blur(10.0, 10.0, nullptr));
+          renderer_.currentCanvas_->saveLayer(nullptr, &blurPaint);
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
         }
