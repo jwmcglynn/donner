@@ -1,5 +1,6 @@
 #include "src/svg/renderer/renderer_wasm_canvas.h"
 
+#include "src/svg/components/computed_path_component.h"
 #include "src/svg/components/computed_shadow_tree_component.h"
 #include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/gradient_component.h"
