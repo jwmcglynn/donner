@@ -5,7 +5,9 @@
 
 namespace donner::svg::components {
 
+template <typename ReferenceType>
 struct EvaluatedReferenceComponent {
+  using Type = ReferenceType;
   EntityHandle target;
 };
 

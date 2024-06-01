@@ -69,7 +69,9 @@ SkM44 toSkia(const Transformd& transform) {
 }
 
 SkRect toSkia(const Boxd& box) {
-  return SkRect::MakeLTRB(box.topLeft.x, box.topLeft.y, box.bottomRight.x, box.bottomRight.y);
+  return SkRect::MakeLTRB(
+      static_cast<SkScalar>(box.topLeft.x), static_cast<SkScalar>(box.topLeft.y),
+      static_cast<SkScalar>(box.bottomRight.x), static_cast<SkScalar>(box.bottomRight.y));
 }
 
 SkColor toSkia(const css::RGBA rgba) {
@@ -104,19 +106,21 @@ SkPath toSkia(const PathSpline& spline) {
     switch (command.type) {
       case PathSpline::CommandType::MoveTo: {
         auto pt = points[command.pointIndex];
-        path.moveTo(pt.x, pt.y);
+        path.moveTo(static_cast<SkScalar>(pt.x), static_cast<SkScalar>(pt.y));
         break;
       }
       case PathSpline::CommandType::CurveTo: {
         auto c0 = points[command.pointIndex];
         auto c1 = points[command.pointIndex + 1];
         auto end = points[command.pointIndex + 2];
-        path.cubicTo(c0.x, c0.y, c1.x, c1.y, end.x, end.y);
+        path.cubicTo(static_cast<SkScalar>(c0.x), static_cast<SkScalar>(c0.y),
+                     static_cast<SkScalar>(c1.x), static_cast<SkScalar>(c1.y),
+                     static_cast<SkScalar>(end.x), static_cast<SkScalar>(end.y));
         break;
       }
       case PathSpline::CommandType::LineTo: {
         auto pt = points[command.pointIndex];
-        path.lineTo(pt.x, pt.y);
+        path.lineTo(static_cast<SkScalar>(pt.x), static_cast<SkScalar>(pt.y));
         break;
       }
       case PathSpline::CommandType::ClosePath: {
@@ -170,9 +174,9 @@ public:
           std::cout << " (shadow " << instance.styleHandle(registry).entity() << ")";
         }
 
-        std::cout << " transform=" << instance.transformCanvasSpace << std::endl;
+        std::cout << " transform=" << instance.transformCanvasSpace << "\n";
 
-        std::cout << std::endl;
+        std::cout << "\n";
       }
 
       if (instance.clipRect) {
@@ -195,10 +199,11 @@ public:
           // TODO: Calculate hint for size of layer.
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
         } else if (!properties.filter.getRequired().is<FilterEffect::None>()) {
-          // TODO: Hardcode a blur.
-          SkPaint blurPaint;
-          blurPaint.setImageFilter(SkImageFilters::Blur(10.0, 10.0, nullptr));
-          renderer_.currentCanvas_->saveLayer(nullptr, &blurPaint);
+          SkPaint filterPaint;
+          filterPaint.setImageFilter(createFilterChain(properties.filter.getRequired()));
+
+          // TODO: Calculate the bounds.
+          renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
         }
@@ -596,7 +601,8 @@ public:
 
       for (int i = 0; i < numRepeats; ++i) {
         for (const Lengthd& dash : dashes) {
-          skiaDashes.push_back(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale);
+          skiaDashes.push_back(
+              static_cast<float>(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale));
         }
       }
 
@@ -608,10 +614,10 @@ public:
     skPaint.setAntiAlias(true);
     skPaint.setStyle(SkPaint::Style::kStroke_Style);
 
-    skPaint.setStrokeWidth(config.strokeWidth);
+    skPaint.setStrokeWidth(static_cast<SkScalar>(config.strokeWidth));
     skPaint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
     skPaint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
-    skPaint.setStrokeMiter(config.miterLimit);
+    skPaint.setStrokeMiter(static_cast<SkScalar>(config.miterLimit));
 
     renderer_.currentCanvas_->drawPath(skPath, skPaint);
   }
@@ -630,8 +636,8 @@ public:
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;
-      skPaint.setColor(
-          toSkia(solid->color.resolve(style.color.getRequired().rgba(), strokeOpacity)));
+      skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(),
+                                                   static_cast<float>(strokeOpacity))));
 
       drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint, style, viewbox, fontMetrics);
     } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint)) {
@@ -644,6 +650,11 @@ public:
                                   fontMetrics);
       }
     }
+  }
+
+  sk_sp<SkImageFilter> createFilterChain(const FilterEffect& filter) {
+    // TODO: Convert from FilterEffect. Use hardcoded for now.
+    return SkImageFilters::Blur(10.0, 10.0, nullptr);
   }
 
 private:

@@ -58,7 +58,7 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
       RecursionGuard guard;
 
       EntityHandle current = handle;
-      while (const auto* ref = current.try_get<EvaluatedReferenceComponent>()) {
+      while (const auto* ref = current.try_get<EvaluatedReferenceComponent<GradientComponent>>()) {
         if (guard.hasRecursion(ref->target)) {
           // TODO: Propagate warning.
           // Note that in the case of recursion, we simply stop evaluating the inheritance instead
@@ -151,7 +151,8 @@ void EvaluateConditionalGradientShadowTrees(Registry& registry) {
       if (auto resolvedReference = gradient.href.value().resolve(registry)) {
         const EntityHandle resolvedHandle = resolvedReference.value().handle;
         if (resolvedHandle.all_of<GradientComponent>()) {
-          registry.emplace_or_replace<EvaluatedReferenceComponent>(entity, resolvedHandle);
+          registry.emplace_or_replace<EvaluatedReferenceComponent<GradientComponent>>(
+              entity, resolvedHandle);
 
           if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
             registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(gradient.href->href);
