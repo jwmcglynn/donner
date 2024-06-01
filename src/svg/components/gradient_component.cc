@@ -49,6 +49,9 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
 
   Registry& registry = *handle.registry();
 
+  //
+  // 1. Inherit attributes following the `href` attribute inheritance chain.
+  //
   {
     std::vector<Entity> inheritanceChain;
     inheritanceChain.push_back(handle);
@@ -73,7 +76,7 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
       }
     }
 
-    // Iterate over the inheritance chain backwards and compute.
+    // Iterate over the inheritance chain backwards to propagate attributes from base -> current.
     EntityHandle base;
     for (auto it = inheritanceChain.rbegin(); it != inheritanceChain.rend(); ++it) {
       EntityHandle cur = EntityHandle(registry, *it);
@@ -81,12 +84,15 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
       auto& curComputed = cur.get_or_emplace<ComputedGradientComponent>();
       curComputed.initialize(cur);
 
-      inheritAttributes(cur, base);
+      resolveAndInheritAttributes(cur, base);
 
       base = cur;
     }
   }
 
+  //
+  // 2. Find the tree containing the `<stop>` elements by following the shadow tree hierarchy.
+  //
   EntityHandle treeEntity = handle;
   {
     RecursionGuard shadowGuard;
@@ -107,6 +113,9 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
     }
   }
 
+  //
+  // 3. Parse GradientStop information into the computed component.
+  //
   const TreeComponent& tree = treeEntity.get<TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = registry.get<TreeComponent>(cur).nextSibling()) {
@@ -118,7 +127,11 @@ void ComputedGradientComponent::initialize(EntityHandle handle) {
   }
 }
 
-void ComputedGradientComponent::inheritAttributes(EntityHandle handle, EntityHandle base) {
+// Resolve unspecified attributes to default values or inherit from the given base gradient element.
+// This method is used to propagate attributes such as `x1`, `y1`, `cx`, `cy`, `r`, etc from the
+// base element to the current element.
+void ComputedGradientComponent::resolveAndInheritAttributes(EntityHandle handle,
+                                                            EntityHandle base) {
   if (base) {
     if (auto* computedBase = base.try_get<ComputedGradientComponent>()) {
       gradientUnits = computedBase->gradientUnits;
@@ -126,6 +139,8 @@ void ComputedGradientComponent::inheritAttributes(EntityHandle handle, EntityHan
     }
   }
 
+  // This lets <linearGradient> and <radialGradient> elements inherit shared attributes from each
+  // other
   const GradientComponent& gradient = handle.get<GradientComponent>();
   if (gradient.gradientUnits) {
     gradientUnits = gradient.gradientUnits.value();
@@ -134,6 +149,7 @@ void ComputedGradientComponent::inheritAttributes(EntityHandle handle, EntityHan
     spreadMethod = gradient.spreadMethod.value();
   }
 
+  // Inherit attributes from matching element types
   if (auto* linearGradient = handle.try_get<LinearGradientComponent>()) {
     linearGradient->inheritAttributes(handle, base);
   }
@@ -143,28 +159,47 @@ void ComputedGradientComponent::inheritAttributes(EntityHandle handle, EntityHan
   }
 }
 
-void EvaluateConditionalGradientShadowTrees(Registry& registry) {
+// Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in the
+// registry
+void EvaluateConditionalGradientShadowTrees(Registry& registry,
+                                            std::vector<ParseError>* outWarnings) {
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
     const auto& [gradient] = view.get(entity);
 
     if (gradient.href) {
+      // Resolve the href to its entity and confirm its a gradient
       if (auto resolvedReference = gradient.href.value().resolve(registry)) {
         const EntityHandle resolvedHandle = resolvedReference.value().handle;
         if (resolvedHandle.all_of<GradientComponent>()) {
           registry.emplace_or_replace<EvaluatedReferenceComponent<GradientComponent>>(
               entity, resolvedHandle);
 
+          // If this element has no children, create a shadow tree to clone the `<stop>` elements
+          // under this element.
+          //
+          // From https://www.w3.org/TR/SVG2/pservers.html#PaintServerTemplates
+          // > Furthermore, if the current element does not have any child content other than
+          // > descriptive elements, than the child content of the template element is cloned to
+          // > replace it.
           if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
+            // Success: Create the shadow
             registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(gradient.href->href);
           }
         } else {
-          // TODO: Propagate warning about mismatched element type.
+          if (outWarnings) {
+            ParseError err;
+            err.reason = "Gradient element href=\"" + gradient.href.value().href +
+                         "\" attribute points to a non-gradient element, inheritance "
+                         "ignored";
+            outWarnings->push_back(err);
+          }
         }
       }
     }
   }
 }
 
+// Create ComputedGradientComponent for all entities in the registry that have a GradientComponent
 void InstantiateGradientComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
     std::ignore = registry.emplace_or_replace<ComputedGradientComponent>(entity);

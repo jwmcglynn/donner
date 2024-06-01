@@ -294,7 +294,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
 void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
-  EvaluateConditionalGradientShadowTrees(registry_);
+  EvaluateConditionalGradientShadowTrees(registry_, outWarnings);
   EvaluateConditionalPatternShadowTrees(registry_);
 
   // Instantiate shadow trees.
