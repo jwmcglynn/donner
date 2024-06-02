@@ -11,7 +11,7 @@
 namespace donner::svg::components {
 
 /**
- * Parameters for <pattern> elements which are not captured by \ref ViewBoxComponent and \ref
+ * Parameters for `<pattern>` elements which are not captured by \ref ViewBoxComponent and \ref
  * SizedElementComponent.
  */
 struct PatternComponent {
