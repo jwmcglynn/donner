@@ -1,8 +1,8 @@
 #include "src/svg/svg_circle_element.h"
 
-#include "src/svg/components/circle_component.h"
-#include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/shape/circle_component.h"
+#include "src/svg/components/shape/shape_system.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
@@ -72,7 +72,7 @@ void SVGCircleElement::invalidate() const {
 
 void SVGCircleElement::compute() const {
   auto& circle = handle_.get_or_emplace<components::CircleComponent>();
-  circle.computePath(handle_, FontMetrics());
+  components::ShapeSystem().createComputedPath(handle_, circle, FontMetrics(), nullptr);
 }
 
 }  // namespace donner::svg

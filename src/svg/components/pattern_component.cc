@@ -1,10 +1,8 @@
 #include "src/svg/components/pattern_component.h"
 
 #include "src/base/math_utils.h"
-#include "src/svg/components/computed_shadow_tree_component.h"
-#include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/evaluated_reference_component.h"
-#include "src/svg/components/shadow_tree_component.h"
+#include "src/svg/components/shadow/shadow_tree_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/graph/recursion_guard.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"

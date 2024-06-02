@@ -1,6 +1,6 @@
 #include "src/svg/svg_linear_gradient_element.h"
 
-#include "src/svg/components/linear_gradient_component.h"
+#include "src/svg/components/gradient/linear_gradient_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 

@@ -1,7 +1,8 @@
 #include "src/svg/svg_polyline_element.h"
 
-#include "src/svg/components/poly_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/shape/computed_path_component.h"
+#include "src/svg/components/shape/poly_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {

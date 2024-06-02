@@ -1,6 +1,6 @@
 #include "src/svg/components/transform_component.h"
 
-#include "src/svg/components/computed_style_component.h"
+#include "src/svg/components/style/computed_style_component.h"
 #include "src/svg/parser/css_transform_parser.h"
 #include "src/svg/parser/transform_parser.h"
 
@@ -11,7 +11,7 @@ void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
                                                      const FontMetrics& fontMetrics,
                                                      std::vector<ParseError>* outWarnings) {
   // TODO: This should avoid recomputing the transform each request.
-  const auto& properties = style.properties().unparsedProperties;
+  const auto& properties = style.properties->unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
     const UnparsedProperty& property = it->second;
 
@@ -41,26 +41,10 @@ void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
   auto& computedTransform = handle.get_or_emplace<ComputedTransformComponent>();
   if (transform.get()) {
     computedTransform.rawCssTransform = transform.get().value();
-    computedTransform.transform = transform.get().value().compute(style.viewbox(), fontMetrics);
+    computedTransform.transform =
+        transform.get().value().compute(style.viewbox.value(), fontMetrics);
   } else {
     computedTransform.transform = Transformd();
-  }
-}
-
-void TransformComponent::compute(EntityHandle handle, const FontMetrics& fontMetrics) {
-  ComputedStyleComponent& style = handle.get_or_emplace<ComputedStyleComponent>();
-  style.computeProperties(handle);
-
-  computeWithPrecomputedStyle(handle, style, fontMetrics, nullptr);
-}
-
-const ComputedTransformComponent* TransformComponent::ComputedTransform(
-    EntityHandle handle, const FontMetrics& fontMetrics) {
-  if (auto* transform = handle.try_get<TransformComponent>()) {
-    transform->compute(handle, fontMetrics);
-    return &handle.get<ComputedTransformComponent>();
-  } else {
-    return nullptr;
   }
 }
 

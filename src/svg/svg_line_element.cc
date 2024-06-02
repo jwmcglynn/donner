@@ -1,8 +1,8 @@
 #include "src/svg/svg_line_element.h"
 
-#include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/line_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/shape/computed_path_component.h"
+#include "src/svg/components/shape/line_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
