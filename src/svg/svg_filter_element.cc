@@ -1,6 +1,6 @@
 #include "src/svg/svg_filter_element.h"
 
-#include "src/svg/components/filter_component.h"
+#include "src/svg/components/filter/filter_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 

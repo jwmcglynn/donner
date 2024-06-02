@@ -24,7 +24,7 @@ cc_library(
         "//src/css/parser",
         "//src/svg/components:document_context",
         "//src/svg/components:transform_component",
-        "//src/svg/filter:filter_effect",
+        "//src/svg/components/filter:filter_effect",
         "//src/svg/graph",
         "//src/svg/parser",
         "//src/svg/registry",

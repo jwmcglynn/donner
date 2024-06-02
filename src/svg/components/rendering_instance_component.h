@@ -5,6 +5,7 @@
 
 #include "src/base/box.h"
 #include "src/base/transform.h"
+#include "src/svg/components/filter/filter_effect.h"
 #include "src/svg/properties/paint_server.h"
 #include "src/svg/registry/registry.h"
 
@@ -23,6 +24,8 @@ struct PaintResolvedReference {
 
 using ResolvedPaintServer =
     std::variant<PaintServer::None, PaintServer::Solid, PaintResolvedReference>;
+
+using ResolvedFilterEffect = std::variant<std::vector<FilterEffect>, ResolvedReference>;
 
 inline bool HasPaint(const ResolvedPaintServer& paint) {
   return !std::holds_alternative<PaintServer::None>(paint);
@@ -47,7 +50,7 @@ struct RenderingInstanceComponent {
    * The entity containing the structural components of the instance, element-specific
    * components like \ref IdComponent.
    */
-  Entity dataEntity;
+  Entity dataEntity = entt::null;
 
   /**
    * The resolved paint server for the instance's fill, if any.
@@ -58,6 +61,11 @@ struct RenderingInstanceComponent {
    * The resolved paint server for the instance's stroke, if any.
    */
   ResolvedPaintServer resolvedStroke = PaintServer::None();
+
+  /**
+   * The resolved filter effect on this instance, if any.
+   */
+  std::optional<ResolvedFilterEffect> resolvedFilter;
 
   /**
    * Information about this elements subtree, if there is a rendering-influencing subtree attached

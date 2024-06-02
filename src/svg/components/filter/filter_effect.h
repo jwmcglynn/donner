@@ -14,7 +14,8 @@ struct FilterEffect {
   };
 
   struct Blur {
-    Lengthd stdDeviation;
+    Lengthd stdDeviationX;
+    Lengthd stdDeviationY;
 
     bool operator==(const Blur&) const = default;
   };

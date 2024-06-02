@@ -34,8 +34,6 @@ cc_library(
 cc_library(
     name = "components_core",
     srcs = [
-        "filter_component.cc",
-        "filter_primitive_component.cc",
         "stylesheet_component.cc",
         "transform_component.cc",
         "tree_component.cc",
@@ -45,8 +43,6 @@ cc_library(
         "attributes_component.h",
         "class_component.h",
         "evaluated_reference_component.h",
-        "filter_component.h",
-        "filter_primitive_component.h",
         "path_length_component.h",
         "preserve_aspect_ratio_component.h",
         "rendering_behavior_component.h",
@@ -86,6 +82,7 @@ cc_library(
     ],
     deps = [
         ":components_core",
+        "//src/svg/components/filter:filter_system",
         "//src/svg/components/layout:layout_system",
         "//src/svg/components/paint:paint_system",
         "//src/svg/components/shadow:components",

@@ -10,6 +10,8 @@
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
 //
+#include "src/svg/components/filter/filter_component.h"
+#include "src/svg/components/filter/filter_effect.h"
 #include "src/svg/components/id_component.h"  // For verbose logging.
 #include "src/svg/components/layout/layout_system.h"
 #include "src/svg/components/layout/sized_element_component.h"
@@ -20,6 +22,7 @@
 #include "src/svg/components/path_length_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/rendering_instance_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"
 #include "src/svg/components/shadow/shadow_branch.h"
 #include "src/svg/components/shadow/shadow_entity_component.h"
@@ -28,6 +31,7 @@
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/graph/reference.h"
 #include "src/svg/renderer/common/rendering_instance_view.h"
 #include "src/svg/renderer/renderer_image_io.h"
 #include "src/svg/renderer/renderer_utils.h"
@@ -199,9 +203,9 @@ public:
 
           // TODO: Calculate hint for size of layer.
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
-        } else if (!properties.filter.getRequired().is<FilterEffect::None>()) {
+        } else if (instance.resolvedFilter) {
           SkPaint filterPaint;
-          filterPaint.setImageFilter(createFilterChain(properties.filter.getRequired()));
+          createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
 
           // TODO: Calculate the bounds.
           renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
@@ -655,9 +659,32 @@ public:
     }
   }
 
-  sk_sp<SkImageFilter> createFilterChain(const FilterEffect& filter) {
-    // TODO: Convert from FilterEffect. Use hardcoded for now.
-    return SkImageFilters::Blur(10.0, 10.0, nullptr);
+  void createFilterChain(SkPaint& filterPaint, const std::vector<FilterEffect>& effectList) {
+    for (const FilterEffect& effect : effectList) {
+      std::visit(entt::overloaded{//
+                                  [&](const FilterEffect::None&) {},
+                                  [&](const FilterEffect::Blur& blur) {
+                                    // TODO: Convert these Length units
+                                    filterPaint.setImageFilter(SkImageFilters::Blur(
+                                        static_cast<float>(blur.stdDeviationX.value),
+                                        static_cast<float>(blur.stdDeviationY.value), nullptr));
+                                  },
+                                  [&](const FilterEffect::ElementReference& ref) {
+                                    assert(false && "Element references must already be resolved");
+                                  }},
+                 effect.value);
+    }
+  }
+
+  void createFilterPaint(SkPaint& filterPaint, Registry& registry,
+                         const components::ResolvedFilterEffect& filter) {
+    if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
+      createFilterChain(filterPaint, *effects);
+    } else if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
+      if (const auto* filter = registry.try_get<components::ComputedFilterComponent>(*reference)) {
+        createFilterChain(filterPaint, filter->effectChain);
+      }
+    }
   }
 
 private:

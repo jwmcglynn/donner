@@ -1,6 +1,6 @@
 #include "src/svg/svg_fe_gaussian_blur_element.h"
 
-#include "src/svg/components/filter_primitive_component.h"
+#include "src/svg/components/filter/filter_primitive_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {

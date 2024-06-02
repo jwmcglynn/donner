@@ -1,6 +1,6 @@
 #include "src/svg/svg_filter_primitive_standard_attributes.h"
 
-#include "src/svg/components/filter_primitive_component.h"
+#include "src/svg/components/filter/filter_primitive_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 
 namespace donner::svg {

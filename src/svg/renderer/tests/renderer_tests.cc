@@ -51,7 +51,7 @@ protected:
     }
 
     file.seekg(0, std::ios::end);
-    const size_t fileLength = file.tellg();
+    const std::streamsize fileLength = file.tellg();
     file.seekg(0);
 
     std::vector<char> fileData(fileLength + 1);
@@ -84,7 +84,7 @@ protected:
       RendererImageIO::writeRgbaPixelsToPngFile(
           goldenImagePath.string().c_str(), renderer.pixelData(), width, height, strideInPixels);
 
-      std::cout << "Updated golden image: " << goldenImagePath.string() << std::endl;
+      std::cout << "Updated golden image: " << goldenImagePath.string() << "\n";
       return;
     }
 
@@ -110,22 +110,22 @@ protected:
     if (mismatchedPixels != 0) {
       const std::filesystem::path actualImagePath =
           std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
-      std::cout << "Actual rendering: " << actualImagePath.string() << std::endl;
+      std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
       RendererImageIO::writeRgbaPixelsToPngFile(
           actualImagePath.string().c_str(), renderer.pixelData(), width, height, strideInPixels);
 
       const std::filesystem::path diffFilePath =
           std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
-      std::cerr << "Diff: " << diffFilePath.string() << std::endl;
+      std::cerr << "Diff: " << diffFilePath.string() << "\n";
 
       RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                                 height, strideInPixels);
 
       FAIL() << "Computed image diff and expected version in " << goldenImageFilename
              << " do not match, " << mismatchedPixels << " pixels different.\n\n"
-             << "To update the golden image, run the following command:\n"
+             << "To update the golden image, run the following command:\n\n"
              << "  UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run "
-                "//src/svg/renderer/tests:renderer_tests";
+                "//src/svg/renderer/tests:renderer_tests\n";
     }
   }
 };

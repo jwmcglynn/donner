@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "src/svg/core/filter.h"
+#include "src/svg/components/filter/filter_units.h"
 #include "src/svg/svg_element.h"
 
 namespace donner::svg {

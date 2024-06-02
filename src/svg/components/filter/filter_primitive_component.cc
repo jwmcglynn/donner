@@ -1,4 +1,4 @@
-#include "src/svg/components/filter_primitive_component.h"  // IWYU pragma: keep
+#include "src/svg/components/filter/filter_primitive_component.h"  // IWYU pragma: keep
 
 #include "src/svg/properties/presentation_attribute_parsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 

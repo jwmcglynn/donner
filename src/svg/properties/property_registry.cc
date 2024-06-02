@@ -8,7 +8,6 @@
 #include "src/css/css.h"
 #include "src/css/parser/color_parser.h"
 #include "src/css/parser/value_parser.h"
-#include "src/svg/filter/filter_effect.h"
 #include "src/svg/properties/property_parsing.h"
 
 namespace donner::svg {
@@ -345,8 +344,8 @@ ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> compo
             err.offset = arg.sourceOffset();
             return err;
           } else {
-            return FilterEffect(
-                FilterEffect::Blur(Lengthd(dimension->value, dimension->suffixUnit.value())));
+            const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
+            return FilterEffect(FilterEffect::Blur(stdDeviation, stdDeviation));
           }
         } else {
           ParseError err;

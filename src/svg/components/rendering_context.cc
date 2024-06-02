@@ -1,6 +1,8 @@
 #include "src/svg/components/rendering_context.h"
 
 #include "src/svg/components/document_context.h"
+#include "src/svg/components/filter/filter_component.h"
+#include "src/svg/components/filter/filter_system.h"
 #include "src/svg/components/id_component.h"
 #include "src/svg/components/layout/layout_system.h"
 #include "src/svg/components/layout/sized_element_component.h"
@@ -126,9 +128,10 @@ public:
       std::cout << "\n";
     }
 
+    const bool hasFilterEffect = !properties.filter.getRequired().is<FilterEffect::None>();
+
     // Create a new layer if opacity is less than 1.
-    if (properties.opacity.getRequired() < 1.0 ||
-        !properties.filter.getRequired().is<FilterEffect::None>()) {
+    if (properties.opacity.getRequired() < 1.0 || hasFilterEffect) {
       instance.isolatedLayer = true;
 
       // TODO: Calculate hint for size of layer.
@@ -137,6 +140,10 @@ public:
 
     if (properties.visibility.getRequired() != Visibility::Visible) {
       instance.visible = false;
+    }
+
+    if (hasFilterEffect) {
+      instance.resolvedFilter = resolveFilter(dataHandle, properties.filter.getRequired());
     }
 
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
@@ -238,6 +245,24 @@ public:
       return contextPaintServers.contextStroke;
     } else {
       return PaintServer::None();
+    }
+  }
+
+  ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {
+    if (filter.is<FilterEffect::ElementReference>()) {
+      const FilterEffect::ElementReference& ref = filter.get<FilterEffect::ElementReference>();
+
+      if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
+          resolvedRef && resolvedRef->handle.all_of<ComputedFilterComponent>()) {
+        return resolvedRef.value();
+      } else {
+        // Empty result.
+        return std::vector<FilterEffect>();
+      }
+    } else {
+      std::vector<FilterEffect> result;
+      result.push_back(filter);
+      return result;
     }
   }
 
@@ -350,6 +375,8 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 
   PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
+
+  FilterSystem().instantiateAllComputedComponents(registry_, outWarnings);
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
