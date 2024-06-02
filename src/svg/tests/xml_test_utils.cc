@@ -1,6 +1,7 @@
 #include "src/svg/tests/xml_test_utils.h"
 
 #include "src/svg/components/document_context.h"
+#include "src/svg/svg_svg_element.h"
 #include "src/svg/xml/xml_parser.h"
 
 namespace donner::svg {

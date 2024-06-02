@@ -42,23 +42,25 @@ using EntityHandle = entt::basic_handle<Registry>;
  * \ref xml_rect, etc.
  */
 enum class ElementType {
-  Circle,
-  Defs,
-  Ellipse,
-  G,
-  Line,
-  LinearGradient,
-  Path,
-  Pattern,
-  Polygon,
-  Polyline,
-  RadialGradient,
-  Rect,
-  Stop,  //!< For gradient stops.
-  Style,
-  SVG,      //!< SVG root element.
-  Unknown,  //!< For unknown elements.
-  Use,
+  Circle,          //!< \ref xml_circle
+  Defs,            //!< \ref xml_defs
+  Ellipse,         //!< \ref xml_ellipse
+  FeGaussianBlur,  //!< \ref xml_feGaussianBlur
+  Filter,          //!< \ref xml_filter
+  G,               //!< \ref xml_g
+  Line,            //!< \ref xml_line
+  LinearGradient,  //!< \ref xml_linearGradient
+  Path,            //!< \ref xml_path
+  Pattern,         //!< \ref xml_pattern
+  Polygon,         //!< \ref xml_polygon
+  Polyline,        //!< \ref xml_polyline
+  RadialGradient,  //!< \ref xml_radialGradient
+  Rect,            //!< \ref xml_rect
+  Stop,            //!< \ref xml_stop, for gradient stops.
+  Style,           //!< \ref xml_style
+  SVG,             //!< \ref xml_svg, SVG root element.
+  Unknown,         //!< For unknown elements.
+  Use,             //!< \ref xml_use
 };
 
 std::string_view TypeToString(ElementType type);
@@ -70,6 +72,10 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
     case ElementType::Ellipse:
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
+    case ElementType::FeGaussianBlur:
+      return fn(std::integral_constant<ElementType, ElementType::FeGaussianBlur>());
+    case donner::svg::ElementType::Filter:
+      return fn(std::integral_constant<ElementType, ElementType::Filter>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());
     case ElementType::Line: return fn(std::integral_constant<ElementType, ElementType::Line>());
     case ElementType::LinearGradient:

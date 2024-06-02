@@ -6,10 +6,13 @@
 #include "src/base/parser/length_parser.h"
 #include "src/base/parser/number_parser.h"
 #include "src/base/parser/parse_error.h"
-#include "src/svg/all_svg_elements.h"           // IWYU pragma: keep
+#include "src/svg/all_svg_elements.h"  // IWYU pragma: keep
+#include "src/svg/components/filter/filter_units.h"
+#include "src/svg/parser/number2d_parser.h"
 #include "src/svg/parser/points_list_parser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "src/svg/parser/preserve_aspect_ratio_parser.h"
 #include "src/svg/parser/viewbox_parser.h"
+#include "src/svg/svg_filter_element.h"
 #include "src/svg/xml/details/xml_parser_context.h"
 #include "src/svg/xml/xml_qualified_name.h"
 
@@ -191,6 +194,99 @@ template <typename T>
 std::optional<ParseError> ParseAttribute(XMLParserContext& context, T element,
                                          const XMLQualifiedNameRef& name, std::string_view value) {
   return ParseCommonAttribute(context, element, name, value);
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFilterElement>(XMLParserContext& context,
+                                                           SVGFilterElement element,
+                                                           const XMLQualifiedNameRef& name,
+                                                           std::string_view value) {
+  if (name == XMLQualifiedNameRef("x")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("y")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("width")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setWidth(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("height")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setHeight(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("filterUnits")) {
+    if (value == "userSpaceOnUse") {
+      element.setFilterUnits(FilterUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setFilterUnits(FilterUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid filterUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("primitiveUnits")) {
+    if (value == "userSpaceOnUse") {
+      element.setPrimitiveUnits(PrimitiveUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setPrimitiveUnits(PrimitiveUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid primitiveUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(XMLParserContext& context,
+                                                                   SVGFEGaussianBlurElement element,
+                                                                   const XMLQualifiedNameRef& name,
+                                                                   std::string_view value) {
+  if (name == XMLQualifiedNameRef("x")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("y")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("width")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setWidth(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("height")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setHeight(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("stdDeviation")) {
+    const auto maybeNumber2d = Number2dParser::Parse(value);
+    if (maybeNumber2d.hasResult()) {
+      const Number2dParser::Result number2d = maybeNumber2d.result();
+      // TODO: Does this handle whitespace at the end of the string?
+      if (number2d.consumedChars == value.size()) {
+        element.setStdDeviation(number2d.numberX, number2d.numberY);
+      } else {
+        ParseError err;
+        err.reason = "Unexpected additional data in stdDeviation, '" + std::string(value) + "'";
+        context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+      }
+    } else {
+      ParseError err;
+      err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
 }
 
 template <>

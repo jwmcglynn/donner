@@ -1,7 +1,7 @@
 #include "src/svg/svg_svg_element.h"
 
+#include "src/svg/components/layout/sized_element_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
-#include "src/svg/components/sized_element_component.h"
 #include "src/svg/components/viewbox_component.h"
 #include "src/svg/svg_document.h"
 

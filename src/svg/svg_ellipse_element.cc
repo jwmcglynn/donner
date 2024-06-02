@@ -1,8 +1,9 @@
 #include "src/svg/svg_ellipse_element.h"
 
-#include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/ellipse_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/shape/ellipse_component.h"
+#include "src/svg/components/shape/shape_system.h"
+#include "src/svg/components/style/computed_style_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
@@ -78,7 +79,7 @@ Lengthd SVGEllipseElement::computedRx() const {
   const components::ComputedStyleComponent& style =
       handle_.get<components::ComputedStyleComponent>();
   return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRx(
-      style.viewbox(), FontMetrics()));
+      style.viewbox.value(), FontMetrics()));
 }
 
 Lengthd SVGEllipseElement::computedRy() const {
@@ -87,7 +88,7 @@ Lengthd SVGEllipseElement::computedRy() const {
   const components::ComputedStyleComponent& style =
       handle_.get_or_emplace<components::ComputedStyleComponent>();
   return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRy(
-      style.viewbox(), FontMetrics()));
+      style.viewbox.value(), FontMetrics()));
 }
 
 void SVGEllipseElement::invalidate() const {
@@ -97,7 +98,7 @@ void SVGEllipseElement::invalidate() const {
 
 void SVGEllipseElement::compute() const {
   auto& ellipse = handle_.get_or_emplace<components::EllipseComponent>();
-  ellipse.computePath(handle_, FontMetrics());
+  components::ShapeSystem().createComputedPath(handle_, ellipse, FontMetrics(), nullptr);
 }
 
 }  // namespace donner::svg

@@ -9,7 +9,8 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_linearGradient '<linearGradient>'
+ * @page xml_linearGradient '<linearGradient>'
+ * @ingroup elements_paint_servers
  *
  * Defines the paint server for a linear gradients.
  *
@@ -46,6 +47,17 @@ namespace donner::svg {
  * Valid child elements: \ref xml_stop
  *
  * @see \ref xml_radialGradient, \ref xml_stop
+ *
+ * | Attribute | Default | Description  |
+ * | --------: | :-----: | :----------- |
+ * | `x1`      | `0%`    | Start X coordinate. |
+ * | `y1`      | `0%`    | Start Y coordinate. |
+ * | `x2`      | `100%`  | End X coordinate. |
+ * | `y2`      | `100%`  | End Y coordinate. |
+ * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
+ * | `gradientTransform` | (none) | A transform to apply to the gradient. |
+ * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
+ * | `href`    | (none)  | A URL reference to a template gradient element. |
  */
 
 /**
@@ -108,6 +120,10 @@ namespace donner::svg {
  * | `y1`      | `0%`    | Start Y coordinate. |
  * | `x2`      | `100%`  | End X coordinate. |
  * | `y2`      | `100%`  | End Y coordinate. |
+ * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
+ * | `gradientTransform` | (none) | A transform to apply to the gradient. |
+ * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
+ * | `href`    | (none)  | A URL reference to a template gradient element. |
  *
  * @see \ref SVGRadialGradientElement, \ref SVGStopElement
  */

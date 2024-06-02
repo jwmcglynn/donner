@@ -1,24 +1,25 @@
 #include "src/svg/components/rendering_context.h"
 
-#include <cassert>
-
-#include "src/svg/components/circle_component.h"
-#include "src/svg/components/computed_shadow_tree_component.h"
-#include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/ellipse_component.h"
-#include "src/svg/components/gradient_component.h"
+#include "src/svg/components/document_context.h"
+#include "src/svg/components/filter/filter_component.h"
+#include "src/svg/components/filter/filter_system.h"
 #include "src/svg/components/id_component.h"
-#include "src/svg/components/line_component.h"
-#include "src/svg/components/offscreen_shadow_tree_component.h"
-#include "src/svg/components/path_component.h"
-#include "src/svg/components/pattern_component.h"
-#include "src/svg/components/poly_component.h"
-#include "src/svg/components/rect_component.h"
+#include "src/svg/components/layout/layout_system.h"
+#include "src/svg/components/layout/sized_element_component.h"
+#include "src/svg/components/paint/gradient_component.h"
+#include "src/svg/components/paint/paint_system.h"
+#include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/rendering_instance_component.h"
-#include "src/svg/components/shadow_tree_component.h"
-#include "src/svg/components/sized_element_component.h"
-#include "src/svg/components/stop_component.h"
+#include "src/svg/components/shadow/computed_shadow_tree_component.h"
+#include "src/svg/components/shadow/offscreen_shadow_tree_component.h"
+#include "src/svg/components/shadow/shadow_branch.h"
+#include "src/svg/components/shadow/shadow_tree_component.h"
+#include "src/svg/components/shadow/shadow_tree_system.h"
+#include "src/svg/components/shape/computed_path_component.h"
+#include "src/svg/components/shape/shape_system.h"
+#include "src/svg/components/style/computed_style_component.h"
+#include "src/svg/components/style/style_system.h"
 #include "src/svg/components/transform_component.h"
 
 namespace donner::svg::components {
@@ -44,7 +45,7 @@ public:
       : registry_(registry), verbose_(verbose) {}
 
   /**
-   * Traverse a tree, instanting each entity in the tree.
+   * Traverse a tree, instantiating each entity in the tree.
    *
    * @param transform The parent transform to apply to the entity.
    * @param treeEntity Current entity in the tree or shadow tree.
@@ -82,7 +83,7 @@ public:
 
     const ComputedStyleComponent& styleComponent =
         registry_.get<ComputedStyleComponent>(styleEntity);
-    const auto& properties = styleComponent.properties();
+    const auto& properties = styleComponent.properties.value();
 
     if (properties.display.getRequired() == Display::None) {
       return;
@@ -93,9 +94,9 @@ public:
         return;
       }
 
-      transform = sizedElement->computeTransform(dataHandle) * transform;
+      transform = LayoutSystem().computeTransform(dataHandle, *sizedElement) * transform;
 
-      if (auto maybeClipRect = sizedElement->clipRect(dataHandle)) {
+      if (auto maybeClipRect = LayoutSystem().clipRect(dataHandle)) {
         ++layerDepth;
         clipRect = maybeClipRect;
       }
@@ -124,11 +125,13 @@ public:
         std::cout << " (shadow " << styleEntity << ")";
       }
 
-      std::cout << std::endl;
+      std::cout << "\n";
     }
 
+    const bool hasFilterEffect = !properties.filter.getRequired().is<FilterEffect::None>();
+
     // Create a new layer if opacity is less than 1.
-    if (properties.opacity.getRequired() < 1.0) {
+    if (properties.opacity.getRequired() < 1.0 || hasFilterEffect) {
       instance.isolatedLayer = true;
 
       // TODO: Calculate hint for size of layer.
@@ -139,18 +142,22 @@ public:
       instance.visible = false;
     }
 
+    if (hasFilterEffect) {
+      instance.resolvedFilter = resolveFilter(dataHandle, properties.filter.getRequired());
+    }
+
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
     const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
 
     if (setsContextColors || (instance.visible && dataHandle.all_of<ComputedPathComponent>())) {
       if (auto fill = properties.fill.get()) {
-        instance.resolvedFill = resolvePaint(ComputedShadowTreeComponent::Branch::OffscreenFill,
-                                             dataHandle, fill.value(), contextPaintServers_);
+        instance.resolvedFill = resolvePaint(ShadowBranchType::OffscreenFill, dataHandle,
+                                             fill.value(), contextPaintServers_);
       }
 
       if (auto stroke = properties.stroke.get()) {
-        instance.resolvedStroke = resolvePaint(ComputedShadowTreeComponent::Branch::OffscreenStroke,
-                                               dataHandle, stroke.value(), contextPaintServers_);
+        instance.resolvedStroke = resolvePaint(ShadowBranchType::OffscreenStroke, dataHandle,
+                                               stroke.value(), contextPaintServers_);
       }
 
       // Save the current context paint servers if this is a shadow tree host.
@@ -184,8 +191,8 @@ public:
     }
   }
 
-  std::optional<SubtreeInfo> instantiateOffscreenSubtree(
-      EntityHandle shadowHostHandle, ComputedShadowTreeComponent::Branch branchType) {
+  std::optional<SubtreeInfo> instantiateOffscreenSubtree(EntityHandle shadowHostHandle,
+                                                         ShadowBranchType branchType) {
     const auto* computedShadowTree = shadowHostHandle.try_get<ComputedShadowTreeComponent>();
     if (!computedShadowTree) {
       // If there's not a shadow tree, there is no offscreen subtree.  This is a gradient and not a
@@ -212,8 +219,8 @@ public:
     }
   }
 
-  ResolvedPaintServer resolvePaint(ComputedShadowTreeComponent::Branch branchType,
-                                   EntityHandle dataHandle, const PaintServer& paint,
+  ResolvedPaintServer resolvePaint(ShadowBranchType branchType, EntityHandle dataHandle,
+                                   const PaintServer& paint,
                                    const ContextPaintServers& contextPaintServers) {
     if (paint.is<PaintServer::Solid>()) {
       return paint.get<PaintServer::Solid>();
@@ -241,6 +248,24 @@ public:
     }
   }
 
+  ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {
+    if (filter.is<FilterEffect::ElementReference>()) {
+      const FilterEffect::ElementReference& ref = filter.get<FilterEffect::ElementReference>();
+
+      if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
+          resolvedRef && resolvedRef->handle.all_of<ComputedFilterComponent>()) {
+        return resolvedRef.value();
+      } else {
+        // Empty result.
+        return std::vector<FilterEffect>();
+      }
+    } else {
+      std::vector<FilterEffect> result;
+      result.push_back(filter);
+      return result;
+    }
+  }
+
 private:
   Registry& registry_;
   bool verbose_;
@@ -250,25 +275,7 @@ private:
   ContextPaintServers contextPaintServers_;
 };
 
-// TODO: Make this a concept
-template <typename Iterator>
-void ComputeStyles(Registry& registry, Iterator begin, Iterator end) {
-  // Create placeholder ComputedStyleComponents for all elements in the range, since creating
-  // computed style components also creates the parents, and we can't modify the component list
-  // while iterating it.
-  for (Iterator it = begin; it != end; ++it) {
-    // TODO: Can this be done with `insert(begin, end)` if some components already exist?
-    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(*it);
-  }
-
-  // Compute the styles for all elements.
-  for (Iterator it = begin; it != end; ++it) {
-    registry.get<ComputedStyleComponent>(*it).computeProperties(EntityHandle(registry, *it));
-  }
-}
-
-void InstantiatePaintShadowTree(Registry& registry, Entity entity,
-                                ComputedShadowTreeComponent::Branch branchType,
+void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
                                 const PaintServer& paint, std::vector<ParseError>* outWarnings) {
   if (paint.is<PaintServer::ElementReference>()) {
     const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
@@ -293,16 +300,16 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
 void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
-  EvaluateConditionalGradientShadowTrees(registry_);
-  EvaluateConditionalPatternShadowTrees(registry_);
+  PaintSystem().createShadowTrees(registry_, outWarnings);
 
   // Instantiate shadow trees.
   for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
     auto [shadowTreeComponent] = view.get(entity);
     if (auto targetEntity = shadowTreeComponent.mainTargetEntity(registry_)) {
-      registry_.get_or_emplace<ComputedShadowTreeComponent>(entity).populateInstance(
-          registry_, ComputedShadowTreeComponent::Branch::Main, targetEntity.value(),
-          shadowTreeComponent.mainHref().value(), outWarnings);
+      auto& shadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
+      ShadowTreeSystem().populateInstance(EntityHandle(registry_, entity), shadow,
+                                          ShadowBranchType::Main, targetEntity.value(),
+                                          shadowTreeComponent.mainHref().value(), outWarnings);
 
     } else if (shadowTreeComponent.mainHref() && outWarnings) {
       // We had a main href but it failed to resolve.
@@ -313,10 +320,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     }
   }
 
-  {
-    auto treeEntities = registry_.view<TreeComponent>();
-    ComputeStyles(registry_, treeEntities.begin(), treeEntities.end());
-  }
+  StyleSystem().computeAllStyles(registry_, outWarnings);
 
   // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
   // after those styles are evaluated, and after which we need to compute the styles for that subset
@@ -324,17 +328,15 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   for (auto view = registry_.view<ComputedStyleComponent>(); auto entity : view) {
     auto [styleComponent] = view.get(entity);
 
-    const auto& properties = styleComponent.properties();
+    const auto& properties = styleComponent.properties.value();
 
     if (auto fill = properties.fill.get()) {
-      InstantiatePaintShadowTree(registry_, entity,
-                                 ComputedShadowTreeComponent::Branch::OffscreenFill, fill.value(),
+      InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenFill, fill.value(),
                                  outWarnings);
     }
 
     if (auto stroke = properties.stroke.get()) {
-      InstantiatePaintShadowTree(registry_, entity,
-                                 ComputedShadowTreeComponent::Branch::OffscreenStroke,
+      InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenStroke,
                                  stroke.value(), outWarnings);
     }
   }
@@ -345,14 +347,15 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
       if (auto targetEntity = offscreenTree.branchTargetEntity(registry_, branchType)) {
         auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
 
-        const std::optional<size_t> maybeInstanceIndex = computedShadow.populateInstance(
-            registry_, branchType, targetEntity.value(), ref.href, outWarnings);
+        const std::optional<size_t> maybeInstanceIndex = ShadowTreeSystem().populateInstance(
+            EntityHandle(registry_, entity), computedShadow, branchType, targetEntity.value(),
+            ref.href, outWarnings);
 
         if (maybeInstanceIndex) {
           // Apply styles to the tree.
           const std::span<const Entity> shadowEntities =
               computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
-          ComputeStyles(registry_, shadowEntities.begin(), shadowEntities.end());
+          StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
         }
       } else if (outWarnings) {
         // We had a href but it failed to resolve.
@@ -365,26 +368,15 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     }
   }
 
-  for (auto view = registry_.view<SizedElementComponent, ComputedStyleComponent>();
-       auto entity : view) {
-    auto [component, style] = view.get(entity);
-    component.computeWithPrecomputedStyle(EntityHandle(registry_, entity), style, FontMetrics(),
-                                          outWarnings);
-  }
+  LayoutSystem().instantiateAllComputedComponents(registry_, outWarnings);
 
   ComputeAllTransforms(registry_, outWarnings);
 
-  InstantiateComputedCircleComponents(registry_, outWarnings);
-  InstantiateComputedEllipseComponents(registry_, outWarnings);
-  InstantiateComputedPathComponents(registry_, outWarnings);
-  InstantiateComputedRectComponents(registry_, outWarnings);
-  InstantiateLineComponents(registry_, outWarnings);
-  InstantiatePolyComponents(registry_, outWarnings);
+  ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 
-  // Should instantiate <stop> before gradients.
-  InstantiateStopComponents(registry_, outWarnings);
-  InstantiateGradientComponents(registry_, outWarnings);
-  InstantiatePatternComponents(registry_, outWarnings);
+  PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
+
+  FilterSystem().instantiateAllComputedComponents(registry_, outWarnings);
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {

@@ -8,24 +8,30 @@
 #include "include/core/SkStream.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
+#include "include/effects/SkImageFilters.h"
 //
-#include "src/svg/components/computed_shadow_tree_component.h"
-#include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/gradient_component.h"
+#include "src/svg/components/filter/filter_component.h"
+#include "src/svg/components/filter/filter_effect.h"
 #include "src/svg/components/id_component.h"  // For verbose logging.
-#include "src/svg/components/linear_gradient_component.h"
-#include "src/svg/components/path_component.h"
+#include "src/svg/components/layout/layout_system.h"
+#include "src/svg/components/layout/sized_element_component.h"
+#include "src/svg/components/paint/gradient_component.h"
+#include "src/svg/components/paint/linear_gradient_component.h"
+#include "src/svg/components/paint/pattern_component.h"
+#include "src/svg/components/paint/radial_gradient_component.h"
 #include "src/svg/components/path_length_component.h"
-#include "src/svg/components/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
-#include "src/svg/components/radial_gradient_component.h"
-#include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
-#include "src/svg/components/shadow_entity_component.h"
-#include "src/svg/components/sized_element_component.h"
+#include "src/svg/components/rendering_instance_component.h"
+#include "src/svg/components/shadow/computed_shadow_tree_component.h"
+#include "src/svg/components/shadow/shadow_branch.h"
+#include "src/svg/components/shadow/shadow_entity_component.h"
+#include "src/svg/components/shape/computed_path_component.h"
+#include "src/svg/components/style/computed_style_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/graph/reference.h"
 #include "src/svg/renderer/common/rendering_instance_view.h"
 #include "src/svg/renderer/renderer_image_io.h"
 #include "src/svg/renderer/renderer_utils.h"
@@ -68,7 +74,9 @@ SkM44 toSkia(const Transformd& transform) {
 }
 
 SkRect toSkia(const Boxd& box) {
-  return SkRect::MakeLTRB(box.topLeft.x, box.topLeft.y, box.bottomRight.x, box.bottomRight.y);
+  return SkRect::MakeLTRB(
+      static_cast<SkScalar>(box.topLeft.x), static_cast<SkScalar>(box.topLeft.y),
+      static_cast<SkScalar>(box.bottomRight.x), static_cast<SkScalar>(box.bottomRight.y));
 }
 
 SkColor toSkia(const css::RGBA rgba) {
@@ -103,19 +111,21 @@ SkPath toSkia(const PathSpline& spline) {
     switch (command.type) {
       case PathSpline::CommandType::MoveTo: {
         auto pt = points[command.pointIndex];
-        path.moveTo(pt.x, pt.y);
+        path.moveTo(static_cast<SkScalar>(pt.x), static_cast<SkScalar>(pt.y));
         break;
       }
       case PathSpline::CommandType::CurveTo: {
         auto c0 = points[command.pointIndex];
         auto c1 = points[command.pointIndex + 1];
         auto end = points[command.pointIndex + 2];
-        path.cubicTo(c0.x, c0.y, c1.x, c1.y, end.x, end.y);
+        path.cubicTo(static_cast<SkScalar>(c0.x), static_cast<SkScalar>(c0.y),
+                     static_cast<SkScalar>(c1.x), static_cast<SkScalar>(c1.y),
+                     static_cast<SkScalar>(end.x), static_cast<SkScalar>(end.y));
         break;
       }
       case PathSpline::CommandType::LineTo: {
         auto pt = points[command.pointIndex];
-        path.lineTo(pt.x, pt.y);
+        path.lineTo(static_cast<SkScalar>(pt.x), static_cast<SkScalar>(pt.y));
         break;
       }
       case PathSpline::CommandType::ClosePath: {
@@ -169,9 +179,9 @@ public:
           std::cout << " (shadow " << instance.styleHandle(registry).entity() << ")";
         }
 
-        std::cout << " transform=" << instance.transformCanvasSpace << std::endl;
+        std::cout << " transform=" << instance.transformCanvasSpace << "\n";
 
-        std::cout << std::endl;
+        std::cout << "\n";
       }
 
       if (instance.clipRect) {
@@ -183,7 +193,7 @@ public:
 
       const components::ComputedStyleComponent& styleComponent =
           instance.styleHandle(registry).get<components::ComputedStyleComponent>();
-      const auto& properties = styleComponent.properties();
+      const auto& properties = styleComponent.properties.value();
 
       if (instance.isolatedLayer) {
         // Create a new layer if opacity is less than 1.
@@ -193,6 +203,12 @@ public:
 
           // TODO: Calculate hint for size of layer.
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
+        } else if (instance.resolvedFilter) {
+          SkPaint filterPaint;
+          createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
+
+          // TODO: Calculate the bounds.
+          renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
         }
@@ -201,8 +217,9 @@ public:
       if (instance.visible) {
         if (const auto* path =
                 instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-          drawPath(instance.dataHandle(registry), instance, *path, styleComponent.properties(),
-                   styleComponent.viewbox(), FontMetrics());
+          drawPath(instance.dataHandle(registry), instance, *path,
+                   styleComponent.properties.value(), styleComponent.viewbox.value(),
+                   FontMetrics());
         }
       }
 
@@ -295,8 +312,7 @@ public:
     const bool objectBoundingBox =
         computedGradient.gradientUnits == GradientUnits::ObjectBoundingBox;
 
-    const components::ComputedTransformComponent* maybeTransformComponent =
-        components::TransformComponent::ComputedTransform(target, FontMetrics());
+    const auto* maybeTransformComponent = target.try_get<components::ComputedTransformComponent>();
 
     bool numbersArePercent = false;
     Transformd transform;
@@ -430,8 +446,8 @@ public:
   }
 
   std::optional<SkPaint> instantiatePattern(
-      components::ComputedShadowTreeComponent::Branch branchType, EntityHandle dataHandle,
-      EntityHandle target, const components::ComputedPatternComponent& computedPattern,
+      components::ShadowBranchType branchType, EntityHandle dataHandle, EntityHandle target,
+      const components::ComputedPatternComponent& computedPattern,
       const components::PaintResolvedReference& ref, const Boxd& pathBounds, const Boxd& viewbox,
       css::RGBA currentColor, float opacity) {
     if (!ref.subtreeInfo) {
@@ -442,8 +458,7 @@ public:
     Registry& registry = *dataHandle.registry();
     const bool objectBoundingBox = computedPattern.patternUnits == PatternUnits::ObjectBoundingBox;
 
-    const components::ComputedTransformComponent* maybeTransformComponent =
-        components::TransformComponent::ComputedTransform(target, FontMetrics());
+    const auto* maybeTransformComponent = target.try_get<components::ComputedTransformComponent>();
 
     Transformd transform;
     std::optional<Boxd> patternBounds;
@@ -476,7 +491,7 @@ public:
       if (const auto* sizedElement = target.try_get<components::ComputedSizedElementComponent>()) {
         patternBounds = sizedElement->bounds;
 
-        transform = sizedElement->computeTransform(target) * transform;
+        transform = components::LayoutSystem().computeTransform(target, *sizedElement) * transform;
       }
     }
 
@@ -505,10 +520,11 @@ public:
     return std::nullopt;
   }
 
-  std::optional<SkPaint> instantiatePaintReference(
-      components::ComputedShadowTreeComponent::Branch branchType, EntityHandle dataHandle,
-      const components::PaintResolvedReference& ref, const Boxd& pathBounds, const Boxd& viewbox,
-      css::RGBA currentColor, float opacity) {
+  std::optional<SkPaint> instantiatePaintReference(components::ShadowBranchType branchType,
+                                                   EntityHandle dataHandle,
+                                                   const components::PaintResolvedReference& ref,
+                                                   const Boxd& pathBounds, const Boxd& viewbox,
+                                                   css::RGBA currentColor, float opacity) {
     const EntityHandle target = ref.reference.handle;
 
     if (const auto* computedGradient = target.try_get<components::ComputedGradientComponent>()) {
@@ -548,8 +564,8 @@ public:
       drawPathFillWithSkPaint(path, skPaint, style);
     } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint)) {
       std::optional<SkPaint> skPaint = instantiatePaintReference(
-          components::ComputedShadowTreeComponent::Branch::OffscreenFill, dataHandle, *ref,
-          path.spline.bounds(), viewbox, style.color.getRequired().rgba(), fillOpacity);
+          components::ShadowBranchType::OffscreenFill, dataHandle, *ref, path.spline.bounds(),
+          viewbox, style.color.getRequired().rgba(), fillOpacity);
       if (skPaint) {
         drawPathFillWithSkPaint(path, skPaint.value(), style);
       }
@@ -590,22 +606,25 @@ public:
 
       for (int i = 0; i < numRepeats; ++i) {
         for (const Lengthd& dash : dashes) {
-          skiaDashes.push_back(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale);
+          skiaDashes.push_back(
+              static_cast<float>(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale));
         }
       }
 
       skPaint.setPathEffect(SkDashPathEffect::Make(
           skiaDashes.data(), skiaDashes.size(),
-          style.strokeDashoffset.get().value().toPixels(viewbox, fontMetrics) * dashUnitsScale));
+          static_cast<SkScalar>(
+              style.strokeDashoffset.get().value().toPixels(viewbox, fontMetrics) *
+              dashUnitsScale)));
     }
 
     skPaint.setAntiAlias(true);
     skPaint.setStyle(SkPaint::Style::kStroke_Style);
 
-    skPaint.setStrokeWidth(config.strokeWidth);
+    skPaint.setStrokeWidth(static_cast<SkScalar>(config.strokeWidth));
     skPaint.setStrokeCap(toSkia(style.strokeLinecap.get().value()));
     skPaint.setStrokeJoin(toSkia(style.strokeLinejoin.get().value()));
-    skPaint.setStrokeMiter(config.miterLimit);
+    skPaint.setStrokeMiter(static_cast<SkScalar>(config.miterLimit));
 
     renderer_.currentCanvas_->drawPath(skPath, skPaint);
   }
@@ -624,18 +643,46 @@ public:
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;
-      skPaint.setColor(
-          toSkia(solid->color.resolve(style.color.getRequired().rgba(), strokeOpacity)));
+      skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(),
+                                                   static_cast<float>(strokeOpacity))));
 
       drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint, style, viewbox, fontMetrics);
     } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint)) {
       std::optional<SkPaint> skPaint = instantiatePaintReference(
-          components::ComputedShadowTreeComponent::Branch::OffscreenStroke, dataHandle, *ref,
+          components::ShadowBranchType::OffscreenStroke, dataHandle, *ref,
           path.spline.strokeMiterBounds(config.strokeWidth, config.miterLimit), viewbox,
           style.color.getRequired().rgba(), NarrowToFloat((strokeOpacity)));
       if (skPaint) {
         drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint.value(), style, viewbox,
                                   fontMetrics);
+      }
+    }
+  }
+
+  void createFilterChain(SkPaint& filterPaint, const std::vector<FilterEffect>& effectList) {
+    for (const FilterEffect& effect : effectList) {
+      std::visit(entt::overloaded{//
+                                  [&](const FilterEffect::None&) {},
+                                  [&](const FilterEffect::Blur& blur) {
+                                    // TODO: Convert these Length units
+                                    filterPaint.setImageFilter(SkImageFilters::Blur(
+                                        static_cast<float>(blur.stdDeviationX.value),
+                                        static_cast<float>(blur.stdDeviationY.value), nullptr));
+                                  },
+                                  [&](const FilterEffect::ElementReference& ref) {
+                                    assert(false && "Element references must already be resolved");
+                                  }},
+                 effect.value);
+    }
+  }
+
+  void createFilterPaint(SkPaint& filterPaint, Registry& registry,
+                         const components::ResolvedFilterEffect& filter) {
+    if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
+      createFilterChain(filterPaint, *effects);
+    } else if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
+      if (const auto* filter = registry.try_get<components::ComputedFilterComponent>(*reference)) {
+        createFilterChain(filterPaint, filter->effectChain);
       }
     }
   }
@@ -658,9 +705,8 @@ void RendererSkia::draw(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = registry.get<components::SizedElementComponent>(rootEntity)
-                                     .calculateViewportScaledDocumentSize(
-                                         registry, components::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
+      EntityHandle(registry, rootEntity), components::InvalidSizeBehavior::ReturnDefault);
 
   bitmap_.allocPixels(
       SkImageInfo::MakeN32(renderingSize.x, renderingSize.y, SkAlphaType::kUnpremul_SkAlphaType));
@@ -680,9 +726,8 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = registry.get<components::SizedElementComponent>(rootEntity)
-                                     .calculateViewportScaledDocumentSize(
-                                         registry, components::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
+      EntityHandle(registry, rootEntity), components::InvalidSizeBehavior::ReturnDefault);
 
   SkPictureRecorder recorder;
   rootCanvas_ = recorder.beginRecording(toSkia(Boxd::WithSize(renderingSize)));

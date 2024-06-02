@@ -1,20 +1,18 @@
 #include "src/svg/renderer/renderer_wasm_canvas.h"
 
-#include "src/svg/components/computed_shadow_tree_component.h"
-#include "src/svg/components/computed_style_component.h"
-#include "src/svg/components/gradient_component.h"
 #include "src/svg/components/id_component.h"  // For verbose logging.
-#include "src/svg/components/linear_gradient_component.h"
-#include "src/svg/components/path_component.h"
+#include "src/svg/components/layout/layout_system.h"
+#include "src/svg/components/layout/sized_element_component.h"
+#include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/path_length_component.h"
-#include "src/svg/components/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
-#include "src/svg/components/radial_gradient_component.h"
-#include "src/svg/components/rect_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/rendering_instance_component.h"
-#include "src/svg/components/shadow_entity_component.h"
-#include "src/svg/components/sized_element_component.h"
+#include "src/svg/components/shadow/shadow_entity_component.h"
+#include "src/svg/components/shape/computed_path_component.h"
+#include "src/svg/components/shape/path_component.h"
+#include "src/svg/components/shape/rect_component.h"
+#include "src/svg/components/style/computed_style_component.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/components/viewbox_component.h"
@@ -56,7 +54,7 @@ public:
 
         std::cout << " transform=" << instance.transformCanvasSpace << std::endl;
 
-        std::cout << std::endl;
+        std::cout << "\n";
       }
 
       const auto& styleComponent =
@@ -65,8 +63,9 @@ public:
       if (instance.visible) {
         if (const auto* path =
                 instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-          drawPath(instance.dataHandle(registry), instance, *path, styleComponent.properties(),
-                   styleComponent.viewbox(), FontMetrics());
+          drawPath(instance.dataHandle(registry), instance, *path,
+                   styleComponent.properties.value(), styleComponent.viewbox.value(),
+                   FontMetrics());
         }
       }
     }
@@ -129,9 +128,8 @@ void RendererWasmCanvas::draw(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = registry.get<components::SizedElementComponent>(rootEntity)
-                                     .calculateViewportScaledDocumentSize(
-                                         registry, components::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
+      EntityHandle(registry, rootEntity), components::InvalidSizeBehavior::ReturnDefault);
 
   canvas_.setSize(renderingSize);
 

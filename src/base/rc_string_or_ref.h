@@ -55,21 +55,21 @@ public:
   /**
    * Constructs a new RcStringOrRef containing a non-owning std::string_view.
    *
-   * @param data Input string to reference.
+   * @param value Input string to reference.
    */
   /* implicit */ constexpr RcStringOrRef(std::string_view value) : value_(value) {}
 
   /**
    * Constructs a new RcStringOrRef containing a transferrable RcString.
    *
-   * @param data Input string to own.
+   * @param value Input string to own.
    */
   /* implicit */ constexpr RcStringOrRef(const RcString& value) : value_(value) {}
 
   /**
    * Constructs a new RcStringOrRef object from a C-style string reference and optional length.
    *
-   * @param data C-style string.
+   * @param value C-style string.
    * @param len Length of the string, or npos to automatically measure, which requires that \ref
    *   data is null-terminated.
    */

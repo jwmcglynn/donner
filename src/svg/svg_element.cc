@@ -3,11 +3,12 @@
 #include "src/css/parser/selector_parser.h"
 #include "src/svg/components/attributes_component.h"
 #include "src/svg/components/class_component.h"
-#include "src/svg/components/computed_style_component.h"
 #include "src/svg/components/document_context.h"
 #include "src/svg/components/id_component.h"
-#include "src/svg/components/shadow_tree_component.h"
-#include "src/svg/components/style_component.h"
+#include "src/svg/components/shadow/shadow_tree_component.h"
+#include "src/svg/components/style/computed_style_component.h"
+#include "src/svg/components/style/style_component.h"
+#include "src/svg/components/style/style_system.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/svg_document.h"
@@ -284,10 +285,9 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
 }
 
 const PropertyRegistry& SVGElement::getComputedStyle() const {
-  auto& computedStyle = handle_.get_or_emplace<components::ComputedStyleComponent>();
-  computedStyle.computeProperties(handle_);
-
-  return computedStyle.properties();
+  const components::ComputedStyleComponent& computedStyle =
+      components::StyleSystem().computeStyle(handle_, nullptr);
+  return computedStyle.properties.value();
 }
 
 EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& xmlTypeName,

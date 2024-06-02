@@ -1,8 +1,9 @@
 #include "src/svg/svg_path_element.h"
 
-#include "src/svg/components/computed_path_component.h"
-#include "src/svg/components/path_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
+#include "src/svg/components/shape/computed_path_component.h"
+#include "src/svg/components/shape/path_component.h"
+#include "src/svg/components/shape/shape_system.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
@@ -46,7 +47,7 @@ void SVGPathElement::invalidate() const {
 
 void SVGPathElement::compute() const {
   auto& path = handle_.get_or_emplace<components::PathComponent>();
-  path.computePath(handle_);
+  components::ShapeSystem().createComputedPath(handle_, path, FontMetrics(), nullptr);
 }
 
 }  // namespace donner::svg

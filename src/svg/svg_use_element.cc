@@ -1,8 +1,8 @@
 #include "src/svg/svg_use_element.h"
 
-#include "src/svg/components/computed_shadow_tree_component.h"
-#include "src/svg/components/shadow_tree_component.h"
-#include "src/svg/components/sized_element_component.h"
+#include "src/svg/components/layout/sized_element_component.h"
+#include "src/svg/components/shadow/computed_shadow_tree_component.h"
+#include "src/svg/components/shadow/shadow_tree_component.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {

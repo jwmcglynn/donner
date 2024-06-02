@@ -362,6 +362,7 @@
     "struct",
     "Subparser",
     "SVGSVG",
+    "SVGG",
     "testcase",
     "tparam",
     "transformd",

@@ -9,7 +9,7 @@ namespace donner::svg {
 
 /**
  * @page xml_polyline '<polyline>'
- * @ingroup basic_shapes
+ * @ingroup elements_basic_shapes
  *
  * Creates a set of connected straight line segments, using the `points` attribute.
  *

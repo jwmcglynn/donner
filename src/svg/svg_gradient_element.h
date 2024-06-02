@@ -17,10 +17,10 @@ namespace donner::svg {
  *
  * | Attribute | Default | Description |
  * | --------: | :-----: | :---------- |
- * | `href` | none | A URL reference to a template gradient element. |
  * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
- * | `gradientTransform` | none | A transform to apply to the gradient. |
+ * | `gradientTransform` | (none) | A transform to apply to the gradient. |
  * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
+ * | `href`    | (none)  | A URL reference to a template gradient element. |
  */
 class SVGGradientElement : public SVGElement {
 protected:
@@ -82,8 +82,8 @@ public:
   /**
    * `gradientUnits` attribute to specify the coordinate system for the gradient.
    *
-   * The default is \ref GradientUnits::ObjectBoundingBox, where 0, 0) is the top-left corner of the
-   * element that references the gradient, and (1, 1) is the bottom-right corner.
+   * The default is \ref GradientUnits::ObjectBoundingBox, where (0, 0) is the top-left corner of
+   * the element that references the gradient, and (1, 1) is the bottom-right corner.
    *
    * This affects the following attributes:
    * - For \ref SVGLinearGradientElement, `x1`, `y1`, `x2`, and `y2`.

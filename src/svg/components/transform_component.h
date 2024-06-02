@@ -22,20 +22,6 @@ struct TransformComponent {
   void computeWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
                                    const FontMetrics& fontMetrics,
                                    std::vector<ParseError>* outWarnings);
-
-  void compute(EntityHandle handle, const FontMetrics& fontMetrics);
-
-  /**
-   * Get the computed transform, computing it if necessary. If the transform is not set, returns
-   * nullptr, the caller should substitute the result for identity in this case.
-   *
-   * @param handle Entity handle.
-   * @param fontMetrics Font metrics used for resolving lengths in the <transform-list>.
-   * @return const ComputedTransformComponent* The computed transform component, or nullptr if the
-   *  transform is not set.
-   */
-  static const ComputedTransformComponent* ComputedTransform(EntityHandle handle,
-                                                             const FontMetrics& fontMetrics);
 };
 
 void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings);

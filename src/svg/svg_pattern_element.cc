@@ -1,11 +1,12 @@
 #include "src/svg/svg_pattern_element.h"
 
-#include "src/svg/components/computed_shadow_tree_component.h"
-#include "src/svg/components/pattern_component.h"
+#include "src/svg/components/layout/sized_element_component.h"
+#include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
-#include "src/svg/components/sized_element_component.h"
-#include "src/svg/components/style_component.h"
+#include "src/svg/components/shadow/computed_shadow_tree_component.h"
+#include "src/svg/components/style/style_component.h"
+#include "src/svg/components/style/style_system.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/viewbox_component.h"
 #include "src/svg/svg_document.h"
@@ -116,8 +117,13 @@ void SVGPatternElement::setPatternTransform(Transformd transform) {
   component.transform.set(CssTransform(transform), css::Specificity::Override());
 }
 
-void SVGPatternElement::setHref(const std::optional<RcString>& value) {
-  handle_.get_or_emplace<components::PatternComponent>().href = value;
+void SVGPatternElement::setHref(const std::optional<RcStringOrRef>& value) {
+  if (value) {
+    handle_.get_or_emplace<components::PatternComponent>().href = RcString(value.value());
+  } else {
+    handle_.get_or_emplace<components::PatternComponent>().href = std::nullopt;
+  }
+
   // Force the shadow tree to be regenerated.
   handle_.remove<components::ComputedShadowTreeComponent>();
 }
@@ -128,7 +134,8 @@ void SVGPatternElement::invalidateTransform() {
 
 void SVGPatternElement::computeTransform() const {
   auto& transform = handle_.get_or_emplace<components::TransformComponent>();
-  transform.compute(handle_, FontMetrics());
+  transform.computeWithPrecomputedStyle(
+      handle_, components::StyleSystem().computeStyle(handle_, nullptr), FontMetrics(), nullptr);
 }
 
 }  // namespace donner::svg

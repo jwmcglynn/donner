@@ -9,6 +9,8 @@ std::string_view TypeToString(ElementType type) {
     case ElementType::Circle: return "Circle";
     case ElementType::Defs: return "Defs";
     case ElementType::Ellipse: return "Ellipse";
+    case ElementType::FeGaussianBlur: return "FeGaussianBlur";
+    case ElementType::Filter: return "Filter";
     case ElementType::G: return "G";
     case ElementType::Line: return "Line";
     case ElementType::LinearGradient: return "LinearGradient";

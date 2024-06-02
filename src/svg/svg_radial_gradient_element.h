@@ -7,7 +7,8 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_radialGradient '<radialGradient>'
+ * @page xml_radialGradient '<radialGradient>'
+ * @ingroup elements_paint_servers
  *
  * Defines the paint server for a radial gradients.
  *
@@ -44,6 +45,19 @@ namespace donner::svg {
  * Valid child elements: \ref xml_stop
  *
  * @see \ref xml_linearGradient, \ref xml_stop
+ *
+ * | Attribute | Default | Description  |
+ * | --------: | :-----: | :----------- |
+ * | `cx`      | `50%`   | Center X coordinate, for the outer circle. |
+ * | `cy`      | `50%`   | Center Y coordinate, for the outer circle. |
+ * | `r`       | `50%`   | Radius of the outer circle. |
+ * | `fx`      | `cx`    | Focal point X coordinate. |
+ * | `fy`      | `cy`    | Focal point Y coordinate. |
+ * | `fr`      | `0`       | Focal point radius. |
+ * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
+ * | `gradientTransform` | (none) | A transform to apply to the gradient. |
+ * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
+ * | `href`    | (none)  | A URL reference to a template gradient element. |
  */
 
 /**
@@ -115,7 +129,11 @@ namespace donner::svg {
  * | `r`       | `50%`   | Radius of the outer circle. |
  * | `fx`      | `cx`    | Focal point X coordinate. |
  * | `fy`      | `cy`    | Focal point Y coordinate. |
- * | `fr`      | 0       | Focal point radius. |
+ * | `fr`      | `0`       | Focal point radius. |
+ * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
+ * | `gradientTransform` | (none) | A transform to apply to the gradient. |
+ * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
+ * | `href`    | (none)  | A URL reference to a template gradient element. |
  *
  * @see \ref SVGLinearGradientElement, \ref SVGStopElement
  */
