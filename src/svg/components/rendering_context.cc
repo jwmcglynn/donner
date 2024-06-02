@@ -295,7 +295,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     }
   }
 
-  StyleSystem().computeAllStyles(registry_);
+  StyleSystem().computeAllStyles(registry_, outWarnings);
 
   // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
   // after those styles are evaluated, and after which we need to compute the styles for that subset
@@ -330,7 +330,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
           // Apply styles to the tree.
           const std::span<const Entity> shadowEntities =
               computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
-          StyleSystem().computeStylesFor(registry_, shadowEntities);
+          StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
         }
       } else if (outWarnings) {
         // We had a href but it failed to resolve.

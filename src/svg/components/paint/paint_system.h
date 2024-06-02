@@ -27,9 +27,10 @@ public:
    * @param stop Stop component attached to \ref handle
    * @param outWarnings Containing any warnings found
    */
-  const ComputedStopComponent& createComputedStop(EntityHandle handle, const StopComponent& stop) {
-    const ComputedStyleComponent& style = StyleSystem().computeStyle(handle);
-    return createComputedStopWithStyle(handle, stop, style, nullptr);
+  const ComputedStopComponent& createComputedStop(EntityHandle handle, const StopComponent& stop,
+                                                  std::vector<ParseError>* outWarnings) {
+    const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
+    return createComputedStopWithStyle(handle, stop, style, outWarnings);
   }
 
   /**

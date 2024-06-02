@@ -6,17 +6,6 @@
 namespace donner::svg {
 
 /**
- * @defgroup basic_shapes Basic shapes
- *
- * \details Basic shapes are defined by a combination of straight lines and curves, and may be
- * stroked, filled, or used as a clipping path.
- *
- * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html
- *
- * Basic shapes have the DOM base class \ref SVGGeometryElement.
- */
-
-/**
  * Base class for all \ref basic_shapes.
  *
  * This is the DOM base class for all basic shapes, such as \ref SVGCircleElement, \ref

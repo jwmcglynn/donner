@@ -17,10 +17,10 @@ namespace donner::svg {
  *
  * | Attribute | Default | Description |
  * | --------: | :-----: | :---------- |
- * | `href` | none | A URL reference to a template gradient element. |
  * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
- * | `gradientTransform` | none | A transform to apply to the gradient. |
+ * | `gradientTransform` | (none) | A transform to apply to the gradient. |
  * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
+ * | `href`    | (none)  | A URL reference to a template gradient element. |
  */
 class SVGGradientElement : public SVGElement {
 protected:

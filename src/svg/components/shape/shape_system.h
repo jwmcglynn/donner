@@ -46,7 +46,7 @@ public:
   const ComputedPathComponent* createComputedPath(EntityHandle handle, const T& component,
                                                   const FontMetrics& fontMetrics,
                                                   std::vector<ParseError>* outWarnings) {
-    const ComputedStyleComponent& style = StyleSystem().computeStyle(handle);
+    const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
     return createComputedShapeWithStyle(handle, component, style, fontMetrics, outWarnings);
   }
 

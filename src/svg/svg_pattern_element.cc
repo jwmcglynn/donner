@@ -117,8 +117,13 @@ void SVGPatternElement::setPatternTransform(Transformd transform) {
   component.transform.set(CssTransform(transform), css::Specificity::Override());
 }
 
-void SVGPatternElement::setHref(const std::optional<RcString>& value) {
-  handle_.get_or_emplace<components::PatternComponent>().href = value;
+void SVGPatternElement::setHref(const std::optional<RcStringOrRef>& value) {
+  if (value) {
+    handle_.get_or_emplace<components::PatternComponent>().href = RcString(value.value());
+  } else {
+    handle_.get_or_emplace<components::PatternComponent>().href = std::nullopt;
+  }
+
   // Force the shadow tree to be regenerated.
   handle_.remove<components::ComputedShadowTreeComponent>();
 }
@@ -129,8 +134,8 @@ void SVGPatternElement::invalidateTransform() {
 
 void SVGPatternElement::computeTransform() const {
   auto& transform = handle_.get_or_emplace<components::TransformComponent>();
-  transform.computeWithPrecomputedStyle(handle_, components::StyleSystem().computeStyle(handle_),
-                                        FontMetrics(), nullptr);
+  transform.computeWithPrecomputedStyle(
+      handle_, components::StyleSystem().computeStyle(handle_, nullptr), FontMetrics(), nullptr);
 }
 
 }  // namespace donner::svg

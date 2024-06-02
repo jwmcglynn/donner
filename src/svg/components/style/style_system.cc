@@ -112,14 +112,15 @@ private:
 
 }  // namespace
 
-const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle) {
+const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
+                                                        std::vector<ParseError>* outWarnings) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
-  computePropertiesInto(handle, computedStyle);
+  computePropertiesInto(handle, computedStyle, outWarnings);
   return computedStyle;
 }
 
-void StyleSystem::computePropertiesInto(EntityHandle handle,
-                                        ComputedStyleComponent& computedStyle) {
+void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
+                                        std::vector<ParseError>* outWarnings) {
   if (computedStyle.properties) {
     return;  // Already computed.
   }
@@ -146,7 +147,11 @@ void StyleSystem::computePropertiesInto(EntityHandle handle,
               rule.selector.matches(ShadowedElementAdapter(registry, handle.entity(), dataEntity));
           match) {
         for (const auto& declaration : rule.declarations) {
-          properties.parseProperty(declaration, match.specificity);
+          if (auto error = properties.parseProperty(declaration, match.specificity)) {
+            if (outWarnings) {
+              outWarnings->push_back(std::move(error.value()));
+            }
+          }
         }
       }
     }
@@ -155,7 +160,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle,
   // Inherit from parent.
   if (const Entity parent = handle.get<TreeComponent>().parent(); parent != entt::null) {
     auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
-    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent);
+    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, outWarnings);
 
     // <pattern> elements can't inherit 'fill' or 'stroke' or it creates recursion in the shadow
     // tree.
@@ -194,10 +199,9 @@ void StyleSystem::computePropertiesInto(EntityHandle handle,
       // TODO: This is a strange dependency inversion, where ComputedStyleComponent depends on
       // SizedElementComponent which depends on ComputedStyleComponent to calculate the viewbox.
       // Split the computed viewbox into a different component?
-      // TODO: Pass outWarnings?
       const ComputedSizedElementComponent& computedSizedElement =
           LayoutSystem().createComputedSizedElementComponentWithStyle(handle, computedStyle,
-                                                                      FontMetrics(), nullptr);
+                                                                      FontMetrics(), outWarnings);
       computedStyle.viewbox = computedSizedElement.bounds;
     }
   } else {
@@ -207,7 +211,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle,
   }
 }
 
-void StyleSystem::computeAllStyles(Registry& registry) {
+void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings) {
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating
   // computed style components also creates the parents, and we can't modify the component list
   // while iterating it.
@@ -218,22 +222,23 @@ void StyleSystem::computeAllStyles(Registry& registry) {
 
   // Compute the styles for all elements.
   for (auto entity : view) {
-    StyleSystem().computeStyle(EntityHandle(registry, entity));
+    StyleSystem().computeStyle(EntityHandle(registry, entity), outWarnings);
   }
 }
 
-void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities) {
+void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
+                                   std::vector<ParseError>* outWarnings) {
   for (Entity entity : entities) {
-    StyleSystem().computeStyle(EntityHandle(registry, entity));
+    StyleSystem().computeStyle(EntityHandle(registry, entity), outWarnings);
   }
 }
 
-void StyleSystem::applyStyleToLayout(EntityHandle handle) {
+void StyleSystem::applyStyleToLayout(EntityHandle handle, std::vector<ParseError>* outWarnings) {
   auto& style = handle.get<ComputedStyleComponent>();
-  computePropertiesInto(handle, style);
+  computePropertiesInto(handle, style, outWarnings);
 
   LayoutSystem().createComputedSizedElementComponentWithStyle(handle, style, FontMetrics(),
-                                                              nullptr);
+                                                              outWarnings);
 }
 
 }  // namespace donner::svg::components

@@ -10,7 +10,7 @@
 
 namespace donner::svg {
 
-// clang-format on
+// clang-format off
 /**
  * @page xml_svg '<svg>'
  * @ingroup elements_structural
@@ -37,7 +37,7 @@ namespace donner::svg {
  * | `width`   | `0`     | Width of the SVG viewport. |
  * | `height`  | `0`     | Height of the SVG viewport. |
  * | `viewBox` | (none)  | Rectangle in userspace that the SVG viewport is mapped to. |
- * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the SVG viewport to fit the SVG content.
+ * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the SVG viewport to fit the SVG content. |
  * | `transform` | (none) | Transformation matrix to apply to SVG content. |
  */
 
@@ -57,10 +57,10 @@ namespace donner::svg {
  * | `width`   | `0`     | Width of the SVG viewport. |
  * | `height`  | `0`     | Height of the SVG viewport. |
  * | `viewBox` | (none)  | Rectangle in userspace that the SVG viewport is mapped to. |
- * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the SVG viewport to fit the SVG content.
+ * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the SVG viewport to fit the SVG content. |
  * | `transform` | (none) | Transformation matrix to apply to SVG content. |
  */
-// clang-format off
+// clang-format on
 class SVGSVGElement : public SVGGraphicsElement {
   friend class SVGDocument;
 

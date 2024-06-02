@@ -14,16 +14,46 @@ namespace donner::svg::components {
  */
 class StyleSystem {
 public:
-  const ComputedStyleComponent& computeStyle(EntityHandle handle);
+  /**
+   * Compute the style for the given entity handle, applying the CSS cascade and inheritance rules.
+   *
+   * @param handle Entity handle to compute the style for
+   * @param outWarnings Containing any warnings found
+   * @returns Computed style component for the entity
+   */
+  const ComputedStyleComponent& computeStyle(EntityHandle handle,
+                                             std::vector<ParseError>* outWarnings);
 
-  void applyStyleToLayout(EntityHandle handle);
+  /**
+   * Updates \ref LayoutSystem with computed style information, creating \ref
+   * ComputedSizedElementComponent for the given entity.
+   *
+   * @param handle Entity handle to compute the style for
+   * @param outWarnings Containing any warnings found
+   */
+  void applyStyleToLayout(EntityHandle handle, std::vector<ParseError>* outWarnings);
 
-  void computeAllStyles(Registry& registry);
+  /**
+   * Computes the style for all entities in the registry.
+   *
+   * @param registry Registry to compute the styles, used to query for all entities in the tree.
+   * @param outWarnings Containing any warnings found
+   */
+  void computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings);
 
-  void computeStylesFor(Registry& registry, std::span<const Entity> entities);
+  /**
+   * Computes the style for the given entities in the registry.
+   *
+   * @param registry Registry containing the entities
+   * @param entities Entities to compute
+   * @param outWarnings Containing any warnings found
+   */
+  void computeStylesFor(Registry& registry, std::span<const Entity> entities,
+                        std::vector<ParseError>* outWarnings);
 
 private:
-  void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle);
+  void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
+                             std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components
