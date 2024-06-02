@@ -7,59 +7,7 @@
 
 namespace donner::svg::components {
 
-void PatternComponent::compute(EntityHandle handle) {
-  handle.get_or_emplace<ComputedPatternComponent>().initialize(handle);
-}
-
-void ComputedPatternComponent::initialize(EntityHandle handle) {
-  if (initialized) {
-    return;
-  }
-
-  initialized = true;
-
-  Registry& registry = *handle.registry();
-
-  {
-    std::vector<Entity> inheritanceChain;
-    inheritanceChain.push_back(handle);
-
-    // If there's an href, first fill the computed component with defaults from that.
-    {
-      RecursionGuard guard;
-
-      EntityHandle current = handle;
-      while (const auto* ref = current.try_get<EvaluatedReferenceComponent<PatternComponent>>()) {
-        if (guard.hasRecursion(ref->target)) {
-          // TODO: Propagate warning.
-          // Note that in the case of recursion, we simply stop evaluating the inheritance instead
-          // of treating the gradient as invalid.
-          break;
-        }
-
-        guard.add(ref->target);
-
-        inheritanceChain.push_back(ref->target);
-        current = ref->target;
-      }
-    }
-
-    // Iterate over the inheritance chain backwards and compute.
-    EntityHandle base;
-    for (auto it = inheritanceChain.rbegin(); it != inheritanceChain.rend(); ++it) {
-      EntityHandle cur = EntityHandle(registry, *it);
-
-      auto& curComputed = cur.get_or_emplace<ComputedPatternComponent>();
-      curComputed.initialize(cur);
-
-      inheritAttributes(cur, base);
-
-      base = cur;
-    }
-  }
-}
-
-void ComputedPatternComponent::inheritAttributes(EntityHandle handle, EntityHandle base) {
+void ComputedPatternComponent::resolveAndInheritAttributes(EntityHandle handle, EntityHandle base) {
   if (base) {
     if (auto* computedBase = base.try_get<ComputedPatternComponent>()) {
       patternUnits = computedBase->patternUnits;

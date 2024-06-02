@@ -1,0 +1,10 @@
+/**
+@defgroup ecs_systems ECS Systems
+
+Systems are the core of the ECS architecture. They contain the logic and are responsible
+for updating the components of entities.
+
+- Systems contain logic and interact with components.
+- Components are the data layer and contain the state, but no logic.
+
+*/

@@ -32,7 +32,7 @@ struct GradientComponent {
 };
 
 /**
- * Created by \ref InstantiateGradientComponents during render tree instantiation.
+ * Created by \ref PaintSystem during render tree instantiation.
  *
  * - Resolves the inheritance hierarchy from \ref GradientComponent::href
  * - Collects gradient stop information from \ref xml_stop child elements into \ref

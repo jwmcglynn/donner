@@ -18,8 +18,6 @@ struct PatternComponent {
   std::optional<PatternUnits> patternUnits;
   std::optional<PatternContentUnits> patternContentUnits;
   std::optional<Reference> href;
-
-  void compute(EntityHandle handle);
 };
 
 struct ComputedPatternComponent {
@@ -27,9 +25,7 @@ struct ComputedPatternComponent {
   PatternUnits patternUnits = PatternUnits::Default;
   PatternContentUnits patternContentUnits = PatternContentUnits::Default;
 
-  void initialize(EntityHandle handle);
-
-  void inheritAttributes(EntityHandle handle, EntityHandle base = EntityHandle());
+  void resolveAndInheritAttributes(EntityHandle handle, EntityHandle base = EntityHandle());
 };
 
 }  // namespace donner::svg::components

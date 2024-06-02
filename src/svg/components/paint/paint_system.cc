@@ -52,7 +52,7 @@ void PaintSystem::instantiateAllComputedComponents(Registry& registry,
   // Should instantiate <stop> before gradients.
   for (auto view = registry.view<StopComponent, ComputedStyleComponent>(); auto entity : view) {
     auto [stop, style] = view.get(entity);
-    createComputedTypeWithStyle(EntityHandle(registry, entity), stop, style, outWarnings);
+    createComputedStopWithStyle(EntityHandle(registry, entity), stop, style, outWarnings);
   }
 
   // Create ComputedGradientComponent for all entities in the registry that have a GradientComponent
@@ -60,10 +60,9 @@ void PaintSystem::instantiateAllComputedComponents(Registry& registry,
     std::ignore = registry.emplace_or_replace<ComputedGradientComponent>(entity);
   }
 
-  for (auto view = registry.view<GradientComponent, ComputedStyleComponent>(); auto entity : view) {
-    auto [computedGradient, style] = view.get(entity);
-    createComputedTypeWithStyle(EntityHandle(registry, entity), computedGradient, style,
-                                outWarnings);
+  for (auto view = registry.view<ComputedGradientComponent>(); auto entity : view) {
+    auto [computedGradient] = view.get(entity);
+    initializeComputedGradient(EntityHandle(registry, entity), computedGradient, outWarnings);
   }
 
   // Create ComputedPatternComponent for all entities in the registry that have a PatternComponent
@@ -73,7 +72,7 @@ void PaintSystem::instantiateAllComputedComponents(Registry& registry,
 
   for (auto view = registry.view<ComputedPatternComponent>(); auto entity : view) {
     auto [computedPattern] = view.get(entity);
-    computedPattern.initialize(EntityHandle(registry, entity));
+    initializeComputedPattern(EntityHandle(registry, entity), computedPattern, outWarnings);
   }
 }
 
@@ -97,33 +96,7 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
   // 1. Inherit attributes following the `href` attribute inheritance chain.
   //
   {
-    std::vector<Entity> inheritanceChain;
-    inheritanceChain.push_back(handle);
-
-    // If there's an href, first fill the computed component with defaults from that.
-    {
-      RecursionGuard guard;
-
-      EntityHandle current = handle;
-      while (const auto* ref = current.try_get<EvaluatedReferenceComponent<GradientComponent>>()) {
-        if (guard.hasRecursion(ref->target)) {
-          if (outWarnings) {
-            ParseError err;
-            err.reason = "Circular gradient inheritance detected";
-            outWarnings->push_back(err);
-          }
-
-          // Note that in the case of recursion, we simply stop evaluating the inheritance instead
-          // of treating the gradient as invalid.
-          break;
-        }
-
-        guard.add(ref->target);
-
-        inheritanceChain.push_back(ref->target);
-        current = ref->target;
-      }
-    }
+    std::vector<Entity> inheritanceChain = getInheritanceChain(handle, outWarnings);
 
     // Iterate over the inheritance chain backwards to propagate attributes from base -> current.
     EntityHandle base;
@@ -176,15 +149,70 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
   }
 }
 
-const ComputedGradientComponent& PaintSystem::createComputedTypeWithStyle(
-    EntityHandle handle, const GradientComponent& gradient, const ComputedStyleComponent& style,
-    std::vector<ParseError>* outWarnings) {
-  ComputedGradientComponent& computedGradient = handle.get_or_emplace<ComputedGradientComponent>();
-  initializeComputedGradient(handle, computedGradient, outWarnings);
-  return computedGradient;
+void PaintSystem::initializeComputedPattern(EntityHandle handle,
+                                            ComputedPatternComponent& computedPattern,
+                                            std::vector<ParseError>* outWarnings) {
+  if (computedPattern.initialized) {
+    return;
+  }
+
+  computedPattern.initialized = true;
+
+  Registry& registry = *handle.registry();
+
+  //
+  // 1. Inherit attributes following the `href` attribute inheritance chain.
+  //
+  std::vector<Entity> inheritanceChain = getInheritanceChain(handle, outWarnings);
+
+  // Iterate over the inheritance chain backwards to propagate attributes from base -> current.
+  EntityHandle base;
+  for (auto it = inheritanceChain.rbegin(); it != inheritanceChain.rend(); ++it) {
+    EntityHandle cur = EntityHandle(registry, *it);
+
+    auto& curComputed = cur.get_or_emplace<ComputedPatternComponent>();
+    initializeComputedPattern(cur, curComputed, outWarnings);
+
+    computedPattern.resolveAndInheritAttributes(cur, base);
+
+    base = cur;
+  }
 }
 
-const ComputedStopComponent& PaintSystem::createComputedTypeWithStyle(
+std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,
+                                                     std::vector<ParseError>* outWarnings) {
+  std::vector<Entity> inheritanceChain;
+  inheritanceChain.push_back(handle);
+
+  // If there's an href, first fill the computed component with defaults from that.
+  {
+    RecursionGuard guard;
+
+    EntityHandle current = handle;
+    while (const auto* ref = current.try_get<EvaluatedReferenceComponent<PaintSystem>>()) {
+      if (guard.hasRecursion(ref->target)) {
+        if (outWarnings) {
+          ParseError err;
+          err.reason = "Circular paint inheritance detected";
+          outWarnings->push_back(err);
+        }
+
+        // Note that in the case of recursion, we simply stop evaluating the inheritance instead
+        // of treating the gradient as invalid.
+        break;
+      }
+
+      guard.add(ref->target);
+
+      inheritanceChain.push_back(ref->target);
+      current = ref->target;
+    }
+  }
+
+  return inheritanceChain;
+}
+
+const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
     EntityHandle handle, const StopComponent& stop, const ComputedStyleComponent& style,
     std::vector<ParseError>* outWarnings) {
   return handle.emplace_or_replace<ComputedStopComponent>(
@@ -203,8 +231,8 @@ void PaintSystem::createGradientShadowTrees(Registry& registry,
       if (auto resolvedReference = gradient.href.value().resolve(registry)) {
         const EntityHandle resolvedHandle = resolvedReference.value().handle;
         if (resolvedHandle.all_of<GradientComponent>()) {
-          registry.emplace_or_replace<EvaluatedReferenceComponent<GradientComponent>>(
-              entity, resolvedHandle);
+          registry.emplace_or_replace<EvaluatedReferenceComponent<PaintSystem>>(entity,
+                                                                                resolvedHandle);
 
           // If this element has no children, create a shadow tree to clone the `<stop>` elements
           // under this element.
@@ -240,8 +268,8 @@ void PaintSystem::createPatternShadowTrees(Registry& registry,
       if (auto resolvedReference = pattern.href.value().resolve(registry)) {
         const EntityHandle resolvedHandle = resolvedReference.value().handle;
         if (resolvedHandle.all_of<PatternComponent>()) {
-          registry.emplace_or_replace<EvaluatedReferenceComponent<PatternComponent>>(
-              entity, resolvedHandle);
+          registry.emplace_or_replace<EvaluatedReferenceComponent<PaintSystem>>(entity,
+                                                                                resolvedHandle);
 
           if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
             registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(pattern.href->href);

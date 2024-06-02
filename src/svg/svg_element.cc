@@ -286,7 +286,7 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
 
 const PropertyRegistry& SVGElement::getComputedStyle() const {
   const components::ComputedStyleComponent& computedStyle =
-      components::StyleSystem().computeProperties(handle_);
+      components::StyleSystem().computeStyle(handle_);
   return computedStyle.properties.value();
 }
 

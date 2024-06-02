@@ -129,8 +129,8 @@ void SVGPatternElement::invalidateTransform() {
 
 void SVGPatternElement::computeTransform() const {
   auto& transform = handle_.get_or_emplace<components::TransformComponent>();
-  transform.computeWithPrecomputedStyle(
-      handle_, components::StyleSystem().computeProperties(handle_), FontMetrics(), nullptr);
+  transform.computeWithPrecomputedStyle(handle_, components::StyleSystem().computeStyle(handle_),
+                                        FontMetrics(), nullptr);
 }
 
 }  // namespace donner::svg

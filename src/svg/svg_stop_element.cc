@@ -50,16 +50,15 @@ double SVGStopElement::stopOpacity() const {
 
 css::Color SVGStopElement::computedStopColor() const {
   // TODO: Cache the result so this doesn't need to recompute?
-  components::PaintSystem().createComputedType(handle_,
-                                               handle_.get_or_emplace<components::StopComponent>());
-
-  return handle_.get<components::ComputedStopComponent>().properties.stopColor.getRequired();
+  const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
+      handle_, handle_.get_or_emplace<components::StopComponent>());
+  return computed.properties.stopColor.getRequired();
 }
 
 double SVGStopElement::computedStopOpacity() const {
-  components::PaintSystem().createComputedType(handle_,
-                                               handle_.get_or_emplace<components::StopComponent>());
-  return handle_.get<components::ComputedStopComponent>().properties.stopOpacity.getRequired();
+  const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
+      handle_, handle_.get_or_emplace<components::StopComponent>());
+  return computed.properties.stopOpacity.getRequired();
 }
 
 void SVGStopElement::invalidate() const {

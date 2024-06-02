@@ -43,7 +43,7 @@ public:
       : registry_(registry), verbose_(verbose) {}
 
   /**
-   * Traverse a tree, instanting each entity in the tree.
+   * Traverse a tree, instantiating each entity in the tree.
    *
    * @param transform The parent transform to apply to the entity.
    * @param treeEntity Current entity in the tree or shadow tree.
@@ -250,23 +250,6 @@ private:
   ContextPaintServers contextPaintServers_;
 };
 
-// TODO: Make this a concept
-template <typename Iterator>
-void ComputeStyles(Registry& registry, Iterator begin, Iterator end) {
-  // Create placeholder ComputedStyleComponents for all elements in the range, since creating
-  // computed style components also creates the parents, and we can't modify the component list
-  // while iterating it.
-  for (Iterator it = begin; it != end; ++it) {
-    // TODO: Can this be done with `insert(begin, end)` if some components already exist?
-    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(*it);
-  }
-
-  // Compute the styles for all elements.
-  for (Iterator it = begin; it != end; ++it) {
-    StyleSystem().computeProperties(EntityHandle(registry, *it));
-  }
-}
-
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
                                 const PaintServer& paint, std::vector<ParseError>* outWarnings) {
   if (paint.is<PaintServer::ElementReference>()) {
@@ -312,10 +295,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     }
   }
 
-  {
-    auto treeEntities = registry_.view<TreeComponent>();
-    ComputeStyles(registry_, treeEntities.begin(), treeEntities.end());
-  }
+  StyleSystem().computeAllStyles(registry_);
 
   // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
   // after those styles are evaluated, and after which we need to compute the styles for that subset
@@ -350,7 +330,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
           // Apply styles to the tree.
           const std::span<const Entity> shadowEntities =
               computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
-          ComputeStyles(registry_, shadowEntities.begin(), shadowEntities.end());
+          StyleSystem().computeStylesFor(registry_, shadowEntities);
         }
       } else if (outWarnings) {
         // We had a href but it failed to resolve.

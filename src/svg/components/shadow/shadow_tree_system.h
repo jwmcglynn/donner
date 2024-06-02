@@ -16,6 +16,14 @@
 
 namespace donner::svg::components {
 
+/**
+ * Instantiates shadow trees for elements that are not part of the main render graph, such as
+ * \ref xml_use and \ref xml_pattern elements.
+ *
+ * @ingroup ecs_systems
+ * @see https://www.w3.org/TR/SVG2/struct.html#UseShadowTree
+ * @see https://www.w3.org/TR/SVG2/pservers.html#PaintServerTemplates
+ */
 class ShadowTreeSystem {
 public:
   /**

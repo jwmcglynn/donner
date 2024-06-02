@@ -112,7 +112,7 @@ private:
 
 }  // namespace
 
-const ComputedStyleComponent& StyleSystem::computeProperties(EntityHandle handle) {
+const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
   computePropertiesInto(handle, computedStyle);
   return computedStyle;
@@ -204,6 +204,27 @@ void StyleSystem::computePropertiesInto(EntityHandle handle,
     // Convert properties to relative transforms.
     // TODO: Set font metrics from properties.
     computedStyle.properties->resolveUnits(computedStyle.viewbox.value(), FontMetrics());
+  }
+}
+
+void StyleSystem::computeAllStyles(Registry& registry) {
+  // Create placeholder ComputedStyleComponents for all elements in the range, since creating
+  // computed style components also creates the parents, and we can't modify the component list
+  // while iterating it.
+  auto view = registry.view<TreeComponent>();
+  for (auto entity : view) {
+    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
+  }
+
+  // Compute the styles for all elements.
+  for (auto entity : view) {
+    StyleSystem().computeStyle(EntityHandle(registry, entity));
+  }
+}
+
+void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities) {
+  for (Entity entity : entities) {
+    StyleSystem().computeStyle(EntityHandle(registry, entity));
   }
 }
 

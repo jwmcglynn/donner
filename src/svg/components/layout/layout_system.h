@@ -11,6 +11,13 @@
 
 namespace donner::svg::components {
 
+/**
+ * Handles layout and bounds calculations for SVG elements. This system is responsible for
+ * calculating the the document size, viewboxes, and the bounds for elements.
+ *
+ * @ingroup ecs_systems
+ * @see https://www.w3.org/TR/SVG2/coords.html
+ */
 class LayoutSystem {
 public:
   /// @name Regular properties
