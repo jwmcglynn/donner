@@ -12,7 +12,8 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_pattern '<pattern>'
+ * @page xml_pattern '<pattern>'
+ * @ingroup elements_paint_servers
  *
  * Defines a paint server containing a repeated pattern, which is tiled to fill the area.
  *

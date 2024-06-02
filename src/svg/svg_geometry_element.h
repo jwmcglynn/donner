@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup basic_shapes Basic Shapes
+ * @defgroup basic_shapes Basic shapes
  *
  * \details Basic shapes are defined by a combination of straight lines and curves, and may be
  * stroked, filled, or used as a clipping path.

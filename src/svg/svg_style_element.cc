@@ -10,9 +10,9 @@ SVGStyleElement SVGStyleElement::Create(SVGDocument& document) {
   return SVGStyleElement(CreateEntity(registry, Tag, Type));
 }
 
-void SVGStyleElement::setType(RcString type) {
+void SVGStyleElement::setType(const RcStringOrRef& type) {
   auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
-  stylesheetComponent.type = type;
+  stylesheetComponent.type = RcString(type);
 }
 
 void SVGStyleElement::setContents(std::string_view style) {

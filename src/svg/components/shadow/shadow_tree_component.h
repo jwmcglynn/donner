@@ -1,9 +1,8 @@
 #pragma once
 /// @file
 
-#include <span>
-
 #include "src/base/rc_string.h"
+#include "src/base/rc_string_or_ref.h"
 #include "src/svg/graph/reference.h"
 #include "src/svg/registry/registry.h"
 
@@ -17,7 +16,7 @@ public:
     return mainReference_ ? std::make_optional(mainReference_->href) : std::nullopt;
   }
 
-  void setMainHref(RcString href) { mainReference_ = Reference(href); }
+  void setMainHref(const RcStringOrRef& href) { mainReference_ = Reference(RcString(href)); }
 
   std::optional<ResolvedReference> mainTargetEntity(Registry& registry) const {
     return mainReference_ ? mainReference_->resolve(registry) : std::nullopt;

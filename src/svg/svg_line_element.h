@@ -8,7 +8,7 @@ namespace donner::svg {
 
 /**
  * @page xml_line '<line>'
- * @ingroup basic_shapes
+ * @ingroup elements_basic_shapes
  *
  * Creates a line between two points, using the `x1`, `y1`, `x2`, and `y2` attributes.
  *

@@ -25,9 +25,9 @@ struct StylesheetComponent {
   /**
    * Parse the contents of the \ref xml_style element.
    *
-   * @param str The contents of the `<style>` element.
+   * @param str The contents of the \ref xml_style element.
    */
-  void parseStylesheet(std::string_view str) { stylesheet = css::CSS::ParseStylesheet(str); }
+  void parseStylesheet(const RcStringOrRef& str) { stylesheet = css::CSS::ParseStylesheet(str); }
 };
 
 }  // namespace donner::svg::components

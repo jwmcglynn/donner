@@ -1,0 +1,12 @@
+/**
+@defgroup elements_paint_servers Elements: Paint servers
+
+\details Paint servers are elements that define a color or a pattern that can be used to fill or
+stroke shapes. The following paint servers are supported:
+
+- \ref xml_linearGradient
+- \ref xml_radialGradient
+- \ref xml_pattern
+
+- SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html
+*/

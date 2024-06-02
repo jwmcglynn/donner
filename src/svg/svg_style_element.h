@@ -1,11 +1,12 @@
 #pragma once
 /// @file
 
-#include "src/base/rc_string.h"
+#include "src/base/rc_string_or_ref.h"
 #include "src/svg/svg_element.h"
 
 namespace donner::svg {
 
+// clang-format off
 /**
  * @defgroup xml_style '<style>'
  *
@@ -42,13 +43,15 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * TODO: Document attributes
- * | Attribute | Default | Description  |
- * | --------: | :-----: | :----------- |
- * | `points`  | (none)  | List of points that make up the polygon, see \ref poly_points. |
+ * | Attribute | Default    | Description  |
+ * | --------: | :--------: | :----------- |
+ * | `type`    | `text/css` | Type of the stylesheets contents, currently only `text/css` is supported. |
+ * | `media`   | (empty)    | [unsupported] Specifies a media query that must be matched for the style sheet to apply. |
+ * | `title`   | (empty)    | [unsupported] Specifies a title for the style sheet, which is used when selecting between alternate style sheets. |
+ *
+ * Note that `type` is defined to be a media type [[rfc2046](https://www.ietf.org/rfc/rfc2046.txt)].
  */
 
-// clang-format off
 /**
  * DOM object for a \ref xml_style element, which contains a CSS stylesheet.
  *
@@ -100,14 +103,13 @@ public:
    *
    * @param type Stylesheet type.
    */
-  void setType(RcString type);
+  void setType(const RcStringOrRef& type);
 
   /**
    * Set the contents of the stylesheet.
    *
    * @param style Stylesheet contents (CSS text).
    */
-  // TODO: Switch to RcStringOrRef
   void setContents(std::string_view style);
 
   /// Return true if the stylesheet is of type `text/css`.

@@ -8,7 +8,7 @@ namespace donner::svg {
 
 /**
  * @page xml_circle '<circle>'
- * @ingroup basic_shapes
+ * @ingroup elements_basic_shapes
  *
  * Creates a circle centered on `cx`, `cy`, with radius `r`.
  *
