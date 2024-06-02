@@ -1,14 +1,14 @@
 #pragma once
 /// @file
 
-#include "src/svg/components/gradient/gradient_component.h"
-#include "src/svg/components/gradient/stop_component.h"
+#include "src/svg/components/paint/gradient_component.h"
+#include "src/svg/components/paint/stop_component.h"
 #include "src/svg/components/style/computed_style_component.h"
 #include "src/svg/components/style/style_system.h"
 
 namespace donner::svg::components {
 
-class GradientSystem {
+class PaintSystem {
 public:
   template <typename T>
   void createComputedType(EntityHandle handle, const T& component) {
@@ -29,6 +29,31 @@ public:
    * @param outWarnings Containing any warnings found
    */
   void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
+
+  void createShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings);
+
+private:
+  /**
+   * Initialize \ref computedGradient with the given entity handle. This method must be called after
+   * construction to complete initialization.
+   *
+   * This method:
+   * - Looks up \ref GradientComponent and \ref LinearGradientComponent components attached to the
+   *   entity.
+   * - Resolves the href reference and inherits attributes from the referenced gradient element.
+   * - Aggregates \ref xml_stop information into the \ref stops field.
+   */
+  void initializeComputedGradient(EntityHandle handle, ComputedGradientComponent& computedGradient,
+                                  std::vector<ParseError>* outWarnings);
+
+  const ComputedGradientComponent& createComputedTypeWithStyle(
+      EntityHandle handle, const GradientComponent& gradient, const ComputedStyleComponent& style,
+      std::vector<ParseError>* outWarnings);
+
+  const ComputedStopComponent& createComputedTypeWithStyle(EntityHandle handle,
+                                                           const StopComponent& stop,
+                                                           const ComputedStyleComponent& style,
+                                                           std::vector<ParseError>* outWarnings);
 
   /**
    * Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in
@@ -79,28 +104,7 @@ public:
    */
   void createGradientShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings);
 
-private:
-  /**
-   * Initialize \ref computedGradient with the given entity handle. This method must be called after
-   * construction to complete initialization.
-   *
-   * This method:
-   * - Looks up \ref GradientComponent and \ref LinearGradientComponent components attached to the
-   *   entity.
-   * - Resolves the href reference and inherits attributes from the referenced gradient element.
-   * - Aggregates \ref xml_stop information into the \ref stops field.
-   */
-  void initializeComputedGradient(EntityHandle handle, ComputedGradientComponent& computedGradient,
-                                  std::vector<ParseError>* outWarnings);
-
-  const ComputedGradientComponent& createComputedTypeWithStyle(
-      EntityHandle handle, const GradientComponent& gradient, const ComputedStyleComponent& style,
-      std::vector<ParseError>* outWarnings);
-
-  const ComputedStopComponent& createComputedTypeWithStyle(EntityHandle handle,
-                                                           const StopComponent& stop,
-                                                           const ComputedStyleComponent& style,
-                                                           std::vector<ParseError>* outWarnings);
+  void createPatternShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

@@ -32,8 +32,4 @@ struct ComputedPatternComponent {
   void inheritAttributes(EntityHandle handle, EntityHandle base = EntityHandle());
 };
 
-void EvaluateConditionalPatternShadowTrees(Registry& registry);
-
-void InstantiatePatternComponents(Registry& registry, std::vector<ParseError>* outWarnings);
-
 }  // namespace donner::svg::components

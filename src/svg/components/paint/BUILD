@@ -5,12 +5,14 @@ cc_library(
     srcs = [
         "gradient_component.cc",
         "linear_gradient_component.cc",
+        "pattern_component.cc",
         "radial_gradient_component.cc",
         "stop_component.cc",
     ],
     hdrs = [
         "gradient_component.h",
         "linear_gradient_component.h",
+        "pattern_component.h",
         "radial_gradient_component.h",
         "stop_component.h",
     ],
@@ -26,12 +28,12 @@ cc_library(
 )
 
 cc_library(
-    name = "gradient_system",
+    name = "paint_system",
     srcs = [
-        "gradient_system.cc",
+        "paint_system.cc",
     ],
     hdrs = [
-        "gradient_system.h",
+        "paint_system.h",
     ],
     visibility = [
         "//src/svg/components:__subpackages__",

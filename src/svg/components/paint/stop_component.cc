@@ -1,4 +1,4 @@
-#include "src/svg/components/gradient/stop_component.h"
+#include "src/svg/components/paint/stop_component.h"
 
 #include "src/css/parser/color_parser.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"

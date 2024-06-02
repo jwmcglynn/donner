@@ -1,4 +1,4 @@
-#include "src/svg/components/gradient/linear_gradient_component.h"
+#include "src/svg/components/paint/linear_gradient_component.h"
 
 #include "src/svg/properties/presentation_attribute_parsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 

@@ -10,14 +10,14 @@
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
 //
-#include "src/svg/components/gradient/gradient_component.h"
-#include "src/svg/components/gradient/linear_gradient_component.h"
-#include "src/svg/components/gradient/radial_gradient_component.h"
 #include "src/svg/components/id_component.h"  // For verbose logging.
 #include "src/svg/components/layout/layout_system.h"
 #include "src/svg/components/layout/sized_element_component.h"
+#include "src/svg/components/paint/gradient_component.h"
+#include "src/svg/components/paint/linear_gradient_component.h"
+#include "src/svg/components/paint/pattern_component.h"
+#include "src/svg/components/paint/radial_gradient_component.h"
 #include "src/svg/components/path_length_component.h"
-#include "src/svg/components/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"

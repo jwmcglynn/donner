@@ -1,12 +1,10 @@
 #include "src/svg/renderer/renderer_wasm_canvas.h"
 
-#include "src/svg/components/gradient/linear_gradient_component.h"
-#include "src/svg/components/gradient/radial_gradient_component.h"
 #include "src/svg/components/id_component.h"  // For verbose logging.
 #include "src/svg/components/layout/layout_system.h"
 #include "src/svg/components/layout/sized_element_component.h"
+#include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/path_length_component.h"
-#include "src/svg/components/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/rendering_instance_component.h"

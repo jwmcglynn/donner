@@ -1,9 +1,9 @@
-#include "src/svg/components/gradient/gradient_component.h"
+#include "src/svg/components/paint/gradient_component.h"
 
 #include "src/base/math_utils.h"
 #include "src/svg/components/evaluated_reference_component.h"
-#include "src/svg/components/gradient/linear_gradient_component.h"
-#include "src/svg/components/gradient/radial_gradient_component.h"
+#include "src/svg/components/paint/linear_gradient_component.h"
+#include "src/svg/components/paint/radial_gradient_component.h"
 
 namespace donner::svg::components {
 

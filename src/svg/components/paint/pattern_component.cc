@@ -1,37 +1,11 @@
-#include "src/svg/components/pattern_component.h"
+#include "src/svg/components/paint/pattern_component.h"
 
-#include "src/base/math_utils.h"
 #include "src/svg/components/evaluated_reference_component.h"
-#include "src/svg/components/shadow/shadow_tree_component.h"
 #include "src/svg/components/tree_component.h"
 #include "src/svg/graph/recursion_guard.h"
-#include "src/svg/properties/presentation_attribute_parsing.h"
+#include "src/svg/properties/presentation_attribute_parsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
-
-namespace {
-
-/**
- * Returns true if the given component does not have any child content other than descriptive
- * elements, per https://www.w3.org/TR/SVG2/pservers.html#PaintServerTemplates
- *
- * @param handle Entity handle to check.
- * @return true if this element has no child content other than structural elements.
- */
-bool HasNoStructuralChildren(EntityHandle handle) {
-  const Registry& registry = *handle.registry();
-
-  const TreeComponent& tree = handle.get<TreeComponent>();
-  for (auto cur = tree.firstChild(); cur != entt::null;
-       cur = registry.get<TreeComponent>(cur).nextSibling()) {
-    // TODO: Detect <desc>, <metadata>, <title> elements.
-    return false;
-  }
-
-  return true;
-}
-
-}  // namespace
 
 void PatternComponent::compute(EntityHandle handle) {
   handle.get_or_emplace<ComputedPatternComponent>().initialize(handle);
@@ -101,39 +75,6 @@ void ComputedPatternComponent::inheritAttributes(EntityHandle handle, EntityHand
   }
   if (pattern.patternContentUnits) {
     patternContentUnits = pattern.patternContentUnits.value();
-  }
-}
-
-void EvaluateConditionalPatternShadowTrees(Registry& registry) {
-  for (auto view = registry.view<PatternComponent>(); auto entity : view) {
-    const auto& [pattern] = view.get(entity);
-
-    if (pattern.href) {
-      if (auto resolvedReference = pattern.href.value().resolve(registry)) {
-        const EntityHandle resolvedHandle = resolvedReference.value().handle;
-        if (resolvedHandle.all_of<PatternComponent>()) {
-          registry.emplace_or_replace<EvaluatedReferenceComponent<PatternComponent>>(
-              entity, resolvedHandle);
-
-          if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
-            registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(pattern.href->href);
-          }
-        } else {
-          // TODO: Propagate warning about mismatched element type.
-        }
-      }
-    }
-  }
-}
-
-void InstantiatePatternComponents(Registry& registry, std::vector<ParseError>* outWarnings) {
-  for (auto view = registry.view<PatternComponent>(); auto entity : view) {
-    std::ignore = registry.emplace_or_replace<ComputedPatternComponent>(entity);
-  }
-
-  for (auto view = registry.view<ComputedPatternComponent>(); auto entity : view) {
-    auto [computedPattern] = view.get(entity);
-    computedPattern.initialize(EntityHandle(registry, entity));
   }
 }
 

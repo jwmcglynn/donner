@@ -1,12 +1,12 @@
 #include "src/svg/components/rendering_context.h"
 
 #include "src/svg/components/document_context.h"
-#include "src/svg/components/gradient/gradient_component.h"
-#include "src/svg/components/gradient/gradient_system.h"
 #include "src/svg/components/id_component.h"
 #include "src/svg/components/layout/layout_system.h"
 #include "src/svg/components/layout/sized_element_component.h"
-#include "src/svg/components/pattern_component.h"
+#include "src/svg/components/paint/gradient_component.h"
+#include "src/svg/components/paint/paint_system.h"
+#include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/rendering_instance_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"
@@ -292,8 +292,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
 void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
-  GradientSystem().createGradientShadowTrees(registry_, outWarnings);
-  EvaluateConditionalPatternShadowTrees(registry_);
+  PaintSystem().createShadowTrees(registry_, outWarnings);
 
   // Instantiate shadow trees.
   for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
@@ -370,8 +369,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
   ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 
-  GradientSystem().instantiateAllComputedComponents(registry_, outWarnings);
-  InstantiatePatternComponents(registry_, outWarnings);
+  PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {

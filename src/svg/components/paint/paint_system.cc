@@ -1,7 +1,8 @@
-#include "src/svg/components/gradient/gradient_system.h"
+#include "src/svg/components/paint/paint_system.h"
 
 #include "src/svg/components/evaluated_reference_component.h"
-#include "src/svg/components/gradient/gradient_component.h"
+#include "src/svg/components/paint/gradient_component.h"
+#include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"
 #include "src/svg/components/shadow/shadow_tree_component.h"
 #include "src/svg/components/style/computed_style_component.h"
@@ -46,8 +47,8 @@ constexpr void ForEachShape(const F& f) {
 
 }  // namespace
 
-void GradientSystem::instantiateAllComputedComponents(Registry& registry,
-                                                      std::vector<ParseError>* outWarnings) {
+void PaintSystem::instantiateAllComputedComponents(Registry& registry,
+                                                   std::vector<ParseError>* outWarnings) {
   // Should instantiate <stop> before gradients.
   for (auto view = registry.view<StopComponent, ComputedStyleComponent>(); auto entity : view) {
     auto [stop, style] = view.get(entity);
@@ -64,51 +65,26 @@ void GradientSystem::instantiateAllComputedComponents(Registry& registry,
     createComputedTypeWithStyle(EntityHandle(registry, entity), computedGradient, style,
                                 outWarnings);
   }
-}
 
-// Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in the
-// registry
-void GradientSystem::createGradientShadowTrees(Registry& registry,
-                                               std::vector<ParseError>* outWarnings) {
-  for (auto view = registry.view<GradientComponent>(); auto entity : view) {
-    const auto& [gradient] = view.get(entity);
+  // Create ComputedPatternComponent for all entities in the registry that have a PatternComponent
+  for (auto view = registry.view<PatternComponent>(); auto entity : view) {
+    std::ignore = registry.emplace_or_replace<ComputedPatternComponent>(entity);
+  }
 
-    if (gradient.href) {
-      // Resolve the href to its entity and confirm its a gradient
-      if (auto resolvedReference = gradient.href.value().resolve(registry)) {
-        const EntityHandle resolvedHandle = resolvedReference.value().handle;
-        if (resolvedHandle.all_of<GradientComponent>()) {
-          registry.emplace_or_replace<EvaluatedReferenceComponent<GradientComponent>>(
-              entity, resolvedHandle);
-
-          // If this element has no children, create a shadow tree to clone the `<stop>` elements
-          // under this element.
-          //
-          // From https://www.w3.org/TR/SVG2/pservers.html#PaintServerTemplates
-          // > Furthermore, if the current element does not have any child content other than
-          // > descriptive elements, than the child content of the template element is cloned to
-          // > replace it.
-          if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
-            // Success: Create the shadow
-            registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(gradient.href->href);
-          }
-        } else {
-          if (outWarnings) {
-            ParseError err;
-            err.reason = "Gradient element href=\"" + gradient.href.value().href +
-                         "\" attribute points to a non-gradient element, inheritance "
-                         "ignored";
-            outWarnings->push_back(err);
-          }
-        }
-      }
-    }
+  for (auto view = registry.view<ComputedPatternComponent>(); auto entity : view) {
+    auto [computedPattern] = view.get(entity);
+    computedPattern.initialize(EntityHandle(registry, entity));
   }
 }
 
-void GradientSystem::initializeComputedGradient(EntityHandle handle,
-                                                ComputedGradientComponent& computedGradient,
-                                                std::vector<ParseError>* outWarnings) {
+void PaintSystem::createShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings) {
+  createGradientShadowTrees(registry, outWarnings);
+  createPatternShadowTrees(registry, outWarnings);
+}
+
+void PaintSystem::initializeComputedGradient(EntityHandle handle,
+                                             ComputedGradientComponent& computedGradient,
+                                             std::vector<ParseError>* outWarnings) {
   if (computedGradient.initialized) {
     return;
   }
@@ -200,7 +176,7 @@ void GradientSystem::initializeComputedGradient(EntityHandle handle,
   }
 }
 
-const ComputedGradientComponent& GradientSystem::createComputedTypeWithStyle(
+const ComputedGradientComponent& PaintSystem::createComputedTypeWithStyle(
     EntityHandle handle, const GradientComponent& gradient, const ComputedStyleComponent& style,
     std::vector<ParseError>* outWarnings) {
   ComputedGradientComponent& computedGradient = handle.get_or_emplace<ComputedGradientComponent>();
@@ -208,11 +184,80 @@ const ComputedGradientComponent& GradientSystem::createComputedTypeWithStyle(
   return computedGradient;
 }
 
-const ComputedStopComponent& GradientSystem::createComputedTypeWithStyle(
+const ComputedStopComponent& PaintSystem::createComputedTypeWithStyle(
     EntityHandle handle, const StopComponent& stop, const ComputedStyleComponent& style,
     std::vector<ParseError>* outWarnings) {
   return handle.emplace_or_replace<ComputedStopComponent>(
       stop.properties, style, style.properties->unparsedProperties, outWarnings);
+}
+
+// Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in the
+// registry
+void PaintSystem::createGradientShadowTrees(Registry& registry,
+                                            std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<GradientComponent>(); auto entity : view) {
+    const auto& [gradient] = view.get(entity);
+
+    if (gradient.href) {
+      // Resolve the href to its entity and confirm its a gradient
+      if (auto resolvedReference = gradient.href.value().resolve(registry)) {
+        const EntityHandle resolvedHandle = resolvedReference.value().handle;
+        if (resolvedHandle.all_of<GradientComponent>()) {
+          registry.emplace_or_replace<EvaluatedReferenceComponent<GradientComponent>>(
+              entity, resolvedHandle);
+
+          // If this element has no children, create a shadow tree to clone the `<stop>` elements
+          // under this element.
+          //
+          // From https://www.w3.org/TR/SVG2/pservers.html#PaintServerTemplates
+          // > Furthermore, if the current element does not have any child content other than
+          // > descriptive elements, than the child content of the template element is cloned to
+          // > replace it.
+          if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
+            // Success: Create the shadow
+            registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(gradient.href->href);
+          }
+        } else {
+          if (outWarnings) {
+            ParseError err;
+            err.reason = "Gradient element href=\"" + gradient.href.value().href +
+                         "\" attribute points to a non-gradient element, inheritance "
+                         "ignored";
+            outWarnings->push_back(err);
+          }
+        }
+      }
+    }
+  }
+}
+
+void PaintSystem::createPatternShadowTrees(Registry& registry,
+                                           std::vector<ParseError>* outWarnings) {
+  for (auto view = registry.view<PatternComponent>(); auto entity : view) {
+    const auto& [pattern] = view.get(entity);
+
+    if (pattern.href) {
+      if (auto resolvedReference = pattern.href.value().resolve(registry)) {
+        const EntityHandle resolvedHandle = resolvedReference.value().handle;
+        if (resolvedHandle.all_of<PatternComponent>()) {
+          registry.emplace_or_replace<EvaluatedReferenceComponent<PatternComponent>>(
+              entity, resolvedHandle);
+
+          if (HasNoStructuralChildren(EntityHandle(registry, entity))) {
+            registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(pattern.href->href);
+          }
+        } else {
+          if (outWarnings) {
+            ParseError err;
+            err.reason = "Pattern element href=\"" + pattern.href.value().href +
+                         "\" attribute points to a non-gradient element, inheritance "
+                         "ignored";
+            outWarnings->push_back(err);
+          }
+        }
+      }
+    }
+  }
 }
 
 }  // namespace donner::svg::components

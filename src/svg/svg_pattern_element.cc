@@ -1,7 +1,7 @@
 #include "src/svg/svg_pattern_element.h"
 
 #include "src/svg/components/layout/sized_element_component.h"
-#include "src/svg/components/pattern_component.h"
+#include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"

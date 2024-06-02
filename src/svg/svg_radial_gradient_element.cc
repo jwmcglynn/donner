@@ -1,6 +1,6 @@
 #include "src/svg/svg_radial_gradient_element.h"
 
-#include "src/svg/components/gradient/radial_gradient_component.h"
+#include "src/svg/components/paint/radial_gradient_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 

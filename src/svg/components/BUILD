@@ -36,7 +36,6 @@ cc_library(
     srcs = [
         "filter_component.cc",
         "filter_primitive_component.cc",
-        "pattern_component.cc",
         "stylesheet_component.cc",
         "transform_component.cc",
         "tree_component.cc",
@@ -49,7 +48,6 @@ cc_library(
         "filter_component.h",
         "filter_primitive_component.h",
         "path_length_component.h",
-        "pattern_component.h",
         "preserve_aspect_ratio_component.h",
         "rendering_behavior_component.h",
         "rendering_instance_component.h",
@@ -88,8 +86,8 @@ cc_library(
     ],
     deps = [
         ":components_core",
-        "//src/svg/components/gradient:gradient_system",
         "//src/svg/components/layout:layout_system",
+        "//src/svg/components/paint:paint_system",
         "//src/svg/components/shadow:components",
         "//src/svg/components/shadow:shadow_tree_system",
         "//src/svg/components/shape:shape_system",

@@ -1,6 +1,6 @@
 #include "src/svg/svg_gradient_element.h"
 
-#include "src/svg/components/gradient/gradient_component.h"
+#include "src/svg/components/paint/gradient_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"
 #include "src/svg/components/shadow/shadow_tree_component.h"
 

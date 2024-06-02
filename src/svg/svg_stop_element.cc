@@ -1,7 +1,7 @@
 #include "src/svg/svg_stop_element.h"
 
-#include "src/svg/components/gradient/gradient_system.h"
-#include "src/svg/components/gradient/stop_component.h"
+#include "src/svg/components/paint/paint_system.h"
+#include "src/svg/components/paint/stop_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
 #include "src/svg/svg_document.h"
 
@@ -50,15 +50,15 @@ double SVGStopElement::stopOpacity() const {
 
 css::Color SVGStopElement::computedStopColor() const {
   // TODO: Cache the result so this doesn't need to recompute?
-  components::GradientSystem().createComputedType(
-      handle_, handle_.get_or_emplace<components::StopComponent>());
+  components::PaintSystem().createComputedType(handle_,
+                                               handle_.get_or_emplace<components::StopComponent>());
 
   return handle_.get<components::ComputedStopComponent>().properties.stopColor.getRequired();
 }
 
 double SVGStopElement::computedStopOpacity() const {
-  components::GradientSystem().createComputedType(
-      handle_, handle_.get_or_emplace<components::StopComponent>());
+  components::PaintSystem().createComputedType(handle_,
+                                               handle_.get_or_emplace<components::StopComponent>());
   return handle_.get<components::ComputedStopComponent>().properties.stopOpacity.getRequired();
 }
 
