@@ -8,7 +8,7 @@
 
 namespace donner::svg {
 
-SVGDocument instantiateSubtree(std::string_view str);
+SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& options = {});
 
 template <typename ElementT = SVGElement>
 struct ParsedFragment {

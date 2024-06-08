@@ -205,6 +205,7 @@ public:
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
         } else if (instance.resolvedFilter) {
           SkPaint filterPaint;
+          filterPaint.setAntiAlias(true);
           createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
 
           // TODO: Calculate the bounds.
@@ -285,10 +286,10 @@ public:
   }
 
   Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewbox,
-                                 const Transformd& transform, bool numbersArePercent) {
-    return transform.transformPosition(Vector2d(
+                                 bool numbersArePercent) {
+    return Vector2d(
         toPercent(x, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::X),
-        toPercent(y, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::Y)));
+        toPercent(y, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::Y));
   }
 
   static bool CircleContainsPoint(Vector2d center, double radius, Vector2d point) {
@@ -366,37 +367,43 @@ public:
     const int numStops = static_cast<int>(pos.size());
     if (numStops == 1) {
       SkPaint paint;
+      paint.setAntiAlias(true);
       paint.setColor(color[0]);
       return paint;
     }
 
+    // Transform applied to the gradient coordinates, and for radial gradients the focal point and
+    // radius.
+    const SkMatrix localMatrix = toSkiaMatrix(transform);
+
     if (const auto* linearGradient =
             target.try_get<components::ComputedLinearGradientComponent>()) {
-      const SkPoint points[] = {
-          toSkia(resolveGradientCoords(linearGradient->x1, linearGradient->y1, bounds, transform,
-                                       numbersArePercent)),
-          toSkia(resolveGradientCoords(linearGradient->x2, linearGradient->y2, bounds, transform,
-                                       numbersArePercent))};
+      const SkPoint points[] = {toSkia(resolveGradientCoords(linearGradient->x1, linearGradient->y1,
+                                                             bounds, numbersArePercent)),
+                                toSkia(resolveGradientCoords(linearGradient->x2, linearGradient->y2,
+                                                             bounds, numbersArePercent))};
 
       SkPaint paint;
       paint.setAntiAlias(true);
       paint.setShader(SkGradientShader::MakeLinear(points, color.data(), pos.data(), numStops,
-                                                   toSkia(computedGradient.spreadMethod)));
+                                                   toSkia(computedGradient.spreadMethod), 0,
+                                                   &localMatrix));
       return paint;
     } else {
       const auto& radialGradient = target.get<components::ComputedRadialGradientComponent>();
-      const Vector2d center = resolveGradientCoords(radialGradient.cx, radialGradient.cy, bounds,
-                                                    transform, numbersArePercent);
+      const Vector2d center =
+          resolveGradientCoords(radialGradient.cx, radialGradient.cy, bounds, numbersArePercent);
       const SkScalar radius = resolveGradientCoord(radialGradient.r, bounds, numbersArePercent);
 
       Vector2d focalCenter = resolveGradientCoords(radialGradient.fx.value_or(radialGradient.cx),
                                                    radialGradient.fy.value_or(radialGradient.cy),
-                                                   bounds, transform, numbersArePercent);
+                                                   bounds, numbersArePercent);
       const SkScalar focalRadius =
           resolveGradientCoord(radialGradient.fr, bounds, numbersArePercent);
 
       if (NearZero(radius)) {
         SkPaint paint;
+        paint.setAntiAlias(true);
         paint.setColor(color.back());
         return paint;
       }
@@ -424,13 +431,13 @@ public:
       SkPaint paint;
       paint.setAntiAlias(true);
       if (NearZero(focalRadius) && focalCenter == center) {
-        paint.setShader(SkGradientShader::MakeRadial(toSkia(center), radius, color.data(),
-                                                     pos.data(), numStops,
-                                                     toSkia(computedGradient.spreadMethod)));
+        paint.setShader(
+            SkGradientShader::MakeRadial(toSkia(center), radius, color.data(), pos.data(), numStops,
+                                         toSkia(computedGradient.spreadMethod), 0, &localMatrix));
       } else {
         paint.setShader(SkGradientShader::MakeTwoPointConical(
             toSkia(focalCenter), focalRadius, toSkia(center), radius, color.data(), pos.data(),
-            numStops, toSkia(computedGradient.spreadMethod)));
+            numStops, toSkia(computedGradient.spreadMethod), 0, &localMatrix));
       }
       return paint;
     }
@@ -507,10 +514,11 @@ public:
 
       renderer_.currentCanvas_ = renderer_.rootCanvas_;
 
-      // TODO: May need to transform content? Need to convert SkM44 to SkMatrix (3x3).
+      // Transform to apply to the pattern contents.
       const SkMatrix localMatrix = toSkiaMatrix(transform);
 
       SkPaint skPaint;
+      skPaint.setAntiAlias(true);
       skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
           SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix,
           &tileRect));
@@ -559,6 +567,7 @@ public:
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;
+      skPaint.setAntiAlias(true);
       skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(), fillOpacity)));
 
       drawPathFillWithSkPaint(path, skPaint, style);
@@ -643,6 +652,7 @@ public:
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;
+      skPaint.setAntiAlias(true);
       skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(),
                                                    static_cast<float>(strokeOpacity))));
 
@@ -741,6 +751,7 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
 }
 
 bool RendererSkia::save(const char* filename) {
+  assert(bitmap_.colorType() == kRGBA_8888_SkColorType);
   return RendererImageIO::writeRgbaPixelsToPngFile(filename, pixelData(), bitmap_.width(),
                                                    bitmap_.height());
 }
