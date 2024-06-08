@@ -332,13 +332,12 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     StyleElement, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-style",
-        {
-            {"e-style-004.svg", Params::Skip()},  // Not impl: Attribute matchers
-            {"e-style-012.svg", Params::Skip()},  // Not impl: <svg version="1.1">
-            {"e-style-014.svg", Params::Skip()},  // Not impl: CSS @import
-        })),
+    ValuesIn(getTestsWithPrefix("e-style",
+                                {
+                                    {"e-style-012.svg",
+                                     Params::Skip()},  // Not impl: <svg version="1.1">
+                                    {"e-style-014.svg", Params::Skip()},  // Not impl: CSS @import
+                                })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
