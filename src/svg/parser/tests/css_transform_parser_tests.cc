@@ -309,7 +309,11 @@ TEST(TransformParserCss, ScaleY_ParseErrors) {
 }
 
 TEST(TransformParserCss, Rotate) {
+  constexpr double kInvSqrt2(0.70710678118);
+
   EXPECT_THAT(parseAsCss("rotate(0)"), ParseResultIs(TransformIsIdentity()));
+  EXPECT_THAT(parseAsCss("rotate(45deg)"),
+              ParseResultIs(TransformIs(kInvSqrt2, kInvSqrt2, -kInvSqrt2, kInvSqrt2, 0, 0)));
   // This is near-identity, but not close enough for isIdentity() to return true.
   EXPECT_THAT(parseAsCss("rotate(360deg)"), ParseResultIs(TransformIs(1, 0, 0, 1, 0, 0)));
   EXPECT_THAT(parseAsCss("rotate(90deg)"), ParseResultIs(TransformIs(0, 1, -1, 0, 0, 0)));

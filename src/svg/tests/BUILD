@@ -8,6 +8,7 @@ cc_test(
         "svg_element_tests.cc",
         "svg_ellipse_element_tests.cc",
         "svg_filter_element_tests.cc",
+        "svg_linear_gradient_element_tests.cc",
         "svg_path_element_tests.cc",
         "svg_rect_element_tests.cc",
     ],
@@ -16,6 +17,7 @@ cc_test(
         "//src/base:base_test_utils",
         "//src/svg",
         "//src/svg/core:core_test_utils",
+        "//src/svg/renderer/tests:renderer_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -8,7 +8,8 @@
 
 namespace donner::svg {
 
-SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& options = {});
+SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& options = {},
+                               Vector2i size = {100, 100});
 
 template <typename ElementT = SVGElement>
 struct ParsedFragment {
@@ -20,12 +21,14 @@ struct ParsedFragment {
 };
 
 ParsedFragment<> instantiateSubtreeElement(std::string_view str,
-                                           const XMLParser::Options& options = {});
+                                           const XMLParser::Options& options = {},
+                                           Vector2i size = {100, 100});
 
 template <typename ElementT>
 ParsedFragment<ElementT> instantiateSubtreeElementAs(std::string_view str,
-                                                     const XMLParser::Options& options = {}) {
-  auto result = instantiateSubtreeElement(str, options);
+                                                     const XMLParser::Options& options = {},
+                                                     Vector2i size = {100, 100}) {
+  auto result = instantiateSubtreeElement(str, options, size);
 
   return ParsedFragment<ElementT>{std::move(result.document), result.element.cast<ElementT>()};
 };

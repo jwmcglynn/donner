@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "src/base/transform.h"
 #include "src/svg/core/gradient.h"
 #include "src/svg/svg_element.h"
 
@@ -92,6 +93,13 @@ public:
   GradientUnits gradientUnits() const;
 
   /**
+   * `gradientTransform` attribute to specify a transform to apply to the gradient.
+   *
+   * The default is the identity transform.
+   */
+  Transformd gradientTransform() const;
+
+  /**
    * `spreadMethod` attribute to specify how to fill the area outside the gradient.
    *
    * The default is \ref GradientSpreadMethod::Pad, which fills with the start or end color.
@@ -109,7 +117,7 @@ public:
    *   `std::nullopt` to remove the attribute. To be valid, the reference must be to a different
    *   \ref xml_linearGradient or a \ref xml_radialGradient element.
    */
-  void setHref(std::optional<RcString> value);
+  void setHref(const std::optional<RcString>& value);
 
   /**
    * `gradientUnits` attribute to specify the coordinate system for the gradient.
@@ -121,6 +129,15 @@ public:
   void setGradientUnits(GradientUnits value);
 
   /**
+   * `gradientTransform` attribute to specify a transform to apply to the gradient.
+   *
+   * \see \ref gradientTransform()
+   *
+   * @param value The transform to apply to the gradient.
+   */
+  void setGradientTransform(const Transformd& value);
+
+  /**
    * `spreadMethod` attribute to specify how to fill the area outside the gradient.
    *
    * \see \ref spreadMethod()
@@ -128,10 +145,6 @@ public:
    * @param value The method to use to fill the area outside the gradient.
    */
   void setSpreadMethod(GradientSpreadMethod value);
-
-protected:
-  /// Invalidates cached data from the render tree.
-  void invalidate() const;
 };
 
 }  // namespace donner::svg

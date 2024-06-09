@@ -2,9 +2,20 @@
 
 #include "src/svg/components/paint/gradient_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"
-#include "src/svg/components/shadow/shadow_tree_component.h"
+#include "src/svg/components/style/style_system.h"
+#include "src/svg/components/transform_component.h"
 
 namespace donner::svg {
+
+namespace {
+
+void computeTransform(EntityHandle handle) {
+  auto& transform = handle.get_or_emplace<components::TransformComponent>();
+  transform.computeWithPrecomputedStyle(
+      handle, components::StyleSystem().computeStyle(handle, nullptr), FontMetrics(), nullptr);
+}
+
+}  // namespace
 
 SVGGradientElement::SVGGradientElement(EntityHandle handle) : SVGElement(handle) {
   handle_.emplace<components::GradientComponent>();
@@ -24,12 +35,17 @@ GradientUnits SVGGradientElement::gradientUnits() const {
       GradientUnits::Default);
 }
 
+Transformd SVGGradientElement::gradientTransform() const {
+  computeTransform(handle_);
+  return handle_.get<components::ComputedTransformComponent>().transform;
+}
+
 GradientSpreadMethod SVGGradientElement::spreadMethod() const {
   return handle_.get_or_emplace<components::GradientComponent>().spreadMethod.value_or(
       GradientSpreadMethod::Default);
 }
 
-void SVGGradientElement::setHref(std::optional<RcString> value) {
+void SVGGradientElement::setHref(const std::optional<RcString>& value) {
   handle_.get_or_emplace<components::GradientComponent>().href = value;
   // Force the shadow tree to be regenerated.
   handle_.remove<components::ComputedShadowTreeComponent>();
@@ -37,6 +53,11 @@ void SVGGradientElement::setHref(std::optional<RcString> value) {
 
 void SVGGradientElement::setGradientUnits(GradientUnits value) {
   handle_.get_or_emplace<components::GradientComponent>().gradientUnits = value;
+}
+
+void SVGGradientElement::setGradientTransform(const Transformd& value) {
+  auto& component = handle_.get_or_emplace<components::TransformComponent>();
+  component.transform.set(CssTransform(value), css::Specificity::Override());
 }
 
 void SVGGradientElement::setSpreadMethod(GradientSpreadMethod value) {

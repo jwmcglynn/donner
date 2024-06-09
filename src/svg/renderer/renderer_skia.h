@@ -21,6 +21,8 @@ public:
 
   void draw(SVGDocument& document);
 
+  std::string drawIntoAscii(SVGDocument& document);
+
   sk_sp<SkPicture> drawIntoSkPicture(SVGDocument& document);
 
   bool save(const char* filename);

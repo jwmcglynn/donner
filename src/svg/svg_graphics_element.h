@@ -26,7 +26,7 @@ public:
 
   /// Set the 2d transformation for this element, which can be identity to make the transform a
   /// no-op.
-  void setTransform(Transformd transform);
+  void setTransform(const Transformd& transform);
 
 protected:
   void invalidateTransform();

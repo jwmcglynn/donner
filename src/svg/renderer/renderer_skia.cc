@@ -729,6 +729,54 @@ void RendererSkia::draw(SVGDocument& document) {
   rootCanvas_ = currentCanvas_ = nullptr;
 }
 
+std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
+  Registry& registry = document.registry();
+  const Entity rootEntity = document.rootEntity();
+
+  // TODO: Plumb outWarnings.
+  RendererUtils::prepareDocumentForRendering(document, verbose_);
+
+  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
+      EntityHandle(registry, rootEntity), components::InvalidSizeBehavior::ReturnDefault);
+
+  assert(renderingSize.x <= 64 && renderingSize.y <= 64 &&
+         "Rendering size must be less than or equal to 64x64");
+
+  bitmap_.allocPixels(SkImageInfo::Make(renderingSize.x, renderingSize.y, kGray_8_SkColorType,
+                                        kOpaque_SkAlphaType));
+  SkCanvas canvas(bitmap_);
+  rootCanvas_ = &canvas;
+  currentCanvas_ = &canvas;
+
+  draw(registry, rootEntity);
+
+  rootCanvas_ = currentCanvas_ = nullptr;
+
+  std::string asciiArt;
+  asciiArt.reserve(renderingSize.x * renderingSize.y +
+                   renderingSize.y);  // Reserve space including newlines
+
+  static const std::array<char, 10> grayscaleTable = {'.', ',', ':', '-', '=',
+                                                      '+', '*', '#', '%', '@'};
+
+  for (int y = 0; y < renderingSize.y; ++y) {
+    for (int x = 0; x < renderingSize.x; ++x) {
+      const uint8_t pixel = *bitmap_.getAddr8(x, y);
+      int index = pixel / static_cast<int>(256 / grayscaleTable.size());
+      if (index >= grayscaleTable.size()) {
+        index = grayscaleTable.size() - 1;
+      }
+      asciiArt += grayscaleTable.at(index);
+    }
+
+    asciiArt += '\n';
+  }
+
+  bitmap_.reset();
+
+  return asciiArt;
+}
+
 sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();

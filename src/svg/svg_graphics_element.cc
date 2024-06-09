@@ -12,7 +12,7 @@ Transformd SVGGraphicsElement::transform() const {
   return handle_.get<components::ComputedTransformComponent>().transform;
 }
 
-void SVGGraphicsElement::setTransform(Transformd transform) {
+void SVGGraphicsElement::setTransform(const Transformd& transform) {
   auto& component = handle_.get_or_emplace<components::TransformComponent>();
   component.transform.set(CssTransform(transform), css::Specificity::Override());
 }

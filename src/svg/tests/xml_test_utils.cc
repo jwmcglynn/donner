@@ -8,17 +8,19 @@ namespace donner::svg {
 
 namespace {
 
-static constexpr std::string_view kPrefix(
-    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\n  ");
-
 static constexpr std::string_view kSuffix("\n</svg>");
 
 }  // namespace
 
-SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& options) {
+SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& options,
+                               Vector2i size) {
   std::vector<char> fileData;
-  fileData.reserve(kPrefix.size() + str.size() + kSuffix.size() + 1);
-  fileData.insert(fileData.end(), kPrefix.begin(), kPrefix.end());
+  const std::string prefix = std::string("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"") +
+                             std::to_string(size.x) + "\" height=\"" + std::to_string(size.y) +
+                             "\">\n  ";
+
+  fileData.reserve(prefix.size() + str.size() + kSuffix.size() + 1);
+  fileData.insert(fileData.end(), prefix.begin(), prefix.end());
   fileData.insert(fileData.end(), str.begin(), str.end());
   fileData.insert(fileData.end(), kSuffix.begin(), kSuffix.end());
   fileData.push_back('\0');
@@ -33,14 +35,14 @@ SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& o
 
   // Set the canvas size, this is needed for computed style calculation to succeed.
   auto& document = maybeResult.result();
-  document.setCanvasSize(100, 100);
+  document.setCanvasSize(size.x, size.y);
 
   return std::move(maybeResult.result());
 }
 
-ParsedFragment<> instantiateSubtreeElement(std::string_view str,
-                                           const XMLParser::Options& options) {
-  SVGDocument document = instantiateSubtree(str, options);
+ParsedFragment<> instantiateSubtreeElement(std::string_view str, const XMLParser::Options& options,
+                                           Vector2i size) {
+  SVGDocument document = instantiateSubtree(str, options, size);
 
   auto maybeElement = document.svgElement().firstChild();
   if (maybeElement) {
