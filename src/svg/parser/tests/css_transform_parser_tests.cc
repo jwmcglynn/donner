@@ -309,7 +309,7 @@ TEST(TransformParserCss, ScaleY_ParseErrors) {
 }
 
 TEST(TransformParserCss, Rotate) {
-  constexpr double kInvSqrt2(0.70710678118);
+  constexpr double kInvSqrt2 = MathConstants<double>::kInvSqrt2;
 
   EXPECT_THAT(parseAsCss("rotate(0)"), ParseResultIs(TransformIsIdentity()));
   EXPECT_THAT(parseAsCss("rotate(45deg)"),

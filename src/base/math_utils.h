@@ -77,6 +77,7 @@ struct MathConstants<float> {
   static constexpr float kHalfPi = kPi / 2.0f;        ///< Pi / 2.
   static constexpr float kDegToRad = kPi / 180.0f;    ///< Degrees to radians ratio.
   static constexpr float kRadToDeg = 180.0f / kPi;    ///< Radians to degrees ratio.
+  static constexpr float kInvSqrt2 = 0.70710678118f;  ///< 1 / sqrt(2).
 };
 
 /// Math constants for double.
@@ -85,8 +86,9 @@ struct MathConstants<double> {
   static constexpr double kPi = 3.1415926535897932384626433832795028841971693993751;  ///< Pi.
   static constexpr double kReciprocalPi = 1.0 / kPi;                                  ///< 1 / Pi.
   static constexpr double kHalfPi = kPi / 2.0;                                        ///< Pi / 2.
-  static constexpr double kDegToRad = kPi / 180.0;  ///< Degrees to radians ratio.
-  static constexpr double kRadToDeg = 180.0 / kPi;  ///< Radians to degrees ratio.
+  static constexpr double kDegToRad = kPi / 180.0;         ///< Degrees to radians ratio.
+  static constexpr double kRadToDeg = 180.0 / kPi;         ///< Radians to degrees ratio.
+  static constexpr double kInvSqrt2 = 0.7071067811865475;  ///< 1 / sqrt(2).
 };
 
 /**

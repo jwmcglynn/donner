@@ -13,15 +13,24 @@
 
 namespace donner::svg {
 
+/**
+ * Stores an uncompressed RGBA-format image.
+ *
+ * Loaded by \ref RendererTestUtils::readRgbaImageFromPngFile.
+ */
 struct Image {
-  int width;
-  int height;
-  size_t strideInPixels;
-  std::vector<uint8_t> data;
+  int width;                  //!< Image width in pixels.
+  int height;                 //!< Image height in pixels.
+  size_t strideInPixels;      //!< The stride of \ref data, in pixels.
+  std::vector<uint8_t> data;  //!< Pixel data, in RGBA format. Rows are are \ref strideInPixels long
+                              //!< (byte length is `strideInPixels * 4`).
 };
 
+/**
+ * Stores an ASCII representation of a rendered image, and supports diffing it to another image.
+ */
 struct AsciiImage {
-  std::string generated;
+  std::string generated;  //!< ASCII art of generated image, with lines separated by `\n`
 
   /**
    * Compare the rendered ASCII image to a golden ASCII string, and output the image differences if
@@ -110,8 +119,16 @@ struct AsciiImage {
   }
 };
 
+/**
+ * Test utilities for rendering and saving SVGs in tests.
+ */
 class RendererTestUtils {
 public:
+  /**
+   * Read an RGBA image from a PNG file.
+   *
+   * @param filename Path to a PNG file to load.
+   */
   static std::optional<Image> readRgbaImageFromPngFile(const char* filename) {
     int width, height, channels;
     auto data = stbi_load(filename, &width, &height, &channels, 4);
@@ -130,7 +147,7 @@ public:
    * Render the given SVG fragment into ASCII art. The generated image is of the given size, and has
    * a black background.
    *
-   * Colors will be mapped to ASCII characters, with `.` white all the way to `@` black, with ten
+   * Colors will be mapped to ASCII characters, with `@` white all the way to `.` black, with ten
    * shades of gray.
    *
    * To compare the generated ASCII image to a golden ASCII string, use `matches` on the returned
@@ -146,10 +163,28 @@ public:
    * @param svgFragment The SVG fragment to render.
    * @param size The size of the generated image.
    */
-  static AsciiImage renderToAsciiImage(std::string_view svgFragment, Vector2i size = {16, 16}) {
+  static AsciiImage renderToAsciiImage(std::string_view svgFragment,
+                                       Vector2i size = kTestSvgDefaultSize) {
     SVGDocument document = instantiateSubtree(svgFragment, XMLParser::Options(), size);
 
+    return renderToAsciiImage(document);
+  }
+
+  /**
+   * Render the given \ref SVGDocument into ASCII art. The generated image is of given size, and has
+   * a black background.
+   *
+   * Colors will be mapped to ASCII characters, with `@` white all the way to `.` black, with ten
+   * shades of gray.
+   *
+   * To compare the generated ASCII image to a golden ASCII string, use `matches` on the returned
+   * \ref AsciiImage object.
+   *
+   * @param document SVG document to render, of max size 64x64.
+   */
+  static AsciiImage renderToAsciiImage(SVGDocument document) {
     RendererSkia renderer;
+    renderer.setAntialias(false);
 
     AsciiImage result;
     result.generated = renderer.drawIntoAscii(document);

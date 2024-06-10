@@ -31,6 +31,8 @@ public:
   int width() const { return bitmap_.width(); }
   int height() const { return bitmap_.height(); }
 
+  void setAntialias(bool antialias) { antialias_ = antialias; }
+
 private:
   class Impl;
 
@@ -42,6 +44,7 @@ private:
   SkBitmap bitmap_;
   SkCanvas* rootCanvas_ = nullptr;
   SkCanvas* currentCanvas_ = nullptr;
+  bool antialias_ = true;
 };
 
 }  // namespace donner::svg

@@ -205,8 +205,7 @@ private:
     // > The normalized diagonal length must be calculated with
     // > `sqrt((width)**2 + (height)**2)/sqrt(2)`.
     // From https://svgwg.org/svg2-draft/coords.html#Units
-    constexpr T kInvSqrt2(0.70710678118);
-    return box.size().length() * kInvSqrt2;
+    return box.size().length() * MathConstants<T>::kInvSqrt2;
   }
 };
 

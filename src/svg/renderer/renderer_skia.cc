@@ -205,7 +205,7 @@ public:
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
         } else if (instance.resolvedFilter) {
           SkPaint filterPaint;
-          filterPaint.setAntiAlias(true);
+          filterPaint.setAntiAlias(renderer_.antialias_);
           createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
 
           // TODO: Calculate the bounds.
@@ -258,7 +258,7 @@ public:
                                              css::RGBA currentColor, float opacity) {
     if (ref.fallback) {
       SkPaint paint;
-      paint.setAntiAlias(true);
+      paint.setAntiAlias(renderer_.antialias_);
       paint.setColor(toSkia(ref.fallback.value().resolve(currentColor, opacity)));
       return paint;
     }
@@ -367,7 +367,7 @@ public:
     const int numStops = static_cast<int>(pos.size());
     if (numStops == 1) {
       SkPaint paint;
-      paint.setAntiAlias(true);
+      paint.setAntiAlias(renderer_.antialias_);
       paint.setColor(color[0]);
       return paint;
     }
@@ -384,7 +384,7 @@ public:
                                                              bounds, numbersArePercent))};
 
       SkPaint paint;
-      paint.setAntiAlias(true);
+      paint.setAntiAlias(renderer_.antialias_);
       paint.setShader(SkGradientShader::MakeLinear(points, color.data(), pos.data(), numStops,
                                                    toSkia(computedGradient.spreadMethod), 0,
                                                    &localMatrix));
@@ -403,7 +403,7 @@ public:
 
       if (NearZero(radius)) {
         SkPaint paint;
-        paint.setAntiAlias(true);
+        paint.setAntiAlias(renderer_.antialias_);
         paint.setColor(color.back());
         return paint;
       }
@@ -429,7 +429,7 @@ public:
       }
 
       SkPaint paint;
-      paint.setAntiAlias(true);
+      paint.setAntiAlias(renderer_.antialias_);
       if (NearZero(focalRadius) && focalCenter == center) {
         paint.setShader(
             SkGradientShader::MakeRadial(toSkia(center), radius, color.data(), pos.data(), numStops,
@@ -518,7 +518,7 @@ public:
       const SkMatrix localMatrix = toSkiaMatrix(transform);
 
       SkPaint skPaint;
-      skPaint.setAntiAlias(true);
+      skPaint.setAntiAlias(renderer_.antialias_);
       skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
           SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix,
           &tileRect));
@@ -555,7 +555,7 @@ public:
       skPath.setFillType(SkPathFillType::kEvenOdd);
     }
 
-    skPaint.setAntiAlias(true);
+    skPaint.setAntiAlias(renderer_.antialias_);
     skPaint.setStyle(SkPaint::Style::kFill_Style);
     renderer_.currentCanvas_->drawPath(skPath, skPaint);
   }
@@ -567,7 +567,7 @@ public:
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;
-      skPaint.setAntiAlias(true);
+      skPaint.setAntiAlias(renderer_.antialias_);
       skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(), fillOpacity)));
 
       drawPathFillWithSkPaint(path, skPaint, style);
@@ -627,7 +627,7 @@ public:
               dashUnitsScale)));
     }
 
-    skPaint.setAntiAlias(true);
+    skPaint.setAntiAlias(renderer_.antialias_);
     skPaint.setStyle(SkPaint::Style::kStroke_Style);
 
     skPaint.setStrokeWidth(static_cast<SkScalar>(config.strokeWidth));
@@ -652,7 +652,7 @@ public:
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;
-      skPaint.setAntiAlias(true);
+      skPaint.setAntiAlias(renderer_.antialias_);
       skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(),
                                                    static_cast<float>(strokeOpacity))));
 

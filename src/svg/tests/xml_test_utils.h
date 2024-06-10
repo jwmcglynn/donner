@@ -8,8 +8,12 @@
 
 namespace donner::svg {
 
+/// The default size of SVG images instantiated by \ref instantiateSubtree, \ref
+/// instantiateSubtreeElement, or \ref instantiateSubtreeElementAs.
+static constexpr Vector2i kTestSvgDefaultSize = {16, 16};
+
 SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& options = {},
-                               Vector2i size = {100, 100});
+                               Vector2i size = kTestSvgDefaultSize);
 
 template <typename ElementT = SVGElement>
 struct ParsedFragment {
@@ -22,12 +26,12 @@ struct ParsedFragment {
 
 ParsedFragment<> instantiateSubtreeElement(std::string_view str,
                                            const XMLParser::Options& options = {},
-                                           Vector2i size = {100, 100});
+                                           Vector2i size = kTestSvgDefaultSize);
 
 template <typename ElementT>
 ParsedFragment<ElementT> instantiateSubtreeElementAs(std::string_view str,
                                                      const XMLParser::Options& options = {},
-                                                     Vector2i size = {100, 100}) {
+                                                     Vector2i size = kTestSvgDefaultSize) {
   auto result = instantiateSubtreeElement(str, options, size);
 
   return ParsedFragment<ElementT>{std::move(result.document), result.element.cast<ElementT>()};
