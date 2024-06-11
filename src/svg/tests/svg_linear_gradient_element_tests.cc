@@ -371,6 +371,97 @@ TEST(SVGLinearGradientElementTests, SpreadMethodRendering) {
   }
 }
 
-// TODO: href
+TEST(SVGLinearGradientElementTests, HrefSimple) {
+  auto gradient = instantiateSubtreeElementAs<SVGLinearGradientElement>(
+      R"(<linearGradient href="#refGradient" />)");
+  EXPECT_THAT(gradient->href(), testing::Optional(testing::Eq("#refGradient")));
+}
+
+TEST(SVGLinearGradientElementTests, HrefInheritanceChildrenXYRendering) {
+  ParsedFragment<SVGLinearGradientElement> fragment =
+      instantiateSubtreeElementAs<SVGLinearGradientElement>(R"-(
+        <linearGradient id="gradient" href="#refGradient" />
+        <linearGradient id="refGradient" x1="10%" y1="20%" x2="80%" y2="90%">
+          <stop offset="0%" stop-color="white" />
+          <stop offset="100%" stop-color="black" />
+        </linearGradient>
+        <rect width="16" height="16" fill="url(#gradient)" />
+        )-");
+
+  EXPECT_THAT(fragment->href(), testing::Optional(testing::Eq("#refGradient")));
+  EXPECT_THAT(fragment->x1(), testing::Eq(std::nullopt));
+  EXPECT_THAT(fragment->y1(), testing::Eq(std::nullopt));
+  EXPECT_THAT(fragment->x2(), testing::Eq(std::nullopt));
+  EXPECT_THAT(fragment->y2(), testing::Eq(std::nullopt));
+
+  {
+    const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
+
+    EXPECT_TRUE(generatedAscii.matches(R"(
+        @@@@@@@%%##***++
+        @@@@@@%%##***++=
+        @@@@@%%##***++==
+        @@@@%%##***++==-
+        @@@%%##***++==--
+        @@%%##***++==--:
+        @%%##***++==--::
+        %%##***++==--::,
+        %##***++==--::,,
+        ##***++==--::,,,
+        #***++==--::,,,.
+        ***++==--::,,,..
+        **++==--::,,,...
+        *++==--::,,,....
+        ++==--::,,,.....
+        +==--::,,,......
+        )"));
+  }
+}
+
+TEST(SVGLinearGradientElementTests, HrefInheritanceSharedParamsRendering) {
+  ParsedFragment<SVGLinearGradientElement> fragment =
+      instantiateSubtreeElementAs<SVGLinearGradientElement>(R"-(
+        <linearGradient id="gradient" href="#refGradient" gradientUnits="userSpaceOnUse"
+            gradientTransform="rotate(90)" spreadMethod="repeat">
+          <!-- should be overridden -->
+          <stop offset="0%" stop-color="white" />
+          <stop offset="100%" stop-color="black" />
+        </linearGradient>
+        <linearGradient id="refGradient" x1="10%" x2="80%">
+          <stop offset="20%" stop-color="white" />
+          <stop offset="80%" stop-color="black" />
+        </linearGradient>
+        <rect width="16" height="16" fill="url(#gradient)" />
+        )-");
+
+  EXPECT_THAT(fragment->href(), testing::Optional(testing::Eq("#refGradient")));
+  EXPECT_THAT(fragment->x1(), testing::Eq(std::nullopt));
+  EXPECT_THAT(fragment->y1(), testing::Eq(std::nullopt));
+  EXPECT_THAT(fragment->x2(), testing::Eq(std::nullopt));
+  EXPECT_THAT(fragment->y2(), testing::Eq(std::nullopt));
+
+  {
+    const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
+
+    EXPECT_TRUE(generatedAscii.matches(R"(
+        ,,,,,,,,,,,,,,,,
+        ................
+        @@@@@@@@@@@@@@@@
+        %%%%%%%%%%%%%%%%
+        ################
+        ****************
+        ++++++++++++++++
+        ================
+        ----------------
+        ----------------
+        ::::::::::::::::
+        ,,,,,,,,,,,,,,,,
+        ................
+        @@@@@@@@@@@@@@@@
+        %%%%%%%%%%%%%%%%
+        ################
+        )"));
+  }
+}
 
 }  // namespace donner::svg
