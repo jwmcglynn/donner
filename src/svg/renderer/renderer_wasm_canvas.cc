@@ -129,7 +129,8 @@ void RendererWasmCanvas::draw(SVGDocument& document) {
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
   const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
-      EntityHandle(registry, rootEntity), components::InvalidSizeBehavior::ReturnDefault);
+      EntityHandle(registry, rootEntity),
+      components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 
   canvas_.setSize(renderingSize);
 

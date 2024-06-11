@@ -5,8 +5,11 @@
 
 namespace donner::svg::components {
 
+/**
+ * Holds the value of the `class` attribute of an element.
+ */
 struct ClassComponent {
-  RcString className;
+  RcString className;  //!< The value of the `class` attribute.
 };
 
 }  // namespace donner::svg::components

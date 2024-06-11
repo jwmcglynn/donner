@@ -20,6 +20,13 @@ namespace donner::svg::components {
  */
 class LayoutSystem {
 public:
+  /// Controls the behavior of \ref LayoutSystem::calculateViewportScaledDocumentSize for invalid
+  /// sizes.
+  enum class InvalidSizeBehavior {
+    ZeroSize,       //!< Return a size of 0x0.
+    ReturnDefault,  //!< Return the default document size (512x512).
+  };
+
   /// @name Regular properties
   /// @{
 

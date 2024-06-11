@@ -7,6 +7,7 @@
 
 namespace donner::svg {
 
+// clang-format off
 /**
  * Base class for SVG gradient elements, such as \ref SVGLinearGradientElement and \ref
  * SVGRadialGradientElement.
@@ -18,11 +19,12 @@ namespace donner::svg {
  *
  * | Attribute | Default | Description |
  * | --------: | :-----: | :---------- |
- * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
+ * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `gradientTransform` | (none) | A transform to apply to the gradient. |
- * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
- * | `href`    | (none)  | A URL reference to a template gradient element. |
+ * | `spreadMethod` | `pad` | How to handle colors outside the gradient. Either `pad`, `reflect`, or `repeat`. |
+ * | `href`    | (none)  | A URL reference to a template gradient element, which is then used as a template for this gradient. Example: `<linearGradient id="MyGradient" href="#MyGradient2" />` |
  */
+// clang-format on
 class SVGGradientElement : public SVGElement {
 protected:
   /**

@@ -6,6 +6,7 @@
 
 namespace donner::svg {
 
+// clang-format off
 /**
  * @page xml_radialGradient '<radialGradient>'
  * @ingroup elements_paint_servers
@@ -53,11 +54,10 @@ namespace donner::svg {
  * | `r`       | `50%`   | Radius of the outer circle. |
  * | `fx`      | `cx`    | Focal point X coordinate. |
  * | `fy`      | `cy`    | Focal point Y coordinate. |
- * | `fr`      | `0`       | Focal point radius. |
- * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
+ * | `fr`      | `0`       | Focal point radius. | * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `gradientTransform` | (none) | A transform to apply to the gradient. |
- * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
- * | `href`    | (none)  | A URL reference to a template gradient element. |
+ * | `spreadMethod` | `pad` | How to handle colors outside the gradient. Either `pad`, `reflect`, or `repeat`. |
+ * | `href`    | (none)  | A URL reference to a template gradient element, which is then used as a template for this gradient. Example: `<radialGradient id="MyGradient" href="#MyGradient2" />` |
  */
 
 /**
@@ -129,14 +129,14 @@ namespace donner::svg {
  * | `r`       | `50%`   | Radius of the outer circle. |
  * | `fx`      | `cx`    | Focal point X coordinate. |
  * | `fy`      | `cy`    | Focal point Y coordinate. |
- * | `fr`      | `0`       | Focal point radius. |
- * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient. |
+ * | `fr`      | `0`       | Focal point radius. | * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `gradientTransform` | (none) | A transform to apply to the gradient. |
- * | `spreadMethod` | `pad` | How to handle colors outside the gradient. |
- * | `href`    | (none)  | A URL reference to a template gradient element. |
+ * | `spreadMethod` | `pad` | How to handle colors outside the gradient. Either `pad`, `reflect`, or `repeat`. |
+ * | `href`    | (none)  | A URL reference to a template gradient element, which is then used as a template for this gradient. Example: `<radialGradient id="MyGradient" href="#MyGradient2" />` |
  *
  * @see \ref SVGLinearGradientElement, \ref SVGStopElement
  */
+// clang-format on
 class SVGRadialGradientElement : public SVGGradientElement {
 protected:
   /// Create an SVGRadialGradientElement wrapper from an entity.

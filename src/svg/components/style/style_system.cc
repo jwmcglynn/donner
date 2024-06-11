@@ -180,7 +180,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   if (!computedStyle.viewbox) {
     const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
     const Vector2i documentSize = LayoutSystem().calculateViewportScaledDocumentSize(
-        EntityHandle(registry, rootEntity), InvalidSizeBehavior::ZeroSize);
+        EntityHandle(registry, rootEntity), LayoutSystem::InvalidSizeBehavior::ZeroSize);
     computedStyle.viewbox = Boxd(Vector2d::Zero(), documentSize);
   }
 

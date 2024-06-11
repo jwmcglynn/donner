@@ -34,11 +34,6 @@ struct ComputedSizedElementComponent {
                           ///< transformations.
 };
 
-enum class InvalidSizeBehavior {
-  ZeroSize,
-  ReturnDefault,
-};
-
 struct SizedElementComponent {
   SizedElementProperties properties;
 };

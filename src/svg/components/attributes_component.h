@@ -10,7 +10,11 @@
 
 namespace donner::svg::components {
 
+/**
+ * Stores XML attribute values.
+ */
 struct AttributesComponent {
+  /// Constructor.
   AttributesComponent() = default;
 
   // No copy, move-only.
@@ -40,6 +44,7 @@ struct AttributesComponent {
     const auto it = attributes_.find(name);
     return (it != attributes_.end()) ? std::make_optional(it->second.value) : std::nullopt;
   }
+
   /**
    * Find attributes matching the given name matcher.
    *
@@ -105,9 +110,10 @@ struct AttributesComponent {
 
 private:
   struct Storage {
-    XMLQualifiedName name;
-    RcString value;
+    XMLQualifiedName name;  ///< Name of the attribute.
+    RcString value;         ///< Value of the attribute.
 
+    /// Constructor.
     Storage(const XMLQualifiedName& name, const RcString& value) : name(name), value(value) {}
 
     /// Move operators.
@@ -122,8 +128,10 @@ private:
     ~Storage() = default;
   };
 
-  std::map<XMLQualifiedNameRef, Storage> attributes_;
-  std::set<XMLQualifiedName> attrNameStorage_;
+  std::map<XMLQualifiedNameRef, Storage>
+      attributes_;  ///< Map of attribute name to value, note that the key values are references to
+                    ///< the value in \ref attrNameStorage_.
+  std::set<XMLQualifiedName> attrNameStorage_;  ///< Storage for XMLQualifiedName.
 };
 
 }  // namespace donner::svg::components
