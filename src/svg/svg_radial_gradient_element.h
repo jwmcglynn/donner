@@ -129,7 +129,8 @@ namespace donner::svg {
  * | `r`       | `50%`   | Radius of the outer circle. |
  * | `fx`      | `cx`    | Focal point X coordinate. |
  * | `fy`      | `cy`    | Focal point Y coordinate. |
- * | `fr`      | `0`       | Focal point radius. | * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
+ * | `fr`      | `0`       | Focal point radius. |
+ * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `gradientTransform` | (none) | A transform to apply to the gradient. |
  * | `spreadMethod` | `pad` | How to handle colors outside the gradient. Either `pad`, `reflect`, or `repeat`. |
  * | `href`    | (none)  | A URL reference to a template gradient element, which is then used as a template for this gradient. Example: `<radialGradient id="MyGradient" href="#MyGradient2" />` |

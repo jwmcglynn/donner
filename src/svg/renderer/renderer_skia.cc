@@ -40,6 +40,8 @@ namespace donner::svg {
 
 namespace {
 
+const Boxd kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+
 SkPoint toSkia(Vector2d value) {
   return SkPoint::Make(NarrowToFloat(value.x), NarrowToFloat(value.y));
 }
@@ -331,9 +333,10 @@ public:
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
-      transform = ResolveTransform(maybeTransformComponent, pathBounds, FontMetrics());
+      transform = ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
 
       // Note that this applies *before* transform.
+      transform *= Transformd::Scale(pathBounds.size());
       transform *= Transformd::Translate(pathBounds.topLeft);
 
       // TODO: Can numbersArePercent be represented by the transform instead?
@@ -342,7 +345,7 @@ public:
       transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
     }
 
-    const Boxd& bounds = objectBoundingBox ? pathBounds : viewbox;
+    const Boxd& bounds = objectBoundingBox ? kUnitPathBounds : viewbox;
 
     std::vector<SkScalar> pos;
     std::vector<SkColor> color;
@@ -486,11 +489,11 @@ public:
 
       patternBounds = pathBounds;
 
-      transform = ResolveTransform(maybeTransformComponent, Boxd(Vector2d(), pathBounds.size()),
-                                   FontMetrics());
+      transform = ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
 
       // Note that this applies *before* transform.
       transform *= Transformd::Scale(pathBounds.size());
+      transform *= Transformd::Translate(pathBounds.topLeft);
 
     } else {
       transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
