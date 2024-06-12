@@ -18,11 +18,6 @@ using CommandType = PathSpline::CommandType;
 
 namespace {
 
-MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
-  return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
-         testing::ExplainMatchResult(unitMatcher, arg.unit, result_listener);
-}
-
 MATCHER_P(ComputedSplineIs, matchers, "") {
   const auto& maybeSpline = arg.element.computedSpline();
   if (maybeSpline) {

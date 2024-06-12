@@ -9,9 +9,18 @@
 #include "src/svg/components/style/style_system.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/core/preserve_aspect_ratio.h"
 #include "src/svg/svg_document.h"
 
 namespace donner::svg {
+
+namespace {
+
+/// The default `xMidYMid meet` value for \ref xml_pattern `preserveAspectRatio`
+static constexpr PreserveAspectRatio kPatternDefaultPreserveAspectRatio{
+    PreserveAspectRatio::Align::XMidYMid, PreserveAspectRatio::MeetOrSlice::Meet};
+
+}  // namespace
 
 SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -24,6 +33,7 @@ SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
   handle.emplace<components::SizedElementComponent>();
   handle.emplace<components::DoNotInheritFillOrStrokeTag>();
   handle.emplace<components::ViewboxComponent>();
+  handle.emplace<components::PreserveAspectRatioComponent>(kPatternDefaultPreserveAspectRatio);
   return SVGPatternElement(handle);
 }
 
@@ -44,11 +54,11 @@ Lengthd SVGPatternElement::y() const {
 }
 
 std::optional<Lengthd> SVGPatternElement::width() const {
-  return handle_.get<components::SizedElementComponent>().properties.width.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.width.get();
 }
 
 std::optional<Lengthd> SVGPatternElement::height() const {
-  return handle_.get<components::SizedElementComponent>().properties.height.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.height.get();
 }
 
 PatternUnits SVGPatternElement::patternUnits() const {

@@ -11,11 +11,6 @@ using testing::AllOf;
 
 namespace donner::svg {
 
-MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
-  return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
-         testing::ExplainMatchResult(unitMatcher, arg.unit, result_listener);
-}
-
 TEST(SVGLinearGradientElementTests, Defaults) {
   auto gradient = instantiateSubtreeElementAs<SVGLinearGradientElement>("<linearGradient />");
   EXPECT_THAT(gradient->x1(), testing::Eq(std::nullopt));

@@ -137,4 +137,20 @@ MATCHER_P2(BoxEq, topLeftMatcher, bottomRightMatcher, "") {
          testing::ExplainMatchResult(bottomRightMatcher, arg.bottomRight, result_listener);
 }
 
+/**
+ * Matches a Length.
+ *
+ * Example:
+ * ```
+ * EXPECT_THAT(Length(10.0, Lengthd::Unit::Cm), LengthIs(10.0, Lengthd::Unit::Cm));
+ * ```
+ *
+ * @param valueMatcher Matcher for value field.
+ * @param unitMatcher Matcher for unit field.
+ */
+MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
+  return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
+         testing::ExplainMatchResult(unitMatcher, arg.unit, result_listener);
+}
+
 }  // namespace donner

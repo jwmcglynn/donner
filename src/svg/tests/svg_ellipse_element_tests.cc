@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/base/tests/base_test_utils.h"
 #include "src/svg/svg_ellipse_element.h"
 #include "src/svg/tests/xml_test_utils.h"
 
@@ -9,11 +10,6 @@ using testing::Eq;
 using testing::Optional;
 
 namespace donner::svg {
-
-MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
-  return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
-         testing::ExplainMatchResult(unitMatcher, arg.unit, result_listener);
-}
 
 namespace {
 

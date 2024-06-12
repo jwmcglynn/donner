@@ -10,6 +10,7 @@ cc_test(
         "svg_filter_element_tests.cc",
         "svg_linear_gradient_element_tests.cc",
         "svg_path_element_tests.cc",
+        "svg_pattern_element_tests.cc",
         "svg_radial_gradient_element_tests.cc",
         "svg_rect_element_tests.cc",
     ],

@@ -4,18 +4,12 @@
 #include "src/base/tests/base_test_utils.h"
 #include "src/svg/core/gradient.h"
 #include "src/svg/renderer/tests/renderer_test_utils.h"
-#include "src/svg/svg_linear_gradient_element.h"
 #include "src/svg/svg_radial_gradient_element.h"
 #include "src/svg/tests/xml_test_utils.h"
 
 using testing::AllOf;
 
 namespace donner::svg {
-
-MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
-  return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
-         testing::ExplainMatchResult(unitMatcher, arg.unit, result_listener);
-}
 
 TEST(SVGRadialGradientElementTests, Defaults) {
   auto gradient = instantiateSubtreeElementAs<SVGRadialGradientElement>("<radialGradient />");
