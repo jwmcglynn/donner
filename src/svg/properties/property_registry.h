@@ -86,7 +86,20 @@ public:
   Property<FilterEffect> filter{
       "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
 
+  /// Properties which don't have specific listings above, which are stored as raw css declarations.
   std::map<RcString, UnparsedProperty> unparsedProperties;
+
+  /// Constructor.
+  PropertyRegistry();
+
+  /// Destructor.
+  ~PropertyRegistry();
+
+  /// Copy and move constructors.
+  PropertyRegistry(const PropertyRegistry&);
+  PropertyRegistry(PropertyRegistry&&) noexcept;
+  PropertyRegistry& operator=(const PropertyRegistry&);
+  PropertyRegistry& operator=(PropertyRegistry&&) noexcept;
 
   /**
    * Return a tuple of all properties within the PropertyRegistry.
@@ -117,6 +130,22 @@ public:
     return std::tuple_size_v<PropertiesTuple>;
   }
 
+  /**
+   * Calls a compile time functor for each property in the registry.
+   *
+   * Example:
+   * ```
+   * auto properties = allProperties();
+   * forEachProperty<0, numProperties()>([&properties](auto i) {
+   *   auto& property = std::get<i>(properties);
+   * }
+   * ```
+   *
+   * @tparam Start Index of the current property to call.
+   * @tparam End Total number of properties in the registry.
+   * @tparam F Type of the functor object, with signature `void(std::integral_constant<size_t>)`.
+   * @param f Functor instance.
+   */
   template <size_t Start, size_t End, class F>
   static constexpr void forEachProperty(const F& f) {
     if constexpr (Start < End) {
@@ -135,30 +164,17 @@ public:
    */
   [[nodiscard]] PropertyRegistry inheritFrom(
       const PropertyRegistry& parent,
-      PropertyInheritOptions options = PropertyInheritOptions::All) const {
-    PropertyRegistry result;
-    result.unparsedProperties = unparsedProperties;  // Unparsed properties are not inherited.
+      PropertyInheritOptions options = PropertyInheritOptions::All) const;
 
-    auto resultProperties = result.allPropertiesMutable();
-    const auto parentProperties = parent.allProperties();
-    const auto selfProperties = allProperties();
-
-    forEachProperty<0, numProperties()>(
-        [&resultProperties, &parentProperties, &selfProperties, options](auto i) {
-          auto res = std::get<i.value>(selfProperties)
-                         .inheritFrom(std::get<i.value>(parentProperties), options);
-
-          std::get<i.value>(resultProperties) = res;
-        });
-
-    return result;
-  }
-
-  void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
-    std::apply([&viewbox, &fontMetrics](
-                   auto&&... property) { (property.resolveUnits(viewbox, fontMetrics), ...); },
-               std::tuple(allPropertiesMutable()));
-  }
+  /**
+   * Calls \ref Property::resolveUnits for each property in the registry, which converts the units
+   * of this property to pixel-relative values, if it contains a value which is relative such as a
+   * font- or viewport-relative length.
+   *
+   * @param viewbox The viewbox to use for resolving relative lengths.
+   * @param fontMetrics The font metrics to use for resolving relative lengths.
+   */
+  void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics);
 
   /**
    * Parse a single declaration, adding it to the property registry.

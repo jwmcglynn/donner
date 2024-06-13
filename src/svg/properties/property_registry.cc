@@ -516,6 +516,41 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 16> kPro
 
 }  // namespace
 
+PropertyRegistry::PropertyRegistry() = default;
+
+PropertyRegistry::~PropertyRegistry() = default;
+
+PropertyRegistry::PropertyRegistry(const PropertyRegistry&) = default;
+PropertyRegistry::PropertyRegistry(PropertyRegistry&&) noexcept = default;
+PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default;
+PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
+
+[[nodiscard]] PropertyRegistry PropertyRegistry::inheritFrom(const PropertyRegistry& parent,
+                                                             PropertyInheritOptions options) const {
+  PropertyRegistry result;
+  result.unparsedProperties = unparsedProperties;  // Unparsed properties are not inherited.
+
+  auto resultProperties = result.allPropertiesMutable();
+  const auto parentProperties = parent.allProperties();
+  const auto selfProperties = allProperties();
+
+  forEachProperty<0, numProperties()>([&resultProperties, &parentProperties, &selfProperties,
+                                       options](auto i) {
+    auto res =
+        std::get<i.value>(selfProperties).inheritFrom(std::get<i.value>(parentProperties), options);
+
+    std::get<i.value>(resultProperties) = res;
+  });
+
+  return result;
+}
+
+void PropertyRegistry::resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
+  std::apply([&viewbox, &fontMetrics](
+                 auto&&... property) { (property.resolveUnits(viewbox, fontMetrics), ...); },
+             std::tuple(allPropertiesMutable()));
+}
+
 std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                           css::Specificity specificity) {
   const frozen::string frozenName(declaration.name);
