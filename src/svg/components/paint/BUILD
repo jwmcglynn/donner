@@ -21,7 +21,9 @@ cc_library(
     ],
     deps = [
         "//src/svg/components:components_core",
+        "//src/svg/components/layout:sized_element_component",
         "//src/svg/components/shadow:components",
+        "//src/svg/components/shape:components",
         "//src/svg/properties",
         "//src/svg/registry",
     ],
@@ -41,6 +43,7 @@ cc_library(
     deps = [
         ":components",
         "//src/svg/components:components_core",
+        "//src/svg/components/layout:layout_system",
         "//src/svg/components/shadow:components",
         "//src/svg/components/style:style_system",
         "//src/svg/properties",

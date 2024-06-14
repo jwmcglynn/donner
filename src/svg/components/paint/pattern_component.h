@@ -1,9 +1,7 @@
 #pragma once
 /// @file
 
-#include <vector>
-
-#include "src/base/parser/parse_error.h"
+#include "src/svg/components/layout/sized_element_component.h"
 #include "src/svg/core/pattern.h"
 #include "src/svg/graph/reference.h"
 #include "src/svg/registry/registry.h"
@@ -18,12 +16,14 @@ struct PatternComponent {
   std::optional<PatternUnits> patternUnits;
   std::optional<PatternContentUnits> patternContentUnits;
   std::optional<Reference> href;
+  SizedElementProperties sizeProperties;
 };
 
 struct ComputedPatternComponent {
   bool initialized = false;
   PatternUnits patternUnits = PatternUnits::Default;
   PatternContentUnits patternContentUnits = PatternContentUnits::Default;
+  Boxd tileRect = Boxd::CreateEmpty(Vector2d());
 
   void resolveAndInheritAttributes(EntityHandle handle, EntityHandle base = EntityHandle());
 };

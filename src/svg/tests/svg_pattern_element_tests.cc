@@ -2,13 +2,10 @@
 #include <gtest/gtest.h>
 
 #include "src/base/tests/base_test_utils.h"
-#include "src/svg/core/gradient.h"
 #include "src/svg/core/preserve_aspect_ratio.h"
 #include "src/svg/renderer/tests/renderer_test_utils.h"
 #include "src/svg/svg_pattern_element.h"
 #include "src/svg/tests/xml_test_utils.h"
-
-using testing::AllOf;
 
 namespace donner::svg {
 
@@ -29,6 +26,147 @@ TEST(SVGPatternElementTests, Defaults) {
   EXPECT_THAT(pattern->patternContentUnits(), testing::Eq(PatternContentUnits::UserSpaceOnUse));
   EXPECT_THAT(pattern->patternTransform(), TransformEq(Transformd()));
   EXPECT_THAT(pattern->href(), testing::Eq(std::nullopt));
+}
+
+TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" width="1" height="1">
+          <circle r="4" cx="4" cy="4" fill="lime" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ..####..........
+        .######.........
+        ########........
+        ########........
+        ########........
+        ########........
+        .######.........
+        ..####..........
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        )"));
+}
+
+TEST(SVGPatternElementTests, ObjectBoundingBoxTiledRendering) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" width="0.5" height="0.5">
+          <rect x="0" y="0" width="4" height="4" fill="lime" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ####....####....
+        ####....####....
+        ####....####....
+        ####....####....
+        ................
+        ................
+        ................
+        ................
+        ####....####....
+        ####....####....
+        ####....####....
+        ####....####....
+        ................
+        ................
+        ................
+        ................
+        )"));
+}
+
+TEST(SVGPatternElementTests, ObjectBoundingBoxTiledWithXYRendering) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" x="0.125" y="0.25" width="0.5" height="0.5">
+          <rect x="0" y="0" width="4" height="4" fill="lime" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        ................
+        ................
+        ................
+        ..####....####..
+        ..####....####..
+        ..####....####..
+        ..####....####..
+        ................
+        ................
+        ................
+        ................
+        ..####....####..
+        ..####....####..
+        ..####....####..
+        ..####....####..
+        )"));
+}
+TEST(SVGPatternElementTests, UserSpaceOnUseRendering) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect x="0" y="0" width="4" height="4" fill="lime" />
+          <rect x="4" y="4" width="4" height="4" fill="gray" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ####....####....
+        ####....####....
+        ####....####....
+        ####....####....
+        ....++++....++++
+        ....++++....++++
+        ....++++....++++
+        ....++++....++++
+        ####....####....
+        ####....####....
+        ####....####....
+        ####....####....
+        ....++++....++++
+        ....++++....++++
+        ....++++....++++
+        ....++++....++++
+        )"));
+}
+
+TEST(SVGPatternElementTests, UserSpaceOnUseWithXYRendering) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" x="2" y="2" width="6" height="6">
+          <rect x="0" y="0" width="4" height="4" fill="lime" />
+          <rect x="4" y="4" width="4" height="4" fill="gray" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ++....++....++..
+        ++....++....++..
+        ..####..####..##
+        ..####..####..##
+        ..####..####..##
+        ..####..####..##
+        ++....++....++..
+        ++....++....++..
+        ..####..####..##
+        ..####..####..##
+        ..####..####..##
+        ..####..####..##
+        ++....++....++..
+        ++....++....++..
+        ..####..####..##
+        ..####..####..##
+        )"));
 }
 
 // TODO: Additional tests and rendering tests

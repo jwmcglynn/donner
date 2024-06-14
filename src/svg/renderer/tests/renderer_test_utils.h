@@ -1,7 +1,6 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include <stb/stb_image.h>
 
 #include <optional>
 #include <vector>
@@ -129,19 +128,7 @@ public:
    *
    * @param filename Path to a PNG file to load.
    */
-  static std::optional<Image> readRgbaImageFromPngFile(const char* filename) {
-    int width, height, channels;
-    auto data = stbi_load(filename, &width, &height, &channels, 4);
-    if (!data) {
-      ADD_FAILURE() << "Failed to load image: " << filename;
-      return std::nullopt;
-    }
-
-    Image result{width, height, static_cast<size_t>(width),
-                 std::vector<uint8_t>(data, data + static_cast<ptrdiff_t>(width * height * 4))};
-    stbi_image_free(data);
-    return result;
-  }
+  static std::optional<Image> readRgbaImageFromPngFile(const char* filename);
 
   /**
    * Render the given SVG fragment into ASCII art. The generated image is of the given size, and has

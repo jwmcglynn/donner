@@ -195,7 +195,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
     if (viewboxComponent->viewbox) {
       computedStyle.viewbox = viewboxComponent->viewbox.value();
-    } else {
+    } else if (handle.all_of<SizedElementComponent>()) {
       // TODO: This is a strange dependency inversion, where ComputedStyleComponent depends on
       // SizedElementComponent which depends on ComputedStyleComponent to calculate the viewbox.
       // Split the computed viewbox into a different component?

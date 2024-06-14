@@ -3,6 +3,9 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 cc_library(
     name = "renderer_test_utils",
     testonly = 1,
+    srcs = [
+        "renderer_test_utils.cc",
+    ],
     hdrs = [
         "renderer_test_utils.h",
     ],

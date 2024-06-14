@@ -1,6 +1,5 @@
 #include "src/svg/svg_pattern_element.h"
 
-#include "src/svg/components/layout/sized_element_component.h"
 #include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/preserve_aspect_ratio_component.h"
 #include "src/svg/components/rendering_behavior_component.h"
@@ -30,7 +29,6 @@ SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
           components::RenderingBehavior::ShadowOnlyChildren)
       .appliesTransform = false;
   handle.emplace<components::PatternComponent>();
-  handle.emplace<components::SizedElementComponent>();
   handle.emplace<components::DoNotInheritFillOrStrokeTag>();
   handle.emplace<components::ViewboxComponent>();
   handle.emplace<components::PreserveAspectRatioComponent>(kPatternDefaultPreserveAspectRatio);
@@ -46,19 +44,19 @@ PreserveAspectRatio SVGPatternElement::preserveAspectRatio() const {
 }
 
 Lengthd SVGPatternElement::x() const {
-  return handle_.get<components::SizedElementComponent>().properties.x.getRequired();
+  return handle_.get<components::PatternComponent>().sizeProperties.x.getRequired();
 }
 
 Lengthd SVGPatternElement::y() const {
-  return handle_.get<components::SizedElementComponent>().properties.y.getRequired();
+  return handle_.get<components::PatternComponent>().sizeProperties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGPatternElement::width() const {
-  return handle_.get<components::SizedElementComponent>().properties.width.get();
+  return handle_.get<components::PatternComponent>().sizeProperties.width.get();
 }
 
 std::optional<Lengthd> SVGPatternElement::height() const {
-  return handle_.get<components::SizedElementComponent>().properties.height.get();
+  return handle_.get<components::PatternComponent>().sizeProperties.height.get();
 }
 
 PatternUnits SVGPatternElement::patternUnits() const {
@@ -95,22 +93,22 @@ void SVGPatternElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspec
 }
 
 void SVGPatternElement::setX(Lengthd value) {
-  handle_.get<components::SizedElementComponent>().properties.x.set(value,
-                                                                    css::Specificity::Override());
+  handle_.get<components::PatternComponent>().sizeProperties.x.set(value,
+                                                                   css::Specificity::Override());
 }
 
 void SVGPatternElement::setY(Lengthd value) {
-  handle_.get<components::SizedElementComponent>().properties.y.set(value,
-                                                                    css::Specificity::Override());
+  handle_.get<components::PatternComponent>().sizeProperties.y.set(value,
+                                                                   css::Specificity::Override());
 }
 
 void SVGPatternElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get<components::SizedElementComponent>().properties.width.set(
+  handle_.get<components::PatternComponent>().sizeProperties.width.set(
       value, css::Specificity::Override());
 }
 
 void SVGPatternElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get<components::SizedElementComponent>().properties.height.set(
+  handle_.get<components::PatternComponent>().sizeProperties.height.set(
       value, css::Specificity::Override());
 }
 

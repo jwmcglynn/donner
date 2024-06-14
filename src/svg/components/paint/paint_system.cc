@@ -1,6 +1,7 @@
 #include "src/svg/components/paint/paint_system.h"
 
 #include "src/svg/components/evaluated_reference_component.h"
+#include "src/svg/components/layout/layout_system.h"
 #include "src/svg/components/paint/gradient_component.h"
 #include "src/svg/components/paint/pattern_component.h"
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"
@@ -177,6 +178,16 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
 
     base = cur;
   }
+
+  // TODO: Inherit size properties.
+  //
+  // 2. Resolve the pattern size attributes
+  //
+  const PatternComponent& pattern = handle.get<PatternComponent>();
+  computedPattern.tileRect = LayoutSystem().computeSizeProperties(
+      handle, pattern.sizeProperties, handle.get<ComputedStyleComponent>(), FontMetrics(),
+      outWarnings);
+
 }
 
 std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,

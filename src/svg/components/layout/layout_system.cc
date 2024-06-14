@@ -280,6 +280,18 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
   }
 }
 
+// Evaluates SizedElementProperties and returns the resulting bounds.
+Boxd LayoutSystem::computeSizeProperties(EntityHandle entity,
+                                         const SizedElementProperties& sizeProperties,
+                                         const ComputedStyleComponent& style,
+                                         FontMetrics fontMetrics,
+                                         std::vector<ParseError>* outWarnings) {
+  SizedElementProperties mutableSizeProperties = sizeProperties;
+  return ApplyUnparsedPropertiesAndGetBounds(entity, mutableSizeProperties,
+                                             style.properties.value().unparsedProperties,
+                                             style.viewbox.value(), fontMetrics, outWarnings);
+}
+
 // Creates a ComputedSizedElementComponent for the linked entity, using precomputed style
 // information.
 const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementComponentWithStyle(
@@ -287,9 +299,8 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
     std::vector<ParseError>* outWarnings) {
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
-  const Boxd bounds = ApplyUnparsedPropertiesAndGetBounds(
-      entity, sizedElement.properties, style.properties.value().unparsedProperties,
-      style.viewbox.value(), fontMetrics, outWarnings);
+  const Boxd bounds =
+      computeSizeProperties(entity, sizedElement.properties, style, fontMetrics, outWarnings);
   return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, style.viewbox.value());
 }
 

@@ -12,6 +12,7 @@ void ComputedPatternComponent::resolveAndInheritAttributes(EntityHandle handle, 
     if (auto* computedBase = base.try_get<ComputedPatternComponent>()) {
       patternUnits = computedBase->patternUnits;
       patternContentUnits = computedBase->patternContentUnits;
+      tileRect = computedBase->tileRect;
     }
   }
 

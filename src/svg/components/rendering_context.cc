@@ -298,6 +298,14 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
   instantiateRenderTreeWithPrecomputedTree(verbose);
 }
 
+// 1. Setup shadow trees
+// 2. Evaluate and propagate styles
+// 3. Instantiate shadow trees and propagate style information to them
+// 4. Determine element sizes and layout
+// 5. Compute transforms
+// 6. Decompose shapes to paths
+// 7. Resolve fill and stroke references (paints)
+// 8. Resolve filter references
 void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
   PaintSystem().createShadowTrees(registry_, outWarnings);

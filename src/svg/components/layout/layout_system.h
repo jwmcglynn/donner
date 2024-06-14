@@ -47,6 +47,21 @@ public:
   void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
   /**
+   * Evaluates SizedElementProperties and returns the resulting bounds, using precomputed style
+   * information.
+   *
+   * @param entity Entity handle.
+   * @param sizeProperties Size properties to evaluate.
+   * @param style Precomputed style information for this element.
+   * @param fontMetrics Font metrics, used to scale lengths.
+   * @param outWarnings Output vector of parse errors, if any.
+   * @return Computed bounds.
+   */
+  Boxd computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
+                             const ComputedStyleComponent& style, FontMetrics fontMetrics,
+                             std::vector<ParseError>* outWarnings);
+
+  /**
    * Creates a \ref ComputedSizedElementComponent for the linked entity, using precomputed style
    * information.
    *

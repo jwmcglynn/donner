@@ -51,6 +51,8 @@ public:
    * Create shadow trees for all gradient and pattern elements in the registry that have a valid
    * href="" attribute.
    *
+   * This must be called before \ref instantiateAllComputedComponents.
+   *
    * @param registry Registry used to find all \ref GradientComponent and \ref PatternComponent
    * components to compute shadow trees
    * @param outWarnings Containing any warnings found

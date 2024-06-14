@@ -483,33 +483,31 @@ public:
       // > of the applicable element has no width or height and objectBoundingBox is specified,
       // > then the given effect (e.g., a gradient or a filter) will be ignored.
       //
-      if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
+      if (NearZero(pathBounds.width()) || NearZero(pathBounds.height()) ||
+          NearZero(computedPattern.tileRect.width()) ||
+          NearZero(computedPattern.tileRect.height())) {
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
-      patternBounds = pathBounds;
-
       transform = ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
 
-      // Note that this applies *before* transform.
-      transform *= Transformd::Scale(pathBounds.size());
-      transform *= Transformd::Translate(pathBounds.topLeft);
-
+      // Resolve x/y/width/height in tileRect to translation/bounds.
+      transform *= Transformd::Translate(pathBounds.size() * computedPattern.tileRect.topLeft);
+      patternBounds = Boxd(Vector2d(), pathBounds.size() * computedPattern.tileRect.size());
     } else {
       transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
 
-      if (const auto* sizedElement = target.try_get<components::ComputedSizedElementComponent>()) {
-        patternBounds = sizedElement->bounds;
+      patternBounds = computedPattern.tileRect;
 
-        transform = components::LayoutSystem().computeTransform(target, *sizedElement) * transform;
-      }
+      transform *= Transformd::Translate(computedPattern.tileRect.topLeft);
     }
 
     if (patternBounds) {
-      const SkRect tileRect = toSkia(patternBounds.value());
+      const SkRect skPatternBounds = toSkia(patternBounds.value());
+      const SkRect tileRect = toSkia(Boxd(Vector2d(), patternBounds.value().size()));
 
       SkPictureRecorder recorder;
-      renderer_.currentCanvas_ = recorder.beginRecording(tileRect);
+      renderer_.currentCanvas_ = recorder.beginRecording(skPatternBounds);
 
       // Render the subtree into the offscreen SkPictureRecorder.
       assert(ref.subtreeInfo);
