@@ -456,6 +456,21 @@ public:
     return PreserveAspectRatio::None();
   }
 
+  /**
+   * Instantiates a pattern paint. See \ref PatternUnits, \ref PatternContentUnits for details on
+   * their behavior.
+   *
+   * @param branchType Determined by whether this is the fill or stroke.
+   * @param dataHandle The handle to the pattern data.
+   * @param target The target entity to which the pattern is applied.
+   * @param computedPattern The resolved pattern component.
+   * @param ref The reference to the pattern.
+   * @param pathBounds The bounds of the path to which the pattern is applied.
+   * @param viewbox The viewbox of the the target entity.
+   * @param currentColor Current context color inherited from the parent.
+   * @param opacity Current opacity inherited from the parent.
+   * @return SkPaint instance containing the pattern.
+   */
   std::optional<SkPaint> instantiatePattern(
       components::ShadowBranchType branchType, EntityHandle dataHandle, EntityHandle target,
       const components::ComputedPatternComponent& computedPattern,
