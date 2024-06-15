@@ -191,7 +191,8 @@ public:
         renderer_.currentCanvas_->clipRect(toSkia(instance.clipRect.value()));
       }
 
-      renderer_.currentCanvas_->setMatrix(toSkia(instance.transformCanvasSpace));
+      renderer_.currentCanvas_->setMatrix(
+          toSkia(layerBaseTransform_ * instance.transformCanvasSpace));
 
       const components::ComputedStyleComponent& styleComponent =
           instance.styleHandle(registry).get<components::ComputedStyleComponent>();
@@ -467,11 +468,18 @@ public:
 
     Registry& registry = *dataHandle.registry();
     const bool objectBoundingBox = computedPattern.patternUnits == PatternUnits::ObjectBoundingBox;
+    const bool patternContentObjectBoundingBox =
+        computedPattern.patternContentUnits == PatternContentUnits::ObjectBoundingBox;
 
     const auto* maybeTransformComponent = target.try_get<components::ComputedTransformComponent>();
 
     Transformd transform;
+    Transformd contentRootTransform;
     std::optional<Boxd> patternBounds;
+
+    if (NearZero(computedPattern.tileRect.width()) || NearZero(computedPattern.tileRect.height())) {
+      return createFallbackPaint(ref, currentColor, opacity);
+    }
 
     if (objectBoundingBox) {
       // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
@@ -483,9 +491,7 @@ public:
       // > of the applicable element has no width or height and objectBoundingBox is specified,
       // > then the given effect (e.g., a gradient or a filter) will be ignored.
       //
-      if (NearZero(pathBounds.width()) || NearZero(pathBounds.height()) ||
-          NearZero(computedPattern.tileRect.width()) ||
-          NearZero(computedPattern.tileRect.height())) {
+      if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
@@ -495,11 +501,14 @@ public:
       transform *= Transformd::Translate(pathBounds.size() * computedPattern.tileRect.topLeft);
       patternBounds = Boxd(Vector2d(), pathBounds.size() * computedPattern.tileRect.size());
     } else {
-      transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+      transform = Transformd::Translate(computedPattern.tileRect.topLeft);
+      transform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
 
       patternBounds = computedPattern.tileRect;
+    }
 
-      transform *= Transformd::Translate(computedPattern.tileRect.topLeft);
+    if (patternContentObjectBoundingBox) {
+      contentRootTransform = Transformd::Scale(pathBounds.size());
     }
 
     if (patternBounds) {
@@ -508,12 +517,14 @@ public:
 
       SkPictureRecorder recorder;
       renderer_.currentCanvas_ = recorder.beginRecording(skPatternBounds);
+      layerBaseTransform_ = contentRootTransform;
 
       // Render the subtree into the offscreen SkPictureRecorder.
       assert(ref.subtreeInfo);
       drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
 
       renderer_.currentCanvas_ = renderer_.rootCanvas_;
+      layerBaseTransform_ = Transformd();
 
       // Transform to apply to the pattern contents.
       const SkMatrix localMatrix = toSkiaMatrix(transform);
@@ -703,6 +714,7 @@ private:
   RenderingInstanceView view_;
 
   std::vector<components::SubtreeInfo> subtreeMarkers_;
+  Transformd layerBaseTransform_ = Transformd();
 };
 
 RendererSkia::RendererSkia(bool verbose) : verbose_(verbose) {}

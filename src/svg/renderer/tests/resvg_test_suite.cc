@@ -268,17 +268,17 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-pattern-018.svg", Params::Skip()},  // Not impl: <text>
             {"e-pattern-019.svg",
              Params::Skip()},  // Not impl: patternContentUnits, objectBoundingBox
-            {"e-pattern-020.svg", Params::Skip()},  // Not impl: objectBoundingBox
-            {"e-pattern-021.svg", Params::Skip()},  // Bug? Recursive on child
-            {"e-pattern-022.svg", Params::Skip()},  // Bug? Self-recursive
-            {"e-pattern-023.svg", Params::Skip()},  // Bug? Self-recursive on child
-            {"e-pattern-024.svg", Params::Skip()},  // Not impl: objectBoundingBox
-            {"e-pattern-025.svg", Params::Skip()},  // Not impl: objectBoundingBox
-            {"e-pattern-026.svg", Params::Skip()},  // Not impl: userSpaceOnUse
-            {"e-pattern-027.svg", Params::Skip()},  // Bug? Invalid patternUnits
-            {"e-pattern-028.svg", Params::Skip()},  // UB: Invalid patternTransform
-            {"e-pattern-029.svg", Params::Skip()},  // Not impl: viewBox
-            {"e-pattern-030.svg", Params::Skip()},  // Not impl: userSpaceOnUse
+            {"e-pattern-020.svg", Params::Skip()},                // Not impl: objectBoundingBox
+            {"e-pattern-021.svg", Params::Skip()},                // Bug? Recursive on child
+            {"e-pattern-022.svg", Params::Skip()},                // Bug? Self-recursive
+            {"e-pattern-023.svg", Params::Skip()},                // Bug? Self-recursive on child
+            {"e-pattern-024.svg", Params::Skip()},                // Not impl: objectBoundingBox
+            {"e-pattern-025.svg", Params::Skip()},                // Not impl: objectBoundingBox
+            {"e-pattern-026.svg", Params::Skip()},                // Not impl: userSpaceOnUse
+            {"e-pattern-027.svg", Params::Skip()},                // Bug? Invalid patternUnits
+            {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
+            {"e-pattern-029.svg", Params::Skip()},                // Not impl: viewBox
+            {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.
         })),
     TestNameFromFilename);
 
