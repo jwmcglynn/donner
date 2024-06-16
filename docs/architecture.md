@@ -1,4 +1,4 @@
-# System Architecture
+# System architecture {#SystemArchitecture}
 
 ## High-level Architecture
 

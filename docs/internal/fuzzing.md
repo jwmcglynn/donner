@@ -1,4 +1,4 @@
-# Fuzzing
+# Fuzzing {#Fuzzing}
 
 Parsers and subparsers within Donner SVG have fuzzers in order to harden the implementation and detect new edge cases. Fuzzing is performed with [libFuzzer](https://llvm.org/docs/LibFuzzer.html).
 

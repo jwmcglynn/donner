@@ -1,4 +1,4 @@
-# About Donner
+# Introduction {#InstructionSection}
 
 Donner is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
 
@@ -19,9 +19,9 @@ Donner focuses on security and performance, which is validated with code coverag
 
 ## Documentation
 
-- [Getting started](getting_started.md)
-- [API Documentation](namespaces.html)
-- [System Architecture](architecture.md)
+- \subpage GettingStarted
+- \subpage DonnerAPI
+- \ref SystemArchitecture
 - [Devtools](devtools/index.md), such as binary size and code coverage
 
 ## Project Goals

@@ -415,4 +415,5 @@
     "titleBar.inactiveBackground": "#42b88399",
     "titleBar.inactiveForeground": "#15202b99"
   },
+  "C_Cpp.default.cppStandard": "c++20",
 }

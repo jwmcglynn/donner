@@ -174,7 +174,7 @@ private:
   ParseResult<double> readNumber() {
     skipWhitespace();
 
-    ParseResult<NumberParser::Result> maybeResult = NumberParser::Parse(remaining_);
+    auto maybeResult = NumberParser::Parse(remaining_);
     if (maybeResult.hasError()) {
       ParseError err = std::move(maybeResult.error());
       err.offset += currentOffset();
@@ -463,7 +463,7 @@ private:
 
   PathSpline::Builder spline_;
 
-  const std::string_view d_;
+  std::string_view d_;
   std::string_view remaining_;
 
   Token last_token_ = Token::InvalidCommand;

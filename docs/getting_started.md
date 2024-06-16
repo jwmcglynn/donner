@@ -1,4 +1,4 @@
-# Getting started
+# Getting started {#GettingStarted}
 
 ## Adding to your bazel project
 

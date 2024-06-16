@@ -143,11 +143,13 @@ ParseResult<LengthParser::Result> LengthParser::Parse(std::string_view str,
 
 std::optional<Lengthd::Unit> LengthParser::ParseUnit(std::string_view str) {
   size_t charsConsumed = 0;
-  if (auto maybeUnit = parseUnit(str, &charsConsumed); maybeUnit && charsConsumed == str.size()) {
-    return maybeUnit;
-  } else {
-    return std::nullopt;
+  if (auto maybeUnit = parseUnit(str, &charsConsumed)) {
+    if (charsConsumed == str.size()) {
+      return maybeUnit;
+    }
   }
+
+  return std::nullopt;
 }
 
 }  // namespace donner

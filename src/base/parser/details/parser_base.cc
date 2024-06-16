@@ -43,7 +43,7 @@ int ParserBase::currentOffset() {
 }
 
 ParseResult<double> ParserBase::readNumber() {
-  ParseResult<NumberParser::Result> maybeResult = NumberParser::Parse(remaining_);
+  auto maybeResult = NumberParser::Parse(remaining_);
   if (maybeResult.hasError()) {
     ParseError err = std::move(maybeResult.error());
     err.offset += currentOffset();

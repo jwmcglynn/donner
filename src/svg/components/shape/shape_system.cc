@@ -13,6 +13,14 @@ namespace donner::svg::components {
 
 namespace {
 
+/**
+ * Parse the string of the 'd' presentation attribute out of CSS, which can be parsed with \ref
+ * PathParser.
+ *
+ * @param components CSS ComponentValue list to parse, the right side of the declaration (e.g.
+ * `d: <component-values>`).
+ * @return parsed string, or an error if the string could not be parsed
+ */
 ParseResult<RcString> ParseD(std::span<const css::ComponentValue> components) {
   if (auto maybeIdent = TryGetSingleIdent(components);
       maybeIdent && maybeIdent->equalsLowercase("none")) {
@@ -45,22 +53,38 @@ std::optional<ParseError> ParseDFromAttributes(PathComponent& properties,
   return std::nullopt;
 }
 
+/**
+ * Concept for the callback type of \ref ForEachShape.
+ *
+ * Matches lambdas with this signature:
+ * ```
+ * template<typename T>
+ * bool callback<T>();
+ * ```
+ *
+ * For example:
+ * ```
+ * [&]<typename ShapeType>() -> bool {
+ *    const auto& shape = registry.get<ShapeType>(entity);
+ *    return shouldExit;
+ * }
+ * ```
+ */
 template <typename F, typename ComponentType>
 concept ForEachCallback = requires(const F& f) {
   { f.template operator()<ComponentType>() } -> std::same_as<bool>;
 };
 
 /**
- *
  * Helper to call the callback on each entt::type_list element. Short-circuits if the callback
 returns true.
  *
- * @tparam TypeList
- * @tparam F
- * @tparam Indices
- * @param f
- * @return true
- * @return false
+ * @tparam TypeList Tuple of types to iterate over.
+ * @tparam F Callback type. Must be callable with a single type parameter.
+ * @tparam Indices Indices of the tuple.
+ * @param f Callback.
+ * @return true if the callback returns true for any element.
+ * @return false if the callback returns false for all elements.
  */
 template <typename TypeList, typename F, std::size_t... Indices>
   requires(ForEachCallback<F, typename entt::type_list_element<Indices, TypeList>::type> && ...)
@@ -69,7 +93,15 @@ constexpr bool ForEachShapeImpl(const F& f, std::index_sequence<Indices...>) {
           ...);
 }
 
-// Main function to iterate over the tuple
+/**
+ * Iterate over a tuple at compile time, calling the callback on each element. Short-circuits if
+ * the callback returns true.
+ *
+ * @tparam TypeList Tuple of types to iterate over.
+ * @tparam F Callback type. Must be callable with a single type parameter.
+ * @param f Callback.
+ * @return true if the callback returns true for any element.
+ */
 template <typename TypeList, typename F>
 constexpr bool ForEachShape(const F& f) {
   return ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
