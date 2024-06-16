@@ -5,7 +5,7 @@
 
 #include "src/base/parser/number_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Implementation of \ref PathParser.
@@ -174,14 +174,14 @@ private:
   ParseResult<double> readNumber() {
     skipWhitespace();
 
-    auto maybeResult = NumberParser::Parse(remaining_);
+    auto maybeResult = base::parser::NumberParser::Parse(remaining_);
     if (maybeResult.hasError()) {
       ParseError err = std::move(maybeResult.error());
       err.offset += currentOffset();
       return err;
     }
 
-    const NumberParser::Result& result = maybeResult.result();
+    const base::parser::NumberParser::Result& result = maybeResult.result();
     remaining_.remove_prefix(result.consumedChars);
     return result.number;
   }
@@ -228,6 +228,7 @@ private:
   }
 
   std::optional<ParseError> processUntilNextCommand(TokenCommand command) {
+    // TODO: Change this to a while loop
     do {
       if (auto error = processCommand(command)) {
         return std::move(error.value());
@@ -413,7 +414,7 @@ private:
       }
       skipCommaWhitespace();
 
-      std::array<double, 2> endCoords;
+      std::array<double, 2> endCoords = {};
       if (auto error = readNumbers(endCoords)) {
         return error;
       }
@@ -478,4 +479,4 @@ ParseResult<PathSpline> PathParser::Parse(std::string_view d) {
   return parser.parse();
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

@@ -6,7 +6,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/svg/svg_document.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Parse an SVG XML document.
@@ -63,4 +63,4 @@ public:
                                            Options options = {}) noexcept;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

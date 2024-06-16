@@ -21,8 +21,7 @@
         }
       },
       "group": {
-        "kind": "build",
-        "isDefault": true
+        "kind": "build"
       },
       "presentation": {
         "revealProblems": "always"
@@ -54,7 +53,24 @@
       "problemMatcher": [
         "$gcc"
       ],
-      "group": "test",
+      "group": {
+        "kind": "build"
+      },
+      "presentation": {
+        "clear": true
+      }
+    },
+    {
+      "label": "all",
+      "type": "shell",
+      "command": "bazel build //src/...",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
       "presentation": {
         "clear": true
       }
@@ -79,8 +95,7 @@
         "$gcc"
       ],
       "group": {
-        "kind": "test",
-        "isDefault": true
+        "kind": "test"
       },
       "presentation": {
         "clear": true

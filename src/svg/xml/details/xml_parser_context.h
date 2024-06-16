@@ -6,7 +6,7 @@
 #include "src/svg/xml/details/line_offsets.h"
 #include "src/svg/xml/xml_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 struct ParserOrigin {
   size_t startOffset;
@@ -81,4 +81,4 @@ private:
   std::string_view namespacePrefix_;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

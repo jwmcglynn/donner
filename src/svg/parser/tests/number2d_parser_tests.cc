@@ -8,7 +8,7 @@
 using testing::AllOf;
 using testing::ElementsAre;
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 namespace {
 
@@ -17,6 +17,8 @@ MATCHER_P2(Number2dIs, x, y, "") {
 }
 
 }  // namespace
+
+using namespace base::parser;  // NOLINT: For tests
 
 TEST(Number2dParser, Empty) {
   ParseResult<Number2dParser::Result> result = Number2dParser::Parse("");
@@ -98,4 +100,4 @@ TEST(Number2dParser, ParseErrors) {
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

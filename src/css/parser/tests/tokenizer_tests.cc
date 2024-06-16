@@ -6,8 +6,7 @@
 
 using testing::ElementsAre;
 
-namespace donner {
-namespace css {
+namespace donner::css::parser {
 
 using details::Tokenizer;
 using namespace std::literals;
@@ -460,5 +459,4 @@ TEST(Tokenizer, Delim) {
   }
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css::parser

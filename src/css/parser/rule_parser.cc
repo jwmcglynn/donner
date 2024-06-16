@@ -3,7 +3,7 @@
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 namespace {
 
@@ -190,4 +190,4 @@ std::optional<Rule> RuleParser::ParseRule(std::string_view str) {
   return parser.parseRule();
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

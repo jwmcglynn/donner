@@ -4,12 +4,12 @@
 #include "src/base/parser/parse_result.h"
 #include "src/base/parser/tests/parse_result_test_utils.h"
 
-using testing::_;
+using testing::_;  // NOLINT
 using testing::Not;
 using testing::Optional;
 using testing::StartsWith;
 
-namespace donner {
+namespace donner::base::parser {
 
 TEST(ParseResult, Value) {
   ParseResult<int> result = []() -> ParseResult<int> { return 42; }();
@@ -183,4 +183,4 @@ TEST(ParseResultTestUtils, ResultAndErrorMatcher) {
   EXPECT_THAT(withError, Not(ParseResultAndError(_, _)));
 }
 
-}  // namespace donner
+}  // namespace donner::base::parser

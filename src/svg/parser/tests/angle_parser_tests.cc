@@ -6,7 +6,9 @@
 #include "src/css/parser/details/tokenizer.h"
 #include "src/svg/parser/angle_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 namespace {
 
@@ -61,4 +63,4 @@ TEST(AngleParserTest, BareZero) {
   EXPECT_THAT(ParseAngle(component, AngleParseOptions::None), ParseErrorIs("Invalid angle"));
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

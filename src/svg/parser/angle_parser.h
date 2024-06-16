@@ -1,12 +1,10 @@
 #pragma once
 /// @file
 
-#include <span>
-
 #include "src/base/parser/parse_result.h"
 #include "src/css/component_value.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Options for \ref ParseAngle, which controls whether bare zero is allowed.
@@ -26,4 +24,4 @@ enum class AngleParseOptions {
 ParseResult<double> ParseAngle(const css::ComponentValue& component,
                                AngleParseOptions options = AngleParseOptions::None);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

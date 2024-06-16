@@ -8,6 +8,7 @@
 #include "src/css/css.h"
 #include "src/css/parser/color_parser.h"
 #include "src/css/parser/value_parser.h"
+#include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/properties/property_parsing.h"
 
 namespace donner::svg {
@@ -18,7 +19,7 @@ namespace {
 static constexpr css::Specificity kSpecificityPresentationAttribute =
     css::Specificity::FromABC(0, 0, 0);
 
-ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
+parser::ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* number = component.tryGetToken<css::Token::Number>()) {
@@ -26,13 +27,13 @@ ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components)
     }
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid number";
   err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
-ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> components) {
+parser::ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -72,13 +73,13 @@ ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> component
     }
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid display value";
   err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
-ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
+parser::ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -94,15 +95,15 @@ ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> com
     }
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid display value";
   err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
-ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
+parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
   if (components.empty()) {
-    ParseError err;
+    parser::ParseError err;
     err.reason = "Invalid paint server value";
     return err;
   }
@@ -125,7 +126,7 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
 
       if (result) {
         if (components.size() > 1) {
-          ParseError err;
+          parser::ParseError err;
           err.reason = "Unexpected tokens after paint server value";
           err.offset = token.offset() + name.size();
           return err;
@@ -153,13 +154,13 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
         }
 
         // If we couldn't identify a fallback yet, try parsing it as a color.
-        auto colorResult = css::ColorParser::Parse(components.subspan(i));
+        auto colorResult = css::parser::ColorParser::Parse(components.subspan(i));
         if (colorResult.hasResult()) {
           return PaintServer(
               PaintServer::ElementReference(url.value, std::move(colorResult.result())));
         } else {
           // Invalid paint.
-          ParseError err;
+          parser::ParseError err;
           err.reason = "Invalid paint server url, failed to parse fallback";
           err.offset = components[i].sourceOffset();
           return err;
@@ -173,18 +174,18 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
   }
 
   // If we couldn't parse yet, try parsing as a color.
-  auto colorResult = css::ColorParser::Parse(components);
+  auto colorResult = css::parser::ColorParser::Parse(components);
   if (colorResult.hasResult()) {
     return PaintServer(PaintServer::Solid(std::move(colorResult.result())));
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid paint server";
   err.offset = firstComponent.sourceOffset();
   return err;
 }
 
-ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> components) {
+parser::ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -198,13 +199,14 @@ ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> compone
     }
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid fill rule";
   err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
-ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValue> components) {
+parser::ParseResult<StrokeLinecap> ParseStrokeLinecap(
+    std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -220,13 +222,14 @@ ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValu
     }
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid linecap";
   err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
-ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentValue> components) {
+parser::ParseResult<StrokeLinejoin> ParseStrokeLinejoin(
+    std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -246,13 +249,13 @@ ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentVa
     }
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid linejoin";
   err.offset = !components.empty() ? components.front().sourceOffset() : 0;
   return err;
 }
 
-ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
+parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
     std::span<const css::ComponentValue> components) {
   // https://www.w3.org/TR/css-values-4/#mult-comma
   std::vector<Lengthd> result;
@@ -271,10 +274,10 @@ ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
           trySkipToken.template operator()<css::Token::Comma>() || components.empty()) {
         trySkipToken.template operator()<css::Token::Whitespace>();
       } else {
-        ParseError err;
+        parser::ParseError err;
         err.reason = "Unexpected token in dasharray";
-        err.offset =
-            !components.empty() ? components.front().sourceOffset() : ParseError::kEndOfString;
+        err.offset = !components.empty() ? components.front().sourceOffset()
+                                         : parser::ParseError::kEndOfString;
         return err;
       }
     }
@@ -282,7 +285,7 @@ ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
     const css::ComponentValue& component = components.front();
     if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit) {
-        ParseError err;
+        parser::ParseError err;
         err.reason = "Invalid unit on length";
         err.offset = component.sourceOffset();
         return err;
@@ -294,7 +297,7 @@ ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
     } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
       result.emplace_back(number->value, Lengthd::Unit::None);
     } else {
-      ParseError err;
+      parser::ParseError err;
       err.reason = "Unexpected token in dasharray";
       err.offset = component.sourceOffset();
       return err;
@@ -306,11 +309,11 @@ ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
   return result;
 }
 
-ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
+parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
   // TODO: Handle parsing a list of filter effects
   // https://www.w3.org/TR/filter-effects/#FilterProperty
   if (components.empty()) {
-    ParseError err;
+    parser::ParseError err;
     err.reason = "Invalid filter value";
     return err;
   }
@@ -339,7 +342,7 @@ ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> compo
         const auto& arg = function.values.front();
         if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
           if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
-            ParseError err;
+            parser::ParseError err;
             err.reason = "Invalid unit on length";
             err.offset = arg.sourceOffset();
             return err;
@@ -348,7 +351,7 @@ ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> compo
             return FilterEffect(FilterEffect::Blur(stdDeviation, stdDeviation));
           }
         } else {
-          ParseError err;
+          parser::ParseError err;
           err.reason = "Invalid blur value";
           err.offset = arg.sourceOffset();
           return err;
@@ -357,7 +360,7 @@ ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> compo
     }
   }
 
-  ParseError err;
+  parser::ParseError err;
   err.reason = "Invalid filter value";
   err.offset = firstComponent.sourceOffset();
   return err;
@@ -373,11 +376,11 @@ static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAtt
 
 static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 16> kProperties = {
     {"color",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        auto maybeError = Parse(
            params,
-           [](const PropertyParseFnParams& params) {
-             return css::ColorParser::Parse(params.components());
+           [](const parser::PropertyParseFnParams& params) {
+             return css::parser::ColorParser::Parse(params.components());
            },
            &registry.color);
        if (maybeError.has_value()) {
@@ -394,122 +397,138 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 16> kPro
        return maybeError;
      }},  //
     {"display",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseDisplay(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseDisplay(params.components());
+           },
            &registry.display);
      }},  //
     {"opacity",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseAlphaValue(params.components());
+           },
            &registry.opacity);
      }},  //
     {"visibility",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseVisibility(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseVisibility(params.components());
+           },
            &registry.visibility);
      }},  //
     {"fill",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) {
+           [](const parser::PropertyParseFnParams& params) {
              return ParsePaintServer(params.components());
            },
            &registry.fill);
      }},  //
     {"fill-rule",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseFillRule(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseFillRule(params.components());
+           },
            &registry.fillRule);
      }},  //
     {"fill-opacity",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseAlphaValue(params.components());
+           },
            &registry.fillOpacity);
      }},  //
     {"stroke",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) {
+           [](const parser::PropertyParseFnParams& params) {
              return ParsePaintServer(params.components());
            },
            &registry.stroke);
      }},  //
     {"stroke-opacity",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseAlphaValue(params.components());
+           },
            &registry.strokeOpacity);
      }},  //
     {"stroke-width",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) {
-             return ParseLengthPercentage(params.components(), params.allowUserUnits());
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
            },
            &registry.strokeWidth);
      }},  //
     {"stroke-linecap",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) {
+           [](const parser::PropertyParseFnParams& params) {
              return ParseStrokeLinecap(params.components());
            },
            &registry.strokeLinecap);
      }},  //
     {"stroke-linejoin",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) {
+           [](const parser::PropertyParseFnParams& params) {
              return ParseStrokeLinejoin(params.components());
            },
            &registry.strokeLinejoin);
      }},  //
     {"stroke-miterlimit",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseNumber(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseNumber(params.components());
+           },
            &registry.strokeMiterlimit);
      }},  //
     {"stroke-dasharray",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) {
+           [](const parser::PropertyParseFnParams& params) {
              return ParseStrokeDasharray(params.components());
            },
            &registry.strokeDasharray);
      }},  //
     {"stroke-dashoffset",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) {
-             return ParseLengthPercentage(params.components(), params.allowUserUnits());
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
            },
            &registry.strokeDashoffset);
      }},  //
     {"filter",
-     [](PropertyRegistry& registry, const PropertyParseFnParams& params) {
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const PropertyParseFnParams& params) { return ParseFilter(params.components()); },
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseFilter(params.components());
+           },
            &registry.filter);
      }},  //
 };
@@ -551,21 +570,21 @@ void PropertyRegistry::resolveUnits(const Boxd& viewbox, const FontMetrics& font
              std::tuple(allPropertiesMutable()));
 }
 
-std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
-                                                          css::Specificity specificity) {
+std::optional<parser::ParseError> PropertyRegistry::parseProperty(
+    const css::Declaration& declaration, css::Specificity specificity) {
   const frozen::string frozenName(declaration.name);
   const auto it = kProperties.find(frozenName);
   if (it != kProperties.end()) {
     return it->second(*this, CreateParseFnParams(declaration, specificity,
-                                                 PropertyParseBehavior::AllowUserUnits));
+                                                 parser::PropertyParseBehavior::AllowUserUnits));
   }
 
   // Only store unparsed properties if they are valid presentation attribute names.
   if (kValidPresentationAttributes.count(frozenName) != 0) {
     unparsedProperties.emplace(
-        std::make_pair(declaration.name, UnparsedProperty{declaration, specificity}));
+        std::make_pair(declaration.name, parser::UnparsedProperty{declaration, specificity}));
   } else {
-    ParseError err;
+    parser::ParseError err;
     err.reason = "Unknown property '" + declaration.name + "'";
     err.offset = declaration.sourceOffset;
     return err;
@@ -581,10 +600,9 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
-                                                               std::string_view value,
-                                                               std::optional<ElementType> type,
-                                                               EntityHandle handle) {
+parser::ParseResult<bool> PropertyRegistry::parsePresentationAttribute(
+    std::string_view name, std::string_view value, std::optional<ElementType> type,
+    EntityHandle handle) {
   /* TODO: The SVG2 spec says the name may be similar to the attribute, not necessarily the same.
    * There may need to be a second mapping.
    */
@@ -599,10 +617,10 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   assert((!type.has_value() || (type.has_value() && handle != EntityHandle())) &&
          "If a type is specified, entity handle must be set");
 
-  PropertyParseFnParams params;
+  parser::PropertyParseFnParams params;
   params.valueOrComponents = value;
   params.specificity = kSpecificityPresentationAttribute;
-  params.parseBehavior = PropertyParseBehavior::AllowUserUnits;
+  params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
 
   const auto it = kProperties.find(frozen::string(name));
   if (it != kProperties.end()) {

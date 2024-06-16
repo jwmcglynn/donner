@@ -3,41 +3,42 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
 
 namespace {
 
-using CirclePresentationAttributeParseFn = std::optional<ParseError> (*)(
-    CircleProperties& properties, const PropertyParseFnParams& params);
+using CirclePresentationAttributeParseFn = std::optional<parser::ParseError> (*)(
+    CircleProperties& properties, const parser::PropertyParseFnParams& params);
 
 static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttributeParseFn, 3>
     kProperties = {
         {"cx",
-         [](CircleProperties& properties, const PropertyParseFnParams& params) {
+         [](CircleProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
                params,
-               [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
+               [](const parser::PropertyParseFnParams& params) {
+                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cx);
          }},  //
         {"cy",
-         [](CircleProperties& properties, const PropertyParseFnParams& params) {
+         [](CircleProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
                params,
-               [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
+               [](const parser::PropertyParseFnParams& params) {
+                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cy);
          }},  //
         {"r",
-         [](CircleProperties& properties, const PropertyParseFnParams& params) {
+         [](CircleProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
                params,
-               [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
+               [](const parser::PropertyParseFnParams& params) {
+                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.r);
          }}  //
@@ -48,15 +49,15 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
 
 ComputedCircleComponent::ComputedCircleComponent(
     const CircleProperties& inputProperties,
-    const std::map<RcString, UnparsedProperty>& unparsedProperties,
-    std::vector<ParseError>* outWarnings)
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+    std::vector<parser::ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
-      auto maybeError =
-          it->second(properties, CreateParseFnParams(property.declaration, property.specificity,
-                                                     PropertyParseBehavior::AllowUserUnits));
+      auto maybeError = it->second(
+          properties, CreateParseFnParams(property.declaration, property.specificity,
+                                          parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }
@@ -66,7 +67,7 @@ ComputedCircleComponent::ComputedCircleComponent(
 
 }  // namespace donner::svg::components
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
@@ -87,4 +88,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
   return false;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

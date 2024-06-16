@@ -6,13 +6,15 @@
 #include "src/css/parser/value_parser.h"
 #include "src/svg/parser/css_transform_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 namespace {
 
 ParseResult<Transformd> parseAsCss(std::string_view str) {
-  const std::vector<css::ComponentValue> components = css::ValueParser::Parse(str);
-  auto cssTransformResult = CssTransformParser::Parse(components);
+  const std::vector<css::ComponentValue> components = css::parser::ValueParser::Parse(str);
+  auto cssTransformResult = parser::CssTransformParser::Parse(components);
   if (cssTransformResult.hasError()) {
     return std::move(cssTransformResult.error());
   }
@@ -529,4 +531,4 @@ TEST(TransformParserCss, MultiplicationOrder) {
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

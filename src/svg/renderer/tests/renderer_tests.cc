@@ -57,7 +57,7 @@ protected:
     std::vector<char> fileData(fileLength + 1);
     file.read(fileData.data(), fileLength);
 
-    auto maybeResult = XMLParser::ParseSVG(fileData);
+    auto maybeResult = parser::XMLParser::ParseSVG(fileData);
     EXPECT_FALSE(maybeResult.hasError())
         << "Parse Error: " << maybeResult.error().line << ":" << maybeResult.error().offset << ": "
         << maybeResult.error().reason;

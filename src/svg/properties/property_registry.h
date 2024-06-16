@@ -1,8 +1,6 @@
 #pragma once
 /// @file
 
-#include <span>
-
 #include "src/base/box.h"
 #include "src/base/parser/parse_result.h"
 #include "src/css/color.h"
@@ -41,8 +39,8 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
 }  // namespace detail
 
 class PropertyRegistry;
-using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
-                                                      const PropertyParseFnParams& params);
+using PropertyParseFn = std::optional<parser::ParseError> (*)(
+    PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
 
 class PropertyRegistry {
 public:
@@ -87,7 +85,7 @@ public:
       "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
 
   /// Properties which don't have specific listings above, which are stored as raw css declarations.
-  std::map<RcString, UnparsedProperty> unparsedProperties;
+  std::map<RcString, parser::UnparsedProperty> unparsedProperties;
 
   /// Constructor.
   PropertyRegistry();
@@ -183,8 +181,8 @@ public:
    * @param specificity Specificity of the declaration.
    * @return Error if the declaration had errors parsing or the property is not supported.
    */
-  std::optional<ParseError> parseProperty(const css::Declaration& declaration,
-                                          css::Specificity specificity);
+  std::optional<parser::ParseError> parseProperty(const css::Declaration& declaration,
+                                                  css::Specificity specificity);
 
   /**
    * Parse a HTML/SVG style attribute, corresponding to a CSS <declaration-list>, ignoring any parse
@@ -206,9 +204,9 @@ public:
    * @return true if the element supports this attribute and it was parsed successfully, or a \ref
    *   ParseError if parsing failed.
    */
-  ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
-                                               std::optional<ElementType> type = std::nullopt,
-                                               EntityHandle handle = EntityHandle());
+  parser::ParseResult<bool> parsePresentationAttribute(
+      std::string_view name, std::string_view value, std::optional<ElementType> type = std::nullopt,
+      EntityHandle handle = EntityHandle());
 
   /**
    * Ostream output operator, for debugging which outputs a human-readable representation of all of

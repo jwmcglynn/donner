@@ -7,6 +7,8 @@
 
 namespace donner::svg {
 
+using namespace base::parser;  // NOLINT: For tests
+
 using css::Color;
 using css::ComponentValue;
 using css::Declaration;

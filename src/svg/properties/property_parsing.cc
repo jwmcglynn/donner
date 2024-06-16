@@ -3,10 +3,11 @@
 #include "src/css/parser/value_parser.h"
 #include "src/svg/components/transform_component.h"
 #include "src/svg/parser/css_transform_parser.h"
+#include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/parser/transform_parser.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 namespace {
 
@@ -24,7 +25,7 @@ std::span<const css::ComponentValue> TrimTrailingWhitespace(
 std::span<const css::ComponentValue> PropertyParseFnParams::components() const {
   if (const std::string_view* str = std::get_if<std::string_view>(&valueOrComponents)) {
     if (!parsedComponents_) {
-      parsedComponents_ = std::make_optional(css::ValueParser::Parse(*str));
+      parsedComponents_ = std::make_optional(css::parser::ValueParser::Parse(*str));
     }
 
     return parsedComponents_.value();
@@ -132,4 +133,4 @@ ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> compone
   return err;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

@@ -4,7 +4,7 @@
 
 #include "absl/strings/charconv.h"
 
-namespace donner {
+namespace donner::base::parser {
 
 ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Options options) {
   auto begin = str.begin();
@@ -77,4 +77,4 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
   }
 }
 
-}  // namespace donner
+}  // namespace donner::base::parser

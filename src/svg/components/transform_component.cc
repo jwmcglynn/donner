@@ -9,26 +9,26 @@ namespace donner::svg::components {
 void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
                                                      const ComputedStyleComponent& style,
                                                      const FontMetrics& fontMetrics,
-                                                     std::vector<ParseError>* outWarnings) {
+                                                     std::vector<parser::ParseError>* outWarnings) {
   // TODO: This should avoid recomputing the transform each request.
   const auto& properties = style.properties->unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
-    const UnparsedProperty& property = it->second;
+    const parser::UnparsedProperty& property = it->second;
 
-    PropertyParseFnParams params;
+    parser::PropertyParseFnParams params;
     params.valueOrComponents = property.declaration.values;
     params.specificity = property.specificity;
-    params.parseBehavior = PropertyParseBehavior::AllowUserUnits;
+    params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
 
     auto maybeError = Parse(
         params,
-        [](const PropertyParseFnParams& params) {
+        [](const parser::PropertyParseFnParams& params) {
           if (const std::string_view* str =
                   std::get_if<std::string_view>(&params.valueOrComponents)) {
-            return TransformParser::Parse(*str).map<CssTransform>(
+            return parser::TransformParser::Parse(*str).map<CssTransform>(
                 [](const Transformd& transform) { return CssTransform(transform); });
           } else {
-            return CssTransformParser::Parse(params.components());
+            return parser::CssTransformParser::Parse(params.components());
           }
         },
         &transform);
@@ -48,7 +48,7 @@ void TransformComponent::computeWithPrecomputedStyle(EntityHandle handle,
   }
 }
 
-void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings) {
+void ComputeAllTransforms(Registry& registry, std::vector<parser::ParseError>* outWarnings) {
   // Create placeholder ComputedTransformComponents for all elements in the tree.
   for (auto entity : registry.view<TransformComponent>()) {
     std::ignore = registry.get_or_emplace<ComputedTransformComponent>(entity);

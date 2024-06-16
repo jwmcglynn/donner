@@ -9,9 +9,12 @@
 #include "src/svg/registry/registry.h"
 #include "src/svg/xml/xml_qualified_name.h"
 
-namespace donner {
-struct ParseError;
-}
+namespace donner::base::parser {
+
+template <typename T>
+class ParseResult;
+
+}  // namespace donner::base::parser
 
 namespace donner::svg {
 
@@ -113,7 +116,8 @@ public:
    * @return true if the attribute was set, false if the attribute is not a valid presentation
    *   attribute for this element, or a \ref ParseError if the value is invalid.
    */
-  ParseResult<bool> trySetPresentationAttribute(std::string_view name, std::string_view value);
+  base::parser::ParseResult<bool> trySetPresentationAttribute(std::string_view name,
+                                                              std::string_view value);
 
   /**
    * Returns true if the element has an attribute with the given name.

@@ -2,7 +2,7 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Style>(
@@ -11,4 +11,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Style>(
   return false;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

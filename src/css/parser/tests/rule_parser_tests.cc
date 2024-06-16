@@ -9,8 +9,7 @@ using testing::ElementsAre;
 using testing::Eq;
 using testing::Optional;
 
-namespace donner {
-namespace css {
+namespace donner::css::parser {
 
 TEST(RuleParser, Empty) {
   EXPECT_THAT(RuleParser::ParseStylesheet(""), ElementsAre());
@@ -75,7 +74,7 @@ TEST(RuleParser, ParseRule) {
   }
 }
 
-TEST(RuleParser, ParseRule_AtRule) {
+TEST(RuleParser, ParseRuleAtRule) {
   EXPECT_THAT(RuleParser::ParseRule("@other"), Optional(AtRuleIs("other", ElementsAre())));
   EXPECT_THAT(RuleParser::ParseRule("@charset"), Optional(InvalidRuleType()));
   EXPECT_THAT(RuleParser::ParseRule("@charset \"test\""), Optional(InvalidRuleType()));
@@ -118,5 +117,4 @@ TEST(RuleParser, ParseStylesheet) {
   EXPECT_THAT(RuleParser::ParseStylesheet("-->"), ElementsAre());
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css::parser

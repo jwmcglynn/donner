@@ -22,7 +22,7 @@ public:
    * @returns Computed style component for the entity
    */
   const ComputedStyleComponent& computeStyle(EntityHandle handle,
-                                             std::vector<ParseError>* outWarnings);
+                                             std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Updates \ref LayoutSystem with computed style information, creating \ref
@@ -31,7 +31,7 @@ public:
    * @param handle Entity handle to compute the style for
    * @param outWarnings Containing any warnings found
    */
-  void applyStyleToLayout(EntityHandle handle, std::vector<ParseError>* outWarnings);
+  void applyStyleToLayout(EntityHandle handle, std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Computes the style for all entities in the registry.
@@ -39,7 +39,7 @@ public:
    * @param registry Registry to compute the styles, used to query for all entities in the tree.
    * @param outWarnings Containing any warnings found
    */
-  void computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings);
+  void computeAllStyles(Registry& registry, std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Computes the style for the given entities in the registry.
@@ -49,11 +49,11 @@ public:
    * @param outWarnings Containing any warnings found
    */
   void computeStylesFor(Registry& registry, std::span<const Entity> entities,
-                        std::vector<ParseError>* outWarnings);
+                        std::vector<parser::ParseError>* outWarnings);
 
 private:
   void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                             std::vector<ParseError>* outWarnings);
+                             std::vector<parser::ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

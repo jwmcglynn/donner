@@ -21,9 +21,9 @@ struct TransformComponent {
 
   void computeWithPrecomputedStyle(EntityHandle handle, const ComputedStyleComponent& style,
                                    const FontMetrics& fontMetrics,
-                                   std::vector<ParseError>* outWarnings);
+                                   std::vector<parser::ParseError>* outWarnings);
 };
 
-void ComputeAllTransforms(Registry& registry, std::vector<ParseError>* outWarnings);
+void ComputeAllTransforms(Registry& registry, std::vector<parser::ParseError>* outWarnings);
 
 }  // namespace donner::svg::components

@@ -24,7 +24,7 @@ public:
    * @param verbose If true, enable verbose logging.
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
-  void instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings);
+  void instantiateRenderTree(bool verbose, std::vector<parser::ParseError>* outWarnings);
 
 private:
   /**
@@ -32,7 +32,7 @@ private:
    *
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
-  void createComputedComponents(std::vector<ParseError>* outWarnings);
+  void createComputedComponents(std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Creates all rendering instances for the document, the final step before it can be rendered.

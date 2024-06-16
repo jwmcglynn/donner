@@ -276,7 +276,8 @@ private:
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
-                                const PaintServer& paint, std::vector<ParseError>* outWarnings) {
+                                const PaintServer& paint,
+                                std::vector<parser::ParseError>* outWarnings) {
   if (paint.is<PaintServer::ElementReference>()) {
     const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
 
@@ -293,7 +294,8 @@ void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchT
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
 
-void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
+void RenderingContext::instantiateRenderTree(bool verbose,
+                                             std::vector<parser::ParseError>* outWarnings) {
   createComputedComponents(outWarnings);
   instantiateRenderTreeWithPrecomputedTree(verbose);
 }
@@ -306,7 +308,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 // 6. Decompose shapes to paths
 // 7. Resolve fill and stroke references (paints)
 // 8. Resolve filter references
-void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
+void RenderingContext::createComputedComponents(std::vector<parser::ParseError>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
   PaintSystem().createShadowTrees(registry_, outWarnings);
 
@@ -321,7 +323,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
     } else if (shadowTreeComponent.mainHref() && outWarnings) {
       // We had a main href but it failed to resolve.
-      ParseError err;
+      parser::ParseError err;
       err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
                    shadowTreeComponent.mainHref().value_or("") + "'";
       outWarnings->emplace_back(std::move(err));
@@ -367,7 +369,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
         }
       } else if (outWarnings) {
         // We had a href but it failed to resolve.
-        ParseError err;
+        parser::ParseError err;
         err.reason =
             std::string("Warning: Failed to resolve offscreen shadow tree target with href '") +
             ref.href + "'";

@@ -45,7 +45,7 @@ public:
   template <typename T>
   const ComputedPathComponent* createComputedPath(EntityHandle handle, const T& component,
                                                   const FontMetrics& fontMetrics,
-                                                  std::vector<ParseError>* outWarnings) {
+                                                  std::vector<parser::ParseError>* outWarnings) {
     const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
     return createComputedShapeWithStyle(handle, component, style, fontMetrics, outWarnings);
   }
@@ -61,9 +61,9 @@ public:
    * @param fontMetrics Font metrics, used to scale lengths
    * @param outWarnings Containing any warnings found
    */
-  const ComputedPathComponent* createComputedPathIfShape(EntityHandle handle,
-                                                         const FontMetrics& fontMetrics,
-                                                         std::vector<ParseError>* outWarnings);
+  const ComputedPathComponent* createComputedPathIfShape(
+      EntityHandle handle, const FontMetrics& fontMetrics,
+      std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Create \ref ComputedPathComponent for all entities in the registry that have a shape component.
@@ -73,47 +73,36 @@ public:
    * @param registry Registry used to find all shape components
    * @param outWarnings Containing any warnings found
    */
-  void instantiateAllComputedPaths(Registry& registry, std::vector<ParseError>* outWarnings);
+  void instantiateAllComputedPaths(Registry& registry,
+                                   std::vector<parser::ParseError>* outWarnings);
 
 private:
   using AllShapes = entt::type_list<CircleComponent, EllipseComponent, LineComponent, PathComponent,
                                     PolyComponent, RectComponent>;
 
-  const ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
-                                                            const CircleComponent& circle,
-                                                            const ComputedStyleComponent& style,
-                                                            const FontMetrics& fontMetrics,
-                                                            std::vector<ParseError>* outWarnings);
+  const ComputedPathComponent* createComputedShapeWithStyle(
+      EntityHandle handle, const CircleComponent& circle, const ComputedStyleComponent& style,
+      const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings);
 
-  const ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
-                                                            const EllipseComponent& ellipse,
-                                                            const ComputedStyleComponent& style,
-                                                            const FontMetrics& fontMetrics,
-                                                            std::vector<ParseError>* outWarnings);
+  const ComputedPathComponent* createComputedShapeWithStyle(
+      EntityHandle handle, const EllipseComponent& ellipse, const ComputedStyleComponent& style,
+      const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings);
 
-  const ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
-                                                            const LineComponent& line,
-                                                            const ComputedStyleComponent& style,
-                                                            const FontMetrics& fontMetrics,
-                                                            std::vector<ParseError>* outWarnings);
+  const ComputedPathComponent* createComputedShapeWithStyle(
+      EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
+      const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings);
 
-  const ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
-                                                            const PathComponent& path,
-                                                            const ComputedStyleComponent& style,
-                                                            const FontMetrics& fontMetrics,
-                                                            std::vector<ParseError>* outWarnings);
+  const ComputedPathComponent* createComputedShapeWithStyle(
+      EntityHandle handle, const PathComponent& path, const ComputedStyleComponent& style,
+      const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings);
 
-  const ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
-                                                            const PolyComponent& poly,
-                                                            const ComputedStyleComponent& style,
-                                                            const FontMetrics& fontMetrics,
-                                                            std::vector<ParseError>* outWarnings);
+  const ComputedPathComponent* createComputedShapeWithStyle(
+      EntityHandle handle, const PolyComponent& poly, const ComputedStyleComponent& style,
+      const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings);
 
-  const ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
-                                                            const RectComponent& rect,
-                                                            const ComputedStyleComponent& style,
-                                                            const FontMetrics& fontMetrics,
-                                                            std::vector<ParseError>* outWarnings);
+  const ComputedPathComponent* createComputedShapeWithStyle(
+      EntityHandle handle, const RectComponent& rect, const ComputedStyleComponent& style,
+      const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

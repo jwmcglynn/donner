@@ -44,7 +44,8 @@ public:
   /// @name Computed properties
   /// @{
 
-  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry,
+                                        std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Evaluates SizedElementProperties and returns the resulting bounds, using precomputed style
@@ -59,7 +60,7 @@ public:
    */
   Boxd computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
                              const ComputedStyleComponent& style, FontMetrics fontMetrics,
-                             std::vector<ParseError>* outWarnings);
+                             std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Creates a \ref ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -73,7 +74,7 @@ public:
    */
   const ComputedSizedElementComponent& createComputedSizedElementComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, FontMetrics fontMetrics,
-      std::vector<ParseError>* outWarnings);
+      std::vector<parser::ParseError>* outWarnings);
 
   /**
    * If this element establishes a clipping context, returns the clip rect in the parent's

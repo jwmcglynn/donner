@@ -8,7 +8,9 @@ using testing::ElementsAre;
 using testing::Eq;
 using testing::Optional;
 
-namespace donner::css {
+namespace donner::css::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 TEST(Color, ColorPrintTo) {
   using namespace string_literals;
@@ -284,4 +286,4 @@ TEST(ColorParser, HslErrors) {
               ParseErrorIs("Unexpected token when parsing function 'hsl'"));
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

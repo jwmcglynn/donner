@@ -10,7 +10,9 @@ using testing::ElementsAre;
 using testing::Eq;
 using testing::Optional;
 
-namespace donner::css {
+namespace donner::css::parser {
+
+using namespace donner::base::parser;  // NOLINT: For tests
 
 namespace {
 
@@ -244,4 +246,4 @@ TEST(AnbMicrosyntaxParser, FunctionTokenInvalid) {
               ParseErrorIs("Expected CSS token when parsing An+B microsyntax"));
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

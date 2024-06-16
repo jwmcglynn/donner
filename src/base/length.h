@@ -8,6 +8,70 @@
 namespace donner {
 
 /**
+ * The unit identifier for a length, corresponding to CSS unit identifiers.
+ * See https://www.w3.org/TR/css-values-3/#lengths for definitions.
+ */
+enum class LengthUnit {
+  None,     ///< Unitless.
+  Percent,  ///< Percentage, using the '\%' symbol.
+  /**
+   * @addtogroup _ABSOLUTE
+   * Absolute lengths, https://www.w3.org/TR/css-values-3/#absolute-lengths.
+   *
+   * @{
+   */
+  Cm,  ///< Centimeters, 1cm = 96px/2.54.
+  Mm,  ///< Millimeters, 1mm = 1/10th of 1cm.
+  Q,   ///< Quarter-millimeters, 1Q = 1/40th of 1cm.
+  In,  ///< Inches, 1in = 2.54cm = 96px.
+  Pc,  ///< Picas, 1pc = 1/6th of 1in
+  Pt,  ///< Points, 1pt = 1/72nd of 1in.
+  Px,  ///< Pixels, 1px = 1/96th of 1in.
+  /// @}
+  /**
+   * @addtogroup _RELATIVE
+   * Relative lengths, https://www.w3.org/TR/css-values-3/#relative-lengths.
+   *
+   * @{
+   */
+  Em,    ///< Font size, 1em = current font size.
+  Ex,    ///< x-height of the current font, 1ex = x-height of current font.
+  Ch,    ///< Width of the glyph '0' in the current font, 1ch = width of '0' in current font.
+  Rem,   ///< Root font size, 1rem = font size of the root element.
+  Vw,    ///< Viewport width, 1vw = 1% of viewport width.
+  Vh,    ///< Viewport height, 1vh = 1% of viewport height.
+  Vmin,  ///< Smaller of viewport width and height, 1vmin = 1% of smaller of viewport width and
+         ///< height.
+  Vmax,  ///< Larger of viewport width and height, 1vmax = 1% of larger of viewport width and
+         ///< height.
+  /// @}
+};
+
+inline std::ostream& operator<<(std::ostream& os, LengthUnit unit) {
+  switch (unit) {
+    case LengthUnit::None: return os << "None";
+    case LengthUnit::Percent: return os << "Percent";
+    case LengthUnit::Cm: return os << "Cm";
+    case LengthUnit::Mm: return os << "Mm";
+    case LengthUnit::Q: return os << "Q";
+    case LengthUnit::In: return os << "In";
+    case LengthUnit::Pc: return os << "Pc";
+    case LengthUnit::Pt: return os << "Pt";
+    case LengthUnit::Px: return os << "Px";
+    case LengthUnit::Em: return os << "Em";
+    case LengthUnit::Ex: return os << "Ex";
+    case LengthUnit::Ch: return os << "Ch";
+    case LengthUnit::Rem: return os << "Rem";
+    case LengthUnit::Vw: return os << "Vw";
+    case LengthUnit::Vh: return os << "Vh";
+    case LengthUnit::Vmin: return os << "Vmin";
+    case LengthUnit::Vmax: return os << "Vmax";
+  }
+
+  UTILS_UNREACHABLE();
+}
+
+/**
  * Parses a CSS `<length-percentage>` type as defined by
  * https://www.w3.org/TR/css-values-3/#typedef-length-percentage
  *
@@ -32,45 +96,8 @@ namespace donner {
  */
 template <typename T>
 struct Length {
-  /**
-   * The unit identifier for a length, corresponding to CSS unit identifiers.
-   * See https://www.w3.org/TR/css-values-3/#lengths for definitions.
-   */
-  enum class Unit {
-    None,     ///< Unitless.
-    Percent,  ///< Percentage, using the '\%' symbol.
-    /**
-     * @addtogroup _ABSOLUTE
-     * Absolute lengths, https://www.w3.org/TR/css-values-3/#absolute-lengths.
-     *
-     * @{
-     */
-    Cm,  ///< Centimeters, 1cm = 96px/2.54.
-    Mm,  ///< Millimeters, 1mm = 1/10th of 1cm.
-    Q,   ///< Quarter-millimeters, 1Q = 1/40th of 1cm.
-    In,  ///< Inches, 1in = 2.54cm = 96px.
-    Pc,  ///< Picas, 1pc = 1/6th of 1in
-    Pt,  ///< Points, 1pt = 1/72nd of 1in.
-    Px,  ///< Pixels, 1px = 1/96th of 1in.
-    /// @}
-    /**
-     * @addtogroup _RELATIVE
-     * Relative lengths, https://www.w3.org/TR/css-values-3/#relative-lengths.
-     *
-     * @{
-     */
-    Em,    ///< Font size, 1em = current font size.
-    Ex,    ///< x-height of the current font, 1ex = x-height of current font.
-    Ch,    ///< Width of the glyph '0' in the current font, 1ch = width of '0' in current font.
-    Rem,   ///< Root font size, 1rem = font size of the root element.
-    Vw,    ///< Viewport width, 1vw = 1% of viewport width.
-    Vh,    ///< Viewport height, 1vh = 1% of viewport height.
-    Vmin,  ///< Smaller of viewport width and height, 1vmin = 1% of smaller of viewport width and
-           ///< height.
-    Vmax,  ///< Larger of viewport width and height, 1vmax = 1% of larger of viewport width and
-           ///< height.
-    /// @}
-  };
+  /// The unit identifier for the length.
+  using Unit = LengthUnit;
 
   /// The numeric value of the length.
   T value = T(0);
@@ -176,27 +203,7 @@ struct Length {
    * @return The ostream that was written to, for chaining.
    */
   friend std::ostream& operator<<(std::ostream& os, const Length<T>& length) {
-    os << length.value;
-    switch (length.unit) {
-      case Unit::None: break;
-      case Unit::Percent: os << "%"; break;
-      case Unit::Cm: os << "cm"; break;
-      case Unit::Mm: os << "mm"; break;
-      case Unit::Q: os << "Q"; break;
-      case Unit::In: os << "in"; break;
-      case Unit::Pc: os << "pc"; break;
-      case Unit::Pt: os << "pt"; break;
-      case Unit::Px: os << "px"; break;
-      case Unit::Em: os << "em"; break;
-      case Unit::Ex: os << "ex"; break;
-      case Unit::Ch: os << "ch"; break;
-      case Unit::Rem: os << "rem"; break;
-      case Unit::Vw: os << "vw"; break;
-      case Unit::Vh: os << "vh"; break;
-      case Unit::Vmin: os << "vmin"; break;
-      case Unit::Vmax: os << "vmax"; break;
-    }
-    return os;
+    return os << length.value << " " << length.unit;
   }
 
 private:

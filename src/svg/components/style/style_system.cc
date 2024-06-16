@@ -112,15 +112,15 @@ private:
 
 }  // namespace
 
-const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
-                                                        std::vector<ParseError>* outWarnings) {
+const ComputedStyleComponent& StyleSystem::computeStyle(
+    EntityHandle handle, std::vector<parser::ParseError>* outWarnings) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
   computePropertiesInto(handle, computedStyle, outWarnings);
   return computedStyle;
 }
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                                        std::vector<ParseError>* outWarnings) {
+                                        std::vector<parser::ParseError>* outWarnings) {
   if (computedStyle.properties) {
     return;  // Already computed.
   }
@@ -211,7 +211,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 }
 
-void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings) {
+void StyleSystem::computeAllStyles(Registry& registry,
+                                   std::vector<parser::ParseError>* outWarnings) {
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating
   // computed style components also creates the parents, and we can't modify the component list
   // while iterating it.
@@ -227,13 +228,14 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* 
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
-                                   std::vector<ParseError>* outWarnings) {
+                                   std::vector<parser::ParseError>* outWarnings) {
   for (Entity entity : entities) {
     StyleSystem().computeStyle(EntityHandle(registry, entity), outWarnings);
   }
 }
 
-void StyleSystem::applyStyleToLayout(EntityHandle handle, std::vector<ParseError>* outWarnings) {
+void StyleSystem::applyStyleToLayout(EntityHandle handle,
+                                     std::vector<parser::ParseError>* outWarnings) {
   auto& style = handle.get<ComputedStyleComponent>();
   computePropertiesInto(handle, style, outWarnings);
 

@@ -6,7 +6,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/base/vector2.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * @page poly_points Polyline/polygon points list
@@ -62,4 +62,4 @@ public:
   static ParseResult<std::vector<Vector2d>> Parse(std::string_view str);
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

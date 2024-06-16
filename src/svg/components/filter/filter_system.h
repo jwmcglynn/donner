@@ -16,9 +16,10 @@ namespace donner::svg::components {
 class FilterSystem {
 public:
   void createComputedFilter(EntityHandle handle, const FilterComponent& component,
-                            std::vector<ParseError>* outWarnings);
+                            std::vector<parser::ParseError>* outWarnings);
 
-  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry,
+                                        std::vector<parser::ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

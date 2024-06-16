@@ -2,11 +2,11 @@
 
 #include "src/base/parser/details/parser_base.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 namespace {
 
-class TransformParserImpl : public ParserBase {
+class TransformParserImpl : public base::parser::ParserBase {
 public:
   TransformParserImpl(std::string_view str) : ParserBase(str) {}
 
@@ -195,4 +195,4 @@ ParseResult<Transformd> TransformParser::Parse(std::string_view str) {
   return parser.parse();
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

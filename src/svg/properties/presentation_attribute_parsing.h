@@ -4,7 +4,7 @@
 #include "src/svg/properties/property_parsing.h"
 #include "src/svg/registry/registry.h"  // For EntityHandle
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Parse a presentation attribute,which can contain a CSS value, for a specific \ref ElementType.
@@ -24,4 +24,4 @@ template <ElementType Type>
 ParseResult<bool> ParsePresentationAttribute(EntityHandle handle, std::string_view name,
                                              const PropertyParseFnParams& params);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

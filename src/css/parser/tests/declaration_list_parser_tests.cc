@@ -6,8 +6,7 @@
 
 using testing::ElementsAre;
 
-namespace donner {
-namespace css {
+namespace donner::css::parser {
 
 TEST(DeclarationListParser, Empty) {
   EXPECT_THAT(DeclarationListParser::Parse(""), ElementsAre());
@@ -110,5 +109,4 @@ TEST(DeclarationListParser, OnlyDeclarations) {
                           DeclarationIs("name2", ElementsAre(TokenIsIdent("value2")), true)));
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css::parser

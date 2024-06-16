@@ -12,8 +12,8 @@ static constexpr std::string_view kSuffix("\n</svg>");
 
 }  // namespace
 
-SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& options,
-                               Vector2i size) {
+SVGDocument instantiateSubtree(std::string_view str, const parser::XMLParser::Options& options,
+                               const Vector2i& size) {
   std::vector<char> fileData;
   const std::string prefix = std::string("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"") +
                              std::to_string(size.x) + "\" height=\"" + std::to_string(size.y) +
@@ -25,8 +25,8 @@ SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& o
   fileData.insert(fileData.end(), kSuffix.begin(), kSuffix.end());
   fileData.push_back('\0');
 
-  std::vector<ParseError> warnings;
-  auto maybeResult = XMLParser::ParseSVG(fileData, &warnings, options);
+  std::vector<parser::ParseError> warnings;
+  auto maybeResult = parser::XMLParser::ParseSVG(fileData, &warnings, options);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
@@ -40,7 +40,8 @@ SVGDocument instantiateSubtree(std::string_view str, const XMLParser::Options& o
   return std::move(maybeResult.result());
 }
 
-ParsedFragment<> instantiateSubtreeElement(std::string_view str, const XMLParser::Options& options,
+ParsedFragment<> instantiateSubtreeElement(std::string_view str,
+                                           const parser::XMLParser::Options& options,
                                            Vector2i size) {
   SVGDocument document = instantiateSubtree(str, options, size);
 

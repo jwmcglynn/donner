@@ -13,7 +13,9 @@
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 
-namespace donner::css {
+namespace donner::css::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 struct FakeElementData {
   RcString id;
@@ -485,4 +487,4 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   EXPECT_TRUE(matches(":only-of-type", element(mid1)));
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

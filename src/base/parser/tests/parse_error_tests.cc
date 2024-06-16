@@ -3,7 +3,7 @@
 
 #include "src/base/parser/parse_error.h"
 
-namespace donner {
+namespace donner::base::parser {
 
 TEST(ParseError, ResolveOffset) {
   {
@@ -36,4 +36,4 @@ TEST(ParseError, Output) {
   EXPECT_EQ((std::ostringstream() << err).str(), "Parse error at 1:2: Test reason");
 }
 
-}  // namespace donner
+}  // namespace donner::base::parser

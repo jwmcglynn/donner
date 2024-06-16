@@ -42,7 +42,7 @@ void ComputedRadialGradientComponent::inheritAttributes(EntityHandle handle, Ent
 
 }  // namespace donner::svg::components
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::RadialGradient>(
@@ -52,4 +52,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::RadialGradient>(
   return false;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

@@ -20,8 +20,8 @@ struct CircleProperties {
 
 struct ComputedCircleComponent {
   ComputedCircleComponent(const CircleProperties& inputProperties,
-                          const std::map<RcString, UnparsedProperty>& unparsedProperties,
-                          std::vector<ParseError>* outWarnings);
+                          const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+                          std::vector<parser::ParseError>* outWarnings);
 
   CircleProperties properties;
 };

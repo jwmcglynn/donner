@@ -7,7 +7,7 @@
 
 using testing::ElementsAre;
 
-namespace donner::css {
+namespace donner::css::parser {
 
 MATCHER_P2(SelectorRuleIs, selector, declarations, "") {
   return testing::ExplainMatchResult(selector, arg.selector, result_listener) &&
@@ -31,4 +31,4 @@ TEST(StylesheetParser, WithRules) {
                   ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")))))));
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

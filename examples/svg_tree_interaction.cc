@@ -26,6 +26,9 @@ struct MutableString : std::vector<char> {
 
 }  // namespace
 
+using donner::base::parser::ParseError;
+using donner::base::parser::ParseResult;
+
 int main(int argc, char* argv[]) {
   // This is the base SVG we are loading, a simple path containing a line.
   MutableString svgContents(R"(
@@ -36,8 +39,8 @@ int main(int argc, char* argv[]) {
 
   // Call ParseSVG to load the SVG file, not that this modifies the original string, and the
   // underlying string must remain valid as long as the SVGDocument is in use.
-  donner::ParseResult<donner::svg::SVGDocument> maybeResult =
-      donner::svg::XMLParser::ParseSVG(svgContents);
+  ParseResult<donner::svg::SVGDocument> maybeResult =
+      donner::svg::parser::XMLParser::ParseSVG(svgContents);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";

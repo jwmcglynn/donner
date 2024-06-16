@@ -109,8 +109,8 @@ void SVGElement::setStyle(std::string_view style) {
                                                                          RcString(style));
 }
 
-ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
-                                                          std::string_view value) {
+parser::ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
+                                                                  std::string_view value) {
   std::string_view actualName = name;
 
   // gradientTransform and patternTransform are special, since they map to the
@@ -123,7 +123,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     actualName = "transform";
   }
 
-  ParseResult<bool> trySetResult =
+  auto trySetResult =
       handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
           handle_, actualName, value);
 
@@ -164,10 +164,9 @@ void SVGElement::setAttribute(const XMLQualifiedNameRef& name, std::string_view 
   // TODO: Add support for namespace when parsing presentation attributes.
   // Only parse empty namespaces for now.
   if (name.namespacePrefix.empty()) {
-    const ParseResult<bool> trySetResult = trySetPresentationAttribute(name.name, value);
+    const auto trySetResult = trySetPresentationAttribute(name.name, value);
     if (trySetResult.hasResult() && trySetResult.result()) {
-      // Early-return since if this succeed, the attribute has already been
-      // stored.
+      // Early-return since if this succeeds, the attribute has already been stored.
       return;
     }
   }
@@ -189,7 +188,7 @@ void SVGElement::removeAttribute(const XMLQualifiedNameRef& name) {
     // TODO: Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.
     if (name.namespacePrefix.empty()) {
-      [[maybe_unused]] ParseResult<bool> trySetResult =
+      [[maybe_unused]] auto trySetResult =
           handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
               handle_, name.name, "initial");
     }
@@ -275,7 +274,7 @@ void SVGElement::remove() {
 }
 
 std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
-  const ParseResult<css::Selector> selectorResult = css::SelectorParser::Parse(str);
+  const auto selectorResult = css::parser::SelectorParser::Parse(str);
   if (selectorResult.hasError()) {
     return std::nullopt;
   }

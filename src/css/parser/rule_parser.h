@@ -5,7 +5,7 @@
 
 #include "src/css/rule.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 /**
  * Rule-related parsing routines, including parsing individual rules, lists of rules, and
@@ -42,4 +42,4 @@ public:
   static std::optional<Rule> ParseRule(std::string_view str);
 };
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

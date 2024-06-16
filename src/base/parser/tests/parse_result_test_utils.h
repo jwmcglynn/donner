@@ -4,12 +4,12 @@
 
 #include <concepts>
 #include <ostream>
-#include <string>
 
 #include "src/base/parser/parse_result.h"
 
-namespace donner {
+namespace donner::base::parser {
 
+// TODO: Move this to a more general location, like base/concepts/is_optional_like.h
 template <typename T>
 concept IsOptionalLike = requires(T t) {
   { t.has_value() } -> std::same_as<bool>;
@@ -118,4 +118,4 @@ MATCHER_P2(ParseResultAndError, resultMatcher, errorMessageMatcher, "") {
          testing::ExplainMatchResult(errorMessageMatcher, arg.error(), result_listener);
 }
 
-}  // namespace donner
+}  // namespace donner::base::parser

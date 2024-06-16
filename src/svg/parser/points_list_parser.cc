@@ -3,11 +3,10 @@
 #include <vector>
 
 #include "src/base/parser/details/parser_base.h"
-#include "src/base/parser/number_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
-class PointsListParserImpl : public ParserBase {
+class PointsListParserImpl : public base::parser::ParserBase {
 public:
   PointsListParserImpl(std::string_view str) : ParserBase(str) {}
 
@@ -59,4 +58,4 @@ ParseResult<std::vector<Vector2d>> PointsListParser::Parse(std::string_view str)
   return parser.parse();
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

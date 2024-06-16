@@ -2,7 +2,7 @@
 
 #include "src/base/string_utils.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 namespace {
 
@@ -485,4 +485,4 @@ ParseResult<AnbMicrosyntaxParser::Result> AnbMicrosyntaxParser::Parse(
   });
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

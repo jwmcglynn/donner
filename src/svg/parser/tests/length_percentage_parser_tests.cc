@@ -6,7 +6,9 @@
 #include "src/css/parser/details/tokenizer.h"
 #include "src/svg/parser/length_percentage_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 namespace {
 
@@ -107,4 +109,4 @@ TEST(LengthPercentageParserTest, MultipleComponents) {
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

@@ -29,7 +29,7 @@ void ComputedPatternComponent::resolveAndInheritAttributes(EntityHandle handle, 
 
 }  // namespace donner::svg::components
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Pattern>(
@@ -39,4 +39,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Pattern>(
   return false;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

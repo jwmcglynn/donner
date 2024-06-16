@@ -22,7 +22,8 @@ public:
 
       auto end = std::chrono::high_resolution_clock::now();
       auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start_);
-      std::cout << name_ << ": " << duration.count() << "ms" << std::endl;
+      std::cout << name_ << ": " << duration.count() << "ms"
+                << "\n";
     }
   }
 
@@ -45,7 +46,7 @@ void DumpTree(SVGElement element, int depth) {
       std::cout << ", viewbox: " << *viewbox;
     }
   }
-  std::cout << std::endl;
+  std::cout << "\n";
   for (auto elm = element.firstChild(); elm; elm = elm->nextSibling()) {
     DumpTree(elm.value(), depth + 1);
   }
@@ -53,14 +54,16 @@ void DumpTree(SVGElement element, int depth) {
 
 extern "C" int main(int argc, char* argv[]) {
   if (argc != 2) {
-    std::cerr << "Unexpected arg count." << std::endl;
-    std::cerr << "USAGE: renderer_tool <filename>" << std::endl;
+    std::cerr << "Unexpected arg count."
+              << "\n";
+    std::cerr << "USAGE: renderer_tool <filename>"
+              << "\n";
     return 1;
   }
 
   std::ifstream file(argv[1]);
   if (!file) {
-    std::cerr << "Could not open file " << argv[1] << std::endl;
+    std::cerr << "Could not open file " << argv[1] << "\n";
     return 2;
   }
 
@@ -71,34 +74,34 @@ extern "C" int main(int argc, char* argv[]) {
   std::vector<char> fileData(fileLength + 1);
   file.read(fileData.data(), fileLength);
 
-  std::vector<ParseError> warnings;
+  std::vector<parser::ParseError> warnings;
 
   Trace traceParse("Parse");
-  auto maybeResult = XMLParser::ParseSVG(fileData, &warnings);
+  auto maybeResult = parser::XMLParser::ParseSVG(fileData, &warnings);
   traceParse.stop();
 
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
+    std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
     return 3;
   }
 
-  std::cout << "Parsed successfully." << std::endl;
+  std::cout << "Parsed successfully.\n";
 
   if (!warnings.empty()) {
-    std::cout << "Warnings:" << std::endl;
+    std::cout << "Warnings:\n";
     for (auto& w : warnings) {
-      std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << std::endl;
+      std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << "\n";
     }
   }
 
   SVGDocument document = std::move(maybeResult.result());
 
-  std::cout << "Tree:" << std::endl;
+  std::cout << "Tree:\n";
   DumpTree(document.svgElement(), 0);
 
   if (auto path1 = document.svgElement().querySelector("#path1")) {
-    std::cout << "Found path1" << std::endl;
+    std::cout << "Found path1\n";
     path1->setStyle("fill: red");
     path1->setStyle("stroke: white");
   }
@@ -114,15 +117,14 @@ extern "C" int main(int argc, char* argv[]) {
     renderer.draw(document);
   }
 
-  std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << std::endl;
+  std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << "\n";
 
   constexpr const char* kOutputFilename = "output.png";
   if (renderer.save(kOutputFilename)) {
-    std::cout << "Saved to file: " << std::filesystem::absolute(kOutputFilename) << std::endl;
+    std::cout << "Saved to file: " << std::filesystem::absolute(kOutputFilename) << "\n";
     return 0;
   } else {
-    std::cerr << "Failed to save to file: " << std::filesystem::absolute(kOutputFilename)
-              << std::endl;
+    std::cerr << "Failed to save to file: " << std::filesystem::absolute(kOutputFilename) << "\n";
     return 1;
   }
 }

@@ -7,7 +7,7 @@
 #include "src/css/parser/details/subparsers.h"
 #include "src/css/parser/details/tokenizer.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 namespace {
 
@@ -567,4 +567,4 @@ ParseResult<Color> ColorParser::ParseString(std::string_view str) {
   return parser.parseColor();
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

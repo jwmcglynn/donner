@@ -5,7 +5,9 @@
 #include "src/base/tests/base_test_utils.h"
 #include "src/svg/parser/viewbox_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 TEST(ViewboxParser, Empty) {
   EXPECT_THAT(ViewboxParser::Parse(""),
@@ -43,4 +45,4 @@ TEST(ViewboxParser, InvalidSize) {
               ParseErrorIs("Width and height should be positive"));
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

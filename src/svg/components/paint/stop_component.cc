@@ -8,27 +8,30 @@ namespace donner::svg::components {
 
 namespace {
 
-std::optional<ParseError> ParseStopColor(StopProperties& properties,
-                                         const PropertyParseFnParams& params) {
+std::optional<parser::ParseError> ParseStopColor(StopProperties& properties,
+                                                 const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
-      [](const PropertyParseFnParams& params) {
-        return css::ColorParser::Parse(params.components());
+      [](const parser::PropertyParseFnParams& params) {
+        return css::parser::ColorParser::Parse(params.components());
       },
       &properties.stopColor);
 }
 
-std::optional<ParseError> ParseStopOpacity(StopProperties& properties,
-                                           const PropertyParseFnParams& params) {
+std::optional<parser::ParseError> ParseStopOpacity(StopProperties& properties,
+                                                   const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
-      [](const PropertyParseFnParams& params) { return ParseAlphaValue(params.components()); },
+      [](const parser::PropertyParseFnParams& params) {
+        return parser::ParseAlphaValue(params.components());
+      },
       &properties.stopOpacity);
 }
 
 // Returns true if the property was found and parsed successfully.
-ParseResult<bool> ParseProperty(std::string_view name, const PropertyParseFnParams params,
-                                StopProperties& properties) {
+parser::ParseResult<bool> ParseProperty(std::string_view name,
+                                        const parser::PropertyParseFnParams& params,
+                                        StopProperties& properties) {
   // TODO: Case insensitive?
   if (name == "stop-color") {
     if (auto maybeError = ParseStopColor(properties, params)) {
@@ -49,13 +52,13 @@ ParseResult<bool> ParseProperty(std::string_view name, const PropertyParseFnPara
 
 ComputedStopComponent::ComputedStopComponent(
     const StopProperties& inputProperties, const ComputedStyleComponent& style,
-    const std::map<RcString, UnparsedProperty>& unparsedProperties,
-    std::vector<ParseError>* outWarnings)
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+    std::vector<parser::ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
-    const PropertyParseFnParams params =
+    const parser::PropertyParseFnParams params =
         CreateParseFnParams(unparsedProperty.declaration, unparsedProperty.specificity,
-                            PropertyParseBehavior::AllowUserUnits);
+                            parser::PropertyParseBehavior::AllowUserUnits);
 
     auto result = ParseProperty(name, params, properties);
     if (result.hasError() && outWarnings) {
@@ -72,7 +75,7 @@ ComputedStopComponent::ComputedStopComponent(
 
 }  // namespace donner::svg::components
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Stop>(
@@ -82,4 +85,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Stop>(
   return components::ParseProperty(name, params, properties);
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

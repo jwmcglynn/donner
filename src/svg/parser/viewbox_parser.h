@@ -6,7 +6,7 @@
 #include "src/base/box.h"
 #include "src/base/parser/parse_result.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Parse an SVG viewBox attribute, such as `0 0 100 100`.
@@ -35,4 +35,4 @@ public:
   static ParseResult<Boxd> Parse(std::string_view str);
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

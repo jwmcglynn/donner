@@ -10,8 +10,9 @@
 using testing::AllOf;
 using testing::ElementsAre;
 
-namespace donner {
-namespace css {
+namespace donner::css::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 TEST(SelectorParser, Empty) {
   EXPECT_THAT(SelectorParser::Parse(""),
@@ -99,7 +100,7 @@ TEST(SelectorParser, TypeSelector) {
                                               EntryIs(TypeSelectorIs("b"), TypeSelectorIs("c")))));
 }
 
-TEST(SelectorParser, TypeSelector_ToString) {
+TEST(SelectorParser, TypeSelectorToString) {
   EXPECT_THAT(
       SelectorParser::Parse("name"),
       ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(name))))")));
@@ -131,7 +132,7 @@ TEST(SelectorParser, PseudoElementSelector) {
                                        TokenIsIdent("two")))))));
 }
 
-TEST(SelectorParser, PseudoElementSelector_ToString) {
+TEST(SelectorParser, PseudoElementSelectorToString) {
   EXPECT_THAT(SelectorParser::Parse("::after"),
               ParseResultIs(ToStringIs(
                   "Selector(ComplexSelector(CompoundSelector(PseudoElementSelector(after))))")));
@@ -160,7 +161,7 @@ TEST(SelectorParser, PseudoClassSelector) {
                                        TokenIsIdent("two")))))));
 }
 
-TEST(SelectorParser, PseudoClassSelector_ToString) {
+TEST(SelectorParser, PseudoClassSelectorToString) {
   EXPECT_THAT(SelectorParser::Parse(":after"),
               ParseResultIs(ToStringIs(
                   "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(after))))")));
@@ -228,7 +229,7 @@ TEST(SelectorParser, AttributeSelector) {
                   AttributeSelectorIs("key", MatcherIs(AttrMatcher::DashMatch, "value"))))));
 }
 
-TEST(SelectorParser, AttributeSelector_ToString) {
+TEST(SelectorParser, AttributeSelectorToString) {
   EXPECT_THAT(SelectorParser::Parse("a[test]"),
               ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(TypeSelector(a), "
                                        "AttributeSelector(test))))")));
@@ -356,7 +357,7 @@ TEST(SelectorParser, Specificity) {
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm
-TEST(SelectorParser, CssTestSuite_Is) {
+TEST(SelectorParser, CssTestSuiteIs) {
   // Simple selector arguments
   EXPECT_THAT(SelectorParser::Parse(".a :is(.b, .c)"),
               ParseResultIs(ComplexSelectorIs(
@@ -438,5 +439,4 @@ TEST(SelectorParser, CssTestSuite_Is) {
 // TODO: Add more tests from
 // http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/toc.htm
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css::parser

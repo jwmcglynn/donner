@@ -2,9 +2,9 @@
 
 #include "src/base/parser/details/parser_base.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
-class PreserveAspectRatioParserImpl : public ParserBase {
+class PreserveAspectRatioParserImpl : public base::parser::ParserBase {
 public:
   PreserveAspectRatioParserImpl(std::string_view str) : ParserBase(str) {}
 
@@ -85,4 +85,4 @@ ParseResult<PreserveAspectRatio> PreserveAspectRatioParser::Parse(std::string_vi
   return parser.parse();
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

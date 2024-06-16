@@ -6,7 +6,7 @@
 #include "src/css/parser/details/tokenizer.h"
 #include "src/css/selector.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 /*
 Parse according to the following CSS selector grammar, from
@@ -842,4 +842,4 @@ ParseResult<Selector> SelectorParser::Parse(std::string_view str) {
   });
 }
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

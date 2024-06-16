@@ -8,7 +8,7 @@
 #include "src/css/component_value.h"
 #include "src/css/selector.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 /**
  * Parse a CSS selector, or list of selectors, and returns a \ref Selector that can be matched
@@ -35,4 +35,4 @@ public:
   static ParseResult<Selector> Parse(std::string_view str);
 };
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

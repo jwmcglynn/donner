@@ -6,7 +6,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/base/transform.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Parse an SVG transform attribute, such as `translate(100 100)`, using the SVG syntax which does
@@ -47,4 +47,4 @@ public:
   static ParseResult<Transformd> Parse(std::string_view str);
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

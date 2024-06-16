@@ -1,6 +1,6 @@
 #include "src/svg/parser/angle_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseOptions options) {
   if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
@@ -30,4 +30,4 @@ ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseO
   return err;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

@@ -34,8 +34,8 @@ struct EllipseProperties {
 
 struct ComputedEllipseComponent {
   ComputedEllipseComponent(const EllipseProperties& inputProperties,
-                           const std::map<RcString, UnparsedProperty>& unparsedProperties,
-                           std::vector<ParseError>* outWarnings);
+                           const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+                           std::vector<parser::ParseError>* outWarnings);
 
   EllipseProperties properties;
 };

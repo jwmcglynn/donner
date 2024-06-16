@@ -6,6 +6,9 @@
 #include "src/svg/renderer/renderer_skia.h"
 #include "src/svg/svg.h"
 
+using donner::base::parser::ParseError;
+using donner::base::parser::ParseResult;
+
 int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::cerr << "Unexpected arg count.\n";
@@ -31,13 +34,13 @@ int main(int argc, char* argv[]) {
   // SVGDocument, since it is referenced internally.
 
   // The warnings list is optional, call ParseSVG(fileData) to ignore warnings.
-  std::vector<donner::ParseError> warnings;
-  donner::ParseResult<donner::svg::SVGDocument> maybeResult =
-      donner::svg::XMLParser::ParseSVG(fileData, &warnings);
+  std::vector<ParseError> warnings;
+  ParseResult<donner::svg::SVGDocument> maybeResult =
+      donner::svg::parser::XMLParser::ParseSVG(fileData, &warnings);
 
   // ParseResult either contains an SVGDocument or an error.
   if (maybeResult.hasError()) {
-    const donner::ParseError& e = maybeResult.error();
+    const ParseError& e = maybeResult.error();
     std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
     return 3;
   }
@@ -46,7 +49,7 @@ int main(int argc, char* argv[]) {
 
   if (!warnings.empty()) {
     std::cout << "Warnings:\n";
-    for (donner::ParseError& w : warnings) {
+    for (ParseError& w : warnings) {
       std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << "\n";
     }
   }

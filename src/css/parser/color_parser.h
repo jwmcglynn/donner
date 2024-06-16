@@ -8,7 +8,7 @@
 #include "src/css/color.h"
 #include "src/css/component_value.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 /**
  * Parse a CSS color, either from a string or the CSS intermediate representation, a list of
@@ -37,4 +37,4 @@ public:
   static ParseResult<Color> ParseString(std::string_view str);
 };
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

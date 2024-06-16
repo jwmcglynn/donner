@@ -6,11 +6,11 @@
 namespace donner::css {
 
 Stylesheet CSS::ParseStylesheet(std::string_view str) {
-  return StylesheetParser::Parse(str);
+  return parser::StylesheetParser::Parse(str);
 }
 
 std::vector<Declaration> CSS::ParseStyleAttribute(std::string_view str) {
-  return DeclarationListParser::ParseOnlyDeclarations(str);
+  return parser::DeclarationListParser::ParseOnlyDeclarations(str);
 }
 
 }  // namespace donner::css

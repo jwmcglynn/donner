@@ -10,7 +10,9 @@ using testing::AllOf;
 using testing::ElementsAre;
 using testing::HasSubstr;
 
-namespace donner::svg {
+namespace donner::svg::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 using Command = PathSpline::Command;
 using CommandType = PathSpline::CommandType;
@@ -143,7 +145,7 @@ TEST(PathParser, ClosePath) {
   }
 }
 
-TEST(PathParser, ClosePath_ParseErrors) {
+TEST(PathParser, ClosePathParseErrors) {
   // Comma at end is a parse error.
   {
     ParseResult<PathSpline> result = PathParser::Parse("M0,0Z,");
@@ -230,7 +232,7 @@ TEST(PathParser, LineTo) {
   }
 }
 
-TEST(PathParser, LineTo_Implicit) {
+TEST(PathParser, LineToImplicit) {
   EXPECT_THAT(PathParser::Parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
   EXPECT_THAT(PathParser::Parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
   EXPECT_THAT(PathParser::Parse("M0,0 1,"), ParseErrorIs(HasSubstr("Failed to parse number")));
@@ -260,7 +262,7 @@ TEST(PathParser, LineTo_Implicit) {
   }
 }
 
-TEST(PathParser, LineTo_PartialParse) {
+TEST(PathParser, LineToPartialParse) {
   {
     ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3,");
 
@@ -347,7 +349,7 @@ TEST(PathParser, HorizontalLineTo) {
   }
 }
 
-TEST(PathParser, HorizontalLineTo_ParseError) {
+TEST(PathParser, HorizontalLineToParseError) {
   {
     ParseResult<PathSpline> result = PathParser::Parse("M1,1 h1,");
 
@@ -573,7 +575,7 @@ TEST(PathParser, EllipticalArc) {
   }
 }
 
-TEST(PathParser, EllipticalArt_OutOfRangeRadii) {
+TEST(PathParser, EllipticalArtOutOfRangeRadii) {
   // Per https://www.w3.org/TR/SVG/implnote.html#ArcCorrectionOutOfRangeRadii, out-of-range radii
   // should be corrected.
 
@@ -624,7 +626,7 @@ TEST(PathParser, EllipticalArt_OutOfRangeRadii) {
   }
 }
 
-TEST(PathParser, EllipticalArc_Parsing) {
+TEST(PathParser, EllipticalArcParsing) {
   // Missing rotation.
   EXPECT_THAT(PathParser::Parse("M0,0 a150,150"),
               ParseErrorIs(HasSubstr("Failed to parse number")));
@@ -677,4 +679,4 @@ TEST(PathParser, NoWhitespace) {
                       Command{CommandType::LineTo, 4}, Command{CommandType::ClosePath, 0}))));
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

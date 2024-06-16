@@ -9,7 +9,7 @@
 #include "src/svg/xml/details/xml_parser_context.h"
 #include "src/svg/xml/xml_qualified_name.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 namespace {
 
@@ -221,4 +221,4 @@ ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
   return svgDocument;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

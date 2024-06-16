@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 void RendererUtils::prepareDocumentForRendering(SVGDocument& document, bool verbose,
-                                                std::vector<ParseError>* outWarnings) {
+                                                std::vector<parser::ParseError>* outWarnings) {
   Registry& registry = document.registry();
   if (!registry.ctx().contains<components::RenderingContext>()) {
     registry.ctx().emplace<components::RenderingContext>(registry);

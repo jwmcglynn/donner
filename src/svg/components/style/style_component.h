@@ -11,8 +11,8 @@ struct StyleComponent {
   PropertyRegistry properties;
 
   void setStyle(std::string_view style) { properties.parseStyle(style); }
-  ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                std::string_view value) {
+  parser::ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                        std::string_view value) {
     return properties.parsePresentationAttribute(name, value, handle.get<TreeComponent>().type(),
                                                  handle);
   }

@@ -5,7 +5,7 @@
 
 #include "src/css/component_value.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 /**
  * Parse a CSS value, per https://www.w3.org/TR/css-syntax-3/#parse-list-of-component-values. This
@@ -36,4 +36,4 @@ public:
   static std::vector<ComponentValue> Parse(std::string_view str);
 };
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

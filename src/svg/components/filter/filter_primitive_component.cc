@@ -2,7 +2,7 @@
 
 #include "src/svg/properties/presentation_attribute_parsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeGaussianBlur>(
@@ -10,4 +10,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FeGaussianBlur>(
   return false;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

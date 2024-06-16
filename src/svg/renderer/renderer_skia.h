@@ -19,6 +19,12 @@ public:
   explicit RendererSkia(bool verbose = false);
   ~RendererSkia();
 
+  // Copy is disallowed, move is allowed.
+  RendererSkia(const RendererSkia&) = delete;
+  RendererSkia& operator=(const RendererSkia&) = delete;
+  RendererSkia(RendererSkia&&) noexcept;
+  RendererSkia& operator=(RendererSkia&&) noexcept;
+
   void draw(SVGDocument& document);
 
   std::string drawIntoAscii(SVGDocument& document);

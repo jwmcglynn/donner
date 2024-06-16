@@ -24,8 +24,8 @@ struct StopProperties {
 
 struct ComputedStopComponent {
   ComputedStopComponent(const StopProperties& inputProperties, const ComputedStyleComponent& style,
-                        const std::map<RcString, UnparsedProperty>& unparsedProperties,
-                        std::vector<ParseError>* outWarnings);
+                        const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+                        std::vector<parser::ParseError>* outWarnings);
 
   StopProperties properties;
 };

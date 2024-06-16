@@ -6,7 +6,7 @@
 #include "src/base/length.h"
 #include "src/base/parser/parse_result.h"
 
-namespace donner {
+namespace donner::base::parser {
 
 /**
  * Parser for CSS `<length-percentage>` strings, such as "10px", "30%", "10em", etc.
@@ -30,7 +30,11 @@ public:
     /// The parsed result.
     Lengthd length;
     /// The number of characters of the input string that were consumed to parse the number.
-    size_t consumedChars;
+    size_t consumedChars = 0;
+
+    friend std::ostream& operator<<(std::ostream& os, const Result& self) {
+      return os << "Result {" << self.length << ", consumedChars: " << self.consumedChars << "}";
+    }
   };
 
   /**
@@ -100,4 +104,4 @@ public:
   static std::optional<Lengthd::Unit> ParseUnit(std::string_view str);
 };
 
-}  // namespace donner
+}  // namespace donner::base::parser

@@ -6,7 +6,7 @@
 #include "src/base/parser/parse_result.h"
 #include "src/svg/core/path_spline.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 // clang-format off
 /**
@@ -59,4 +59,4 @@ public:
   static ParseResult<PathSpline> Parse(std::string_view d);
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

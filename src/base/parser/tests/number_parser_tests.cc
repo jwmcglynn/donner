@@ -6,7 +6,7 @@
 
 using testing::HasSubstr;
 
-namespace donner {
+namespace donner::base::parser {
 
 using Result = NumberParser::Result;
 
@@ -151,4 +151,4 @@ TEST(NumberParser, AllowOutOfRange) {
               ParseResultIs(Result{-std::numeric_limits<double>::infinity(), 19}));
 }
 
-}  // namespace donner
+}  // namespace donner::base::parser

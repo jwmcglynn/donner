@@ -1,6 +1,6 @@
 #include "src/svg/parser/length_percentage_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 ParseResult<Lengthd> ParseLengthPercentage(const css::ComponentValue& component,
                                            bool allowUserUnits) {
@@ -46,4 +46,4 @@ ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> 
   return err;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

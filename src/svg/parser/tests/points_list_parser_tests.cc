@@ -8,7 +8,9 @@
 using testing::AllOf;
 using testing::ElementsAre;
 
-namespace donner::svg {
+namespace donner::svg::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 TEST(PointsListParser, Empty) {
   ParseResult<std::vector<Vector2d>> result = PointsListParser::Parse("");
@@ -69,4 +71,4 @@ TEST(PointsListParser, ParseErrors) {
               ParseErrorIs("Failed to parse number: Unexpected character"));
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

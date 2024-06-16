@@ -322,13 +322,15 @@ private:
 
   /// Consume a numeric token, per https://www.w3.org/TR/css-syntax-3/#consume-numeric-token
   Token consumeNumericToken() {
+    using base::parser::NumberParser;
+
     NumberParser::Options options;
     options.forbidOutOfRange = false;
 
-    ParseResult<NumberParser::Result> numberResult = NumberParser::Parse(remaining_, options);
+    auto numberResult = NumberParser::Parse(remaining_, options);
     assert(numberResult.hasResult());  // Should not hit due to isNumberStart() precondition.
 
-    NumberParser::Result number = numberResult.result();
+    const NumberParser::Result number = numberResult.result();
 
     RcString numberString(remaining_.substr(0, number.consumedChars));
     NumberType type = NumberType::Integer;
@@ -343,7 +345,8 @@ private:
     if (isIdentifierStart(remainingAfterNumber)) {
       auto [name, nameConsumedChars] = consumeName(remainingAfterNumber);
       return token<Token::Dimension>(number.consumedChars + nameConsumedChars, number.number, name,
-                                     LengthParser::ParseUnit(name), std::move(numberString), type);
+                                     base::parser::LengthParser::ParseUnit(name),
+                                     std::move(numberString), type);
     } else if (remainingAfterNumber.starts_with("%")) {
       return token<Token::Percentage>(number.consumedChars + 1, number.number,
                                       std::move(numberString), type);

@@ -3,9 +3,9 @@
 
 #include <span>
 
-#include "src/base/parser/number_parser.h"
+#include "src/base/parser/parse_result.h"
 
-namespace donner {
+namespace donner::base::parser {
 
 /**
  * Base class for parsers, containing common functionality such as maintaining the current
@@ -74,4 +74,4 @@ protected:
   std::string_view remaining_;  // NOLINT: Protected visibility for inheriting parsers to use.
 };
 
-}  // namespace donner
+}  // namespace donner::base::parser

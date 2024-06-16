@@ -9,6 +9,7 @@
 #include "src/svg/components/shadow/computed_shadow_tree_component.h"
 #include "src/svg/components/style/computed_style_component.h"
 #include "src/svg/components/viewbox_component.h"
+#include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/properties/presentation_attribute_parsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
@@ -21,44 +22,44 @@ static constexpr int kDefaultHeight = 512;
 // The maximum size supported for a rendered image.
 static constexpr int kMaxDimension = 8192;
 
-using SizedElementPresentationAttributeParseFn = std::optional<ParseError> (*)(
-    SizedElementProperties& properties, const PropertyParseFnParams& params);
+using SizedElementPresentationAttributeParseFn = std::optional<parser::ParseError> (*)(
+    SizedElementProperties& properties, const parser::PropertyParseFnParams& params);
 
 static constexpr frozen::unordered_map<frozen::string, SizedElementPresentationAttributeParseFn, 4>
     kProperties = {
         {"x",
-         [](SizedElementProperties& properties, const PropertyParseFnParams& params) {
+         [](SizedElementProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
                params,
-               [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
+               [](const parser::PropertyParseFnParams& params) {
+                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.x);
          }},  //
         {"y",
-         [](SizedElementProperties& properties, const PropertyParseFnParams& params) {
+         [](SizedElementProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
                params,
-               [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
+               [](const parser::PropertyParseFnParams& params) {
+                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.y);
          }},  //
         {"width",
-         [](SizedElementProperties& properties, const PropertyParseFnParams& params) {
+         [](SizedElementProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
                params,
-               [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
+               [](const parser::PropertyParseFnParams& params) {
+                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.width);
          }},  //
         {"height",
-         [](SizedElementProperties& properties, const PropertyParseFnParams& params) {
+         [](SizedElementProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
                params,
-               [](const PropertyParseFnParams& params) {
-                 return ParseLengthPercentage(params.components(), params.allowUserUnits());
+               [](const parser::PropertyParseFnParams& params) {
+                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.height);
          }},
@@ -77,14 +78,14 @@ PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
 }
 
 void ApplyUnparsedProperties(SizedElementProperties& properties,
-                             const std::map<RcString, UnparsedProperty>& unparsedProperties,
-                             std::vector<ParseError>* outWarnings) {
+                             const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+                             std::vector<parser::ParseError>* outWarnings) {
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
-      auto maybeError =
-          it->second(properties, CreateParseFnParams(property.declaration, property.specificity,
-                                                     PropertyParseBehavior::AllowUserUnits));
+      auto maybeError = it->second(
+          properties, CreateParseFnParams(property.declaration, property.specificity,
+                                          parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }
@@ -94,14 +95,14 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
 
 Boxd ApplyUnparsedPropertiesAndGetBounds(
     EntityHandle handle, SizedElementProperties& properties,
-    const std::map<RcString, UnparsedProperty>& unparsedProperties, Boxd inheritedViewbox,
-    FontMetrics fontMetrics, std::vector<ParseError>* outWarnings) {
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, Boxd inheritedViewbox,
+    FontMetrics fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   ApplyUnparsedProperties(properties, unparsedProperties, outWarnings);
   return LayoutSystem().calculateBounds(handle, properties, inheritedViewbox, fontMetrics);
 }
 
-ParseResult<bool> ParseSizedElementPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                         const PropertyParseFnParams& params) {
+parser::ParseResult<bool> ParseSizedElementPresentationAttribute(
+    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
   const auto it = kProperties.find(frozen::string(name));
   if (it != kProperties.end()) {
     SizedElementProperties& properties = handle.get_or_emplace<SizedElementComponent>().properties;
@@ -271,7 +272,7 @@ Transformd LayoutSystem::computeTransform(
 }
 
 void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
-                                                    std::vector<ParseError>* outWarnings) {
+                                                    std::vector<parser::ParseError>* outWarnings) {
   for (auto view = registry.view<SizedElementComponent, ComputedStyleComponent>();
        auto entity : view) {
     auto [component, style] = view.get(entity);
@@ -285,7 +286,7 @@ Boxd LayoutSystem::computeSizeProperties(EntityHandle entity,
                                          const SizedElementProperties& sizeProperties,
                                          const ComputedStyleComponent& style,
                                          FontMetrics fontMetrics,
-                                         std::vector<ParseError>* outWarnings) {
+                                         std::vector<parser::ParseError>* outWarnings) {
   SizedElementProperties mutableSizeProperties = sizeProperties;
   return ApplyUnparsedPropertiesAndGetBounds(entity, mutableSizeProperties,
                                              style.properties.value().unparsedProperties,
@@ -296,7 +297,7 @@ Boxd LayoutSystem::computeSizeProperties(EntityHandle entity,
 // information.
 const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementComponentWithStyle(
     EntityHandle entity, const ComputedStyleComponent& style, FontMetrics fontMetrics,
-    std::vector<ParseError>* outWarnings) {
+    std::vector<parser::ParseError>* outWarnings) {
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
   const Boxd bounds =
@@ -395,7 +396,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(EntityHandle entity) const {
 
 }  // namespace donner::svg::components
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 // SVGSVGElement shares this component.
 template <>
@@ -411,4 +412,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Use>(
   return components::ParseSizedElementPresentationAttribute(handle, name, params);
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

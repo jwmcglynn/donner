@@ -45,8 +45,8 @@ public:
     fileData_.resize(svg.size() + 1);
     std::memcpy(fileData_.data(), svg.data(), svg.size());
 
-    std::vector<donner::ParseError> warnings;
-    auto maybeResult = XMLParser::ParseSVG(fileData_, &warnings);
+    std::vector<donner::base::parser::ParseError> warnings;
+    auto maybeResult = parser::XMLParser::ParseSVG(fileData_, &warnings);
 
     if (maybeResult.hasError()) {
       const auto& e = maybeResult.error();

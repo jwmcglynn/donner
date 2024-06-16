@@ -5,7 +5,7 @@
 
 #include "src/css/stylesheet.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 /**
  * Parse a CSS stylesheet into a list of selectors and their associated declarations.
@@ -21,4 +21,4 @@ public:
   static Stylesheet Parse(std::string_view str);
 };
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

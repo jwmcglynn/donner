@@ -36,7 +36,7 @@ void ComputedLinearGradientComponent::inheritAttributes(EntityHandle handle, Ent
 
 }  // namespace donner::svg::components
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::LinearGradient>(
@@ -46,4 +46,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::LinearGradient>(
   return false;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

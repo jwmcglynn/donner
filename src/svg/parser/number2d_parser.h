@@ -5,7 +5,7 @@
 
 #include "src/base/parser/parse_result.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Parser for floating point numbers in SVG or CSS, corresponding to the CSS3 `<number-token>`
@@ -40,4 +40,4 @@ public:
   static ParseResult<Result> Parse(std::string_view str);
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

@@ -4,7 +4,7 @@
 #include "src/svg/parser/angle_parser.h"
 #include "src/svg/parser/length_percentage_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 namespace {
 
@@ -455,4 +455,4 @@ ParseResult<CssTransform> CssTransformParser::Parse(
   return parser.parse();
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

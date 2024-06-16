@@ -1,6 +1,6 @@
 #include "src/svg/properties/presentation_attribute_parsing.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 // For elements without components, define the presentation attribute template overload for them
 // here.
@@ -23,4 +23,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Unknown>(
   return false;
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

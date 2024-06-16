@@ -4,7 +4,9 @@
 #include "src/base/parser/tests/parse_result_test_utils.h"
 #include "src/svg/parser/preserve_aspect_ratio_parser.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
+
+using namespace base::parser;  // NOLINT: For tests
 
 using Align = PreserveAspectRatio::Align;
 using MeetOrSlice = PreserveAspectRatio::MeetOrSlice;
@@ -97,4 +99,4 @@ TEST(PreserveAspectRatioParser, InvalidMeetOrSlice) {
               ParseErrorIs("Invalid meetOrSlice: 'badtoken'"));
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

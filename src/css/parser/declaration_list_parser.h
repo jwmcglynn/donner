@@ -6,7 +6,7 @@
 
 #include "src/css/declaration.h"
 
-namespace donner::css {
+namespace donner::css::parser {
 
 /**
  * Parse a CSS declaration list, which can be either from an HTML/SVG style attribute, or from the
@@ -46,4 +46,4 @@ public:
   static std::vector<Declaration> ParseRuleDeclarations(std::span<ComponentValue> components);
 };
 
-}  // namespace donner::css
+}  // namespace donner::css::parser

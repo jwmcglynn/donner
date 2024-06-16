@@ -8,8 +8,7 @@ using testing::ElementsAre;
 using testing::Eq;
 using testing::Optional;
 
-namespace donner {
-namespace css {
+namespace donner::css::parser {
 
 TEST(ValueParser, Empty) {
   EXPECT_THAT(ValueParser::Parse(""), ElementsAre());
@@ -64,5 +63,4 @@ TEST(ValueParser, Selector) {
                               TokenIsIdent("value"), TokenIsWhitespace(" ")))));
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css::parser

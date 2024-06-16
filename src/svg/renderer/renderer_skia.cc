@@ -736,6 +736,9 @@ RendererSkia::RendererSkia(bool verbose) : verbose_(verbose) {}
 
 RendererSkia::~RendererSkia() {}
 
+RendererSkia::RendererSkia(RendererSkia&&) noexcept = default;
+RendererSkia& RendererSkia::operator=(RendererSkia&&) noexcept = default;
+
 void RendererSkia::draw(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();

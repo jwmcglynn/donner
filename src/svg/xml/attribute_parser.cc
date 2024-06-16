@@ -16,7 +16,7 @@
 #include "src/svg/xml/details/xml_parser_context.h"
 #include "src/svg/xml/xml_qualified_name.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 namespace {
 
@@ -30,7 +30,7 @@ bool IsAlwaysGenericAttribute(const XMLQualifiedNameRef& name) {
 }
 
 static std::optional<double> ParseNumberNoSuffix(std::string_view str) {
-  const auto maybeResult = NumberParser::Parse(str);
+  const auto maybeResult = base::parser::NumberParser::Parse(str);
   if (maybeResult.hasResult()) {
     if (maybeResult.result().consumedChars != str.size()) {
       // We had extra characters, treat as invalid.
@@ -45,10 +45,10 @@ static std::optional<double> ParseNumberNoSuffix(std::string_view str) {
 
 static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
                                                    std::string_view value) {
-  LengthParser::Options options;
+  base::parser::LengthParser::Options options;
   options.unitOptional = true;
 
-  auto maybeLengthResult = LengthParser::Parse(value, options);
+  auto maybeLengthResult = base::parser::LengthParser::Parse(value, options);
   if (maybeLengthResult.hasError()) {
     context.addSubparserWarning(std::move(maybeLengthResult.error()),
                                 context.parserOriginFrom(value));
@@ -69,11 +69,11 @@ static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
 static std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view value) {
   // Since we want to both parse a number or percent, use a LengthParser and then filter the allowed
   // suffixes.
-  LengthParser::Options options;
+  base::parser::LengthParser::Options options;
   options.unitOptional = true;
   options.limitUnitToPercentage = true;
 
-  auto maybeLengthResult = LengthParser::Parse(value, options);
+  auto maybeLengthResult = base::parser::LengthParser::Parse(value, options);
   if (maybeLengthResult.hasError()) {
     context.addSubparserWarning(std::move(maybeLengthResult.error()),
                                 context.parserOriginFrom(value));
@@ -151,7 +151,7 @@ std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, T& ele
     }
   }
 
-  ParseUnconditionalCommonAttribute(context, element, name, value);
+  parser::ParseUnconditionalCommonAttribute(context, element, name, value);
   return std::nullopt;
 }
 
@@ -339,7 +339,7 @@ std::optional<ParseError> ParseAttribute<SVGLinearGradientElement>(XMLParserCont
       element.setY2(length.value());
     }
   } else {
-    return ParseGradientCommonAttribute(context, element, name, value);
+    return parser::ParseGradientCommonAttribute(context, element, name, value);
   }
 
   return std::nullopt;
@@ -486,7 +486,7 @@ std::optional<ParseError> ParseAttribute<SVGRadialGradientElement>(XMLParserCont
       element.setFr(length.value());
     }
   } else {
-    return ParseGradientCommonAttribute(context, element, name, value);
+    return parser::ParseGradientCommonAttribute(context, element, name, value);
   }
 
   return std::nullopt;
@@ -603,4 +603,4 @@ std::optional<ParseError> AttributeParser::ParseAndSetAttribute(XMLParserContext
   return ParseAttributesForElement(context, element, name, value, AllSVGElements());
 }
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

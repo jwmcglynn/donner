@@ -14,6 +14,8 @@ namespace donner::css::traversal {
  *
  * The type must support tree traversal operations, such as `parentElement()` and
  * `previousSibling()`, and type and class information to match against the respective selectors.
+ *
+ * TODO: Move this to its own header, like base/concepts/element_like.h.
  */
 template <typename T>
 concept ElementLike =

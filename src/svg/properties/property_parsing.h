@@ -2,11 +2,10 @@
 /// @file
 
 #include "src/css/specificity.h"
-#include "src/svg/parser/length_percentage_parser.h"
 #include "src/svg/properties/property.h"
 #include "src/svg/registry/registry.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 struct UnparsedProperty {
   css::Declaration declaration;
@@ -104,4 +103,4 @@ ParseResult<std::optional<Lengthd>> ParseLengthPercentageOrAuto(
  */
 ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> components);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser

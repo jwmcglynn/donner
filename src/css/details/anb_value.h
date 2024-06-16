@@ -6,7 +6,7 @@
 namespace donner::css {
 
 /**
- * An+B microsyntax value, which is parsed by \ref AnbMicrosyntaxParser.
+ * An+B microsyntax value, which is parsed by \ref parser::AnbMicrosyntaxParser.
  *
  * For example, the arguments of `:nth-child(4n+2)` are parsed as an AnbValue with a = 4, and b = 2.
  *

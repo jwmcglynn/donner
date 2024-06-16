@@ -10,16 +10,15 @@
 #include "src/css/parser/details/tokenizer.h"
 #include "src/css/parser/rule_parser.h"
 
-namespace donner {
-namespace css {
+namespace donner::css::parser {
 
 using details::Tokenizer;
 
 namespace {
 
-std::filesystem::path kTestDataDirectory = "external/css-parsing-tests/";
+const std::filesystem::path kTestDataDirectory = "external/css-parsing-tests/";
 
-nlohmann::json loadJson(std::filesystem::path file) {
+nlohmann::json loadJson(const std::filesystem::path& file) {
   std::ifstream in(file);
   EXPECT_TRUE(in) << "Failed to open " << file << ", pwd: " << std::filesystem::current_path();
 
@@ -379,7 +378,7 @@ TEST(CssParsingTests, RuleList) {
     SCOPED_TRACE(testing::Message() << "CSS: " << css);
 
     nlohmann::json ruleList = nlohmann::json::array();
-    for (const auto& rule : RuleParser::ParseListOfRules(css)) {
+    for (const auto& rule : parser::RuleParser::ParseListOfRules(css)) {
       ruleList.push_back(ruleToJson(rule));
     }
 
@@ -417,5 +416,4 @@ TEST(CssParsingTests, Stylesheet) {
   }
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css::parser

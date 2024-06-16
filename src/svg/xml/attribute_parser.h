@@ -4,7 +4,7 @@
 #include "src/svg/xml/details/xml_parser_context.h"
 #include "src/svg/xml/xml_qualified_name.h"
 
-namespace donner::svg {
+namespace donner::svg::parser {
 
 /**
  * Parses XML attributes and sets applies them to SVGElements.
@@ -25,4 +25,4 @@ public:
                                                         std::string_view value) noexcept;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::parser
