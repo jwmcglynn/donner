@@ -1,4 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@pip_deps//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_binary")
 
 cc_library(
     name = "core",
@@ -46,5 +48,14 @@ cc_test(
         ":core_test_utils",
         "//src/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+py_binary(
+    name = "generate_test_pathlength_numpy",
+    srcs = ["tests/generate_test_pathlength_numpy.py"],
+    deps = [
+        requirement("scipy"),
+        requirement("numpy"),
     ],
 )

@@ -314,7 +314,7 @@ TEST(PathSpline, PathLengthSimpleCurve) {
   PathSpline spline = builder.build();
 
   // Calculate the expected length of the simple cubic Bezier curve
-  const double expectedLength = 5.26837;
+  const double expectedLength = 5.26836554;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
@@ -326,7 +326,7 @@ TEST(PathSpline, PathLengthLoop) {
   PathSpline spline = builder.build();
 
   // Calculate the expected length of the cubic Bezier curve with a loop
-  const double expectedLength = 4.794082;
+  const double expectedLength = 4.79396527;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
@@ -338,7 +338,7 @@ TEST(PathSpline, PathLengthCusp) {
   PathSpline spline = builder.build();
 
   // Calculate the expected length of the cubic Bezier curve with a cusp
-  const double expectedLength = 4.436832;
+  const double expectedLength = 4.43682857;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
@@ -350,7 +350,7 @@ TEST(PathSpline, PathLengthInflectionPoint) {
   PathSpline spline = builder.build();
 
   // Calculate the expected length of the cubic Bezier curve with an inflection point
-  const double expectedLength = 3.9342;
+  const double expectedLength = 3.93406628;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
