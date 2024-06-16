@@ -224,6 +224,11 @@ public:
   size_t size() const { return commands_.size(); }
 
   /**
+   * Returns the length of the spline.
+   */
+  double pathLength() const;
+
+  /**
    * Returns the bounding box for this spline.
    */
   Boxd bounds() const;

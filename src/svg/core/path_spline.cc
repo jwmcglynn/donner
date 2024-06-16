@@ -8,6 +8,42 @@ namespace donner::svg {
 namespace {
 
 /**
+ * Subdivide a cubic curve into two quadratics, and measure the length of the resulting curve.
+ * Subdivide until the given accuracy \ref tolerance is reached.
+ *
+ * @param points The points of the curve segment.
+ * @param tolerance Controls the accuracy of the subdivision, based a which limits
+ * the amount of error in the length.
+ */
+double SubdivideAndMeasureCubic(const std::array<Vector2d, 4>& points, double tolerance) {
+  auto midPoint = [](const Vector2d& p1, const Vector2d& p2) { return (p1 + p2) * 0.5; };
+
+  const Vector2d& p0 = points[0];
+  const Vector2d& p1 = points[1];
+  const Vector2d& p2 = points[2];
+  const Vector2d& p3 = points[3];
+
+  const Vector2d p01 = midPoint(p0, p1);
+  const Vector2d p12 = midPoint(p1, p2);
+  const Vector2d p23 = midPoint(p2, p3);
+  const Vector2d p012 = midPoint(p01, p12);
+  const Vector2d p123 = midPoint(p12, p23);
+  const Vector2d p0123 = midPoint(p012, p123);
+
+  const double chord = p0.distance(p3);
+  const double contNet = p0.distance(p1) + p1.distance(p2) + p2.distance(p3);
+
+  if ((contNet - chord) <= tolerance) {
+    return (chord + contNet) / 2;
+  }
+
+  const std::array<Vector2d, 4> left = {p0, p01, p012, p0123};
+  const std::array<Vector2d, 4> right = {p0123, p123, p23, p3};
+
+  return SubdivideAndMeasureCubic(left, tolerance) + SubdivideAndMeasureCubic(right, tolerance);
+};
+
+/**
  * Internal helper function, adds the extrema created by the miter joint
  * when provided the tangents of the joint, as well as the stroke properties.
  *
@@ -18,8 +54,8 @@ namespace {
  * @param strokeWidth Width of stroke.
  * @param miterLimit Miter limit of the stroke.
  */
-static void ComputeMiter(Boxd& box, const Vector2d& currentPoint, const Vector2d& tangent0,
-                         const Vector2d& tangent1, double strokeWidth, double miterLimit) {
+void ComputeMiter(Boxd& box, const Vector2d& currentPoint, const Vector2d& tangent0,
+                  const Vector2d& tangent1, double strokeWidth, double miterLimit) {
   const double intersectionAngle = tangent0.angleWith(-tangent1);
 
   // If we're under the miter limit, the miter applies. However, don't apply it if the tangents are
@@ -60,6 +96,38 @@ std::ostream& operator<<(std::ostream& os, const PathSpline& spline) {
     os << command << ", ";
   }
   return os << "\n ]\n}\n";
+}
+
+double PathSpline::pathLength() const {
+  const double kTolerance = 0.001;
+
+  double totalLength = 0.0;
+  Vector2d startPoint;
+
+  for (const Command& command : commands_) {
+    switch (command.type) {
+      case CommandType::MoveTo: startPoint = points_[command.pointIndex]; break;
+      case CommandType::LineTo: {
+        const Vector2d& endPoint = points_[command.pointIndex];
+        totalLength += startPoint.distance(endPoint);
+        startPoint = endPoint;
+        break;
+      }
+      case CommandType::CurveTo: {
+        const std::array<Vector2d, 4> bezierPoints = {startPoint, points_[command.pointIndex],
+                                                      points_[command.pointIndex + 1],
+                                                      points_[command.pointIndex + 2]};
+        totalLength += SubdivideAndMeasureCubic(bezierPoints, kTolerance);
+        startPoint = points_[command.pointIndex + 2];
+        break;
+      }
+      case CommandType::ClosePath:
+        // Optional: handle ClosePath if necessary
+        break;
+    }
+  }
+
+  return totalLength;
 }
 
 Boxd PathSpline::bounds() const {

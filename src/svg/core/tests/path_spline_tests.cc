@@ -6,7 +6,7 @@
 #include "src/svg/core/path_spline.h"
 #include "src/svg/core/tests/path_spline_test_utils.h"
 
-using testing::_;
+using testing::_;  // NOLINT, reserved-identifier: Allow for convenience
 using testing::AllOf;
 using testing::DoubleEq;
 using testing::DoubleNear;
@@ -18,13 +18,17 @@ using testing::SizeIs;
 
 namespace donner::svg {
 
+namespace {
+
 using Command = PathSpline::Command;
 using CommandType = PathSpline::CommandType;
 
-static constexpr Vector2d kVec1(123.0, 456.7);
-static constexpr Vector2d kVec2(78.9, 1011.12);
-static constexpr Vector2d kVec3(-1314.0, 1516.17);
-static constexpr Vector2d kVec4(1819.0, -2021.22);
+constexpr Vector2d kVec1(123.0, 456.7);
+constexpr Vector2d kVec2(78.9, 1011.12);
+constexpr Vector2d kVec3(-1314.0, 1516.17);
+constexpr Vector2d kVec4(1819.0, -2021.22);
+
+}  // namespace
 
 TEST(PathSplineBuilder, MoveTo) {
   auto builder = PathSpline::Builder();
@@ -35,7 +39,7 @@ TEST(PathSplineBuilder, MoveTo) {
                                            ElementsAre(Command{CommandType::MoveTo, 0})));
 }
 
-TEST(PathSplineBuilder, MoveTo_Replace) {
+TEST(PathSplineBuilder, MoveToReplace) {
   auto builder = PathSpline::Builder();
   builder.moveTo(kVec1);
   builder.moveTo(kVec2);
@@ -46,7 +50,7 @@ TEST(PathSplineBuilder, MoveTo_Replace) {
                                            ElementsAre(Command{CommandType::MoveTo, 0})));
 }
 
-TEST(PathSplineBuilder, MoveTo_MultipleSegments) {
+TEST(PathSplineBuilder, MoveToMultipleSegments) {
   auto builder = PathSpline::Builder();
   builder.moveTo(kVec1);
   builder.lineTo(kVec2);
@@ -60,7 +64,7 @@ TEST(PathSplineBuilder, MoveTo_MultipleSegments) {
                           Command{CommandType::MoveTo, 2}, Command{CommandType::LineTo, 3}));
 }
 
-TEST(PathSplineBuilder, MoveTo_UnusedRemoved) {
+TEST(PathSplineBuilder, MoveToUnusedRemoved) {
   auto builder = PathSpline::Builder();
   builder.moveTo(kVec1);
   builder.lineTo(kVec2);
@@ -83,7 +87,7 @@ TEST(PathSplineBuilder, LineTo) {
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
 }
 
-TEST(PathSplineBuilder, LineTo_Complex) {
+TEST(PathSplineBuilder, LineToComplex) {
   auto builder = PathSpline::Builder();
   builder.moveTo(Vector2d::Zero());
   builder.lineTo(kVec1);
@@ -101,7 +105,7 @@ TEST(PathSplineBuilder, LineTo_Complex) {
                           Command{CommandType::LineTo, 4}));
 }
 
-TEST(PathSplineBuilder, LineTo_FailsWithoutStart) {
+TEST(PathSplineBuilder, LineToFailsWithoutStart) {
   auto builder = PathSpline::Builder();
   EXPECT_DEATH(builder.lineTo(kVec1), "without calling MoveTo");
 }
@@ -117,7 +121,7 @@ TEST(PathSplineBuilder, CurveTo) {
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1}));
 }
 
-TEST(PathSplineBuilder, CurveTo_Chained) {
+TEST(PathSplineBuilder, CurveToChained) {
   auto builder = PathSpline::Builder();
   builder.moveTo(kVec1);
   builder.curveTo(kVec2, kVec3, kVec4);
@@ -132,7 +136,7 @@ TEST(PathSplineBuilder, CurveTo_Chained) {
                           Command{CommandType::CurveTo, 4}, Command{CommandType::LineTo, 7}));
 }
 
-TEST(PathSplineBuilder, CurveTo_FailsWithoutStart) {
+TEST(PathSplineBuilder, CurveToFailsWithoutStart) {
   auto builder = PathSpline::Builder();
   EXPECT_DEATH(builder.curveTo(kVec1, kVec2, kVec3), "without calling MoveTo");
 }
@@ -149,7 +153,7 @@ TEST(PathSplineBuilder, ArcTo) {
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1}));
 }
 
-TEST(PathSplineBuilder, ArcTo_LargeArc) {
+TEST(PathSplineBuilder, ArcToLargeArc) {
   auto builder = PathSpline::Builder();
   builder.moveTo(Vector2d(1.0, 0.0));
   builder.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, true, false,
@@ -178,12 +182,12 @@ TEST(PathSplineBuilder, ClosePath) {
                           Command{CommandType::LineTo, 2}));
 }
 
-TEST(PathSplineBuilder, ClosePath_FailsWithoutStart) {
+TEST(PathSplineBuilder, ClosePathFailsWithoutStart) {
   auto builder = PathSpline::Builder();
   EXPECT_DEATH(builder.closePath(), "without an open path");
 }
 
-TEST(PathSplineBuilder, ClosePath_AfterMoveTo) {
+TEST(PathSplineBuilder, ClosePathAfterMoveTo) {
   auto builder = PathSpline::Builder();
   builder.moveTo(kVec1);
   builder.closePath();
@@ -194,7 +198,7 @@ TEST(PathSplineBuilder, ClosePath_AfterMoveTo) {
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
 }
 
-TEST(PathSplineBuilder, ClosePath_MoveToReplace) {
+TEST(PathSplineBuilder, ClosePathMoveToReplace) {
   auto builder = PathSpline::Builder();
   builder.moveTo(kVec1);
   builder.lineTo(kVec2);
@@ -238,7 +242,7 @@ TEST(PathSplineBuilder, Circle) {
                           Command{CommandType::CurveTo, 10}, Command{CommandType::ClosePath, 0}));
 }
 
-TEST(PathSplineBuilder, Build_MultipleTimesFails) {
+TEST(PathSplineBuilder, BuildMultipleTimesFails) {
   auto builder = PathSpline::Builder();
   PathSpline spline1 = builder.build();
 
@@ -250,7 +254,119 @@ TEST(PathSpline, Empty) {
   EXPECT_TRUE(spline.empty());
 }
 
-TEST(PathSpline, Empty_BoundsFails) {
+TEST(PathSpline, PathLengthEmpty) {
+  PathSpline spline = PathSpline::Builder().build();
+  EXPECT_EQ(spline.pathLength(), 0.0);
+}
+
+TEST(PathSpline, PathLengthSingleLine) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(kVec1);
+  builder.lineTo(kVec2);
+  PathSpline spline = builder.build();
+
+  const double expectedLength = (kVec2 - kVec1).length();
+  EXPECT_DOUBLE_EQ(spline.pathLength(), expectedLength);
+}
+
+TEST(PathSpline, PathLengthMultipleSegments) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(kVec1);
+  builder.lineTo(kVec2);
+  builder.lineTo(kVec3);
+  builder.lineTo(kVec4);
+  PathSpline spline = builder.build();
+
+  const double expectedLength =
+      (kVec2 - kVec1).length() + (kVec3 - kVec2).length() + (kVec4 - kVec3).length();
+  EXPECT_DOUBLE_EQ(spline.pathLength(), expectedLength);
+}
+
+TEST(PathSpline, PathLengthCurveTo) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(kVec1);
+  builder.curveTo(kVec2, kVec3, kVec4);
+  PathSpline spline = builder.build();
+
+  const double tolerance = 0.001;
+  double expectedLength = 4106.97786;
+  EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
+}
+
+TEST(PathSpline, PathLengthComplexPath) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(kVec1);
+  builder.lineTo(kVec2);
+  builder.curveTo(kVec3, kVec4, Vector2d(1.0, 1.0));
+  builder.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, false, false,
+                Vector2d(0.0, 2.0));
+  PathSpline spline = builder.build();
+
+  const double tolerance = 0.001;
+  double expectedLength = 3674.25092;
+  EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
+}
+
+TEST(PathSpline, PathLengthSimpleCurve) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0, 0));
+  builder.curveTo(Vector2d(1, 2), Vector2d(3, 2), Vector2d(4, 0));
+  PathSpline spline = builder.build();
+
+  // Calculate the expected length of the simple cubic Bezier curve
+  const double expectedLength = 5.26837;
+  const double tolerance = 0.001;
+  EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
+}
+
+TEST(PathSpline, PathLengthLoop) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0, 0));
+  builder.curveTo(Vector2d(1, 2), Vector2d(3, -2), Vector2d(4, 0));
+  PathSpline spline = builder.build();
+
+  // Calculate the expected length of the cubic Bezier curve with a loop
+  const double expectedLength = 4.794082;
+  const double tolerance = 0.001;
+  EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
+}
+
+TEST(PathSpline, PathLengthCusp) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0, 0));
+  builder.curveTo(Vector2d(1, 2), Vector2d(2, 2), Vector2d(3, 0));
+  PathSpline spline = builder.build();
+
+  // Calculate the expected length of the cubic Bezier curve with a cusp
+  const double expectedLength = 4.436832;
+  const double tolerance = 0.001;
+  EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
+}
+
+TEST(PathSpline, PathLengthInflectionPoint) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0, 0));
+  builder.curveTo(Vector2d(1, 2), Vector2d(2, -2), Vector2d(3, 0));
+  PathSpline spline = builder.build();
+
+  // Calculate the expected length of the cubic Bezier curve with an inflection point
+  const double expectedLength = 3.9342;
+  const double tolerance = 0.001;
+  EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
+}
+
+TEST(PathSpline, PathLengthCollinearControlPoints) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0, 0));
+  builder.curveTo(Vector2d(1, 1), Vector2d(2, 2), Vector2d(3, 3));
+  PathSpline spline = builder.build();
+
+  // For collinear control points, the curve should be a straight line
+  const double expectedLength = (Vector2d(3, 3) - Vector2d(0, 0)).length();
+  EXPECT_DOUBLE_EQ(spline.pathLength(), expectedLength);
+}
+
+TEST(PathSpline, BoundsEmptyFails) {
   PathSpline spline = PathSpline::Builder().build();
   EXPECT_DEATH(spline.bounds(), "!empty()");
   EXPECT_DEATH(spline.strokeMiterBounds(1.0, 1.0), "!empty()");
@@ -266,7 +382,7 @@ TEST(PathSpline, Bounds) {
   EXPECT_EQ(spline.bounds(), Boxd(Vector2d(0.0, 0.0), Vector2d(123.0, 1011.12)));
 }
 
-TEST(PathSpline, Bounds_Curve) {
+TEST(PathSpline, BoundsCurve) {
   auto builder = PathSpline::Builder();
   builder.moveTo(Vector2d(0.0, 0.0));
   builder.curveTo(Vector2d(8.0, 9.0), Vector2d(2.0, 0.0), Vector2d(0.0, 0.0));
@@ -275,7 +391,7 @@ TEST(PathSpline, Bounds_Curve) {
   EXPECT_THAT(spline.bounds(), BoxEq(Vector2d(0.0, 0.0), Vector2Near(4.04307, 4.0)));
 }
 
-TEST(PathSpline, Bounds_Ellipse) {
+TEST(PathSpline, BoundsEllipse) {
   auto builder = PathSpline::Builder();
   builder.ellipse(Vector2d(1.0, 2.0), Vector2d(2.0, 1.0));
   PathSpline spline = builder.build();
@@ -329,7 +445,7 @@ TEST(PathSpline, StrokeMiterBounds) {
   EXPECT_THAT(spline.strokeMiterBounds(5.0, kExpectedCutoff - 0.1), kBoundsWithoutMiter);
 }
 
-TEST(PathSpline, StrokeMiterBounds_ClosePath) {
+TEST(PathSpline, StrokeMiterBoundsClosePath) {
   // Like StrokeMiterBounds, except with ClosePath called completing the triangle.
   //
   //      (0, 100)
@@ -378,7 +494,7 @@ TEST(PathSpline, StrokeMiterBounds_ClosePath) {
   EXPECT_THAT(spline.strokeMiterBounds(5.0, kExpectedCutoff - 0.1), kBoundsWithoutMiter);
 }
 
-TEST(PathSpline, StrokeMiterBounds_Colinear) {
+TEST(PathSpline, StrokeMiterBoundsColinear) {
   // Two line segments that have the same tangent.
   //
   //   .-------->.-------->.
@@ -406,7 +522,7 @@ TEST(PathSpline, StrokeMiterBounds_Colinear) {
   EXPECT_THAT(spline.strokeMiterBounds(5.0, 100.0), kBoundsWithoutMiter);
 }
 
-TEST(PathSpline, StrokeMiterBounds_Infinite) {
+TEST(PathSpline, StrokeMiterBoundsInfinite) {
   // With a 180 degree angle, a line doubling back on itself.
   //
   //   .<===========>.
@@ -434,7 +550,7 @@ TEST(PathSpline, StrokeMiterBounds_Infinite) {
   EXPECT_THAT(spline.strokeMiterBounds(5.0, 100.0), kBoundsWithoutMiter);
 }
 
-TEST(PathSpline, PointAt_Triangle) {
+TEST(PathSpline, PointAtTriangle) {
   //      (1, 2)
   //        /\
   //       /  \
@@ -476,7 +592,7 @@ TEST(PathSpline, PointAt_Triangle) {
   EXPECT_EQ(spline.pointAt(3, 1.0), Vector2(0.0, 0.0));
 }
 
-TEST(PathSpline, PointAt_MultipleSegments) {
+TEST(PathSpline, PointAtMultipleSegments) {
   // Create two separate line segments.
   //
   //        . (1, 3)

@@ -51,6 +51,21 @@ public:
   }
 
   /**
+   * Convert the given shape to a path, if the provided entity contains a shape. Returns the \ref
+   * ComputedPathComponent if the path was successfully created, or nullptr if the path could not be
+   * created.
+   *
+   * Paths may not be created if the shape is invalid, such as a circle with a negative radius.
+   *
+   * @param handle Entity handle to create the computed path for
+   * @param fontMetrics Font metrics, used to scale lengths
+   * @param outWarnings Containing any warnings found
+   */
+  const ComputedPathComponent* createComputedPathIfShape(EntityHandle handle,
+                                                         const FontMetrics& fontMetrics,
+                                                         std::vector<ParseError>* outWarnings);
+
+  /**
    * Create \ref ComputedPathComponent for all entities in the registry that have a shape component.
    *
    * This assumes that \ref StyleSystem::computeAllStyles has already been called.

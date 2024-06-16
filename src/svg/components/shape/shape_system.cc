@@ -1,5 +1,7 @@
 #include "src/svg/components/shape/shape_system.h"
 
+#include <concepts>
+
 #include "src/svg/components/shape/computed_path_component.h"
 #include "src/svg/components/shape/rect_component.h"
 #include "src/svg/components/style/computed_style_component.h"
@@ -43,19 +45,60 @@ std::optional<ParseError> ParseDFromAttributes(PathComponent& properties,
   return std::nullopt;
 }
 
-// Helper to call the callback on each entt::type_list element
+template <typename F, typename ComponentType>
+concept ForEachCallback = requires(const F& f) {
+  { f.template operator()<ComponentType>() } -> std::same_as<bool>;
+};
+
+/**
+ *
+ * Helper to call the callback on each entt::type_list element. Short-circuits if the callback
+returns true.
+ *
+ * @tparam TypeList
+ * @tparam F
+ * @tparam Indices
+ * @param f
+ * @return true
+ * @return false
+ */
 template <typename TypeList, typename F, std::size_t... Indices>
-constexpr void ForEachShapeImpl(const F& f, std::index_sequence<Indices...>) {
-  (f.template operator()<typename entt::type_list_element<Indices, TypeList>::type>(), ...);
+  requires(ForEachCallback<F, typename entt::type_list_element<Indices, TypeList>::type> && ...)
+constexpr bool ForEachShapeImpl(const F& f, std::index_sequence<Indices...>) {
+  return (f.template operator()<typename entt::type_list_element<Indices, TypeList>::type>() ||
+          ...);
 }
 
 // Main function to iterate over the tuple
 template <typename TypeList, typename F>
-constexpr void ForEachShape(const F& f) {
-  ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
+constexpr bool ForEachShape(const F& f) {
+  return ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
 }
 
 }  // namespace
+
+const ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
+    EntityHandle handle, const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+  const ComputedPathComponent* computedPath = nullptr;
+
+  ForEachShape<AllShapes>([&]<typename ShapeType>() -> bool {
+    using ShapeComponent = ShapeType;
+    bool shouldExit = false;
+
+    if (handle.all_of<ShapeComponent>()) {
+      const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
+      computedPath = createComputedShapeWithStyle(handle, handle.get<ShapeComponent>(), style,
+                                                  fontMetrics, outWarnings);
+      // Note the computedPath may be null if the shape failed to instantiate due to an error (like
+      // having zero points), when this occurs no other shapes will match and we should exit early.
+      shouldExit = true;
+    }
+
+    return shouldExit;
+  });
+
+  return computedPath;
+}
 
 void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
                                               std::vector<ParseError>* outWarnings) {
@@ -65,6 +108,9 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
       createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, FontMetrics(),
                                    outWarnings);
     }
+
+    const bool shouldExit = false;
+    return shouldExit;
   });
 }
 

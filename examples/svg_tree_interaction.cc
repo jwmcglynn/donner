@@ -29,8 +29,8 @@ struct MutableString : std::vector<char> {
 int main(int argc, char* argv[]) {
   // This is the base SVG we are loading, a simple path containing a line.
   MutableString svgContents(R"(
-    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
-      <path d="M 1 1 L 2 3" fill="blue" stroke-width="3" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
+      <path d="M 1 1 L 4 5" stroke="blue" />
     </svg>
   )");
 
@@ -55,7 +55,12 @@ int main(int argc, char* argv[]) {
   // The result of querySelector is a generic SVGElement, but we know it's a path, so we can cast
   // it. If the cast fails, an assertion will be triggered.
   donner::svg::SVGPathElement path = maybePath->cast<donner::svg::SVGPathElement>();
-  std::cout << "Path: " << *path.computedSpline() << "\n";
+  if (std::optional<donner::svg::PathSpline> spline = path.computedSpline()) {
+    std::cout << "Path: " << *spline << "\n";
+    std::cout << "Length: " << spline->pathLength() << " userspace units\n";
+  } else {
+    std::cout << "Path is empty\n";
+  }
 
   // We could also use \ref SVGElement::isa<>() to check if the element is a path, and then cast it.
   assert(maybePath->isa<donner::svg::SVGPathElement>());

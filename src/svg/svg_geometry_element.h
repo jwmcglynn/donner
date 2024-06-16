@@ -24,7 +24,12 @@ protected:
   explicit SVGGeometryElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
 public:
-  /// Get the path length override, if set.
+  /// Get the length of the path in user units. To override this value for `stroke-dasharray` and
+  /// other path-offset-relative values, use \ref setPathLength.
+  double computedPathLength() const;
+
+  /// Get the path length override, if set. To get the computed path length, use \ref
+  /// computedPathLength().
   std::optional<double> pathLength() const;
 
   /**
