@@ -1,48 +1,63 @@
-<svg width="512" height="428" xmlns="http://www.w3.org/2000/svg">
-  <rect x="0" y="0" width="512" height="428" fill="white" />
-  <rect x="0" y="0" width="187.65477943663583" height="128" fill="#FF5733" />
-  <rect x="187.65477943663583" y="0" width="94.67365364500668" height="128" fill="#33FF57" />
-  <rect x="282.3284330816425" y="0" width="77.95419608985934" height="128" fill="#3357FF" />
-  <rect x="360.28262917150187" y="0" width="52.573938293255345" height="128" fill="#FF33A1" />
-  <rect x="412.85656746475723" y="0" width="32.31988843037566" height="128" fill="#FF8633" />
-  <rect x="445.1764558951329" y="0" width="19.100053599213183" height="128" fill="#33FFD7" />
-  <rect x="464.2765094943461" y="0" width="16.8749889419099" height="128" fill="#8333FF" />
-  <rect x="481.151498436256" y="0" width="12.903110315506824" height="128" fill="#FF3381" />
-  <rect x="494.0546087517628" y="0" width="7.058194174858326" height="128" fill="#33FF83" />
-  <rect x="501.11280292662116" y="0" width="5.300389765152185" height="128" fill="#A133FF" />
-  <rect x="506.41319269177336" y="0" width="3.6528228051642584" height="128" fill="#FF8333" />
-  <rect x="510.0660154969376" y="0" width="0.8985517804826011" height="128" fill="#3381FF" />
-  <rect x="510.9645672774202" y="0" width="0.5038950496183008" height="128" fill="#FF33D7" />
-  <rect x="511.4684623270385" y="0" width="0.49390373997616654" height="128" fill="#FF5733" />
-  <rect x="511.96236606701467" y="0" width="0.0376339329853721" height="128" fill="#33FF57" />
+<svg width="512" height="528" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="512" height="528" fill="white" />
+  <rect x="0" y="0" width="174.37890901631738" height="128" fill="#FF5733" />
+  <rect x="174.37890901631738" y="0" width="96.62280526102437" height="128" fill="#33FF57" />
+  <rect x="271.00171427734176" y="0" width="49.34274313678566" height="128" fill="#3357FF" />
+  <rect x="320.3444574141274" y="0" width="44.242460354283985" height="128" fill="#FF33A1" />
+  <rect x="364.5869177684114" y="0" width="33.46206856132571" height="128" fill="#FF8633" />
+  <rect x="398.0489863297371" y="0" width="31.264355241244242" height="128" fill="#33FFD7" />
+  <rect x="429.3133415709813" y="0" width="17.926163974779122" height="128" fill="#8333FF" />
+  <rect x="447.23950554576044" y="0" width="13.506669076097308" height="128" fill="#FF3381" />
+  <rect x="460.74617462185773" y="0" width="11.69123471924435" height="128" fill="#33FF83" />
+  <rect x="472.43740934110207" y="0" width="9.039975384735605" height="128" fill="#A133FF" />
+  <rect x="481.4773847258377" y="0" width="7.94346303558957" height="128" fill="#FF8333" />
+  <rect x="489.42084776142724" y="0" width="6.875082417179891" height="128" fill="#3381FF" />
+  <rect x="496.29593017860714" y="0" width="4.974627718545941" height="128" fill="#FF33D7" />
+  <rect x="501.2705578971531" y="0" width="4.517643381473106" height="128" fill="#FF5733" />
+  <rect x="505.78820127862616" y="0" width="3.6702531367368167" height="128" fill="#33FF57" />
+  <rect x="509.45845441536295" y="0" width="0.8520788665256824" height="128" fill="#3357FF" />
+  <rect x="510.31053328188864" y="0" width="0.7176717085630839" height="128" fill="#FF33A1" />
+  <rect x="511.02820499045174" y="0" width="0.47292565115677093" height="128" fill="#FF8633" />
+  <rect x="511.5011306416085" y="0" width="0.463548407577985" height="128" fill="#33FFD7" />
+  <rect x="511.9646790491865" y="0" width="0.03532095081342704" height="128" fill="#8333FF" />
   <rect x="0" y="148" width="20" height="20" fill="#FF5733" />
-  <text x="25" y="163" fill="black" font-size="12">src/svg - 550.25 KB</text>
+  <text x="25" y="163" fill="black" font-size="12">src/svg - 544.80 KB</text>
   <rect x="0" y="168" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="183" fill="black" font-size="12">Everything else - 277.61 KB</text>
+  <text x="25" y="183" fill="black" font-size="12">Everything else - 301.87 KB</text>
   <rect x="0" y="188" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="203" fill="black" font-size="12">src/svg/components - 228.58 KB</text>
+  <text x="25" y="203" fill="black" font-size="12">src/css/parser - 154.16 KB</text>
   <rect x="0" y="208" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="223" fill="black" font-size="12">src/css/parser - 154.16 KB</text>
+  <text x="25" y="223" fill="black" font-size="12">src/svg/properties - 138.22 KB</text>
   <rect x="0" y="228" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="243" fill="black" font-size="12">src/svg/xml - 94.77 KB</text>
+  <text x="25" y="243" fill="black" font-size="12">src/svg/xml - 104.54 KB</text>
   <rect x="0" y="248" width="20" height="20" fill="#33FFD7" />
-  <text x="25" y="263" fill="black" font-size="12">src/css - 56.01 KB</text>
+  <text x="25" y="263" fill="black" font-size="12">src/svg/components/paint - 97.68 KB</text>
   <rect x="0" y="268" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="283" fill="black" font-size="12">src/svg/properties - 49.48 KB</text>
+  <text x="25" y="283" fill="black" font-size="12">src/css - 56.01 KB</text>
   <rect x="0" y="288" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="303" fill="black" font-size="12">external/abseil-cpp~/absl/strings/internal - 37.83 KB</text>
+  <text x="25" y="303" fill="black" font-size="12">external/abseil-cpp~/absl/strings/internal - 42.20 KB</text>
   <rect x="0" y="308" width="20" height="20" fill="#33FF83" />
-  <text x="25" y="323" fill="black" font-size="12">src/svg/parser - 20.70 KB</text>
+  <text x="25" y="323" fill="black" font-size="12">src/svg/components/shape - 36.53 KB</text>
   <rect x="0" y="328" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="343" fill="black" font-size="12">external/abseil-cpp~/absl/strings - 15.54 KB</text>
+  <text x="25" y="343" fill="black" font-size="12">src/svg/components/style - 28.24 KB</text>
   <rect x="0" y="348" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="363" fill="black" font-size="12">src/svg/core - 10.71 KB</text>
+  <text x="25" y="363" fill="black" font-size="12">src/svg/components/layout - 24.82 KB</text>
   <rect x="0" y="368" width="20" height="20" fill="#3381FF" />
-  <text x="25" y="383" fill="black" font-size="12">src/base/parser - 2.63 KB</text>
+  <text x="25" y="383" fill="black" font-size="12">src/svg/parser - 21.48 KB</text>
   <rect x="0" y="388" width="20" height="20" fill="#FF33D7" />
-  <text x="25" y="403" fill="black" font-size="12">src/base/parser/details - 1.48 KB</text>
+  <text x="25" y="403" fill="black" font-size="12">external/abseil-cpp~/absl/strings - 15.54 KB</text>
   <rect x="0" y="408" width="20" height="20" fill="#FF5733" />
-  <text x="25" y="423" fill="black" font-size="12">src/svg/graph - 1.45 KB</text>
+  <text x="25" y="423" fill="black" font-size="12">src/svg/components - 14.11 KB</text>
   <rect x="0" y="428" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="443" fill="black" font-size="12">src/svg/registry - 113.00 B</text>
+  <text x="25" y="443" fill="black" font-size="12">src/svg/core - 11.47 KB</text>
+  <rect x="0" y="448" width="20" height="20" fill="#3357FF" />
+  <text x="25" y="463" fill="black" font-size="12">src/base/parser - 2.66 KB</text>
+  <rect x="0" y="468" width="20" height="20" fill="#FF33A1" />
+  <text x="25" y="483" fill="black" font-size="12">src/svg/components/filter - 2.24 KB</text>
+  <rect x="0" y="488" width="20" height="20" fill="#FF8633" />
+  <text x="25" y="503" fill="black" font-size="12">src/base/parser/details - 1.48 KB</text>
+  <rect x="0" y="508" width="20" height="20" fill="#33FFD7" />
+  <text x="25" y="523" fill="black" font-size="12">src/svg/graph - 1.45 KB</text>
+  <rect x="0" y="528" width="20" height="20" fill="#8333FF" />
+  <text x="25" y="543" fill="black" font-size="12">src/svg/registry - 113.00 B</text>
 </svg>
