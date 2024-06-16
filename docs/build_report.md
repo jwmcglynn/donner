@@ -2,7 +2,7 @@
 
 Generated with: tools/generate_build_report.py --all --save docs/build_report.md
 
-Git revision: [5de8eab25d5f80a9395791aa4c333057ac0d4a2c](https://github.com/jwmcglynn/donner/commit/5de8eab25d5f80a9395791aa4c333057ac0d4a2c)
+Git revision: [b927a06b50a01b62b2540673886703c3ed138299](https://github.com/jwmcglynn/donner/commit/b927a06b50a01b62b2540673886703c3ed138299)
 
 ## Lines of code
 ```
@@ -26,29 +26,29 @@ Saved report to build-binary-size/binary_size_report.html
 ```
     FILE SIZE        VM SIZE    
  --------------  -------------- 
-  77.5%  1.21Mi  77.5%  1.21Mi    src
-    25.9%   321Ki  25.9%   321Ki    [60 Others]
+  77.5%  1.21Mi  76.8%  1.21Mi    src
+    24.9%   309Ki  24.9%   309Ki    [60 Others]
+    12.2%   151Ki  12.2%   151Ki    src/svg/properties/property_registry.cc
     11.7%   144Ki  11.7%   144Ki    src/svg/svg_element.cc
-    10.4%   128Ki  10.4%   128Ki    src/svg/properties/property_registry.cc
-     4.8%  59.5Ki   4.8%  59.5Ki    src/css/parser/color_parser.cc
+     4.8%  59.6Ki   4.8%  59.6Ki    src/css/parser/color_parser.cc
      4.5%  56.2Ki   4.5%  56.2Ki    src/svg/svg_circle_element.cc
-     4.0%  49.0Ki   4.0%  49.0Ki    src/svg/xml/xml_parser.cc
+     4.0%  49.2Ki   4.0%  49.2Ki    src/svg/xml/xml_parser.cc
      3.7%  46.4Ki   3.7%  46.4Ki    src/svg/svg_pattern_element.cc
-     3.7%  45.6Ki   3.7%  45.6Ki    src/svg/components/paint/paint_system.cc
+     3.7%  45.8Ki   3.7%  45.8Ki    src/svg/components/paint/paint_system.cc
      3.4%  42.0Ki   3.4%  42.0Ki    src/css/component_value.cc
-     3.2%  40.0Ki   3.2%  40.0Ki    src/css/parser/selector_parser.cc
+     3.3%  40.6Ki   3.3%  40.6Ki    src/css/parser/selector_parser.cc
      3.1%  38.3Ki   3.1%  38.3Ki    src/svg/svg_gradient_element.cc
      2.9%  36.3Ki   2.9%  36.3Ki    src/svg/svg_ellipse_element.cc
-     2.5%  30.6Ki   2.5%  30.6Ki    src/svg/xml/xml_tool.cc
-     2.3%  28.2Ki   2.3%  28.2Ki    src/svg/components/style/style_system.cc
+     2.4%  30.2Ki   2.4%  30.2Ki    src/svg/xml/xml_tool.cc
+     2.3%  28.3Ki   2.3%  28.3Ki    src/svg/components/style/style_system.cc
      2.2%  27.3Ki   2.2%  27.3Ki    src/svg/svg_rect_element.cc
      2.1%  26.2Ki   2.1%  26.2Ki    src/css/parser/declaration_list_parser.cc
-     2.1%  25.9Ki   2.1%  25.9Ki    src/svg/components/paint/stop_component.cc
-     2.0%  24.9Ki   2.0%  24.9Ki    src/svg/xml/attribute_parser.cc
-     2.0%  24.8Ki   2.0%  24.8Ki    src/svg/components/layout/layout_system.cc
+     2.0%  25.0Ki   2.0%  25.0Ki    src/svg/xml/attribute_parser.cc
+     2.0%  24.9Ki   2.0%  24.9Ki    src/svg/components/layout/layout_system.cc
      1.8%  22.4Ki   1.8%  22.4Ki    src/svg/svg_stop_element.cc
-     1.7%  21.5Ki   1.7%  21.5Ki    src/svg/components/shape/shape_system.cc
-  14.2%   226Ki  14.2%   226Ki    [__LINKEDIT]
+     1.8%  21.7Ki   1.8%  21.7Ki    src/svg/components/shape/shape_system.cc
+     1.3%  15.6Ki   1.3%  15.6Ki    src/svg/svg_document.cc
+  14.1%   226Ki  14.9%   240Ki    [__LINKEDIT]
    3.6%  57.7Ki   3.6%  57.7Ki    third_party/abseil
     45.8%  26.5Ki  45.8%  26.5Ki    external/abseil-cpp~/absl/strings/internal/charconv_parse.cc
     27.0%  15.6Ki  27.0%  15.6Ki    external/abseil-cpp~/absl/strings/internal/charconv_bigint.cc
@@ -56,9 +56,9 @@ Saved report to build-binary-size/binary_size_report.html
      0.3%     170   0.3%     170    external/abseil-cpp~/absl/strings/internal/memutil.cc
    0.9%  13.9Ki   0.9%  13.9Ki    [__DATA]
    0.9%  13.8Ki   0.9%  13.8Ki    [__TEXT,__cstring]
-   0.9%  13.7Ki   0.9%  13.7Ki    [__DATA_CONST,__const]
-   0.8%  12.7Ki   0.8%  12.7Ki    [__DATA_CONST]
-   0.7%  12.0Ki   0.8%  12.1Ki    [__TEXT]
+   0.8%  13.5Ki   0.8%  13.5Ki    [__DATA_CONST,__const]
+   0.8%  12.9Ki   0.8%  12.9Ki    [__DATA_CONST]
+   0.8%  12.7Ki   0.8%  12.8Ki    [__TEXT]
    0.2%  2.90Ki   0.2%  2.90Ki    [__TEXT,__text]
    0.1%  2.39Ki   0.1%  2.39Ki    [__TEXT,__gcc_except_tab]
    0.1%  1.77Ki   0.1%  1.67Ki    [Mach-O Headers]
@@ -67,7 +67,7 @@ Saved report to build-binary-size/binary_size_report.html
    0.0%     456   0.0%     456    [__TEXT,__unwind_info]
    0.0%     212   0.0%     212    [__TEXT,__init_offsets]
    0.0%     203   0.0%     203    [__TEXT,__const]
- 100.0%  1.56Mi 100.0%  1.56Mi    TOTAL
+ 100.0%  1.56Mi 100.0%  1.58Mi    TOTAL
 ```
 
 ![Binary size bar graph](binary_size_bargraph.svg)
@@ -77,9 +77,9 @@ Saved report to build-binary-size/binary_size_report.html
 $ tools/coverage.sh --quiet
 Analyzing coverage for: //src/...
 Overall coverage rate:
-  lines......: 91.4% (18583 of 20334 lines)
-  functions......: 88.5% (3263 of 3687 functions)
-  branches......: 64.4% (4433 of 6880 branches)
+  lines......: 91.4% (18604 of 20347 lines)
+  functions......: 88.4% (3262 of 3688 functions)
+  branches......: 66.6% (4419 of 6632 branches)
 Coverage report saved to coverage-report/index.html
 ```
 
