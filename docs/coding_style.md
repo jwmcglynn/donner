@@ -99,7 +99,7 @@ if (auto maybeUnit = parseUnit(str, &charsConsumed)) {
 auto maybeResult = NumberParser::Parse(remaining_);
 if (maybeResult.hasError()) {
   ParseError err = std::move(maybeResult.error());
-  err.offset += currentOffset();
+  err.location = err.location.addParentOffset(currentOffset());
   return err;
 }
 

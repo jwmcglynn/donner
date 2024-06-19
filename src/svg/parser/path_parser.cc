@@ -26,7 +26,7 @@ public:
 
     // Read first command separately, since it must be a MoveTo command.
     {
-      const int sourceOffset = currentOffset();
+      const FileOffset sourceOffset = currentOffset();
 
       ParseResult<TokenCommand> maybeCommand = readCommand();
       if (maybeCommand.hasError()) {
@@ -37,7 +37,7 @@ public:
       if (command.token != Token::MoveTo) {
         ParseError err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
-        err.offset = sourceOffset;
+        err.location = sourceOffset;
         return ParseResult(spline_.build(), std::move(err));
       }
 
@@ -125,7 +125,7 @@ private:
     return ch == '\t' || ch == ' ' || ch == '\n' || ch == '\f' || ch == '\r';
   }
 
-  int currentOffset() { return remaining_.data() - d_.data(); }
+  FileOffset currentOffset() { return FileOffset::Offset(remaining_.data() - d_.data()); }
 
   std::optional<TokenCommand> peekCommand() {
     assert(!remaining_.empty());
@@ -163,7 +163,7 @@ private:
     if (!maybeCommand) {
       ParseError err;
       err.reason = std::string("Unexpected token '") + remaining_[0] + "' in path data";
-      err.offset = currentOffset();
+      err.location = currentOffset();
       return err;
     }
 
@@ -177,7 +177,7 @@ private:
     auto maybeResult = base::parser::NumberParser::Parse(remaining_);
     if (maybeResult.hasError()) {
       ParseError err = std::move(maybeResult.error());
-      err.offset += currentOffset();
+      err.location = err.location.addParentOffset(currentOffset());
       return err;
     }
 
@@ -213,7 +213,7 @@ private:
       } else {
         ParseError err;
         err.reason = "Unexpected character when parsing flag, expected '1' or '0'";
-        err.offset = currentOffset();
+        err.location = currentOffset();
         return err;
       }
 
@@ -222,7 +222,7 @@ private:
     } else {
       ParseError err;
       err.reason = "Unexpected end of string when parsing flag";
-      err.offset = currentOffset();
+      err.location = currentOffset();
       return err;
     }
   }
@@ -245,19 +245,19 @@ private:
       skipWhitespace();
       if (remaining_.starts_with(',')) {
         // Skip a comma, but require the next non-whitespace to not be a command.
-        const int commaOffset = currentOffset();
+        const FileOffset commaOffset = currentOffset();
         remaining_.remove_prefix(1);
         skipWhitespace();
 
         if (!remaining_.empty() && peekCommand().has_value()) {
           ParseError err;
           err.reason = "Unexpected ',' before command";
-          err.offset = commaOffset;
+          err.location = commaOffset;
           return err;
         } else if (remaining_.empty()) {
           ParseError err;
           err.reason = "Unexpected ',' at end of string";
-          err.offset = commaOffset;
+          err.location = commaOffset;
           return err;
         }
       }
@@ -430,7 +430,7 @@ private:
     } else {
       ParseError err;
       err.reason = "Expected command";
-      err.offset = currentOffset();
+      err.location = currentOffset();
       return err;
     }
 

@@ -35,14 +35,14 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     if (foundPlus && std::signbit(result.number)) {
       ParseError err;
       err.reason = "Failed to parse number: Invalid sign";
-      err.offset = 1;  // The character after the '+'
+      err.location = FileOffset::Offset(1);  // The character after the '+'
       return err;
     }
 
     if (!std::isfinite(result.number)) {
       ParseError err;
       err.reason = "Failed to parse number: Not finite";
-      err.offset = 0;
+      err.location = FileOffset::Offset(0);
       return err;
     }
 
@@ -72,7 +72,7 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     } else if (ec == std::errc::result_out_of_range) {
       err.reason += ": Out of range";
     }
-    err.offset = strAdvance - str.begin();
+    err.location = FileOffset::Offset(strAdvance - str.begin());
     return err;
   }
 }

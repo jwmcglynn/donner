@@ -43,7 +43,7 @@ public:
     } else {
       ParseError err;
       err.reason = "Unexpected EOF when parsing function '" + functionName_ + "'";
-      err.offset = lastOffset_;
+      err.location = lastOffset_;
       return err;
     }
   }
@@ -61,7 +61,7 @@ public:
     } else {
       ParseError err;
       err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
-      err.offset = resultToken.offset();
+      err.location = resultToken.offset();
       return err;
     }
   }
@@ -81,7 +81,7 @@ public:
     if (!trySkipComma()) {
       ParseError err;
       err.reason = "Missing comma when parsing function '" + functionName_ + "'";
-      err.offset = lastOffset_;
+      err.location = lastOffset_;
       return err;
     }
 
@@ -101,7 +101,7 @@ public:
 
     ParseError err;
     err.reason = "Missing delimiter for alpha when parsing function '" + functionName_ + "'";
-    err.offset = lastOffset_;
+    err.location = lastOffset_;
     return err;
   }
 
@@ -109,7 +109,7 @@ public:
     if (!isEOF()) {
       ParseError err;
       err.reason = "Additional tokens when parsing function '" + functionName_ + "'";
-      err.offset = lastOffset_;
+      err.location = lastOffset_;
       return err;
     }
 
@@ -138,17 +138,17 @@ private:
       } else {
         ParseError err;
         err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
-        err.offset = component.sourceOffset();
+        err.location = component.sourceOffset();
         next_ = std::move(err);
         break;
       }
     }
   }
 
-  const RcString& functionName_;
+  RcString functionName_;
   std::span<const css::ComponentValue> components_;
   std::optional<ParseResult<css::Token>> next_;
-  size_t lastOffset_ = 0;
+  parser::FileOffset lastOffset_ = parser::FileOffset::Offset(0);
 };
 
 class ColorParserImpl {
@@ -164,7 +164,7 @@ public:
     } else if (components_.size() != 1) {
       ParseError err;
       err.reason = "Expected a single color";
-      err.offset = components_.front().sourceOffset();
+      err.location = components_.front().sourceOffset();
       return err;
     }
 
@@ -188,14 +188,14 @@ public:
         } else {
           ParseError err;
           err.reason = "Invalid color '" + name + "'";
-          err.offset = token.offset();
+          err.location = token.offset();
           return err;
         }
 
       } else {
         ParseError err;
         err.reason = "Unexpected token when parsing color";
-        err.offset = token.offset();
+        err.location = token.offset();
         return err;
       }
     } else if (component.is<css::Function>()) {
@@ -219,14 +219,14 @@ public:
       } else {
         ParseError err;
         err.reason = "Unsupported color function '" + name + "'";
-        err.offset = f.sourceOffset;
+        err.location = f.sourceOffset;
         return err;
       }
 
     } else {
       ParseError err;
       err.reason = "Unexpected block when parsing color";
-      err.offset = component.sourceOffset();
+      err.location = component.sourceOffset();
       return err;
     }
   }
@@ -355,14 +355,14 @@ public:
       } else {
         ParseError err;
         err.reason = "Angle has unexpected dimension '" + dimension.suffixString + "'";
-        err.offset = angleToken.offset();
+        err.location = angleToken.offset();
         return err;
       }
     }
 
     ParseError err;
     err.reason = "Unexpected token when parsing angle";
-    err.offset = angleToken.offset();
+    err.location = angleToken.offset();
     return err;
   }
 
@@ -476,7 +476,7 @@ public:
     } else {
       ParseError err;
       err.reason = "Unexpected alpha value";
-      err.offset = alphaToken.offset();
+      err.location = alphaToken.offset();
       return err;
     }
   }
@@ -485,7 +485,7 @@ private:
   ParseError unexpectedTokenError(const RcString& functionName, const Token& token) {
     ParseError err;
     err.reason = "Unexpected token when parsing function '" + functionName + "'";
-    err.offset = token.offset();
+    err.location = token.offset();
     return err;
   }
 

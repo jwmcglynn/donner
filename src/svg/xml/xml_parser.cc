@@ -49,8 +49,9 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(XMLParserContext& c
         err.reason =
             std::string("Unexpected <style> element contents, expected text or CDATA, found '") +
             std::string(TypeToString(i->type())) + "'";
-        err.offset =
-            context.parserOriginFrom(std::string_view(node->name(), node->name_size())).startOffset;
+        err.location = FileOffset::Offset(
+            context.parserOriginFrom(std::string_view(node->name(), node->name_size()))
+                .startOffset);
         return err;
       }
     }
@@ -205,11 +206,11 @@ ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
     xmlDocument.parse<flags>(str.data());
   } catch (rapidxml_ns::parse_error& e) {
     const size_t offset = e.where<char>() - str.data();
+    const size_t line = context.offsetToLine(offset);
 
     ParseError err;
     err.reason = e.what();
-    err.line = context.offsetToLine(offset);
-    err.offset = offset - context.lineOffset(err.line);
+    err.location = FileOffset::LineAndOffset(line, offset - context.lineOffset(line));
     return err;
   }
 

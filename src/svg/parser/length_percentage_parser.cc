@@ -8,7 +8,7 @@ ParseResult<Lengthd> ParseLengthPercentage(const css::ComponentValue& component,
     if (!dimension->suffixUnit) {
       ParseError err;
       err.reason = "Invalid unit on length";
-      err.offset = component.sourceOffset();
+      err.location = component.sourceOffset();
       return err;
     } else {
       return Lengthd(dimension->value, dimension->suffixUnit.value());
@@ -25,7 +25,7 @@ ParseResult<Lengthd> ParseLengthPercentage(const css::ComponentValue& component,
 
   ParseError err;
   err.reason = "Invalid length or percentage";
-  err.offset = component.sourceOffset();
+  err.location = component.sourceOffset();
   return err;
 }
 
@@ -36,13 +36,13 @@ ParseResult<Lengthd> ParseLengthPercentage(std::span<const css::ComponentValue> 
   } else if (components.empty()) {
     ParseError err;
     err.reason = "Unexpected end of input";
-    err.offset = ParseError::kEndOfString;
+    err.location = FileOffset::EndOfString();
     return err;
   }
 
   ParseError err;
   err.reason = "Unexpected token when parsing length or percentage";
-  err.offset = components[1].sourceOffset();
+  err.location = components[1].sourceOffset();
   return err;
 }
 

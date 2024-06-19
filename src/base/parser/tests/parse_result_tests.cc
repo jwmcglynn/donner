@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "src/base/parser/file_offset.h"
 #include "src/base/parser/parse_result.h"
 #include "src/base/parser/tests/parse_result_test_utils.h"
 
@@ -24,20 +25,24 @@ TEST(ParseResult, Value) {
   EXPECT_EQ(result.result(), 43);
 
   // R-value reference accessor.
-  const int value = std::move(result.result());
+  const int value = std::move(result.result());  // NOLINT: Testing move
   EXPECT_EQ(value, 43);
 }
 
 TEST(ParseResult, DeathTests) {
   ParseResult<int> withResult = 42;
   EXPECT_DEATH(withResult.error(), "hasError");
-  EXPECT_DEATH({ withResult.error().offset = 42; }, "hasError");
+  EXPECT_DEATH({ withResult.error().location = FileOffset::Offset(42); }, "hasError");
   EXPECT_DEATH({ const auto error = std::move(withResult.error()); }, "hasError");
 
   ParseResult<int> withError = ParseError();
   EXPECT_DEATH(withError.result(), "hasResult");
   EXPECT_DEATH({ withError.result() = 42; }, "hasResult");
-  EXPECT_DEATH({ [[maybe_unused]] const int result = std::move(withError.result()); }, "hasResult");
+  EXPECT_DEATH(
+      {
+        [[maybe_unused]] const int result = std::move(withError.result());  // NOLINT: Testing move
+      },
+      "hasResult");
 }
 
 TEST(ParseResult, Error) {
@@ -51,11 +56,11 @@ TEST(ParseResult, Error) {
   EXPECT_TRUE(result.hasError());
 
   EXPECT_EQ(result.error().reason, "Test error please ignore");
-  EXPECT_EQ(result.error().offset, 0);
+  EXPECT_EQ(result.error().location, FileOffset::Offset(0));
 
   // Mutable accessor.
-  result.error().offset = 42;
-  EXPECT_EQ(result.error().offset, 42);
+  result.error().location = FileOffset::Offset(42);
+  EXPECT_EQ(result.error().location, FileOffset::Offset(42));
 
   // R-value reference accessor.
   const ParseError error = std::move(result.error());
@@ -135,8 +140,7 @@ TEST(ParseResultTestUtils, ErrorMatchers) {
   ParseResult<int> withError = []() -> ParseResult<int> {
     ParseError error;
     error.reason = "Test error please ignore";
-    error.line = 1;
-    error.offset = 30;
+    error.location = FileOffset::LineAndOffset(1, 30);
     return error;
   }();
 

@@ -2,7 +2,7 @@
 
 namespace donner::css {
 
-Function::Function(RcString name, size_t sourceOffset)
+Function::Function(RcString name, const parser::FileOffset& sourceOffset)
     : name(std::move(name)), sourceOffset(sourceOffset) {}
 
 bool Function::operator==(const Function& other) const {
@@ -19,7 +19,7 @@ std::ostream& operator<<(std::ostream& os, const Function& func) {
   return os;
 }
 
-SimpleBlock::SimpleBlock(TokenIndex associatedToken, size_t sourceOffset)
+SimpleBlock::SimpleBlock(TokenIndex associatedToken, const parser::FileOffset& sourceOffset)
     : associatedToken(associatedToken), sourceOffset(sourceOffset) {}
 
 bool SimpleBlock::operator==(const SimpleBlock& other) const {

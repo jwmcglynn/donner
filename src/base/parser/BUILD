@@ -17,9 +17,18 @@ cc_library(
     ],
     visibility = ["//src:__subpackages__"],
     deps = [
+        ":file_offset",
         "//src/base",
         "@com_google_absl//absl/strings",
     ],
+)
+
+cc_library(
+    name = "file_offset",
+    hdrs = [
+        "file_offset.h",
+    ],
+    visibility = ["//src:__subpackages__"],
 )
 
 cc_library(

@@ -35,8 +35,8 @@ concept TokenizerLike = requires(T t) {
 template <TokenizerLike<Token> T>
 SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode);
 template <TokenizerLike<Token> T>
-Function consumeFunction(T& tokenizer, Token::Function&& functionToken, size_t offset,
-                         ParseMode mode);
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken,
+                         const parser::FileOffset& offset, ParseMode mode);
 
 /// Consume a component value, per https://www.w3.org/TR/css-syntax-3/#consume-component-value
 template <TokenizerLike<Token> T>
@@ -109,8 +109,8 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode)
 
 /// Consume a function, per https://www.w3.org/TR/css-syntax-3/#consume-function
 template <TokenizerLike<Token> T>
-Function consumeFunction(T& tokenizer, Token::Function&& functionToken, size_t offset,
-                         ParseMode mode) {
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken,
+                         const parser::FileOffset& offset, ParseMode mode) {
   Function result(std::move(functionToken.name), offset);
 
   while (!tokenizer.isEOF()) {
@@ -169,7 +169,7 @@ concept DecayedSameAs = std::is_same_v<std::decay_t<T>, U>;
 template <typename T, typename ItemType>
 concept DeclarationTokenizerItem = requires(T t, ParseMode parseMode) {
   { t.value } -> DecayedSameAs<ItemType>;
-  { t.offset() } -> std::same_as<size_t>;
+  { t.offset() } -> std::same_as<parser::FileOffset>;
   { t.asComponentValue(parseMode) } -> std::same_as<ComponentValue>;
 };
 
@@ -199,7 +199,7 @@ struct DeclarationTokenTokenizer {
       return value.is<TokenType>();
     }
 
-    size_t offset() const { return value.offset(); }
+    parser::FileOffset offset() const { return value.offset(); }
 
     ComponentValue asComponentValue(ParseMode parseMode = ParseMode::Keep) {
       return consumeComponentValue(tokenizer.get(), std::move(value), parseMode);
@@ -227,7 +227,7 @@ struct DeclarationComponentValueTokenizer {
       return value.isToken<TokenType>();
     }
 
-    size_t offset() const { return value.sourceOffset(); }
+    parser::FileOffset offset() const { return value.sourceOffset(); }
 
     ComponentValue asComponentValue(ParseMode parseMode = ParseMode::Keep) {
       return std::move(value);
@@ -248,7 +248,7 @@ private:
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <DeclarationTokenizer T>
 std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&& ident,
-                                                     size_t offset) {
+                                                     const parser::FileOffset& offset) {
   {
     bool hadColon = false;
 
@@ -334,14 +334,16 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
 
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <TokenizerLike<Token> T>
-std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident, size_t offset) {
+std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident,
+                                              const parser::FileOffset& offset) {
   DeclarationTokenTokenizer declarationTokenizer(tokenizer);
   return consumeDeclarationGeneric(declarationTokenizer, std::move(ident), offset);
 }
 
 /// Consume a declaration, starting with an partially parsed set of ComponentValues.
 template <TokenizerLike<ComponentValue> T>
-std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident, size_t offset) {
+std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident,
+                                              const parser::FileOffset& offset) {
   DeclarationComponentValueTokenizer declarationTokenizer(tokenizer);
   return consumeDeclarationGeneric(declarationTokenizer, std::move(ident), offset);
 }

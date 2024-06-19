@@ -9,29 +9,28 @@ TEST(ParseError, ResolveOffset) {
   {
     // Base case: Regular offset is left unchanged.
     ParseError err;
-    err.offset = 1;
+    err.location = FileOffset::Offset(1);
 
-    EXPECT_EQ(err.resolveOffset("abcdef"), 1);
+    EXPECT_EQ(err.location.resolveOffset("abcdef"), FileOffset::Offset(1));
 
-    err.offset = 5;
-    EXPECT_EQ(err.resolveOffset("abcdef"), 5);
+    err.location = FileOffset::Offset(5);
+    EXPECT_EQ(err.location.resolveOffset("abcdef"), FileOffset::Offset(5));
   }
 
   {
-    // kEndOfString is resolved based on the input string.
+    // EndOfString() is resolved based on the input string.
     ParseError err;
-    err.offset = ParseError::kEndOfString;
+    err.location = FileOffset::EndOfString();
 
-    EXPECT_EQ(err.resolveOffset("abcdef"), 6);
-    EXPECT_EQ(err.resolveOffset("test string please ignore"), 25);
+    EXPECT_EQ(err.location.resolveOffset("abcdef"), FileOffset::Offset(6));
+    EXPECT_EQ(err.location.resolveOffset("test string please ignore"), FileOffset::Offset(25));
   }
 }
 
 TEST(ParseError, Output) {
   ParseError err;
   err.reason = "Test reason";
-  err.line = 1;
-  err.offset = 2;
+  err.location = FileOffset::LineAndOffset(1, 2);
 
   EXPECT_EQ((std::ostringstream() << err).str(), "Parse error at 1:2: Test reason");
 }

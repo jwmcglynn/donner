@@ -44,6 +44,7 @@ cc_library(
     ],
     deps = [
         "//src/base",
+        "//src/base/parser:file_offset",
         "//src/svg/xml:xml_qualified_name",
         "@frozen",
     ],

@@ -40,7 +40,11 @@ bool ParserBase::isWhitespace(char ch) const {
   return ch == '\t' || ch == ' ' || ch == '\n' || ch == '\r';
 }
 
-int ParserBase::currentOffset() {
+FileOffset ParserBase::currentOffset() const {
+  return FileOffset::Offset(consumedChars());
+}
+
+size_t ParserBase::consumedChars() const {
   return remaining_.data() - str_.data();
 }
 
@@ -48,7 +52,7 @@ ParseResult<double> ParserBase::readNumber() {
   auto maybeResult = NumberParser::Parse(remaining_);
   if (maybeResult.hasError()) {
     ParseError err = std::move(maybeResult.error());
-    err.offset += currentOffset();
+    err.location = err.location.addParentOffset(currentOffset());
     return err;
   }
 

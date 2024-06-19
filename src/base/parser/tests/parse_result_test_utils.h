@@ -76,15 +76,32 @@ MATCHER_P2(ParseErrorPos, line, offset, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
   if constexpr (std::is_same_v<ArgType, ParseError>) {
-    return testing::ExplainMatchResult(line, arg.line, result_listener) &&
-           testing::ExplainMatchResult(offset, arg.offset, result_listener);
+    return testing::ExplainMatchResult(line, arg.location.line, result_listener) &&
+           testing::ExplainMatchResult(offset, arg.location.offset, result_listener);
   } else {
     if (!arg.hasError()) {
       return false;
     }
 
-    return testing::ExplainMatchResult(line, arg.error().line, result_listener) &&
-           testing::ExplainMatchResult(offset, arg.error().offset, result_listener);
+    return testing::ExplainMatchResult(line, arg.error().location.line, result_listener) &&
+           testing::ExplainMatchResult(offset, arg.error().location.offset, result_listener);
+  }
+}
+
+/**
+ * Matches if a ParseResult contains an error at the end of the string.
+ */
+MATCHER(ParseErrorEndOfString, "") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
+
+  if constexpr (std::is_same_v<ArgType, ParseError>) {
+    return arg.offset == std::nullopt;
+  } else {
+    if (!arg.hasError()) {
+      return false;
+    }
+
+    return arg.error().location.offset == std::nullopt;
   }
 }
 

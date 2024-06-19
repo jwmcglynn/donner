@@ -22,7 +22,7 @@ public:
         if (remaining_.starts_with(',')) {
           ParseError err;
           err.reason = "Extra ',' before coordinate";
-          err.offset = currentOffset();
+          err.location = currentOffset();
           return err;
         }
       }

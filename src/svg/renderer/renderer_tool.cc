@@ -72,7 +72,7 @@ extern "C" int main(int argc, char* argv[]) {
   file.seekg(0);
 
   std::vector<char> fileData(fileLength + 1);
-  file.read(fileData.data(), fileLength);
+  file.read(fileData.data(), static_cast<std::streamsize>(fileLength));
 
   std::vector<parser::ParseError> warnings;
 
@@ -82,7 +82,7 @@ extern "C" int main(int argc, char* argv[]) {
 
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
+    std::cerr << "Parse Error " << e << "\n";
     return 3;
   }
 
@@ -91,7 +91,7 @@ extern "C" int main(int argc, char* argv[]) {
   if (!warnings.empty()) {
     std::cout << "Warnings:\n";
     for (auto& w : warnings) {
-      std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << "\n";
+      std::cout << "  " << w << "\n";
     }
   }
 

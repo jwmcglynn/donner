@@ -33,7 +33,8 @@ parser::ParseResult<RcString> ParseD(std::span<const css::ComponentValue> compon
 
   parser::ParseError err;
   err.reason = "Expected string or 'none'";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
   return err;
 }
 

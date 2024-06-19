@@ -1,6 +1,7 @@
 #include "src/svg/parser/css_transform_parser.h"
 
 #include "src/base/math_utils.h"
+#include "src/base/parser/file_offset.h"
 #include "src/svg/parser/angle_parser.h"
 #include "src/svg/parser/length_percentage_parser.h"
 
@@ -70,14 +71,14 @@ public:
       } else {
         ParseError err;
         err.reason = "Expected a number";
-        err.offset = components_.front().sourceOffset();
+        err.location = components_.front().sourceOffset();
         return err;
       }
     }
 
     ParseError err;
     err.reason = "Not enough parameters";
-    err.offset = ParseError::kEndOfString;
+    err.location = FileOffset::EndOfString();
     return err;
   }
 
@@ -88,7 +89,7 @@ public:
         if (!tryConsumeToken<css::Token::Comma>()) {
           ParseError err;
           err.reason = isEOF() ? "Not enough parameters" : "Expected a comma";
-          err.offset = sourceOffset();
+          err.location = sourceOffset();
           return err;
         }
         skipWhitespace();
@@ -118,7 +119,7 @@ public:
 
     ParseError err;
     err.reason = "Not enough parameters";
-    err.offset = ParseError::kEndOfString;
+    err.location = FileOffset::EndOfString();
     return err;
   }
 
@@ -135,13 +136,13 @@ public:
 
     ParseError err;
     err.reason = "Not enough parameters";
-    err.offset = ParseError::kEndOfString;
+    err.location = FileOffset::EndOfString();
     return err;
   }
 
-  size_t sourceOffset() const {
+  FileOffset sourceOffset() const {
     if (isEOF()) {
-      return ParseError::kEndOfString;
+      return FileOffset::EndOfString();
     } else {
       return components_.front().sourceOffset();
     }
@@ -233,13 +234,13 @@ public:
       } else {
         ParseError err;
         err.reason = "Unexpected function '" + name + "'";
-        err.offset = parser_.sourceOffset();
+        err.location = parser_.sourceOffset();
         return err;
       }
     } else {
       ParseError err;
       err.reason = "Expected a function, found unexpected token";
-      err.offset = parser_.sourceOffset();
+      err.location = parser_.sourceOffset();
       return err;
     }
 
@@ -256,7 +257,7 @@ public:
     if (!subparser.isEOF()) {
       ParseError err;
       err.reason = "Expected only one parameter";
-      err.offset = subparser.sourceOffset();
+      err.location = subparser.sourceOffset();
       return err;
     }
 
@@ -273,7 +274,7 @@ public:
     if (!subparser.isEOF()) {
       ParseError err;
       err.reason = "Expected only one parameter";
-      err.offset = subparser.sourceOffset();
+      err.location = subparser.sourceOffset();
       return err;
     }
 
@@ -291,7 +292,7 @@ public:
     if (!subparser.isEOF()) {
       ParseError err;
       err.reason = "Expected only one parameter";
-      err.offset = subparser.sourceOffset();
+      err.location = subparser.sourceOffset();
       return err;
     }
 
@@ -308,7 +309,7 @@ public:
     if (!subparser.isEOF()) {
       ParseError err;
       err.reason = "Unexpected parameters when parsing 'matrix'";
-      err.offset = subparser.sourceOffset();
+      err.location = subparser.sourceOffset();
       return err;
     }
 
@@ -334,7 +335,7 @@ public:
       } else {
         ParseError err;
         err.reason = "Expected a comma";
-        err.offset = subparser.sourceOffset();
+        err.location = subparser.sourceOffset();
         return err;
       }
 
@@ -351,7 +352,7 @@ public:
     if (!subparser.isEOF()) {
       ParseError err;
       err.reason = "Unexpected parameters when parsing 'translate'";
-      err.offset = subparser.sourceOffset();
+      err.location = subparser.sourceOffset();
       return err;
     }
 
@@ -376,7 +377,7 @@ public:
       } else {
         ParseError err;
         err.reason = "Expected a comma";
-        err.offset = subparser.sourceOffset();
+        err.location = subparser.sourceOffset();
         return err;
       }
 
@@ -393,7 +394,7 @@ public:
     if (!subparser.isEOF()) {
       ParseError err;
       err.reason = "Unexpected parameters when parsing 'scale'";
-      err.offset = subparser.sourceOffset();
+      err.location = subparser.sourceOffset();
       return err;
     }
 
@@ -418,7 +419,7 @@ public:
       } else {
         ParseError err;
         err.reason = "Expected a comma";
-        err.offset = subparser.sourceOffset();
+        err.location = subparser.sourceOffset();
         return err;
       }
 
@@ -435,7 +436,7 @@ public:
     if (!subparser.isEOF()) {
       ParseError err;
       err.reason = "Unexpected parameters when parsing 'skew'";
-      err.offset = subparser.sourceOffset();
+      err.location = subparser.sourceOffset();
       return err;
     }
 

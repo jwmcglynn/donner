@@ -52,7 +52,12 @@ protected:
   /**
    * Return the location of the parser's cursor, in characters from the start of the screen.
    */
-  int currentOffset();
+  FileOffset currentOffset() const;
+
+  /**
+   * Returns the number of characters consumed by the parser.
+   */
+  size_t consumedChars() const;
 
   /**
    * Read a number, note that this does not skip whitespace.

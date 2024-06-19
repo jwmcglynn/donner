@@ -86,26 +86,26 @@ public:
       if (unitRequired(number)) {
         ParseError err;
         err.reason = "Unit expected";
-        err.offset = currentOffset();
+        err.location = currentOffset();
         return err;
       }
 
       result.length.value = number;
-      result.consumedChars = currentOffset();
+      result.consumedChars = consumedChars();
       return result;
     }
 
     size_t charsConsumed = 0;
     if (auto maybeUnit = parseUnit(remaining_, &charsConsumed)) {
       remaining_.remove_prefix(charsConsumed);
-      result.consumedChars = currentOffset();
+      result.consumedChars = consumedChars();
       result.length.value = number;
       result.length.unit = maybeUnit.value();
 
       if (options_.limitUnitToPercentage && result.length.unit != Lengthd::Unit::Percent) {
         ParseError err;
         err.reason = "Unexpected unit, expected percentage";
-        err.offset = currentOffset();
+        err.location = currentOffset();
         return err;
       }
 
@@ -115,11 +115,11 @@ public:
     if (unitRequired(number)) {
       ParseError err;
       err.reason = "Invalid unit";
-      err.offset = currentOffset();
+      err.location = currentOffset();
       return err;
     } else {
       result.length.value = number;
-      result.consumedChars = currentOffset();
+      result.consumedChars = consumedChars();
       return result;
     }
   }

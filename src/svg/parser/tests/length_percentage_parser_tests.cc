@@ -83,14 +83,14 @@ TEST(LengthPercentageParserTest, ZeroComponents) {
   {
     const ParseResult<Lengthd> result = ParseLengthPercentage(""_cv_list, kAllowUserUnits);
     EXPECT_THAT(result, ParseErrorIs("Unexpected end of input"));
-    EXPECT_THAT(result, ParseErrorPos(0, ParseError::kEndOfString));
+    EXPECT_THAT(result, ParseErrorEndOfString());
   }
 
   {
     const ParseResult<Lengthd> result =
         ParseLengthPercentage("/* comment */"_cv_list, kAllowUserUnits);
     EXPECT_THAT(result, ParseErrorIs("Unexpected end of input"));
-    EXPECT_THAT(result, ParseErrorPos(0, ParseError::kEndOfString));
+    EXPECT_THAT(result, ParseErrorEndOfString());
   }
 }
 

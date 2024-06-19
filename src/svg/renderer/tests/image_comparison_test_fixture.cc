@@ -62,12 +62,10 @@ SVGDocument ImageComparisonTestFixture::loadSVG(const char* filename) {
   file.seekg(0);
 
   std::vector<char> fileData(fileLength + 1);
-  file.read(fileData.data(), fileLength);
+  file.read(fileData.data(), static_cast<std::streamsize>(fileLength));
 
   auto maybeResult = parser::XMLParser::ParseSVG(fileData);
-  EXPECT_FALSE(maybeResult.hasError())
-      << "Parse Error: " << maybeResult.error().line << ":" << maybeResult.error().offset << ": "
-      << maybeResult.error().reason;
+  EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
   if (maybeResult.hasError()) {
     return SVGDocument();
   }
@@ -115,24 +113,24 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
   if (mismatchedPixels > params.maxMismatchedPixels) {
     std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
-              << params.maxMismatchedPixels << " max)" << std::endl;
+              << params.maxMismatchedPixels << " max)\n";
 
     const std::filesystem::path actualImagePath =
         std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
-    std::cout << "Actual rendering: " << actualImagePath.string() << std::endl;
+    std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(),
                                               renderer.pixelData(), width, height, strideInPixels);
 
-    std::cout << "Expected: " << goldenImageFilename << std::endl;
+    std::cout << "Expected: " << goldenImageFilename << "\n";
 
     const std::filesystem::path diffFilePath =
         std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
-    std::cerr << "Diff: " << diffFilePath.string() << std::endl;
+    std::cerr << "Diff: " << diffFilePath.string() << "\n";
 
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
-    std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)" << std::endl;
+    std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
 
     {
       RendererSkia rendererVerbose(/*verbose*/ true);
@@ -144,12 +142,13 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
           std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
       {
         std::ofstream file(skpFilePath.string());
-        file.write(reinterpret_cast<const char*>(pictureData->data()), pictureData->size());
+        file.write(reinterpret_cast<const char*>(pictureData->data()),  // NOLINT: Intentional cast
+                   static_cast<std::streamsize>(pictureData->size()));
         EXPECT_TRUE(file.good());
       }
 
       std::cout << "Load this .skp into https://debugger.skia.org/\n"
-                << "=> " << skpFilePath.string() << std::endl;
+                << "=> " << skpFilePath.string() << "\n";
     }
 
     FAIL() << mismatchedPixels << " pixels different.";
@@ -159,7 +158,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       std::cout << " (" << mismatchedPixels << " pixels differ, out of "
                 << params.maxMismatchedPixels << " max)";
     }
-    std::cout << std::endl;
+    std::cout << "\n";
   }
 }
 

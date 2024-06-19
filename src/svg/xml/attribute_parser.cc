@@ -58,7 +58,7 @@ static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
   if (maybeLengthResult.result().consumedChars != value.size()) {
     ParseError err;
     err.reason = "Unexpected data at end of attribute";
-    err.offset = maybeLengthResult.result().consumedChars;
+    err.location = FileOffset::Offset(maybeLengthResult.result().consumedChars);
     context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     return std::nullopt;
   }
@@ -83,7 +83,7 @@ static std::optional<float> ParseStopOffset(XMLParserContext& context, std::stri
   if (maybeLengthResult.result().consumedChars != value.size()) {
     ParseError err;
     err.reason = "Unexpected data at end of attribute";
-    err.offset = maybeLengthResult.result().consumedChars;
+    err.location = FileOffset::Offset(maybeLengthResult.result().consumedChars);
     context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     return std::nullopt;
   }

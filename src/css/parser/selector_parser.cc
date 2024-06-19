@@ -807,8 +807,8 @@ private:
   void setError(std::string reason) {
     ParseError err;
     err.reason = std::move(reason);
-    err.offset =
-        !components_.empty() ? components_.front().sourceOffset() : ParseError::kEndOfString;
+    err.location =
+        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString();
     error_ = std::move(err);
   }
 
@@ -837,7 +837,7 @@ ParseResult<Selector> SelectorParser::Parse(std::string_view str) {
   details::Tokenizer tokenizer_(str);
   std::vector<ComponentValue> components = details::parseListOfComponentValues(tokenizer_);
   return ParseComponents(components).mapError<Selector>([str](ParseError&& err) {
-    err.offset = err.resolveOffset(str);
+    err.location = err.location.resolveOffset(str);
     return std::move(err);
   });
 }

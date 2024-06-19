@@ -3,10 +3,10 @@
 
 #include <optional>
 #include <ostream>
-#include <string_view>
 #include <variant>
 
 #include "src/base/length.h"
+#include "src/base/parser/file_offset.h"
 #include "src/base/rc_string.h"
 
 namespace donner::css {
@@ -773,7 +773,7 @@ struct Token {
   /**
    * Returns the offset within the source string where this token starts.
    */
-  size_t offset() const { return offset_; }
+  parser::FileOffset offset() const { return parser::FileOffset::Offset(offset_); }
 
   /**
    * Check if the token is of the given type.

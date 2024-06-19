@@ -29,7 +29,7 @@ SVGDocument instantiateSubtree(std::string_view str, const parser::XMLParser::Op
   auto maybeResult = parser::XMLParser::ParseSVG(fileData, &warnings, options);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
+    std::cerr << "Parse Error " << e << "\n";
     return SVGDocument();
   }
 

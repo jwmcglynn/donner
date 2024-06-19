@@ -23,7 +23,7 @@ public:
     if (!remaining_.empty()) {
       ParseError err;
       err.reason = "Expected end of string";
-      err.offset = currentOffset();
+      err.location = currentOffset();
       return err;
     }
 

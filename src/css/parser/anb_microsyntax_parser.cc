@@ -213,7 +213,7 @@ public:
             } else {
               ParseError err;
               err.reason = "An+B microsyntax unexpected end of list";
-              err.offset = ParseError::kEndOfString;
+              err.location = FileOffset::EndOfString();
               return err;
             }
           }
@@ -284,12 +284,12 @@ public:
     if (components_.empty()) {
       ParseError err;
       err.reason = "An+B microsyntax unexpected end of list";
-      err.offset = ParseError::kEndOfString;
+      err.location = FileOffset::EndOfString();
       return err;
     } else {
       ParseError err;
       err.reason = "Unexpected token when parsing An+B microsyntax";
-      err.offset = components_.front().sourceOffset();
+      err.location = components_.front().sourceOffset();
       return err;
     }
   }
@@ -334,7 +334,7 @@ private:
     if (!component.is<Token>()) {
       ParseError err;
       err.reason = "Expected CSS token when parsing An+B microsyntax";
-      err.offset = component.sourceOffset();
+      err.location = component.sourceOffset();
       return err;
     }
 
@@ -433,7 +433,7 @@ private:
 
     ParseError err;
     err.reason = "Unexpected token when parsing An+B microsyntax";
-    err.offset = token.offset();
+    err.location = token.offset();
     return err;
   }
 

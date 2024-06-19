@@ -29,7 +29,8 @@ struct Declaration {
    * @param sourceOffset Offset of the declaration name in the source string.
    * @param important Whether the declaration ends with `!important`.
    */
-  Declaration(RcString name, std::vector<ComponentValue> values = {}, size_t sourceOffset = 0,
+  Declaration(RcString name, std::vector<ComponentValue> values = {},
+              const parser::FileOffset& sourceOffset = parser::FileOffset::Offset(0),
               bool important = false)
       : name(std::move(name)),
         values(std::move(values)),
@@ -55,7 +56,7 @@ struct Declaration {
 
   RcString name;                       ///< Name of the declaration.
   std::vector<ComponentValue> values;  ///< List of component values for the declaration.
-  size_t sourceOffset;                 ///< Offset of the declaration name in the source string.
+  parser::FileOffset sourceOffset;     ///< Offset of the declaration name in the source string.
   bool important = false;              ///< Whether the declaration ends with `!important`.
 };
 

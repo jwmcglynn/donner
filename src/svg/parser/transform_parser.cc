@@ -21,7 +21,7 @@ public:
         skipCommaWhitespace();
       }
 
-      const int functionStart = currentOffset();
+      const FileOffset functionStart = currentOffset();
 
       ParseResult<std::string_view> maybeFunc = readFunction();
       if (maybeFunc.hasError()) {
@@ -134,7 +134,7 @@ public:
       } else {
         ParseError err;
         err.reason = std::string("Unexpected function '").append(func) + "'";
-        err.offset = functionStart;
+        err.location = functionStart;
         return err;
       }
 
@@ -148,7 +148,7 @@ public:
       } else {
         ParseError err;
         err.reason = "Expected ')'";
-        err.offset = currentOffset();
+        err.location = currentOffset();
         return err;
       }
     }
@@ -175,7 +175,8 @@ private:
         } else {
           ParseError err;
           err.reason = "Expected '(' after function name";
-          err.offset = currentOffset() + i;
+          err.location = currentOffset();
+          err.location.offset.value() += i;
           return err;
         }
       }
@@ -183,7 +184,7 @@ private:
 
     ParseError err;
     err.reason = "Unexpected end of string instead of transform function";
-    err.offset = currentOffset();
+    err.location = currentOffset();
     return err;
   }
 };

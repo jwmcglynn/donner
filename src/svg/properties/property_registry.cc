@@ -29,7 +29,8 @@ parser::ParseResult<double> ParseNumber(std::span<const css::ComponentValue> com
 
   parser::ParseError err;
   err.reason = "Invalid number";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
   return err;
 }
 
@@ -75,7 +76,8 @@ parser::ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> c
 
   parser::ParseError err;
   err.reason = "Invalid display value";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
   return err;
 }
 
@@ -97,7 +99,8 @@ parser::ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentVa
 
   parser::ParseError err;
   err.reason = "Invalid display value";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
   return err;
 }
 
@@ -128,7 +131,8 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
         if (components.size() > 1) {
           parser::ParseError err;
           err.reason = "Unexpected tokens after paint server value";
-          err.offset = token.offset() + name.size();
+          err.location = token.offset();
+          err.location.offset.value() += name.size();
           return err;
         }
 
@@ -162,7 +166,7 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
           // Invalid paint.
           parser::ParseError err;
           err.reason = "Invalid paint server url, failed to parse fallback";
-          err.offset = components[i].sourceOffset();
+          err.location = components[i].sourceOffset();
           return err;
         }
       }
@@ -181,7 +185,7 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
 
   parser::ParseError err;
   err.reason = "Invalid paint server";
-  err.offset = firstComponent.sourceOffset();
+  err.location = firstComponent.sourceOffset();
   return err;
 }
 
@@ -201,7 +205,8 @@ parser::ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue>
 
   parser::ParseError err;
   err.reason = "Invalid fill rule";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
   return err;
 }
 
@@ -224,7 +229,8 @@ parser::ParseResult<StrokeLinecap> ParseStrokeLinecap(
 
   parser::ParseError err;
   err.reason = "Invalid linecap";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
   return err;
 }
 
@@ -251,7 +257,8 @@ parser::ParseResult<StrokeLinejoin> ParseStrokeLinejoin(
 
   parser::ParseError err;
   err.reason = "Invalid linejoin";
-  err.offset = !components.empty() ? components.front().sourceOffset() : 0;
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
   return err;
 }
 
@@ -276,8 +283,8 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
       } else {
         parser::ParseError err;
         err.reason = "Unexpected token in dasharray";
-        err.offset = !components.empty() ? components.front().sourceOffset()
-                                         : parser::ParseError::kEndOfString;
+        err.location = !components.empty() ? components.front().sourceOffset()
+                                           : parser::FileOffset::EndOfString();
         return err;
       }
     }
@@ -287,7 +294,7 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
       if (!dimension->suffixUnit) {
         parser::ParseError err;
         err.reason = "Invalid unit on length";
-        err.offset = component.sourceOffset();
+        err.location = component.sourceOffset();
         return err;
       } else {
         result.emplace_back(dimension->value, dimension->suffixUnit.value());
@@ -299,7 +306,7 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
     } else {
       parser::ParseError err;
       err.reason = "Unexpected token in dasharray";
-      err.offset = component.sourceOffset();
+      err.location = component.sourceOffset();
       return err;
     }
 
@@ -344,7 +351,7 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
           if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
             parser::ParseError err;
             err.reason = "Invalid unit on length";
-            err.offset = arg.sourceOffset();
+            err.location = arg.sourceOffset();
             return err;
           } else {
             const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
@@ -353,7 +360,7 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
         } else {
           parser::ParseError err;
           err.reason = "Invalid blur value";
-          err.offset = arg.sourceOffset();
+          err.location = arg.sourceOffset();
           return err;
         }
       }
@@ -362,7 +369,7 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
 
   parser::ParseError err;
   err.reason = "Invalid filter value";
-  err.offset = firstComponent.sourceOffset();
+  err.location = firstComponent.sourceOffset();
   return err;
 }
 
@@ -586,7 +593,7 @@ std::optional<parser::ParseError> PropertyRegistry::parseProperty(
   } else {
     parser::ParseError err;
     err.reason = "Unknown property '" + declaration.name + "'";
-    err.offset = declaration.sourceOffset;
+    err.location = declaration.sourceOffset;
     return err;
   }
 

@@ -49,7 +49,7 @@ extern "C" int main(int argc, char* argv[]) {
   auto maybeResult = parser::XMLParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
+    std::cerr << "Parse Error " << e << "\n";
     return 3;
   }
 
@@ -58,7 +58,7 @@ extern "C" int main(int argc, char* argv[]) {
   if (!warnings.empty()) {
     std::cout << "Warnings:\n";
     for (auto& w : warnings) {
-      std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << "\n";
+      std::cout << "  " << w << "\n";
     }
   }
 

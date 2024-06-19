@@ -37,7 +37,7 @@ public:
         ParseError err;
         err.reason = align.empty() ? std::string("Unexpected end of string instead of align")
                                    : ("Invalid align: '" + std::string(align) + "'");
-        err.offset = currentOffset();
+        err.location = currentOffset();
         return err;
       }
     }
@@ -53,14 +53,14 @@ public:
       } else {
         ParseError err;
         err.reason = "Invalid meetOrSlice: '" + std::string(meetOrSlice) + "'";
-        err.offset = currentOffset();
+        err.location = currentOffset();
         return err;
       }
 
       if (!remaining_.empty()) {
         ParseError err;
         err.reason = "End of attribute expected";
-        err.offset = currentOffset();
+        err.location = currentOffset();
         return err;
       }
     }

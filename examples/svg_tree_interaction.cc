@@ -43,7 +43,7 @@ int main(int argc, char* argv[]) {
       donner::svg::parser::XMLParser::ParseSVG(svgContents);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
+    std::cerr << "Parse Error " << e << "\n";  // Includes line:column and reason
     return 1;
   }
 

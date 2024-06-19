@@ -30,10 +30,12 @@ public:
     const size_t line = lineOffsets_.offsetToLine(origin.startOffset);
 
     ParseError newError = std::move(error);
-    if (newError.line == 0) {
-      newError.offset += origin.startOffset - lineOffsets_.lineOffset(line);
+    if (newError.location.line == 0) {
+      assert(newError.location.offset.has_value() &&
+             "Location must be resolved and not have a nullopt offset");
+      newError.location.offset.value() += origin.startOffset - lineOffsets_.lineOffset(line);
     }
-    newError.line += line;
+    newError.location.line += line;
     return newError;
   }
 

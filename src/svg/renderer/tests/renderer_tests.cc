@@ -58,9 +58,7 @@ protected:
     file.read(fileData.data(), fileLength);
 
     auto maybeResult = parser::XMLParser::ParseSVG(fileData);
-    EXPECT_FALSE(maybeResult.hasError())
-        << "Parse Error: " << maybeResult.error().line << ":" << maybeResult.error().offset << ": "
-        << maybeResult.error().reason;
+    EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
     if (maybeResult.hasError()) {
       return SVGDocument();
     }

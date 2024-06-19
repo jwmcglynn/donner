@@ -15,7 +15,7 @@ ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseO
     } else {
       ParseError err;
       err.reason = "Unsupported angle unit '" + dimension->suffixString + "'";
-      err.offset = component.sourceOffset();
+      err.location = component.sourceOffset();
       return err;
     }
   } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
@@ -26,7 +26,7 @@ ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseO
 
   ParseError err;
   err.reason = "Invalid angle";
-  err.offset = component.sourceOffset();
+  err.location = component.sourceOffset();
   return err;
 }
 
