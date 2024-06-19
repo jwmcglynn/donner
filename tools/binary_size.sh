@@ -9,8 +9,15 @@ mkdir -p build-binary-size
 # --ui_event_filters=-info,-stdout,-stderr --noshow_progress hides all compile output
 BAZEL_QUIET_OPTIONS="--ui_event_filters=-info,-warning,-stdout,-stderr --noshow_progress"
 
+BAZEL_CONFIGS="--config=binary-size"
+
+# If we're macos also specify the macos-binary-size config
+if [[ "$(uname)" == "Darwin" ]]; then
+  BAZEL_CONFIGS="$BAZEL_CONFIGS --config=macos-binary-size"
+fi
+
 # Build the binary to analyze, xml_tool
-bazel build $BAZEL_QUIET_OPTIONS -c opt --strip=never --copt=-g //src/svg/xml:xml_tool.stripped
+bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //src/svg/xml:xml_tool.stripped
 
 cp -f bazel-bin/src/svg/xml/xml_tool build-binary-size/xml_tool
 

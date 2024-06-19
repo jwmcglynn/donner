@@ -35,7 +35,7 @@ build:linux --config=host_libstdc++ --copt=-fno-modules
 build:macos --features=oso_prefix_is_pwd
 
 # Reduces binary size on mac
-build:macos --linkopt=-exported_symbols_list --linkopt=/dev/null
+build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
 
 # Generates documentation
 build:doc --aspects=//tools/aspects:hdoc_aspect.bzl%hdoc_aspect
@@ -44,7 +44,7 @@ build:doc --build_tag_filters=docs
 build --config=libc++ --config=c++20 --define absl=1
 
 # Binary size builds
-build:binary-size -c opt --copt=-Oz --copt=-g --strip=never
+build:binary-size -c opt --copt=-Os --copt=-g --strip=never
 
 # Coverage builds
 coverage --config=coverage
