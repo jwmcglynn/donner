@@ -3,7 +3,7 @@ import sys
 import json
 import os
 from typing import Dict
-from python.webtreemap import read_bloaty_csv, Node, generate_webtreemap_html
+from python.webtreemap import generate_webtreemap_html
 
 
 def main(filename: str, output_filename: str):

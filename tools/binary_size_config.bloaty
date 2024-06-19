@@ -3,8 +3,8 @@ custom_data_source: {
   base_data_source: "compileunits"
 
   rewrite: {
-    pattern: "^(\\.\\./)?src"
-    replacement: "src"
+    pattern: "^(\\.\\./)?donner"
+    replacement: "donner"
   }
   rewrite: {
     pattern: "^(\\.\\./)?(third_party/\\w+)"
