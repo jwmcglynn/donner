@@ -41,7 +41,7 @@ bazel build --build_tag_filters=wasm //...
 To try the wasm demo:
 
 ```sh
-bazel run --build_tag_filters=wasm //src/wasm:serve_http
+bazel run --build_tag_filters=wasm //experimental/wasm:serve_http
 ```
 
 ## Build reports

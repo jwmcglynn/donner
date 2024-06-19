@@ -1,1 +1,1 @@
-command script import ./src/base/lldb/base_formatters.py
+command script import ./base/lldb/base_formatters.py

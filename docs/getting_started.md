@@ -29,12 +29,10 @@ cc_binary(
 
 ## Loading an SVG
 
-TODO: Change this to be <donner/...>
-
 First include the core SVG module with:
 
 ```cpp
-#include "src/svg/svg.h"
+#include "donner/svg/SVG.h"
 ```
 
 Use XMLParser to load an SVG from a string, which may be loaded from a file. Note that the string needs to be mutable as it is modified by the parser.

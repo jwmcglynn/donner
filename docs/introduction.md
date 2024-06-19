@@ -43,7 +43,7 @@ bazel test //...
 To render an SVG as an image, try the renderer tool:
 
 ```sh
-bazel run //src/svg/renderer:renderer_tool -- src/svg/renderer/testdata/Ghostscript_Tiger.svg
+bazel run //donner/svg/renderer:renderer_tool -- $(bazel info workspace)/donner/svg/renderer/testdata/Ghostscript_Tiger.svg
 ```
 
 See more details in the [Building Donner](internal/building.md) instructions.

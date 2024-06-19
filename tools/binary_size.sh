@@ -17,9 +17,9 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 # Build the binary to analyze, xml_tool
-bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //src/svg/xml:xml_tool.stripped
+bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/xml:xml_tool.stripped
 
-cp -f bazel-bin/src/svg/xml/xml_tool build-binary-size/xml_tool
+cp -f bazel-bin/donner/svg/xml/xml_tool build-binary-size/xml_tool
 
 # Print human-readable binary size of xml_tool.stripped
 echo '```'

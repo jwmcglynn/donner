@@ -3,8 +3,8 @@
 #include <iostream>
 #include <vector>
 
-#include "src/svg/renderer/renderer_skia.h"
-#include "src/svg/svg.h"
+#include "donner/svg/SVG.h"
+#include "donner/svg/renderer/RendererSkia.h"
 
 using donner::base::parser::ParseError;
 using donner::base::parser::ParseResult;

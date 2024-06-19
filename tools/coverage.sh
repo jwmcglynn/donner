@@ -3,7 +3,7 @@
 function print_help() {
   echo "Usage: $0 [--quiet] [TARGETS...]"
   echo "Run coverage analysis on the specified Bazel targets."
-  echo "If no targets are specified, coverage is run on '//src/...'."
+  echo "If no targets are specified, coverage is run on '//donner/...'."
   echo ""
   echo "Options:"
   echo "  --quiet  Suppress debug output."
@@ -26,8 +26,8 @@ for arg in "$@"; do
   fi
 done
 
-# Default to //src/... if no targets are specified
-TARGETS=${TARGETS:-//src/...}
+# Default to //donner/... if no targets are specified
+TARGETS=${TARGETS:-//donner/...}
 
 echo "Analyzing coverage for: $TARGETS"
 

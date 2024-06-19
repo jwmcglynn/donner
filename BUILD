@@ -7,11 +7,9 @@
 #
 cc_library(
     name = "donner",
-    include_prefix = "donner",
-    strip_include_prefix = "src",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/svg/renderer",
+        "//donner/svg/renderer",
     ],
 )
 
@@ -50,6 +48,6 @@ filegroup(
         "*.svg",
     ]),
     visibility = [
-        "//src:__subpackages__",
+        "//donner:__subpackages__",
     ],
 )

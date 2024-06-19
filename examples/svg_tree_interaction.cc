@@ -1,9 +1,9 @@
 #include <iostream>
 #include <vector>
 
-#include "src/base/utils.h"
-#include "src/svg/svg.h"
-#include "src/svg/svg_path_element.h"
+#include "donner/base/Utils.h"
+#include "donner/svg/SVG.h"
+#include "donner/svg/SVGPathElement.h"
 
 namespace {
 

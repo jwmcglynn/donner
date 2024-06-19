@@ -1,0 +1,52 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "components",
+    srcs = [
+        "GradientComponent.cc",
+        "LinearGradientComponent.cc",
+        "PatternComponent.cc",
+        "RadialGradientComponent.cc",
+        "StopComponent.cc",
+    ],
+    hdrs = [
+        "GradientComponent.h",
+        "LinearGradientComponent.h",
+        "PatternComponent.h",
+        "RadialGradientComponent.h",
+        "StopComponent.h",
+    ],
+    visibility = [
+        "//donner/svg/components:__subpackages__",
+    ],
+    deps = [
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/layout:sized_element_component",
+        "//donner/svg/components/shadow:components",
+        "//donner/svg/components/shape:components",
+        "//donner/svg/properties",
+        "//donner/svg/registry",
+    ],
+)
+
+cc_library(
+    name = "paint_system",
+    srcs = [
+        "PaintSystem.cc",
+    ],
+    hdrs = [
+        "PaintSystem.h",
+    ],
+    visibility = [
+        "//donner/svg/components:__subpackages__",
+    ],
+    deps = [
+        ":components",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/layout:layout_system",
+        "//donner/svg/components/shadow:components",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/properties",
+        "//donner/svg/registry",
+    ],
+)

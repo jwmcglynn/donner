@@ -21,7 +21,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "base_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/base/base_tests",
+      "program": "${workspaceFolder}/bazel-bin/base/base_tests",
       "args": [
         "--gtest_break_on_failure",
       ],
@@ -34,7 +34,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "core_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/core/core_tests",
+      "program": "${workspaceFolder}/bazel-bin/svg/core/core_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -47,7 +47,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "svg_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/tests/svg_tests",
+      "program": "${workspaceFolder}/bazel-bin/svg/tests/svg_tests",
       "args": [
         "--gtest_break_on_failure",
       ],
@@ -60,7 +60,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "renderer_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/renderer/tests/renderer_tests",
+      "program": "${workspaceFolder}/bazel-bin/svg/renderer/tests/renderer_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -73,7 +73,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "resvg_test_suite",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/renderer/tests/resvg_test_suite",
+      "program": "${workspaceFolder}/bazel-bin/svg/renderer/tests/resvg_test_suite",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -86,7 +86,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "css_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/css/css_tests",
+      "program": "${workspaceFolder}/bazel-bin/css/css_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -99,7 +99,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "svg_parser_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/parser/parser_tests",
+      "program": "${workspaceFolder}/bazel-bin/svg/parser/parser_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -112,7 +112,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "css_parser_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/css/parser/parser_tests",
+      "program": "${workspaceFolder}/bazel-bin/css/parser/parser_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -125,10 +125,10 @@
       "type": "lldb",
       "request": "launch",
       "name": "anb_microsyntax_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/src/css/parser/anb_microsyntax_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/css/parser/anb_microsyntax_parser_fuzzer",
       "cwd": "${workspaceFolder}",
       "args": [
-        "src/css/parser/tests/anb_microsyntax_parser_corpus/crash-ed705e365ccd3fba8d30135aa52aed5ed12f7cc7",
+        "css/parser/tests/anb_microsyntax_parser_corpus/crash-ed705e365ccd3fba8d30135aa52aed5ed12f7cc7",
       ],
       "sourceMap": {
         ".": "${workspaceFolder}"
@@ -138,7 +138,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "properties_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/properties/tests/properties_tests",
+      "program": "${workspaceFolder}/bazel-bin/svg/properties/tests/properties_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -151,11 +151,11 @@
       "type": "lldb",
       "request": "launch",
       "name": "css_parsing_tests",
-      "program": "${workspaceFolder}/bazel-bin/src/css/parser/css_parsing_tests",
+      "program": "${workspaceFolder}/bazel-bin/css/parser/css_parsing_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
-      "cwd": "${workspaceFolder}/bazel-bin/src/css/parser/css_parsing_tests.runfiles/__main__",
+      "cwd": "${workspaceFolder}/bazel-bin/css/parser/css_parsing_tests.runfiles/__main__",
       "sourceMap": {
         ".": "${workspaceFolder}"
       },
@@ -164,9 +164,9 @@
       "type": "lldb",
       "request": "launch",
       "name": "xml_tool",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/xml/xml_tool",
+      "program": "${workspaceFolder}/bazel-bin/svg/xml/xml_tool",
       "args": [
-        "${workspaceFolder}/src/svg/xml/testdata/e-path-034.svg"
+        "${workspaceFolder}/svg/xml/testdata/e-path-034.svg"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -177,9 +177,9 @@
       "type": "lldb",
       "request": "launch",
       "name": "declaration_list_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/src/css/parser/declaration_list_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/css/parser/declaration_list_parser_fuzzer",
       "args": [
-        "${workspaceFolder}/src/css/parser/tests/declaration_list_parser_corpus/unicode.txt"
+        "${workspaceFolder}/css/parser/tests/declaration_list_parser_corpus/unicode.txt"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -190,9 +190,9 @@
       "type": "lldb",
       "request": "launch",
       "name": "stylesheet_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/src/css/parser/stylesheet_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/css/parser/stylesheet_parser_fuzzer",
       "args": [
-        "${workspaceFolder}/bazel-bin/src/css/parser/stylesheet_parser_corpus/eof.txt"
+        "${workspaceFolder}/bazel-bin/css/parser/stylesheet_parser_corpus/eof.txt"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -203,9 +203,9 @@
       "type": "lldb",
       "request": "launch",
       "name": "color_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/src/css/parser/color_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/css/parser/color_parser_fuzzer",
       "args": [
-        "${workspaceFolder}/src/css/parser/tests/color_parser_corpus/function.txt"
+        "${workspaceFolder}/css/parser/tests/color_parser_corpus/function.txt"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -216,9 +216,9 @@
       "type": "lldb",
       "request": "launch",
       "name": "selector_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/src/css/parser/selector_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/css/parser/selector_parser_fuzzer",
       "args": [
-        "${workspaceFolder}/src/css/parser/tests/selector_parser_corpus/infinite-loop-handleComplexSelector.txt"
+        "${workspaceFolder}/css/parser/tests/selector_parser_corpus/infinite-loop-handleComplexSelector.txt"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -229,11 +229,11 @@
       "type": "lldb",
       "request": "launch",
       "name": "renderer_tool",
-      "program": "${workspaceFolder}/bazel-bin/src/svg/renderer/renderer_tool",
+      "program": "${workspaceFolder}/bazel-bin/svg/renderer/renderer_tool",
       "args": [
-        "${workspaceFolder}/src/svg/renderer/testdata/stroking_pathlength.svg"
+        "${workspaceFolder}/svg/renderer/testdata/stroking_pathlength.svg"
       ],
-      "cwd": "${workspaceFolder}/bazel-bin/src/svg/renderer/renderer_tool.runfiles/__main__",
+      "cwd": "${workspaceFolder}/bazel-bin/svg/renderer/renderer_tool.runfiles/__main__",
       "sourceMap": {
         ".": "${workspaceFolder}"
       },

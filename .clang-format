@@ -10,3 +10,5 @@ Language: Cpp
 # Force pointers to the type for C++.
 DerivePointerAlignment: false
 PointerAlignment: Left
+
+IncludeIsMainRegex: '(_tests?)?$'

@@ -37,9 +37,9 @@
         "-c",
         "dbg",
         "--config=asan",
-        "//src/svg/xml:xml_tool",
+        "//donner/svg/xml:xml_tool",
         "--",
-        "${workspaceFolder}/src/svg/xml/testdata/e-path-034.svg"
+        "${workspaceFolder}/donner/svg/xml/testdata/e-path-034.svg"
       ],
       "group": "test",
       "options": {
@@ -49,7 +49,7 @@
     {
       "label": "svg (all)",
       "type": "shell",
-      "command": "bazel test -c dbg //src/svg/...",
+      "command": "bazel test -c dbg //donner/svg/...",
       "problemMatcher": [
         "$gcc"
       ],
@@ -63,7 +63,7 @@
     {
       "label": "all",
       "type": "shell",
-      "command": "bazel build //src/...",
+      "command": "bazel build //...",
       "problemMatcher": [
         "$gcc"
       ],
@@ -78,7 +78,7 @@
     {
       "label": "svg_tests",
       "type": "shell",
-      "command": "bazel run -c dbg //src/svg/tests:svg_tests",
+      "command": "bazel run -c dbg //donner/svg/tests:svg_tests",
       "problemMatcher": [
         "$gcc"
       ],
@@ -90,7 +90,7 @@
     {
       "label": "css (all)",
       "type": "shell",
-      "command": "bazel test //src/css/... -c dbg",
+      "command": "bazel test //donner/css/... -c dbg",
       "problemMatcher": [
         "$gcc"
       ],
@@ -104,7 +104,7 @@
     {
       "label": "all tests",
       "type": "shell",
-      "command": "bazel test //src/... -c dbg",
+      "command": "bazel test //... -c dbg",
       "problemMatcher": [
         "$gcc"
       ],
@@ -116,7 +116,7 @@
     {
       "label": "base_tests",
       "type": "shell",
-      "command": "bazel build //src/base:base_tests -c dbg",
+      "command": "bazel build //donner/base:base_tests -c dbg",
       "problemMatcher": [
         "$gcc"
       ]
@@ -124,7 +124,7 @@
     {
       "label": "renderer_tool",
       "type": "shell",
-      "command": "bazel run -c dbg //src/svg/renderer:renderer_tool -- ${workspaceFolder}/src/svg/renderer/testdata/Ghostscript_Tiger.svg",
+      "command": "bazel run -c dbg //donner/svg/renderer:renderer_tool -- ${workspaceFolder}/src/svg/renderer/testdata/Ghostscript_Tiger.svg",
       "problemMatcher": [
         "$gcc"
       ],
@@ -139,7 +139,7 @@
     {
       "label": "renderer_tests",
       "type": "shell",
-      "command": "bazel run -c dbg //src/svg/renderer/tests:renderer_tests",
+      "command": "bazel run -c dbg //donner/svg/renderer/tests:renderer_tests",
       "problemMatcher": [
         "$gcc"
       ],
@@ -148,7 +148,7 @@
     {
       "label": "base_parser_tests",
       "type": "shell",
-      "command": "bazel build //src/base/parser:parser_tests -c dbg",
+      "command": "bazel build //donner/base/parser:parser_tests -c dbg",
       "problemMatcher": [
         "$gcc"
       ],
@@ -157,62 +157,62 @@
     {
       "label": "core_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/core:core_tests -c dbg",
+      "command": "bazel build //donner/svg/core:core_tests -c dbg",
       "problemMatcher": []
     },
     {
       "label": "svg_parser_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/parser:parser_tests -c dbg",
+      "command": "bazel build //donner/svg/parser:parser_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },
     {
       "label": "svg_parser_tests (run)",
       "type": "shell",
-      "command": "bazel run //src/svg/parser:parser_tests -c dbg",
+      "command": "bazel run //donner/svg/parser:parser_tests -c dbg",
       "problemMatcher": [],
       "group": "test"
     },
     {
       "label": "components_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/components:components_tests -c dbg",
+      "command": "bazel build //donner/svg/components:components_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },
     {
       "label": "properties_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/properties/tests:properties_tests -c dbg",
+      "command": "bazel build //donner/svg/properties/tests:properties_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },
     {
       "label": "xml_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/xml:xml_tests -c dbg",
+      "command": "bazel build //donner/svg/xml:xml_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },
     {
       "label": "xml_details_tests",
       "type": "shell",
-      "command": "bazel build //src/svg/xml:xml_details_tests -c dbg",
+      "command": "bazel build //donner/svg/xml:xml_details_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },
     {
       "label": "svg_tests",
       "type": "shell",
-      "command": "bazel run //src/svg/tests:svg_tests -c dbg",
+      "command": "bazel run //donner/svg/tests:svg_tests -c dbg",
       "problemMatcher": [],
       "group": "test"
     },
     {
       "label": "css_parser_tests",
       "type": "shell",
-      "command": "bazel build //src/css/parser:parser_tests -c dbg",
+      "command": "bazel build //donner/css/parser:parser_tests -c dbg",
       "problemMatcher": [],
       "group": "test"
     }

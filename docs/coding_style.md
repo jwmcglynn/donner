@@ -8,11 +8,11 @@ Include paths for Donner files are relative to the donner svg directory and use 
 
 ```cpp
 // GOOD:
-#include "src/base/vector2.h"
+#include "donner/base/Vector2.h"
 
 // BAD:
-#include "vector2.h"
-#include <src/base/vector2.h>
+#include "Vector2.h"
+#include <donner/base/Vector2.h>
 ```
 
 STL and third-party dependencies do not use this, and use angle brackets:
@@ -25,7 +25,7 @@ STL and third-party dependencies do not use this, and use angle brackets:
 ## Naming
 
 - **Folders**: Names are lowercase, and one word is preferred. For multiple words, use lower_snake_case.
-- **Files**: lower_snake_case
+- **Files**: UpperCamelCase, matching the C++ class in the file contents. They may be suffixed by `_test` or `_fuzzer`, and for main files they may vary, such as `debugger_main.cc`.
 - **Classes**: UpperCamelCase, matching filename. This matches the SVG standard for DOM object naming.
 - **Class methods**: lowerCamelCase, aligning with the SVG standard.
   - Constructors, and constructor-like static methods continue to use UpperCamelCase.
@@ -34,14 +34,14 @@ STL and third-party dependencies do not use this, and use angle brackets:
 - **Parameters and local variables**: lowerCamelCase
 - **Constants**: `k` prefix, and then UpperCamelCase: kExampleConstant
 
-`path/to_the/example_class.h`:
+`path/to_the/ExampleClass.h`:
 
 ```cpp
 #pragma once
 
 #include <string>
 
-#include "src/base/math_utils.h"
+#include "donner/base/MathUtils.h"
 
 class ExampleClass {
 public:
