@@ -119,8 +119,7 @@
     "cuchar": "cpp"
   },
   "files.exclude": {
-    "bazel-*": true,
-    "external/hdoc": true
+    "bazel-*": true
   },
   "editor.tabSize": 2,
   // C++ extension settings

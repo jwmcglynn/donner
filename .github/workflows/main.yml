@@ -50,11 +50,3 @@ jobs:
       - name: Test
         run: |
           "${GITHUB_WORKSPACE}/bin/bazel" test --test_output=errors //...
-
-      - name: Build docs
-        run: |
-          "${GITHUB_WORKSPACE}/bin/bazel" build --build_tag_filters=docs //...
-
-      - name: Build wasm
-        run: |
-          "${GITHUB_WORKSPACE}/bin/bazel" build --build_tag_filters=wasm //...
