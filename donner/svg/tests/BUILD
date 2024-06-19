@@ -5,6 +5,7 @@ cc_test(
     srcs = [
         "ElementStyle_tests.cc",
         "SVGCircleElement_tests.cc",
+        "SVGElement_tests.cc",
         "SVGEllipseElement_tests.cc",
         "SVGFilterElement_tests.cc",
         "SVGLinearGradientElement_tests.cc",
@@ -12,7 +13,6 @@ cc_test(
         "SVGPatternElement_tests.cc",
         "SVGRadialGradientElement_tests.cc",
         "SVGRectElement_tests.cc",
-        "SVGelement_tests.cc",
     ],
     deps = [
         ":xml_test_utils",

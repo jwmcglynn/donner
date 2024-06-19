@@ -26,7 +26,7 @@ TEST(SVGRadialGradientElementTests, Defaults) {
   EXPECT_THAT(gradient->spreadMethod(), testing::Eq(GradientSpreadMethod::Pad));
 }
 
-TEST(SVGradialGradientElementTests, RenderingDefaults) {
+TEST(SVGRadialGradientElementTests, RenderingDefaults) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <radialGradient id="a">
           <stop offset="0%" stop-color="white" />
