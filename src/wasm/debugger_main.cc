@@ -50,7 +50,7 @@ public:
 
     if (maybeResult.hasError()) {
       const auto& e = maybeResult.error();
-      std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
+      std::cerr << "Parse Error " << e << std::endl;
       return false;
     }
 
@@ -59,7 +59,7 @@ public:
     if (!warnings.empty()) {
       std::cout << "Warnings:" << std::endl;
       for (auto& w : warnings) {
-        std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << std::endl;
+        std::cout << "  " << w << std::endl;
       }
     }
 
