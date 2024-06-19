@@ -44,5 +44,6 @@ Donner focuses on security and performance, which is validated with code coverag
 
 ## Other Libraries
 
-- **[librsvg](https://gitlab.gnome.org/GNOME/librsvg)**: Provides a simple way to render SVGs one-shot, does not provide a DOM or animation
-- **[resvg](https://github.com/RazrFalcon/resvg)**: A Rust library that focuses on correctness, safety, and portability for static SVGs
+- C++ | **[LunaSVG](https://github.com/sammycage/lunasvg)**: A lightweight library with an embedded renderer, suitable for embedded applications
+- Rust | **[librsvg](https://gitlab.gnome.org/GNOME/librsvg)**: Provides a simple way to render SVGs one-shot, does not provide a DOM or animation
+- Rust | **[resvg](https://github.com/RazrFalcon/resvg)**: Library that focuses on correctness, safety, and portability for static SVGs
