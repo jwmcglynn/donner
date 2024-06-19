@@ -9,6 +9,7 @@ cc_library(
         "SVGElement.cc",
         "SVGEllipseElement.cc",
         "SVGFEGaussianBlurElement.cc",
+        "SVGFilterElement.cc",
         "SVGFilterPrimitiveStandardAttributes.cc",
         "SVGGElement.cc",
         "SVGGeometryElement.cc",
@@ -27,7 +28,6 @@ cc_library(
         "SVGStyleElement.cc",
         "SVGUnknownElement.cc",
         "SVGUseElement.cc",
-        "SVGfilterElement.cc",
     ],
     hdrs = [
         "AllSVGElements.h",

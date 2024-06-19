@@ -71,7 +71,7 @@ donner_cc_fuzzer(
 donner_cc_fuzzer(
     name = "transform_parser_fuzzer",
     srcs = [
-        "tests/transform_parser_fuzzer.cc",
+        "tests/TransformParser_fuzzer.cc",
     ],
     corpus = "tests/transform_parser_corpus",
     deps = [
