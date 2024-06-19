@@ -1,0 +1,11 @@
+.github-corner svg {
+  fill: var(--primary-color);
+  color: var(--page-background-color);
+}
+
+@media screen and (max-width: 767px) {
+  .github-corner svg {
+    width: 50px;
+    height: 50px;
+  }
+}
