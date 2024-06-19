@@ -199,7 +199,7 @@ STRIP_FROM_PATH        =
 # specify the list of include paths that are normally passed to the compiler
 # using the -I flag.
 
-STRIP_FROM_INC_PATH    = src
+STRIP_FROM_INC_PATH    = .
 
 # If the SHORT_NAMES tag is set to YES, doxygen will generate much shorter (but
 # less readable) file names. This can be useful is your file systems doesn't
@@ -674,7 +674,7 @@ SHOW_GROUPED_MEMB_INC  = NO
 # files with double quotes in the documentation rather than with sharp brackets.
 # The default value is: NO.
 
-FORCE_LOCAL_INCLUDES   = NO
+FORCE_LOCAL_INCLUDES   = YES
 
 # If the INLINE_INFO tag is set to YES then a tag [inline] is inserted in the
 # documentation for inline members.
@@ -950,7 +950,7 @@ WARN_LOGFILE           =
 # Note: If this tag is empty the current directory is searched.
 
 INPUT                  = docs \
-                         src
+                         donner
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses
@@ -2404,7 +2404,7 @@ SEARCH_INCLUDES        = YES
 # RECURSIVE has no effect here.
 # This tag requires that the tag SEARCH_INCLUDES is set to YES.
 
-INCLUDE_PATH           =
+INCLUDE_PATH           = donner
 
 # You can use the INCLUDE_FILE_PATTERNS tag to specify one or more wildcard
 # patterns (like *.h and *.hpp) to filter out the header-files in the
