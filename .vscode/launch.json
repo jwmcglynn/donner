@@ -7,14 +7,14 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "hdoc",
-      "program": "${workspaceFolder}/bazel-bin/external/hdoc/hdoc",
+      "name": "examples/svg_to_png",
+      "program": "${workspaceFolder}/bazel-bin/examples/svg_to_png",
       "cwd": "${workspaceFolder}",
       "args": [
-        "--verbose",
+        "donner_splash.svg",
       ],
       "sourceMap": {
-        ".": "${workspaceFolder}/third_party/hdoc"
+        ".": "${workspaceFolder}"
       }
     },
     {

@@ -20,15 +20,21 @@ Donner focuses on security and performance, which is validated with code coverag
 ## Documentation
 
 - \subpage GettingStarted
-- \subpage DonnerAPI
 - \ref SystemArchitecture
-- [Devtools](devtools/index.md), such as binary size and code coverage
+- \ref Devtools
+- \ref DonnerAPI
+- [Examples](https://github.com/jwmcglynn/donner/tree/main/examples) (github)
 
 ## Project Goals
 
 - Have minimal dependencies, so it can be integrated into existing applications, assuming a modern compiler.
 - Expose the SVG DOM, so that applications can manipulate SVGs dynamically.
 - Implement the [SVG 2 Specification](https://www.w3.org/TR/SVG2/).
+
+## Status
+
+- [Project status](https://github.com/jwmcglynn/donner/issues/149) (github)
+- [Build report](build_report.md)
 
 ## Building
 
@@ -46,4 +52,4 @@ To render an SVG as an image, try the renderer tool:
 bazel run //donner/svg/renderer:renderer_tool -- $(bazel info workspace)/donner/svg/renderer/testdata/Ghostscript_Tiger.svg
 ```
 
-See more details in the [Building Donner](internal/building.md) instructions.
+See more details in the \subpage BuildingDonner instructions.
