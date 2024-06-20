@@ -41,7 +41,7 @@ cc_library(
 cc_test(
     name = "renderer_tests",
     srcs = [
-        "renderer_tests.cc",
+        "Renderer_tests.cc",
     ],
     data = [
         "//donner/svg/renderer/testdata",
