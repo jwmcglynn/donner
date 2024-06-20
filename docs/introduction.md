@@ -23,7 +23,7 @@ Donner focuses on security and performance, which is validated with code coverag
 - \ref SystemArchitecture
 - \ref Devtools
 - \ref DonnerAPI
-- [Examples](https://github.com/jwmcglynn/donner/tree/main/examples) (github)
+- [Examples](Examples.html)
 
 ## Project Goals
 
