@@ -16,7 +16,7 @@ donner::ParseResult<donner::svg::SVGDocument> maybeResult =
 ```cpp
 if (maybeResult.hasError()) {
   const auto& e = maybeResult.error();
-  std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
+  std::cerr << "Parse Error " << e << "\n";
   // Handle the error per your project's conventions here.
 }
 ```

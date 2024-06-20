@@ -37,50 +37,21 @@ First include the core SVG module with:
 
 Use XMLParser to load an SVG from a string, which may be loaded from a file. Note that the string needs to be mutable as it is modified by the parser.
 
-```cpp
-// This is the base SVG we are loading, a simple path containing a line.
-MutableString svgContents(R"(
-  <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
-    <path d="M 1 1 L 2 3" fill="blue" stroke-width="3" />
-  </svg>
-)");
+\snippet svg_tree_interaction.cc svg string
 
-donner::ParseResult<donner::svg::SVGDocument> maybeResult =
-    donner::svg::XMLParser::ParseSVG(svgContents);
-```
+\snippet svg_tree_interaction.cc svg parse
 
 `ParseResult` contains either the document or an error, which can be checked with `hasError()` and `error()`:
 
-```cpp
-if (maybeResult.hasError()) {
-  const auto& e = maybeResult.error();
-  std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << "\n";
-  // Handle the error per your project's conventions here.
-}
-```
+\snippet svg_tree_interaction.cc error handling
 
 Then get the `SVGDocument` and start using it. For example, to get the `SVGElement` for the `<path>`:
 
-```cpp
-donner::svg::SVGDocument document = std::move(maybeResult.result());
-
-// querySelector supports standard CSS selectors, anything that's valid when defining a CSS rule
-// works here too, for example querySelector("svg > path[fill='blue']") is also valid and will
-// match the same element.
-auto maybePath = document.svgElement().querySelector("path");
-UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
-```
+\snippet svg_tree_interaction.cc get path
 
 The document tree can be traversed via the Donner API, and the SVG can be modified in-memory:
 
-```cpp
-// Set styles, note that these combine together and do not replace.
-path.setStyle("fill: red");
-path.setStyle("stroke: white");
-
-// Get the parsed, cascaded style for this element and output it to the console.
-std::cout << "Computed style: " << path.getComputedStyle() << "\n";
-```
+\snippet svg_tree_interaction.cc path set style
 
 Outputs
 

@@ -30,3 +30,6 @@ package-lock.json
 # Python
 __pycache__
 *.pyc
+
+# From examples/svg_to_png.cc
+output.png

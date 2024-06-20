@@ -1,16 +1,17 @@
 /**
 @defgroup data_formats Data formats
 
-SVG data is specified using many different micro-syntaxes such as \ref path_data and \ref poly_points.
+SVG data is specified using many different micro-syntaxes such as \ref path_data and \ref
+poly_points.
 
 Donner implements a collection of parsers for these micro-syntaxes:
-- \ref donner::svg::PathParser::Parse
-- \ref donner::svg::PointsListParser::Parse
-- \ref donner::NumberParser::Parse
-- \ref donner::LengthParser::Parse
+- \ref donner::svg::PathParser
+- \ref donner::svg::PointsListParser
+- \ref donner::NumberParser
+- \ref donner::LengthParser
 - \ref donner::svg::ParseLengthPercentage
-- \ref donner::svg::TransformParser::Parse
-- \ref donner::svg::ViewboxParser::Parse
+- \ref donner::svg::TransformParser
+- \ref donner::svg::ViewboxParser
 
 Additionally, Donner includes a standalone CSS parser, \ref donner::css::CSS.
 
