@@ -1,8 +1,11 @@
 #include "donner/base/SmallVector.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace donner {
+
+using testing::ElementsAre;
 
 namespace {
 
@@ -275,6 +278,36 @@ TEST(SmallVector, BeginEndMethods) {
   SmallVector<int, 4> vec = {1, 2, 3, 4};
   EXPECT_EQ(vec.begin(), &vec[0]);
   EXPECT_EQ(vec.end(), &vec[0] + vec.size());
+}
+
+/**
+ * Validates that the gtest ElementsAre matcher works for this class.
+ */
+TEST(SmallVector, ElementsAreMatcher) {
+  SmallVector<int, 4> vec = {1, 2, 3, 4};
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
+
+  vec.push_back(5);
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4, 5));
+
+  vec.pop_back();
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
+}
+
+/**
+ * Validates that the gtest ElementsAre matcher works for non-trivial types.
+ */
+TEST(SmallVector, ElementsAreMatcherNonTrivialType) {
+  SmallVector<std::string, 4> vec;
+  vec.push_back("hello");
+  vec.push_back("world");
+  EXPECT_THAT(vec, ElementsAre("hello", "world"));
+
+  vec.pop_back();
+  EXPECT_THAT(vec, ElementsAre("hello"));
+
+  vec.clear();
+  EXPECT_THAT(vec, ElementsAre());
 }
 
 }  // namespace donner

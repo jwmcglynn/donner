@@ -22,6 +22,13 @@ namespace donner {
 template <typename T, std::size_t DefaultSize>
 class SmallVector {
 public:
+  using value_type = T;              //!< Type of elements stored in the vector.
+  using size_type = std::size_t;     //!< Type used to represent the size of the vector.
+  using reference = T&;              //!< Reference to an element in the vector.
+  using const_reference = const T&;  //!< Const reference to an element in the vector.
+  using iterator = T*;               //!< Iterator to an element in the vector.
+  using const_iterator = const T*;   //!< Const iterator to an element in the vector.
+
   /**
    * Constructs an empty SmallVector.
    */
@@ -282,6 +289,11 @@ private:
 
     Data() : longData(nullptr) {}
     ~Data() {}
+
+    Data(const Data&) = delete;
+    Data& operator=(const Data&) = delete;
+    Data(Data&&) = delete;
+    Data& operator=(Data&&) = delete;
   };
 
   Data data_;  //!< Data storage for the vector.

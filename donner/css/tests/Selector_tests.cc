@@ -42,7 +42,7 @@ struct FakeElement {
         .getAttribute(name);
   }
 
-  std::SmallVector<svg::XMLQualifiedNameRef, 1> findMatchingAttributes(
+  SmallVector<svg::XMLQualifiedNameRef, 1> findMatchingAttributes(
       const svg::XMLQualifiedNameRef& matcher) const {
     return registry_.get()
         .get_or_emplace<svg::components::AttributesComponent>(entity_)
