@@ -3,6 +3,11 @@
 
 using namespace donner;
 
+/**
+ * @brief Tests default construction of SmallVector.
+ * 
+ * Validates that a default constructed SmallVector is empty, has a size of 0, and a capacity equal to its template parameter.
+ */
 TEST(SmallVector, DefaultConstruction) {
     SmallVector<int, 4> vec;
     EXPECT_TRUE(vec.empty());
@@ -10,6 +15,9 @@ TEST(SmallVector, DefaultConstruction) {
     EXPECT_EQ(4, vec.capacity());
 }
 
+/**
+ * Validates that a SmallVector constructed with an initializer list contains the correct elements, size, and capacity.
+ */
 TEST(SmallVector, InitializerListConstruction) {
     SmallVector<int, 4> vec = {1, 2, 3, 4};
     EXPECT_FALSE(vec.empty());
@@ -21,6 +29,9 @@ TEST(SmallVector, InitializerListConstruction) {
     EXPECT_EQ(4, vec[3]);
 }
 
+/**
+ * Validates that a SmallVector can exceed its default size and correctly manages its capacity and elements.
+ */
 TEST(SmallVector, ExceedsDefaultSize) {
     SmallVector<int, 4> vec = {1, 2, 3, 4, 5};
     EXPECT_FALSE(vec.empty());
@@ -30,6 +41,9 @@ TEST(SmallVector, ExceedsDefaultSize) {
     EXPECT_EQ(5, vec[4]);
 }
 
+/**
+ * Validates that a copy-constructed SmallVector contains the same elements, size, and capacity as the original.
+ */
 TEST(SmallVector, CopyConstruction) {
     SmallVector<int, 4> original = {1, 2, 3, 4};
     SmallVector<int, 4> copy = original;
@@ -39,6 +53,9 @@ TEST(SmallVector, CopyConstruction) {
     }
 }
 
+/**
+ * Validates that a move-constructed SmallVector correctly transfers elements from the source, leaving the source empty.
+ */
 TEST(SmallVector, MoveConstruction) {
     SmallVector<int, 4> original = {1, 2, 3, 4};
     SmallVector<int, 4> moved = std::move(original);
@@ -48,6 +65,9 @@ TEST(SmallVector, MoveConstruction) {
     EXPECT_EQ(4, moved[3]);
 }
 
+/**
+ * Validates that elements can be added to and removed from the SmallVector, and that the size is updated accordingly.
+ */
 TEST(SmallVector, PushBackAndPopBack) {
     SmallVector<int, 4> vec;
     vec.push_back(1);

@@ -9,23 +9,49 @@
 
 namespace donner {
 
+/**
+ * A vector with small-size optimization.
+ * 
+ * This vector can store a small number of elements on the stack. If the number of elements exceeds
+ * the stack capacity, it will allocate memory on the heap. This can reduce memory allocations for
+ * small vectors.
+ * 
+ * @tparam T Type of elements stored in the vector.
+ * @tparam DefaultSize Number of elements that can be stored on the stack.
+ */
 template<typename T, std::size_t DefaultSize>
 class SmallVector {
 public:
+    /**
+     * Constructs an empty SmallVector.
+     */
     SmallVector() : size_(0), capacity_(DefaultSize), isLong_(false) {}
 
+    /**
+     * Constructs a SmallVector with the elements from the initializer list.
+     * 
+     * @param init Initializer list to initialize the elements of the vector.
+     */
     SmallVector(std::initializer_list<T> init) : SmallVector() {
         for (const auto& value : init) {
             push_back(value);
         }
     }
 
+    /**
+     * Destructor for SmallVector.
+     */
     ~SmallVector() {
         if (isLong_) {
             delete[] data_.longData;
         }
     }
 
+    /**
+     * Copy constructor.
+     * 
+     * @param other The SmallVector to copy from.
+     */
     SmallVector(const SmallVector& other) : size_(other.size_), capacity_(other.capacity_), isLong_(other.isLong_) {
         if (isLong_) {
             data_.longData = new T[capacity_];
@@ -35,6 +61,12 @@ public:
         }
     }
 
+    /**
+     * Copy assignment operator.
+     * 
+     * @param other The SmallVector to copy from.
+     * @return Reference to this SmallVector.
+     */
     SmallVector& operator=(const SmallVector& other) {
         if (this != &other) {
             if (isLong_) {
@@ -55,6 +87,11 @@ public:
         return *this;
     }
 
+    /**
+     * Move constructor.
+     * 
+     * @param other The SmallVector to move from.
+     */
     SmallVector(SmallVector&& other) noexcept : size_(other.size_), capacity_(other.capacity_), isLong_(other.isLong_), data_(other.data_) {
         other.size_ = 0;
         other.capacity_ = DefaultSize;
@@ -62,6 +99,12 @@ public:
         other.data_.longData = nullptr; // Prevent double-free
     }
 
+    /**
+     * Move assignment operator.
+     * 
+     * @param other The SmallVector to move from.
+     * @return Reference to this SmallVector.
+     */
     SmallVector& operator=(SmallVector&& other) noexcept {
         if (this != &other) {
             if (isLong_) {
@@ -81,6 +124,11 @@ public:
         return *this;
     }
 
+    /**
+     * Adds an element to the end of the vector.
+     * 
+     * @param value The value to add.
+     */
     void push_back(const T& value) {
         ensureCapacity(size_ + 1);
         if (isLong_) {
@@ -91,22 +139,45 @@ public:
         ++size_;
     }
 
+    /**
+     * Clears the contents of the vector.
+     */
     void clear() {
         size_ = 0;
     }
 
+    /**
+     * Returns the number of elements in the vector.
+     */
     std::size_t size() const {
         return size_;
     }
 
+    /**
+     * Checks if the vector is empty.
+     * 
+     * @return True if the vector is empty, false otherwise.
+     */
     bool empty() const {
         return size_ == 0;
     }
 
+    /**
+     * Accesses the element at the specified index.
+     * 
+     * @param index Index of the element to access.
+     * @return Reference to the element at the specified index.
+     */
     T& operator[](std::size_t index) {
         return isLong_ ? data_.longData[index] : data_.shortData[index];
     }
 
+    /**
+     * Accesses the element at the specified index (const version).
+     * 
+     * @param index Index of the element to access.
+     * @return Const reference to the element at the specified index.
+     */
     const T& operator[](std::size_t index) const {
         return isLong_ ? data_.longData[index] : data_.shortData[index];
     }
