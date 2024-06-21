@@ -57,7 +57,7 @@ Outputs
 
 ```
 Computed style: PropertyRegistry {
-  fill: PaintServer(solid Color(0, 0, 255, 255)) (set) @ Specificity(0, 0, 0)
+  fill: PaintServer(solid Color(rgba(0, 0, 255, 255))) (set) @ Specificity(0, 0, 0)
   stroke-width: 3px (set) @ Specificity(0, 0, 0)
 }
 ```

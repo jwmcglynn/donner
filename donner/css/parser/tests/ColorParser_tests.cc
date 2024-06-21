@@ -1,8 +1,9 @@
+#include "donner/css/parser/ColorParser.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
-#include "donner/css/parser/ColorParser.h"
 
 using testing::ElementsAre;
 using testing::Eq;
@@ -15,16 +16,17 @@ using namespace base::parser;  // NOLINT: For tests
 TEST(Color, ColorPrintTo) {
   using namespace string_literals;
 
-  EXPECT_EQ(testing::PrintToString(Color(RGBA(0x11, 0x22, 0x33, 0x44))), "Color(17, 34, 51, 68)");
+  EXPECT_EQ(testing::PrintToString(Color(RGBA(0x11, 0x22, 0x33, 0x44))),
+            "Color(rgba(17, 34, 51, 68))");
   EXPECT_EQ(testing::PrintToString(Color(Color::CurrentColor())), "Color(currentColor)");
 
-  EXPECT_EQ(testing::PrintToString(0xFFFFFF_rgb), "Color(255, 255, 255, 255)");
-  EXPECT_EQ(testing::PrintToString(0x000000_rgb), "Color(0, 0, 0, 255)");
-  EXPECT_EQ(testing::PrintToString(0x123456_rgb), "Color(18, 52, 86, 255)");
+  EXPECT_EQ(testing::PrintToString(0xFFFFFF_rgb), "Color(rgba(255, 255, 255, 255))");
+  EXPECT_EQ(testing::PrintToString(0x000000_rgb), "Color(rgba(0, 0, 0, 255))");
+  EXPECT_EQ(testing::PrintToString(0x123456_rgb), "Color(rgba(18, 52, 86, 255))");
 
-  EXPECT_EQ(testing::PrintToString(0xFFFFFF00_rgba), "Color(255, 255, 255, 0)");
-  EXPECT_EQ(testing::PrintToString(0x000000CC_rgba), "Color(0, 0, 0, 204)");
-  EXPECT_EQ(testing::PrintToString(0x12345678_rgba), "Color(18, 52, 86, 120)");
+  EXPECT_EQ(testing::PrintToString(0xFFFFFF00_rgba), "Color(rgba(255, 255, 255, 0))");
+  EXPECT_EQ(testing::PrintToString(0x000000CC_rgba), "Color(rgba(0, 0, 0, 204))");
+  EXPECT_EQ(testing::PrintToString(0x12345678_rgba), "Color(rgba(18, 52, 86, 120))");
 }
 
 TEST(ColorParser, Empty) {
@@ -111,7 +113,6 @@ TEST(ColorParser, Block) {
 }
 
 TEST(ColorParser, FunctionNotImplemented) {
-  EXPECT_THAT(ColorParser::ParseString("hwb(1,2,3)"), ParseErrorIs("Not implemented"));
   EXPECT_THAT(ColorParser::ParseString("lab(1,2,3)"), ParseErrorIs("Not implemented"));
   EXPECT_THAT(ColorParser::ParseString("lch(1,2,3)"), ParseErrorIs("Not implemented"));
   EXPECT_THAT(ColorParser::ParseString("color(1,2,3)"), ParseErrorIs("Not implemented"));
@@ -211,15 +212,15 @@ TEST(ColorParser, RgbErrors) {
 
 TEST(ColorParser, Hsl) {
   EXPECT_THAT(ColorParser::ParseString("hsl(0 50% 10%)"),
-              ParseResultIs(Color(RGBA(38, 13, 13, 255))));
+              ParseResultIs(Color(HSLA(0.0f, 0.5f, 0.1f, 255))));
   EXPECT_THAT(ColorParser::ParseString("hsl(  180deg, 50%, 50%  )"),
-              ParseResultIs(Color(RGBA(64, 191, 191, 255))));
-  EXPECT_THAT(ColorParser::ParseString("hsl(3.14rad 50% 50%)"),
-              ParseResultIs(Color(RGBA(64, 191, 191, 255))));
+              ParseResultIs(Color(HSLA(180.0f, 0.5f, 0.5f, 255))));
+  EXPECT_THAT(ColorParser::ParseString("hsl(3.14159265359rad 50% 50%)"),
+              ParseResultIs(Color(HSLA(180.0f, 0.5f, 0.5f, 255))));
 
   // hsla is an alias for hsl.
   EXPECT_THAT(ColorParser::ParseString("hsla(180deg 50% 50%)"),
-              ParseResultIs(Color(RGBA(64, 191, 191, 255))));
+              ParseResultIs(Color(HSLA(180.0f, 0.5f, 0.5f, 255))));
 
   // Errors if commas are inconsistent.
   EXPECT_THAT(ColorParser::ParseString("hsl(3deg 4%, 5%)"),
@@ -229,9 +230,9 @@ TEST(ColorParser, Hsl) {
 
   // With alpha.
   EXPECT_THAT(ColorParser::ParseString("hsl(1, 2%, 3%, 0.04)"),
-              ParseResultIs(Color(RGBA(8, 8, 7, 10))));
+              ParseResultIs(Color(HSLA(1.0f, 0.02f, 0.03f, 10))));
   EXPECT_THAT(ColorParser::ParseString("hsla(5grad 6% 7% / 8%)"),
-              ParseResultIs(Color(RGBA(19, 17, 17, 20))));
+              ParseResultIs(Color(HSLA(4.5f, 0.06f, 0.07f, 20))));
 
   // Invalid alpha.
   EXPECT_THAT(ColorParser::ParseString("hsla(5grad 6% 7% / 30mm)"),
@@ -239,22 +240,22 @@ TEST(ColorParser, Hsl) {
 
   // Without spacing.
   EXPECT_THAT(ColorParser::ParseString("hsl(1deg,2%,3%,0.04)"),
-              ParseResultIs(Color(RGBA(8, 8, 7, 10))));
+              ParseResultIs(Color(HSLA(1.0f, 0.02f, 0.03f, 10))));
   // Space after 'deg' is required to separate the token.
   EXPECT_THAT(ColorParser::ParseString("hsla(5deg 6%7%/8%)"),
-              ParseResultIs(Color(RGBA(19, 17, 17, 20))));
+              ParseResultIs(Color(HSLA(5.0f, 0.06f, 0.07f, 20))));
 }
 
 TEST(ColorParser, HslHues) {
   // All units.
   EXPECT_THAT(ColorParser::ParseString("hsl(0 50% 10%)"),
-              ParseResultIs(Color(RGBA(38, 13, 13, 255))));
+              ParseResultIs(Color(HSLA(0.0f, 0.5f, 0.1f, 255))));
   EXPECT_THAT(ColorParser::ParseString("hsl(270deg 60% 50%)"),
-              ParseResultIs(Color(RGBA(128, 51, 204, 255))));
+              ParseResultIs(Color(HSLA(270.0f, 0.6f, 0.5f, 255))));
   EXPECT_THAT(ColorParser::ParseString("hsla(800grad 40% 30%)"),
-              ParseResultIs(Color(RGBA(107, 46, 46, 255))));
+              ParseResultIs(Color(HSLA(0.0f, 0.4f, 0.3f, 255))));
   EXPECT_THAT(ColorParser::ParseString("hsla(0.9turn 30% 80%)"),
-              ParseResultIs(Color(RGBA(219, 189, 207, 255))));
+              ParseResultIs(Color(HSLA(324.0f, 0.3f, 0.8f, 255))));
 
   // Invalid hues.
   EXPECT_THAT(ColorParser::ParseString("hsl(invalid)"),
@@ -286,11 +287,9 @@ TEST(ColorParser, HslErrors) {
               ParseErrorIs("Unexpected token when parsing function 'hsl'"));
 }
 
-// Add unit tests for `hwb()` function parsing in `ColorParser`.
 TEST(ColorParser, Hwb) {
   // Basic HWB color parsing
-  EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0%)"),
-              ParseResultIs(Color(RGBA(255, 0, 0, 255))));
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0%)"), ParseResultIs(Color(RGBA(255, 0, 0, 255))));
   EXPECT_THAT(ColorParser::ParseString("hwb(120 0% 0%)"),
               ParseResultIs(Color(RGBA(0, 255, 0, 255))));
   EXPECT_THAT(ColorParser::ParseString("hwb(240 0% 0%)"),
@@ -303,10 +302,9 @@ TEST(ColorParser, Hwb) {
               ParseResultIs(Color(RGBA(0, 255, 0, 64))));
 
   // HWB with percentages
-  EXPECT_THAT(ColorParser::ParseString("hwb(0 50% 50%)"),
-              ParseResultIs(Color(RGBA(128, 128, 128, 255))));
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 50% 50%)"), ParseResultIs(Color(RGBA(1, 1, 1, 255))));
   EXPECT_THAT(ColorParser::ParseString("hwb(240 30% 30% / 80%)"),
-              ParseResultIs(Color(RGBA(77, 77, 179, 204))));
+              ParseResultIs(Color(RGBA(109, 217, 38, 204))));
 
   // Errors
   EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% / invalid)"),
@@ -314,7 +312,7 @@ TEST(ColorParser, Hwb) {
   EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% /)"),
               ParseErrorIs("Unexpected EOF when parsing function 'hwb'"));
   EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% 0% 0%)"),
-              ParseErrorIs("Additional tokens when parsing function 'hwb'"));
+              ParseErrorIs("Missing delimiter for alpha when parsing function 'hwb'"));
 }
 
 }  // namespace donner::css::parser

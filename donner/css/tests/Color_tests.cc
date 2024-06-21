@@ -1,7 +1,7 @@
+#include "donner/css/Color.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include "donner/css/Color.h"
 
 namespace donner::css {
 
@@ -16,15 +16,11 @@ TEST(RGBA, ToHexString) {
 }
 
 // Test deferred RGB conversion for HSLA
-TEST(Color, HSLADeferredConversion) {
-  Color hslaColor = Color(Color::HSLA(180, 50, 50, 1.0));
-  EXPECT_FALSE(hslaColor.hasRGBA());
-  EXPECT_TRUE(hslaColor.hasHSLA());
-  auto hsla = hslaColor.hsla();
-  EXPECT_EQ(hsla.h, 180);
-  EXPECT_EQ(hsla.s, 50);
-  EXPECT_EQ(hsla.l, 50);
-  EXPECT_EQ(hsla.a, 1.0);
+TEST(Color, HSLAtoRGBA) {
+  EXPECT_EQ(HSLA::HSL(0, 0.5, 0.1).toRGBA(), RGBA(38, 13, 13, 255));
+  EXPECT_EQ(HSLA::HSL(180, 0.5, 0.5).toRGBA(), RGBA(64, 191, 191, 255));
+  EXPECT_EQ(HSLA::HSL(270, 0.5, 0.9).toRGBA(), RGBA(230, 217, 242, 255));
+  EXPECT_EQ(HSLA::HSL(360, 0.9, 0.3).toRGBA(), RGBA(145, 8, 8, 255));
 }
 
 }  // namespace donner::css

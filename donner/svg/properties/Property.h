@@ -416,7 +416,7 @@ struct Property {
  *
  * Example output:
  * ```
- * color: Color(0, 255, 0, 255) (set) @ Specificity(0, 0, 0)
+ * color: Color(rgba(0, 255, 0, 255)) (set) @ Specificity(0, 0, 0)
  * ```
  *
  * @param os Output stream to write to.

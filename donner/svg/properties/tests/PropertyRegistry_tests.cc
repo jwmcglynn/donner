@@ -1,9 +1,10 @@
+#include "donner/svg/properties/PropertyRegistry.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::svg {
 
@@ -29,7 +30,7 @@ TEST(PropertyRegistry, ParseDeclaration) {
 
   // Test printing to string.
   EXPECT_THAT(registry, ToStringIs(R"(PropertyRegistry {
-  color: Color(0, 255, 0, 255) (set) @ Specificity(0, 0, 0)
+  color: Color(rgba(0, 255, 0, 255)) (set) @ Specificity(0, 0, 0)
 }
 )"));
 }

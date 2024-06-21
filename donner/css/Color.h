@@ -6,6 +6,8 @@
 #include <string_view>
 #include <variant>
 
+#include "donner/base/Utils.h"
+
 namespace donner::css {
 
 /**
@@ -45,6 +47,59 @@ struct RGBA {
    * @returns '#rrggbb' if the color is opaque, or '#rrggbbaa' if the color has an alpha channel.
    */
   std::string toHexString() const;
+
+  /**
+   * Ostream output operator.
+   *
+   * Outputs: `rgba(r, g, b, a)`.
+   *
+   * @param os The output stream.
+   * @param color The color to output.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const RGBA& color);
+};
+
+/// Represents an HSLA color.
+struct HSLA {
+  float hDeg;        ///< Hue component, in degrees [0, 360].
+  float s;           ///< Saturation component, as a percentage [0, 1].
+  float l;           ///< Lightness component, as a percentage [0, 1].
+  uint8_t a = 0xFF;  ///< Alpha component, as uint8 [0, 255].
+
+  /**
+   * Constructor, initializes to the given HSLA values.
+   *
+   * @param hDeg The hue component, in degrees [0, 360].
+   * @param s The saturation component, as a percentage [0, 1].
+   * @param l The lightness component, as a percentage [0, 1].
+   * @param a The alpha component, as a uint8 [0, 255].
+   */
+  constexpr HSLA(float hDeg, float s, float l, uint8_t a) : hDeg(hDeg), s(s), l(l), a(a) {}
+
+  /**
+   * Constructor, for HSL colors, which are fully opaque.
+   *
+   * @param hDeg The hue component, in degrees [0, 360].
+   * @param s The saturation component, as a percentage [0, 1].
+   * @param l The lightness component, as a percentage [0, 1].
+   */
+  static constexpr HSLA HSL(float h, float s, float l) { return {h, s, l, 0xFF}; }
+
+  /// Convert the color to an RGBA color.
+  RGBA toRGBA() const;
+
+  /// Equality operator.
+  bool operator==(const HSLA&) const = default;
+
+  /**
+   * Ostream output operator.
+   *
+   * Outputs: `hsla(h, s, l, a)`.
+   *
+   * @param os The output stream.
+   * @param color The color to output.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const HSLA& color);
 };
 
 /**
@@ -61,20 +116,11 @@ struct Color {
   struct CurrentColor {
     /// Equality operator.
     bool operator==(const CurrentColor&) const = default;
-  };
 
-  /// Represents an HSLA color.
-  struct HSLA {
-    float h; ///< Hue component, in degrees.
-    float s; ///< Saturation component, as a percentage.
-    float l; ///< Lightness component, as a percentage.
-    float a; ///< Alpha component, as a percentage.
-
-    /// Constructor, initializes to the given HSLA values.
-    constexpr HSLA(float h, float s, float l, float a) : h(h), s(s), l(l), a(a) {}
-
-    /// Equality operator.
-    bool operator==(const HSLA&) const = default;
+    /// Ostream output operator.
+    friend std::ostream& operator<<(std::ostream& os, const CurrentColor&) {
+      return os << "currentColor";
+    }
   };
 
   /// A variant for supported color types.
@@ -116,15 +162,15 @@ struct Color {
   /// Returns true if the color is an RGBA color.
   bool hasRGBA() const { return std::holds_alternative<RGBA>(value); }
 
-  /// Returns true if the color is an HSLA color.
-  bool hasHSLA() const { return std::holds_alternative<HSLA>(value); }
-
   /**
    * Returns the RGBA color value, if this object stores an RGBA color.
    *
    * @pre `hasRGBA()` returns true.
    */
   RGBA rgba() const { return std::get<RGBA>(value); }
+
+  /// Returns true if the color is an HSLA color.
+  bool hasHSLA() const { return std::holds_alternative<HSLA>(value); }
 
   /**
    * Returns the HSLA color value, if this object stores an HSLA color.
@@ -134,32 +180,19 @@ struct Color {
   HSLA hsla() const { return std::get<HSLA>(value); }
 
   /**
+   * Returns the color as RGBA. Note that \ref isCurrentColor() colors cannot be converted to RGBA
+   * and will assert if called.
+   */
+  RGBA asRGBA() const;
+
+  /**
    * Resolves the current value of this color to RGBA, by using the current rendering state, such as
    * the \p currentColor and \p opacity.
    *
    * @param currentColor The current color, used if this color is `currentcolor`.
    * @param opacity The current opacity, used to multiply the alpha channel.
    */
-  RGBA resolve(RGBA currentColor, float opacity) const {
-    if (isCurrentColor()) {
-      RGBA value = currentColor;
-      if (opacity != 1.0f) {
-        value.a = static_cast<uint8_t>(static_cast<float>(value.a) * opacity);
-      }
-      return value;
-    } else if (hasRGBA()) {
-      RGBA value = rgba();
-      if (opacity != 1.0f) {
-        value.a = static_cast<uint8_t>(static_cast<float>(value.a) * opacity);
-      }
-      return value;
-    } else if (hasHSLA()) {
-      // Conversion from HSLA to RGBA should be implemented here.
-      // This is a placeholder to indicate where the conversion logic would go.
-      // For now, return a default value.
-      return RGBA::RGB(0, 0, 0); // Placeholder for actual conversion logic
-    }
-  }
+  RGBA resolve(RGBA currentColor, float opacity) const;
 
   /**
    * Ostream output operator.
@@ -171,7 +204,7 @@ struct Color {
    *
    * or
    * ```
-   * Color(0, 255, 128, 255)
+   * Color(rgba(0, 255, 128, 255))
    * ```
    *
    * @param os The output stream.
