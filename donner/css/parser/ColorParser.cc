@@ -429,9 +429,40 @@ public:
 
   ParseResult<Color> parseHwb(const RcString& functionName,
                               std::span<const css::ComponentValue> components) {
-    ParseError err;
-    err.reason = "Not implemented";
-    return err;
+    FunctionParameterParser hwbParams(functionName, components);
+
+    ParseResult<double> hueResult = parseHue(hwbParams);
+    if (hueResult.hasError()) {
+      return std::move(hueResult.error());
+    }
+
+    const bool requiresCommas = hwbParams.trySkipComma();
+
+    auto whitenessResult = hwbParams.nextAs<Token::Percentage>();
+    if (whitenessResult.hasError()) {
+      return std::move(whitenessResult.error());
+    }
+
+    if (requiresCommas) {
+      if (auto error = hwbParams.requireComma()) {
+        return std::move(error.value());
+      }
+    }
+
+    auto blacknessResult = hwbParams.nextAs<Token::Percentage>();
+    if (blacknessResult.hasError()) {
+      return std::move(blacknessResult.error());
+    }
+
+    const RGBA rgb = hwbToRgb(normalizeAngleDegrees(hueResult.result()) * 6.0 / 360.0,
+                              Clamp(whitenessResult.result().value / 100.0, 0.0, 1.0),
+                              Clamp(blacknessResult.result().value / 100.0, 0.0, 1.0));
+    auto alphaResult = tryParseOptionalAlpha(hwbParams, requiresCommas);
+    if (alphaResult.hasError()) {
+      return std::move(alphaResult.error());
+    }
+
+    return Color(RGBA(rgb.r, rgb.g, rgb.b, alphaResult.result()));
   }
 
   ParseResult<Color> parseLab(const RcString& functionName,

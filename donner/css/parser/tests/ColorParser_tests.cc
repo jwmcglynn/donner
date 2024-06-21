@@ -286,4 +286,35 @@ TEST(ColorParser, HslErrors) {
               ParseErrorIs("Unexpected token when parsing function 'hsl'"));
 }
 
+// Add unit tests for `hwb()` function parsing in `ColorParser`.
+TEST(ColorParser, Hwb) {
+  // Basic HWB color parsing
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0%)"),
+              ParseResultIs(Color(RGBA(255, 0, 0, 255))));
+  EXPECT_THAT(ColorParser::ParseString("hwb(120 0% 0%)"),
+              ParseResultIs(Color(RGBA(0, 255, 0, 255))));
+  EXPECT_THAT(ColorParser::ParseString("hwb(240 0% 0%)"),
+              ParseResultIs(Color(RGBA(0, 0, 255, 255))));
+
+  // HWB with alpha
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% / 0.5)"),
+              ParseResultIs(Color(RGBA(255, 0, 0, 128))));
+  EXPECT_THAT(ColorParser::ParseString("hwb(120 0% 0% / 25%)"),
+              ParseResultIs(Color(RGBA(0, 255, 0, 64))));
+
+  // HWB with percentages
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 50% 50%)"),
+              ParseResultIs(Color(RGBA(128, 128, 128, 255))));
+  EXPECT_THAT(ColorParser::ParseString("hwb(240 30% 30% / 80%)"),
+              ParseResultIs(Color(RGBA(77, 77, 179, 204))));
+
+  // Errors
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% / invalid)"),
+              ParseErrorIs("Unexpected alpha value"));
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% /)"),
+              ParseErrorIs("Unexpected EOF when parsing function 'hwb'"));
+  EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% 0% 0%)"),
+              ParseErrorIs("Additional tokens when parsing function 'hwb'"));
+}
+
 }  // namespace donner::css::parser
