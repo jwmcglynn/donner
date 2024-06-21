@@ -142,11 +142,8 @@ public:
    */
   void push_back(const T& value) {
     ensureCapacity(size_ + 1);
-    if (isLong_) {
-      new (data_.longData + size_) T(value);
-    } else {
-      new (&reinterpret_cast<T&>(data_.shortData[size_])) T(value);
-    }
+    
+    new (data() + size_) T(value);
     ++size_;
   }
 
@@ -156,11 +153,7 @@ public:
   void pop_back() {
     if (size_ > 0) {
       --size_;
-      if (isLong_) {
-        data_.longData[size_].~T();
-      } else {
-        reinterpret_cast<T*>(&data_.shortData[size_])->~T();
-      }
+      data()[size_].~T();
     }
   }
 
@@ -169,13 +162,21 @@ public:
    */
   void clear() {
     for (std::size_t i = 0; i < size_; ++i) {
-      if (isLong_) {
-        data_.longData[i].~T();
-      } else {
-        reinterpret_cast<T*>(&data_.shortData[i])->~T();
-      }
+      data()[i].~T();
     }
     size_ = 0;
+  }
+
+  /**
+   * Gets the data stored in the vector.
+   */
+  T* data() { return isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data()); }
+
+  /**
+   * Gets the data stored in the vector (const version).
+   */
+  const T* data() const {
+    return isLong_ ? data_.longData : reinterpret_cast<const T*>(data_.shortData.data());
   }
 
   /**
@@ -202,7 +203,7 @@ public:
    * @return Reference to the element at the specified index.
    */
   T& operator[](std::size_t index) {
-    return isLong_ ? data_.longData[index] : reinterpret_cast<T&>(data_.shortData[index]);
+    return data()[index];
   }
 
   /**
@@ -212,13 +213,13 @@ public:
    * @return Const reference to the element at the specified index.
    */
   const T& operator[](std::size_t index) const {
-    return isLong_ ? data_.longData[index] : reinterpret_cast<const T&>(data_.shortData[index]);
+    return data()[index];
   }
 
   /**
    * Returns an iterator to the beginning of the vector.
    */
-  T* begin() { return isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data()); }
+  T* begin() { return data(); }
 
   /**
    * Returns an iterator to the end of the vector.
@@ -229,7 +230,7 @@ public:
    * Returns a const iterator to the beginning of the vector.
    */
   const T* begin() const {
-    return isLong_ ? data_.longData : reinterpret_cast<const T*>(data_.shortData.data());
+    return data();
   }
 
   /**
@@ -252,17 +253,10 @@ private:
     T* newData = reinterpret_cast<T*>(::operator new(newCapacityAdjusted * sizeof(T)));
 
     if (size_ > 0) {
-      if (isLong_) {
-        std::move(data_.longData, data_.longData + size_, newData);
-        for (std::size_t i = 0; i < size_; ++i) {
-          data_.longData[i].~T();
-        }
-      } else {
-        std::move(reinterpret_cast<T*>(data_.shortData.data()),
-                  reinterpret_cast<T*>(data_.shortData.data()) + size_, newData);
-        for (std::size_t i = 0; i < size_; ++i) {
-          reinterpret_cast<T*>(data_.shortData.data())[i].~T();
-        }
+      T* oldData = isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data());
+      for (std::size_t i = 0; i < size_; ++i) {
+        new (newData + i) T(std::move(oldData[i]));
+        oldData[i].~T();
       }
     }
 
