@@ -1,3 +1,5 @@
+#include "donner/css/Selector.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -5,7 +7,6 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
-#include "donner/css/Selector.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/components/AttributesComponent.h"
 #include "donner/svg/components/TreeComponent.h"
@@ -41,7 +42,7 @@ struct FakeElement {
         .getAttribute(name);
   }
 
-  std::vector<svg::XMLQualifiedNameRef> findMatchingAttributes(
+  SmallVector<svg::XMLQualifiedNameRef, 1> findMatchingAttributes(
       const svg::XMLQualifiedNameRef& matcher) const {
     return registry_.get()
         .get_or_emplace<svg::components::AttributesComponent>(entity_)

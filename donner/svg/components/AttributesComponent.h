@@ -6,6 +6,7 @@
 #include <set>
 
 #include "donner/base/RcStringOrRef.h"
+#include "donner/base/SmallVector.h"
 #include "donner/svg/xml/XMLQualifiedName.h"
 
 namespace donner::svg::components {
@@ -52,9 +53,9 @@ struct AttributesComponent {
    * is "*", the matcher will match any namespace with the given attribute name.
    * @return A vector of attributes matching the given name matcher.
    */
-  std::vector<XMLQualifiedNameRef> findMatchingAttributes(
+  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
       const XMLQualifiedNameRef& matcher) const {
-    std::vector<XMLQualifiedNameRef> result;
+    SmallVector<XMLQualifiedNameRef, 1> result;
 
     if (matcher.namespacePrefix == "*") {
       const XMLQualifiedNameRef attributeNameOnly(matcher.name);

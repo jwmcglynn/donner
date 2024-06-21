@@ -145,7 +145,7 @@ std::optional<RcString> SVGElement::getAttribute(const XMLQualifiedNameRef& name
   return handle_.get_or_emplace<components::AttributesComponent>().getAttribute(name);
 }
 
-std::vector<XMLQualifiedNameRef> SVGElement::findMatchingAttributes(
+SmallVector<XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
     const XMLQualifiedNameRef& matcher) const {
   return handle_.get_or_emplace<components::AttributesComponent>().findMatchingAttributes(matcher);
 }

@@ -89,7 +89,7 @@ struct ShadowedElementAdapter {
     }
   }
 
-  std::vector<XMLQualifiedNameRef> findMatchingAttributes(
+  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
       const XMLQualifiedNameRef& matcher) const {
     if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
       return component->findMatchingAttributes(matcher);

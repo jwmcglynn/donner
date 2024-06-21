@@ -21,7 +21,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "base_tests",
-      "program": "${workspaceFolder}/bazel-bin/base/base_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/base/base_tests",
       "args": [
         "--gtest_break_on_failure",
       ],
@@ -34,7 +34,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "core_tests",
-      "program": "${workspaceFolder}/bazel-bin/svg/core/core_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/core/core_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -47,7 +47,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "svg_tests",
-      "program": "${workspaceFolder}/bazel-bin/svg/tests/svg_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/tests/svg_tests",
       "args": [
         "--gtest_break_on_failure",
       ],
@@ -60,7 +60,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "renderer_tests",
-      "program": "${workspaceFolder}/bazel-bin/svg/renderer/tests/renderer_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/renderer_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -73,7 +73,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "resvg_test_suite",
-      "program": "${workspaceFolder}/bazel-bin/svg/renderer/tests/resvg_test_suite",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/resvg_test_suite",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -86,20 +86,21 @@
       "type": "lldb",
       "request": "launch",
       "name": "css_tests",
-      "program": "${workspaceFolder}/bazel-bin/css/css_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/css_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        ".": "${workspaceFolder}"
+        ".": "${workspaceFolder}",
+        "/proc/self/cwd": "${workspaceFolder}"
       }
     },
     {
       "type": "lldb",
       "request": "launch",
       "name": "svg_parser_tests",
-      "program": "${workspaceFolder}/bazel-bin/svg/parser/parser_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/parser/parser_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -112,7 +113,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "css_parser_tests",
-      "program": "${workspaceFolder}/bazel-bin/css/parser/parser_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/parser_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -125,7 +126,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "anb_microsyntax_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/css/parser/anb_microsyntax_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/anb_microsyntax_parser_fuzzer",
       "cwd": "${workspaceFolder}",
       "args": [
         "css/parser/tests/anb_microsyntax_parser_corpus/crash-ed705e365ccd3fba8d30135aa52aed5ed12f7cc7",
@@ -138,7 +139,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "properties_tests",
-      "program": "${workspaceFolder}/bazel-bin/svg/properties/tests/properties_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/properties/tests/properties_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -151,7 +152,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "css_parsing_tests",
-      "program": "${workspaceFolder}/bazel-bin/css/parser/css_parsing_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/css_parsing_tests",
       "args": [
         "--gtest_break_on_failure"
       ],
@@ -164,7 +165,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "xml_tool",
-      "program": "${workspaceFolder}/bazel-bin/svg/xml/xml_tool",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/xml/xml_tool",
       "args": [
         "${workspaceFolder}/svg/xml/testdata/e-path-034.svg"
       ],
@@ -177,7 +178,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "declaration_list_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/css/parser/declaration_list_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/declaration_list_parser_fuzzer",
       "args": [
         "${workspaceFolder}/css/parser/tests/declaration_list_parser_corpus/unicode.txt"
       ],
@@ -190,7 +191,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "stylesheet_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/css/parser/stylesheet_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/stylesheet_parser_fuzzer",
       "args": [
         "${workspaceFolder}/bazel-bin/css/parser/stylesheet_parser_corpus/eof.txt"
       ],
@@ -203,7 +204,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "color_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/css/parser/color_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/color_parser_fuzzer",
       "args": [
         "${workspaceFolder}/css/parser/tests/color_parser_corpus/function.txt"
       ],
@@ -216,7 +217,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "selector_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/css/parser/selector_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/selector_parser_fuzzer",
       "args": [
         "${workspaceFolder}/css/parser/tests/selector_parser_corpus/infinite-loop-handleComplexSelector.txt"
       ],
@@ -229,7 +230,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "renderer_tool",
-      "program": "${workspaceFolder}/bazel-bin/svg/renderer/renderer_tool",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/renderer/renderer_tool",
       "args": [
         "${workspaceFolder}/svg/renderer/testdata/stroking_pathlength.svg"
       ],
