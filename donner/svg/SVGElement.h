@@ -142,7 +142,8 @@ public:
    * is "*", the matcher will match any namespace with the given attribute name.
    * @return A vector of attributes matching the given name matcher.
    */
-  std::vector<XMLQualifiedNameRef> findMatchingAttributes(const XMLQualifiedNameRef& matcher) const;
+  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
+      const XMLQualifiedNameRef& matcher) const;
 
   /**
    * Set the value of a generic XML attribute, which may be either a presentation attribute or

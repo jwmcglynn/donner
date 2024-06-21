@@ -568,9 +568,8 @@ struct AttributeSelector {
       // If there's no additional condition, the attribute existing constitutes a match.
       return !matcher || valueMatches(matcher.value(), maybeValue.value());
     } else {
-      // TODO: Make this enumerate attributes without allocations.
       // Wildcard may return multiple matches.
-      const std::vector<svg::XMLQualifiedNameRef> attributes =
+      const SmallVector<svg::XMLQualifiedNameRef, 1> attributes =
           element.findMatchingAttributes(name.name);
 
       for (const auto& attributeName : attributes) {

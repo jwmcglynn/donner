@@ -4,6 +4,7 @@
 #include <concepts>
 #include <coroutine>
 
+#include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/svg/xml/XMLQualifiedName.h"
 
@@ -32,7 +33,7 @@ concept ElementLike =
       { t.getAttribute(attribName) } -> std::same_as<std::optional<RcString>>;
       {
         t.findMatchingAttributes(attribName)
-      } -> std::same_as<std::vector<svg::XMLQualifiedNameRef>>;
+      } -> std::same_as<SmallVector<svg::XMLQualifiedNameRef, 1>>;
     };
 
 /**
