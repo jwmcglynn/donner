@@ -19,7 +19,7 @@ jobs:
   # This workflow contains a single job called "build"
   build:
     # The type of runner that the job will run on
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
@@ -30,11 +30,14 @@ jobs:
         run: |
           sudo apt-get install -y libncurses5
 
-      - name: Install bazelisk
-        run: |
-          mkdir -p "${GITHUB_WORKSPACE}/bin/"
-          wget https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O "${GITHUB_WORKSPACE}/bin/bazel"
-          chmod +x "${GITHUB_WORKSPACE}/bin/bazel"
+      - name: Cache Bazel
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'WORKSPACE', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-
 
       # Enable tmate debugging of manually-triggered workflows if the input option was provided
       - name: Setup tmate session
@@ -45,8 +48,8 @@ jobs:
 
       - name: Build
         run: |
-          "${GITHUB_WORKSPACE}/bin/bazel" build //...
+          bazelisk build //...
 
       - name: Test
         run: |
-          "${GITHUB_WORKSPACE}/bin/bazel" test --test_output=errors //...
+          bazelisk test --test_output=errors //...
