@@ -41,7 +41,7 @@ cc_test(
         "tests/MathUtils_tests.cc",
         "tests/RcStringOrRef_tests.cc",
         "tests/RcString_tests.cc",
-        "tests/SmalLVector_tests.cc",
+        "tests/SmallVector_tests.cc",
         "tests/StringUtils_tests.cc",
         "tests/Transform_tests.cc",
         "tests/Utils_tests.cc",
