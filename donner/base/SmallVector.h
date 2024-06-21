@@ -4,6 +4,8 @@
 #include <array>
 #include <cstddef>
 #include <initializer_list>
+#include <new>
+#include <utility>
 
 namespace donner {
 
@@ -42,8 +44,9 @@ public:
    * Destructor for SmallVector.
    */
   ~SmallVector() {
+    clear();
     if (isLong_) {
-      delete[] data_.longData;
+      ::operator delete(data_.longData);
     }
   }
 
@@ -52,14 +55,10 @@ public:
    *
    * @param other The SmallVector to copy from.
    */
-  SmallVector(const SmallVector& other)
-      : size_(other.size_), capacity_(other.capacity_), isLong_(other.isLong_) {
-    if (isLong_) {
-      data_.longData = new T[capacity_];
-      std::copy(other.data_.longData, other.data_.longData + size_, data_.longData);
-    } else {
-      std::copy(other.data_.shortData.begin(), other.data_.shortData.begin() + size_,
-                data_.shortData.begin());
+  SmallVector(const SmallVector& other) : size_(0), capacity_(DefaultSize), isLong_(false) {
+    ensureCapacity(other.size_);
+    for (std::size_t i = 0; i < other.size_; ++i) {
+      push_back(other[i]);
     }
   }
 
@@ -71,20 +70,10 @@ public:
    */
   SmallVector& operator=(const SmallVector& other) {
     if (this != &other) {
-      if (isLong_) {
-        delete[] data_.longData;
-      }
-
-      size_ = other.size_;
-      capacity_ = other.capacity_;
-      isLong_ = other.isLong_;
-
-      if (isLong_) {
-        data_.longData = new T[capacity_];
-        std::copy(other.data_.longData, other.data_.longData + size_, data_.longData);
-      } else {
-        std::copy(other.data_.shortData.begin(), other.data_.shortData.begin() + size_,
-                  data_.shortData.begin());
+      clear();
+      ensureCapacity(other.size_);
+      for (std::size_t i = 0; i < other.size_; ++i) {
+        push_back(other[i]);
       }
     }
     return *this;
@@ -96,11 +85,17 @@ public:
    * @param other The SmallVector to move from.
    */
   SmallVector(SmallVector&& other) noexcept
-      : size_(other.size_), capacity_(other.capacity_), isLong_(other.isLong_), data_(other.data_) {
+      : size_(other.size_), capacity_(other.capacity_), isLong_(other.isLong_) {
+    if (isLong_) {
+      data_.longData = other.data_.longData;
+      other.data_.longData = nullptr;
+    } else {
+      std::move(other.data_.shortData.begin(), other.data_.shortData.begin() + size_,
+                data_.shortData.begin());
+    }
     other.size_ = 0;
     other.capacity_ = DefaultSize;
     other.isLong_ = false;
-    other.data_.longData = nullptr;  // Prevent double-free
   }
 
   /**
@@ -111,19 +106,24 @@ public:
    */
   SmallVector& operator=(SmallVector&& other) noexcept {
     if (this != &other) {
+      clear();
       if (isLong_) {
-        delete[] data_.longData;
+        ::operator delete(data_.longData);
       }
 
       size_ = other.size_;
       capacity_ = other.capacity_;
       isLong_ = other.isLong_;
-      data_ = other.data_;
-
+      if (isLong_) {
+        data_.longData = other.data_.longData;
+        other.data_.longData = nullptr;
+      } else {
+        std::move(other.data_.shortData.begin(), other.data_.shortData.begin() + size_,
+                  data_.shortData.begin());
+      }
       other.size_ = 0;
       other.capacity_ = DefaultSize;
       other.isLong_ = false;
-      other.data_.longData = nullptr;  // Prevent double-free
     }
     return *this;
   }
@@ -136,9 +136,9 @@ public:
   void push_back(const T& value) {
     ensureCapacity(size_ + 1);
     if (isLong_) {
-      data_.longData[size_] = value;
+      new (data_.longData + size_) T(value);
     } else {
-      data_.shortData[size_] = value;
+      new (&reinterpret_cast<T&>(data_.shortData[size_])) T(value);
     }
     ++size_;
   }
@@ -149,13 +149,27 @@ public:
   void pop_back() {
     if (size_ > 0) {
       --size_;
+      if (isLong_) {
+        data_.longData[size_].~T();
+      } else {
+        reinterpret_cast<T*>(&data_.shortData[size_])->~T();
+      }
     }
   }
 
   /**
    * Clears the contents of the vector.
    */
-  void clear() { size_ = 0; }
+  void clear() {
+    for (std::size_t i = 0; i < size_; ++i) {
+      if (isLong_) {
+        data_.longData[i].~T();
+      } else {
+        reinterpret_cast<T*>(&data_.shortData[i])->~T();
+      }
+    }
+    size_ = 0;
+  }
 
   /**
    * Returns the number of elements in the vector.
@@ -181,7 +195,7 @@ public:
    * @return Reference to the element at the specified index.
    */
   T& operator[](std::size_t index) {
-    return isLong_ ? data_.longData[index] : data_.shortData[index];
+    return isLong_ ? data_.longData[index] : reinterpret_cast<T&>(data_.shortData[index]);
   }
 
   /**
@@ -191,13 +205,13 @@ public:
    * @return Const reference to the element at the specified index.
    */
   const T& operator[](std::size_t index) const {
-    return isLong_ ? data_.longData[index] : data_.shortData[index];
+    return isLong_ ? data_.longData[index] : reinterpret_cast<const T&>(data_.shortData[index]);
   }
 
   /**
    * Returns an iterator to the beginning of the vector.
    */
-  T* begin() { return isLong_ ? data_.longData : data_.shortData.data(); }
+  T* begin() { return isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data()); }
 
   /**
    * Returns an iterator to the end of the vector.
@@ -207,7 +221,9 @@ public:
   /**
    * Returns a const iterator to the beginning of the vector.
    */
-  const T* begin() const { return isLong_ ? data_.longData : data_.shortData.data(); }
+  const T* begin() const {
+    return isLong_ ? data_.longData : reinterpret_cast<const T*>(data_.shortData.data());
+  }
 
   /**
    * Returns a const iterator to the end of the vector.
@@ -225,20 +241,31 @@ private:
       return;
     }
 
-    if (!isLong_ && newCapacity <= DefaultSize) {
-      capacity_ = DefaultSize;
-    } else {
-      isLong_ = true;
-      capacity_ = std::max(capacity_ * 2, newCapacity);
-      T* newData = new T[capacity_];
-      if (size_ > 0) {
-        std::copy(begin(), end(), newData);
+    std::size_t newCapacityAdjusted = std::max(capacity_ * 2, newCapacity);
+    T* newData = reinterpret_cast<T*>(::operator new(newCapacityAdjusted * sizeof(T)));
+
+    if (size_ > 0) {
+      if (isLong_) {
+        std::move(data_.longData, data_.longData + size_, newData);
+        for (std::size_t i = 0; i < size_; ++i) {
+          data_.longData[i].~T();
+        }
+      } else {
+        std::move(reinterpret_cast<T*>(data_.shortData.data()),
+                  reinterpret_cast<T*>(data_.shortData.data()) + size_, newData);
+        for (std::size_t i = 0; i < size_; ++i) {
+          reinterpret_cast<T*>(data_.shortData.data())[i].~T();
+        }
       }
-      if (size_ > DefaultSize) {
-        delete[] data_.longData;
-      }
-      data_.longData = newData;
     }
+
+    if (isLong_) {
+      ::operator delete(data_.longData);
+    }
+
+    data_.longData = newData;
+    isLong_ = true;
+    capacity_ = newCapacityAdjusted;
   }
 
   std::size_t size_;      //!< Number of elements in the vector.
@@ -249,8 +276,12 @@ private:
    * Union to store the data for the vector.
    */
   union Data {
-    std::array<T, DefaultSize> shortData;  //!< Data storage for small vectors.
-    T* longData;                           //!< Data storage for large vectors.
+    std::array<std::aligned_storage_t<sizeof(T), alignof(T)>, DefaultSize>
+        shortData;  //!< Data storage for small vectors.
+    T* longData;    //!< Data storage for large vectors.
+
+    Data() : longData(nullptr) {}
+    ~Data() {}
   };
 
   Data data_;  //!< Data storage for the vector.
