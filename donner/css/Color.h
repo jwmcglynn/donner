@@ -63,8 +63,22 @@ struct Color {
     bool operator==(const CurrentColor&) const = default;
   };
 
+  /// Represents an HSLA color.
+  struct HSLA {
+    float h; ///< Hue component, in degrees.
+    float s; ///< Saturation component, as a percentage.
+    float l; ///< Lightness component, as a percentage.
+    float a; ///< Alpha component, as a percentage.
+
+    /// Constructor, initializes to the given HSLA values.
+    constexpr HSLA(float h, float s, float l, float a) : h(h), s(s), l(l), a(a) {}
+
+    /// Equality operator.
+    bool operator==(const HSLA&) const = default;
+  };
+
   /// A variant for supported color types.
-  using Type = std::variant<RGBA, CurrentColor>;
+  using Type = std::variant<RGBA, CurrentColor, HSLA>;
 
   /// The color value.
   Type value;
@@ -102,12 +116,22 @@ struct Color {
   /// Returns true if the color is an RGBA color.
   bool hasRGBA() const { return std::holds_alternative<RGBA>(value); }
 
+  /// Returns true if the color is an HSLA color.
+  bool hasHSLA() const { return std::holds_alternative<HSLA>(value); }
+
   /**
    * Returns the RGBA color value, if this object stores an RGBA color.
    *
    * @pre `hasRGBA()` returns true.
    */
   RGBA rgba() const { return std::get<RGBA>(value); }
+
+  /**
+   * Returns the HSLA color value, if this object stores an HSLA color.
+   *
+   * @pre `hasHSLA()` returns true.
+   */
+  HSLA hsla() const { return std::get<HSLA>(value); }
 
   /**
    * Resolves the current value of this color to RGBA, by using the current rendering state, such as
@@ -117,11 +141,24 @@ struct Color {
    * @param opacity The current opacity, used to multiply the alpha channel.
    */
   RGBA resolve(RGBA currentColor, float opacity) const {
-    RGBA value = isCurrentColor() ? currentColor : rgba();
-    if (opacity != 1.0f) {
-      value.a = static_cast<uint8_t>(static_cast<float>(value.a) * opacity);
+    if (isCurrentColor()) {
+      RGBA value = currentColor;
+      if (opacity != 1.0f) {
+        value.a = static_cast<uint8_t>(static_cast<float>(value.a) * opacity);
+      }
+      return value;
+    } else if (hasRGBA()) {
+      RGBA value = rgba();
+      if (opacity != 1.0f) {
+        value.a = static_cast<uint8_t>(static_cast<float>(value.a) * opacity);
+      }
+      return value;
+    } else if (hasHSLA()) {
+      // Conversion from HSLA to RGBA should be implemented here.
+      // This is a placeholder to indicate where the conversion logic would go.
+      // For now, return a default value.
+      return RGBA::RGB(0, 0, 0); // Placeholder for actual conversion logic
     }
-    return value;
   }
 
   /**

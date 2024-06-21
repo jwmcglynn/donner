@@ -203,6 +203,9 @@ std::ostream& operator<<(std::ostream& os, const Color& color) {
   os << "Color(";
   if (color.isCurrentColor()) {
     os << "currentColor";
+  } else if (color.hasHSLA()) {
+    const auto hsla = color.hsla();
+    os << "hsla(" << hsla.h << ", " << hsla.s << "%, " << hsla.l << "%, " << hsla.a << ")";
   } else {
     const RGBA rgba = color.rgba();
     os << static_cast<int>(rgba.r) << ", " << static_cast<int>(rgba.g) << ", "
