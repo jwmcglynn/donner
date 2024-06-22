@@ -133,7 +133,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
     {
       RendererSkia rendererVerbose(/*verbose*/ true);
-      sk_sp<SkPicture> picture = renderer.drawIntoSkPicture(document);
+      sk_sp<SkPicture> picture = rendererVerbose.drawIntoSkPicture(document);
 
       sk_sp<SkData> pictureData = picture->serialize();
 

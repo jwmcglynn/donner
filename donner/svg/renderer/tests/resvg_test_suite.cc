@@ -259,18 +259,17 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
             {"e-pattern-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 250)},  // Anti-aliasing artifacts
-            {"e-pattern-009.svg", Params::Skip()},            // Not impl: viewBox
-            {"e-pattern-010.svg", Params::Skip()},            // Not impl: viewBox
-            {"e-pattern-011.svg", Params::Skip()},            // Not impl: preserveAspectRatio
-            {"e-pattern-014.svg", Params::Skip()},            // Not impl: Full href attributes
-            {"e-pattern-016.svg", Params::Skip()},            // Not impl: Full href attributes
-            {"e-pattern-018.svg", Params::Skip()},            // Not impl: <text>
-            {"e-pattern-019.svg",
-             Params::Skip()},  // Not impl: patternContentUnits, objectBoundingBox
-            {"e-pattern-020.svg", Params::Skip()},                // Not impl: objectBoundingBox
-            {"e-pattern-021.svg", Params::Skip()},                // Bug? Recursive on child
-            {"e-pattern-022.svg", Params::Skip()},                // Bug? Self-recursive
+             Params::WithThreshold(kDefaultThreshold, 250)},     // Anti-aliasing artifacts
+            {"e-pattern-009.svg", Params::Skip()},               // Not impl: viewBox
+            {"e-pattern-010.svg", Params::Skip()},               // Not impl: viewBox
+            {"e-pattern-011.svg", Params::Skip()},               // Not impl: preserveAspectRatio
+            {"e-pattern-014.svg", Params::Skip()},               // Not impl: Full href attributes
+            {"e-pattern-016.svg", Params::Skip()},               // Not impl: Full href attributes
+            {"e-pattern-018.svg", Params::Skip()},               // Not impl: <text>
+            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},  // Anti-aliasing artifacts
+            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 300)},  // Anti-aliasing artifacts
+            {"e-pattern-021.svg", Params::Skip()},                    // Bug? Recursive on child
+            {"e-pattern-022.svg", Params::Skip()},                    // Bug? Self-recursive
             {"e-pattern-023.svg", Params::Skip()},                // Bug? Self-recursive on child
             {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
             {"e-pattern-029.svg", Params::Skip()},                // Not impl: viewBox

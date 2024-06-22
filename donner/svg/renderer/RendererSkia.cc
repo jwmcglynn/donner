@@ -525,6 +525,13 @@ public:
 
     const SkRect tileRect = toSkia(Boxd(Vector2d(), rect.size()));
 
+    SkCanvas* const savedCanvas = renderer_.currentCanvas_;
+    const Transformd savedLayerBaseTransform = layerBaseTransform_;
+
+    if (renderer_.verbose_) {
+      std::cout << "Start pattern contents\n";
+    }
+
     SkPictureRecorder recorder;
     renderer_.currentCanvas_ = recorder.beginRecording(tileRect);
     layerBaseTransform_ = contentRootTransform;
@@ -533,8 +540,12 @@ public:
     assert(ref.subtreeInfo);
     drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
 
-    renderer_.currentCanvas_ = renderer_.rootCanvas_;
-    layerBaseTransform_ = Transformd();
+    if (renderer_.verbose_) {
+      std::cout << "End pattern contents\n";
+    }
+
+    renderer_.currentCanvas_ = savedCanvas;
+    layerBaseTransform_ = savedLayerBaseTransform;
 
     // Transform to apply to the pattern contents.
     const SkMatrix localMatrix = toSkiaMatrix(patternTransform);
