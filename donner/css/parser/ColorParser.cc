@@ -394,15 +394,18 @@ public:
       return std::move(lightnessResult.error());
     }
 
-    const RGBA rgb = hslToRgb(normalizeAngleDegrees(hueResult.result()) * 6.0 / 360.0,
-                              Clamp(saturationResult.result().value / 100.0, 0.0, 1.0),
-                              Clamp(lightnessResult.result().value / 100.0, 0.0, 1.0));
+    HSLA hsl =
+        HSLA::HSL(static_cast<float>(normalizeAngleDegrees(hueResult.result())),
+                  static_cast<float>(Clamp(saturationResult.result().value / 100.0, 0.0, 1.0)),
+                  static_cast<float>(Clamp(lightnessResult.result().value / 100.0, 0.0, 1.0)));
     auto alphaResult = tryParseOptionalAlpha(hslParams, requiresCommas);
     if (alphaResult.hasError()) {
       return std::move(alphaResult.error());
     }
 
-    return Color(RGBA(rgb.r, rgb.g, rgb.b, alphaResult.result()));
+    hsl.a = alphaResult.result();
+
+    return Color(hsl);
   }
 
   ParseResult<uint8_t> tryParseOptionalAlpha(FunctionParameterParser& params, bool requiresCommas) {
@@ -429,9 +432,40 @@ public:
 
   ParseResult<Color> parseHwb(const RcString& functionName,
                               std::span<const css::ComponentValue> components) {
-    ParseError err;
-    err.reason = "Not implemented";
-    return err;
+    FunctionParameterParser hwbParams(functionName, components);
+
+    ParseResult<double> hueResult = parseHue(hwbParams);
+    if (hueResult.hasError()) {
+      return std::move(hueResult.error());
+    }
+
+    const bool requiresCommas = hwbParams.trySkipComma();
+
+    auto whitenessResult = hwbParams.nextAs<Token::Percentage>();
+    if (whitenessResult.hasError()) {
+      return std::move(whitenessResult.error());
+    }
+
+    if (requiresCommas) {
+      if (auto error = hwbParams.requireComma()) {
+        return std::move(error.value());
+      }
+    }
+
+    auto blacknessResult = hwbParams.nextAs<Token::Percentage>();
+    if (blacknessResult.hasError()) {
+      return std::move(blacknessResult.error());
+    }
+
+    const RGBA rgb = hwbToRgb(normalizeAngleDegrees(hueResult.result()),
+                              Clamp(whitenessResult.result().value / 100.0, 0.0, 1.0),
+                              Clamp(blacknessResult.result().value / 100.0, 0.0, 1.0));
+    auto alphaResult = tryParseOptionalAlpha(hwbParams, requiresCommas);
+    if (alphaResult.hasError()) {
+      return std::move(alphaResult.error());
+    }
+
+    return Color(RGBA(rgb.r, rgb.g, rgb.b, alphaResult.result()));
   }
 
   ParseResult<Color> parseLab(const RcString& functionName,
@@ -489,34 +523,21 @@ private:
     return err;
   }
 
-  // https://www.w3.org/TR/2021/WD-css-color-4-20210601/#hsl-to-rgb
-  static RGBA hslToRgb(double hue, double saturation, double lightness) {
-    const double t2 = (lightness <= 0.5) ? lightness * (saturation + 1.0)
-                                         : lightness + saturation - (lightness * saturation);
-    const double t1 = lightness * 2.0 - t2;
-    return RGBA::RGB(numberToChannel(hueToRgb(t1, t2, hue + 2.0) * 255.0),
-                     numberToChannel(hueToRgb(t1, t2, hue) * 255.0),
-                     numberToChannel(hueToRgb(t1, t2, hue - 2.0) * 255.0));
-  }
-
-  static double hueToRgb(double t1, double t2, double hue) {
-    if (hue < 0.0) {
-      hue += 6.0;
+  static RGBA hwbToRgb(double hue, double white, double black) {
+    if (white + black >= 1) {
+      const uint8_t gray = numberToChannel(white / (white + black));
+      return RGBA::RGB(gray, gray, gray);
     }
 
-    if (hue >= 6.0) {
-      hue -= 6.0;
+    HSLA hsl = HSLA::HSL(static_cast<float>(hue), 1.0f, 0.5f);
+    float* hslComponents[3] = {&hsl.hDeg, &hsl.s, &hsl.l};
+
+    for (int i = 0; i < 3; i++) {
+      *hslComponents[i] *= static_cast<float>(1 - white - black);
+      *hslComponents[i] += static_cast<float>(white);
     }
 
-    if (hue < 1.0) {
-      return (t2 - t1) * hue + t1;
-    } else if (hue < 3.0) {
-      return t2;
-    } else if (hue < 4.0) {
-      return (t2 - t1) * (4.0 - hue) + t1;
-    } else {
-      return t1;
-    }
+    return hsl.toRGBA();
   }
 
   static double normalizeAngleDegrees(double angleDegrees) {

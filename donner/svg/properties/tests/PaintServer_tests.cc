@@ -16,13 +16,13 @@ TEST(PaintServer, Output) {
             "PaintServer(context-stroke)");
   EXPECT_EQ((std::ostringstream() << PaintServer(PaintServer::Solid(Color(RGBA(0xFF, 0, 0, 0xFF)))))
                 .str(),
-            "PaintServer(solid Color(255, 0, 0, 255))");
+            "PaintServer(solid Color(rgba(255, 0, 0, 255)))");
   EXPECT_EQ((std::ostringstream() << PaintServer(PaintServer::ElementReference("#test"))).str(),
             "PaintServer(url(#test))");
   EXPECT_EQ((std::ostringstream() << PaintServer(
                  PaintServer::ElementReference("#test", Color(RGBA(0, 0xFF, 0, 0xFF)))))
                 .str(),
-            "PaintServer(url(#test) Color(0, 255, 0, 255))");
+            "PaintServer(url(#test) Color(rgba(0, 255, 0, 255)))");
 }
 
 }  // namespace donner::svg

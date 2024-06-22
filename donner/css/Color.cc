@@ -3,6 +3,8 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include "donner/base/MathUtils.h"
+
 namespace donner::css {
 
 namespace {
@@ -164,7 +166,56 @@ static constexpr auto kColors = frozen::make_unordered_map<frozen::string, Color
     {"currentcolor"_s, Color(Color::CurrentColor())},
 });
 
+template <class... Ts>
+struct overloaded : Ts... {
+  using Ts::operator()...;
+};
+
+uint8_t numberToChannel(double number) {
+  return static_cast<uint8_t>(Clamp(Round(number), 0.0, 255.0));
+}
+
+/**
+ * Convert HSL to RGBA, per https://www.w3.org/TR/css-color-4/#hsl-to-rgb
+ *
+ * @param hueDegrees Hue as degrees, will be normalized to [0, 360]
+ * @param saturation  Saturation in reference range [0,1]
+ * @param lightness  Lightness in reference range [0,1]
+ */
+RGBA hslToRgb(float hueDegrees, float saturation, float lightness) {
+  hueDegrees = fmodf(hueDegrees, 360.0f);
+
+  if (hueDegrees < 0.0f) {
+    hueDegrees += 360.0f;
+  }
+
+  auto f = [&](float n) {
+    const float k = std::fmodf(n + hueDegrees / 30.0f, 12.0f);
+    const float a = saturation * Min(lightness, 1.0f - lightness);
+    return lightness - a * Max(-1.0f, Min(k - 3.0f, 9.0f - k, 1.0f));
+  };
+
+  return RGBA::RGB(numberToChannel(f(0) * 255.0f), numberToChannel(f(8) * 255.0f),
+                   numberToChannel(f(4) * 255.0f));
+}
+
 }  // namespace
+
+std::ostream& operator<<(std::ostream& os, const RGBA& color) {
+  return os << "rgba(" << static_cast<int>(color.r) << ", " << static_cast<int>(color.g) << ", "
+            << static_cast<int>(color.b) << ", " << static_cast<int>(color.a) << ")";
+}
+
+RGBA HSLA::toRGBA() const {
+  RGBA result = hslToRgb(hDeg, s, l);
+  result.a = a;
+  return result;
+}
+
+std::ostream& operator<<(std::ostream& os, const HSLA& color) {
+  return os << "hsla(" << color.hDeg << ", " << color.s * 100 << "%, " << color.l * 100 << "%, "
+            << static_cast<int>(color.a) << ")";
+}
 
 std::string RGBA::toHexString() const {
   // Convert this color to hex without using stringstream.
@@ -199,17 +250,31 @@ std::optional<Color> Color::ByName(std::string_view name) {
   return it->second;
 }
 
+RGBA Color::asRGBA() const {
+  RGBA result;
+  std::visit(
+      overloaded{[&](RGBA rgba) { result = rgba; }, [&](HSLA hsla) { result = hsla.toRGBA(); },
+                 [&](auto&&) {
+                   UTILS_RELEASE_ASSERT_MSG(
+                       false, "Cannot convert currentColor to RGBA, use resolve() instead");
+                 }},
+      value);
+  return result;
+}
+
+RGBA Color::resolve(RGBA currentColor, float opacity) const {
+  RGBA value = isCurrentColor() ? currentColor : asRGBA();
+  if (opacity != 1.0f) {
+    value.a = static_cast<uint8_t>(static_cast<float>(value.a) * opacity);
+  }
+
+  return value;
+}
+
 std::ostream& operator<<(std::ostream& os, const Color& color) {
   os << "Color(";
-  if (color.isCurrentColor()) {
-    os << "currentColor";
-  } else {
-    const RGBA rgba = color.rgba();
-    os << static_cast<int>(rgba.r) << ", " << static_cast<int>(rgba.g) << ", "
-       << static_cast<int>(rgba.b) << ", " << static_cast<int>(rgba.a);
-  }
-  os << ")";
-  return os;
+  std::visit([&os](auto&& element) { os << element; }, color.value);
+  return os << ")";
 }
 
 }  // namespace donner::css
