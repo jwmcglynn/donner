@@ -1,69 +1,64 @@
 #!/bin/bash
-# Source: https://schneegans.github.io/tutorials/2020/08/16/badges
+# Based on: https://schneegans.github.io/tutorials/2020/08/16/badges
 
-# This scripts counts the lines of code and comments in all source files
+# This script counts the lines of code and comments in all source files
 # and prints the results to the command line. It uses the commandline tool
-# "cloc". You can either pass --loc, --comments or --percentage to show the
-# respective values only.
-# Some parts below need to be adapted to your project!
+# "cloc".
+
+set -e
 
 # Get the location of this script.
 SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
 
-# Run cloc - this counts code lines, blank lines and comment lines
-# for the specified languages. You will need to change this accordingly.
-# For C++, you could use "C++,C/C++ Header" for example.
-# We are only interested in the summary, therefore the tail -1
-SUMMARY="$(cloc "${SCRIPT_DIR}"/../donner --include-lang="C++,C/C++ Header" --timeout=60 --diff-timeout=60 --md | tail -1)"
+# Function to run cloc with common arguments and parse the output
+run_cloc() {
+    local extra_args="$@"
+    local output
+    output=$(cloc "${SCRIPT_DIR}"/../donner --include-lang="C++,C/C++ Header" --timeout=60 --diff-timeout=60 --csv $extra_args)
+    
+    # Extract the summary line (last line) and parse it
+    local summary
+    summary=$(echo "$output" | tail -1)
 
-# The $SUMMARY is one line of a markdown table and looks like this:
-# SUM:|101|3123|2238|10783
-# We use the following command to split it into an array.
-IFS='|' read -r -a TOKENS <<< "$SUMMARY"
+    IFS=',' read -r files language blank comment code <<< "$summary"
+    
+    # Return the parsed values
+    echo "$code,$comment"
+}
 
-# Store the individual tokens for better readability.
-NUMBER_OF_FILES=${TOKENS[1]}
-COMMENT_LINES=${TOKENS[3]}
-LINES_OF_CODE=${TOKENS[4]}
+# Run cloc for all files, product files, and test files, and extract values
+ALL_STATS=$(run_cloc "")
+IFS=',' read -r LINES_OF_CODE COMMENT_LINES <<< "$ALL_STATS"
 
-# To make the estimate of commented lines more accurate, we have to
-# subtract any copyright header which is included in each file.
-# For Fly-Pie, this header has the length of five lines.
-# All dumb comments like those /////////// or those // ------------ 
-# are also subtracted. As cloc does not count inline comments,
-# the overall estimate should be rather conservative.
-# Change the lines below according to your project.
-DUMB_COMMENTS="$(grep -r -E '//////|// -----' "${SCRIPT_DIR}" | wc -l)"
-COMMENT_LINES=$(($COMMENT_LINES - 5 * $NUMBER_OF_FILES - $DUMB_COMMENTS))
+PRODUCT_STATS=$(run_cloc "--not-match-f=_tests\.cc$" --exclude-dir=tests)
+IFS=',' read -r PRODUCT_LOC PRODUCT_COMMENTS <<< "$PRODUCT_STATS"
 
-# Print all results if no arguments are given.
-if [[ $# -eq 0 ]] ; then
-  awk -v a=$LINES_OF_CODE \
-      'BEGIN {printf "Lines of source code: %6.1fk\n", a/1000}'
-  awk -v a=$COMMENT_LINES \
-      'BEGIN {printf "Lines of comments:    %6.1fk\n", a/1000}'
-  awk -v a=$COMMENT_LINES -v b=$LINES_OF_CODE \
-      'BEGIN {printf "Comment Percentage:   %6.1f%%\n", 100*a/b}'
-  exit 0
-fi
+TEST_STATS=$(run_cloc "--match-f=_tests\.cc$")
+IFS=',' read -r TEST_LOC TEST_COMMENTS <<< "$TEST_STATS"
 
-# Show lines of code if --loc is given.
-if [[ $* == *--loc* ]]
-then
-  awk -v a=$LINES_OF_CODE \
-      'BEGIN {printf "%.1fk\n", a/1000}'
-fi
+COMMENT_PERCENT=$(bc <<< "scale=2; $COMMENT_LINES/$LINES_OF_CODE*100")
 
-# Show lines of comments if --comments is given.
-if [[ $* == *--comments* ]]
-then
-  awk -v a=$COMMENT_LINES \
-      'BEGIN {printf "%.1fk\n", a/1000}'
-fi
+# Function to print formatted output
+print_formatted() {
+    local label="$1"
+    local value="$2"
+    local unit="$3"
+    printf "%-25s %6.1f%s\n" "$label:" "$value" "$unit"
+}
 
-# Show precentage of comments if --percentage is given.
-if [[ $* == *--percentage* ]]
-then
-  awk -v a=$COMMENT_LINES -v b=$LINES_OF_CODE \
-      'BEGIN {printf "%.1f\n", 100*a/b}'
-fi
+# Function to calculate and format value
+calc_and_format() {
+    local value="$1"
+    local divisor="$2"
+    if [[ "$value" =~ ^[0-9]+$ ]] && [[ "$divisor" =~ ^[0-9]+$ ]]; then
+        bc <<< "scale=1; $value/$divisor" || echo "0.0"
+    else
+        echo "0.0"
+    fi
+}
+
+print_formatted "Lines of source code" $(calc_and_format $LINES_OF_CODE 1000) "k"
+print_formatted "Lines of comments" $(calc_and_format $COMMENT_LINES 1000) "k"
+print_formatted "Comment percentage" "$COMMENT_PERCENT" "%"
+print_formatted "Product lines of code" $(calc_and_format $PRODUCT_LOC 1000) "k"
+print_formatted "Test lines of code" $(calc_and_format $TEST_LOC 1000) "k"
