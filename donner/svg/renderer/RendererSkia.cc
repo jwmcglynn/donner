@@ -488,9 +488,9 @@ public:
 
     const auto* maybeTransformComponent = target.try_get<components::ComputedTransformComponent>();
 
-    Transformd transform;
+    Transformd patternTransform;
     Transformd contentRootTransform;
-    std::optional<Boxd> patternBounds;
+    Boxd rect = computedPattern.tileRect;
 
     if (NearZero(computedPattern.tileRect.width()) || NearZero(computedPattern.tileRect.height())) {
       return createFallbackPaint(ref, currentColor, opacity);
@@ -510,49 +510,40 @@ public:
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
-      transform = ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
+      const Vector2 rectSize = rect.size();
 
-      // Resolve x/y/width/height in tileRect to translation/bounds.
-      transform *= Transformd::Translate(pathBounds.size() * computedPattern.tileRect.topLeft);
-      patternBounds = Boxd(Vector2d(), pathBounds.size() * computedPattern.tileRect.size());
-    } else {
-      transform = Transformd::Translate(computedPattern.tileRect.topLeft);
-      transform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
-
-      patternBounds = computedPattern.tileRect;
+      rect.topLeft = rect.topLeft * pathBounds.size() + pathBounds.topLeft;
+      rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
     }
+
+    patternTransform = Transformd::Translate(rect.topLeft);
+    patternTransform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
 
     if (patternContentObjectBoundingBox) {
       contentRootTransform = Transformd::Scale(pathBounds.size());
     }
 
-    if (patternBounds) {
-      const SkRect skPatternBounds = toSkia(patternBounds.value());
-      const SkRect tileRect = toSkia(Boxd(Vector2d(), patternBounds.value().size()));
+    const SkRect tileRect = toSkia(Boxd(Vector2d(), rect.size()));
 
-      SkPictureRecorder recorder;
-      renderer_.currentCanvas_ = recorder.beginRecording(skPatternBounds);
-      layerBaseTransform_ = contentRootTransform;
+    SkPictureRecorder recorder;
+    renderer_.currentCanvas_ = recorder.beginRecording(tileRect);
+    layerBaseTransform_ = contentRootTransform;
 
-      // Render the subtree into the offscreen SkPictureRecorder.
-      assert(ref.subtreeInfo);
-      drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+    // Render the subtree into the offscreen SkPictureRecorder.
+    assert(ref.subtreeInfo);
+    drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
 
-      renderer_.currentCanvas_ = renderer_.rootCanvas_;
-      layerBaseTransform_ = Transformd();
+    renderer_.currentCanvas_ = renderer_.rootCanvas_;
+    layerBaseTransform_ = Transformd();
 
-      // Transform to apply to the pattern contents.
-      const SkMatrix localMatrix = toSkiaMatrix(transform);
+    // Transform to apply to the pattern contents.
+    const SkMatrix localMatrix = toSkiaMatrix(patternTransform);
 
-      SkPaint skPaint;
-      skPaint.setAntiAlias(renderer_.antialias_);
-      skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
-          SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix,
-          &tileRect));
-      return skPaint;
-    }
-
-    return std::nullopt;
+    SkPaint skPaint;
+    skPaint.setAntiAlias(renderer_.antialias_);
+    skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
+        SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix, &tileRect));
+    return skPaint;
   }
 
   std::optional<SkPaint> instantiatePaintReference(components::ShadowBranchType branchType,

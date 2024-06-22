@@ -14,7 +14,8 @@ static const std::filesystem::path kSvgDir = "external/resvg-test-suite/svg/";
 static const std::filesystem::path kGoldenDir = "external/resvg-test-suite/png/";
 
 std::vector<ImageComparisonTestcase> getTestsWithPrefix(
-    const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {}) {
+    const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {},
+    ImageComparisonParams defaultParams = {}) {
   // Copy into a vector and sort the tests.
   std::vector<ImageComparisonTestcase> testPlan;
   for (const auto& entry : std::filesystem::directory_iterator(kSvgDir)) {
@@ -22,6 +23,7 @@ std::vector<ImageComparisonTestcase> getTestsWithPrefix(
     if (filename.find(prefix) == 0) {
       ImageComparisonTestcase test;
       test.svgFilename = entry.path();
+      test.params = defaultParams;
 
       // Set special-case params.
       if (auto it = overrides.find(filename); it != overrides.end()) {
@@ -256,26 +258,20 @@ INSTANTIATE_TEST_SUITE_P(
         "e-pattern",
         {
             {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
-            {"e-pattern-007.svg",
-             Params::Skip()},  // Not impl: patternContentUnits=objectBoundingBox
             {"e-pattern-008.svg",
-             Params::Skip()},  // Not impl: patternContentUnits=objectBoundingBox
-            {"e-pattern-009.svg", Params::Skip()},  // Not impl: viewBox
-            {"e-pattern-010.svg", Params::Skip()},  // Not impl: viewBox
-            {"e-pattern-011.svg", Params::Skip()},  // Not impl: preserveAspectRatio
-            {"e-pattern-014.svg", Params::Skip()},  // Not impl: Full href attributes
-            {"e-pattern-016.svg", Params::Skip()},  // Not impl: Full href attributes
-            {"e-pattern-018.svg", Params::Skip()},  // Not impl: <text>
+             Params::WithThreshold(kDefaultThreshold, 250)},  // Anti-aliasing artifacts
+            {"e-pattern-009.svg", Params::Skip()},            // Not impl: viewBox
+            {"e-pattern-010.svg", Params::Skip()},            // Not impl: viewBox
+            {"e-pattern-011.svg", Params::Skip()},            // Not impl: preserveAspectRatio
+            {"e-pattern-014.svg", Params::Skip()},            // Not impl: Full href attributes
+            {"e-pattern-016.svg", Params::Skip()},            // Not impl: Full href attributes
+            {"e-pattern-018.svg", Params::Skip()},            // Not impl: <text>
             {"e-pattern-019.svg",
              Params::Skip()},  // Not impl: patternContentUnits, objectBoundingBox
             {"e-pattern-020.svg", Params::Skip()},                // Not impl: objectBoundingBox
             {"e-pattern-021.svg", Params::Skip()},                // Bug? Recursive on child
             {"e-pattern-022.svg", Params::Skip()},                // Bug? Self-recursive
             {"e-pattern-023.svg", Params::Skip()},                // Bug? Self-recursive on child
-            {"e-pattern-024.svg", Params::Skip()},                // Not impl: objectBoundingBox
-            {"e-pattern-025.svg", Params::Skip()},                // Not impl: objectBoundingBox
-            {"e-pattern-026.svg", Params::Skip()},                // Not impl: userSpaceOnUse
-            {"e-pattern-027.svg", Params::Skip()},                // Bug? Invalid patternUnits
             {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
             {"e-pattern-029.svg", Params::Skip()},                // Not impl: viewBox
             {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.

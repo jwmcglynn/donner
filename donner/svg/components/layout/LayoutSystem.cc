@@ -201,8 +201,8 @@ Boxd LayoutSystem::calculateBounds(EntityHandle entity, const SizedElementProper
   }
 
   const Vector2d origin(
-      properties.x.getRequired().toPixels(Boxd(Vector2d(), size), fontMetrics, Lengthd::Extent::X),
-      properties.y.getRequired().toPixels(Boxd(Vector2d(), size), fontMetrics, Lengthd::Extent::Y));
+      properties.x.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::X),
+      properties.y.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::Y));
   return Boxd(origin, origin + size);
 }
 
@@ -282,15 +282,13 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
 }
 
 // Evaluates SizedElementProperties and returns the resulting bounds.
-Boxd LayoutSystem::computeSizeProperties(EntityHandle entity,
-                                         const SizedElementProperties& sizeProperties,
-                                         const ComputedStyleComponent& style,
-                                         FontMetrics fontMetrics,
-                                         std::vector<parser::ParseError>* outWarnings) {
+Boxd LayoutSystem::computeSizeProperties(
+    EntityHandle entity, const SizedElementProperties& sizeProperties,
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Boxd& viewbox,
+    FontMetrics fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   SizedElementProperties mutableSizeProperties = sizeProperties;
-  return ApplyUnparsedPropertiesAndGetBounds(entity, mutableSizeProperties,
-                                             style.properties.value().unparsedProperties,
-                                             style.viewbox.value(), fontMetrics, outWarnings);
+  return ApplyUnparsedPropertiesAndGetBounds(entity, mutableSizeProperties, unparsedProperties,
+                                             viewbox, fontMetrics, outWarnings);
 }
 
 // Creates a ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -301,7 +299,8 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
   const Boxd bounds =
-      computeSizeProperties(entity, sizedElement.properties, style, fontMetrics, outWarnings);
+      computeSizeProperties(entity, sizedElement.properties, style.properties->unparsedProperties,
+                            style.viewbox.value(), fontMetrics, outWarnings);
   return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, style.viewbox.value());
 }
 

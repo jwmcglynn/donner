@@ -184,10 +184,18 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
   //
   // 2. Resolve the pattern size attributes
   //
+  const auto& style = handle.get<ComputedStyleComponent>();
+
+  // If patternUnits are objectBoundingBox, we want to evaluate percentages to [0, 1]. Otherwise
+  // evaluate to userUnits.
+  const Boxd tileViewbox = (computedPattern.patternUnits == PatternUnits::ObjectBoundingBox)
+                               ? Boxd(Vector2d(), Vector2d(1.0, 1.0))
+                               : style.viewbox.value();
+
   const PatternComponent& pattern = handle.get<PatternComponent>();
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
-      handle, pattern.sizeProperties, handle.get<ComputedStyleComponent>(), FontMetrics(),
-      outWarnings);
+      handle, pattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,
+      FontMetrics(), outWarnings);
 }
 
 std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,

@@ -84,7 +84,6 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   // TODO: Add a flag to disable this behavior.
   document.setCanvasSize(500, 500);
 
-  // TODO: Do a re-render when there's a failure and enable verbose output.
   RendererSkia renderer(/*verbose*/ false);
   renderer.draw(document);
 

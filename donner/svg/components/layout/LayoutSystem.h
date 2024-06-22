@@ -53,13 +53,15 @@ public:
    *
    * @param entity Entity handle.
    * @param sizeProperties Size properties to evaluate.
-   * @param style Precomputed style information for this element.
+   * @param unparsedProperties Unparsed properties to evaluate.
+   * @param viewbox Viewbox to use when converting size percentages.
    * @param fontMetrics Font metrics, used to scale lengths.
    * @param outWarnings Output vector of parse errors, if any.
    * @return Computed bounds.
    */
   Boxd computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
-                             const ComputedStyleComponent& style, FontMetrics fontMetrics,
+                             const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+                             const Boxd& viewbox, FontMetrics fontMetrics,
                              std::vector<parser::ParseError>* outWarnings);
 
   /**
