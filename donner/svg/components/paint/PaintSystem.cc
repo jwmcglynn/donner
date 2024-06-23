@@ -182,7 +182,6 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
     base = cur;
   }
 
-  // TODO: Inherit size properties.
   //
   // 2. Resolve the pattern size attributes
   //
@@ -194,9 +193,8 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
                                ? Boxd(Vector2d(), Vector2d(1.0, 1.0))
                                : style.viewbox.value();
 
-  const PatternComponent& pattern = handle.get<PatternComponent>();
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
-      handle, pattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,
+      handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,
       FontMetrics(), outWarnings);
 
   //
@@ -205,9 +203,9 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
   // To disambiguate the inherited viewbox, check to see if this pattern has an explicitly-provided
   // viewbox before inheriting from the computed viewbox.
   if (const auto& viewbox = handle.get<ViewboxComponent>(); viewbox.viewbox) {
-    const auto& preserveAspectRatio =
-        handle.get<PreserveAspectRatioComponent>().preserveAspectRatio;
-    computedPattern.preserveAspectRatio = preserveAspectRatio;
+    if (const auto* component = handle.try_get<PreserveAspectRatioComponent>()) {
+      computedPattern.preserveAspectRatio = component->preserveAspectRatio;
+    }
     computedPattern.viewbox = viewbox.viewbox.value();
   }
 }

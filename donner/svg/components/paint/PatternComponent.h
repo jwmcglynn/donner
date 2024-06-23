@@ -27,8 +27,9 @@ struct ComputedPatternComponent {
   Boxd tileRect = Boxd::CreateEmpty(Vector2d());
   PreserveAspectRatio preserveAspectRatio;
   std::optional<Boxd> viewbox;
+  SizedElementProperties sizeProperties;
 
-  void resolveAndInheritAttributes(EntityHandle handle, EntityHandle base = EntityHandle());
+  void resolveAndInheritAttributes(EntityHandle handle, EntityHandle base);
 };
 
 }  // namespace donner::svg::components

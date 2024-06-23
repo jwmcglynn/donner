@@ -2,28 +2,43 @@
 
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/TreeComponent.h"
+#include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
 
 void ComputedPatternComponent::resolveAndInheritAttributes(EntityHandle handle, EntityHandle base) {
+  const PatternComponent& pattern = handle.get<PatternComponent>();
+
   if (base) {
     if (auto* computedBase = base.try_get<ComputedPatternComponent>()) {
       patternUnits = computedBase->patternUnits;
       patternContentUnits = computedBase->patternContentUnits;
       tileRect = computedBase->tileRect;
+      preserveAspectRatio = computedBase->preserveAspectRatio;
+      viewbox = computedBase->viewbox;
+      sizeProperties = computedBase->sizeProperties;
     }
   }
 
-  // TODO: Inherit viewbox, transform, preserveAspectRatio, x, y, width, and height.
-
-  const PatternComponent& pattern = handle.get<PatternComponent>();
   if (pattern.patternUnits) {
     patternUnits = pattern.patternUnits.value();
   }
   if (pattern.patternContentUnits) {
     patternContentUnits = pattern.patternContentUnits.value();
+  }
+  if (pattern.sizeProperties.x.hasValue()) {
+    sizeProperties.x = pattern.sizeProperties.x;
+  }
+  if (pattern.sizeProperties.y.hasValue()) {
+    sizeProperties.y = pattern.sizeProperties.y;
+  }
+  if (pattern.sizeProperties.width.hasValue()) {
+    sizeProperties.width = pattern.sizeProperties.width;
+  }
+  if (pattern.sizeProperties.height.hasValue()) {
+    sizeProperties.height = pattern.sizeProperties.height;
   }
 }
 

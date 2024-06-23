@@ -296,6 +296,14 @@ RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
 
 void RenderingContext::instantiateRenderTree(bool verbose,
                                              std::vector<parser::ParseError>* outWarnings) {
+  // Call ShadowTreeSystem::teardown() to destroy any existing shadow trees.
+  // TODO: Only do this when this part of the tree is invalidated.
+  for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
+    auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
+    ShadowTreeSystem().teardown(registry_, shadow);
+  }
+  registry_.clear<ComputedShadowTreeComponent>();
+
   createComputedComponents(outWarnings);
   instantiateRenderTreeWithPrecomputedTree(verbose);
 }
