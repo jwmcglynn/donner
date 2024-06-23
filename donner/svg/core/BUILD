@@ -6,6 +6,7 @@ cc_library(
     name = "core",
     srcs = [
         "PathSpline.cc",
+        "PreserveAspectRatio.cc",
     ],
     hdrs = [
         "CssTransform.h",
@@ -42,6 +43,7 @@ cc_test(
     name = "core_tests",
     srcs = [
         "tests/PathSpline_tests.cc",
+        "tests/PreserveAspectRatio_tests.cc",
     ],
     deps = [
         ":core",

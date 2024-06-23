@@ -9,6 +9,7 @@
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
@@ -238,36 +239,15 @@ Vector2i LayoutSystem::calculateViewportScaledDocumentSize(EntityHandle entity,
 
 Transformd LayoutSystem::computeTransform(
     EntityHandle handle, const ComputedSizedElementComponent& computedSizedElement) const {
+  const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(handle);
+
   // If this entity also has a viewbox, this SizedElementComponent is used to define a viewport.
   if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
-    return viewbox->computeTransform(computedSizedElement.bounds, GetPreserveAspectRatio(handle));
+    return preserveAspectRatio.computeTransform(computedSizedElement.bounds, viewbox->viewbox);
   } else {
     // This branch is hit for <use> elements.
-    PreserveAspectRatio preserveAspectRatio = PreserveAspectRatio::None();
-    if (const auto* preserveAspectRatioComponent = handle.try_get<PreserveAspectRatioComponent>()) {
-      preserveAspectRatio = preserveAspectRatioComponent->preserveAspectRatio;
-    }
-
-    Vector2d scale =
-        computedSizedElement.bounds.size() / computedSizedElement.inheritedViewbox.size();
-
-    if (preserveAspectRatio.align != PreserveAspectRatio::Align::None) {
-      if (preserveAspectRatio.meetOrSlice == PreserveAspectRatio::MeetOrSlice::Meet) {
-        scale.x = scale.y = std::min(scale.x, scale.y);
-      } else {
-        scale.x = scale.y = std::max(scale.x, scale.y);
-      }
-    }
-
-    Vector2d translation = computedSizedElement.bounds.topLeft -
-                           (computedSizedElement.inheritedViewbox.topLeft * scale);
-    const Vector2d alignMaxOffset =
-        computedSizedElement.bounds.size() - computedSizedElement.inheritedViewbox.size() * scale;
-
-    const Vector2d alignMultiplier(preserveAspectRatio.alignMultiplierX(),
-                                   preserveAspectRatio.alignMultiplierY());
-    return Transformd::Scale(scale) *
-           Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
+    return preserveAspectRatio.computeTransform(computedSizedElement.bounds,
+                                                computedSizedElement.inheritedViewbox);
   }
 }
 
@@ -388,7 +368,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(EntityHandle entity) const {
 
   // Scale the original viewbox to the canvas size.
   const Transformd transform =
-      viewbox.computeTransform(Boxd(Vector2d(), canvasSize), preserveAspectRatio);
+      preserveAspectRatio.computeTransform(Boxd(Vector2d(), canvasSize), viewbox.viewbox);
 
   return transform.transformPosition(viewboxSize);
 }

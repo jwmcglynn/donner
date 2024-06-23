@@ -105,6 +105,12 @@ struct Box {
     addPoint(box.bottomRight);
   }
 
+  /**
+   * Return a box with the same size but moved to the origin, i.e. with the top-left corner at (0,
+   * 0).
+   */
+  Box toOrigin() const { return Box(Vector2d(), size()); }
+
   /// Returns the box width.
   T width() const { return bottomRight.x - topLeft.x; }
   /// Returns the box height.

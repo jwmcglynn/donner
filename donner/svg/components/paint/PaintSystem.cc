@@ -1,7 +1,9 @@
 #include "donner/svg/components/paint/PaintSystem.h"
 
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
+#include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/TreeComponent.h"
+#include "donner/svg/components/ViewboxComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -180,7 +182,6 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
     base = cur;
   }
 
-  // TODO: Inherit size properties.
   //
   // 2. Resolve the pattern size attributes
   //
@@ -192,10 +193,21 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
                                ? Boxd(Vector2d(), Vector2d(1.0, 1.0))
                                : style.viewbox.value();
 
-  const PatternComponent& pattern = handle.get<PatternComponent>();
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
-      handle, pattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,
+      handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,
       FontMetrics(), outWarnings);
+
+  //
+  // 3. Apply viewbox transform
+  //
+  // To disambiguate the inherited viewbox, check to see if this pattern has an explicitly-provided
+  // viewbox before inheriting from the computed viewbox.
+  if (const auto& viewbox = handle.get<ViewboxComponent>(); viewbox.viewbox) {
+    if (const auto* component = handle.try_get<PreserveAspectRatioComponent>()) {
+      computedPattern.preserveAspectRatio = component->preserveAspectRatio;
+    }
+    computedPattern.viewbox = viewbox.viewbox.value();
+  }
 }
 
 std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,
@@ -238,8 +250,8 @@ const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
       stop.properties, style, style.properties->unparsedProperties, outWarnings);
 }
 
-// Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in the
-// registry
+// Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in
+// the registry
 void PaintSystem::createGradientShadowTrees(Registry& registry,
                                             std::vector<parser::ParseError>* outWarnings) {
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {

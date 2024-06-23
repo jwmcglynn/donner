@@ -37,7 +37,6 @@ cc_library(
         "StylesheetComponent.cc",
         "TransformComponent.cc",
         "TreeComponent.cc",
-        "ViewboxComponent.cc",
     ],
     hdrs = [
         "AttributesComponent.h",
@@ -96,7 +95,6 @@ cc_test(
     srcs = [
         "tests/AttributesComponent_tests.cc",
         "tests/TreeComponent_tests.cc",
-        "tests/ViewboxComponent_tests.cc",
     ],
     deps = [
         ":components",
