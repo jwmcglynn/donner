@@ -517,14 +517,16 @@ public:
       rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
     }
 
-    patternTransform = Transformd::Translate(rect.topLeft);
+    patternTransform = computedPattern.viewTransform;
+    patternTransform *= Transformd::Translate(rect.topLeft);
     patternTransform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
 
     if (patternContentObjectBoundingBox) {
       contentRootTransform = Transformd::Scale(pathBounds.size());
     }
 
-    const SkRect tileRect = toSkia(Boxd(Vector2d(), rect.size()));
+    const SkRect tileRect = toSkia(
+        Boxd(Vector2d(), computedPattern.viewTransform.inversed().transformVector(rect.size())));
 
     SkCanvas* const savedCanvas = renderer_.currentCanvas_;
     const Transformd savedLayerBaseTransform = layerBaseTransform_;

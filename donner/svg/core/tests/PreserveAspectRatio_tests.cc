@@ -1,40 +1,37 @@
+#include "donner/svg/core/PreserveAspectRatio.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/svg/components/ViewboxComponent.h"
 
 using testing::DoubleNear;
 using testing::Pointwise;
 
-namespace donner::svg::components {
+namespace donner::svg {
 
-TEST(ViewboxComponent, OptionalNone) {
-  Boxd viewbox({0, 0}, {100, 100});
-  ViewboxComponent component{std::nullopt};
+TEST(PreserveAspectRatio, ComputeTransformEmptyViewbox) {
   EXPECT_TRUE(
-      component.computeTransform(Boxd({0, 0}, {100, 100}), PreserveAspectRatio()).isIdentity());
+      PreserveAspectRatio().computeTransform(Boxd({0, 0}, {100, 100}), std::nullopt).isIdentity());
 }
 
-TEST(ViewboxComponent, Defaults) {
+TEST(PreserveAspectRatio, Defaults) {
   const Boxd viewbox({0, 0}, {100, 100});
   const PreserveAspectRatio preserveAspectRatio;
-  ViewboxComponent component{std::make_optional(viewbox)};
 
-  EXPECT_TRUE(
-      component.computeTransform(Boxd({0, 0}, {100, 100}), preserveAspectRatio).isIdentity());
+  EXPECT_TRUE(preserveAspectRatio.computeTransform(Boxd({0, 0}, {100, 100}), viewbox).isIdentity());
 
   // Element half size: Scale down content.
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {50, 50}), preserveAspectRatio),
+  EXPECT_THAT(preserveAspectRatio.computeTransform(Boxd({0, 0}, {50, 50}), viewbox),
               TransformEq(Transformd::Scale({0.5, 0.5})));
 
   // Larger: scale up.
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {200, 200}), preserveAspectRatio),
+  EXPECT_THAT(preserveAspectRatio.computeTransform(Boxd({0, 0}, {200, 200}), viewbox),
               TransformEq(Transformd::Scale({2, 2})));
 
   // Aspect ratio is preserved, and the default is "meet" so the use the smaller dimension.
   {
-    auto transform = component.computeTransform(Boxd({0, 0}, {50, 100}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({0, 0}, {50, 100}), viewbox);
     EXPECT_THAT(transform,
                 TransformEq(Transformd::Scale({0.5, 0.5}) * Transformd::Translate({0, 25})));
 
@@ -43,7 +40,7 @@ TEST(ViewboxComponent, Defaults) {
   }
 
   {
-    auto transform = component.computeTransform(Boxd({0, 0}, {400, 200}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({0, 0}, {400, 200}), viewbox);
     EXPECT_THAT(transform,
                 TransformEq(Transformd::Scale({2, 2}) * Transformd::Translate({100, 0})));
 
@@ -53,7 +50,7 @@ TEST(ViewboxComponent, Defaults) {
 
   // With the position x/y other than 0,0 it translates to the new origin too.
   {
-    auto transform = component.computeTransform(Boxd({50, 50}, {250, 450}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({50, 50}, {250, 450}), viewbox);
     EXPECT_THAT(transform,
                 TransformEq(Transformd::Scale({2, 2}) * Transformd::Translate({50, 150})));
 
@@ -62,16 +59,14 @@ TEST(ViewboxComponent, Defaults) {
   }
 }
 
-TEST(ViewboxComponent, None) {
+TEST(PreserveAspectRatio, None) {
   const Boxd viewbox({0, 0}, {100, 100});
   const PreserveAspectRatio preserveAspectRatio = PreserveAspectRatio::None();
-  ViewboxComponent component{std::make_optional(viewbox)};
 
-  EXPECT_TRUE(
-      component.computeTransform(Boxd({0, 0}, {100, 100}), preserveAspectRatio).isIdentity());
+  EXPECT_TRUE(preserveAspectRatio.computeTransform(Boxd({0, 0}, {100, 100}), viewbox).isIdentity());
 
   {
-    auto transform = component.computeTransform(Boxd({0, 0}, {50, 100}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({0, 0}, {50, 100}), viewbox);
     EXPECT_THAT(transform, TransformEq(Transformd::Scale({0.5, 1})));
 
     EXPECT_THAT(transform.transformPosition({0, 0}), Vector2Near(0, 0));
@@ -79,7 +74,7 @@ TEST(ViewboxComponent, None) {
   }
 
   {
-    auto transform = component.computeTransform(Boxd({0, 0}, {400, 200}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({0, 0}, {400, 200}), viewbox);
     EXPECT_THAT(transform, TransformEq(Transformd::Scale({4, 2})));
 
     EXPECT_THAT(transform.transformPosition({0, 0}), Vector2Near(0, 0));
@@ -88,7 +83,7 @@ TEST(ViewboxComponent, None) {
 
   // With the position x/y other than 0,0 it translates to the new origin.
   {
-    auto transform = component.computeTransform(Boxd({50, 50}, {250, 450}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({50, 50}, {250, 450}), viewbox);
     EXPECT_THAT(transform,
                 TransformEq(Transformd::Scale({2, 4}) * Transformd::Translate({50, 50})));
 
@@ -97,24 +92,22 @@ TEST(ViewboxComponent, None) {
   }
 }
 
-TEST(ViewboxComponent, Slice) {
+TEST(PreserveAspectRatio, Slice) {
   const Boxd viewbox({0, 0}, {100, 100});
   const PreserveAspectRatio preserveAspectRatio{PreserveAspectRatio::Align::XMidYMid,
                                                 PreserveAspectRatio::MeetOrSlice::Slice};
-  ViewboxComponent component{std::make_optional(viewbox)};
 
-  EXPECT_TRUE(
-      component.computeTransform(Boxd({0, 0}, {100, 100}), preserveAspectRatio).isIdentity());
+  EXPECT_TRUE(preserveAspectRatio.computeTransform(Boxd({0, 0}, {100, 100}), viewbox).isIdentity());
 
   // No slicing if the box fits.
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {50, 50}), preserveAspectRatio),
+  EXPECT_THAT(preserveAspectRatio.computeTransform(Boxd({0, 0}, {50, 50}), viewbox),
               TransformEq(Transformd::Scale({0.5, 0.5})));
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {200, 200}), preserveAspectRatio),
+  EXPECT_THAT(preserveAspectRatio.computeTransform(Boxd({0, 0}, {200, 200}), viewbox),
               TransformEq(Transformd::Scale({2, 2})));
 
   // Slice, effectively scaling to the larger dimension.
   {
-    auto transform = component.computeTransform(Boxd({0, 0}, {50, 200}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({0, 0}, {50, 200}), viewbox);
     EXPECT_THAT(transform,
                 TransformEq(Transformd::Scale({2, 2}) * Transformd::Translate({-75, 0})));
 
@@ -123,7 +116,7 @@ TEST(ViewboxComponent, Slice) {
   }
 
   {
-    auto transform = component.computeTransform(Boxd({0, 0}, {50, 25}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({0, 0}, {50, 25}), viewbox);
     EXPECT_THAT(transform,
                 TransformEq(Transformd::Scale({0.5, 0.5}) * Transformd::Translate({0, -12.5})));
 
@@ -133,7 +126,7 @@ TEST(ViewboxComponent, Slice) {
 
   // With the position x/y other than 0,0 it translates to the new origin too.
   {
-    auto transform = component.computeTransform(Boxd({50, 50}, {250, 450}), preserveAspectRatio);
+    auto transform = preserveAspectRatio.computeTransform(Boxd({50, 50}, {250, 450}), viewbox);
     EXPECT_THAT(transform,
                 TransformEq(Transformd::Scale({4, 4}) * Transformd::Translate({-50, 50})));
 
@@ -142,37 +135,36 @@ TEST(ViewboxComponent, Slice) {
   }
 }
 
-TEST(ViewboxComponent, MinMaxMeet) {
+TEST(PreserveAspectRatio, MinMaxMeet) {
   const Boxd viewbox({0, 0}, {100, 100});
   const PreserveAspectRatio minMeet{PreserveAspectRatio::Align::XMinYMin,
                                     PreserveAspectRatio::MeetOrSlice::Meet};
   const PreserveAspectRatio maxMeet{PreserveAspectRatio::Align::XMaxYMax,
                                     PreserveAspectRatio::MeetOrSlice::Meet};
-  ViewboxComponent component{std::make_optional(viewbox)};
 
   // No effect if the box fits.
-  EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100}), minMeet).isIdentity());
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {50, 50}), minMeet),
+  EXPECT_TRUE(minMeet.computeTransform(Boxd({0, 0}, {100, 100}), viewbox).isIdentity());
+  EXPECT_THAT(minMeet.computeTransform(Boxd({0, 0}, {50, 50}), viewbox),
               TransformEq(Transformd::Scale({0.5, 0.5})));
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {200, 200}), minMeet),
+  EXPECT_THAT(minMeet.computeTransform(Boxd({0, 0}, {200, 200}), viewbox),
               TransformEq(Transformd::Scale({2, 2})));
-  EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100}), maxMeet).isIdentity());
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {50, 50}), maxMeet),
+  EXPECT_TRUE(maxMeet.computeTransform(Boxd({0, 0}, {100, 100}), viewbox).isIdentity());
+  EXPECT_THAT(maxMeet.computeTransform(Boxd({0, 0}, {50, 50}), viewbox),
               TransformEq(Transformd::Scale({0.5, 0.5})));
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {200, 200}), maxMeet),
+  EXPECT_THAT(maxMeet.computeTransform(Boxd({0, 0}, {200, 200}), viewbox),
               TransformEq(Transformd::Scale({2, 2})));
 
   {
-    auto transformMin = component.computeTransform(Boxd({0, 0}, {50, 100}), minMeet);
-    auto transformMax = component.computeTransform(Boxd({0, 0}, {50, 100}), maxMeet);
+    auto transformMin = minMeet.computeTransform(Boxd({0, 0}, {50, 100}), viewbox);
+    auto transformMax = maxMeet.computeTransform(Boxd({0, 0}, {50, 100}), viewbox);
     EXPECT_THAT(transformMin, TransformEq(Transformd::Scale({0.5, 0.5})));
     EXPECT_THAT(transformMax,
                 TransformEq(Transformd::Scale({0.5, 0.5}) * Transformd::Translate({0, 50})));
   }
 
   {
-    auto transformMin = component.computeTransform(Boxd({0, 0}, {400, 200}), minMeet);
-    auto transformMax = component.computeTransform(Boxd({0, 0}, {400, 200}), maxMeet);
+    auto transformMin = minMeet.computeTransform(Boxd({0, 0}, {400, 200}), viewbox);
+    auto transformMax = maxMeet.computeTransform(Boxd({0, 0}, {400, 200}), viewbox);
 
     EXPECT_THAT(transformMin, TransformEq(Transformd::Scale({2, 2})));
     EXPECT_THAT(transformMax,
@@ -180,41 +172,40 @@ TEST(ViewboxComponent, MinMaxMeet) {
   }
 }
 
-TEST(ViewboxComponent, MinMaxSlice) {
+TEST(PreserveAspectRatio, MinMaxSlice) {
   const Boxd viewbox({0, 0}, {100, 100});
   const PreserveAspectRatio minSlice{PreserveAspectRatio::Align::XMinYMin,
                                      PreserveAspectRatio::MeetOrSlice::Slice};
   const PreserveAspectRatio maxSlice{PreserveAspectRatio::Align::XMaxYMax,
                                      PreserveAspectRatio::MeetOrSlice::Slice};
-  ViewboxComponent component{std::make_optional(viewbox)};
 
   // No effect if the box fits.
-  EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100}), minSlice).isIdentity());
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {50, 50}), minSlice),
+  EXPECT_TRUE(minSlice.computeTransform(Boxd({0, 0}, {100, 100}), viewbox).isIdentity());
+  EXPECT_THAT(minSlice.computeTransform(Boxd({0, 0}, {50, 50}), viewbox),
               TransformEq(Transformd::Scale({0.5, 0.5})));
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {200, 200}), minSlice),
+  EXPECT_THAT(minSlice.computeTransform(Boxd({0, 0}, {200, 200}), viewbox),
               TransformEq(Transformd::Scale({2, 2})));
-  EXPECT_TRUE(component.computeTransform(Boxd({0, 0}, {100, 100}), maxSlice).isIdentity());
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {50, 50}), maxSlice),
+  EXPECT_TRUE(maxSlice.computeTransform(Boxd({0, 0}, {100, 100}), viewbox).isIdentity());
+  EXPECT_THAT(maxSlice.computeTransform(Boxd({0, 0}, {50, 50}), viewbox),
               TransformEq(Transformd::Scale({0.5, 0.5})));
-  EXPECT_THAT(component.computeTransform(Boxd({0, 0}, {200, 200}), maxSlice),
+  EXPECT_THAT(maxSlice.computeTransform(Boxd({0, 0}, {200, 200}), viewbox),
               TransformEq(Transformd::Scale({2, 2})));
 
   {
-    auto transformMin = component.computeTransform(Boxd({0, 0}, {50, 200}), minSlice);
-    auto transformMax = component.computeTransform(Boxd({0, 0}, {50, 200}), maxSlice);
+    auto transformMin = minSlice.computeTransform(Boxd({0, 0}, {50, 200}), viewbox);
+    auto transformMax = maxSlice.computeTransform(Boxd({0, 0}, {50, 200}), viewbox);
     EXPECT_THAT(transformMin, TransformEq(Transformd::Scale({2, 2})));
     EXPECT_THAT(transformMax,
                 TransformEq(Transformd::Scale({2, 2}) * Transformd::Translate({-150, 0})));
   }
 
   {
-    auto transformMin = component.computeTransform(Boxd({0, 0}, {50, 25}), minSlice);
-    auto transformMax = component.computeTransform(Boxd({0, 0}, {50, 25}), maxSlice);
+    auto transformMin = minSlice.computeTransform(Boxd({0, 0}, {50, 25}), viewbox);
+    auto transformMax = maxSlice.computeTransform(Boxd({0, 0}, {50, 25}), viewbox);
     EXPECT_THAT(transformMin, TransformEq(Transformd::Scale({0.5, 0.5})));
     EXPECT_THAT(transformMax,
                 TransformEq(Transformd::Scale({0.5, 0.5}) * Transformd::Translate({0, -25})));
   }
 }
 
-}  // namespace donner::svg::components
+}  // namespace donner::svg

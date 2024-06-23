@@ -1,7 +1,9 @@
 #include "donner/svg/components/paint/PaintSystem.h"
 
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
+#include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/TreeComponent.h"
+#include "donner/svg/components/ViewboxComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -196,6 +198,19 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
       handle, pattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,
       FontMetrics(), outWarnings);
+
+  //
+  // 3. Apply viewbox transform
+  //
+  // To disambiguate the inherited viewbox, check to see if this pattern has an explicitly-provided
+  // viewbox before inheriting from the computed viewbox.
+  if (const auto& viewbox = handle.get<ViewboxComponent>(); viewbox.viewbox) {
+    const auto& preserveAspectRatio =
+        handle.get<PreserveAspectRatioComponent>().preserveAspectRatio;
+
+    computedPattern.viewTransform =
+        preserveAspectRatio.computeTransform(computedPattern.tileRect, viewbox.viewbox);
+  }
 }
 
 std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,
@@ -238,8 +253,8 @@ const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
       stop.properties, style, style.properties->unparsedProperties, outWarnings);
 }
 
-// Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in the
-// registry
+// Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in
+// the registry
 void PaintSystem::createGradientShadowTrees(Registry& registry,
                                             std::vector<parser::ParseError>* outWarnings) {
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
