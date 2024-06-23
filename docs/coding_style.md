@@ -342,3 +342,23 @@ if (maybeResult.hasError()) {
 
 const NumberParser::Result& result = maybeResult.result();
 ```
+
+## `operator<=>` when possible
+
+Use the C++20 spaceship operator when possible, but note that gtest has a bug where `operator==` must also be supplied.
+
+```cpp
+/// Spaceship equality operator to another \ref RcString.
+constexpr friend auto operator<=>(const RcString& lhs, const RcString& rhs) {
+  return compareStringViews(lhs, rhs);
+}
+
+//
+// For gtest, also implement operator== in terms of operator<=>.
+//
+
+/// Equality operator to another \ref RcString.
+constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
+  return (lhs <=> rhs) == std::strong_ordering::equal;
+}
+```
