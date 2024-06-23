@@ -9,6 +9,7 @@ cc_library(
         "PreserveAspectRatio.cc",
     ],
     hdrs = [
+        "ClipPathUnits.h",
         "CssTransform.h",
         "Gradient.h",
         "PathSpline.h",

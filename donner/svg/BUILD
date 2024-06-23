@@ -4,6 +4,7 @@ cc_library(
     name = "svg_core",
     srcs = [
         "SVGCircleElement.cc",
+        "SVGClipPathElement.cc",
         "SVGDefsElement.cc",
         "SVGDocument.cc",
         "SVGElement.cc",
@@ -32,6 +33,7 @@ cc_library(
     hdrs = [
         "AllSVGElements.h",
         "SVGCircleElement.h",
+        "SVGClipPathElement.h",
         "SVGDefsElement.h",
         "SVGDocument.h",
         "SVGElement.h",

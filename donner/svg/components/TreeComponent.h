@@ -2,6 +2,7 @@
 /// @file
 
 #include "donner/base/RcString.h"
+#include "donner/base/SmallVector.h"
 #include "donner/svg/registry/Registry.h"
 #include "donner/svg/xml/XMLQualifiedName.h"
 
@@ -86,5 +87,30 @@ private:
   Entity previousSibling_{entt::null};
   Entity nextSibling_{entt::null};
 };
+
+// TODO: Find a better place for this helper
+template <typename Func>
+void ForAllChildren(EntityHandle handle, const Func& func) {
+  assert(handle.valid());
+  Registry& registry = *handle.registry();
+
+  SmallVector<entt::entity, 4> stack;
+  stack.push_back(handle.entity());
+
+  while (!stack.empty()) {
+    EntityHandle currentHandle = EntityHandle(registry, stack[stack.size() - 1]);
+    stack.pop_back();
+
+    // Call the functor for the current entity
+    func(currentHandle);
+
+    // Add all children to the stack
+    auto& treeComponent = currentHandle.get<components::TreeComponent>();
+    for (entt::entity child = treeComponent.firstChild(); child != entt::null;
+         child = registry.get<components::TreeComponent>(child).nextSibling()) {
+      stack.push_back(child);
+    }
+  }
+}
 
 }  // namespace donner::svg::components

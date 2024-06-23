@@ -3,6 +3,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "components",
     srcs = [
+        "ClipPathComponent.cc",
         "GradientComponent.cc",
         "LinearGradientComponent.cc",
         "PatternComponent.cc",
@@ -10,6 +11,7 @@ cc_library(
         "StopComponent.cc",
     ],
     hdrs = [
+        "ClipPathComponent.h",
         "GradientComponent.h",
         "LinearGradientComponent.h",
         "PatternComponent.h",

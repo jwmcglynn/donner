@@ -5,6 +5,7 @@ cc_test(
     srcs = [
         "ElementStyle_tests.cc",
         "SVGCircleElement_tests.cc",
+        "SVGClipPathElement_tests.cc",
         "SVGElement_tests.cc",
         "SVGEllipseElement_tests.cc",
         "SVGFilterElement_tests.cc",

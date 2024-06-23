@@ -205,7 +205,42 @@ INSTANTIATE_TEST_SUITE_P(Visibility, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(Circle, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-circle")), TestNameFromFilename);
 
-// TODO(clip): e-clipPath
+INSTANTIATE_TEST_SUITE_P(
+    ClipPath, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-clipPath",
+        {
+            {"e-clipPath-007.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-009.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-010.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-011.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-012.svg", Params::Skip()},  // Not impl: <text>, clip-rule
+            {"e-clipPath-013.svg", Params::Skip()},  // Not impl: clip-rule
+            {"e-clipPath-014.svg", Params::Skip()},  // Not impl: clip-rule
+            {"e-clipPath-015.svg", Params::Skip()},  // Not impl: clip-rule
+            {"e-clipPath-016.svg", Params::Skip()},  // Bug: g is invalid child
+            {"e-clipPath-018.svg", Params::Skip()},  // Not impl: clip-rule on parent
+            {"e-clipPath-019.svg", Params::Skip()},  // Not impl: clip-path on child
+            {"e-clipPath-020.svg", Params::Skip()},  // Not impl: clip-path on self, clip-rule
+            {"e-clipPath-021.svg", Params::Skip()},  // Not impl: nested clip-path, clip-rule
+            {"e-clipPath-024.svg", Params::Skip()},  // Not impl: invisible child
+            {"e-clipPath-025.svg", Params::Skip()},  // Not impl: invisible child
+            {"e-clipPath-029.svg", Params::Skip()},  // Not impl: recursive child
+            {"e-clipPath-031.svg",
+             Params::Skip()},  // Not impl: `clip-path` on child with transform
+            {"e-clipPath-032.svg", Params::Skip()},  // Invalid `clip-path` on self
+            {"e-clipPath-033.svg", Params::Skip()},  // Invalid `clip-path` on child
+            {"e-clipPath-034.svg", Params::Skip()},  // Not impl: `clip-path` on children
+            {"e-clipPath-036.svg", Params::Skip()},  // Not impl: `clip-path` on self
+            {"e-clipPath-037.svg", Params::Skip()},  // Not impl: Recursive with self
+            {"e-clipPath-038.svg", Params::Skip()},  // Not impl: marker
+            {"e-clipPath-039.svg", Params::Skip()},  // Not impl: `mask` has no effect
+            {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
+            {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
+            {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
+            {"e-clipPath-047.svg", Params::Skip()},  // Not impl: <symbol>
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-defs",

@@ -6,6 +6,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/core/ClipPathUnits.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/registry/Registry.h"
 
@@ -20,6 +21,13 @@ struct PaintResolvedReference {
   ResolvedReference reference;
   std::optional<css::Color> fallback;
   std::optional<SubtreeInfo> subtreeInfo;
+};
+
+struct ResolvedClipPath {
+  ResolvedReference reference;
+  ClipPathUnits units;
+
+  bool valid() const { return reference.valid(); }
 };
 
 using ResolvedPaintServer =
@@ -45,6 +53,8 @@ struct RenderingInstanceComponent {
       transformCanvasSpace;  //!< The canvas-space transform of the element, element-from-canvas.
 
   std::optional<Boxd> clipRect;  //!< The clip rect of the element, if set.
+
+  std::optional<ResolvedClipPath> clipPath;  //!< The clip path of the element, if set.
 
   /**
    * The entity containing the structural components of the instance, element-specific

@@ -316,6 +316,29 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
   return result;
 }
 
+parser::ParseResult<Reference> ParseReference(std::string_view tag,
+                                              std::span<const css::ComponentValue> components) {
+  if (components.empty()) {
+    parser::ParseError err;
+    err.reason = std::string("Empty ") + std::string(tag) + " value";
+    return err;
+  }
+
+  const css::ComponentValue& firstComponent = components.front();
+  if (firstComponent.is<css::Token>()) {
+    const auto& token = firstComponent.get<css::Token>();
+    if (token.is<css::Token::Url>()) {
+      const auto& url = token.get<css::Token::Url>();
+      return Reference{url.value};
+    }
+  }
+
+  parser::ParseError err;
+  err.reason = "Invalid url reference";
+  err.location = firstComponent.sourceOffset();
+  return err;
+}
+
 parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
   // TODO: Handle parsing a list of filter effects
   // https://www.w3.org/TR/filter-effects/#FilterProperty
@@ -381,7 +404,7 @@ static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAtt
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 16> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 17> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        auto maybeError = Parse(
@@ -528,6 +551,15 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 16> kPro
              return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
            },
            &registry.strokeDashoffset);
+     }},  //
+    {"clip-path",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseReference("clip-path", params.components());
+           },
+           &registry.clipPath);
      }},  //
     {"filter",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

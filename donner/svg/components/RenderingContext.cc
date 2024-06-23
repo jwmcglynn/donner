@@ -9,6 +9,7 @@
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -37,6 +38,10 @@ struct ContextPaintServers {
 
 bool IsValidPaintServer(EntityHandle handle) {
   return handle.any_of<ComputedGradientComponent, ComputedPatternComponent>();
+}
+
+bool IsValidClipPath(EntityHandle handle) {
+  return handle.all_of<ClipPathComponent>();
 }
 
 class RenderingContextImpl {
@@ -130,20 +135,28 @@ public:
 
     const bool hasFilterEffect = !properties.filter.getRequired().is<FilterEffect::None>();
 
-    // Create a new layer if opacity is less than 1.
-    if (properties.opacity.getRequired() < 1.0 || hasFilterEffect) {
-      instance.isolatedLayer = true;
-
-      // TODO: Calculate hint for size of layer.
-      ++layerDepth;
-    }
-
     if (properties.visibility.getRequired() != Visibility::Visible) {
       instance.visible = false;
     }
 
     if (hasFilterEffect) {
       instance.resolvedFilter = resolveFilter(dataHandle, properties.filter.getRequired());
+    }
+
+    if (properties.clipPath.get()) {
+      if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.getRequired());
+          resolved.valid()) {
+        instance.clipPath = resolved;
+      }
+    }
+
+    // Create a new layer if opacity is less than 1 or if there is an effect that requires an
+    // isolated group.
+    if (properties.opacity.getRequired() < 1.0 || instance.resolvedFilter || instance.clipPath) {
+      instance.isolatedLayer = true;
+
+      // TODO: Calculate hint for size of layer.
+      ++layerDepth;
     }
 
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
@@ -246,6 +259,20 @@ public:
     } else {
       return PaintServer::None();
     }
+  }
+
+  ResolvedClipPath resolveClipPath(EntityHandle dataHandle, const Reference& reference) {
+    // Only resolve paints if the paint server references a supported <pattern> or gradient
+    // element, and the shadow tree was instantiated. If the shadow tree is not instantiated, that
+    // indicates there was recursion and we treat the reference as invalid.
+    if (auto resolvedRef = reference.resolve(*dataHandle.registry());
+        resolvedRef && IsValidClipPath(resolvedRef->handle)) {
+      return ResolvedClipPath{resolvedRef.value(),
+                              resolvedRef->handle.get<ClipPathComponent>().clipPathUnits.value_or(
+                                  ClipPathUnits::Default)};
+    }
+
+    return ResolvedClipPath{ResolvedReference{EntityHandle()}, ClipPathUnits::Default};
   }
 
   ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {

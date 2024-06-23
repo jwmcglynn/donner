@@ -107,8 +107,8 @@ SkPaint::Join toSkia(StrokeLinejoin lineJoin) {
 
 SkPath toSkia(const PathSpline& spline) {
   SkPath path;
-  const std::vector<Vector2d>& points = spline.points();
 
+  const std::vector<Vector2d>& points = spline.points();
   for (const PathSpline::Command& command : spline.commands()) {
     switch (command.type) {
       case PathSpline::CommandType::MoveTo: {
@@ -214,6 +214,39 @@ public:
 
           // TODO: Calculate the bounds.
           renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
+        } else if (instance.clipPath) {
+          const components::ResolvedClipPath& ref = instance.clipPath.value();
+
+          Transformd clipPathTransform;
+          if (ref.units == ClipPathUnits::ObjectBoundingBox) {
+            if (const auto* path =
+                    instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+              // TODO: Extend this to get the element bounds for all child elements.
+              const Boxd bounds = path->spline.bounds();
+              clipPathTransform =
+                  Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
+            }
+          }
+
+          if (auto* computedTransform =
+                  ref.reference.handle.try_get<components::ComputedTransformComponent>()) {
+            clipPathTransform *= computedTransform->transform;
+          }
+
+          renderer_.currentCanvas_->save();
+          const SkMatrix skClipPathTransform = toSkiaMatrix(clipPathTransform);
+
+          // Iterate over children and add any paths to the clip.
+          SkPath skClipPath;
+          components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
+            if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
+              skClipPath.addPath(toSkia(clipPathData->spline), skClipPathTransform);
+            }
+          });
+
+          skClipPath.setFillType(SkPathFillType::kWinding);
+
+          renderer_.currentCanvas_->clipPath(skClipPath, SkClipOp::kIntersect, true);
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
         }

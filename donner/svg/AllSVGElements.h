@@ -9,6 +9,7 @@
 #include <entt/entt.hpp>
 
 #include "donner/svg/SVGCircleElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGClipPathElement.h"        // IWYU pragma: export
 #include "donner/svg/SVGDefsElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGEllipseElement.h"         // IWYU pragma: export
 #include "donner/svg/SVGFEGaussianBlurElement.h"  // IWYU pragma: export
@@ -38,6 +39,7 @@ namespace donner::svg {
  */
 using AllSVGElements = entt::type_list<  //
     SVGCircleElement,                    //
+    SVGClipPathElement,                  //
     SVGDefsElement,                      //
     SVGEllipseElement,                   //
     SVGFEGaussianBlurElement,            //

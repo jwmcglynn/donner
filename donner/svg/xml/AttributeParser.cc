@@ -7,6 +7,7 @@
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/parser/ParseError.h"
 #include "donner/svg/AllSVGElements.h"  // IWYU pragma: keep
+#include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/parser/Number2dParser.h"
@@ -194,6 +195,28 @@ template <typename T>
 std::optional<ParseError> ParseAttribute(XMLParserContext& context, T element,
                                          const XMLQualifiedNameRef& name, std::string_view value) {
   return ParseCommonAttribute(context, element, name, value);
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGClipPathElement>(XMLParserContext& context,
+                                                             SVGClipPathElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  if (name == XMLQualifiedNameRef("clipPathUnits")) {
+    if (value == "userSpaceOnUse") {
+      element.setClipPathUnits(ClipPathUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setClipPathUnits(ClipPathUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid clipPathUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
 }
 
 template <>

@@ -22,6 +22,9 @@ struct ResolvedReference {
    * @return The entity associated with the handle
    */
   operator Entity() const { return handle.entity(); }
+
+  /// Returns true if this ResolvedReference is non-empty.
+  bool valid() const { return bool(handle); }
 };
 
 /**
@@ -65,7 +68,7 @@ struct Reference {
   bool operator==(const Reference& other) const = default;
 
   /// Outputs the href string to a stream.
-  std::ostream& operator<<(std::ostream& os) const { return os << href; }
+  friend std::ostream& operator<<(std::ostream& os, const Reference& ref) { return os << ref.href; }
 };
 
 }  // namespace donner::svg

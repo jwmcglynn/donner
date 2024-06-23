@@ -7,6 +7,7 @@ namespace donner::svg {
 std::string_view TypeToString(ElementType type) {
   switch (type) {
     case ElementType::Circle: return "Circle";
+    case ElementType::ClipPath: return "ClipPath";
     case ElementType::Defs: return "Defs";
     case ElementType::Ellipse: return "Ellipse";
     case ElementType::FeGaussianBlur: return "FeGaussianBlur";
