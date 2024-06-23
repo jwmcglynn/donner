@@ -278,10 +278,6 @@
         fill: #10131e;
       }
 
-      .cls-92 {
-        mix-blend-mode: lighten;
-      }
-
       .cls-93 {
         clip-path: url(#clippath-1);
       }
