@@ -66,5 +66,7 @@ cc_binary(
     deps = [
         ":renderer_skia",
         "//donner/svg/xml",
+        "@com_google_absl//absl/debugging:failure_signal_handler",
+        "@com_google_absl//absl/debugging:symbolize",
     ],
 )

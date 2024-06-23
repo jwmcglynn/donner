@@ -146,7 +146,7 @@ int RendererWasmCanvas::height() const {
 }
 
 void RendererWasmCanvas::draw(Registry& registry, Entity root) {
-  Impl impl(*this, RenderingInstanceView{registry.view<components::RenderingInstanceComponent>()});
+  Impl impl(*this, RenderingInstanceView{registry});
   impl.drawUntil(registry, entt::null);
 }
 

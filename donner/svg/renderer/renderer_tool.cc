@@ -5,8 +5,11 @@
 #include <iostream>
 #include <vector>
 
+#include "absl/debugging/failure_signal_handler.h"
+#include "absl/debugging/symbolize.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererSkia.h"
+#include "donner/svg/renderer/RendererUtils.h"
 
 namespace donner::svg {
 
@@ -53,17 +56,52 @@ void DumpTree(SVGElement element, int depth) {
 }
 
 extern "C" int main(int argc, char* argv[]) {
-  if (argc != 2) {
+  // Initialize the symbolizer to get a human-readable stack trace
+  absl::InitializeSymbolizer(argv[0]);
+
+  absl::FailureSignalHandlerOptions options;
+  absl::InstallFailureSignalHandler(options);
+
+  if (argc != 2 && argc != 3) {
     std::cerr << "Unexpected arg count."
               << "\n";
-    std::cerr << "USAGE: renderer_tool <filename>"
+    std::cerr << "USAGE: renderer_tool <filename> [--quiet]"
               << "\n";
     return 1;
   }
 
-  std::ifstream file(argv[1]);
+  if (argv[1] == std::string_view("--help")) {
+    std::cout << "Donner SVG Renderer tool\n";
+    std::cout << "\n";
+    std::cout << "USAGE: renderer_tool <filename> [--quiet]\n";
+    std::cout << "\n";
+    std::cout << "  filename: The SVG file to render.\n";
+    std::cout << "  --quiet: Do not output the parsed tree or warnings.\n";
+    std::cout << "\n";
+    std::cout << "This will output the parsed tree and render the SVG to a file named 'output.png' "
+                 "in the working directory\n";
+    std::cout << "\n";
+    return 0;
+  }
+
+  std::string filename;
+  bool quiet = false;
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] == std::string_view("--quiet")) {
+      quiet = true;
+    } else {
+      filename = argv[i];
+    }
+  }
+
+  if (filename.empty()) {
+    std::cerr << "No filename specified.\n";
+    return 1;
+  }
+
+  std::ifstream file(filename);
   if (!file) {
-    std::cerr << "Could not open file " << argv[1] << "\n";
+    std::cerr << "Could not open file " << filename << "\n";
     return 2;
   }
 
@@ -77,7 +115,7 @@ extern "C" int main(int argc, char* argv[]) {
   std::vector<parser::ParseError> warnings;
 
   Trace traceParse("Parse");
-  auto maybeResult = parser::XMLParser::ParseSVG(fileData, &warnings);
+  auto maybeResult = parser::XMLParser::ParseSVG(fileData, quiet ? nullptr : &warnings);
   traceParse.stop();
 
   if (maybeResult.hasError()) {
@@ -97,8 +135,10 @@ extern "C" int main(int argc, char* argv[]) {
 
   SVGDocument document = std::move(maybeResult.result());
 
-  std::cout << "Tree:\n";
-  DumpTree(document.svgElement(), 0);
+  if (!quiet) {
+    std::cout << "Tree:\n";
+    DumpTree(document.svgElement(), 0);
+  }
 
   if (auto path1 = document.svgElement().querySelector("#path1")) {
     std::cout << "Found path1\n";
@@ -107,6 +147,22 @@ extern "C" int main(int argc, char* argv[]) {
   }
 
   document.setCanvasSize(800, 600);
+
+  {
+    warnings.clear();
+
+    // Manually call prepareDocumentForRendering so we can measure how long it takes. This is
+    // normally called automatically by the Renderer.
+    Trace tracePrepare("Prepare");
+    RendererUtils::prepareDocumentForRendering(document, false, quiet ? nullptr : &warnings);
+
+    if (!warnings.empty()) {
+      std::cout << "Warnings:\n";
+      for (auto& w : warnings) {
+        std::cout << "  " << w << "\n";
+      }
+    }
+  }
 
   Trace traceCreateRenderer("Create Renderer");
   RendererSkia renderer;

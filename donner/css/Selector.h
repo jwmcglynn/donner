@@ -256,7 +256,7 @@ struct ClassSelector {
    *
    * @param name The class to match, without the leading `.`.
    */
-  explicit ClassSelector(RcString name) : name(std::move(name)) {}
+  explicit ClassSelector(const RcString& name) : name(std::move(name)) {}
 
   /**
    * Returns true if the provided element matches this selector, based on if the element's `class`
@@ -272,7 +272,8 @@ struct ClassSelector {
 
     // Returns true if attribute value is a whitespace-separated list of values, and one of them
     // exactly matches the matcher value.
-    for (auto&& str : StringUtils::Split(element.className(), ' ')) {
+    const RcString className = element.className();
+    for (auto str : StringUtils::Split(className, ' ')) {
       if (str == name) {
         return true;
       }
@@ -822,7 +823,7 @@ struct ComplexSelector {
     // "To match a complex selector against an element, process it compound selector at a time, in
     // right-to-left order."
     for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
-      const auto& entry = *it;
+      const Entry& entry = *it;
 
       // "If any simple selectors in the rightmost compound selector does not match the element,
       // return failure."
@@ -855,11 +856,17 @@ struct ComplexSelector {
       if (entry.combinator == Combinator::Descendant) {
         elementsGenerator = std::bind(&traversal::parentsGenerator<T>, currentElement.value());
       } else if (entry.combinator == Combinator::Child) {
-        elementsGenerator =
-            std::bind(&traversal::singleElementGenerator<T>, currentElement->parentElement());
+        if (auto parent = currentElement->parentElement()) {
+          elementsGenerator = std::bind(&traversal::singleElementGenerator<T>, parent.value());
+        } else {
+          return SelectorMatchResult::None();
+        }
       } else if (entry.combinator == Combinator::NextSibling) {
-        elementsGenerator =
-            std::bind(&traversal::singleElementGenerator<T>, currentElement->previousSibling());
+        if (auto previous = currentElement->previousSibling()) {
+          elementsGenerator = std::bind(&traversal::singleElementGenerator<T>, previous.value());
+        } else {
+          return SelectorMatchResult::None();
+        }
       } else if (entry.combinator == Combinator::SubsequentSibling) {
         elementsGenerator =
             std::bind(&traversal::previousSiblingsGenerator<T>, currentElement.value());

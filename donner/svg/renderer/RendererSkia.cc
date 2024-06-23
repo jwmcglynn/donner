@@ -159,6 +159,7 @@ public:
     bool foundEndEntity = false;
 
     while (!view_.done() && !foundEndEntity) {
+      // When we find the end we do one more iteration of the loop and then exit.
       foundEndEntity = view_.currentEntity() == endEntity;
 
       const components::RenderingInstanceComponent& instance = view_.get();
@@ -846,7 +847,7 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 }
 
 void RendererSkia::draw(Registry& registry, Entity root) {
-  Impl impl(*this, RenderingInstanceView{registry.view<components::RenderingInstanceComponent>()});
+  Impl impl(*this, RenderingInstanceView{registry});
   impl.drawUntil(registry, entt::null);
 }
 

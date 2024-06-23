@@ -170,10 +170,8 @@ private:
  * @param element The element to yield. If this is `std::nullopt`, the generator will yield nothing.
  */
 template <ElementLike T>
-SelectorTraversalGenerator<T> singleElementGenerator(const std::optional<T> element) {
-  if (element.has_value()) {
-    co_yield element.value();
-  }
+SelectorTraversalGenerator<T> singleElementGenerator(const T& element) {
+  co_yield element;
 }
 
 /**

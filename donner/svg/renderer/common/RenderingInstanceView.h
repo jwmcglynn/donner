@@ -8,28 +8,29 @@ namespace donner::svg {
 
 struct RenderingInstanceView {
 public:
-  using ViewType =
-      entt::basic_view<entt::get_t<entt::storage_type_t<components::RenderingInstanceComponent>>,
-                       entt::exclude_t<>>;
-  using Iterator = ViewType::iterator;
+  using StorageType = entt::storage<components::RenderingInstanceComponent>;
+  using Iterator = StorageType::const_iterator;
 
-  explicit RenderingInstanceView(const ViewType& view)
-      : view_(view), current_(view.begin()), end_(view.end()) {}
+  explicit RenderingInstanceView(Registry& registry)
+      : storage_(registry.storage<components::RenderingInstanceComponent>()),
+        current_(storage_.begin()),
+        end_(storage_.end()) {}
 
   bool done() const { return current_ == end_; }
-  void advance() { ++current_; }
+  void advance() {
+    assert(!done());
+    ++current_;
+  }
 
   Entity currentEntity() const {
     assert(!done());
-    return *current_;
+    return entt::to_entity(storage_, *current_);
   }
 
-  const components::RenderingInstanceComponent& get() const {
-    return view_.get<components::RenderingInstanceComponent>(currentEntity());
-  }
+  const components::RenderingInstanceComponent& get() const { return *current_; }
 
 private:
-  const ViewType& view_;
+  StorageType& storage_;
   Iterator current_;
   Iterator end_;
 };

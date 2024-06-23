@@ -42,6 +42,9 @@ build --config=libc++ --config=c++20 --define absl=1
 # Binary size builds
 build:binary-size -c opt --copt=-Os --copt=-g --strip=never
 
+# For test coverage install the failure signal handler
+test --test_env="GTEST_INSTALL_FAILURE_SIGNAL_HANDLER=1"
+
 # Coverage builds
 coverage --config=coverage
 coverage --combined_report=lcov
@@ -65,6 +68,7 @@ test:coverage --nocache_test_results
 build:asan --linkopt -ldl
 build:asan --copt -fsanitize=address,undefined
 build:asan --linkopt -fsanitize=address,undefined
+build:asan --copt -fno-omit-frame-pointer --copt -fsanitize-address-use-after-scope
 build:asan --test_env=ASAN_SYMBOLIZER_PATH
 # These require libubsan, which is not linked properly by bazel, so disable.
 # See https://github.com/google/oss-fuzz/issues/713

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <initializer_list>
 #include <new>
@@ -32,7 +33,7 @@ public:
   /**
    * Constructs an empty SmallVector.
    */
-  SmallVector() : size_(0), capacity_(DefaultSize), isLong_(false) {}
+  SmallVector() noexcept : size_(0), capacity_(DefaultSize), isLong_(false) {}
 
   /**
    * Constructs a SmallVector with the elements from the initializer list.
@@ -97,8 +98,13 @@ public:
       data_.longData = other.data_.longData;
       other.data_.longData = nullptr;
     } else {
-      std::move(other.data_.shortData.begin(), other.data_.shortData.begin() + size_,
-                data_.shortData.begin());
+      for (size_t i = 0; i < size_; ++i) {
+        new (reinterpret_cast<T*>(&data_.shortData[i]))
+            T(std::move(*reinterpret_cast<T*>(&other.data_.shortData[i])));
+        if constexpr (!std::is_trivially_destructible_v<T>) {
+          reinterpret_cast<T*>(&other.data_.shortData[i])->~T();
+        }
+      }
     }
     other.size_ = 0;
     other.capacity_ = DefaultSize;
@@ -125,8 +131,13 @@ public:
         data_.longData = other.data_.longData;
         other.data_.longData = nullptr;
       } else {
-        std::move(other.data_.shortData.begin(), other.data_.shortData.begin() + size_,
-                  data_.shortData.begin());
+        for (size_t i = 0; i < size_; ++i) {
+          new (reinterpret_cast<T*>(&data_.shortData[i]))
+              T(std::move(*reinterpret_cast<T*>(&other.data_.shortData[i])));
+          if constexpr (!std::is_trivially_destructible_v<T>) {
+            reinterpret_cast<T*>(&other.data_.shortData[i])->~T();
+          }
+        }
       }
       other.size_ = 0;
       other.capacity_ = DefaultSize;
@@ -142,7 +153,7 @@ public:
    */
   void push_back(const T& value) {
     ensureCapacity(size_ + 1);
-    
+
     new (data() + size_) T(value);
     ++size_;
   }
@@ -150,19 +161,23 @@ public:
   /**
    * Removes the last element from the vector.
    */
-  void pop_back() {
+  void pop_back() noexcept {
     if (size_ > 0) {
       --size_;
-      data()[size_].~T();
+      if constexpr (!std::is_trivially_destructible_v<T>) {
+        data()[size_].~T();
+      }
     }
   }
 
   /**
    * Clears the contents of the vector.
    */
-  void clear() {
-    for (std::size_t i = 0; i < size_; ++i) {
-      data()[i].~T();
+  void clear() noexcept {
+    if constexpr (!std::is_trivially_destructible_v<T>) {
+      for (std::size_t i = 0; i < size_; ++i) {
+        data()[i].~T();
+      }
     }
     size_ = 0;
   }
@@ -170,31 +185,33 @@ public:
   /**
    * Gets the data stored in the vector.
    */
-  T* data() { return isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data()); }
+  T* data() noexcept {
+    return isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data());
+  }
 
   /**
    * Gets the data stored in the vector (const version).
    */
-  const T* data() const {
+  const T* data() const noexcept {
     return isLong_ ? data_.longData : reinterpret_cast<const T*>(data_.shortData.data());
   }
 
   /**
    * Returns the number of elements in the vector.
    */
-  std::size_t size() const { return size_; }
+  std::size_t size() const noexcept { return size_; }
 
   /**
    * Returns the capacity of the vector.
    */
-  std::size_t capacity() const { return capacity_; }
+  std::size_t capacity() const noexcept { return capacity_; }
 
   /**
    * Checks if the vector is empty.
    *
    * @return True if the vector is empty, false otherwise.
    */
-  bool empty() const { return size_ == 0; }
+  bool empty() const noexcept { return size_ == 0; }
 
   /**
    * Accesses the element at the specified index.
@@ -202,7 +219,8 @@ public:
    * @param index Index of the element to access.
    * @return Reference to the element at the specified index.
    */
-  T& operator[](std::size_t index) {
+  T& operator[](std::size_t index) noexcept(false) {
+    assert(index < size_ && "Index out of bounds");
     return data()[index];
   }
 
@@ -212,31 +230,30 @@ public:
    * @param index Index of the element to access.
    * @return Const reference to the element at the specified index.
    */
-  const T& operator[](std::size_t index) const {
+  const T& operator[](std::size_t index) const noexcept(false) {
+    assert(index < size_ && "Index out of bounds");
     return data()[index];
   }
 
   /**
    * Returns an iterator to the beginning of the vector.
    */
-  T* begin() { return data(); }
+  iterator begin() noexcept { return data(); }
 
   /**
    * Returns an iterator to the end of the vector.
    */
-  T* end() { return begin() + size_; }
+  iterator end() noexcept { return data() + size_; }
 
   /**
    * Returns a const iterator to the beginning of the vector.
    */
-  const T* begin() const {
-    return data();
-  }
+  const_iterator begin() const noexcept { return data(); }
 
   /**
    * Returns a const iterator to the end of the vector.
    */
-  const T* end() const { return begin() + size_; }
+  const_iterator end() const noexcept { return begin() + size_; }
 
 private:
   /**
@@ -252,10 +269,11 @@ private:
     std::size_t newCapacityAdjusted = std::max(capacity_ * 2, newCapacity);
     T* newData = reinterpret_cast<T*>(::operator new(newCapacityAdjusted * sizeof(T)));
 
-    if (size_ > 0) {
-      T* oldData = isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data());
-      for (std::size_t i = 0; i < size_; ++i) {
-        new (newData + i) T(std::move(oldData[i]));
+    T* oldData = isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data());
+    for (std::size_t i = 0; i < size_; ++i) {
+      new (newData + i) T(std::move(oldData[i]));
+
+      if constexpr (!std::is_trivially_destructible_v<T>) {
         oldData[i].~T();
       }
     }
