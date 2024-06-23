@@ -27,7 +27,7 @@ enum class ClipPathUnits {
    */
   ObjectBoundingBox,
   /**
-   * The default value for the `"clipPath"` attribute, which is `userSpaceOnUse`.
+   * The default value for the `"clipPathUnits"` attribute, which is `userSpaceOnUse`.
    */
   Default = UserSpaceOnUse,
 };
