@@ -45,21 +45,6 @@
 #endif
 
 /**
- * \def UTILS_NO_DISCARD
- *
- * Equivalent to the `[[nodiscard]]` attribute in C++17, indicating that a return value should not
- * be ignored.
- */
-
-#if __has_cpp_attribute(nodiscard)
-#define UTILS_NO_DISCARD [[nodiscard]]
-#elif __has_attribute(warn_unused_result) || (defined(__GNUC__) && !defined(__clang__))
-#define UTILS_NO_DISCARD __attribute__((warn_unused_result))
-#else
-#define UTILS_NO_DISCARD
-#endif
-
-/**
  * \def UTILS_UNREACHABLE()
  *
  * A hint to the compiler that the code following this macro is unreachable.

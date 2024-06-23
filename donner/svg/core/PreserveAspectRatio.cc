@@ -27,4 +27,34 @@ Transformd PreserveAspectRatio::computeTransform(const Boxd& size,
          Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
 }
 
+std::ostream& operator<<(std::ostream& os, const PreserveAspectRatio& value) {
+  return os << "PreserveAspectRatio {" << value.align << ", " << value.meetOrSlice << "}";
+}
+
+std::ostream& operator<<(std::ostream& os, PreserveAspectRatio::Align value) {
+  switch (value) {
+    case PreserveAspectRatio::Align::None: os << "Align::None"; break;
+    case PreserveAspectRatio::Align::XMinYMin: os << "Align::XMinYMin"; break;
+    case PreserveAspectRatio::Align::XMidYMin: os << "Align::XMidYMin"; break;
+    case PreserveAspectRatio::Align::XMaxYMin: os << "Align::XMaxYMin"; break;
+    case PreserveAspectRatio::Align::XMinYMid: os << "Align::XMinYMid"; break;
+    case PreserveAspectRatio::Align::XMidYMid: os << "Align::XMidYMid"; break;
+    case PreserveAspectRatio::Align::XMaxYMid: os << "Align::XMaxYMid"; break;
+    case PreserveAspectRatio::Align::XMinYMax: os << "Align::XMinYMax"; break;
+    case PreserveAspectRatio::Align::XMidYMax: os << "Align::XMidYMax"; break;
+    case PreserveAspectRatio::Align::XMaxYMax: os << "Align::XMaxYMax"; break;
+  }
+
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, PreserveAspectRatio::MeetOrSlice value) {
+  switch (value) {
+    case PreserveAspectRatio::MeetOrSlice::Meet: os << "MeetOrSlice::Meet"; break;
+    case PreserveAspectRatio::MeetOrSlice::Slice: os << "MeetOrSlice::Slice"; break;
+  }
+
+  return os;
+}
+
 }  // namespace donner::svg

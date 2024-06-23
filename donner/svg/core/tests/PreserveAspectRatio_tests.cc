@@ -10,6 +10,40 @@ using testing::Pointwise;
 
 namespace donner::svg {
 
+// Validates operator<< and testing::PrintToString.
+TEST(PreserveAspectRatio, AlignToString) {
+  EXPECT_EQ("Align::None", testing::PrintToString(PreserveAspectRatio::Align::None));
+  EXPECT_EQ("Align::XMinYMin", testing::PrintToString(PreserveAspectRatio::Align::XMinYMin));
+  EXPECT_EQ("Align::XMidYMin", testing::PrintToString(PreserveAspectRatio::Align::XMidYMin));
+  EXPECT_EQ("Align::XMaxYMin", testing::PrintToString(PreserveAspectRatio::Align::XMaxYMin));
+  EXPECT_EQ("Align::XMinYMid", testing::PrintToString(PreserveAspectRatio::Align::XMinYMid));
+  EXPECT_EQ("Align::XMidYMid", testing::PrintToString(PreserveAspectRatio::Align::XMidYMid));
+  EXPECT_EQ("Align::XMaxYMid", testing::PrintToString(PreserveAspectRatio::Align::XMaxYMid));
+  EXPECT_EQ("Align::XMinYMax", testing::PrintToString(PreserveAspectRatio::Align::XMinYMax));
+  EXPECT_EQ("Align::XMidYMax", testing::PrintToString(PreserveAspectRatio::Align::XMidYMax));
+  EXPECT_EQ("Align::XMaxYMax", testing::PrintToString(PreserveAspectRatio::Align::XMaxYMax));
+}
+TEST(PreserveAspectRatio, MeetOrSliceToString) {
+  EXPECT_EQ(testing::PrintToString(PreserveAspectRatio::MeetOrSlice::Meet), "MeetOrSlice::Meet");
+  EXPECT_EQ(testing::PrintToString(PreserveAspectRatio::MeetOrSlice::Slice), "MeetOrSlice::Slice");
+}
+
+TEST(PreserveAspectRatio, FullStructToString) {
+  PreserveAspectRatio par1{PreserveAspectRatio::Align::None,
+                           PreserveAspectRatio::MeetOrSlice::Meet};
+  EXPECT_EQ(testing::PrintToString(par1), "PreserveAspectRatio {Align::None, MeetOrSlice::Meet}");
+
+  PreserveAspectRatio par2{PreserveAspectRatio::Align::XMidYMid,
+                           PreserveAspectRatio::MeetOrSlice::Slice};
+  EXPECT_EQ(testing::PrintToString(par2),
+            "PreserveAspectRatio {Align::XMidYMid, MeetOrSlice::Slice}");
+
+  PreserveAspectRatio par3{PreserveAspectRatio::Align::XMaxYMax,
+                           PreserveAspectRatio::MeetOrSlice::Meet};
+  EXPECT_EQ(testing::PrintToString(par3),
+            "PreserveAspectRatio {Align::XMaxYMax, MeetOrSlice::Meet}");
+}
+
 TEST(PreserveAspectRatio, ComputeTransformEmptyViewbox) {
   EXPECT_TRUE(
       PreserveAspectRatio().computeTransform(Boxd({0, 0}, {100, 100}), std::nullopt).isIdentity());

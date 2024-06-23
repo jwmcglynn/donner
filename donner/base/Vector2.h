@@ -82,17 +82,17 @@ struct Vector2 {
         y(y) {}  // NOLINT: Suppress bugprone-easily-swappable-parameters, order is well-known.
 
   /// Returns the length of the vector.
-  UTILS_NO_DISCARD T length() const { return static_cast<T>(sqrt(double(x * x + y * y))); }
+  [[nodiscard]] T length() const { return static_cast<T>(sqrt(double(x * x + y * y))); }
 
   /// Returns the squared length of the vector.
-  UTILS_NO_DISCARD T lengthSquared() const { return x * x + y * y; }
+  [[nodiscard]] T lengthSquared() const { return x * x + y * y; }
 
   /**
    * Returns the distance between two vectors, assuming that each represents a point in space.
    *
    * @param other The other vector.
    */
-  UTILS_NO_DISCARD T distance(const Vector2<T>& other) const { return (other - *this).length(); }
+  [[nodiscard]] T distance(const Vector2<T>& other) const { return (other - *this).length(); }
 
   /**
    * Returns the squared distance between two vectors, assuming that each represents a point in
@@ -100,7 +100,7 @@ struct Vector2 {
    *
    * @param other The other vector.
    */
-  UTILS_NO_DISCARD T distanceSquared(const Vector2<T>& other) const {
+  [[nodiscard]] T distanceSquared(const Vector2<T>& other) const {
     return (other - *this).lengthSquared();
   }
 
@@ -109,14 +109,14 @@ struct Vector2 {
    *
    * @param other The other vector.
    */
-  UTILS_NO_DISCARD T dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
+  [[nodiscard]] T dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
 
   /**
    * Rotate this vector by \p radians
    *
    * @param radians Angle in radians.
    */
-  UTILS_NO_DISCARD Vector2<T> rotate(double radians) const {
+  [[nodiscard]] Vector2<T> rotate(double radians) const {
     return rotate(std::cos(radians), std::sin(radians));
   }
 
@@ -126,7 +126,7 @@ struct Vector2 {
    * @param cosResult The result of `cos(angle)`
    * @param sinResult The result of `sin(angle)`
    */
-  UTILS_NO_DISCARD Vector2<T> rotate(T cosResult, T sinResult) const {
+  [[nodiscard]] Vector2<T> rotate(T cosResult, T sinResult) const {
     return Vector2<T>(x * cosResult - y * sinResult, x * sinResult + y * cosResult);
   }
 
@@ -135,7 +135,7 @@ struct Vector2 {
    *
    * @return Angle in the range of [-π, π].
    */
-  UTILS_NO_DISCARD T angle() const { return static_cast<T>(atan2(double(y), double(x))); }
+  [[nodiscard]] T angle() const { return static_cast<T>(atan2(double(y), double(x))); }
 
   /**
    * Returns the angle between this vector and the provided vector, or zero if one of the vectors
@@ -144,7 +144,7 @@ struct Vector2 {
    * @param other Other vector.
    * @return Angle in the range of [0, π].
    */
-  UTILS_NO_DISCARD T angleWith(const Vector2<T>& other) const {
+  [[nodiscard]] T angleWith(const Vector2<T>& other) const {
     const T magProduct = length() * other.length();
     if (NearZero(magProduct)) {
       return T(0);
@@ -157,7 +157,7 @@ struct Vector2 {
   /**
    * Returns the normalized form of this vector.
    */
-  UTILS_NO_DISCARD Vector2<T> normalize() const {
+  [[nodiscard]] Vector2<T> normalize() const {
     const T len = length();
 
     if (NearZero(len)) {

@@ -12,33 +12,6 @@ using namespace base::parser;  // NOLINT: For tests
 using Align = PreserveAspectRatio::Align;
 using MeetOrSlice = PreserveAspectRatio::MeetOrSlice;
 
-static void PrintTo(Align value, std::ostream* os) {
-  switch (value) {
-    case Align::None: *os << "Align::None"; break;
-    case Align::XMinYMin: *os << "Align::XMinYMin"; break;
-    case Align::XMidYMin: *os << "Align::XMidYMin"; break;
-    case Align::XMaxYMin: *os << "Align::XMaxYMin"; break;
-    case Align::XMinYMid: *os << "Align::XMinYMid"; break;
-    case Align::XMidYMid: *os << "Align::XMidYMid"; break;
-    case Align::XMaxYMid: *os << "Align::XMaxYMid"; break;
-    case Align::XMinYMax: *os << "Align::XMinYMax"; break;
-    case Align::XMidYMax: *os << "Align::XMidYMax"; break;
-    case Align::XMaxYMax: *os << "Align::XMaxYMax"; break;
-  }
-}
-
-static void PrintTo(MeetOrSlice value, std::ostream* os) {
-  switch (value) {
-    case MeetOrSlice::Meet: *os << "MeetOrSlice::Meet"; break;
-    case MeetOrSlice::Slice: *os << "MeetOrSlice::Slice"; break;
-  }
-}
-
-static void PrintTo(const PreserveAspectRatio& value, std::ostream* os) {
-  *os << "PreserveAspectRatio {" << testing::PrintToString(value.align) << ", "
-      << testing::PrintToString(value.meetOrSlice) << "}";
-}
-
 TEST(PreserveAspectRatioParser, Empty) {
   EXPECT_THAT(PreserveAspectRatioParser::Parse(""),
               ParseErrorIs("Unexpected end of string instead of align"));
