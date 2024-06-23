@@ -1,9 +1,9 @@
 #pragma once
 /// @file
 
-#include "donner/base/Transform.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/core/Pattern.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/registry/Registry.h"
 
@@ -25,7 +25,8 @@ struct ComputedPatternComponent {
   PatternUnits patternUnits = PatternUnits::Default;
   PatternContentUnits patternContentUnits = PatternContentUnits::Default;
   Boxd tileRect = Boxd::CreateEmpty(Vector2d());
-  Transformd viewTransform;
+  PreserveAspectRatio preserveAspectRatio;
+  std::optional<Boxd> viewbox;
 
   void resolveAndInheritAttributes(EntityHandle handle, EntityHandle base = EntityHandle());
 };

@@ -517,16 +517,17 @@ public:
       rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
     }
 
-    patternTransform = computedPattern.viewTransform;
-    patternTransform *= Transformd::Translate(rect.topLeft);
-    patternTransform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
-
-    if (patternContentObjectBoundingBox) {
+    if (computedPattern.viewbox) {
+      contentRootTransform = computedPattern.preserveAspectRatio.computeTransform(
+          rect.toOrigin(), computedPattern.viewbox);
+    } else if (patternContentObjectBoundingBox) {
       contentRootTransform = Transformd::Scale(pathBounds.size());
     }
 
-    const SkRect tileRect = toSkia(
-        Boxd(Vector2d(), computedPattern.viewTransform.inversed().transformVector(rect.size())));
+    patternTransform = Transformd::Translate(rect.topLeft);
+    patternTransform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+
+    const SkRect skTileRect = toSkia(rect.toOrigin());
 
     SkCanvas* const savedCanvas = renderer_.currentCanvas_;
     const Transformd savedLayerBaseTransform = layerBaseTransform_;
@@ -536,7 +537,7 @@ public:
     }
 
     SkPictureRecorder recorder;
-    renderer_.currentCanvas_ = recorder.beginRecording(tileRect);
+    renderer_.currentCanvas_ = recorder.beginRecording(skTileRect);
     layerBaseTransform_ = contentRootTransform;
 
     // Render the subtree into the offscreen SkPictureRecorder.
@@ -556,7 +557,8 @@ public:
     SkPaint skPaint;
     skPaint.setAntiAlias(renderer_.antialias_);
     skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
-        SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix, &tileRect));
+        SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix,
+        &skTileRect));
     return skPaint;
   }
 

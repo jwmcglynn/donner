@@ -207,9 +207,8 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
   if (const auto& viewbox = handle.get<ViewboxComponent>(); viewbox.viewbox) {
     const auto& preserveAspectRatio =
         handle.get<PreserveAspectRatioComponent>().preserveAspectRatio;
-
-    computedPattern.viewTransform =
-        preserveAspectRatio.computeTransform(computedPattern.tileRect, viewbox.viewbox);
+    computedPattern.preserveAspectRatio = preserveAspectRatio;
+    computedPattern.viewbox = viewbox.viewbox.value();
   }
 }
 

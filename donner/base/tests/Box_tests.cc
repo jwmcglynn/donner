@@ -1,8 +1,8 @@
+#include "donner/base/Box.h"
+
 #include <gtest/gtest.h>
 
 #include <sstream>
-
-#include "donner/base/Box.h"
 
 namespace donner {
 
@@ -42,7 +42,7 @@ TEST(Box, AddPoint) {
   EXPECT_EQ(box, Boxd(Vector2d(-4.0, -5.0), Vector2d(2.0, 3.0)));
 }
 
-TEST(Box, AddPoint_FromEmpty) {
+TEST(Box, AddPointFromEmpty) {
   Boxd box = Boxd::CreateEmpty(Vector2d::Zero());
 
   // Zero is already in the box, this should no-op.
@@ -57,6 +57,40 @@ TEST(Box, AddBox) {
   Boxd box(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));
   box.addBox(Boxd(Vector2d(5.0, 6.0), Vector2d(7.0, 8.0)));
   EXPECT_EQ(box, Boxd(Vector2d(1.0, 2.0), Vector2d(7.0, 8.0)));
+}
+
+TEST(Box, ToOrigin) {
+  // Test with negative coordinates
+  EXPECT_EQ(Boxd(Vector2d(-3.0, -4.0), Vector2d(-1.0, -2.0)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d(2.0, 2.0)));
+
+  // Test with mixed positive and negative coordinates
+  EXPECT_EQ(Boxd(Vector2d(-2.0, 1.0), Vector2d(2.0, 5.0)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d(4.0, 4.0)));
+
+  // Test with zero-width box
+  EXPECT_EQ(Boxd(Vector2d(3.0, 3.0), Vector2d(3.0, 5.0)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d(0.0, 2.0)));
+
+  // Test with zero-height box
+  EXPECT_EQ(Boxd(Vector2d(1.0, 4.0), Vector2d(5.0, 4.0)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d(4.0, 0.0)));
+
+  // Test with point (zero-width and zero-height)
+  EXPECT_EQ(Boxd(Vector2d(2.0, 2.0), Vector2d(2.0, 2.0)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d::Zero()));
+
+  // Test with box already at origin
+  EXPECT_EQ(Boxd(Vector2d::Zero(), Vector2d(3.0, 3.0)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d(3.0, 3.0)));
+
+  // Test with very large coordinates
+  EXPECT_EQ(Boxd(Vector2d(1e6, 2e6), Vector2d(3e6, 5e6)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d(2e6, 3e6)));
+
+  // Test with very small coordinates
+  EXPECT_EQ(Boxd(Vector2d(1e-6, 2e-6), Vector2d(3e-6, 5e-6)).toOrigin(),
+            Boxd(Vector2d::Zero(), Vector2d(2e-6, 3e-6)));
 }
 
 TEST(Box, WidthHeight) {

@@ -259,14 +259,19 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
             {"e-pattern-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 250)},     // Anti-aliasing artifacts
+             Params::WithThreshold(kDefaultThreshold, 250)},  // Anti-aliasing artifacts
+            {"e-pattern-010.svg",
+             Params::WithThreshold(kDefaultThreshold, 150)},     // Anti-aliasing artifacts
             {"e-pattern-014.svg", Params::Skip()},               // Not impl: Full href attributes
             {"e-pattern-016.svg", Params::Skip()},               // Not impl: Full href attributes
             {"e-pattern-018.svg", Params::Skip()},               // Not impl: <text>
             {"e-pattern-019.svg", Params::WithThreshold(0.2f)},  // Anti-aliasing artifacts
             {"e-pattern-020.svg", Params::WithThreshold(0.6f, 300)},  // Anti-aliasing artifacts
+            {"e-pattern-021.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
+            {"e-pattern-022.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
+            {"e-pattern-023.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
             {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
-            {"e-pattern-029.svg", Params::Skip()},                // Not impl: viewBox
+            {"e-pattern-029.svg", Params::Skip()},                // Not impl: href
             {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.
         })),
     TestNameFromFilename);
