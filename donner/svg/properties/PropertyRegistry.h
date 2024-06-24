@@ -7,6 +7,7 @@
 #include "donner/css/Declaration.h"
 #include "donner/css/Stylesheet.h"
 #include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/core/ClipRule.h" // Included for ClipRule enum
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"

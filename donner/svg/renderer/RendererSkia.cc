@@ -244,7 +244,7 @@ public:
             }
           });
 
-          skClipPath.setFillType(SkPathFillType::kWinding);
+          skClipPath.setFillType(ref.clipRule == core::ClipRule::NonZero ? SkPathFillType::kWinding : SkPathFillType::kEvenOdd);
 
           renderer_.currentCanvas_->clipPath(skClipPath, SkClipOp::kIntersect, true);
         } else {
@@ -796,7 +796,7 @@ void RendererSkia::draw(SVGDocument& document) {
   rootCanvas_ = &canvas;
   currentCanvas_ = &canvas;
 
-  draw(registry, rootEntity);
+  draw(registry, root);
 
   rootCanvas_ = currentCanvas_ = nullptr;
 }
@@ -821,7 +821,7 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   rootCanvas_ = &canvas;
   currentCanvas_ = &canvas;
 
-  draw(registry, rootEntity);
+  draw(registry, root);
 
   rootCanvas_ = currentCanvas_ = nullptr;
 
@@ -865,7 +865,7 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   rootCanvas_ = recorder.beginRecording(toSkia(Boxd::WithSize(renderingSize)));
   currentCanvas_ = rootCanvas_;
 
-  draw(registry, rootEntity);
+  draw(registry, root);
 
   rootCanvas_ = currentCanvas_ = nullptr;
 

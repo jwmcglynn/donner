@@ -7,6 +7,7 @@
 #include "donner/base/Transform.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipPathUnits.h"
+#include "donner/svg/core/ClipRule.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/registry/Registry.h"
 
@@ -26,6 +27,7 @@ struct PaintResolvedReference {
 struct ResolvedClipPath {
   ResolvedReference reference;
   ClipPathUnits units;
+  ClipRule clipRule;
 
   bool valid() const { return reference.valid(); }
 };
