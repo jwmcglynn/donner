@@ -88,6 +88,10 @@ public:
   Property<FilterEffect> filter{
       "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
 
+  // Adding the clip-rule property declaration
+  Property<ClipRule, PropertyCascade::Inherit> clipRule{
+      "clip-rule", []() -> std::optional<ClipRule> { return ClipRule::NonZero; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
 
@@ -112,7 +116,7 @@ public:
     return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
                                  stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
                                  strokeMiterlimit, strokeDasharray, strokeDashoffset, clipPath,
-                                 filter);
+                                 filter, clipRule);
   }
 
   /**

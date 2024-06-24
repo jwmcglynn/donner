@@ -282,7 +282,7 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
         trySkipToken.template operator()<css::Token::Whitespace>();
       } else {
         parser::ParseError err;
-        err.reason = "Unexpected token in dasharray";
+        err.reason = "Unexpected tokens after dasharray value";
         err.location = !components.empty() ? components.front().sourceOffset()
                                            : parser::FileOffset::EndOfString();
         return err;
@@ -570,7 +570,39 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 17> kPro
            },
            &registry.filter);
      }},  //
+    // Adding the clip-rule property parsing function
+    {"clip-rule",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseClipRule(params.components());
+           },
+           &registry.clipRule);
+     }},
 };
+
+// Adding the ParseClipRule function to parse the clip-rule property
+parser::ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("nonzero")) {
+        return ClipRule::NonZero;
+      } else if (value.equalsLowercase("evenodd")) {
+        return ClipRule::EvenOdd;
+      }
+    }
+  }
+
+  parser::ParseError err;
+  err.reason = "Invalid clip-rule value";
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  return err;
+}
 
 }  // namespace
 
