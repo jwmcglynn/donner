@@ -68,10 +68,10 @@ INSTANTIATE_TEST_SUITE_P(
     Display, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("a-display",  //
                                 {
-                                    {"a-display-004.svg", Params::Skip()},  // Not impl: <clipPath>
                                     {"a-display-005.svg", Params::Skip()},  // Not impl: <tspan>
                                     {"a-display-006.svg", Params::Skip()},  // Not impl: <tref>
-                                    {"a-display-008.svg", Params::Skip()},  // Not impl: <clipPath>
+                                    {"a-display-008.svg",
+                                     Params::Skip()},  // Not impl: <clipPath> and `display: none`
                                     {"a-display-009.svg", Params::Skip()},  // Not impl: <tspan>
                                 })),
     TestNameFromFilename);
@@ -112,7 +112,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-opacity",
         {
-            {"a-opacity-002.svg", Params::Skip()},  // Not impl: <clipPath>
+            {"a-opacity-002.svg", Params::Skip()},  // Not impl: <clipPath> and `display: none`
             {"a-opacity-005.svg",
              Params::Skip()},  // Changed in css-color-4 to allow percentage in <alpha-value>, see
                                // https://www.w3.org/TR/css-color/#transparency
@@ -139,11 +139,12 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
-            {"a-stroke-007.svg", Params::Skip()},            // Not impl: <text>
-            {"a-stroke-008.svg", Params::Skip()},            // Not impl: <text>
-            {"a-stroke-009.svg", Params::Skip()},            // Not impl: <pattern>, <text>
-            {"a-stroke-012.svg", Params::Skip()},            // Not impl: <pattern>
-            {"a-stroke-013.svg", Params::Skip()},            // Not impl: <pattern>, "gradientUnits"
+            {"a-stroke-007.svg", Params::Skip()},  // Not impl: <text>
+            {"a-stroke-008.svg", Params::Skip()},  // Not impl: <text>
+            {"a-stroke-009.svg", Params::Skip()},  // Not impl: <pattern>, <text>
+            {"a-stroke-012.svg",
+             Params::Skip()},  // Not impl: Not impl: <pattern> / stroke interaction
+            {"a-stroke-013.svg", Params::Skip()},  // Not impl: <pattern>, "null shape" and fallback
             {"a-stroke-dasharray-005.svg", Params::Skip()},  // Not impl: "font-size"? "em" units
                                                              // (font-size="20" not impl)
             {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
@@ -154,9 +155,10 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-linejoin-004.svg",
              Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
-            {"a-stroke-opacity-004.svg", Params::Skip()},   // Not impl: <pattern>
-            {"a-stroke-opacity-006.svg", Params::Skip()},   // Not impl: <text>
-            {"a-stroke-width-004.svg", Params::Skip()},     // UB: Nothing should be rendered
+            {"a-stroke-opacity-004.svg",
+             Params::Skip()},  // Not impl: <pattern> / stroke interaction
+            {"a-stroke-opacity-006.svg", Params::Skip()},  // Not impl: <text>
+            {"a-stroke-width-004.svg", Params::Skip()},    // UB: Nothing should be rendered
         })),
     TestNameFromFilename);
 
@@ -185,17 +187,18 @@ INSTANTIATE_TEST_SUITE_P(
 
 // TODO(text): a-unicode
 
-INSTANTIATE_TEST_SUITE_P(Visibility, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix(
-                             "a-visibility",  //
-                             {
-                                 {"a-visibility-003.svg", Params::Skip()},  // Not impl: <tspan>
-                                 {"a-visibility-004.svg", Params::Skip()},  // Not impl: <tspan>
-                                 {"a-visibility-005.svg", Params::Skip()},  // Not impl: <clipPath>
-                                 {"a-visibility-006.svg", Params::Skip()},  // Not impl: <clipPath>
-                                 {"a-visibility-007.svg", Params::Skip()},  // Not impl: <clipPath>
-                             })),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Visibility, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "a-visibility",  //
+        {
+            {"a-visibility-003.svg", Params::Skip()},  // Not impl: <tspan>
+            {"a-visibility-004.svg", Params::Skip()},  // Not impl: <tspan>
+            {"a-visibility-005.svg", Params::Skip()},  // Not impl: <clipPath> interaction
+            {"a-visibility-006.svg", Params::Skip()},  // Not impl: <clipPath> interaction
+            {"a-visibility-007.svg", Params::Skip()},  // Not impl: <clipPath> interaction
+        })),
+    TestNameFromFilename);
 
 // TODO(text): a-word-spacing
 // TODO(text): a-writing-mode
