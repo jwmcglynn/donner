@@ -9,6 +9,7 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
+#include "include/pathops/SkPathOps.h"
 //
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
@@ -236,17 +237,30 @@ public:
           renderer_.currentCanvas_->save();
           const SkMatrix skClipPathTransform = toSkiaMatrix(clipPathTransform);
 
+          SkPath fullPath;
+
           // Iterate over children and add any paths to the clip.
-          SkPath skClipPath;
+          // TODO: Allow specifying the clip-rule per-path by reading the presentation attribute
+          // from the path. Move to a Computed component pre-calculation?
           components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
             if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
-              skClipPath.addPath(toSkia(clipPathData->spline), skClipPathTransform);
+              SkPath path = toSkia(clipPathData->spline);
+              path.transform(skClipPathTransform);
+
+              if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
+                const auto& style = computedStyle->properties.value();
+                const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
+
+                path.setFillType(clipRule == ClipRule::NonZero ? SkPathFillType::kWinding
+                                                               : SkPathFillType::kEvenOdd);
+              }
+
+              Op(fullPath, path, kUnion_SkPathOp, &fullPath);
             }
           });
 
-          skClipPath.setFillType(ref.clipRule == core::ClipRule::NonZero ? SkPathFillType::kWinding : SkPathFillType::kEvenOdd);
+          renderer_.currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
 
-          renderer_.currentCanvas_->clipPath(skClipPath, SkClipOp::kIntersect, true);
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
         }
@@ -796,7 +810,7 @@ void RendererSkia::draw(SVGDocument& document) {
   rootCanvas_ = &canvas;
   currentCanvas_ = &canvas;
 
-  draw(registry, root);
+  draw(registry, rootEntity);
 
   rootCanvas_ = currentCanvas_ = nullptr;
 }
@@ -821,7 +835,7 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   rootCanvas_ = &canvas;
   currentCanvas_ = &canvas;
 
-  draw(registry, root);
+  draw(registry, rootEntity);
 
   rootCanvas_ = currentCanvas_ = nullptr;
 
@@ -865,7 +879,7 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   rootCanvas_ = recorder.beginRecording(toSkia(Boxd::WithSize(renderingSize)));
   currentCanvas_ = rootCanvas_;
 
-  draw(registry, root);
+  draw(registry, rootEntity);
 
   rootCanvas_ = currentCanvas_ = nullptr;
 

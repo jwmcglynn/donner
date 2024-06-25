@@ -210,6 +210,27 @@ parser::ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue>
   return err;
 }
 
+parser::ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("nonzero")) {
+        return ClipRule::NonZero;
+      } else if (value.equalsLowercase("evenodd")) {
+        return ClipRule::EvenOdd;
+      }
+    }
+  }
+
+  parser::ParseError err;
+  err.reason = "Invalid clip-rule value";
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  return err;
+}
+
 parser::ParseResult<StrokeLinecap> ParseStrokeLinecap(
     std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
@@ -404,7 +425,7 @@ static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAtt
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 17> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 18> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        auto maybeError = Parse(
@@ -581,28 +602,6 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 17> kPro
            &registry.clipRule);
      }},
 };
-
-// Adding the ParseClipRule function to parse the clip-rule property
-parser::ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-
-      if (value.equalsLowercase("nonzero")) {
-        return ClipRule::NonZero;
-      } else if (value.equalsLowercase("evenodd")) {
-        return ClipRule::EvenOdd;
-      }
-    }
-  }
-
-  parser::ParseError err;
-  err.reason = "Invalid clip-rule value";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
-  return err;
-}
 
 }  // namespace
 

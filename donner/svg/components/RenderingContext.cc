@@ -147,8 +147,6 @@ public:
       if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.getRequired());
           resolved.valid()) {
         instance.clipPath = resolved;
-        // Query the clip rule value and store in ResolvedClipPath
-        instance.clipPath->clipRule = properties.clipRule.get().value_or(core::ClipRule::NonZero);
       }
     }
 
