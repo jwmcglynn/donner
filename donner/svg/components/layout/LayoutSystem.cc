@@ -94,14 +94,6 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
   }
 }
 
-Boxd ApplyUnparsedPropertiesAndGetBounds(
-    EntityHandle handle, SizedElementProperties& properties,
-    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, Boxd inheritedViewbox,
-    FontMetrics fontMetrics, std::vector<parser::ParseError>* outWarnings) {
-  ApplyUnparsedProperties(properties, unparsedProperties, outWarnings);
-  return LayoutSystem().calculateBounds(handle, properties, inheritedViewbox, fontMetrics);
-}
-
 parser::ParseResult<bool> ParseSizedElementPresentationAttribute(
     EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
   const auto it = kProperties.find(frozen::string(name));
@@ -164,49 +156,6 @@ Vector2i LayoutSystem::calculateDocumentSize(EntityHandle entity) const {
   return RoundSize(calculateRawDocumentSize(entity));
 }
 
-Boxd LayoutSystem::calculateBounds(EntityHandle entity, const SizedElementProperties& properties,
-                                   const Boxd& inheritedViewbox, FontMetrics fontMetrics) {
-  Registry& registry = *entity.registry();
-
-  Vector2d size = inheritedViewbox.size();
-  if (const auto* viewbox = entity.try_get<ViewboxComponent>()) {
-    if (!properties.width.hasValue() && !properties.height.hasValue() && viewbox->viewbox) {
-      size = viewbox->viewbox->size();
-    }
-
-    const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
-    if (ctx.rootEntity == entity.entity()) {
-      // This is the root <svg> element.
-      const Vector2i documentSize =
-          calculateViewportScaledDocumentSize(entity, InvalidSizeBehavior::ZeroSize);
-      return Boxd(Vector2d(), documentSize);
-    }
-  }
-
-  const ComputedShadowTreeComponent* shadowTree = entity.try_get<ComputedShadowTreeComponent>();
-
-  // From https://www.w3.org/TR/SVG/struct.html#UseElement:
-  // > The width and height attributes only have an effect if the referenced element defines a
-  // > viewport (i.e., if it is a ‘svg’ or ‘symbol’)
-  if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
-                      entity.registry()->all_of<ViewboxComponent>(shadowTree->mainLightRoot()))) {
-    if (properties.width.hasValue()) {
-      size.x = properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics,
-                                                       Lengthd::Extent::X);
-    }
-
-    if (properties.height.hasValue()) {
-      size.y = properties.height.getRequired().toPixels(inheritedViewbox, fontMetrics,
-                                                        Lengthd::Extent::Y);
-    }
-  }
-
-  const Vector2d origin(
-      properties.x.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::X),
-      properties.y.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::Y));
-  return Boxd(origin, origin + size);
-}
-
 Vector2i LayoutSystem::calculateViewportScaledDocumentSize(EntityHandle entity,
                                                            InvalidSizeBehavior behavior) const {
   const Vector2d documentSize = calculateDocumentSize(entity);
@@ -267,8 +216,10 @@ Boxd LayoutSystem::computeSizeProperties(
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Boxd& viewbox,
     FontMetrics fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   SizedElementProperties mutableSizeProperties = sizeProperties;
-  return ApplyUnparsedPropertiesAndGetBounds(entity, mutableSizeProperties, unparsedProperties,
-                                             viewbox, fontMetrics, outWarnings);
+
+  ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, outWarnings);
+  return LayoutSystem().calculateSizedElementBounds(entity, mutableSizeProperties, viewbox,
+                                                    fontMetrics);
 }
 
 // Creates a ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -290,6 +241,51 @@ std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
   }
 
   return std::nullopt;
+}
+
+Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
+                                               const SizedElementProperties& properties,
+                                               const Boxd& inheritedViewbox,
+                                               FontMetrics fontMetrics) {
+  Registry& registry = *entity.registry();
+
+  Vector2d size = inheritedViewbox.size();
+  if (const auto* viewbox = entity.try_get<ViewboxComponent>()) {
+    if (!properties.width.hasValue() && !properties.height.hasValue() && viewbox->viewbox) {
+      size = viewbox->viewbox->size();
+    }
+
+    const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
+    if (ctx.rootEntity == entity.entity()) {
+      // This is the root <svg> element.
+      const Vector2i documentSize =
+          calculateViewportScaledDocumentSize(entity, InvalidSizeBehavior::ZeroSize);
+      return Boxd(Vector2d(), documentSize);
+    }
+  }
+
+  const ComputedShadowTreeComponent* shadowTree = entity.try_get<ComputedShadowTreeComponent>();
+
+  // From https://www.w3.org/TR/SVG/struct.html#UseElement:
+  // > The width and height attributes only have an effect if the referenced element defines a
+  // > viewport (i.e., if it is a ‘svg’ or ‘symbol’)
+  if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
+                      entity.registry()->all_of<ViewboxComponent>(shadowTree->mainLightRoot()))) {
+    if (properties.width.hasValue()) {
+      size.x = properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics,
+                                                       Lengthd::Extent::X);
+    }
+
+    if (properties.height.hasValue()) {
+      size.y = properties.height.getRequired().toPixels(inheritedViewbox, fontMetrics,
+                                                        Lengthd::Extent::Y);
+    }
+  }
+
+  const Vector2d origin(
+      properties.x.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::X),
+      properties.y.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::Y));
+  return Boxd(origin, origin + size);
 }
 
 Vector2d LayoutSystem::calculateRawDocumentSize(EntityHandle entity) const {

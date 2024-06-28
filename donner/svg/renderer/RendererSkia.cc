@@ -222,7 +222,8 @@ public:
           if (ref.units == ClipPathUnits::ObjectBoundingBox) {
             if (const auto* path =
                     instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-              // TODO: Extend this to get the element bounds for all child elements.
+              // TODO: Extend this to get the element bounds for all child elements by adding an API
+              // to LayoutSystem.
               const Boxd bounds = path->spline.bounds();
               clipPathTransform =
                   Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
@@ -240,8 +241,7 @@ public:
           SkPath fullPath;
 
           // Iterate over children and add any paths to the clip.
-          // TODO: Allow specifying the clip-rule per-path by reading the presentation attribute
-          // from the path. Move to a Computed component pre-calculation?
+          // TODO: Move path/clip-rule aggregation and to a Computed component pre-calculation?
           components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
             if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
               SkPath path = toSkia(clipPathData->spline);

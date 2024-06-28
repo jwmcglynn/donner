@@ -33,9 +33,6 @@ public:
   std::optional<float> intrinsicAspectRatio(EntityHandle entity) const;
   Vector2i calculateDocumentSize(EntityHandle entity) const;
 
-  Boxd calculateBounds(EntityHandle entity, const SizedElementProperties& properties,
-                       const Boxd& inheritedViewbox, FontMetrics fontMetrics);
-
   Vector2i calculateViewportScaledDocumentSize(EntityHandle entity,
                                                InvalidSizeBehavior behavior) const;
 
@@ -103,6 +100,18 @@ public:
   /// @}
 
 private:
+  /**
+   * Calculate the size of an element such as \ref xml_svg and \ref xml_use, which defines x, y,
+   * width, height, and an optional viewport.
+   *
+   * @param entity The entity to calculate the size for.
+   * @param properties The size properties of the element.
+   * @param inheritedViewbox The viewbox of the parent element.
+   * @param fontMetrics Font metrics, used to calculate the size of text elements.
+   */
+  Boxd calculateSizedElementBounds(EntityHandle entity, const SizedElementProperties& properties,
+                                   const Boxd& inheritedViewbox, FontMetrics fontMetrics);
+
   Vector2d calculateRawDocumentSize(EntityHandle handle) const;
 };
 
