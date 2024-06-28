@@ -10,6 +10,7 @@ cc_library(
     ],
     hdrs = [
         "ClipPathUnits.h",
+        "ClipRule.h",
         "CssTransform.h",
         "Gradient.h",
         "PathSpline.h",

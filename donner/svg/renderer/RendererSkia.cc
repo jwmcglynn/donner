@@ -9,6 +9,7 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
+#include "include/pathops/SkPathOps.h"
 //
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
@@ -221,7 +222,8 @@ public:
           if (ref.units == ClipPathUnits::ObjectBoundingBox) {
             if (const auto* path =
                     instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-              // TODO: Extend this to get the element bounds for all child elements.
+              // TODO: Extend this to get the element bounds for all child elements by adding an API
+              // to LayoutSystem.
               const Boxd bounds = path->spline.bounds();
               clipPathTransform =
                   Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
@@ -236,17 +238,29 @@ public:
           renderer_.currentCanvas_->save();
           const SkMatrix skClipPathTransform = toSkiaMatrix(clipPathTransform);
 
+          SkPath fullPath;
+
           // Iterate over children and add any paths to the clip.
-          SkPath skClipPath;
+          // TODO: Move path/clip-rule aggregation and to a Computed component pre-calculation?
           components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
             if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
-              skClipPath.addPath(toSkia(clipPathData->spline), skClipPathTransform);
+              SkPath path = toSkia(clipPathData->spline);
+              path.transform(skClipPathTransform);
+
+              if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
+                const auto& style = computedStyle->properties.value();
+                const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
+
+                path.setFillType(clipRule == ClipRule::NonZero ? SkPathFillType::kWinding
+                                                               : SkPathFillType::kEvenOdd);
+              }
+
+              Op(fullPath, path, kUnion_SkPathOp, &fullPath);
             }
           });
 
-          skClipPath.setFillType(SkPathFillType::kWinding);
+          renderer_.currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
 
-          renderer_.currentCanvas_->clipPath(skClipPath, SkClipOp::kIntersect, true);
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
         }
