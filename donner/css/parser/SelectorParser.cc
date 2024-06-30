@@ -88,6 +88,15 @@ using SubclassSelector =
     std::variant<IdSelector, ClassSelector, PseudoClassSelector, AttributeSelector>;
 
 /**
+ * An+B microsyntax value with an optional selector, for pseudo-class selectors such as
+ *`:nth-child(An+B of S)`.
+ */
+struct AnbValueAndSelector {
+  AnbValue value;                      //!< The An+B value.
+  std::unique_ptr<Selector> selector;  //!< The optional selector.
+};
+
+/**
  * Implementation for \ref SelectorParser.
  *
  * Usage:
@@ -117,16 +126,54 @@ public:
   }
 
   /**
-   * Parse a An+B microsyntax type suffix, in form of "of S", where S is a type selector.
+   * Parse a An+B microsyntax type suffix, in form of "of S", where S is a selector.
    */
-  ParseResult<TypeSelector> parseMicrosyntaxTypeSuffix() {
-    auto maybeType = handleMicrosyntaxTypeSuffix();
-    if (!maybeType) {
+  ParseResult<Selector> parseMicrosyntaxTypeSuffix() {
+    auto maybeSelector = handleMicrosyntaxTypeSuffix();
+    if (!maybeSelector) {
       assert(error_.has_value());
       return std::move(error_.value());
     }
 
-    return std::move(maybeType.value());
+    return std::move(maybeSelector.value());
+  }
+
+  /**
+   * Parse a forgiving selector list, a list of selectors separated by commas
+   * with invalid selectors removed.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#parse-as-a-forgiving-selector-list
+   */
+  Selector parseForgivingSelectorList() {
+    bool first = true;
+    Selector result;
+
+    skipWhitespace();
+
+    while (!isEOF()) {
+      if (first) {
+        first = false;
+      } else {
+        expectAndConsumeToken<Token::Comma>();  // Complex selectors should only
+                                                // end when there is a comma or
+                                                // EOF.
+      }
+
+      skipWhitespace();
+
+      if (auto complexSelector = handleComplexSelector()) {
+        if (complexSelector->isValid()) {
+          result.entries.emplace_back(std::move(*complexSelector));
+        }
+      } else {
+        // Skip tokens until the next comma.
+        while (!isEOF() && !nextTokenIs<Token::Comma>()) {
+          advance();
+        }
+      }
+    }
+
+    return result;
   }
 
 private:
@@ -163,7 +210,7 @@ private:
     return result;
   }
 
-  std::optional<TypeSelector> handleMicrosyntaxTypeSuffix() {
+  std::optional<Selector> handleMicrosyntaxTypeSuffix() {
     skipWhitespace();
 
     if (const Token* token = next<Token>()) {
@@ -177,15 +224,16 @@ private:
 
     skipWhitespace();
 
-    auto typeSelector = handleTypeSelector();
-    if (!typeSelector) {
+    Selector selector = parseForgivingSelectorList();
+    if (selector.entries.empty()) {
+      setError("Failed to parse selector after 'of' keyword");
       return std::nullopt;
     }
 
     skipWhitespace();
 
     if (isEOF()) {
-      return std::move(typeSelector.value());
+      return std::move(selector);
     } else {
       setError("Expected end of microsyntax type suffix");
       return std::nullopt;
@@ -427,17 +475,18 @@ private:
     const auto& anbResult = anbParseResult.result();
 
     if (anbResult.remainingComponents.empty()) {
-      return AnbValueAndSelector{anbResult.value, std::nullopt};
+      return AnbValueAndSelector{anbResult.value, nullptr};
     } else if (anbSupportedWithOptionalSelector) {
       SelectorParserImpl parser(anbResult.remainingComponents);
 
-      ParseResult<TypeSelector> typeResult = parser.parseMicrosyntaxTypeSuffix();
-      if (typeResult.hasError()) {
+      ParseResult<Selector> selectorResult = parser.parseMicrosyntaxTypeSuffix();
+      if (selectorResult.hasError()) {
         // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
         return std::nullopt;
       }
 
-      return AnbValueAndSelector{anbResult.value, std::move(typeResult.result())};
+      return AnbValueAndSelector{anbResult.value,
+                                 std::make_unique<Selector>(std::move(selectorResult.result()))};
     } else {
       // Extra components, but parsing them is not supported. Discard the An+B value.
       // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
@@ -445,6 +494,31 @@ private:
     }
 
     UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
+  }
+
+  std::unique_ptr<Selector> parseSelectorIfNeeded(const PseudoClassSelector& pseudoClass) {
+    if (!pseudoClass.argsIfFunction) {
+      return nullptr;
+    }
+
+    const bool forgivingSelector =
+        pseudoClass.ident.equalsLowercase("not") || pseudoClass.ident.equalsLowercase("has");
+    const bool regularSelector =
+        pseudoClass.ident.equalsLowercase("is") || pseudoClass.ident.equalsLowercase("where");
+    if (!forgivingSelector && !regularSelector) {
+      return nullptr;
+    }
+
+    // Parse the arguments for known pseudo-classes
+    SelectorParserImpl parser(pseudoClass.argsIfFunction.value());
+    ParseResult<Selector> selectorResult =
+        forgivingSelector ? parser.parseForgivingSelectorList() : parser.parse();
+    if (selectorResult.hasError()) {
+      // TODO: Propagate a warning here, ignore for now and don't set the Selector.
+      return nullptr;
+    }
+
+    return std::make_unique<Selector>(std::move(selectorResult.result()));
   }
 
   std::optional<SubclassSelector> handleSubclassSelector() {
@@ -464,7 +538,12 @@ private:
       } else if (nextTokenIs<Token::Colon>()) {
         if (auto maybePseudoClass = handlePseudoClassSelector()) {
           PseudoClassSelector& pseudoClass = maybePseudoClass.value();
-          pseudoClass.anbValueAndSelectorIfAnb = parseAnbArgumentsIfNeeded(pseudoClass);
+          if (auto anbAndSelector = parseAnbArgumentsIfNeeded(pseudoClass)) {
+            pseudoClass.anbValueIfAnb = anbAndSelector->value;
+            pseudoClass.selector = std::move(anbAndSelector->selector);
+          } else if (auto selector = parseSelectorIfNeeded(pseudoClass)) {
+            pseudoClass.selector = std::move(selector);
+          }
           return pseudoClass;
         } else {
           // Error is set by handlePseudoClassSelector.
@@ -840,6 +919,11 @@ ParseResult<Selector> SelectorParser::Parse(std::string_view str) {
     err.location = err.location.resolveOffset(str);
     return std::move(err);
   });
+}
+
+Selector SelectorParser::ParseForgivingSelectorList(std::span<const ComponentValue> components) {
+  SelectorParserImpl parser(components);
+  return parser.parseForgivingSelectorList();
 }
 
 }  // namespace donner::css::parser

@@ -17,6 +17,9 @@
 
 namespace donner::css {
 
+// Forward declarations.
+struct Selector;
+
 /**
  * Returned by \ref Selector::matches to indicate whether the selector matched, and if so, the
  * specificity of the match.
@@ -104,6 +107,25 @@ struct PseudoElementSelector {
    */
   explicit PseudoElementSelector(RcString ident) : ident(std::move(ident)) {}
 
+  /// Destructor.
+  ~PseudoElementSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  PseudoElementSelector(PseudoElementSelector&&) = default;
+  PseudoElementSelector& operator=(PseudoElementSelector&&) = default;
+  PseudoElementSelector(const PseudoElementSelector&) = default;
+  PseudoElementSelector& operator=(const PseudoElementSelector&) = default;
+
+  /**
+   * Returns true if this selector is valid and supported by this implementation.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#invalid
+   */
+  bool isValid() const {
+    // TODO
+    return false;
+  }
+
   /**
    * Returns true if the provided element matches this selector.
    *
@@ -174,8 +196,23 @@ struct TypeSelector {
   TypeSelector(const svg::XMLQualifiedNameRef& matcher)
       : matcher(RcString(matcher.namespacePrefix), RcString(matcher.name)) {}
 
+  /// Destructor.
+  ~TypeSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  TypeSelector(TypeSelector&&) = default;
+  TypeSelector& operator=(TypeSelector&&) = default;
+  TypeSelector(const TypeSelector&) = default;
+  TypeSelector& operator=(const TypeSelector&) = default;
+
   /// Returns true if this is a universal selector.
   bool isUniversal() const { return matcher.name == "*"; }
+
+  /// Returns true if this is a valid selector.
+  bool isValid() const {
+    // TODO: Error out if the namespace has not been registered.
+    return true;
+  }
 
   /**
    * Returns true if the provided element matches this selector.
@@ -224,6 +261,18 @@ struct IdSelector {
    */
   explicit IdSelector(RcString name) : name(std::move(name)) {}
 
+  /// Destructor.
+  ~IdSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  IdSelector(IdSelector&&) = default;
+  IdSelector& operator=(IdSelector&&) = default;
+  IdSelector(const IdSelector&) = default;
+  IdSelector& operator=(const IdSelector&) = default;
+
+  /// Returns true if this is a valid selector.
+  bool isValid() const { return true; }
+
   /**
    * Returns true if the provided element matches this selector, based on a case-sensitive match
    * of the provided id against the element's `id` attribute.
@@ -258,6 +307,18 @@ struct ClassSelector {
    */
   explicit ClassSelector(const RcString& name) : name(std::move(name)) {}
 
+  /// Destructor.
+  ~ClassSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  ClassSelector(ClassSelector&&) = default;
+  ClassSelector& operator=(ClassSelector&&) = default;
+  ClassSelector(const ClassSelector&) = default;
+  ClassSelector& operator=(const ClassSelector&) = default;
+
+  /// Returns true if this is a valid selector.
+  bool isValid() const { return true; }
+
   /**
    * Returns true if the provided element matches this selector, based on if the element's `class`
    * attribute's whitespace-separated list of classes exactly contains this selector's name.
@@ -290,19 +351,42 @@ struct ClassSelector {
 };
 
 /**
- * An+B microsyntax value with an optional selector, for pseudo-class selectors such as
- *`:nth-child(An+B of S)`.
- */
-struct AnbValueAndSelector {
-  AnbValue value;                        //!< The An+B value.
-  std::optional<TypeSelector> selector;  //!< The optional selector.
-};
-
-/**
- * Selectors which start with one colon, e.g. `:hover`, are called pseudo-classes, and they
+ * Selectors which start with one colon, e.g. `:nth-child()`, are called pseudo-classes, and they
  * represent additional state information not directly present in the document tree.
  *
  * Each pseudo-class selector has a unique behavior.
+ *
+ * Selectors supported:
+ * - `:nth-child(An+B [of S])` - Selects the element if its index within its parent is `An+B`
+ *   (1-based) when counting from the first element that would be selected by `S`. If `S` is
+ omitted,
+ *   the selector matches only elements that are direct children of their parent.
+ * - `:nth-last-child(An+B [of S])` - Selects the element if its index within its parent is `An+B`
+ *   (1-based) when counting from the last element that would be selected by `S`. If `S` is omitted,
+ *   the selector matches only elements that are direct children of their parent.
+ * - `:nth-of-type(An+B)` - Selects the element if its index within its parent's children of the
+ *   same type is `An+B` (1-based).
+ * - `:nth-last-of-type(An+B)` - Selects the element if its index within its parent's children of
+ *   the same type is `An+B` (1-based).
+ * - `:first-child` - Selects the element if it is the first child of its parent.
+ * - `:last-child` - Selects the element if it is the last child of its parent.
+ * - `:first-of-type` - Selects the element if it is the first child of its parent and its type is
+ *   the same as its parent.
+ * - `:last-of-type` - Selects the element if it is the last child of its parent and its type is
+ *   the same as its parent.
+ * - `:only-child` - Selects the element if it is the only child of its parent.
+ * - `:only-of-type` - Selects the element if it is the only child of its parent and its type is
+ *   the same as its parent.
+ * - `:empty` - Selects the element if it has no children.
+ * - `:root` - Selects the element if it is the root of the document.
+ *
+ * Not yet implemented, see https://github.com/jwmcglynn/donner/issues/3:
+ * - `:is(S)` - Selects the element if it matches any of the selectors in the argument list.
+ * - `:not(S)` - Selects the element if it does not match `S`.
+ * - `:where(S)` - Selects the element if it matches all of the selectors in the argument list.
+ * - `:has(S)` - Selects the element if any of its descendants match `S`.
+ * - `:defined` - Selects if the element is supported by the user agent (donner svg in this
+ *    case).
  *
  * Pseudo-classes are defined in the following specs:
  * - Linguistic Pseudo-classes, such as `:dir()` and `:lang()`,
@@ -326,9 +410,11 @@ struct PseudoClassSelector {
   RcString ident;  ///< The name of the pseudo-class.
   std::optional<std::vector<ComponentValue>>
       argsIfFunction;  ///< The arguments of the pseudo-class, if it is a function.
-  std::optional<AnbValueAndSelector>
-      anbValueAndSelectorIfAnb;  ///< The An+B value and selector of the pseudo-class, for An+B
-                                 ///< pseudo-classes such as `:nth-child`.
+  std::optional<AnbValue> anbValueIfAnb;  ///< The An+B value of the pseudo-class, for An+B
+                                          ///< pseudo-classes such as `:nth-child`.
+  std::unique_ptr<Selector>
+      selector;  ///< The selector of the pseudo-class, for pseudo-classes such
+                 ///< as `:is()` and `:not()`, or `:nth-child(An+B of S)`.
 
   /**
    * Create a PseudoClassSelector with the given ident.
@@ -337,61 +423,54 @@ struct PseudoClassSelector {
    */
   explicit PseudoClassSelector(RcString ident) : ident(std::move(ident)) {}
 
+  /// Destructor.
+  ~PseudoClassSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  PseudoClassSelector(PseudoClassSelector&&) = default;
+  PseudoClassSelector& operator=(PseudoClassSelector&&) = default;
+
+  PseudoClassSelector(const PseudoClassSelector& other) { this->operator=(other); }
+
+  PseudoClassSelector& operator=(const PseudoClassSelector& other) {
+    ident = other.ident;
+    argsIfFunction = other.argsIfFunction;
+    anbValueIfAnb = other.anbValueIfAnb;
+    selector = other.selector ? std::make_unique<Selector>(*other.selector) : nullptr;
+
+    return *this;
+  }
+
+  /**
+   * Returns true if this selector is valid and supported by this implementation.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#invalid
+   */
+  bool isValid() const {
+    if (!argsIfFunction.has_value()) {
+      // Check for valid non-function pseudo-classes
+      return ident.equalsLowercase("root") || ident.equalsLowercase("empty") ||
+             ident.equalsLowercase("first-child") || ident.equalsLowercase("last-child") ||
+             ident.equalsLowercase("only-child") || ident.equalsLowercase("first-of-type") ||
+             ident.equalsLowercase("last-of-type") || ident.equalsLowercase("only-of-type");
+    } else {
+      // It's a function.
+      if (anbValueIfAnb.has_value()) {
+        return ident.equalsLowercase("nth-child") || ident.equalsLowercase("nth-last-child") ||
+               ident.equalsLowercase("nth-of-type") || ident.equalsLowercase("nth-last-of-type");
+      }
+    }
+
+    return false;
+  }
+
   /**
    * Returns true if the provided element matches this selector.
    *
    * @param element The element to check.
    */
   template <traversal::ElementLike T>
-  bool matches(const T& element) const {
-    if (!argsIfFunction.has_value()) {
-      if (ident.equalsLowercase("root")) {
-        return !element.parentElement().has_value();
-      } else if (ident.equalsLowercase("empty")) {
-        return !element.firstChild().has_value();
-      } else if (ident.equalsLowercase("first-child")) {
-        return !element.previousSibling().has_value();
-      } else if (ident.equalsLowercase("last-child")) {
-        return !element.nextSibling().has_value();
-      } else if (ident.equalsLowercase("only-child")) {
-        return !element.previousSibling().has_value() && !element.nextSibling().has_value();
-      } else if (ident.equalsLowercase("first-of-type")) {
-        return isFirstOfType(element, element.xmlTypeName());
-      } else if (ident.equalsLowercase("last-of-type")) {
-        return isLastOfType(element, element.xmlTypeName());
-      } else if (ident.equalsLowercase("only-of-type")) {
-        return isFirstOfType(element, element.xmlTypeName()) &&
-               isLastOfType(element, element.xmlTypeName());
-      }
-    } else {
-      // It's a function.
-
-      const std::optional<T> maybeParent = element.parentElement();
-      if (!maybeParent) {
-        return false;
-      }
-
-      if (ident.equalsLowercase("nth-child") && anbValueAndSelectorIfAnb) {
-        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ false,
-                                                anbValueAndSelectorIfAnb->selector);
-        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
-      } else if (ident.equalsLowercase("nth-last-child") && anbValueAndSelectorIfAnb) {
-        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ true,
-                                                anbValueAndSelectorIfAnb->selector);
-        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
-      } else if (ident.equalsLowercase("nth-of-type") && anbValueAndSelectorIfAnb) {
-        const int childIndex =
-            getIndexInParent(*maybeParent, element, /*fromEnd*/ false, element.xmlTypeName());
-        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
-      } else if (ident.equalsLowercase("nth-last-of-type") && anbValueAndSelectorIfAnb) {
-        const int childIndex =
-            getIndexInParent(*maybeParent, element, /*fromEnd*/ true, element.xmlTypeName());
-        return anbValueAndSelectorIfAnb->value.evaluate(childIndex);
-      }
-    }
-
-    return false;
-  }
+  bool matches(const T& element) const;
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj) {
@@ -403,21 +482,20 @@ struct PseudoClassSelector {
       }
       os << "]";
     }
-    if (obj.anbValueAndSelectorIfAnb.has_value()) {
-      os << " anbValue[" << obj.anbValueAndSelectorIfAnb.value().value;
-      if (obj.anbValueAndSelectorIfAnb->selector.has_value()) {
-        os << " of " << obj.anbValueAndSelectorIfAnb->selector.value();
-      }
-      os << "]";
+    if (obj.anbValueIfAnb.has_value()) {
+      os << " anbValue[" << obj.anbValueIfAnb.value() << "]";
+    }
+    if (obj.selector) {
+      os << " selector[" << obj.selector.get() << "]";
     }
     os << ")";
     return os;
   }
 
 private:
-  template <traversal::ElementLike T>
+  template <traversal::ElementLike T, traversal::OptionalSelectorLike<T> SelectorType>
   static int getIndexInParent(const T& parent, const T& element, bool fromEnd,
-                              std::optional<TypeSelector> matchingType) {
+                              const SelectorType& matchingType) {
     int childIndex = 1;
     if (!fromEnd) {
       for (std::optional<T> child = parent.firstChild(); child;
@@ -448,7 +526,7 @@ private:
     }
 
     assert(matchingType &&
-           "Should only reach end of child list if there is a TypeSelector skipping elements");
+           "Should only reach end of child list if there is a Selector skipping elements");
     return -1;
   }
 
@@ -552,6 +630,18 @@ struct AttributeSelector {
    * @param name The attribute name.
    */
   explicit AttributeSelector(WqName name) : name(std::move(name)) {}
+
+  /// Destructor.
+  ~AttributeSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  AttributeSelector(AttributeSelector&&) noexcept = default;
+  AttributeSelector& operator=(AttributeSelector&&) noexcept = default;
+  AttributeSelector(const AttributeSelector&) noexcept = default;
+  AttributeSelector& operator=(const AttributeSelector&) noexcept = default;
+
+  /// Returns true if this is a valid selector.
+  bool isValid() const { return true; }
 
   /**
    * Returns true if the provided element matches this selector.
@@ -677,8 +767,39 @@ struct CompoundSelector {
   using Entry = std::variant<PseudoElementSelector, TypeSelector, IdSelector, ClassSelector,
                              PseudoClassSelector, AttributeSelector>;
 
+  /// Default constructor.
+  CompoundSelector() = default;
+
+  /// Destructor.
+  ~CompoundSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  CompoundSelector(const CompoundSelector&) = default;
+  CompoundSelector(CompoundSelector&&) = default;
+  CompoundSelector& operator=(const CompoundSelector&) = default;
+  CompoundSelector& operator=(CompoundSelector&&) = default;
+
   /// The list of simple selectors in this compound selector.
   std::vector<Entry> entries;
+
+  /**
+   * Return true if this selector is valid and supported by this implementation.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#invalid
+   */
+  bool isValid() const {
+    if (entries.empty()) {
+      return false;
+    }
+
+    for (const auto& entry : entries) {
+      if (!std::visit([](auto&& selector) -> bool { return selector.isValid(); }, entry)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
 
   /**
    * Returns true if the provided element matches this selector.
@@ -766,42 +887,17 @@ struct ComplexSelector {
   std::vector<Entry> entries;  ///< The entries in the complex selector.
 
   /**
+   * Return true if this selector is valid and supported by this implementation.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#invalid
+   */
+  bool isValid() const;
+
+  /**
    * Compute specificity of the ComplexSelector, see
    * https://www.w3.org/TR/selectors-4/#specificity-rules.
    */
-  Specificity computeSpecificity() const {
-    uint32_t a = 0;
-    uint32_t b = 0;
-    uint32_t c = 0;
-    for (const auto& entry : entries) {
-      for (const auto& subEntry : entry.compoundSelector.entries) {
-        std::visit(
-            [&a, &b, &c](auto&& v) {
-              using Type = std::remove_cvref_t<decltype(v)>;
-
-              if constexpr (std::is_same_v<Type, IdSelector>) {
-                ++a;
-              } else if constexpr (std::is_same_v<Type, ClassSelector> ||
-                                   std::is_same_v<Type, AttributeSelector> ||
-                                   std::is_same_v<Type, PseudoClassSelector>) {
-                // TODO: Handle pseudo-classes that have their specificity defined specially.
-                ++b;
-              } else if constexpr (std::is_same_v<Type, TypeSelector>) {
-                // Ignore the universal selector.
-                if (!v.isUniversal()) {
-                  ++c;
-                }
-              } else {
-                static_assert(std::is_same_v<Type, PseudoElementSelector>);
-                ++c;
-              }
-            },
-            subEntry);
-      }
-    }
-
-    return Specificity::FromABC(a, b, c);
-  }
+  Specificity computeSpecificity() const;
 
   /**
    * Match a selector against an element, following the rules in the spec:
@@ -881,19 +977,7 @@ struct ComplexSelector {
   }
 
   /// Output a human-readable representation of the selector.
-  friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj) {
-    os << "ComplexSelector(";
-    bool first = true;
-    for (auto& entry : obj.entries) {
-      if (first) {
-        first = false;
-        os << entry.compoundSelector;
-      } else {
-        os << " " << entry.combinator << " " << entry.compoundSelector;
-      }
-    }
-    return os << ")";
-  }
+  friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj);
 };
 
 /**
@@ -904,6 +988,18 @@ struct ComplexSelector {
  * span#bar`, this would be a \ref Selector with two \ref ComplexSelector entries.
  */
 struct Selector {
+  /// Constructor.
+  Selector();
+
+  /// Destructor.
+  ~Selector() noexcept;
+
+  /// Moveable and copyable.
+  Selector(Selector&&) noexcept;
+  Selector& operator=(Selector&&) noexcept;
+  Selector(const Selector&);
+  Selector& operator=(const Selector&);
+
   /// The list of \ref ComplexSelector entries that compose this selector.
   std::vector<ComplexSelector> entries;
 
@@ -929,19 +1025,72 @@ struct Selector {
   /**
    * Ostream output operator for Selector in a human-readable format.
    */
-  friend std::ostream& operator<<(std::ostream& os, const Selector& obj) {
-    os << "Selector(";
-    bool first = true;
-    for (auto& entry : obj.entries) {
-      if (first) {
-        first = false;
-      } else {
-        os << ", ";
-      }
-      os << entry;
-    }
-    return os << ")";
-  }
+  friend std::ostream& operator<<(std::ostream& os, const Selector& obj);
 };
+
+template <traversal::ElementLike T>
+bool PseudoClassSelector::matches(const T& element) const {
+  if (!argsIfFunction.has_value()) {
+    if (ident.equalsLowercase("root")) {
+      return !element.parentElement().has_value();
+    } else if (ident.equalsLowercase("empty")) {
+      return !element.firstChild().has_value();
+    } else if (ident.equalsLowercase("first-child")) {
+      return !element.previousSibling().has_value();
+    } else if (ident.equalsLowercase("last-child")) {
+      return !element.nextSibling().has_value();
+    } else if (ident.equalsLowercase("only-child")) {
+      return !element.previousSibling().has_value() && !element.nextSibling().has_value();
+    } else if (ident.equalsLowercase("first-of-type")) {
+      return isFirstOfType(element, element.xmlTypeName());
+    } else if (ident.equalsLowercase("last-of-type")) {
+      return isLastOfType(element, element.xmlTypeName());
+    } else if (ident.equalsLowercase("only-of-type")) {
+      return isFirstOfType(element, element.xmlTypeName()) &&
+             isLastOfType(element, element.xmlTypeName());
+    }
+  } else {
+    // It's a function.
+
+    if (ident.equalsLowercase("not")) {
+      if (!selector) {
+        return false;
+      }
+
+      return !selector->matches(element).matched;
+    } else if (ident.equalsLowercase("is") || ident.equalsLowercase("where")) {
+      if (!selector) {
+        return false;
+      }
+
+      return selector->matches(element).matched;
+    } else {
+      const std::optional<T> maybeParent = element.parentElement();
+      if (!maybeParent) {
+        return false;
+      }
+
+      if (ident.equalsLowercase("nth-child") && anbValueIfAnb) {
+        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ false, selector);
+        return anbValueIfAnb->evaluate(childIndex);
+      } else if (ident.equalsLowercase("nth-last-child") && anbValueIfAnb) {
+        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ true, selector);
+        return anbValueIfAnb->evaluate(childIndex);
+      } else if (ident.equalsLowercase("nth-of-type") && anbValueIfAnb) {
+        const int childIndex =
+            getIndexInParent(*maybeParent, element, /*fromEnd*/ false,
+                             std::make_optional<TypeSelector>(element.xmlTypeName()));
+        return anbValueIfAnb->evaluate(childIndex);
+      } else if (ident.equalsLowercase("nth-last-of-type") && anbValueIfAnb) {
+        const int childIndex =
+            getIndexInParent(*maybeParent, element, /*fromEnd*/ true,
+                             std::make_optional<TypeSelector>(element.xmlTypeName()));
+        return anbValueIfAnb->evaluate(childIndex);
+      }
+    }
+  }
+
+  return false;
+}
 
 }  // namespace donner::css

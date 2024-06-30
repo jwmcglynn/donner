@@ -26,6 +26,7 @@ donner_cc_library(
         "ComponentValue.cc",
         "Declaration.cc",
         "Rule.cc",
+        "Selector.cc",
     ],
     hdrs = [
         "Color.h",

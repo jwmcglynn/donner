@@ -1,9 +1,13 @@
+#include "donner/css/parser/SelectorParser.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/css/parser/SelectorParser.h"
+#include "donner/css/ComponentValue.h"
+#include "donner/css/Token.h"
+#include "donner/css/parser/details/Subparsers.h"
 #include "donner/css/parser/tests/SelectorTestUtils.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
 
@@ -13,6 +17,15 @@ using testing::ElementsAre;
 namespace donner::css::parser {
 
 using namespace base::parser;  // NOLINT: For tests
+
+namespace {
+
+std::vector<ComponentValue> TokenizeString(std::string_view str) {
+  details::Tokenizer tokenizer_(str);
+  return details::parseListOfComponentValues(tokenizer_);
+}
+
+}  // namespace
 
 TEST(SelectorParser, Empty) {
   EXPECT_THAT(SelectorParser::Parse(""),
@@ -434,6 +447,77 @@ TEST(SelectorParser, CssTestSuiteIs) {
   EXPECT_THAT(SelectorParser::Parse(".c>.e"),
               ParseResultIs(ComplexSelectorIs(EntryIs(ClassSelectorIs("c")),
                                               EntryIs(Combinator::Child, ClassSelectorIs("e")))));
+}
+
+TEST(SelectorParser, ForgivingSelectorList) {
+  // Test case 1: All valid selectors
+  EXPECT_THAT(SelectorParser::ParseForgivingSelectorList(TokenizeString("div, .class, #id")),
+              SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("div"))),
+                           ComplexSelectorIs(EntryIs(ClassSelectorIs("class"))),
+                           ComplexSelectorIs(EntryIs(IdSelectorIs("id")))));
+
+  // Test case 2: Mixed valid and invalid selectors
+  EXPECT_THAT(SelectorParser::ParseForgivingSelectorList(TokenizeString("div, ::-invalid, .class")),
+              SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("div"))),
+                           ComplexSelectorIs(EntryIs(ClassSelectorIs("class")))));
+
+  // Test case 3: All invalid selectors
+  EXPECT_THAT(SelectorParser::ParseForgivingSelectorList(TokenizeString("div:, :invalid, 1234")),
+              SelectorsAre()  // Empty result
+  );
+
+  // Test case 4: Complex selectors with some invalid parts
+  EXPECT_THAT(SelectorParser::ParseForgivingSelectorList(
+                  TokenizeString("div > p, a[href]:not(:visited), span::before:invalid")),
+              SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("div")),
+                                             EntryIs(Combinator::Child, TypeSelectorIs("p")))));
+
+  // Test case 5: Whitespace handling
+  EXPECT_THAT(
+      SelectorParser::ParseForgivingSelectorList(TokenizeString("  div  ,  .class  ,  #id  ")),
+      SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("div"))),
+                   ComplexSelectorIs(EntryIs(ClassSelectorIs("class"))),
+                   ComplexSelectorIs(EntryIs(IdSelectorIs("id")))));
+
+  // Test case 6: Empty input
+  EXPECT_THAT(SelectorParser::ParseForgivingSelectorList(TokenizeString("")),
+              SelectorsAre()  // Empty result
+  );
+
+  // Test case 7: Single invalid selector
+  EXPECT_THAT(SelectorParser::ParseForgivingSelectorList(TokenizeString("div:")),
+              SelectorsAre()  // Empty result
+  );
+
+  // Test case 8: Pseudo-elements and pseudo-classes
+  EXPECT_THAT(SelectorParser::ParseForgivingSelectorList(
+                  TokenizeString("a:hover, p::first-line, div:nth-child(2n+1)")),
+              SelectorsAre(ComplexSelectorIs(EntryIs(
+                  TypeSelectorIs("div"),
+                  PseudoClassSelectorIs("nth-child", ElementsAre(testing::_, testing::_))))));
+
+  // Test case 9: Attribute selectors
+  EXPECT_THAT(
+      SelectorParser::ParseForgivingSelectorList(
+          TokenizeString("a[href], img[src^='https'], input[type='text']")),
+      SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("a"), AttributeSelectorIs("href"))),
+                   ComplexSelectorIs(EntryIs(
+                       TypeSelectorIs("img"),
+                       AttributeSelectorIs("src", MatcherIs(AttrMatcher::PrefixMatch, "https")))),
+                   ComplexSelectorIs(
+                       EntryIs(TypeSelectorIs("input"),
+                               AttributeSelectorIs("type", MatcherIs(AttrMatcher::Eq, "text"))))));
+
+  // Test case 10: Combinators
+  EXPECT_THAT(
+      SelectorParser::ParseForgivingSelectorList(TokenizeString("div > p, ul + ol, h1 ~ h2")),
+      SelectorsAre(
+          ComplexSelectorIs(EntryIs(TypeSelectorIs("div")),
+                            EntryIs(Combinator::Child, TypeSelectorIs("p"))),
+          ComplexSelectorIs(EntryIs(TypeSelectorIs("ul")),
+                            EntryIs(Combinator::NextSibling, TypeSelectorIs("ol"))),
+          ComplexSelectorIs(EntryIs(TypeSelectorIs("h1")),
+                            EntryIs(Combinator::SubsequentSibling, TypeSelectorIs("h2")))));
 }
 
 // TODO: Add more tests from

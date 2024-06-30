@@ -37,6 +37,19 @@ concept ElementLike =
     };
 
 /**
+ * Concept that can either be a `std::optional<TypeSelector>` or `std::unique_ptr<Selector>`, which
+ * supports:
+ * - `operator bool`
+ * - `operator->`
+ * - `bool matches(const ElementLike& element);`
+ */
+template <typename T, typename ElementType>
+concept OptionalSelectorLike = requires(const T t, const ElementType element) {
+                                 { bool(t) } -> std::same_as<bool>;
+                                 { bool(t.operator->()->matches(element)) } -> std::same_as<bool>;
+                               };
+
+/**
  * Selectors may need to traverse the tree in different ways to match, and this is abstracted away
  * using C++20 coroutines. Each traversal order is a coroutine that yields elements lazily, so that
  * the tree is traversed only as far as necessary.

@@ -456,7 +456,7 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   EXPECT_TRUE(matches(":nth-of-type(2)", element(children["child3"])));
   EXPECT_TRUE(matches(":nth-of-type(2)", element(children["child4"])));
 
-  // [of S] is not supported
+  // [of S] is not supported for :nth-of-type
   EXPECT_TRUE(doesNotMatch(":nth-of-type(1 of type1)", element(children["child1"])));
 
   // :nth-last-of-type(...)
@@ -486,6 +486,87 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   EXPECT_TRUE(doesNotMatch(":only-of-type", element(children["child1"])));
   EXPECT_TRUE(doesNotMatch(":only-of-type", element(children["child2"])));
   EXPECT_TRUE(matches(":only-of-type", element(mid1)));
+}
+
+TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
+  // Setup: Create a simple tree structure
+  auto root = createEntity("root");
+  auto parent = createEntity("div");
+  std::vector<svg::Entity> children;
+
+  tree(root).appendChild(registry_, parent);
+  // Create 5 children
+  // - span
+  // - p
+  // - span
+  // - p
+  // - span
+  for (int i = 1; i <= 5; ++i) {
+    auto child = createEntity(i % 2 == 0 ? "p" : "span");
+    children.push_back(child);
+    tree(parent).appendChild(registry_, child);
+  }
+
+  // Test :nth-child with forgiving selector list
+  EXPECT_TRUE(matches(":nth-child(2 of p, div, span)", element(children[1])))
+      << "Should match 2nd child, which is a p element";
+  EXPECT_TRUE(matches(":nth-child(3 of span, :invalid, p)", element(children[2])))
+      << "Should match 3rd child (span) despite invalid selector in list";
+  EXPECT_FALSE(matches(":nth-child(1 of p, :invalid)", element(children[0])))
+      << "Should not match 1st child (span) as it doesn't match any valid selector in the list";
+
+  // Test :nth-last-child with forgiving selector list
+  EXPECT_TRUE(matches(":nth-last-child(2 of p, span, :invalid)", element(children[3])))
+      << "Should match 2nd-to-last child, which is a p element";
+  EXPECT_TRUE(matches(":nth-last-child(1 of span, :invalid, div)", element(children[4])))
+      << "Should match last child (span) despite invalid selector in list";
+  EXPECT_FALSE(matches(":nth-last-child(3 of p, :invalid)", element(children[2])))
+      << "Should not match 3rd-to-last child (span) as it doesn't match any valid selector in the "
+         "list";
+
+  // Test complex selectors within the forgiving list
+  EXPECT_TRUE(matches(":nth-child(odd of span, p[class], div > *)", element(children[2])))
+      << "Should match 3rd child (span) with complex selectors in the list";
+  EXPECT_TRUE(matches(":nth-last-child(even of p, :invalid)", element(children[1])))
+      << "Should match 2nd-to-last child (p) with complex selectors and an invalid selector";
+
+  // Test with all invalid selectors
+  EXPECT_FALSE(matches(":nth-child(1 of :invalid1, :invalid2)", element(children[0])))
+      << "Should not match when all selectors in the list are invalid";
+  EXPECT_FALSE(matches(":nth-last-child(1 of :invalid1, :invalid2)", element(children[4])))
+      << "Should not match when all selectors in the list are invalid";
+}
+
+TEST_F(SelectorTests, PseudoClassSelectorIsNotWhere) {
+  // <root>
+  // -> mid1 = <mid>
+  //   -> child1 = <type1>
+  //   -> child2 = <type2> (alternating 1/2 based on if number if even)
+  //      ...
+  //   -> child8 = <type2>
+  auto root = createEntity("root");
+  auto mid1 = createEntity("mid");
+  std::map<std::string, svg::Entity> children;
+
+  tree(root).appendChild(registry_, mid1);
+  for (int i = 1; i <= 8; ++i) {
+    const std::string id = "child" + std::to_string(i);
+    const std::string typeName = "type" + std::to_string((i - 1) % 2 + 1);
+    children[id] = createEntity(svg::XMLQualifiedNameRef(typeName));
+    tree(mid1).appendChild(registry_, children[id]);
+  }
+
+  // :is(type1)
+  EXPECT_TRUE(matches(":is(type1)", element(children["child1"])));
+  EXPECT_FALSE(matches(":is(type1)", element(children["child2"])));
+
+  // :not(type1)
+  EXPECT_TRUE(matches(":not(type1)", element(children["child2"])));
+  EXPECT_FALSE(matches(":not(type1)", element(children["child3"])));
+
+  // :where(type1)
+  EXPECT_TRUE(matches(":where(type1)", element(children["child1"])));
+  EXPECT_FALSE(matches(":where(type1)", element(children["child2"])));
 }
 
 }  // namespace donner::css::parser
