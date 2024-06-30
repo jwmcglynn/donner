@@ -31,6 +31,9 @@ build:linux --config=host_libstdc++ --copt=-fno-modules
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
 
+# Creates symlinks in the workspace that point into the sandbox.
+build --symlink_prefix=/
+
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size
 build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
