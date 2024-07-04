@@ -379,11 +379,11 @@ struct ClassSelector {
  *   the same as its parent.
  * - `:empty` - Selects the element if it has no children.
  * - `:root` - Selects the element if it is the root of the document.
- *
- * Not yet implemented, see https://github.com/jwmcglynn/donner/issues/3:
  * - `:is(S)` - Selects the element if it matches any of the selectors in the argument list.
  * - `:not(S)` - Selects the element if it does not match `S`.
  * - `:where(S)` - Selects the element if it matches all of the selectors in the argument list.
+ *
+ * Not yet implemented, see https://github.com/jwmcglynn/donner/issues/3:
  * - `:has(S)` - Selects the element if any of its descendants match `S`.
  * - `:defined` - Selects if the element is supported by the user agent (donner svg in this
  *    case).
