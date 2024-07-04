@@ -1,4 +1,18 @@
-# Enables using platform-specific configs such as build:linux and build:macos in this .baezlrc file
+##
+## Donner build config
+##
+## Options:
+## 
+##   --config=debug             - Build debug with configs set to simplify debugging.
+##   --config=binary-size       - Build optimized build and symbols for binary size analysis.
+##   --config=macos-binary-size - Same as above but with additional flags for macOS.
+##   --config=coverage          - Build with code coverage instrumentation.
+##   --config=asan              - Build with address sanitizer.
+##   --config=asan-fuzzer       - Build with address sanitizer and fuzzing engine.
+##   --config=clang             - Build with clang-tidy checks.
+##
+
+# Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
 build --enable_platform_specific_config
 
 ##
@@ -31,8 +45,6 @@ build:linux --config=host_libstdc++ --copt=-fno-modules
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
 
-# Creates symlinks in the workspace that point into the sandbox.
-build --symlink_prefix=/
 
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size
@@ -41,6 +53,12 @@ build:macos-binary-size --copt=-gline-tables-only
 build:macos-binary-size --linkopt=-dead_strip
 
 build --config=libc++ --config=c++20 --define absl=1
+
+# Debug builds
+build:debug --copt=-O0 --copt=-g -c dbg
+# Creates symlinks in the workspace that point into the sandbox.
+build:debug --symlink_prefix=/
+
 
 # Binary size builds
 build:binary-size -c opt --copt=-Os --copt=-g --strip=never

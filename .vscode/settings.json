@@ -416,4 +416,5 @@
     "titleBar.inactiveForeground": "#15202b99"
   },
   "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.codeAnalysis.clangTidy.enabled": true,
 }
