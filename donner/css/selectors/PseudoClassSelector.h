@@ -1,0 +1,201 @@
+#pragma once
+/// @file
+
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "donner/base/RcString.h"
+#include "donner/css/ComponentValue.h"
+#include "donner/css/SelectorTraversal.h"
+#include "donner/css/WqName.h"
+#include "donner/css/details/AnbValue.h"
+
+namespace donner::css {
+
+// Forward declaration.
+struct Selector;
+
+/**
+ * Selectors which start with one colon, e.g. `:nth-child()`, are called pseudo-classes, and they
+ * represent additional state information not directly present in the document tree.
+ *
+ * Each pseudo-class selector has a unique behavior.
+ *
+ * Selectors supported:
+ * - `:nth-child(An+B [of S])` - Selects the element if its index within its parent is `An+B`
+ *   (1-based) when counting from the first element that would be selected by `S`. If `S` is
+ omitted,
+ *   the selector matches only elements that are direct children of their parent.
+ * - `:nth-last-child(An+B [of S])` - Selects the element if its index within its parent is `An+B`
+ *   (1-based) when counting from the last element that would be selected by `S`. If `S` is omitted,
+ *   the selector matches only elements that are direct children of their parent.
+ * - `:nth-of-type(An+B)` - Selects the element if its index within its parent's children of the
+ *   same type is `An+B` (1-based).
+ * - `:nth-last-of-type(An+B)` - Selects the element if its index within its parent's children of
+ *   the same type is `An+B` (1-based).
+ * - `:first-child` - Selects the element if it is the first child of its parent.
+ * - `:last-child` - Selects the element if it is the last child of its parent.
+ * - `:first-of-type` - Selects the element if it is the first child of its parent and its type is
+ *   the same as its parent.
+ * - `:last-of-type` - Selects the element if it is the last child of its parent and its type is
+ *   the same as its parent.
+ * - `:only-child` - Selects the element if it is the only child of its parent.
+ * - `:only-of-type` - Selects the element if it is the only child of its parent and its type is
+ *   the same as its parent.
+ * - `:empty` - Selects the element if it has no children.
+ * - `:root` - Selects the element if it is the root of the document.
+ * - `:is(S)` - Selects the element if it matches any of the selectors in the argument list.
+ * - `:not(S)` - Selects the element if it does not match `S`.
+ * - `:where(S)` - Selects the element if it matches all of the selectors in the argument list.
+ *
+ * Not yet implemented, see https://github.com/jwmcglynn/donner/issues/3:
+ * - `:has(S)` - Selects the element if any of its descendants match `S`.
+ * - `:defined` - Selects if the element is supported by the user agent (donner svg in this
+ *    case).
+ *
+ * Pseudo-classes are defined in the following specs:
+ * - Linguistic Pseudo-classes, such as `:dir()` and `:lang()`,
+ *   https://www.w3.org/TR/selectors-4/#linguistic-pseudos
+ * - Location Pseudo-classes, such as `:link` and `:visited`,
+ *   https://www.w3.org/TR/selectors-4/#location
+ * - User Action Pseudo-classes, such as `:hover` and `:active`,
+ *   https://www.w3.org/TR/selectors-4/#useraction-pseudos
+ * - Time-dimensional Pseudo-classes, such as `:current` and `:past`,
+ *   https://www.w3.org/TR/selectors-4/#time-pseudos
+ * - Resource State Pseudo-classes, such as `:playing` and `:muted`,
+ *   https://www.w3.org/TR/selectors-4/#resource-pseudos
+ * - Element Display State Pseudo-classes, such as `:open` and `:fullscreen`,
+ *   https://www.w3.org/TR/selectors-4/#display-state-pseudos
+ * - Input Pseudo-classes, such as `:enabled` and `:checked`,
+ *   https://www.w3.org/TR/selectors-4/#input-pseudos
+ * - Tree-Structural Pseudo-classes, such as `:empty` and `:nth-child()`,
+ *   https://www.w3.org/TR/selectors-4/#structural-pseudos
+ */
+struct PseudoClassSelector {
+  RcString ident;  ///< The name of the pseudo-class.
+  std::optional<std::vector<ComponentValue>>
+      argsIfFunction;  ///< The arguments of the pseudo-class, if it is a function.
+  std::optional<AnbValue> anbValueIfAnb;  ///< The An+B value of the pseudo-class, for An+B
+                                          ///< pseudo-classes such as `:nth-child`.
+  std::unique_ptr<Selector>
+      selector;  ///< The selector of the pseudo-class, for pseudo-classes such
+                 ///< as `:is()` and `:not()`, or `:nth-child(An+B of S)`.
+
+  /**
+   * Create a PseudoClassSelector with the given ident.
+   *
+   * @param ident The name of the pseudo-class.
+   */
+  explicit PseudoClassSelector(const RcString& ident) : ident(ident) {}
+
+  /// Destructor.
+  ~PseudoClassSelector() noexcept = default;
+
+  /// Moveable and copyable.
+  PseudoClassSelector(PseudoClassSelector&&) = default;
+  PseudoClassSelector& operator=(PseudoClassSelector&&) = default;
+
+  PseudoClassSelector(const PseudoClassSelector& other) { this->operator=(other); }
+
+  PseudoClassSelector& operator=(const PseudoClassSelector& other);
+
+  /**
+   * Returns true if this selector is valid and supported by this implementation.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#invalid
+   */
+  bool isValid() const {
+    if (!argsIfFunction.has_value()) {
+      // Check for valid non-function pseudo-classes
+      return ident.equalsLowercase("root") || ident.equalsLowercase("empty") ||
+             ident.equalsLowercase("first-child") || ident.equalsLowercase("last-child") ||
+             ident.equalsLowercase("only-child") || ident.equalsLowercase("first-of-type") ||
+             ident.equalsLowercase("last-of-type") || ident.equalsLowercase("only-of-type");
+    } else {
+      // It's a function.
+      if (anbValueIfAnb.has_value()) {
+        return ident.equalsLowercase("nth-child") || ident.equalsLowercase("nth-last-child") ||
+               ident.equalsLowercase("nth-of-type") || ident.equalsLowercase("nth-last-of-type");
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Returns true if the provided element matches this selector.
+   *
+   * @param element The element to check.
+   */
+  template <traversal::ElementLike T>
+  bool matches(const T& element) const;  // NOTE: This function is implemented in Selector.h due to
+                                         // a dependency on the Selector type
+
+  /// Ostream output operator.
+  friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj);
+
+private:
+  template <traversal::ElementLike T, traversal::OptionalSelectorLike<T> SelectorType>
+  static int getIndexInParent(const T& parent, const T& element, bool fromEnd,
+                              const SelectorType& matchingType) {
+    int childIndex = 1;
+    if (!fromEnd) {
+      for (std::optional<T> child = parent.firstChild(); child;
+           child = child.value().nextSibling()) {
+        if (matchingType && !matchingType->matches(child.value())) {
+          continue;
+        }
+
+        if (child.value() == element) {
+          return childIndex;
+        } else {
+          ++childIndex;
+        }
+      }
+    } else {
+      for (std::optional<T> child = parent.lastChild(); child;
+           child = child.value().previousSibling()) {
+        if (matchingType && !matchingType->matches(child.value())) {
+          continue;
+        }
+
+        if (child.value() == element) {
+          return childIndex;
+        } else {
+          ++childIndex;
+        }
+      }
+    }
+
+    assert(matchingType &&
+           "Should only reach end of child list if there is a Selector skipping elements");
+    return -1;
+  }
+
+  template <traversal::ElementLike T>
+  static bool isFirstOfType(const T& element, const svg::XMLQualifiedNameRef& type) {
+    for (std::optional<T> child = element.previousSibling(); child;
+         child = child.value().previousSibling()) {
+      if (child.value().xmlTypeName() == type) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  template <traversal::ElementLike T>
+  static bool isLastOfType(const T& element, const svg::XMLQualifiedNameRef& type) {
+    for (std::optional<T> child = element.nextSibling(); child;
+         child = child.value().nextSibling()) {
+      if (child.value().xmlTypeName() == type) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+};
+
+}  // namespace donner::css

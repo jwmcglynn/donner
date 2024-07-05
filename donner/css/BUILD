@@ -27,6 +27,7 @@ donner_cc_library(
         "Declaration.cc",
         "Rule.cc",
         "Selector.cc",
+        "selectors/PseudoClassSelector.cc",
     ],
     hdrs = [
         "Color.h",
@@ -38,7 +39,15 @@ donner_cc_library(
         "Specificity.h",
         "Stylesheet.h",
         "Token.h",
+        "WqName.h",
         "details/AnbValue.h",
+        "selectors/AttributeSelector.h",
+        "selectors/ClassSelector.h",
+        "selectors/CompoundSelector.h",
+        "selectors/IdSelector.h",
+        "selectors/PseudoClassSelector.h",
+        "selectors/PseudoElementSelector.h",
+        "selectors/TypeSelector.h",
     ],
     visibility = [
         "//donner/css:__subpackages__",
