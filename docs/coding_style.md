@@ -308,11 +308,12 @@ For common string helpers, see `donner/base/StringUtils.h`:
 - Case insensitive matching is configurable:
   - `StringUtils::StartsWith<StringComparison::IgnoreCase>("Hello", "he")`
 - `StringUtils::Split("a,b,c", ',')` - to split a string by a delimiter.
-  - ```cpp
-    for (std::string_view part : StringUtils::Split("a,b,c", ',')) {
-      // ...
-    }
-    ```
+
+```cpp
+for (std::string_view part : StringUtils::Split("a,b,c", ',')) {
+  // ...
+}
+```
 
 ## Limit use of `auto`
 
