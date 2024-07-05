@@ -10,9 +10,7 @@ namespace donner::css::parser {
 
 /*
 Parse according to the following CSS selector grammar, from
-https://www.w3.org/TR/selectors-4/#typedef-selector-list.
-
-Using spec version https://www.w3.org/TR/2018/WD-selectors-4-20181121/.
+https://www.w3.org/TR/2022/WD-selectors-4-20221111/#typedef-selector-list.
 
 Note that this has some slight modifications to remove spec-specific syntax.
 ```
@@ -60,7 +58,7 @@ Note that this has some slight modifications to remove spec-specific syntax.
 <attr-matcher> = [ '~' | '|' | '^' | '$' | '*' ]? '='
 
 (* Note that this is a new feature in CSS Selectors Level 4 *)
-<attr-modifier> = i
+<attr-modifier> = i | s
 
 <pseudo-class-selector> = ':' <ident-token> |
                           ':' <function-token> <any-value> ')'
@@ -768,11 +766,15 @@ private:
 
     subparser.skipWhitespace();
 
-    // Look for an <attr-modifier>, which is just an ident token with a 'i'.
+    // Look for an <attr-modifier>, which is just an ident token with a 'i' or 's'.
     if (const Token* token = subparser.next<Token>(); token) {
       if (token->is<Token::Ident>()) {
-        if (token->get<Token::Ident>().value.equalsLowercase("i")) {
+        const RcString& value = token->get<Token::Ident>().value;
+        if (value.equalsLowercase("i")) {
           matcher.caseInsensitive = true;
+          subparser.advance();
+        } else if (value.equalsLowercase("s")) {
+          matcher.caseInsensitive = false;
           subparser.advance();
         }
       }

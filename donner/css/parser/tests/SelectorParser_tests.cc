@@ -43,7 +43,7 @@ TEST(SelectorParser, Simple) {
               ParseResultIs(ComplexSelectorIs(EntryIs(IdSelectorIs("hash-test")))));
 
   // Using a `\` to escape cancels out the special meaning, see
-  // https://www.w3.org/TR/2018/WD-selectors-4-20181121/#case-sensitive.
+  // https://www.w3.org/TR/selectors-4/#case-sensitive.
   EXPECT_THAT(SelectorParser::Parse("#foo\\>a"),
               ParseResultIs(ComplexSelectorIs(EntryIs(IdSelectorIs("foo>a")))));
 }
@@ -213,6 +213,17 @@ TEST(SelectorParser, AttributeSelector) {
                   TypeSelectorIs("a"),
                   AttributeSelectorIs("test", MatcherIs(AttrMatcher::Eq, "value",
                                                         MatcherOptions::CaseInsensitive))))));
+
+  EXPECT_THAT(SelectorParser::Parse("a[test=insensitive s]"),
+              ParseResultIs(ComplexSelectorIs(
+                  EntryIs(TypeSelectorIs("a"),
+                          AttributeSelectorIs("test", MatcherIs(AttrMatcher::Eq, "insensitive",
+                                                                MatcherOptions::CaseSensitive))))));
+  EXPECT_THAT(SelectorParser::Parse("a[test=\"value\"s]"),
+              ParseResultIs(ComplexSelectorIs(
+                  EntryIs(TypeSelectorIs("a"),
+                          AttributeSelectorIs("test", MatcherIs(AttrMatcher::Eq, "value",
+                                                                MatcherOptions::CaseSensitive))))));
 
   EXPECT_THAT(SelectorParser::Parse("a[zero~=one]"),
               ParseResultIs(ComplexSelectorIs(

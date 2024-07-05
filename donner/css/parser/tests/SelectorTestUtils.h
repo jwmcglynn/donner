@@ -365,7 +365,7 @@ auto AttributeSelectorIs(const char* ns, const char* name, MatcherMatcher matche
   return AttributeSelectorIsImpl(ns, name, testing::Optional(matcherMatcher));
 }
 
-enum class MatcherOptions { Default, CaseInsensitive };
+enum class MatcherOptions { CaseSensitive, CaseInsensitive, Default = CaseSensitive };
 
 inline auto MatcherIs(AttrMatcher op, const char* value,
                       MatcherOptions options = MatcherOptions::Default) {
