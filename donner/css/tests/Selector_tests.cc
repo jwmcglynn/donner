@@ -7,7 +7,9 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
+#include "donner/css/Specificity.h"
 #include "donner/css/parser/SelectorParser.h"
+#include "donner/css/tests/SelectorTestUtils.h"
 #include "donner/svg/components/AttributesComponent.h"
 #include "donner/svg/components/TreeComponent.h"
 
@@ -17,6 +19,8 @@ using testing::ElementsAreArray;
 namespace donner::css::parser {
 
 using namespace base::parser;  // NOLINT: For tests
+
+namespace {
 
 struct FakeElementData {
   RcString id;
@@ -88,9 +92,21 @@ private:
   svg::Entity entity_;
 };
 
+Specificity computeSpecificity(std::string_view str) {
+  auto maybeSelector = SelectorParser::Parse(str);
+  EXPECT_THAT(maybeSelector, NoParseError());
+  if (maybeSelector.hasError()) {
+    return Specificity();
+  }
+
+  return Specificity(maybeSelector.result().maxSpecificity());
+}
+
+}  // namespace
+
 class SelectorTests : public testing::Test {
 protected:
-  svg::Entity createEntity(svg::XMLQualifiedNameRef xmlTypeName) {
+  svg::Entity createEntity(const svg::XMLQualifiedNameRef& xmlTypeName) {
     auto entity = registry_.create();
     registry_.emplace<svg::components::TreeComponent>(entity, svg::ElementType::Unknown,
                                                       svg::XMLQualifiedNameRef(xmlTypeName));
@@ -567,6 +583,49 @@ TEST_F(SelectorTests, PseudoClassSelectorIsNotWhere) {
   // :where(type1)
   EXPECT_TRUE(matches(":where(type1)", element(children["child1"])));
   EXPECT_FALSE(matches(":where(type1)", element(children["child2"])));
+}
+
+TEST_F(SelectorTests, Specificity) {
+  EXPECT_THAT(computeSpecificity("test"), SpecificityIs(Specificity::FromABC(0, 0, 1)));
+  EXPECT_THAT(computeSpecificity(".test"), SpecificityIs(Specificity::FromABC(0, 1, 0)));
+  EXPECT_THAT(computeSpecificity("#test"), SpecificityIs(Specificity::FromABC(1, 0, 0)));
+  EXPECT_THAT(computeSpecificity("::after"), SpecificityIs(Specificity::FromABC(0, 0, 1)));
+  EXPECT_THAT(computeSpecificity(":after(one)"), SpecificityIs(Specificity::FromABC(0, 1, 0)));
+  EXPECT_THAT(computeSpecificity("a[attr=value]"), SpecificityIs(Specificity::FromABC(0, 1, 1)));
+
+  EXPECT_THAT(computeSpecificity("*"), SpecificityIs(Specificity::FromABC(0, 0, 0)))
+      << "Universal selectors are ignored";
+
+  EXPECT_THAT(computeSpecificity("* > a#b.class::after"),
+              SpecificityIs(Specificity::FromABC(1, 1, 2)));
+
+  // For lists, the max specificity is computed.
+  EXPECT_THAT(computeSpecificity("a, .test, #test"), SpecificityIs(Specificity::FromABC(1, 0, 0)));
+  EXPECT_THAT(computeSpecificity("a, :nth-child(2)"), SpecificityIs(Specificity::FromABC(0, 1, 0)));
+
+  // Validate pseudo-classes that change the specificity
+  EXPECT_THAT(computeSpecificity(":is(a)"), SpecificityIs(Specificity::FromABC(0, 0, 1)));
+  EXPECT_THAT(computeSpecificity(":not(a, #b)"), SpecificityIs(Specificity::FromABC(1, 0, 0)));
+  EXPECT_THAT(computeSpecificity(":where(a)"), SpecificityIs(Specificity::FromABC(0, 0, 0)));
+
+  // :nth-child(An+B) and :nth-of-type(An+B) have a specificity of 0,1,0, unless a selector is
+  // specified, in which case the specificity of the selector is added.
+  EXPECT_THAT(computeSpecificity(":nth-child(2n)"), SpecificityIs(Specificity::FromABC(0, 1, 0)));
+  EXPECT_THAT(computeSpecificity(":nth-last-child(2n+1)"),
+              SpecificityIs(Specificity::FromABC(0, 1, 0)));
+
+  EXPECT_THAT(computeSpecificity(":nth-child(2n of #a)"),
+              SpecificityIs(Specificity::FromABC(1, 1, 0)));
+  EXPECT_THAT(computeSpecificity(":nth-last-child(2n+1 of a, [attr=value])"),
+              SpecificityIs(Specificity::FromABC(0, 2, 0)));
+
+  // S:nth-child(An+B) and :nth-child(An+B of S) have the same specificity but different behavior.
+  EXPECT_THAT(computeSpecificity(":nth-child(2n+1 of S)"),
+              SpecificityIs(Specificity::FromABC(0, 1, 1)));
+  EXPECT_THAT(computeSpecificity("S:nth-child(2n+1)"),
+              SpecificityIs(Specificity::FromABC(0, 1, 1)));
+
+  // TODO: has() is not implemented
 }
 
 }  // namespace donner::css::parser

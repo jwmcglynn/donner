@@ -34,8 +34,31 @@ namespace donner::css {
  */
 class Specificity {
 public:
+  /// A 3-tuple of integers representing the specificity before modifiers such as the "!important"
+  /// flag have been applied.
+  struct ABC {
+    uint32_t a = 0;  ///< The number of ID selectors in the selector.
+    uint32_t b = 0;  ///< The number of class selectors, attributes selectors, and pseudo-classes in
+                     ///< the selector.
+    uint32_t c = 0;  ///< The number of type selectors and pseudo-elements in the selector.
+
+    /// Comparison operator.
+    auto operator<=>(const ABC& other) const {
+      if (a != other.a) {
+        return a <=> other.a;
+      } else if (b != other.b) {
+        return b <=> other.b;
+      } else {
+        return c <=> other.c;
+      }
+    }
+  };
+
   /// Default constructor, creates a specificity of (0, 0, 0).
   constexpr Specificity() = default;
+
+  /// Constructs a specificity from a \ref ABC 3-tuple.
+  explicit constexpr Specificity(const ABC& abc) : abc_(abc) {}
 
   /// Destructor.
   ~Specificity() = default;
@@ -75,7 +98,7 @@ public:
     } else if (obj.special_ == SpecialType::StyleAttribute) {
       os << "style (second highest)";
     } else {
-      os << obj.a_ << ", " << obj.b_ << ", " << obj.c_;
+      os << obj.abc_.a << ", " << obj.abc_.b << ", " << obj.abc_.c;
     }
     return os << ")";
   }
@@ -89,7 +112,7 @@ public:
    * @param c The number of type selectors and pseudo-elements in the selector.
    */
   static constexpr Specificity FromABC(uint32_t a, uint32_t b, uint32_t c) {
-    return Specificity(a, b, c);
+    return Specificity(ABC{a, b, c});
   }
 
   /**
@@ -111,12 +134,8 @@ public:
   auto operator<=>(const Specificity& other) const {
     if (special_ != other.special_) {
       return special_ <=> other.special_;
-    } else if (a_ != other.a_) {
-      return a_ <=> other.a_;
-    } else if (b_ != other.b_) {
-      return b_ <=> other.b_;
     } else {
-      return c_ <=> other.c_;
+      return abc_ <=> other.abc_;
     }
   }
 
@@ -124,6 +143,9 @@ public:
   bool operator==(const Specificity& other) const {
     return (*this <=> other) == std::strong_ordering::equal;
   }
+
+  /// Gets the 3-tuple of integers.
+  const ABC& abc() const { return abc_; }
 
 private:
   /**
@@ -139,16 +161,10 @@ private:
     Override         ///< Values set from C++ API, which overrides all other values.
   };
 
-  /// Internal constructor for the 3-tuple.
-  constexpr Specificity(uint32_t a, uint32_t b, uint32_t c) : a_(a), b_(b), c_(c) {}
-
   /// Internal constructor for special values.
-  constexpr Specificity(SpecialType special) : special_(special) {}
+  explicit constexpr Specificity(SpecialType special) : special_(special) {}
 
-  uint32_t a_ = 0;  ///< The number of ID selectors in the selector.
-  uint32_t b_ = 0;  ///< The number of class selectors, attributes selectors, and pseudo-classes in
-                    ///< the selector.
-  uint32_t c_ = 0;  ///< The number of type selectors and pseudo-elements in the selector.
+  ABC abc_;                                  ///< The 3-tuple of integers.
   SpecialType special_ = SpecialType::None;  ///< Special value, if any.
 };
 

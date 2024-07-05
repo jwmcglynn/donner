@@ -8,8 +8,8 @@
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Token.h"
 #include "donner/css/parser/details/Subparsers.h"
-#include "donner/css/parser/tests/SelectorTestUtils.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
+#include "donner/css/tests/SelectorTestUtils.h"
 
 using testing::AllOf;
 using testing::ElementsAre;
@@ -356,28 +356,6 @@ TEST(SelectorParser, InvalidAttributeSelector) {
                   "Expected string or ident after matcher ('~=', '|=', '^=', '$=', '*=', or '=')"));
   EXPECT_THAT(SelectorParser::Parse("[attr~=extra[]]"),
               ParseErrorIs("Expected end of attribute selector, but found more items"));
-}
-
-TEST(SelectorParser, Specificity) {
-  EXPECT_THAT(SelectorParser::Parse("test"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 0, 1))));
-  EXPECT_THAT(SelectorParser::Parse(".test"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 1, 0))));
-  EXPECT_THAT(SelectorParser::Parse("#test"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(1, 0, 0))));
-  EXPECT_THAT(SelectorParser::Parse("::after"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 0, 1))));
-  EXPECT_THAT(SelectorParser::Parse(":after(one)"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 1, 0))));
-  EXPECT_THAT(SelectorParser::Parse("a[attr=value]"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 1, 1))));
-
-  EXPECT_THAT(SelectorParser::Parse("*"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(0, 0, 0))))
-      << "Universal selectors are ignored";
-
-  EXPECT_THAT(SelectorParser::Parse("* > a#b.class::after"),
-              ParseResultIs(SpecificityIs(Specificity::FromABC(1, 1, 2))));
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm

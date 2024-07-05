@@ -3,11 +3,13 @@
 
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/RcString.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/SelectorTraversal.h"
+#include "donner/css/Specificity.h"
 #include "donner/css/WqName.h"
 #include "donner/css/details/AnbValue.h"
 
@@ -130,7 +132,13 @@ struct PseudoClassSelector {
    */
   template <traversal::ElementLike T>
   bool matches(const T& element) const;  // NOTE: This function is implemented in Selector.h due to
-                                         // a dependency on the Selector type
+  // a dependency on the Selector type
+
+  /**
+   * Compute the pseudo-class's specificity, using the rules from
+   * https://www.w3.org/TR/2022/WD-selectors-4-20221111/#specificity-rules
+   */
+  Specificity::ABC computeSpecificity() const;
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj);

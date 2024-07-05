@@ -44,7 +44,6 @@ cc_test(
         "tests/DeclarationListParser_tests.cc",
         "tests/RuleParser_tests.cc",
         "tests/SelectorParser_tests.cc",
-        "tests/SelectorTestUtils.h",
         "tests/StylesheetParser_tests.cc",
         "tests/TokenTestUtils.h",
         "tests/Tokenizer_tests.cc",
@@ -54,6 +53,7 @@ cc_test(
         ":parser",
         "//donner/base:base_test_utils",
         "//donner/base/parser:parser_test_utils",
+        "//donner/css:selector_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -5,8 +5,7 @@
 #include "donner/css/Selector.h"
 #include "donner/svg/xml/XMLQualifiedName.h"
 
-namespace donner {
-namespace css {
+namespace donner::css {
 
 /**
  * Match a Selector against an array of ComplexSelectors, used like:
@@ -188,22 +187,38 @@ auto ComplexSelectorIs(const Args&... matchers) {
   return testing::MakePolymorphicMatcher(ComplexSelectorIsImpl(std::move(matchersVector)));
 }
 
+/**
+ * Checks if either a Selector, ComplexSelector, or Specificity has the given specificity.
+ *
+ * Examples:
+ * @code
+ * EXPECT_THAT(selector, SpecificityIs(Specificity::FromABC(0, 0, 0)));
+ * EXPECT_THAT(specificity, SpecificityIs(Specificity::FromABC(0, 0, 0)));
+ * @endcode
+ *
+ * @param arg Selector, ComplexSelector, or Specificity to match against.
+ * @param specificity Specificity to match against.
+ */
 MATCHER_P(SpecificityIs, specificity, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  const ComplexSelector* selector = nullptr;
-  if constexpr (std::is_same_v<ArgType, Selector>) {
-    if (arg.entries.size() != 1) {
-      *result_listener << "which has " << arg.entries.size() << " entries, when one was expected";
-      return false;
-    }
+  Specificity actual;
 
-    selector = &arg.entries[0];
-  } else {
-    selector = &arg;
+  {
+    if constexpr (std::is_same_v<ArgType, Selector>) {
+      if (arg.entries.size() != 1) {
+        *result_listener << "which has " << arg.entries.size() << " entries, when one was expected";
+        return false;
+      }
+
+      actual = &arg.entries[0].computeSpecificity();
+    } else if constexpr (std::is_same_v<ArgType, ComplexSelector>) {
+      actual = Specificity(arg.computeSpecificity());
+    } else {
+      actual = arg;
+    }
   }
 
-  const Specificity actual = selector->computeSpecificity();
   if (!testing::ExplainMatchResult(specificity, actual, result_listener)) {
     *result_listener << "whose specificity is " << actual;
     return false;
@@ -376,5 +391,4 @@ inline auto MatcherIs(AttrMatcher op, const char* value,
                      options == MatcherOptions::CaseInsensitive));
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css

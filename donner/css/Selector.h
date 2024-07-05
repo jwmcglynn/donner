@@ -119,7 +119,7 @@ struct ComplexSelector {
    * Compute specificity of the ComplexSelector, see
    * https://www.w3.org/TR/selectors-4/#specificity-rules.
    */
-  Specificity computeSpecificity() const;
+  Specificity::ABC computeSpecificity() const;
 
   /**
    * Match a selector against an element, following the rules in the spec:
@@ -163,7 +163,7 @@ struct ComplexSelector {
       // success."
       // In this case, return success once we've reached the leftmost compound selector.
       if (it + 1 == entries.rend()) {
-        return SelectorMatchResult::Match(computeSpecificity());
+        return SelectorMatchResult::Match(Specificity(computeSpecificity()));
       }
 
       // "Otherwise, consider all possible elements that could be related to this element by the
@@ -189,7 +189,7 @@ struct ComplexSelector {
         elementsGenerator =
             std::bind(&traversal::previousSiblingsGenerator<T>, currentElement.value());
       } else {
-        // TODO: Combinator::Column
+        // NOTE: Combinator::Column does not apply to SVG so it never matches.
         return SelectorMatchResult::None();
       }
     }
@@ -224,6 +224,18 @@ struct Selector {
 
   /// The list of \ref ComplexSelector entries that compose this selector.
   std::vector<ComplexSelector> entries;
+
+  Specificity::ABC maxSpecificity() const {
+    Specificity::ABC result;
+    for (const auto& entry : entries) {
+      const Specificity::ABC entrySpecificity = entry.computeSpecificity();
+      if (entrySpecificity > result) {
+        result = entrySpecificity;
+      }
+    }
+
+    return result;
+  }
 
   /**
    * Match an element against a Selector.

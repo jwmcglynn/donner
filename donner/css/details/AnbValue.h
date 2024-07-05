@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include <iostream>
+#include <ostream>
 
 namespace donner::css {
 
@@ -26,17 +26,14 @@ struct AnbValue {
    * evaluate returns false.
    */
   int evaluate(int index) const noexcept {
-    std::cout << "AnbValue::evaluate(" << index << ") = matching " << a << "n+" << b << "\n";
     if (index < 0) {
       return false;
     }
 
     // Return true if index matches any combination of a*n+b
     if (a == 0) {
-      std::cout << "-> " << (index == b ? "true\n" : "false\n");
       return index == b;
     } else {
-      std::cout << "-> " << ((index - b) % a == 0 ? "true\n" : "false\n");
       return (index - b) % a == 0;
     }
   }

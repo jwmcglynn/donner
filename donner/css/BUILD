@@ -61,6 +61,21 @@ donner_cc_library(
     ],
 )
 
+cc_library(
+    name = "selector_test_utils",
+    testonly = 1,
+    hdrs = [
+        "tests/SelectorTestUtils.h",
+    ],
+    visibility = [
+        "//donner/css:__subpackages__",
+    ],
+    deps = [
+        ":core",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 cc_test(
     name = "css_tests",
     srcs = [
@@ -70,6 +85,7 @@ cc_test(
     ],
     deps = [
         ":core",
+        ":selector_test_utils",
         "//donner/base:base_test_utils",
         "//donner/base/parser:parser_test_utils",
         "//donner/css/parser",

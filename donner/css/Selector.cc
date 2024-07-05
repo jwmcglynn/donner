@@ -20,38 +20,41 @@ bool ComplexSelector::isValid() const {
   return true;
 }
 
-Specificity ComplexSelector::computeSpecificity() const {
-  uint32_t a = 0;
-  uint32_t b = 0;
-  uint32_t c = 0;
+Specificity::ABC ComplexSelector::computeSpecificity() const {
+  Specificity::ABC result;
+
   for (const auto& entry : entries) {
     for (const auto& subEntry : entry.compoundSelector.entries) {
       std::visit(
-          [&a, &b, &c](auto&& v) {
+          [&result](auto&& v) {
             using Type = std::remove_cvref_t<decltype(v)>;
 
             if constexpr (std::is_same_v<Type, IdSelector>) {
-              ++a;
+              ++result.a;
             } else if constexpr (std::is_same_v<Type, ClassSelector> ||
-                                 std::is_same_v<Type, AttributeSelector> ||
-                                 std::is_same_v<Type, PseudoClassSelector>) {
-              // TODO: Handle pseudo-classes that have their specificity defined specially.
-              ++b;
+                                 std::is_same_v<Type, AttributeSelector>) {
+              ++result.b;
+            } else if constexpr (std::is_same_v<Type, PseudoClassSelector>) {
+              const Specificity::ABC pseudoAbc = v.computeSpecificity();
+
+              result.a += pseudoAbc.a;
+              result.b += pseudoAbc.b;
+              result.c += pseudoAbc.c;
             } else if constexpr (std::is_same_v<Type, TypeSelector>) {
               // Ignore the universal selector.
               if (!v.isUniversal()) {
-                ++c;
+                ++result.c;
               }
             } else {
               static_assert(std::is_same_v<Type, PseudoElementSelector>);
-              ++c;
+              ++result.c;
             }
           },
           subEntry);
     }
   }
 
-  return Specificity::FromABC(a, b, c);
+  return result;
 }
 
 std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj) {

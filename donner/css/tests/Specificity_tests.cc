@@ -1,8 +1,10 @@
+#include "donner/css/Specificity.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/css/Specificity.h"
+#include "donner/css/tests/SelectorTestUtils.h"
 
 namespace donner::css {
 
