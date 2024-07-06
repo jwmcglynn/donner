@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
 
 donner_cc_library(

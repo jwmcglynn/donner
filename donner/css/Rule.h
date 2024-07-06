@@ -87,6 +87,9 @@ struct QualifiedRule {
   QualifiedRule(std::vector<ComponentValue>&& prelude, SimpleBlock&& block)
       : prelude(std::move(prelude)), block(std::move(block)) {}
 
+  /// Destructor
+  ~QualifiedRule() = default;
+
   // Copy and move constructors.
   QualifiedRule(const QualifiedRule& other) = default;
   QualifiedRule& operator=(const QualifiedRule& other) = default;
@@ -212,6 +215,9 @@ struct Rule {
    * @param value Rule value.
    */
   /* implicit */ Rule(Type&& value) : value(std::move(value)) {}
+
+  /// Destructor
+  ~Rule() = default;
 
   // Copy and move constructors and operators.
   Rule(const Rule& other) = default;

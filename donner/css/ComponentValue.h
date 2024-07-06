@@ -118,6 +118,9 @@ struct ComponentValue {
    */
   /* implicit */ ComponentValue(Type&& value);
 
+  /// Destructor.
+  ~ComponentValue();
+
   // Copy and move constructors.
   ComponentValue(const ComponentValue&) = default;
   ComponentValue& operator=(const ComponentValue&) = default;

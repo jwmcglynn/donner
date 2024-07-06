@@ -49,6 +49,7 @@ donner_cc_library(
         "selectors/IdSelector.h",
         "selectors/PseudoClassSelector.h",
         "selectors/PseudoElementSelector.h",
+        "selectors/SelectorMatchOptions.h",
         "selectors/TypeSelector.h",
     ],
     visibility = [

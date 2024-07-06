@@ -37,7 +37,7 @@
 <attr-matcher> = [ '~' | '|' | '^' | '$' | '*' ]? '='
 
 (* Note that this is a new feature in CSS Selectors Level 4 *)
-<attr-modifier> = i
+<attr-modifier> = i | s
 
 <pseudo-class-selector> = ':' <ident-token> |
                           ':' <function-token> <any-value> ')'
@@ -68,7 +68,7 @@ FIRSTS table
 <class-selector> = '.'
 <attribute-selector> = <[-token>
 <attr-matcher> = '~' | '|' | '^' | '$' | '*' | '='
-<attr-modifier> = i
+<attr-modifier> = i | s
 <pseudo-class-selector> = ':'
 <pseudo-element-selector> = ':'
 
@@ -153,6 +153,7 @@ FIRSTS table
 (* Note that this is a new feature in CSS Selectors Level 4 *)
 <attr-modifier>
   i -> PREDICT 'i'
+  s -> PREDICT 's'
 
 <pseudo-class-selector>
   ':' <ident-token> -> PREDICT ':' <ident-token>

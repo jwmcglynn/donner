@@ -4,6 +4,7 @@
 #include "donner/css/SelectorTraversal.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/ComplexSelector.h"
+#include "donner/css/selectors/SelectorMatchOptions.h"
 
 namespace donner::css {
 
@@ -48,12 +49,14 @@ struct Selector {
    * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to
    * match the selector.
    * @param targetElement Element to match against.
+   * @param options Options to control matching.
    * @returns true if any ComplexSelector in the Selector matches the given element.
    */
   template <traversal::ElementLike T>
-  SelectorMatchResult matches(const T& targetElement) const {
+  SelectorMatchResult matches(const T& targetElement, const SelectorMatchOptions<T>& options =
+                                                          SelectorMatchOptions<T>()) const {
     for (const auto& entry : entries) {
-      if (auto result = entry.matches(targetElement)) {
+      if (auto result = entry.matches(targetElement, options)) {
         return result;
       }
     }
@@ -68,10 +71,17 @@ struct Selector {
 };
 
 template <traversal::ElementLike T>
-bool PseudoClassSelector::matches(const T& element) const {
+PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
+    const T& element, const SelectorMatchOptions<T>& options) const {
   if (!argsIfFunction.has_value()) {
     if (ident.equalsLowercase("root")) {
       return !element.parentElement().has_value();
+    } else if (ident.equalsLowercase("scope")) {
+      if (options.scopeElement) {
+        return PseudoMatchResult(element == *options.scopeElement, /* isPrimary */ false);
+      } else {
+        return PseudoMatchResult(!element.parentElement().has_value(), /* isPrimary */ false);
+      }
     } else if (ident.equalsLowercase("empty")) {
       return !element.firstChild().has_value();
     } else if (ident.equalsLowercase("first-child")) {
@@ -96,13 +106,23 @@ bool PseudoClassSelector::matches(const T& element) const {
         return false;
       }
 
-      return !selector->matches(element).matched;
+      return !selector->matches(element, options).matched;
     } else if (ident.equalsLowercase("is") || ident.equalsLowercase("where")) {
       if (!selector) {
         return false;
       }
 
-      return selector->matches(element).matched;
+      return selector->matches(element, options).matched;
+    } else if (ident.equalsLowercase("has")) {
+      if (!selector) {
+        return false;
+      }
+
+      SelectorMatchOptions<T> optionsOverride = options;
+      optionsOverride.relativeToElement = &element;
+      // TODO: Iterate over all children and match.
+      // return selector->matches(eachElement, optionsOverride).matched;
+      return false;
     } else {
       const std::optional<T> maybeParent = element.parentElement();
       if (!maybeParent) {

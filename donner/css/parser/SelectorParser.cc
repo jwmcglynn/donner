@@ -174,6 +174,46 @@ public:
     return result;
   }
 
+  /**
+   * Parse a forgiving relative selector list, a list of selectors separated by commas
+   * with invalid selectors removed. This differs from parseForgivingSelectorList in that
+   * it allows a combinator prefix to be set, such as `> div`.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#forgiving-selector
+   * @see https://www.w3.org/TR/selectors-4/#parse-relative-selector
+   */
+  Selector parseForgivingRelativeSelectorList() {
+    bool first = true;
+    Selector result;
+
+    skipWhitespace();
+
+    while (!isEOF()) {
+      if (first) {
+        first = false;
+      } else {
+        expectAndConsumeToken<Token::Comma>();  // Complex selectors should only
+                                                // end when there is a comma or
+                                                // EOF.
+      }
+
+      skipWhitespace();
+
+      if (auto relativeSelector = handleRelativeSelector()) {
+        if (relativeSelector->isValid()) {
+          result.entries.emplace_back(std::move(*relativeSelector));
+        }
+      } else {
+        // Skip tokens until the next comma.
+        while (!isEOF() && !nextTokenIs<Token::Comma>()) {
+          advance();
+        }
+      }
+    }
+
+    return result;
+  }
+
 private:
   std::optional<Selector> handleComplexSelectorList() {
     skipWhitespace();
@@ -293,6 +333,22 @@ private:
     }
 
     return result;
+  }
+
+  std::optional<ComplexSelector> handleRelativeSelector() {
+    // See https://www.w3.org/TR/selectors-4/#parse-relative-selector
+    // <relative-selector> = <combinator>? <complex-selector>
+    const auto maybeCombinator = handleCombinator();
+    const Combinator combinator = maybeCombinator.value_or(Combinator::Descendant);
+
+    skipWhitespace();
+
+    std::optional<ComplexSelector> complexSelector = handleComplexSelector();
+    if (complexSelector && !complexSelector->entries.empty()) {
+      complexSelector->entries[0].combinator = combinator;
+    }
+
+    return complexSelector;
   }
 
   std::optional<CompoundSelector> handleCompoundSelector() {
@@ -499,24 +555,26 @@ private:
       return nullptr;
     }
 
-    const bool forgivingSelector =
-        pseudoClass.ident.equalsLowercase("not") || pseudoClass.ident.equalsLowercase("has");
-    const bool regularSelector =
-        pseudoClass.ident.equalsLowercase("is") || pseudoClass.ident.equalsLowercase("where");
-    if (!forgivingSelector && !regularSelector) {
-      return nullptr;
-    }
+    auto unwrap = [](ParseResult<Selector>&& selectorResult) -> std::unique_ptr<Selector> {
+      if (selectorResult.hasError()) {
+        // TODO: Propagate a warning here, ignore for now and don't set the Selector.
+        return nullptr;
+      }
 
-    // Parse the arguments for known pseudo-classes
+      return std::make_unique<Selector>(std::move(selectorResult.result()));
+    };
+
     SelectorParserImpl parser(pseudoClass.argsIfFunction.value());
-    ParseResult<Selector> selectorResult =
-        forgivingSelector ? parser.parseForgivingSelectorList() : parser.parse();
-    if (selectorResult.hasError()) {
-      // TODO: Propagate a warning here, ignore for now and don't set the Selector.
+    if (pseudoClass.ident.equalsLowercase("not") || pseudoClass.ident.equalsLowercase("has")) {
+      return unwrap(parser.parseForgivingSelectorList());
+    } else if (pseudoClass.ident.equalsLowercase("is") ||
+               pseudoClass.ident.equalsLowercase("where")) {
+      return unwrap(parser.parse());
+    } else if (pseudoClass.ident.equalsLowercase("has")) {
+      return unwrap(parser.parseForgivingRelativeSelectorList());
+    } else {
       return nullptr;
     }
-
-    return std::make_unique<Selector>(std::move(selectorResult.result()));
   }
 
   std::optional<SubclassSelector> handleSubclassSelector() {
@@ -926,6 +984,12 @@ ParseResult<Selector> SelectorParser::Parse(std::string_view str) {
 Selector SelectorParser::ParseForgivingSelectorList(std::span<const ComponentValue> components) {
   SelectorParserImpl parser(components);
   return parser.parseForgivingSelectorList();
+}
+
+Selector SelectorParser::ParseForgivingRelativeSelectorList(
+    std::span<const ComponentValue> components) {
+  SelectorParserImpl parser(components);
+  return parser.parseForgivingRelativeSelectorList();
 }
 
 }  // namespace donner::css::parser

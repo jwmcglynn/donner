@@ -12,6 +12,7 @@
 #include "donner/css/Specificity.h"
 #include "donner/css/WqName.h"
 #include "donner/css/details/AnbValue.h"
+#include "donner/css/selectors/SelectorMatchOptions.h"
 
 namespace donner::css {
 
@@ -126,13 +127,31 @@ struct PseudoClassSelector {
   }
 
   /**
+   * Result of \ref matches, returns if the selector matched and if it can be treated as a
+   * "primary" matcher. Every matcher except `:scope` is primary, and can match an element directly.
+   * `:scope` can only be used to find another element in the tree: `:scope > div` is valid and
+   * matches a div, but `:scope` itself cannot match an element.
+   */
+  struct PseudoMatchResult {
+    bool matches = false;   ///< True if the selector matched.
+    bool isPrimary = true;  ///< True if the selector is a primary matcher.
+
+    /// Constructor, implicit from a bool.
+    /* implicit */ PseudoMatchResult(bool matches, bool isPrimary = true)
+        : matches(matches), isPrimary(isPrimary) {}
+  };
+
+  /**
    * Returns true if the provided element matches this selector.
    *
+   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to
+   * match the selector.
    * @param element The element to check.
+   * @param options The options to use when matching
    */
+  // NOTE: This function is implemented in Selector.h due to a dependency on the Selector type
   template <traversal::ElementLike T>
-  bool matches(const T& element) const;  // NOTE: This function is implemented in Selector.h due to
-  // a dependency on the Selector type
+  PseudoMatchResult matches(const T& element, const SelectorMatchOptions<T>& options) const;
 
   /**
    * Compute the pseudo-class's specificity, using the rules from

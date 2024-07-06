@@ -8,6 +8,7 @@
 #include "donner/css/SelectorTraversal.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/CompoundSelector.h"
+#include "donner/css/selectors/SelectorMatchOptions.h"
 
 namespace donner::css {
 
@@ -123,12 +124,13 @@ struct ComplexSelector {
    * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to
    * match the selector.
    * @param targetElement Element to match against.
+   * @param options Options to control matching.
    * @return true if the element matches the selector, within a SelectorMatchResult which also
    *              contains the specificity.
    */
   template <traversal::ElementLike T>
-  SelectorMatchResult matches(const T& targetElement) const {
-    // TODO: Accept :scope elements.
+  SelectorMatchResult matches(const T& targetElement,
+                              const SelectorMatchOptions<T>& options) const {
     using GeneratorCreator = std::function<traversal::SelectorTraversalGenerator<T>()>;
     GeneratorCreator elementsGenerator =
         std::bind(&traversal::singleElementGenerator<T>, targetElement);
@@ -144,7 +146,8 @@ struct ComplexSelector {
       traversal::SelectorTraversalGenerator<T> elements = elementsGenerator();
       while (elements.next()) {
         const T element = elements.getValue();
-        if (entry.compoundSelector.matches(element)) {
+        if (entry.compoundSelector.matches(element, /* requirePrimary */ it == entries.rbegin(),
+                                           options)) {
           currentElement = element;
           break;
         }
@@ -152,6 +155,15 @@ struct ComplexSelector {
 
       if (!currentElement) {
         return SelectorMatchResult::None();
+      }
+
+      // If this is the last entry (first in reverse order) and relativeToElement is set,
+      // we need to check the combinator against the relativeToElement
+      if (it == entries.rbegin() && options.relativeToElement) {
+        if (!matchesRelativeTo(currentElement.value(), *options.relativeToElement,
+                               entry.combinator)) {
+          return SelectorMatchResult::None();
+        }
       }
 
       // "Otherwise, if there is only one compound selector in the complex selector, return
@@ -195,6 +207,48 @@ struct ComplexSelector {
 
   /// Output a human-readable representation of the selector.
   friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj);
+
+private:
+  /**
+   * For relative selectors, check if the current element matches the relativeToElement with the
+   * given combinator.
+   *
+   * @tparam T A type that fulfills the ElementLike concept, to enable traversing the tree to match
+   * the selector.
+   * @param currentElement The element to check.
+   * @param relativeToElement The element to check against for relative matching, for example, the
+   * parent of the current element. For example, `> div` the current element will be the `div` and
+   * the relativeToElement will be the parent.
+   */
+  template <traversal::ElementLike T>
+  bool matchesRelativeTo(const T& currentElement, const T& relativeToElement,
+                         Combinator combinator) const {
+    switch (combinator) {
+      case Combinator::Descendant: {
+        auto elements = traversal::parentsGenerator<T>(currentElement);
+        while (elements.next()) {
+          if (elements.getValue() == relativeToElement) {
+            return true;
+          }
+        }
+        return false;
+      }
+      case Combinator::Child: return (currentElement.parentElement() == relativeToElement);
+      case Combinator::NextSibling: return (currentElement.previousSibling() == relativeToElement);
+      case Combinator::SubsequentSibling: {
+        auto elements = traversal::previousSiblingsGenerator<T>(currentElement);
+        while (elements.next()) {
+          if (elements.getValue() == relativeToElement) {
+            return true;
+          }
+        }
+        return false;
+      }
+      default:
+        // NOTE: Combinator::Column does not apply to SVG so it never matches.
+        return false;
+    }
+  }
 };
 
 }  // namespace donner::css

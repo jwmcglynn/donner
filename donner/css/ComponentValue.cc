@@ -45,6 +45,8 @@ std::ostream& operator<<(std::ostream& os, const SimpleBlock& block) {
 
 ComponentValue::ComponentValue(ComponentValue::Type&& value) : value(std::move(value)) {}
 
+ComponentValue::~ComponentValue() = default;
+
 bool ComponentValue::operator==(const ComponentValue& other) const {
   return value == other.value;
 }

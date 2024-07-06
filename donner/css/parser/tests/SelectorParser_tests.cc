@@ -509,6 +509,28 @@ TEST(SelectorParser, ForgivingSelectorList) {
                             EntryIs(Combinator::SubsequentSibling, TypeSelectorIs("h2")))));
 }
 
+TEST(SelectorParsing, ForgivingRelativeSelectorList) {
+  // Regular list
+  EXPECT_THAT(
+      SelectorParser::ParseForgivingRelativeSelectorList(TokenizeString("div, .class, #id")),
+      SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("div"))),
+                   ComplexSelectorIs(EntryIs(ClassSelectorIs("class"))),
+                   ComplexSelectorIs(EntryIs(IdSelectorIs("id")))));
+
+  // Beginning with a combinator
+  EXPECT_THAT(SelectorParser::ParseForgivingRelativeSelectorList(TokenizeString("> div")),
+              SelectorsAre(ComplexSelectorIs(EntryIs(Combinator::Child, TypeSelectorIs("div")))));
+  EXPECT_THAT(SelectorParser::ParseForgivingRelativeSelectorList(TokenizeString("  >div")),
+              SelectorsAre(ComplexSelectorIs(EntryIs(Combinator::Child, TypeSelectorIs("div")))));
+
+  // List with combinators
+  EXPECT_THAT(SelectorParser::ParseForgivingRelativeSelectorList(TokenizeString("> p, + ol, ~ h2")),
+              SelectorsAre(
+                  ComplexSelectorIs(EntryIs(Combinator::Child, TypeSelectorIs("p"))),
+                  ComplexSelectorIs(EntryIs(Combinator::NextSibling, TypeSelectorIs("ol"))),
+                  ComplexSelectorIs(EntryIs(Combinator::SubsequentSibling, TypeSelectorIs("h2")))));
+}
+
 // TODO: Add more tests from
 // http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/toc.htm
 

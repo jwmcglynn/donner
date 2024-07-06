@@ -413,6 +413,15 @@ TEST_F(SelectorTests, PseudoClassSelectorSimple) {
   EXPECT_TRUE(doesNotMatch(":only-child", element(midB)));
   EXPECT_TRUE(doesNotMatch(":only-child", element(childA)));
   EXPECT_TRUE(matches(":only-child", element(childD)));
+
+  // :scope
+  // See https://www.w3.org/TR/2022/WD-selectors-4-20221111/#the-scope-pseudo for `:scope` rules.
+  EXPECT_TRUE(doesNotMatch(":scope", element(root)))
+      << ":scope cannot match the element directly, it cannot be the subject of the selector";
+  EXPECT_TRUE(doesNotMatch(":scope > root", element(root)));
+  EXPECT_TRUE(matches(":scope > mid", element(midA)));
+  EXPECT_TRUE(matches(":scope > mid", element(midB)));
+  EXPECT_TRUE(doesNotMatch(":scope > a", element(childA)));
 }
 
 TEST_F(SelectorTests, PseudoClassSelectorNthChild) {

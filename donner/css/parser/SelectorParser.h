@@ -50,6 +50,19 @@ public:
    * @param components The list of ComponentValues to parse.
    */
   static Selector ParseForgivingSelectorList(std::span<const ComponentValue> components);
+
+  /**
+   * Parse a "forgiving relative selector list", which is a list of selectors separated by commas,
+   * with invalid selectors removed. As relative selectors, these may start with a combinator, such
+   * as `> div`.
+   *
+   * These can be matched with \ref Selector::matches with \ref
+   * SelectorMatchOptions::relativeToElement set.
+   *
+   * @see https://www.w3.org/TR/selectors-4/#forgiving-selector for more details on
+   * `<forgiving-relative-selector-list>`.
+   */
+  static Selector ParseForgivingRelativeSelectorList(std::span<const ComponentValue> components);
 };
 
 }  // namespace donner::css::parser
