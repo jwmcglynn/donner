@@ -89,16 +89,16 @@ struct PseudoClassSelector {
    *
    * @param ident The name of the pseudo-class.
    */
-  explicit PseudoClassSelector(const RcString& ident) : ident(ident) {}
+  explicit PseudoClassSelector(const RcString& ident);
 
   /// Destructor.
-  ~PseudoClassSelector() noexcept = default;
+  ~PseudoClassSelector() noexcept;
 
   /// Moveable and copyable.
-  PseudoClassSelector(PseudoClassSelector&&) = default;
-  PseudoClassSelector& operator=(PseudoClassSelector&&) = default;
+  PseudoClassSelector(PseudoClassSelector&&) noexcept;
+  PseudoClassSelector& operator=(PseudoClassSelector&&) noexcept;
 
-  PseudoClassSelector(const PseudoClassSelector& other) { this->operator=(other); }
+  PseudoClassSelector(const PseudoClassSelector& other);
 
   PseudoClassSelector& operator=(const PseudoClassSelector& other);
 

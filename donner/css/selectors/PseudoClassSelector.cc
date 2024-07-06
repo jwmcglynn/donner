@@ -4,6 +4,17 @@
 
 namespace donner::css {
 
+PseudoClassSelector::PseudoClassSelector(const RcString& ident) : ident(ident) {}
+
+PseudoClassSelector::~PseudoClassSelector() noexcept = default;
+
+PseudoClassSelector::PseudoClassSelector(PseudoClassSelector&&) noexcept = default;
+PseudoClassSelector& PseudoClassSelector::operator=(PseudoClassSelector&&) noexcept = default;
+
+PseudoClassSelector::PseudoClassSelector(const PseudoClassSelector& other) {
+  this->operator=(other);
+}
+
 PseudoClassSelector& PseudoClassSelector::operator=(const PseudoClassSelector& other) {
   ident = other.ident;
   argsIfFunction = other.argsIfFunction;

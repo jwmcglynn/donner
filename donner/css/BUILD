@@ -27,6 +27,7 @@ donner_cc_library(
         "Declaration.cc",
         "Rule.cc",
         "Selector.cc",
+        "selectors/ComplexSelector.cc",
         "selectors/PseudoClassSelector.cc",
     ],
     hdrs = [
@@ -43,6 +44,7 @@ donner_cc_library(
         "details/AnbValue.h",
         "selectors/AttributeSelector.h",
         "selectors/ClassSelector.h",
+        "selectors/ComplexSelector.h",
         "selectors/CompoundSelector.h",
         "selectors/IdSelector.h",
         "selectors/PseudoClassSelector.h",
