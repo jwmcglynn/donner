@@ -1,6 +1,8 @@
 #include "donner/svg/SVGElement.h"
 
+#include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/parser/SelectorParser.h"
+#include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/AttributesComponent.h"
 #include "donner/svg/components/ClassComponent.h"
@@ -18,16 +20,15 @@ namespace donner::svg {
 namespace {
 
 static std::optional<SVGElement> querySelectorSearch(const css::Selector& selector,
-                                                     SVGElement element) {
-  // TODO: Add a proper iterator for all children.
-  if (selector.matches(element)) {
-    return element;
-  }
+                                                     const SVGElement& element) {
+  css::SelectorMatchOptions<SVGElement> options;
+  options.scopeElement = &element;
 
-  for (std::optional<SVGElement> child = element.firstChild(); child;
-       child = child->nextSibling()) {
-    if (auto result = querySelectorSearch(selector, *child)) {
-      return *result;
+  ElementTraversalGenerator<SVGElement> elements = allChildrenRecursiveGenerator(element);
+  while (elements.next()) {
+    const SVGElement childElement = elements.getValue();
+    if (selector.matches(childElement, options).matched) {
+      return childElement;
     }
   }
 
