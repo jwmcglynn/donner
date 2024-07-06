@@ -565,10 +565,9 @@ private:
     };
 
     SelectorParserImpl parser(pseudoClass.argsIfFunction.value());
-    if (pseudoClass.ident.equalsLowercase("not") || pseudoClass.ident.equalsLowercase("has")) {
+    if (pseudoClass.ident.equalsLowercase("is") || pseudoClass.ident.equalsLowercase("where")) {
       return unwrap(parser.parseForgivingSelectorList());
-    } else if (pseudoClass.ident.equalsLowercase("is") ||
-               pseudoClass.ident.equalsLowercase("where")) {
+    } else if (pseudoClass.ident.equalsLowercase("not")) {
       return unwrap(parser.parse());
     } else if (pseudoClass.ident.equalsLowercase("has")) {
       return unwrap(parser.parseForgivingRelativeSelectorList());

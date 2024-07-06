@@ -178,4 +178,27 @@ ElementTraversalGenerator<T> previousSiblingsGenerator(T element) {
   }
 }
 
+/**
+ * A generator that yields all children of an element recursively with pre-order traversal.
+ */
+template <ElementLike T>
+ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
+  SmallVector<T, 4> stack;
+
+  for (auto child = element.firstChild(); child; child = element.nextSibling()) {
+    stack.push_back(child.value());
+  }
+
+  while (!stack.empty()) {
+    T current = stack[stack.size() - 1];
+    stack.pop_back();
+
+    co_yield current;
+
+    for (auto child = current.firstChild(); child; child = current.nextSibling()) {
+      stack.push_back(child.value());
+    }
+  }
+}
+
 }  // namespace donner

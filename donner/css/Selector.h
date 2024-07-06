@@ -2,6 +2,7 @@
 /// @file
 
 #include "donner/base/element/ElementLike.h"
+#include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/ComplexSelector.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
@@ -120,8 +121,16 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
 
       SelectorMatchOptions<T> optionsOverride = options;
       optionsOverride.relativeToElement = &element;
-      // TODO: Iterate over all children and match.
-      // return selector->matches(eachElement, optionsOverride).matched;
+
+      // Iterate over all children and match.
+      ElementTraversalGenerator<T> elements = allChildrenRecursiveGenerator(element);
+      while (elements.next()) {
+        const T childElement = elements.getValue();
+        if (selector->matches(childElement, optionsOverride).matched) {
+          return true;
+        }
+      }
+
       return false;
     } else {
       const std::optional<T> maybeParent = element.parentElement();

@@ -562,7 +562,7 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
       << "Should not match when all selectors in the list are invalid";
 }
 
-TEST_F(SelectorTests, PseudoClassSelectorIsNotWhere) {
+TEST_F(SelectorTests, PseudoClassSelectorIsNotWhereHas) {
   // <root>
   // -> mid1 = <mid>
   //   -> child1 = <type1>
@@ -592,6 +592,17 @@ TEST_F(SelectorTests, PseudoClassSelectorIsNotWhere) {
   // :where(type1)
   EXPECT_TRUE(matches(":where(type1)", element(children["child1"])));
   EXPECT_FALSE(matches(":where(type1)", element(children["child2"])));
+
+  // :has(> type1)
+  EXPECT_TRUE(matches(":has(> type1)", element(mid1)));
+  EXPECT_TRUE(doesNotMatch(":has(> type1)", element(root)));
+  EXPECT_TRUE(doesNotMatch(":has(> type1)", element(children["child1"])));
+
+  // :has(type1) matches any element under the root that has a type1 child (either direct or
+  // indirect)
+  EXPECT_TRUE(matches(":has(type1)", element(root)));
+  EXPECT_TRUE(matches(":has(type1)", element(mid1)));
+  EXPECT_TRUE(doesNotMatch(":has(type1)", element(children["child1"])));
 }
 
 TEST_F(SelectorTests, Specificity) {
