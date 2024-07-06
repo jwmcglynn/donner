@@ -72,7 +72,7 @@ struct CompoundSelector {
    * @param requirePrimary If true, only primary selectors are considered.
    * @param options Options to control matching.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   bool matches(const T& element, bool requirePrimary,
                const SelectorMatchOptions<T>& options) const {
     for (const auto& entry : entries) {

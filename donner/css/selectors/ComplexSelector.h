@@ -4,8 +4,8 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/ComponentValue.h"
-#include "donner/css/SelectorTraversal.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/CompoundSelector.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
@@ -128,12 +128,11 @@ struct ComplexSelector {
    * @return true if the element matches the selector, within a SelectorMatchResult which also
    *              contains the specificity.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   SelectorMatchResult matches(const T& targetElement,
                               const SelectorMatchOptions<T>& options) const {
-    using GeneratorCreator = std::function<traversal::SelectorTraversalGenerator<T>()>;
-    GeneratorCreator elementsGenerator =
-        std::bind(&traversal::singleElementGenerator<T>, targetElement);
+    using GeneratorCreator = std::function<ElementTraversalGenerator<T>()>;
+    GeneratorCreator elementsGenerator = std::bind(&singleElementGenerator<T>, targetElement);
 
     // "To match a complex selector against an element, process it compound selector at a time, in
     // right-to-left order."
@@ -143,7 +142,7 @@ struct ComplexSelector {
       // "If any simple selectors in the rightmost compound selector does not match the element,
       // return failure."
       std::optional<T> currentElement;
-      traversal::SelectorTraversalGenerator<T> elements = elementsGenerator();
+      ElementTraversalGenerator<T> elements = elementsGenerator();
       while (elements.next()) {
         const T element = elements.getValue();
         if (entry.compoundSelector.matches(element, /* requirePrimary */ it == entries.rbegin(),
@@ -179,22 +178,21 @@ struct ComplexSelector {
       // any one of these elements returns success, then return success. Otherwise, return
       // failure."
       if (entry.combinator == Combinator::Descendant) {
-        elementsGenerator = std::bind(&traversal::parentsGenerator<T>, currentElement.value());
+        elementsGenerator = std::bind(&parentsGenerator<T>, currentElement.value());
       } else if (entry.combinator == Combinator::Child) {
         if (auto parent = currentElement->parentElement()) {
-          elementsGenerator = std::bind(&traversal::singleElementGenerator<T>, parent.value());
+          elementsGenerator = std::bind(&singleElementGenerator<T>, parent.value());
         } else {
           return SelectorMatchResult::None();
         }
       } else if (entry.combinator == Combinator::NextSibling) {
         if (auto previous = currentElement->previousSibling()) {
-          elementsGenerator = std::bind(&traversal::singleElementGenerator<T>, previous.value());
+          elementsGenerator = std::bind(&singleElementGenerator<T>, previous.value());
         } else {
           return SelectorMatchResult::None();
         }
       } else if (entry.combinator == Combinator::SubsequentSibling) {
-        elementsGenerator =
-            std::bind(&traversal::previousSiblingsGenerator<T>, currentElement.value());
+        elementsGenerator = std::bind(&previousSiblingsGenerator<T>, currentElement.value());
       } else {
         // NOTE: Combinator::Column does not apply to SVG so it never matches.
         return SelectorMatchResult::None();
@@ -220,12 +218,12 @@ private:
    * parent of the current element. For example, `> div` the current element will be the `div` and
    * the relativeToElement will be the parent.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   bool matchesRelativeTo(const T& currentElement, const T& relativeToElement,
                          Combinator combinator) const {
     switch (combinator) {
       case Combinator::Descendant: {
-        auto elements = traversal::parentsGenerator<T>(currentElement);
+        auto elements = parentsGenerator<T>(currentElement);
         while (elements.next()) {
           if (elements.getValue() == relativeToElement) {
             return true;
@@ -236,7 +234,7 @@ private:
       case Combinator::Child: return (currentElement.parentElement() == relativeToElement);
       case Combinator::NextSibling: return (currentElement.previousSibling() == relativeToElement);
       case Combinator::SubsequentSibling: {
-        auto elements = traversal::previousSiblingsGenerator<T>(currentElement);
+        auto elements = previousSiblingsGenerator<T>(currentElement);
         while (elements.next()) {
           if (elements.getValue() == relativeToElement) {
             return true;

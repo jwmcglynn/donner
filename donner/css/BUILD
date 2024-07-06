@@ -36,7 +36,6 @@ donner_cc_library(
         "Declaration.h",
         "Rule.h",
         "Selector.h",
-        "SelectorTraversal.h",
         "Specificity.h",
         "Stylesheet.h",
         "Token.h",
@@ -58,6 +57,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
+        "//donner/base/element",
         "//donner/base/parser:file_offset",
         "//donner/svg/xml:xml_qualified_name",
         "@frozen",

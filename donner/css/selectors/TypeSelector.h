@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/css/SelectorTraversal.h"
+#include "donner/base/element/ElementLike.h"
 #include "donner/svg/xml/XMLQualifiedName.h"
 
 namespace donner::css {
@@ -73,7 +73,7 @@ struct TypeSelector {
    *
    * @param element The element to check.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   bool matches(const T& element) const {
     const svg::XMLQualifiedNameRef elementName = element.xmlTypeName();
 

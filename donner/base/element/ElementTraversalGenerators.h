@@ -1,53 +1,12 @@
 #pragma once
 /// @file
 
-#include <concepts>
 #include <coroutine>
 
-#include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/element/ElementLike.h"
 
-namespace donner::css::traversal {
-
-/**
- * Concept for types that can be matched against a selector, such as a \ref donner::svg::SVGElement.
- *
- * The type must support tree traversal operations, such as `parentElement()` and
- * `previousSibling()`, and type and class information to match against the respective selectors.
- *
- * TODO: Move this to its own header, like base/concepts/element_like.h.
- */
-template <typename T>
-concept ElementLike =
-    requires(const T t, const T otherT, const svg::XMLQualifiedNameRef attribName) {
-      { t.operator==(otherT) } -> std::same_as<bool>;
-      { t.parentElement() } -> std::same_as<std::optional<T>>;
-      { t.firstChild() } -> std::same_as<std::optional<T>>;
-      { t.lastChild() } -> std::same_as<std::optional<T>>;
-      { t.previousSibling() } -> std::same_as<std::optional<T>>;
-      { t.nextSibling() } -> std::same_as<std::optional<T>>;
-      { t.xmlTypeName() } -> std::same_as<svg::XMLQualifiedNameRef>;
-      { t.id() } -> std::same_as<RcString>;
-      { t.className() } -> std::same_as<RcString>;
-      { t.getAttribute(attribName) } -> std::same_as<std::optional<RcString>>;
-      {
-        t.findMatchingAttributes(attribName)
-      } -> std::same_as<SmallVector<svg::XMLQualifiedNameRef, 1>>;
-    };
-
-/**
- * Concept that can either be a `std::optional<TypeSelector>` or `std::unique_ptr<Selector>`, which
- * supports:
- * - `operator bool`
- * - `operator->`
- * - `bool matches(const ElementLike& element);`
- */
-template <typename T, typename ElementType>
-concept OptionalSelectorLike = requires(const T t, const ElementType element) {
-  { bool(t) } -> std::same_as<bool>;
-  { bool(t.operator->()->matches(element)) } -> std::same_as<bool>;
-};
+namespace donner {
 
 /**
  * Selectors may need to traverse the tree in different ways to match, and this is abstracted away
@@ -59,12 +18,12 @@ concept OptionalSelectorLike = requires(const T t, const ElementType element) {
  * @see previousSiblingsGenerator
  */
 template <typename T>
-class SelectorTraversalGenerator {
+class ElementTraversalGenerator {
 public:
   class Promise;
 
   /// The internal handle used to store the coroutine, used to construct \ref
-  /// SelectorTraversalGenerator from a `co_yield` expression.
+  /// ElementTraversalGenerator from a `co_yield` expression.
   using Handle = std::coroutine_handle<Promise>;
 
   /// The internal object which stores the current value.
@@ -72,29 +31,29 @@ public:
 
 public:
   /// Construct a generator from a coroutine handle.
-  explicit SelectorTraversalGenerator(Handle h) : coroutine_(h) {}
+  explicit ElementTraversalGenerator(Handle h) : coroutine_(h) {}
 
   /// Copying generators is not allowed.
-  SelectorTraversalGenerator(const SelectorTraversalGenerator&) = delete;
+  ElementTraversalGenerator(const ElementTraversalGenerator&) = delete;
 
   /// Move constructor.
-  SelectorTraversalGenerator(SelectorTraversalGenerator&& other) noexcept
+  ElementTraversalGenerator(ElementTraversalGenerator&& other) noexcept
       : coroutine_(other.coroutine_) {
     other.coroutine_ = nullptr;
   }
 
   /// Copying generators is not allowed.
-  SelectorTraversalGenerator& operator=(const SelectorTraversalGenerator&) = delete;
+  ElementTraversalGenerator& operator=(const ElementTraversalGenerator&) = delete;
 
   /// Move assignment.
-  SelectorTraversalGenerator& operator=(SelectorTraversalGenerator&& other) noexcept {
+  ElementTraversalGenerator& operator=(ElementTraversalGenerator&& other) noexcept {
     coroutine_ = other.coroutine_;
     other.coroutine_ = nullptr;
     return *this;
   }
 
   /// Destructor.
-  ~SelectorTraversalGenerator() {
+  ~ElementTraversalGenerator() {
     if (coroutine_) {
       coroutine_.destroy();
     }
@@ -148,10 +107,10 @@ public:
 
     /**
      * On coroutine construction, the runtime first creates the Handle, then this Promise followed
-     * by `get_return_object()` to get the \ref SelectorTraversalGenerator which holds the state.
+     * by `get_return_object()` to get the \ref ElementTraversalGenerator which holds the state.
      */
     auto get_return_object() noexcept {
-      return SelectorTraversalGenerator{Handle::from_promise(*this)};
+      return ElementTraversalGenerator{Handle::from_promise(*this)};
     }
 
     /// Called when the coroutine returns, does nothing.
@@ -165,12 +124,12 @@ public:
 
     /// On unhandled  exception, crash.
     [[noreturn]] void unhandled_exception() {
-      UTILS_RELEASE_ASSERT_MSG(false, "Unhandled exception in SelectorTraversalGenerator");
+      UTILS_RELEASE_ASSERT_MSG(false, "Unhandled exception in ElementTraversalGenerator");
     }
 
   private:
     std::optional<T> currentValue_;
-    friend class SelectorTraversalGenerator;
+    friend class ElementTraversalGenerator;
   };
 
 private:
@@ -183,7 +142,7 @@ private:
  * @param element The element to yield. If this is `std::nullopt`, the generator will yield nothing.
  */
 template <ElementLike T>
-SelectorTraversalGenerator<T> singleElementGenerator(const T& element) {
+ElementTraversalGenerator<T> singleElementGenerator(const T& element) {
   co_yield element;
 }
 
@@ -194,7 +153,7 @@ SelectorTraversalGenerator<T> singleElementGenerator(const T& element) {
  * @param element The element to start from, which is not yielded.
  */
 template <ElementLike T>
-SelectorTraversalGenerator<T> parentsGenerator(T element) {
+ElementTraversalGenerator<T> parentsGenerator(T element) {
   T currentElement = element;
 
   while (auto parent = currentElement.parentElement()) {
@@ -210,7 +169,7 @@ SelectorTraversalGenerator<T> parentsGenerator(T element) {
  * @param element The element to start from, which is not yielded.
  */
 template <ElementLike T>
-SelectorTraversalGenerator<T> previousSiblingsGenerator(T element) {
+ElementTraversalGenerator<T> previousSiblingsGenerator(T element) {
   T currentElement = element;
 
   while (auto previousSibling = currentElement.previousSibling()) {
@@ -219,4 +178,4 @@ SelectorTraversalGenerator<T> previousSiblingsGenerator(T element) {
   }
 }
 
-}  // namespace donner::css::traversal
+}  // namespace donner

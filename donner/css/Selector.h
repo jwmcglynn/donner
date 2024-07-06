@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/css/SelectorTraversal.h"
+#include "donner/base/element/ElementLike.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/ComplexSelector.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
@@ -52,7 +52,7 @@ struct Selector {
    * @param options Options to control matching.
    * @returns true if any ComplexSelector in the Selector matches the given element.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   SelectorMatchResult matches(const T& targetElement, const SelectorMatchOptions<T>& options =
                                                           SelectorMatchOptions<T>()) const {
     for (const auto& entry : entries) {
@@ -70,7 +70,7 @@ struct Selector {
   friend std::ostream& operator<<(std::ostream& os, const Selector& obj);
 };
 
-template <traversal::ElementLike T>
+template <ElementLike T>
 PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
     const T& element, const SelectorMatchOptions<T>& options) const {
   if (!argsIfFunction.has_value()) {

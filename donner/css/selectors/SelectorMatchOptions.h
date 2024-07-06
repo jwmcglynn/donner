@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/css/SelectorTraversal.h"
+#include "donner/base/element/ElementLike.h"
 
 namespace donner::css {
 
@@ -14,7 +14,7 @@ namespace donner::css {
  * @tparam T A type that fulfills the ElementLike concept, matching the \ref Selector::matches
  * method.
  */
-template <traversal::ElementLike T>
+template <ElementLike T>
 struct SelectorMatchOptions {
   const T* relativeToElement =
       nullptr;  ///< Enables relative querying and uses this element as the reference point. For

@@ -4,8 +4,8 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/base/element/ElementLike.h"
 #include "donner/css/ComponentValue.h"
-#include "donner/css/SelectorTraversal.h"
 
 namespace donner::css {
 
@@ -54,7 +54,7 @@ struct PseudoElementSelector {
    *
    * @param element The element to check.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   bool matches(const T& element) const {
     return false;
   }

@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/ComponentValue.h"
-#include "donner/css/SelectorTraversal.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/WqName.h"
 #include "donner/css/details/AnbValue.h"
@@ -18,6 +18,23 @@ namespace donner::css {
 
 // Forward declaration.
 struct Selector;
+
+namespace details {
+
+/**
+ * Concept that can either be a `std::optional<TypeSelector>` or `std::unique_ptr<Selector>`, which
+ * supports:
+ * - `operator bool`
+ * - `operator->`
+ * - `bool matches(const ElementLike& element);`
+ */
+template <typename T, typename ElementType>
+concept OptionalSelectorLike = requires(const T t, const ElementType element) {
+                                 { bool(t) } -> std::same_as<bool>;
+                                 { bool(t.operator->()->matches(element)) } -> std::same_as<bool>;
+                               };
+
+}  // namespace details
 
 /**
  * Selectors which start with one colon, e.g. `:nth-child()`, are called pseudo-classes, and they
@@ -150,7 +167,7 @@ struct PseudoClassSelector {
    * @param options The options to use when matching
    */
   // NOTE: This function is implemented in Selector.h due to a dependency on the Selector type
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   PseudoMatchResult matches(const T& element, const SelectorMatchOptions<T>& options) const;
 
   /**
@@ -163,7 +180,7 @@ struct PseudoClassSelector {
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj);
 
 private:
-  template <traversal::ElementLike T, traversal::OptionalSelectorLike<T> SelectorType>
+  template <ElementLike T, details::OptionalSelectorLike<T> SelectorType>
   static int getIndexInParent(const T& parent, const T& element, bool fromEnd,
                               const SelectorType& matchingType) {
     int childIndex = 1;
@@ -200,7 +217,7 @@ private:
     return -1;
   }
 
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   static bool isFirstOfType(const T& element, const svg::XMLQualifiedNameRef& type) {
     for (std::optional<T> child = element.previousSibling(); child;
          child = child.value().previousSibling()) {
@@ -212,7 +229,7 @@ private:
     return true;
   }
 
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   static bool isLastOfType(const T& element, const svg::XMLQualifiedNameRef& type) {
     for (std::optional<T> child = element.nextSibling(); child;
          child = child.value().nextSibling()) {

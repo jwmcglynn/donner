@@ -15,7 +15,7 @@
 
 namespace donner::svg {
 
-namespace detail {
+namespace details {
 
 template <typename T, std::size_t... I>
 auto tuple_remove_const(T tuple, std::index_sequence<I...>) {
@@ -37,7 +37,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
   return result;
 }
 
-}  // namespace detail
+}  // namespace details
 
 class PropertyRegistry;
 using PropertyParseFn = std::optional<parser::ParseError> (*)(
@@ -125,7 +125,7 @@ public:
    *
    * @see allProperties()
    */
-  auto allPropertiesMutable() { return detail::as_mutable(allProperties()); }
+  auto allPropertiesMutable() { return details::as_mutable(allProperties()); }
 
   /**
    * Return the size of the tuple returned by \ref allProperties().

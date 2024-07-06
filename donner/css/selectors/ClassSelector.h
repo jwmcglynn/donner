@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/base/RcString.h"
-#include "donner/css/SelectorTraversal.h"
+#include "donner/base/element/ElementLike.h"
 
 namespace donner::css {
 
@@ -42,7 +42,7 @@ struct ClassSelector {
    *
    * @param element The element to check.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   bool matches(const T& element) const {
     // Matching is equivalent to `[class=~name]`.
 

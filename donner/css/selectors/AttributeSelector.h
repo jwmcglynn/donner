@@ -4,7 +4,7 @@
 #include <optional>
 
 #include "donner/base/Utils.h"
-#include "donner/css/SelectorTraversal.h"
+#include "donner/base/element/ElementLike.h"
 #include "donner/css/WqName.h"
 
 namespace donner::css {
@@ -102,7 +102,7 @@ struct AttributeSelector {
    *
    * @param element The element to check.
    */
-  template <traversal::ElementLike T>
+  template <ElementLike T>
   bool matches(const T& element) const {
     if (name.name.namespacePrefix != "*") {
       const std::optional<RcString> maybeValue = element.getAttribute(name.name);
