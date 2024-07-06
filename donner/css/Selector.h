@@ -98,6 +98,8 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
     } else if (ident.equalsLowercase("only-of-type")) {
       return isFirstOfType(element, element.xmlTypeName()) &&
              isLastOfType(element, element.xmlTypeName());
+    } else if (ident.equalsLowercase("defined")) {
+      return element.isKnownType();
     }
   } else {
     // It's a function.

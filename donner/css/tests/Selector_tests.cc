@@ -35,6 +35,7 @@ struct FakeElement {
   svg::XMLQualifiedNameRef xmlTypeName() const {
     return registry_.get().get<svg::components::TreeComponent>(entity_).xmlTypeName();
   }
+  bool isKnownType() const { return xmlTypeName() != svg::XMLQualifiedNameRef("unknown"); }
   RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
   RcString className() const {
     return registry_.get().get_or_emplace<FakeElementData>(entity_).className;
@@ -367,9 +368,11 @@ TEST_F(SelectorTests, PseudoClassSelectorSimple) {
   //   -> childC = <c>
   // -> midB = <mid>
   //  -> childD = <d>
+  // -> midUnknown = <unknown>
   auto root = createEntity("root");
   auto midA = createEntity("mid");
   auto midB = createEntity("mid");
+  auto midUnknown = createEntity("unknown");
   auto childA = createEntity("a");
   auto childB = createEntity("b");
   auto childC = createEntity("c");
@@ -377,6 +380,7 @@ TEST_F(SelectorTests, PseudoClassSelectorSimple) {
 
   tree(root).appendChild(registry_, midA);
   tree(root).appendChild(registry_, midB);
+  tree(root).appendChild(registry_, midUnknown);
   tree(midA).appendChild(registry_, childA);
   tree(midA).appendChild(registry_, childB);
   tree(midA).appendChild(registry_, childC);
@@ -402,7 +406,7 @@ TEST_F(SelectorTests, PseudoClassSelectorSimple) {
   // :last-child
   EXPECT_TRUE(matches(":last-child", element(root)));
   EXPECT_TRUE(doesNotMatch(":last-child", element(midA)));
-  EXPECT_TRUE(matches(":last-child", element(midB)));
+  EXPECT_TRUE(matches(":last-child", element(midUnknown)));
   EXPECT_TRUE(doesNotMatch(":last-child", element(childA)));
   EXPECT_TRUE(matches(":last-child", element(childC)));
   EXPECT_TRUE(matches(":last-child", element(childD)));
@@ -422,6 +426,16 @@ TEST_F(SelectorTests, PseudoClassSelectorSimple) {
   EXPECT_TRUE(matches(":scope > mid", element(midA)));
   EXPECT_TRUE(matches(":scope > mid", element(midB)));
   EXPECT_TRUE(doesNotMatch(":scope > a", element(childA)));
+
+  // :defined
+  // In the implementation for FakeElement, the "unknown" element is special and returns
+  // `isKnownType() == false`. The only element with this type is midUnknown.
+  EXPECT_TRUE(matches(":defined", element(root)));
+  EXPECT_TRUE(matches(":defined", element(midA)));
+  EXPECT_TRUE(matches(":defined", element(midB)));
+  EXPECT_TRUE(matches(":defined", element(childA)));
+  EXPECT_TRUE(matches(":defined", element(childB)));
+  EXPECT_TRUE(doesNotMatch(":defined", element(midUnknown)));
 }
 
 TEST_F(SelectorTests, PseudoClassSelectorNthChild) {

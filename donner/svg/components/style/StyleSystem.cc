@@ -57,6 +57,10 @@ struct ShadowedElementAdapter {
     return registry_.get().get<TreeComponent>(treeEntity_).xmlTypeName();
   }
 
+  bool isKnownType() const {
+    return registry_.get().get<TreeComponent>(treeEntity_).type() != svg::ElementType::Unknown;
+  }
+
   RcString id() const {
     if (const auto* component = registry_.get().try_get<IdComponent>(dataEntity_)) {
       return component->id;

@@ -59,6 +59,10 @@ XMLQualifiedNameRef SVGElement::xmlTypeName() const {
   return handle_.get<components::TreeComponent>().xmlTypeName();
 }
 
+bool SVGElement::isKnownType() const {
+  return type() != ElementType::Unknown;
+}
+
 Entity SVGElement::entity() const {
   return handle_.entity();
 }

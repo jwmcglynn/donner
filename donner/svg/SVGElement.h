@@ -73,6 +73,10 @@ public:
   /// Get the XML tag name string for this element.
   XMLQualifiedNameRef xmlTypeName() const;
 
+  /// Returns true if this is a known element type, returns false if this is an \ref
+  /// SVGUnknownElement.
+  bool isKnownType() const;
+
   /// Get the underlying \ref Entity, for advanced use-cases that require direct access to the ECS.
   Entity entity() const;
 
