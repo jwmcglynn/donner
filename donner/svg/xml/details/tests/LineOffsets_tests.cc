@@ -1,8 +1,8 @@
+#include "donner/svg/xml/details/LineOffsets.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest-death-test.h>
 #include <gtest/gtest.h>
-
-#include "donner/svg/xml/details/LineOffsets.h"
 
 using testing::ElementsAre;
 

@@ -74,8 +74,8 @@ std::optional<parser::ParseError> ParseDFromAttributes(
  */
 template <typename F, typename ComponentType>
 concept ForEachCallback = requires(const F& f) {
-                            { f.template operator()<ComponentType>() } -> std::same_as<bool>;
-                          };
+  { f.template operator()<ComponentType>() } -> std::same_as<bool>;
+};
 
 /**
  * Helper to call the callback on each entt::type_list element. Short-circuits if the callback

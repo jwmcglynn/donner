@@ -1,15 +1,15 @@
 #pragma once
 /// @file
 
-#include "donner/base/StringUtils.h"
-#include <string_view>
-
 #include <bit>
 #include <cassert>
 #include <compare>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#include "donner/base/StringUtils.h"
 
 namespace donner {
 

@@ -1,9 +1,10 @@
+#include "donner/base/tests/BaseTestUtils.h"
+
 #include <gtest/gtest.h>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
-#include "donner/base/tests/BaseTestUtils.h"
 
 namespace donner {
 

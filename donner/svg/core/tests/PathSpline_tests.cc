@@ -1,9 +1,10 @@
+#include "donner/svg/core/PathSpline.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest-death-test.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/svg/core/PathSpline.h"
 #include "donner/svg/core/tests/PathSplineTestUtils.h"
 
 using testing::_;  // NOLINT, reserved-identifier: Allow for convenience

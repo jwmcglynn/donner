@@ -1,6 +1,6 @@
-#include <gtest/gtest.h>
-
 #include "donner/css/parser/details/Common.h"
+
+#include <gtest/gtest.h>
 
 namespace donner {
 namespace css {

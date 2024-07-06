@@ -45,9 +45,9 @@ concept ElementLike =
  */
 template <typename T, typename ElementType>
 concept OptionalSelectorLike = requires(const T t, const ElementType element) {
-                                 { bool(t) } -> std::same_as<bool>;
-                                 { bool(t.operator->()->matches(element)) } -> std::same_as<bool>;
-                               };
+  { bool(t) } -> std::same_as<bool>;
+  { bool(t.operator->()->matches(element)) } -> std::same_as<bool>;
+};
 
 /**
  * Selectors may need to traverse the tree in different ways to match, and this is abstracted away

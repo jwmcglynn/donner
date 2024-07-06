@@ -1,6 +1,6 @@
-#include <gtest/gtest.h>
-
 #include "donner/svg/xml/XMLQualifiedName.h"
+
+#include <gtest/gtest.h>
 
 namespace donner::svg {
 

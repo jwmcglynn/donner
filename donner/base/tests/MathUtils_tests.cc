@@ -1,9 +1,9 @@
+#include "donner/base/MathUtils.h"
+
 #include <gtest/gtest-death-test.h>
 #include <gtest/gtest.h>
 
 #include <limits>
-
-#include "donner/base/MathUtils.h"
 
 namespace donner {
 

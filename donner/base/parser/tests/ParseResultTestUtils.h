@@ -12,9 +12,9 @@ namespace donner::base::parser {
 // TODO: Move this to a more general location, like base/concepts/is_optional_like.h
 template <typename T>
 concept IsOptionalLike = requires(T t) {
-                           { t.has_value() } -> std::same_as<bool>;
-                           t.value();
-                         };
+  { t.has_value() } -> std::same_as<bool>;
+  t.value();
+};
 
 template <typename T>
 void PrintTo(const ParseResult<T>& result, std::ostream* os) {

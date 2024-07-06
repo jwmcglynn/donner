@@ -1,3 +1,5 @@
+#include "donner/svg/SVGElement.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -5,7 +7,6 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DocumentContext.h"
 

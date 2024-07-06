@@ -1,7 +1,7 @@
+#include "donner/base/Vector2.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include "donner/base/Vector2.h"
 
 using testing::AnyOf;
 

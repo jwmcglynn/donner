@@ -1,10 +1,11 @@
+#include "donner/svg/xml/XMLParser.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/RendererUtils.h"
-#include "donner/svg/xml/XMLParser.h"
 
 using testing::AllOf;
 using testing::ElementsAre;

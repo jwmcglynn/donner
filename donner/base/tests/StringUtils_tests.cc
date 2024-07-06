@@ -1,8 +1,9 @@
+#include "donner/base/StringUtils.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/RcString.h"
-#include "donner/base/StringUtils.h"
 
 using namespace std::string_view_literals;
 using testing::ElementsAre;

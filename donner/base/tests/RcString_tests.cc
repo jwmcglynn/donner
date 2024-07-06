@@ -1,8 +1,9 @@
+#include "donner/base/RcString.h"
+
 #include <gtest/gtest.h>
 
 #include <unordered_map>
 
-#include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 
 #pragma clang diagnostic ignored "-Wself-assign-overloaded"

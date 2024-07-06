@@ -1,7 +1,8 @@
+#include "donner/css/parser/details/Tokenizer.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "donner/css/parser/details/Tokenizer.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
 
 using testing::ElementsAre;

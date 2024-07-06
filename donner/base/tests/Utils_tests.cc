@@ -1,6 +1,6 @@
-#include <gtest/gtest.h>
-
 #include "donner/base/Utils.h"
+
+#include <gtest/gtest.h>
 
 namespace donner {
 

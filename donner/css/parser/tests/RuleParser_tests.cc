@@ -1,8 +1,9 @@
+#include "donner/css/parser/RuleParser.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/css/parser/RuleParser.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
 
 using testing::ElementsAre;
