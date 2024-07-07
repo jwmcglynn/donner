@@ -233,13 +233,15 @@ nlohmann::json ruleToJson(const Rule& value) {
 
 nlohmann::json testConsumeComponentValue(std::string_view css) {
   Tokenizer tokenizer(css);
+  details::ComponentValueParsingContext parsingContext;
+
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
     if (token.is<Token::Whitespace>() || token.is<Token::EofToken>()) {
       continue;
     } else {
-      auto result = componentValueToJson(
-          details::consumeComponentValue(tokenizer, std::move(token), details::ParseMode::Keep));
+      auto result = componentValueToJson(details::consumeComponentValue(
+          tokenizer, std::move(token), details::ParseMode::Keep, parsingContext));
       if (!tokenizer.isEOF()) {
         return {"error", "extra-input"};
       }

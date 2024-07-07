@@ -49,7 +49,8 @@ struct DeclarationTokenTokenizer {
     parser::FileOffset offset() const { return value.offset(); }
 
     ComponentValue asComponentValue(ParseMode parseMode = ParseMode::Keep) {
-      return consumeComponentValue(tokenizer.get(), std::move(value), parseMode);
+      ComponentValueParsingContext parsingContext;
+      return consumeComponentValue(tokenizer.get(), std::move(value), parseMode, parsingContext);
     }
   };
 

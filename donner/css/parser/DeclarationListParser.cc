@@ -99,8 +99,10 @@ std::optional<Declaration> parseDeclarationGeneric(T& tokenizer, Token&& token) 
     if constexpr (std::is_same_v<typename T::ItemType, Token>) {
       // Only consume if we're parsing tokens, not ComponentValues which already did this.
       TokenizerConvertToToken tokenizerConvertToToken(tokenizer);
-      std::ignore =
-          consumeComponentValue(tokenizerConvertToToken, std::move(token), ParseMode::Discard);
+      details::ComponentValueParsingContext parsingContext;
+
+      std::ignore = consumeComponentValue(tokenizerConvertToToken, std::move(token),
+                                          ParseMode::Discard, parsingContext);
     }
 
     while (!tokenizer.isEOF()) {

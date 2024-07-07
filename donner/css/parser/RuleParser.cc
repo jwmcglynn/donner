@@ -147,6 +147,7 @@ public:
   static std::optional<QualifiedRule> consumeQualifiedRule(details::Tokenizer& tokenizer,
                                                            Token&& firstToken) {
     std::vector<ComponentValue> prelude;
+    details::ComponentValueParsingContext parsingContext;
     Token token = std::move(firstToken);
 
     while (true) {
@@ -156,12 +157,14 @@ public:
       } else if (token.is<Token::CurlyBracket>()) {
         // <{-token>: Consume a simple block and assign it to the qualified rule's block. Return the
         // qualified rule.
-        return QualifiedRule(std::move(prelude),
-                             consumeSimpleBlock(tokenizer, std::move(token), ParseMode::Keep));
+        return QualifiedRule(
+            std::move(prelude),
+            consumeSimpleBlock(tokenizer, std::move(token), ParseMode::Keep, parsingContext));
       } else {
         // anything else: Reconsume the current input token. Consume a component value. Append the
         // returned value to the qualified rule's prelude.
-        auto component = consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep);
+        auto component =
+            consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep, parsingContext);
         prelude.emplace_back(std::move(component));
       }
 
