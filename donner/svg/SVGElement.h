@@ -73,7 +73,7 @@ public:
   ElementType type() const;
 
   /// Get the XML tag name string for this element.
-  XMLQualifiedNameRef xmlTypeName() const;
+  XMLQualifiedNameRef tagName() const;
 
   /// Returns true if this is a known element type, returns false if this is an \ref
   /// SVGUnknownElement.
@@ -325,10 +325,10 @@ protected:
    * Create a new Entity of the given type.
    *
    * @param registry Registry to create the entity in.
-   * @param xmlTypeName XML element type, e.g. "svg" or "rect", which an optional namespace.
+   * @param tagName XML element type, e.g. "svg" or "rect", which an optional namespace.
    * @param Type Type of the entity.
    */
-  static EntityHandle CreateEntity(Registry& registry, const XMLQualifiedNameRef& xmlTypeName,
+  static EntityHandle CreateEntity(Registry& registry, const XMLQualifiedNameRef& tagName,
                                    ElementType Type);
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.

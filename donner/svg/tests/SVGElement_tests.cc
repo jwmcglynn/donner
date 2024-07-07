@@ -101,7 +101,7 @@ TEST_F(SVGElementTests, Id) {
 TEST_F(SVGElementTests, Type) {
   auto element = create();
   EXPECT_EQ(element.type(), ElementType::Unknown);
-  EXPECT_EQ(element.xmlTypeName().toString(), "unknown");
+  EXPECT_EQ(element.tagName().toString(), "unknown");
 }
 
 TEST_F(SVGElementTests, ClassName) {

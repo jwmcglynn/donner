@@ -55,8 +55,8 @@ ElementType SVGElement::type() const {
   return handle_.get<components::TreeComponent>().type();
 }
 
-XMLQualifiedNameRef SVGElement::xmlTypeName() const {
-  return handle_.get<components::TreeComponent>().xmlTypeName();
+XMLQualifiedNameRef SVGElement::tagName() const {
+  return handle_.get<components::TreeComponent>().tagName();
 }
 
 bool SVGElement::isKnownType() const {
@@ -294,10 +294,10 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
   return computedStyle.properties.value();
 }
 
-EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& xmlTypeName,
+EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& tagName,
                                       ElementType type) {
   Entity entity = registry.create();
-  registry.emplace<components::TreeComponent>(entity, type, xmlTypeName);
+  registry.emplace<components::TreeComponent>(entity, type, tagName);
   registry.emplace<components::TransformComponent>(entity);
   return EntityHandle(registry, entity);
 }

@@ -32,10 +32,10 @@ struct FakeElement {
 
   bool operator==(const FakeElement& other) const { return entity_ == other.entity_; }
 
-  XMLQualifiedNameRef xmlTypeName() const {
-    return registry_.get().get<svg::components::TreeComponent>(entity_).xmlTypeName();
+  XMLQualifiedNameRef tagName() const {
+    return registry_.get().get<svg::components::TreeComponent>(entity_).tagName();
   }
-  bool isKnownType() const { return xmlTypeName() != XMLQualifiedNameRef("unknown"); }
+  bool isKnownType() const { return tagName() != XMLQualifiedNameRef("unknown"); }
   RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
   RcString className() const {
     return registry_.get().get_or_emplace<FakeElementData>(entity_).className;
@@ -107,10 +107,10 @@ Specificity computeSpecificity(std::string_view str) {
 
 class SelectorTests : public testing::Test {
 protected:
-  svg::Entity createEntity(const XMLQualifiedNameRef& xmlTypeName) {
+  svg::Entity createEntity(const XMLQualifiedNameRef& tagName) {
     auto entity = registry_.create();
     registry_.emplace<svg::components::TreeComponent>(entity, svg::ElementType::Unknown,
-                                                      XMLQualifiedNameRef(xmlTypeName));
+                                                      XMLQualifiedNameRef(tagName));
     return entity;
   }
 

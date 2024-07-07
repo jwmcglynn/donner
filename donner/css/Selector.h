@@ -92,12 +92,12 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
     } else if (ident.equalsLowercase("only-child")) {
       return !element.previousSibling().has_value() && !element.nextSibling().has_value();
     } else if (ident.equalsLowercase("first-of-type")) {
-      return isFirstOfType(element, element.xmlTypeName());
+      return isFirstOfType(element, element.tagName());
     } else if (ident.equalsLowercase("last-of-type")) {
-      return isLastOfType(element, element.xmlTypeName());
+      return isLastOfType(element, element.tagName());
     } else if (ident.equalsLowercase("only-of-type")) {
-      return isFirstOfType(element, element.xmlTypeName()) &&
-             isLastOfType(element, element.xmlTypeName());
+      return isFirstOfType(element, element.tagName()) &&
+             isLastOfType(element, element.tagName());
     } else if (ident.equalsLowercase("defined")) {
       return element.isKnownType();
     }
@@ -149,12 +149,12 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
       } else if (ident.equalsLowercase("nth-of-type") && anbValueIfAnb) {
         const int childIndex =
             getIndexInParent(*maybeParent, element, /*fromEnd*/ false,
-                             std::make_optional<TypeSelector>(element.xmlTypeName()));
+                             std::make_optional<TypeSelector>(element.tagName()));
         return anbValueIfAnb->evaluate(childIndex);
       } else if (ident.equalsLowercase("nth-last-of-type") && anbValueIfAnb) {
         const int childIndex =
             getIndexInParent(*maybeParent, element, /*fromEnd*/ true,
-                             std::make_optional<TypeSelector>(element.xmlTypeName()));
+                             std::make_optional<TypeSelector>(element.tagName()));
         return anbValueIfAnb->evaluate(childIndex);
       }
     }

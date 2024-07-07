@@ -310,14 +310,14 @@ TEST_F(TreeComponentTests, Type) {
 TEST_F(TreeComponentTests, TypeString) {
   {
     auto entity = createEntity();
-    EXPECT_EQ(tree(entity).xmlTypeName(), "unknown");
+    EXPECT_EQ(tree(entity).tagName(), "unknown");
   }
 
   {
     auto entity = registry_.create();
     registry_.emplace<TreeComponent>(entity, ElementType::Unknown,
                                      XMLQualifiedNameRef("test-entity"));
-    EXPECT_EQ(tree(entity).xmlTypeName(), "test-entity");
+    EXPECT_EQ(tree(entity).tagName(), "test-entity");
   }
 }
 

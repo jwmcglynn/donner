@@ -23,9 +23,9 @@ public:
    * Create a new unknown SVG element.
    *
    * @param document Containing document.
-   * @param xmlTypeName XML type name.
+   * @param tagName XML type name.
    */
-  static SVGUnknownElement Create(SVGDocument& document, const XMLQualifiedNameRef& xmlTypeName);
+  static SVGUnknownElement Create(SVGDocument& document, const XMLQualifiedNameRef& tagName);
 };
 
 }  // namespace donner::svg

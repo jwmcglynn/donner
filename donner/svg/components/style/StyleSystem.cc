@@ -53,8 +53,8 @@ struct ShadowedElementAdapter {
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
-  XMLQualifiedNameRef xmlTypeName() const {
-    return registry_.get().get<TreeComponent>(treeEntity_).xmlTypeName();
+  XMLQualifiedNameRef tagName() const {
+    return registry_.get().get<TreeComponent>(treeEntity_).tagName();
   }
 
   bool isKnownType() const {

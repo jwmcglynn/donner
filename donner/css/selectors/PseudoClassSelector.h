@@ -221,7 +221,7 @@ private:
   static bool isFirstOfType(const T& element, const XMLQualifiedNameRef& type) {
     for (std::optional<T> child = element.previousSibling(); child;
          child = child.value().previousSibling()) {
-      if (child.value().xmlTypeName() == type) {
+      if (child.value().tagName() == type) {
         return false;
       }
     }
@@ -233,7 +233,7 @@ private:
   static bool isLastOfType(const T& element, const XMLQualifiedNameRef& type) {
     for (std::optional<T> child = element.nextSibling(); child;
          child = child.value().nextSibling()) {
-      if (child.value().xmlTypeName() == type) {
+      if (child.value().tagName() == type) {
         return false;
       }
     }

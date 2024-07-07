@@ -10,9 +10,9 @@ namespace donner::svg::components {
 
 class TreeComponent {
 public:
-  TreeComponent(ElementType type, const XMLQualifiedNameRef& xmlTypeName)
+  TreeComponent(ElementType type, const XMLQualifiedNameRef& tagName)
       : type_(type),
-        xmlTypeName_(RcString(xmlTypeName.namespacePrefix), RcString(xmlTypeName.name)) {}
+        tagName_(RcString(tagName.namespacePrefix), RcString(tagName.name)) {}
 
   /**
    * Insert \a newNode as a child, before \a referenceNode. If \a referenceNode is entt::null,
@@ -69,7 +69,7 @@ public:
 
   ElementType type() const { return type_; }
 
-  XMLQualifiedNameRef xmlTypeName() const { return xmlTypeName_; }
+  XMLQualifiedNameRef tagName() const { return tagName_; }
 
   Entity parent() const { return parent_; }
   Entity firstChild() const { return firstChild_; }
@@ -79,7 +79,7 @@ public:
 
 private:
   ElementType type_;
-  XMLQualifiedName xmlTypeName_;
+  XMLQualifiedName tagName_;
 
   Entity parent_{entt::null};
   Entity firstChild_{entt::null};
