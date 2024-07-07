@@ -2,15 +2,15 @@
 
 Generated with: tools/generate_build_report.py --all --save docs/build_report.md
 
-Git revision: [f93c4bcbe3ffd94cd5190b3316f70984c324bf38](https://github.com/jwmcglynn/donner/commit/f93c4bcbe3ffd94cd5190b3316f70984c324bf38)
+Git revision: [b259c63662e0d990e7820491fb113ceb5337fc4c](https://github.com/jwmcglynn/donner/commit/b259c63662e0d990e7820491fb113ceb5337fc4c)
 
 ## Lines of code
 ```
 $ tools/cloc.sh
-Lines of source code:       28.2k
-Lines of comments:          10.5k
+Lines of source code:       28.7k
+Lines of comments:          10.6k
 Comment percentage:         37.0%
-Product lines of code:      16.9k
+Product lines of code:      17.2k
 Test lines of code:          9.8k
 ```
 
@@ -28,31 +28,31 @@ Saved report to build-binary-size/binary_size_report.html
 ```
     FILE SIZE        VM SIZE    
  --------------  -------------- 
-  70.0%   826Ki  69.8%   826Ki    donner
-    19.9%   164Ki  19.9%   164Ki    [56 Others]
-    17.2%   142Ki  17.2%   142Ki    donner/svg/properties/PropertyRegistry.cc
-     9.4%  77.3Ki   9.4%  77.3Ki    donner/svg/SVGElement.cc
-     8.3%  68.8Ki   8.3%  68.8Ki    donner/css/parser/ColorParser.cc
+  69.9%   827Ki  69.9%   827Ki    donner
+    21.4%   176Ki  21.4%   176Ki    [58 Others]
+    19.5%   161Ki  19.5%   161Ki    donner/svg/properties/PropertyRegistry.cc
+     9.3%  77.3Ki   9.3%  77.3Ki    donner/svg/SVGElement.cc
+     6.0%  49.3Ki   6.0%  49.3Ki    donner/css/parser/ColorParser.cc
      5.6%  46.5Ki   5.6%  46.5Ki    donner/svg/SVGCircleElement.cc
      5.3%  43.7Ki   5.3%  43.7Ki    donner/svg/xml/XMLParser.cc
      4.7%  38.7Ki   4.7%  38.7Ki    donner/svg/SVGPatternElement.cc
-     4.1%  34.2Ki   4.1%  34.2Ki    donner/css/parser/SelectorParser.cc
-     4.0%  32.6Ki   4.0%  32.6Ki    donner/svg/SVGStyleElement.cc
+     4.2%  34.5Ki   4.2%  34.5Ki    donner/css/parser/SelectorParser.cc
      3.1%  25.6Ki   3.1%  25.6Ki    donner/svg/SVGGradientElement.cc
      3.0%  25.1Ki   3.0%  25.1Ki    donner/svg/xml/AttributeParser.cc
-     2.4%  19.4Ki   2.4%  19.4Ki    donner/svg/SVGStopElement.cc
+     2.4%  19.8Ki   2.4%  19.8Ki    donner/css/parser/details/Tokenizer.cc
+     2.3%  19.4Ki   2.3%  19.4Ki    donner/svg/SVGStopElement.cc
      1.8%  14.7Ki   1.8%  14.7Ki    donner/svg/SVGDocument.cc
-     1.6%  13.2Ki   1.6%  13.2Ki    donner/css/parser/DeclarationListParser.cc
+     1.6%  13.0Ki   1.6%  13.0Ki    donner/svg/SVGStyleElement.cc
+     1.5%  12.7Ki   1.5%  12.7Ki    donner/css/parser/DeclarationListParser.cc
      1.5%  12.4Ki   1.5%  12.4Ki    donner/svg/SVGUseElement.cc
      1.5%  12.2Ki   1.5%  12.2Ki    donner/svg/SVGFilterPrimitiveStandardAttributes.cc
      1.4%  11.2Ki   1.4%  11.2Ki    donner/svg/SVGPolygonElement.cc
-     1.4%  11.2Ki   1.4%  11.2Ki    donner/svg/SVGRadialGradientElement.cc
+     1.3%  11.2Ki   1.3%  11.2Ki    donner/svg/SVGRadialGradientElement.cc
      1.3%  10.8Ki   1.3%  10.8Ki    donner/svg/SVGFilterElement.cc
      1.3%  10.8Ki   1.3%  10.8Ki    donner/svg/SVGRectElement.cc
-     1.3%  10.8Ki   1.3%  10.8Ki    donner/svg/SVGLinearGradientElement.cc
-  20.8%   245Ki  21.0%   248Ki    [__LINKEDIT]
-   2.2%  25.9Ki   2.2%  25.9Ki    [__DATA_CONST,__const]
-   1.5%  17.9Ki   1.5%  18.0Ki    [__TEXT]
+  20.8%   246Ki  20.9%   247Ki    [__LINKEDIT]
+   2.2%  25.7Ki   2.2%  25.7Ki    [__DATA_CONST,__const]
+   1.5%  17.7Ki   1.5%  17.8Ki    [__TEXT]
    1.3%  15.0Ki   1.3%  15.0Ki    [__TEXT,__const]
    1.2%  14.3Ki   1.2%  14.3Ki    [__DATA]
    0.9%  11.1Ki   0.9%  11.1Ki    [__TEXT,__cstring]
@@ -61,16 +61,16 @@ Saved report to build-binary-size/binary_size_report.html
     32.7%  3.13Ki  32.7%  3.13Ki    external/abseil-cpp~/absl/strings/charconv.cc
     29.4%  2.82Ki  29.4%  2.82Ki    external/abseil-cpp~/absl/strings/internal/charconv_parse.cc
      1.7%     162   1.7%     162    external/abseil-cpp~/absl/strings/internal/memutil.cc
-   0.5%  5.40Ki   0.5%  5.40Ki    [__DATA_CONST]
+   0.5%  5.62Ki   0.5%  5.62Ki    [__DATA_CONST]
    0.3%  3.01Ki   0.3%  3.01Ki    [__TEXT,__text]
-   0.2%  1.77Ki   0.1%  1.67Ki    [Mach-O Headers]
+   0.1%  1.77Ki   0.1%  1.67Ki    [Mach-O Headers]
    0.1%  1.68Ki   0.1%  1.68Ki    [__DATA,__data]
    0.1%  1.46Ki   0.1%  1.46Ki    [__TEXT,__gcc_except_tab]
    0.1%     852   0.1%     852    [__TEXT,__stubs]
    0.1%     688   0.1%     688    [__DATA_CONST,__got]
    0.0%     560   0.0%     560    [__TEXT,__unwind_info]
    0.0%     220   0.0%     220    [__TEXT,__init_offsets]
- 100.0%  1.15Mi 100.0%  1.16Mi    TOTAL
+ 100.0%  1.16Mi 100.0%  1.16Mi    TOTAL
 ```
 
 ![Binary size bar graph](binary_size_bargraph.svg)
@@ -80,9 +80,9 @@ Saved report to build-binary-size/binary_size_report.html
 $ tools/coverage.sh --quiet
 Analyzing coverage for: //donner/...
 Overall coverage rate:
-  lines......: 91.8% (19753 of 21513 lines)
-  functions......: 88.7% (3528 of 3976 functions)
-  branches......: 70.7% (4702 of 6652 branches)
+  lines......: 91.9% (20106 of 21882 lines)
+  functions......: 88.4% (3585 of 4056 functions)
+  branches......: 68.8% (4697 of 6826 branches)
 Coverage report saved to coverage-report/index.html
 ```
 
