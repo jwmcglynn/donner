@@ -2,7 +2,7 @@
 Helper rules, such as for building fuzzers.
 """
 
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 def donner_cc_library(name, copts = [], tags = [], visibility = None, **kwargs):
     """
@@ -56,6 +56,17 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         native.filegroup(name = corpus_name, srcs = corpus)
     else:
         corpus_name = corpus
+
+    cc_binary(
+        name = name + "_bin",
+        linkopts = ["-fsanitize=fuzzer"],
+        linkstatic = 1,
+        # Only run on Linux, since the macOS clang is missing libclang_rt.fuzzer_osx.a.
+        target_compatible_with = [
+            "@platforms//os:linux",
+        ],
+        **kwargs
+    )
 
     cc_test(
         name = name,

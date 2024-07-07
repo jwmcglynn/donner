@@ -217,14 +217,18 @@
       "type": "lldb",
       "request": "launch",
       "name": "selector_parser_fuzzer",
-      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/selector_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/css/parser/selector_parser_fuzzer_bin",
       "args": [
-        "${workspaceFolder}/css/parser/tests/selector_parser_corpus/infinite-loop-handleComplexSelector.txt"
+        "${workspaceFolder}/donner/css/parser/tests/selector_parser_corpus/crash-88426039d567a639d8aa6d85ada4eff56986595c"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
-        ".": "${workspaceFolder}"
-      }
+        ".": "${workspaceFolder}",
+        "/proc/self/cwd": "${workspaceFolder}"
+      },
+      "initCommands": [
+        "settings set target.disable-aslr false"
+      ],
     },
     {
       "type": "lldb",

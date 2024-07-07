@@ -29,6 +29,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   auto resultComponentsForgiving = SelectorParser::ParseForgivingSelectorList(components);
   (void)resultComponentsForgiving;
 
+  auto resultComponentsRelativeForgiving =
+      SelectorParser::ParseForgivingRelativeSelectorList(components);
+  (void)resultComponentsRelativeForgiving;
+
   return 0;
 }
 

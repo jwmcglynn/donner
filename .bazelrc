@@ -55,7 +55,7 @@ build:macos-binary-size --linkopt=-dead_strip
 build --config=libc++ --config=c++20 --define absl=1
 
 # Debug builds
-build:debug --copt=-O0 --copt=-g -c dbg
+build:debug -c dbg --copt=-O0 --copt=-g
 # Creates symlinks in the workspace that point into the sandbox.
 build:debug --symlink_prefix=/
 
@@ -95,6 +95,7 @@ build:asan --test_env=ASAN_SYMBOLIZER_PATH
 # See https://github.com/google/oss-fuzz/issues/713
 build:asan --copt -fno-sanitize=vptr,function
 build:asan --linkopt -fno-sanitize=vptr,function
+build:asan --strip=never
 
 # Fuzzing builds
 build:asan-fuzzer --config=asan
