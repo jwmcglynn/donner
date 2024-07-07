@@ -139,18 +139,15 @@ public:
     return os << ", numChildren=" << elem.data_->children.size();
   }
 
-  void printTree(std::ostream& os, int depth = 0) const {
-    for (int i = depth; i > 0; --i) {
-      os << "  ";
-      if (i == 1) {
-        os << "- ";
-      }
+  struct DeferredPrinter {
+    const FakeElement& element;
+
+    friend std::ostream& operator<<(std::ostream& os, const DeferredPrinter& printer) {
+      return printer.element.printTreeImpl(os);
     }
-    os << *this << "\n";
-    for (const auto& child : data_->children) {
-      child.printTree(os, depth + 1);
-    }
-  }
+  };
+
+  DeferredPrinter printAsTree() const { return DeferredPrinter{*this}; }
 
 private:
   struct ElementData {
@@ -169,6 +166,21 @@ private:
   };
 
   explicit FakeElement(std::shared_ptr<ElementData> data) : data_(std::move(data)) {}
+
+  std::ostream& printTreeImpl(std::ostream& os, int depth = 0) const {
+    for (int i = depth; i > 0; --i) {
+      os << "  ";
+      if (i == 1) {
+        os << "- ";
+      }
+    }
+    os << *this << "\n";
+    for (const auto& child : data_->children) {
+      child.printTreeImpl(os, depth + 1);
+    }
+
+    return os;
+  }
 
   std::shared_ptr<ElementData> data_;
 };

@@ -183,11 +183,14 @@ ElementTraversalGenerator<T> previousSiblingsGenerator(T element) {
  */
 template <ElementLike T>
 ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
-  SmallVector<T, 4> stack;
+  SmallVector<T, 16> stack;
 
+  // Add elements, then reverse the order.
   for (auto child = element.firstChild(); child; child = child->nextSibling()) {
     stack.push_back(child.value());
   }
+
+  std::reverse(stack.begin(), stack.end());
 
   while (!stack.empty()) {
     T current = stack[stack.size() - 1];
@@ -195,9 +198,13 @@ ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
 
     co_yield current;
 
+    // Add children and then reverse the order of the added ones.
+    size_t prevSize = stack.size();
     for (auto child = current.firstChild(); child; child = child->nextSibling()) {
       stack.push_back(child.value());
     }
+
+    std::reverse(stack.begin() + prevSize, stack.end());
   }
 }
 

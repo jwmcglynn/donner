@@ -31,9 +31,7 @@ protected:
 
   void TearDown() override {
     if (testing::Test::HasFailure()) {
-      std::cerr << "*** Tree structure:\n";
-      root.printTree(std::cerr);
-      std::cerr << "\n";
+      std::cerr << "*** Tree structure:\n" << root.printAsTree() << "\n";
     }
   }
 
