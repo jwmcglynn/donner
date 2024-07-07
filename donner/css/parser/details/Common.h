@@ -5,7 +5,22 @@
 #include <string_view>
 #include <tuple>
 
+namespace donner::css {
+
+// Forward declaration.
+struct Token;
+
+}  // namespace donner::css
+
 namespace donner::css::parser::details {
+
+enum class ParseMode { Keep, Discard };
+
+template <typename T, typename TokenType = Token>
+concept TokenizerLike = requires(T t) {
+  { t.next() } -> std::same_as<TokenType>;
+  { t.isEOF() } -> std::same_as<bool>;
+};
 
 /// U+FFFD REPLACEMENT CHARACTER (�)
 static constexpr char32_t kUnicodeReplacementCharacter = 0xFFFD;

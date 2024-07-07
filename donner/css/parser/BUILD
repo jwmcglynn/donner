@@ -22,6 +22,7 @@ donner_cc_library(
         "StylesheetParser.h",
         "ValueParser.h",
         "details/Common.h",
+        "details/ComponentValueParser.h",
         "details/Subparsers.h",
         "details/Tokenizer.h",
     ],

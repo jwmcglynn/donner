@@ -7,7 +7,7 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Token.h"
-#include "donner/css/parser/details/Subparsers.h"
+#include "donner/css/parser/details/ComponentValueParser.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
 #include "donner/css/tests/SelectorTestUtils.h"
 

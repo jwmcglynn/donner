@@ -13,7 +13,6 @@ namespace {
 
 using details::consumeComponentValue;
 using details::consumeDeclaration;
-using details::consumeSimpleBlock;
 using details::ParseMode;
 
 template <typename T>

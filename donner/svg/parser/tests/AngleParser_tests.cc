@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
-#include "donner/css/parser/details/Subparsers.h"
+#include "donner/css/parser/details/ComponentValueParser.h"
 #include "donner/css/parser/details/Tokenizer.h"
 
 namespace donner::svg::parser {
