@@ -2,8 +2,7 @@
 
 #include <gtest/gtest.h>
 
-namespace donner {
-namespace css {
+namespace donner::css::parser {
 
 using details::Utf8SequenceLength;
 
@@ -35,5 +34,4 @@ TEST(CommonUtf8, SequenceLength) {
   }
 }
 
-}  // namespace css
-}  // namespace donner
+}  // namespace donner::css::parser

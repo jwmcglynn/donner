@@ -14,9 +14,9 @@ using namespace base::parser;  // NOLINT: For tests
 namespace {
 
 css::ComponentValue ParseComponentValue(std::string_view str) {
-  css::details::Tokenizer tokenizer(str);
-  const std::vector<css::ComponentValue> values =
-      css::details::parseListOfComponentValues(tokenizer, css::details::WhitespaceHandling::Keep);
+  css::parser::details::Tokenizer tokenizer(str);
+  const std::vector<css::ComponentValue> values = css::parser::details::parseListOfComponentValues(
+      tokenizer, css::parser::details::WhitespaceHandling::Keep);
   if (values.size() != 1) {
     ADD_FAILURE() << "Expected exactly one component value, got " << values.size() << ", for '"
                   << str << "'";

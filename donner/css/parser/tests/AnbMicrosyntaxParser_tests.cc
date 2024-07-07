@@ -18,9 +18,8 @@ using namespace donner::base::parser;  // NOLINT: For tests
 namespace {
 
 std::vector<css::ComponentValue> toComponents(std::string_view str) {
-  css::details::Tokenizer tokenizer(str);
-  return css::details::parseListOfComponentValues(tokenizer,
-                                                  css::details::WhitespaceHandling::Keep);
+  details::Tokenizer tokenizer(str);
+  return details::parseListOfComponentValues(tokenizer, details::WhitespaceHandling::Keep);
 }
 
 MATCHER_P2(AnbValueIs, a, b, "") {

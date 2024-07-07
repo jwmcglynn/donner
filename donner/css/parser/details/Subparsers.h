@@ -7,7 +7,7 @@
 #include "donner/css/Token.h"
 #include "donner/css/parser/details/Tokenizer.h"
 
-namespace donner::css::details {
+namespace donner::css::parser::details {
 
 enum class ParseMode { Keep, Discard };
 
@@ -348,4 +348,4 @@ std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident
   return consumeDeclarationGeneric(declarationTokenizer, std::move(ident), offset);
 }
 
-}  // namespace donner::css::details
+}  // namespace donner::css::parser::details

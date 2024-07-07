@@ -5,7 +5,7 @@
 #include <string_view>
 #include <tuple>
 
-namespace donner::css::details {
+namespace donner::css::parser::details {
 
 /// U+FFFD REPLACEMENT CHARACTER (�)
 static constexpr char32_t kUnicodeReplacementCharacter = 0xFFFD;
@@ -94,4 +94,4 @@ static inline OutputIterator Utf8Append(char32_t ch, OutputIterator it) {
   return it;
 }
 
-}  // namespace donner::css::details
+}  // namespace donner::css::parser::details

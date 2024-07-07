@@ -5,7 +5,7 @@
 #include "donner/base/parser/NumberParser.h"
 #include "donner/css/parser/details/Common.h"
 
-namespace donner::css::details {
+namespace donner::css::parser::details {
 
 namespace {
 
@@ -594,4 +594,4 @@ Token Tokenizer::consumeRemnantsOfBadUrl(const std::string_view badUrl,
   return token<Token::BadUrl>(i + charsConsumedBefore);
 }
 
-}  // namespace donner::css::details
+}  // namespace donner::css::parser::details

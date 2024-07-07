@@ -6,7 +6,7 @@
 #include "donner/base/RcString.h"
 #include "donner/css/Token.h"
 
-namespace donner::css::details {
+namespace donner::css::parser::details {
 
 /**
  * Tokenizer for CSS, which is called internally by parsers, based on the CSS3 spec:
@@ -96,4 +96,4 @@ private:
   std::optional<Token> nextToken_;  ///< Next token to return, if already computed.
 };
 
-}  // namespace donner::css::details
+}  // namespace donner::css::parser::details
