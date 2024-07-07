@@ -18,9 +18,10 @@ namespace donner {
 
 class FakeElement {
 public:
-  explicit FakeElement(std::string_view tagName = "unknown")
+  explicit FakeElement(const XMLQualifiedNameRef& tagName = "unknown")
       : data_(std::make_shared<ElementData>()) {
-    data_->tagName = XMLQualifiedNameRef(tagName);
+    // NOTE: This copies the string, but that's okay since this is a test helper.
+    data_->tagName = XMLQualifiedName(tagName.namespacePrefix, tagName.name);
   }
 
   /// @name Core API that satisfies the \ref ElementLike concept
@@ -47,11 +48,22 @@ public:
   SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
       const XMLQualifiedNameRef& matcher) const {
     SmallVector<XMLQualifiedNameRef, 1> result;
+    const XMLQualifiedNameRef attributeNameOnly(matcher.name);
+
     for (const auto& [name, value] : data_->attributes) {
-      if (XMLQualifiedNameRef(name.namespacePrefix, name.name) == matcher) {
-        result.push_back(XMLQualifiedNameRef(name.namespacePrefix, name.name));
+      if (matcher.namespacePrefix == "*") {
+        if (StringUtils::Equals<StringComparison::IgnoreCase>(name.name, attributeNameOnly.name)) {
+          result.push_back(name);
+        }
+      } else {
+        if (StringUtils::Equals<StringComparison::IgnoreCase>(name.namespacePrefix,
+                                                              matcher.namespacePrefix) &&
+            StringUtils::Equals<StringComparison::IgnoreCase>(name.name, matcher.name)) {
+          result.push_back(name);
+        }
       }
     }
+
     return result;
   }
 
@@ -110,6 +122,7 @@ public:
   void setClassName(const RcString& className) { data_->className = className; }
 
   void setAttribute(const XMLQualifiedNameRef& name, const RcString& value) {
+    // NOTE: This copies the string, but that's okay since this is a test helper.
     data_->attributes[XMLQualifiedName(name.namespacePrefix, name.name)] = value;
   }
 
@@ -153,7 +166,7 @@ private:
   struct ElementData {
     RcString id;
     RcString className;
-    XMLQualifiedNameRef tagName;
+    XMLQualifiedName tagName;
     std::map<XMLQualifiedName, RcString> attributes;
     std::vector<FakeElement> children;
     std::optional<std::weak_ptr<ElementData>> parent;

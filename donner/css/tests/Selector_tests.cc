@@ -6,12 +6,11 @@
 #include <map>
 
 #include "donner/base/RcString.h"
+#include "donner/base/element/tests/FakeElement.h"
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/css/tests/SelectorTestUtils.h"
-#include "donner/svg/components/AttributesComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
@@ -21,77 +20,6 @@ namespace donner::css::parser {
 using namespace base::parser;  // NOLINT: For tests
 
 namespace {
-
-struct FakeElementData {
-  RcString id;
-  RcString className;
-};
-
-struct FakeElement {
-  FakeElement(svg::Registry& registry, svg::Entity entity) : registry_(registry), entity_(entity) {}
-
-  bool operator==(const FakeElement& other) const { return entity_ == other.entity_; }
-
-  XMLQualifiedNameRef tagName() const {
-    return registry_.get().get<svg::components::TreeComponent>(entity_).tagName();
-  }
-  bool isKnownType() const { return tagName() != XMLQualifiedNameRef("unknown"); }
-  RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
-  RcString className() const {
-    return registry_.get().get_or_emplace<FakeElementData>(entity_).className;
-  }
-
-  std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const {
-    return registry_.get()
-        .get_or_emplace<svg::components::AttributesComponent>(entity_)
-        .getAttribute(name);
-  }
-
-  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
-      const XMLQualifiedNameRef& matcher) const {
-    return registry_.get()
-        .get_or_emplace<svg::components::AttributesComponent>(entity_)
-        .findMatchingAttributes(matcher);
-  }
-
-  std::optional<FakeElement> parentElement() const {
-    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
-    return tree.parent() != entt::null ? std::make_optional(FakeElement(registry_, tree.parent()))
-                                       : std::nullopt;
-  }
-
-  std::optional<FakeElement> firstChild() const {
-    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
-    return tree.firstChild() != entt::null
-               ? std::make_optional(FakeElement(registry_, tree.firstChild()))
-               : std::nullopt;
-  }
-
-  std::optional<FakeElement> lastChild() const {
-    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
-    return tree.lastChild() != entt::null
-               ? std::make_optional(FakeElement(registry_, tree.lastChild()))
-               : std::nullopt;
-  }
-
-  std::optional<FakeElement> previousSibling() const {
-    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
-    return tree.previousSibling() != entt::null
-               ? std::make_optional(FakeElement(registry_, tree.previousSibling()))
-               : std::nullopt;
-  }
-
-  std::optional<FakeElement> nextSibling() const {
-    auto& tree = registry_.get().get<svg::components::TreeComponent>(entity_);
-    return tree.nextSibling() != entt::null
-               ? std::make_optional(FakeElement(registry_, tree.nextSibling()))
-               : std::nullopt;
-  }
-
-private:
-  std::reference_wrapper<svg::Registry> registry_;
-  svg::Entity entity_;
-};
 
 Specificity computeSpecificity(std::string_view str) {
   auto maybeSelector = SelectorParser::Parse(str);
@@ -107,14 +35,7 @@ Specificity computeSpecificity(std::string_view str) {
 
 class SelectorTests : public testing::Test {
 protected:
-  svg::Entity createEntity(const XMLQualifiedNameRef& tagName) {
-    auto entity = registry_.create();
-    registry_.emplace<svg::components::TreeComponent>(entity, svg::ElementType::Unknown,
-                                                      XMLQualifiedNameRef(tagName));
-    return entity;
-  }
-
-  bool matches(std::string_view selector, FakeElement element) {
+  bool matches(std::string_view selector, const FakeElement& element) {
     auto maybeSelector = SelectorParser::Parse(selector);
     EXPECT_THAT(maybeSelector, NoParseError());
     if (maybeSelector.hasError()) {
@@ -124,7 +45,7 @@ protected:
     return maybeSelector.result().matches(element).matched;
   }
 
-  bool doesNotMatch(std::string_view selector, FakeElement element) {
+  bool doesNotMatch(std::string_view selector, const FakeElement& element) {
     auto maybeSelector = SelectorParser::Parse(selector);
     EXPECT_THAT(maybeSelector, NoParseError());
     if (maybeSelector.hasError()) {
@@ -133,231 +54,217 @@ protected:
 
     return !maybeSelector.result().matches(element).matched;
   }
-
-  void setId(svg::Entity entity, std::string_view id) {
-    registry_.get_or_emplace<FakeElementData>(entity).id = id;
-  }
-
-  void setClassName(svg::Entity entity, std::string_view className) {
-    registry_.get_or_emplace<FakeElementData>(entity).className = className;
-  }
-
-  void setAttribute(svg::Entity entity, const XMLQualifiedName& name, const RcString& value) {
-    registry_.get_or_emplace<svg::components::AttributesComponent>(entity).setAttribute(name,
-                                                                                        value);
-  }
-
-  FakeElement element(svg::Entity entity) { return FakeElement(registry_, entity); }
-  svg::components::TreeComponent& tree(svg::Entity entity) {
-    return registry_.get<svg::components::TreeComponent>(entity);
-  }
-
-  svg::Registry registry_;
 };
 
 TEST_F(SelectorTests, TypeMatch) {
-  auto root = createEntity("rect");
-  auto child1 = createEntity("a");
-  auto child2 = createEntity("elm");
-  auto child3 = createEntity(XMLQualifiedNameRef("my-namespace", "elm"));
+  FakeElement root("rect");
+  FakeElement child1("a");
+  FakeElement child2("elm");
+  FakeElement child3(XMLQualifiedNameRef("my-namespace", "elm"));
 
-  tree(root).appendChild(registry_, child1);
+  root.appendChild(child1);
 
-  EXPECT_TRUE(matches("rect", element(root)));
-  EXPECT_TRUE(matches("a", element(child1)));
-  EXPECT_FALSE(matches("rect", element(child1)));
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
 
-  EXPECT_TRUE(matches("*", element(root)));
-  EXPECT_TRUE(matches("*", element(child1)));
+  EXPECT_TRUE(matches("rect", root));
+  EXPECT_TRUE(matches("a", child1));
+  EXPECT_FALSE(matches("rect", child1));
+
+  EXPECT_TRUE(matches("*", root));
+  EXPECT_TRUE(matches("*", child1));
 
   // Namespace matching.
-  EXPECT_TRUE(matches("|a", element(child1)));
-  EXPECT_FALSE(matches("|a", element(child2)));
+  EXPECT_TRUE(matches("|a", child1));
+  EXPECT_FALSE(matches("|a", child2));
 
-  EXPECT_TRUE(matches("|elm", element(child2)));
-  EXPECT_FALSE(matches("my-namespace|elm", element(child2)));
+  EXPECT_TRUE(matches("|elm", child2));
+  EXPECT_FALSE(matches("my-namespace|elm", child2));
 
-  EXPECT_FALSE(matches("|elm", element(child3)));
-  EXPECT_TRUE(matches("my-namespace|elm", element(child3)));
+  EXPECT_FALSE(matches("|elm", child3));
+  EXPECT_TRUE(matches("my-namespace|elm", child3));
 
   // Wildcards match both.
-  EXPECT_TRUE(matches("*|elm", element(child2)));
-  EXPECT_TRUE(matches("*|elm", element(child3)));
+  EXPECT_TRUE(matches("*|elm", child2));
+  EXPECT_TRUE(matches("*|elm", child3));
 }
 
 TEST_F(SelectorTests, Combinators) {
-  auto root = createEntity("root");
-  auto mid = createEntity("mid");
-  auto childA = createEntity("a");
-  auto childB = createEntity("b");
-  auto childC = createEntity("c");
-  auto childD = createEntity("d");
+  FakeElement root("root");
+  FakeElement mid("mid");
+  FakeElement childA("a");
+  FakeElement childB("b");
+  FakeElement childC("c");
+  FakeElement childD("d");
 
-  tree(root).appendChild(registry_, mid);
-  tree(mid).appendChild(registry_, childA);
-  tree(mid).appendChild(registry_, childB);
-  tree(mid).appendChild(registry_, childC);
-  tree(mid).appendChild(registry_, childD);
+  root.appendChild(mid);
+  mid.appendChild(childA);
+  mid.appendChild(childB);
+  mid.appendChild(childC);
+  mid.appendChild(childD);
 
-  EXPECT_TRUE(matches("root a", element(childA)));
-  EXPECT_FALSE(matches("root > a", element(childA)));
-  EXPECT_TRUE(matches("root > mid", element(mid)));
-  EXPECT_TRUE(matches("a + b", element(childB)));
-  EXPECT_FALSE(matches("a + c", element(childC)));
-  EXPECT_TRUE(matches("a ~ c", element(childC)));
-  EXPECT_TRUE(matches("b ~ c", element(childC)));
-  EXPECT_TRUE(matches("root > mid a + b ~ d", element(childD)));
-  EXPECT_FALSE(matches("root > mid a + b ~ d", element(childC)));
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
+
+  EXPECT_TRUE(matches("root a", childA));
+  EXPECT_FALSE(matches("root > a", childA));
+  EXPECT_TRUE(matches("root > mid", mid));
+  EXPECT_TRUE(matches("a + b", childB));
+  EXPECT_FALSE(matches("a + c", childC));
+  EXPECT_TRUE(matches("a ~ c", childC));
+  EXPECT_TRUE(matches("b ~ c", childC));
+  EXPECT_TRUE(matches("root > mid a + b ~ d", childD));
+  EXPECT_FALSE(matches("root > mid a + b ~ d", childC));
 }
 
 TEST_F(SelectorTests, AttributeMatch) {
-  auto root = createEntity("rect");
-  auto child1 = createEntity("a");
+  FakeElement root("rect");
+  FakeElement child1("a");
 
-  tree(root).appendChild(registry_, child1);
-  setAttribute(root, XMLQualifiedName("attr"), "value");
-  setAttribute(child1, XMLQualifiedName("my-namespace", "attr"), "value2");
-  setAttribute(root, XMLQualifiedName("list"), "abc def a");
-  setAttribute(child1, XMLQualifiedName("list"), "ABC DEF A");
-  setAttribute(root, XMLQualifiedName("dash"), "one-two-three");
-  setAttribute(child1, XMLQualifiedName("dash"), "ONE-two-THree");
-  setAttribute(root, XMLQualifiedName("long"), "the quick brown fox");
-  setAttribute(child1, XMLQualifiedName("long"), "THE QUICK BROWN FOX");
+  root.appendChild(child1);
+  root.setAttribute(XMLQualifiedName("attr"), "value");
+  child1.setAttribute(XMLQualifiedName("my-namespace", "attr"), "value2");
+  root.setAttribute(XMLQualifiedName("list"), "abc def a");
+  child1.setAttribute(XMLQualifiedName("list"), "ABC DEF A");
+  root.setAttribute(XMLQualifiedName("dash"), "one-two-three");
+  child1.setAttribute(XMLQualifiedName("dash"), "ONE-two-THree");
+  root.setAttribute(XMLQualifiedName("long"), "the quick brown fox");
+  child1.setAttribute(XMLQualifiedName("long"), "THE QUICK BROWN FOX");
 
   // Use the same attribute name with different namespaces on root.
-  setAttribute(root, XMLQualifiedName("dupe"), "value1");
-  setAttribute(root, XMLQualifiedName("my-namespace", "dupe"), "value2");
+  root.setAttribute(XMLQualifiedName("dupe"), "value1");
+  root.setAttribute(XMLQualifiedName("my-namespace", "dupe"), "value2");
+
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
 
   // No matcher: Matches if the attribute exists.
-  EXPECT_TRUE(matches("[attr]", element(root)));
-  EXPECT_FALSE(matches("[attr]", element(child1)));
-  EXPECT_FALSE(matches("[doesNotExist]", element(root)));
+  EXPECT_TRUE(matches("[attr]", root));
+  EXPECT_FALSE(matches("[attr]", child1));
+  EXPECT_FALSE(matches("[doesNotExist]", root));
 
   // Attribute namespaces
-  EXPECT_TRUE(matches("[*|attr]", element(root)));
-  EXPECT_TRUE(matches("[*|attr]", element(child1)));
-  EXPECT_TRUE(doesNotMatch("[*|none]", element(child1)));
+  EXPECT_TRUE(matches("[*|attr]", root));
+  EXPECT_TRUE(matches("[*|attr]", child1));
+  EXPECT_TRUE(doesNotMatch("[*|none]", child1));
 
-  EXPECT_TRUE(matches("[|attr]", element(root)));
-  EXPECT_TRUE(doesNotMatch("[|attr]", element(child1)));
-  EXPECT_TRUE(doesNotMatch("[my-namespace|attr]", element(root)));
-  EXPECT_TRUE(matches("[my-namespace|attr]", element(child1)));
+  EXPECT_TRUE(matches("[|attr]", root));
+  EXPECT_TRUE(doesNotMatch("[|attr]", child1));
+  EXPECT_TRUE(doesNotMatch("[my-namespace|attr]", root));
+  EXPECT_TRUE(matches("[my-namespace|attr]", child1));
 
-  EXPECT_TRUE(doesNotMatch("[*|attr=invalid]", element(root)));
-  EXPECT_TRUE(doesNotMatch("[*|attr=invalid]", element(child1)));
+  EXPECT_TRUE(doesNotMatch("[*|attr=invalid]", root));
+  EXPECT_TRUE(doesNotMatch("[*|attr=invalid]", child1));
 
   // Attribute namespaces will match values from both attributes
-  EXPECT_TRUE(matches("[*|attr ^= value]", element(root)));
-  EXPECT_TRUE(matches("[*|attr ^= value]", element(child1)));
-  EXPECT_TRUE(matches("[*|dupe = value1]", element(root)));
-  EXPECT_TRUE(matches("[*|dupe = value2]", element(root)));
+  EXPECT_TRUE(matches("[*|attr ^= value]", root));
+  EXPECT_TRUE(matches("[*|attr ^= value]", child1));
+  EXPECT_TRUE(matches("[*|dupe = value1]", root));
+  EXPECT_TRUE(matches("[*|dupe = value2]", root));
 
   // Includes [attr ~= str]: Matches if the attribute is a space-separated list of strings and one
   // of them exactly matches.
-  EXPECT_TRUE(matches("[list~=abc]", element(root)));
-  EXPECT_TRUE(matches("[list~=\"abc\"]", element(root)));
-  EXPECT_FALSE(matches("[list~=ABC]", element(root)));
-  EXPECT_TRUE(matches("[list~=def]", element(root)));
-  EXPECT_TRUE(matches("[list~=a]", element(root)));
-  EXPECT_FALSE(matches("[list~=b]", element(root)));
+  EXPECT_TRUE(matches("[list~=abc]", root));
+  EXPECT_TRUE(matches("[list~=\"abc\"]", root));
+  EXPECT_FALSE(matches("[list~=ABC]", root));
+  EXPECT_TRUE(matches("[list~=def]", root));
+  EXPECT_TRUE(matches("[list~=a]", root));
+  EXPECT_FALSE(matches("[list~=b]", root));
 
   // Includes [attr ~= str i] (case-insensitive).
-  EXPECT_TRUE(matches("[list~=abc i]", element(root)));
-  EXPECT_TRUE(matches("[list~=\"abc\" i]", element(root)));
-  EXPECT_TRUE(matches("[list~=abc i]", element(child1)));
-  EXPECT_TRUE(matches("[list~=ABC i]", element(root)));
-  EXPECT_TRUE(matches("[list~=ABC i]", element(child1)));
+  EXPECT_TRUE(matches("[list~=abc i]", root));
+  EXPECT_TRUE(matches("[list~=\"abc\" i]", root));
+  EXPECT_TRUE(matches("[list~=abc i]", child1));
+  EXPECT_TRUE(matches("[list~=ABC i]", root));
+  EXPECT_TRUE(matches("[list~=ABC i]", child1));
 
   // DashMatch [attr |= str]: Matches if the attribute exactly matches or matches the start of the
   // value plus a hyphen.
-  EXPECT_TRUE(matches("[dash|=one]", element(root)));
-  EXPECT_TRUE(matches("[dash|=one-two]", element(root)));
-  EXPECT_TRUE(matches("[dash|=one-two-three]", element(root)));
-  EXPECT_TRUE(matches("[dash|=\"one-two-three\"]", element(root)));
-  EXPECT_FALSE(matches("[dash|=one-]", element(root)));
-  EXPECT_FALSE(matches("[dash|=invalid]", element(root)));
+  EXPECT_TRUE(matches("[dash|=one]", root));
+  EXPECT_TRUE(matches("[dash|=one-two]", root));
+  EXPECT_TRUE(matches("[dash|=one-two-three]", root));
+  EXPECT_TRUE(matches("[dash|=\"one-two-three\"]", root));
+  EXPECT_FALSE(matches("[dash|=one-]", root));
+  EXPECT_FALSE(matches("[dash|=invalid]", root));
 
   // DashMatch [attr |= str i] (case-insensitive).
-  EXPECT_TRUE(matches("[dash|=one i]", element(root)));
-  EXPECT_TRUE(matches("[dash|=ONE i]", element(root)));
-  EXPECT_TRUE(matches("[dash|=\"ONE\" i]", element(root)));
-  EXPECT_TRUE(matches("[dash|=one i]", element(child1)));
-  EXPECT_TRUE(matches("[dash|=ONE i]", element(child1)));
-  EXPECT_TRUE(matches("[dash|=\"ONE\" i]", element(child1)));
+  EXPECT_TRUE(matches("[dash|=one i]", root));
+  EXPECT_TRUE(matches("[dash|=ONE i]", root));
+  EXPECT_TRUE(matches("[dash|=\"ONE\" i]", root));
+  EXPECT_TRUE(matches("[dash|=one i]", child1));
+  EXPECT_TRUE(matches("[dash|=ONE i]", child1));
+  EXPECT_TRUE(matches("[dash|=\"ONE\" i]", child1));
 
-  EXPECT_TRUE(matches("[dash|=one-two-three i]", element(root)));
-  EXPECT_TRUE(matches("[dash|=one-two-three i]", element(child1)));
-  EXPECT_FALSE(matches("[dash|=INVALID i]", element(root)));
+  EXPECT_TRUE(matches("[dash|=one-two-three i]", root));
+  EXPECT_TRUE(matches("[dash|=one-two-three i]", child1));
+  EXPECT_FALSE(matches("[dash|=INVALID i]", root));
 
   // PrefixMatch [attr ^= str]: Matches if the attribute starts with the given string.
-  EXPECT_TRUE(matches("[long^=the]", element(root)));
-  EXPECT_TRUE(matches("[long^=\"the \"]", element(root)));
-  EXPECT_TRUE(matches("[long$=\"the quick brown fox\"]", element(root)));
-  EXPECT_TRUE(matches("[long^=\"the qui\"]", element(root)));
-  EXPECT_FALSE(matches("[long^=\"the long\"]", element(root)));
+  EXPECT_TRUE(matches("[long^=the]", root));
+  EXPECT_TRUE(matches("[long^=\"the \"]", root));
+  EXPECT_TRUE(matches("[long$=\"the quick brown fox\"]", root));
+  EXPECT_TRUE(matches("[long^=\"the qui\"]", root));
+  EXPECT_FALSE(matches("[long^=\"the long\"]", root));
 
   // PrefixMatch [attr ^= str i] (case-insensitive).
-  EXPECT_TRUE(matches("[long^=THE i]", element(root)));
-  EXPECT_TRUE(matches("[long^=the i]", element(child1)));
-  EXPECT_TRUE(matches("[long^=\"THE \" i]", element(root)));
-  EXPECT_TRUE(matches("[long^=\"the \" i]", element(child1)));
-  EXPECT_TRUE(matches("[long^=\"the qui\" i]", element(child1)));
-  EXPECT_FALSE(matches("[long^=\"the long\" i]", element(child1)));
+  EXPECT_TRUE(matches("[long^=THE i]", root));
+  EXPECT_TRUE(matches("[long^=the i]", child1));
+  EXPECT_TRUE(matches("[long^=\"THE \" i]", root));
+  EXPECT_TRUE(matches("[long^=\"the \" i]", child1));
+  EXPECT_TRUE(matches("[long^=\"the qui\" i]", child1));
+  EXPECT_FALSE(matches("[long^=\"the long\" i]", child1));
 
   // SuffixMatch [attr $= str]: Matches if the attribute ends with the given string.
-  EXPECT_TRUE(matches("[long$=fox]", element(root)));
-  EXPECT_TRUE(matches("[long$=\" fox\"]", element(root)));
-  EXPECT_TRUE(matches("[long$=\"brown fox\"]", element(root)));
-  EXPECT_TRUE(matches("[long$=\"the quick brown fox\"]", element(root)));
-  EXPECT_FALSE(matches("[long$=\"foxes\"]", element(root)));
+  EXPECT_TRUE(matches("[long$=fox]", root));
+  EXPECT_TRUE(matches("[long$=\" fox\"]", root));
+  EXPECT_TRUE(matches("[long$=\"brown fox\"]", root));
+  EXPECT_TRUE(matches("[long$=\"the quick brown fox\"]", root));
+  EXPECT_FALSE(matches("[long$=\"foxes\"]", root));
 
   // SuffixMatch [attr $= str i] (case-insensitive).
-  EXPECT_TRUE(matches("[long$=FOX i]", element(root)));
-  EXPECT_TRUE(matches("[long$=fox i]", element(child1)));
-  EXPECT_TRUE(matches("[long$=\" FOX\" i]", element(root)));
-  EXPECT_TRUE(matches("[long$=\" fox\" i]", element(child1)));
-  EXPECT_TRUE(matches("[long$=\"brown fox\" i]", element(child1)));
-  EXPECT_TRUE(matches("[long$=\"the quick brown fox\" i]", element(child1)));
-  EXPECT_FALSE(matches("[long$=\"foxes\" i]", element(child1)));
+  EXPECT_TRUE(matches("[long$=FOX i]", root));
+  EXPECT_TRUE(matches("[long$=fox i]", child1));
+  EXPECT_TRUE(matches("[long$=\" FOX\" i]", root));
+  EXPECT_TRUE(matches("[long$=\" fox\" i]", child1));
+  EXPECT_TRUE(matches("[long$=\"brown fox\" i]", child1));
+  EXPECT_TRUE(matches("[long$=\"the quick brown fox\" i]", child1));
+  EXPECT_FALSE(matches("[long$=\"foxes\" i]", child1));
 
   // SubstringMatch [attr *= str]: Matches if the attribute contains the given string.
-  EXPECT_TRUE(matches("[long*=brown]", element(root)));
-  EXPECT_TRUE(matches("[long*=\"brown\"]", element(root)));
-  EXPECT_TRUE(matches("[long*=\"quick brown fox\"]", element(root)));
-  EXPECT_TRUE(matches("[long*=\"the quick brown fox\"]", element(root)));
-  EXPECT_FALSE(matches("[long*=\"the quick brown foxes\"]", element(root)));
+  EXPECT_TRUE(matches("[long*=brown]", root));
+  EXPECT_TRUE(matches("[long*=\"brown\"]", root));
+  EXPECT_TRUE(matches("[long*=\"quick brown fox\"]", root));
+  EXPECT_TRUE(matches("[long*=\"the quick brown fox\"]", root));
+  EXPECT_FALSE(matches("[long*=\"the quick brown foxes\"]", root));
 
   // SubstringMatch [attr *= str i] (case-insensitive).
-  EXPECT_TRUE(matches("[long*=BROWN i]", element(root)));
-  EXPECT_TRUE(matches("[long*=brown i]", element(child1)));
-  EXPECT_TRUE(matches("[long*=\"FOX\" i]", element(root)));
-  EXPECT_TRUE(matches("[long*=\"fox\" i]", element(child1)));
-  EXPECT_TRUE(matches("[long*=\"quick brown fox\" i]", element(child1)));
-  EXPECT_TRUE(matches("[long*=\"the quick brown fox\" i]", element(child1)));
-  EXPECT_FALSE(matches("[long*=\"the quick brown foxes\" i]", element(child1)));
+  EXPECT_TRUE(matches("[long*=BROWN i]", root));
+  EXPECT_TRUE(matches("[long*=brown i]", child1));
+  EXPECT_TRUE(matches("[long*=\"FOX\" i]", root));
+  EXPECT_TRUE(matches("[long*=\"fox\" i]", child1));
+  EXPECT_TRUE(matches("[long*=\"quick brown fox\" i]", child1));
+  EXPECT_TRUE(matches("[long*=\"the quick brown fox\" i]", child1));
+  EXPECT_FALSE(matches("[long*=\"the quick brown foxes\" i]", child1));
 
   // Eq [attr = str]: Matches if the attribute exactly matches the given string.
-  EXPECT_TRUE(matches("[attr=value]", element(root)));
-  EXPECT_FALSE(matches("[attr=invalid]", element(root)));
-  EXPECT_TRUE(matches("[list=\"abc def a\"]", element(root)));
-  EXPECT_FALSE(matches("[list=\"abc def a\"]", element(child1)));
-  EXPECT_TRUE(matches("[list=\"ABC DEF A\"]", element(child1)));
-  EXPECT_TRUE(matches("[dash=one-two-three]", element(root)));
-  EXPECT_TRUE(matches("[dash=ONE-two-THree]", element(child1)));
-  EXPECT_FALSE(matches("[dash=INVALID]", element(root)));
-  EXPECT_TRUE(matches("[long=\"the quick brown fox\"]", element(root)));
-  EXPECT_FALSE(matches("[long=\"the quick brown\"]", element(root)));
+  EXPECT_TRUE(matches("[attr=value]", root));
+  EXPECT_FALSE(matches("[attr=invalid]", root));
+  EXPECT_TRUE(matches("[list=\"abc def a\"]", root));
+  EXPECT_FALSE(matches("[list=\"abc def a\"]", child1));
+  EXPECT_TRUE(matches("[list=\"ABC DEF A\"]", child1));
+  EXPECT_TRUE(matches("[dash=one-two-three]", root));
+  EXPECT_TRUE(matches("[dash=ONE-two-THree]", child1));
+  EXPECT_FALSE(matches("[dash=INVALID]", root));
+  EXPECT_TRUE(matches("[long=\"the quick brown fox\"]", root));
+  EXPECT_FALSE(matches("[long=\"the quick brown\"]", root));
 
   // Eq [attr = str i] (case-insensitive).
-  EXPECT_TRUE(matches("[attr=VALUE i]", element(root)));
-  EXPECT_FALSE(matches("[attr=INVALID i]", element(root)));
-  EXPECT_TRUE(matches("[list=\"ABC DEF A\" i]", element(root)));
-  EXPECT_TRUE(matches("[list=\"abc def a\" i]", element(child1)));
-  EXPECT_TRUE(matches("[dash=one-two-three i]", element(root)));
-  EXPECT_TRUE(matches("[dash=one-two-three i]", element(child1)));
-  EXPECT_FALSE(matches("[dash=INVALID i]", element(root)));
-  EXPECT_TRUE(matches("[long=\"THE QUICK BROWN FOX\" i]", element(root)));
-  EXPECT_FALSE(matches("[long=\"THE QUICK BROWN\" i]", element(root)));
+  EXPECT_TRUE(matches("[attr=VALUE i]", root));
+  EXPECT_FALSE(matches("[attr=INVALID i]", root));
+  EXPECT_TRUE(matches("[list=\"ABC DEF A\" i]", root));
+  EXPECT_TRUE(matches("[list=\"abc def a\" i]", child1));
+  EXPECT_TRUE(matches("[dash=one-two-three i]", root));
+  EXPECT_TRUE(matches("[dash=one-two-three i]", child1));
+  EXPECT_FALSE(matches("[dash=INVALID i]", root));
+  EXPECT_TRUE(matches("[long=\"THE QUICK BROWN FOX\" i]", root));
+  EXPECT_FALSE(matches("[long=\"THE QUICK BROWN\" i]", root));
 }
 
 TEST_F(SelectorTests, PseudoClassSelectorSimple) {
@@ -369,73 +276,75 @@ TEST_F(SelectorTests, PseudoClassSelectorSimple) {
   // -> midB = <mid>
   //  -> childD = <d>
   // -> midUnknown = <unknown>
-  auto root = createEntity("root");
-  auto midA = createEntity("mid");
-  auto midB = createEntity("mid");
-  auto midUnknown = createEntity("unknown");
-  auto childA = createEntity("a");
-  auto childB = createEntity("b");
-  auto childC = createEntity("c");
-  auto childD = createEntity("d");
+  FakeElement root("root");
+  FakeElement midA("mid");
+  FakeElement midB("mid");
+  FakeElement midUnknown("unknown");
+  FakeElement childA("a");
+  FakeElement childB("b");
+  FakeElement childC("c");
+  FakeElement childD("d");
 
-  tree(root).appendChild(registry_, midA);
-  tree(root).appendChild(registry_, midB);
-  tree(root).appendChild(registry_, midUnknown);
-  tree(midA).appendChild(registry_, childA);
-  tree(midA).appendChild(registry_, childB);
-  tree(midA).appendChild(registry_, childC);
-  tree(midB).appendChild(registry_, childD);
+  root.appendChild(midA);
+  root.appendChild(midB);
+  root.appendChild(midUnknown);
+  midA.appendChild(childA);
+  midA.appendChild(childB);
+  midA.appendChild(childC);
+  midB.appendChild(childD);
+
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
 
   // :root
-  EXPECT_TRUE(matches(":root", element(root)));
-  EXPECT_TRUE(doesNotMatch(":root", element(midA)));
-  EXPECT_TRUE(matches(":root > mid", element(midA)));
-  EXPECT_TRUE(matches(":root > mid", element(midB)));
-  EXPECT_TRUE(doesNotMatch(":root > a", element(childA)));
+  EXPECT_TRUE(matches(":root", root));
+  EXPECT_TRUE(doesNotMatch(":root", midA));
+  EXPECT_TRUE(matches(":root > mid", midA));
+  EXPECT_TRUE(matches(":root > mid", midB));
+  EXPECT_TRUE(doesNotMatch(":root > a", childA));
 
   // :empty
-  EXPECT_TRUE(doesNotMatch(":empty", element(root)));
-  EXPECT_TRUE(matches(":empty", element(childA)));
+  EXPECT_TRUE(doesNotMatch(":empty", root));
+  EXPECT_TRUE(matches(":empty", childA));
 
   // :first-child
-  EXPECT_TRUE(matches(":first-child", element(root)));
-  EXPECT_TRUE(matches(":first-child", element(midA)));
-  EXPECT_TRUE(doesNotMatch(":first-child", element(midB)));
-  EXPECT_TRUE(matches(":first-child", element(childA)));
+  EXPECT_TRUE(matches(":first-child", root));
+  EXPECT_TRUE(matches(":first-child", midA));
+  EXPECT_TRUE(doesNotMatch(":first-child", midB));
+  EXPECT_TRUE(matches(":first-child", childA));
 
   // :last-child
-  EXPECT_TRUE(matches(":last-child", element(root)));
-  EXPECT_TRUE(doesNotMatch(":last-child", element(midA)));
-  EXPECT_TRUE(matches(":last-child", element(midUnknown)));
-  EXPECT_TRUE(doesNotMatch(":last-child", element(childA)));
-  EXPECT_TRUE(matches(":last-child", element(childC)));
-  EXPECT_TRUE(matches(":last-child", element(childD)));
+  EXPECT_TRUE(matches(":last-child", root));
+  EXPECT_TRUE(doesNotMatch(":last-child", midA));
+  EXPECT_TRUE(matches(":last-child", midUnknown));
+  EXPECT_TRUE(doesNotMatch(":last-child", childA));
+  EXPECT_TRUE(matches(":last-child", childC));
+  EXPECT_TRUE(matches(":last-child", childD));
 
   // :only-child
-  EXPECT_TRUE(matches(":only-child", element(root)));
-  EXPECT_TRUE(doesNotMatch(":only-child", element(midA)));
-  EXPECT_TRUE(doesNotMatch(":only-child", element(midB)));
-  EXPECT_TRUE(doesNotMatch(":only-child", element(childA)));
-  EXPECT_TRUE(matches(":only-child", element(childD)));
+  EXPECT_TRUE(matches(":only-child", root));
+  EXPECT_TRUE(doesNotMatch(":only-child", midA));
+  EXPECT_TRUE(doesNotMatch(":only-child", midB));
+  EXPECT_TRUE(doesNotMatch(":only-child", childA));
+  EXPECT_TRUE(matches(":only-child", childD));
 
   // :scope
   // See https://www.w3.org/TR/2022/WD-selectors-4-20221111/#the-scope-pseudo for `:scope` rules.
-  EXPECT_TRUE(doesNotMatch(":scope", element(root)))
+  EXPECT_TRUE(doesNotMatch(":scope", root))
       << ":scope cannot match the element directly, it cannot be the subject of the selector";
-  EXPECT_TRUE(doesNotMatch(":scope > root", element(root)));
-  EXPECT_TRUE(matches(":scope > mid", element(midA)));
-  EXPECT_TRUE(matches(":scope > mid", element(midB)));
-  EXPECT_TRUE(doesNotMatch(":scope > a", element(childA)));
+  EXPECT_TRUE(doesNotMatch(":scope > root", root));
+  EXPECT_TRUE(matches(":scope > mid", midA));
+  EXPECT_TRUE(matches(":scope > mid", midB));
+  EXPECT_TRUE(doesNotMatch(":scope > a", childA));
 
   // :defined
   // In the implementation for FakeElement, the "unknown" element is special and returns
   // `isKnownType() == false`. The only element with this type is midUnknown.
-  EXPECT_TRUE(matches(":defined", element(root)));
-  EXPECT_TRUE(matches(":defined", element(midA)));
-  EXPECT_TRUE(matches(":defined", element(midB)));
-  EXPECT_TRUE(matches(":defined", element(childA)));
-  EXPECT_TRUE(matches(":defined", element(childB)));
-  EXPECT_TRUE(doesNotMatch(":defined", element(midUnknown)));
+  EXPECT_TRUE(matches(":defined", root));
+  EXPECT_TRUE(matches(":defined", midA));
+  EXPECT_TRUE(matches(":defined", midB));
+  EXPECT_TRUE(matches(":defined", childA));
+  EXPECT_TRUE(matches(":defined", childB));
+  EXPECT_TRUE(doesNotMatch(":defined", midUnknown));
 }
 
 TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
@@ -445,95 +354,97 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   //   -> child2 = <type2> (alternating 1/2 based on if number if even)
   //      ...
   //   -> child8 = <type2>
-  auto root = createEntity("root");
-  auto mid1 = createEntity("mid");
-  std::map<std::string, svg::Entity> children;
+  FakeElement root("root");
+  FakeElement mid1("mid");
+  std::map<std::string, FakeElement> children;
 
-  tree(root).appendChild(registry_, mid1);
+  root.appendChild(mid1);
   for (int i = 1; i <= 8; ++i) {
     const std::string id = "child" + std::to_string(i);
     const std::string typeName = "type" + std::to_string((i - 1) % 2 + 1);
-    children[id] = createEntity(XMLQualifiedNameRef(typeName));
-    tree(mid1).appendChild(registry_, children[id]);
+    children[id] = FakeElement(XMLQualifiedNameRef(typeName));
+    mid1.appendChild(children[id]);
   }
 
-  // :nth-child(An+B) without a selector
-  EXPECT_TRUE(matches(":nth-child(1)", element(children["child1"])));
-  EXPECT_TRUE(doesNotMatch(":nth-child(1)", element(root))) << "Should not match root element";
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
 
-  EXPECT_TRUE(doesNotMatch(":nth-child(2n)", element(children["child1"])));
-  EXPECT_TRUE(matches(":nth-child(2n)", element(children["child2"])));
-  EXPECT_TRUE(doesNotMatch(":nth-child(2n)", element(children["child3"])));
+  // :nth-child(An+B) without a selector
+  EXPECT_TRUE(matches(":nth-child(1)", children["child1"]));
+  EXPECT_TRUE(doesNotMatch(":nth-child(1)", root)) << "Should not match root element";
+
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n)", children["child1"]));
+  EXPECT_TRUE(matches(":nth-child(2n)", children["child2"]));
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n)", children["child3"]));
 
   // :nth-child(An+B of S) with a selector
-  EXPECT_TRUE(matches(":nth-child(1 of type1)", element(children["child1"])));
-  EXPECT_TRUE(doesNotMatch(":nth-child(1 of type2)", element(children["child1"])));
+  EXPECT_TRUE(matches(":nth-child(1 of type1)", children["child1"]));
+  EXPECT_TRUE(doesNotMatch(":nth-child(1 of type2)", children["child1"]));
 
-  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", element(children["child1"])));
-  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", element(children["child2"])));
-  EXPECT_TRUE(matches(":nth-child(2n of type1)", element(children["child3"])));
-  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", element(children["child5"])));
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", children["child1"]));
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", children["child2"]));
+  EXPECT_TRUE(matches(":nth-child(2n of type1)", children["child3"]));
+  EXPECT_TRUE(doesNotMatch(":nth-child(2n of type1)", children["child5"]));
 
   // :nth-last-child(...)
-  EXPECT_TRUE(doesNotMatch(":nth-last-child(1)", element(children["child1"])));
-  EXPECT_TRUE(matches(":nth-last-child(1)", element(children["child8"])));
-  EXPECT_TRUE(doesNotMatch(":nth-last-child(1)", element(root))) << "Should not match root element";
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(1)", children["child1"]));
+  EXPECT_TRUE(matches(":nth-last-child(1)", children["child8"]));
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(1)", root)) << "Should not match root element";
 
-  EXPECT_TRUE(matches(":nth-last-child(2n)", element(children["child1"])));       // 8
-  EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", element(children["child2"])));  // 7
-  EXPECT_TRUE(matches(":nth-last-child(2n)", element(children["child7"])));       // 2
-  EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", element(children["child8"])));  // 1
+  EXPECT_TRUE(matches(":nth-last-child(2n)", children["child1"]));       // 8
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", children["child2"]));  // 7
+  EXPECT_TRUE(matches(":nth-last-child(2n)", children["child7"]));       // 2
+  EXPECT_TRUE(doesNotMatch(":nth-last-child(2n)", children["child8"]));  // 1
 
   // :nth-of-type(...)
-  EXPECT_TRUE(matches(":nth-of-type(1)", element(children["child1"])));
-  EXPECT_TRUE(matches(":nth-of-type(1)", element(children["child2"])));
-  EXPECT_TRUE(doesNotMatch(":nth-of-type(1)", element(children["child3"])));
-  EXPECT_TRUE(doesNotMatch(":nth-of-type(1)", element(children["child4"])));
+  EXPECT_TRUE(matches(":nth-of-type(1)", children["child1"]));
+  EXPECT_TRUE(matches(":nth-of-type(1)", children["child2"]));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(1)", children["child3"]));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(1)", children["child4"]));
 
-  EXPECT_TRUE(doesNotMatch(":nth-of-type(2)", element(children["child1"])));
-  EXPECT_TRUE(doesNotMatch(":nth-of-type(2)", element(children["child2"])));
-  EXPECT_TRUE(matches(":nth-of-type(2)", element(children["child3"])));
-  EXPECT_TRUE(matches(":nth-of-type(2)", element(children["child4"])));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(2)", children["child1"]));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(2)", children["child2"]));
+  EXPECT_TRUE(matches(":nth-of-type(2)", children["child3"]));
+  EXPECT_TRUE(matches(":nth-of-type(2)", children["child4"]));
 
   // [of S] is not supported for :nth-of-type
-  EXPECT_TRUE(doesNotMatch(":nth-of-type(1 of type1)", element(children["child1"])));
+  EXPECT_TRUE(doesNotMatch(":nth-of-type(1 of type1)", children["child1"]));
 
   // :nth-last-of-type(...)
-  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child1"])));
-  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child2"])));
-  EXPECT_TRUE(matches(":nth-last-of-type(1)", element(children["child8"])));
-  EXPECT_TRUE(matches(":nth-last-of-type(1)", element(children["child7"])));
-  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child6"])));
-  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", element(children["child5"])));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", children["child1"]));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", children["child2"]));
+  EXPECT_TRUE(matches(":nth-last-of-type(1)", children["child8"]));
+  EXPECT_TRUE(matches(":nth-last-of-type(1)", children["child7"]));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", children["child6"]));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", children["child5"]));
 
   // [of S] is not supported
-  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1 of type2)", element(children["child8"])));
+  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1 of type2)", children["child8"]));
 
   // :first-of-type
-  EXPECT_TRUE(matches(":first-of-type", element(children["child1"])));
-  EXPECT_TRUE(matches(":first-of-type", element(children["child2"])));
-  EXPECT_TRUE(doesNotMatch(":first-of-type", element(children["child3"])));
-  EXPECT_TRUE(doesNotMatch(":first-of-type", element(children["child4"])));
+  EXPECT_TRUE(matches(":first-of-type", children["child1"]));
+  EXPECT_TRUE(matches(":first-of-type", children["child2"]));
+  EXPECT_TRUE(doesNotMatch(":first-of-type", children["child3"]));
+  EXPECT_TRUE(doesNotMatch(":first-of-type", children["child4"]));
 
   // :last-of-type
-  EXPECT_TRUE(doesNotMatch(":last-of-type", element(children["child1"])));
-  EXPECT_TRUE(doesNotMatch(":last-of-type", element(children["child2"])));
-  EXPECT_TRUE(matches(":last-of-type", element(children["child8"])));
-  EXPECT_TRUE(matches(":last-of-type", element(children["child7"])));
+  EXPECT_TRUE(doesNotMatch(":last-of-type", children["child1"]));
+  EXPECT_TRUE(doesNotMatch(":last-of-type", children["child2"]));
+  EXPECT_TRUE(matches(":last-of-type", children["child8"]));
+  EXPECT_TRUE(matches(":last-of-type", children["child7"]));
 
   // :only-of-type
-  EXPECT_TRUE(doesNotMatch(":only-of-type", element(children["child1"])));
-  EXPECT_TRUE(doesNotMatch(":only-of-type", element(children["child2"])));
-  EXPECT_TRUE(matches(":only-of-type", element(mid1)));
+  EXPECT_TRUE(doesNotMatch(":only-of-type", children["child1"]));
+  EXPECT_TRUE(doesNotMatch(":only-of-type", children["child2"]));
+  EXPECT_TRUE(matches(":only-of-type", mid1));
 }
 
 TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
   // Setup: Create a simple tree structure
-  auto root = createEntity("root");
-  auto parent = createEntity("div");
-  std::vector<svg::Entity> children;
+  FakeElement root("root");
+  FakeElement parent("div");
+  std::vector<FakeElement> children;
 
-  tree(root).appendChild(registry_, parent);
+  root.appendChild(parent);
   // Create 5 children
   // - span
   // - p
@@ -541,38 +452,40 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
   // - p
   // - span
   for (int i = 1; i <= 5; ++i) {
-    auto child = createEntity(i % 2 == 0 ? "p" : "span");
+    FakeElement child(i % 2 == 0 ? "p" : "span");
     children.push_back(child);
-    tree(parent).appendChild(registry_, child);
+    parent.appendChild(child);
   }
 
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
+
   // Test :nth-child with forgiving selector list
-  EXPECT_TRUE(matches(":nth-child(2 of p, div, span)", element(children[1])))
+  EXPECT_TRUE(matches(":nth-child(2 of p, div, span)", children[1]))
       << "Should match 2nd child, which is a p element";
-  EXPECT_TRUE(matches(":nth-child(3 of span, :invalid, p)", element(children[2])))
+  EXPECT_TRUE(matches(":nth-child(3 of span, :invalid, p)", children[2]))
       << "Should match 3rd child (span) despite invalid selector in list";
-  EXPECT_FALSE(matches(":nth-child(1 of p, :invalid)", element(children[0])))
+  EXPECT_FALSE(matches(":nth-child(1 of p, :invalid)", children[0]))
       << "Should not match 1st child (span) as it doesn't match any valid selector in the list";
 
   // Test :nth-last-child with forgiving selector list
-  EXPECT_TRUE(matches(":nth-last-child(2 of p, span, :invalid)", element(children[3])))
+  EXPECT_TRUE(matches(":nth-last-child(2 of p, span, :invalid)", children[3]))
       << "Should match 2nd-to-last child, which is a p element";
-  EXPECT_TRUE(matches(":nth-last-child(1 of span, :invalid, div)", element(children[4])))
+  EXPECT_TRUE(matches(":nth-last-child(1 of span, :invalid, div)", children[4]))
       << "Should match last child (span) despite invalid selector in list";
-  EXPECT_FALSE(matches(":nth-last-child(3 of p, :invalid)", element(children[2])))
+  EXPECT_FALSE(matches(":nth-last-child(3 of p, :invalid)", children[2]))
       << "Should not match 3rd-to-last child (span) as it doesn't match any valid selector in the "
          "list";
 
   // Test complex selectors within the forgiving list
-  EXPECT_TRUE(matches(":nth-child(odd of span, p[class], div > *)", element(children[2])))
+  EXPECT_TRUE(matches(":nth-child(odd of span, p[class], div > *)", children[2]))
       << "Should match 3rd child (span) with complex selectors in the list";
-  EXPECT_TRUE(matches(":nth-last-child(even of p, :invalid)", element(children[1])))
+  EXPECT_TRUE(matches(":nth-last-child(even of p, :invalid)", children[1]))
       << "Should match 2nd-to-last child (p) with complex selectors and an invalid selector";
 
   // Test with all invalid selectors
-  EXPECT_FALSE(matches(":nth-child(1 of :invalid1, :invalid2)", element(children[0])))
+  EXPECT_FALSE(matches(":nth-child(1 of :invalid1, :invalid2)", children[0]))
       << "Should not match when all selectors in the list are invalid";
-  EXPECT_FALSE(matches(":nth-last-child(1 of :invalid1, :invalid2)", element(children[4])))
+  EXPECT_FALSE(matches(":nth-last-child(1 of :invalid1, :invalid2)", children[4]))
       << "Should not match when all selectors in the list are invalid";
 }
 
@@ -583,40 +496,42 @@ TEST_F(SelectorTests, PseudoClassSelectorIsNotWhereHas) {
   //   -> child2 = <type2> (alternating 1/2 based on if number if even)
   //      ...
   //   -> child8 = <type2>
-  auto root = createEntity("root");
-  auto mid1 = createEntity("mid");
-  std::map<std::string, svg::Entity> children;
+  FakeElement root("root");
+  FakeElement mid("mid");
+  std::map<std::string, FakeElement> children;
 
-  tree(root).appendChild(registry_, mid1);
+  root.appendChild(mid);
   for (int i = 1; i <= 8; ++i) {
     const std::string id = "child" + std::to_string(i);
     const std::string typeName = "type" + std::to_string((i - 1) % 2 + 1);
-    children[id] = createEntity(XMLQualifiedNameRef(typeName));
-    tree(mid1).appendChild(registry_, children[id]);
+    children[id] = FakeElement(XMLQualifiedNameRef(typeName));
+    mid.appendChild(children[id]);
   }
 
+  SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
+
   // :is(type1)
-  EXPECT_TRUE(matches(":is(type1)", element(children["child1"])));
-  EXPECT_FALSE(matches(":is(type1)", element(children["child2"])));
+  EXPECT_TRUE(matches(":is(type1)", children["child1"]));
+  EXPECT_FALSE(matches(":is(type1)", children["child2"]));
 
   // :not(type1)
-  EXPECT_TRUE(matches(":not(type1)", element(children["child2"])));
-  EXPECT_FALSE(matches(":not(type1)", element(children["child3"])));
+  EXPECT_TRUE(matches(":not(type1)", children["child2"]));
+  EXPECT_FALSE(matches(":not(type1)", children["child3"]));
 
   // :where(type1)
-  EXPECT_TRUE(matches(":where(type1)", element(children["child1"])));
-  EXPECT_FALSE(matches(":where(type1)", element(children["child2"])));
+  EXPECT_TRUE(matches(":where(type1)", children["child1"]));
+  EXPECT_FALSE(matches(":where(type1)", children["child2"]));
 
   // :has(> type1)
-  EXPECT_TRUE(matches(":has(> type1)", element(mid1)));
-  EXPECT_TRUE(doesNotMatch(":has(> type1)", element(root)));
-  EXPECT_TRUE(doesNotMatch(":has(> type1)", element(children["child1"])));
+  EXPECT_TRUE(matches(":has(> type1)", mid));
+  EXPECT_TRUE(doesNotMatch(":has(> type1)", root));
+  EXPECT_TRUE(doesNotMatch(":has(> type1)", children["child1"]));
 
   // :has(type1) matches any element under the root that has a type1 child (either direct or
   // indirect)
-  EXPECT_TRUE(matches(":has(type1)", element(root)));
-  EXPECT_TRUE(matches(":has(type1)", element(mid1)));
-  EXPECT_TRUE(doesNotMatch(":has(type1)", element(children["child1"])));
+  EXPECT_TRUE(matches(":has(type1)", root));
+  EXPECT_TRUE(matches(":has(type1)", mid));
+  EXPECT_TRUE(doesNotMatch(":has(type1)", children["child1"]));
 }
 
 TEST_F(SelectorTests, Specificity) {

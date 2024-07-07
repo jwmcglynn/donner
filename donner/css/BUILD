@@ -90,9 +90,9 @@ cc_test(
         ":core",
         ":selector_test_utils",
         "//donner/base:base_test_utils",
+        "//donner/base/element:fake_element",
         "//donner/base/parser:parser_test_utils",
         "//donner/css/parser",
-        "//donner/svg/components",
         "@com_google_gtest//:gtest_main",
     ],
 )
