@@ -11,6 +11,7 @@ donner_cc_library(
         "SelectorParser.cc",
         "StylesheetParser.cc",
         "ValueParser.cc",
+        "details/Tokenizer.cc",
     ],
     hdrs = [
         "AnbMicrosyntaxParser.h",
