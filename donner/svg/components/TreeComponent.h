@@ -4,7 +4,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
 #include "donner/svg/registry/Registry.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::svg::components {
 

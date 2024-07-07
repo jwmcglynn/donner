@@ -23,20 +23,6 @@ donner_cc_library(
 )
 
 #
-# Helper type for an XML attribute name with an optional namespace.
-#
-donner_cc_library(
-    name = "xml_qualified_name",
-    hdrs = ["XMLQualifiedName.h"],
-    visibility = [
-        "//visibility:public",
-    ],
-    deps = [
-        "//donner/base",
-    ],
-)
-
-#
 # Tool to parse XML files and output details about its structure.
 #
 cc_binary(
@@ -55,17 +41,6 @@ donner_cc_library(
     deps = [
         "//donner/svg:svg_core",
         "//donner/svg/parser",
-    ],
-)
-
-cc_test(
-    name = "xml_qualified_name_tests",
-    srcs = [
-        "tests/XMLQualifiedName_tests.cc",
-    ],
-    deps = [
-        ":xml_qualified_name",
-        "@com_google_gtest//:gtest_main",
     ],
 )
 

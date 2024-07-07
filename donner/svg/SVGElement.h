@@ -7,10 +7,11 @@
 #include "donner/base/Utils.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/registry/Registry.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::base::parser {
 
+// Forward declaration, #include "donner/base/parser/ParseResult.h"
 template <typename T>
 class ParseResult;
 
@@ -18,6 +19,7 @@ class ParseResult;
 
 namespace donner::svg {
 
+// Forward declaration, #include "donner/svg/SVGDocument.h"
 class SVGDocument;
 
 /**

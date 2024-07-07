@@ -32,23 +32,23 @@ struct FakeElement {
 
   bool operator==(const FakeElement& other) const { return entity_ == other.entity_; }
 
-  svg::XMLQualifiedNameRef xmlTypeName() const {
+  XMLQualifiedNameRef xmlTypeName() const {
     return registry_.get().get<svg::components::TreeComponent>(entity_).xmlTypeName();
   }
-  bool isKnownType() const { return xmlTypeName() != svg::XMLQualifiedNameRef("unknown"); }
+  bool isKnownType() const { return xmlTypeName() != XMLQualifiedNameRef("unknown"); }
   RcString id() const { return registry_.get().get_or_emplace<FakeElementData>(entity_).id; }
   RcString className() const {
     return registry_.get().get_or_emplace<FakeElementData>(entity_).className;
   }
 
-  std::optional<RcString> getAttribute(const svg::XMLQualifiedNameRef& name) const {
+  std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const {
     return registry_.get()
         .get_or_emplace<svg::components::AttributesComponent>(entity_)
         .getAttribute(name);
   }
 
-  SmallVector<svg::XMLQualifiedNameRef, 1> findMatchingAttributes(
-      const svg::XMLQualifiedNameRef& matcher) const {
+  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
+      const XMLQualifiedNameRef& matcher) const {
     return registry_.get()
         .get_or_emplace<svg::components::AttributesComponent>(entity_)
         .findMatchingAttributes(matcher);
@@ -107,10 +107,10 @@ Specificity computeSpecificity(std::string_view str) {
 
 class SelectorTests : public testing::Test {
 protected:
-  svg::Entity createEntity(const svg::XMLQualifiedNameRef& xmlTypeName) {
+  svg::Entity createEntity(const XMLQualifiedNameRef& xmlTypeName) {
     auto entity = registry_.create();
     registry_.emplace<svg::components::TreeComponent>(entity, svg::ElementType::Unknown,
-                                                      svg::XMLQualifiedNameRef(xmlTypeName));
+                                                      XMLQualifiedNameRef(xmlTypeName));
     return entity;
   }
 
@@ -142,7 +142,7 @@ protected:
     registry_.get_or_emplace<FakeElementData>(entity).className = className;
   }
 
-  void setAttribute(svg::Entity entity, const svg::XMLQualifiedName& name, const RcString& value) {
+  void setAttribute(svg::Entity entity, const XMLQualifiedName& name, const RcString& value) {
     registry_.get_or_emplace<svg::components::AttributesComponent>(entity).setAttribute(name,
                                                                                         value);
   }
@@ -159,7 +159,7 @@ TEST_F(SelectorTests, TypeMatch) {
   auto root = createEntity("rect");
   auto child1 = createEntity("a");
   auto child2 = createEntity("elm");
-  auto child3 = createEntity(svg::XMLQualifiedNameRef("my-namespace", "elm"));
+  auto child3 = createEntity(XMLQualifiedNameRef("my-namespace", "elm"));
 
   tree(root).appendChild(registry_, child1);
 
@@ -215,18 +215,18 @@ TEST_F(SelectorTests, AttributeMatch) {
   auto child1 = createEntity("a");
 
   tree(root).appendChild(registry_, child1);
-  setAttribute(root, svg::XMLQualifiedName("attr"), "value");
-  setAttribute(child1, svg::XMLQualifiedName("my-namespace", "attr"), "value2");
-  setAttribute(root, svg::XMLQualifiedName("list"), "abc def a");
-  setAttribute(child1, svg::XMLQualifiedName("list"), "ABC DEF A");
-  setAttribute(root, svg::XMLQualifiedName("dash"), "one-two-three");
-  setAttribute(child1, svg::XMLQualifiedName("dash"), "ONE-two-THree");
-  setAttribute(root, svg::XMLQualifiedName("long"), "the quick brown fox");
-  setAttribute(child1, svg::XMLQualifiedName("long"), "THE QUICK BROWN FOX");
+  setAttribute(root, XMLQualifiedName("attr"), "value");
+  setAttribute(child1, XMLQualifiedName("my-namespace", "attr"), "value2");
+  setAttribute(root, XMLQualifiedName("list"), "abc def a");
+  setAttribute(child1, XMLQualifiedName("list"), "ABC DEF A");
+  setAttribute(root, XMLQualifiedName("dash"), "one-two-three");
+  setAttribute(child1, XMLQualifiedName("dash"), "ONE-two-THree");
+  setAttribute(root, XMLQualifiedName("long"), "the quick brown fox");
+  setAttribute(child1, XMLQualifiedName("long"), "THE QUICK BROWN FOX");
 
   // Use the same attribute name with different namespaces on root.
-  setAttribute(root, svg::XMLQualifiedName("dupe"), "value1");
-  setAttribute(root, svg::XMLQualifiedName("my-namespace", "dupe"), "value2");
+  setAttribute(root, XMLQualifiedName("dupe"), "value1");
+  setAttribute(root, XMLQualifiedName("my-namespace", "dupe"), "value2");
 
   // No matcher: Matches if the attribute exists.
   EXPECT_TRUE(matches("[attr]", element(root)));
@@ -453,7 +453,7 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   for (int i = 1; i <= 8; ++i) {
     const std::string id = "child" + std::to_string(i);
     const std::string typeName = "type" + std::to_string((i - 1) % 2 + 1);
-    children[id] = createEntity(svg::XMLQualifiedNameRef(typeName));
+    children[id] = createEntity(XMLQualifiedNameRef(typeName));
     tree(mid1).appendChild(registry_, children[id]);
   }
 
@@ -591,7 +591,7 @@ TEST_F(SelectorTests, PseudoClassSelectorIsNotWhereHas) {
   for (int i = 1; i <= 8; ++i) {
     const std::string id = "child" + std::to_string(i);
     const std::string typeName = "type" + std::to_string((i - 1) % 2 + 1);
-    children[id] = createEntity(svg::XMLQualifiedNameRef(typeName));
+    children[id] = createEntity(XMLQualifiedNameRef(typeName));
     tree(mid1).appendChild(registry_, children[id]);
   }
 

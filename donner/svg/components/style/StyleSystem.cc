@@ -12,7 +12,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/registry/Registry.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::svg::components {
 

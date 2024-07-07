@@ -10,9 +10,9 @@
 #include "donner/base/RcString.h"
 #include "donner/base/RcStringOrRef.h"
 
-namespace donner::svg {
+namespace donner {
 
-// Forward declaration.
+// Forward declaration, implemented later in the file.
 struct XMLQualifiedNameRef;
 
 /**
@@ -201,20 +201,20 @@ struct XMLQualifiedNameRef {
   }
 };
 
-}  // namespace donner::svg
+}  // namespace donner
 
 /**
- * Hash function for \ref donner::svg::XMLQualifiedNameRef.
+ * Hash function for \ref donner::XMLQualifiedNameRef.
  */
 template <>
-struct std::hash<donner::svg::XMLQualifiedNameRef> {
+struct std::hash<donner::XMLQualifiedNameRef> {
   /**
    * Hash function for \ref XMLQualifiedName.
    *
    * @param attr Input attribute.
    * @return std::size_t Output hash.
    */
-  std::size_t operator()(const donner::svg::XMLQualifiedNameRef& attr) const {
+  std::size_t operator()(const donner::XMLQualifiedNameRef& attr) const {
     std::size_t hash = 0;
     hash ^= std::hash<std::string_view>()(attr.namespacePrefix);
     hash ^= std::hash<std::string_view>()(attr.name);
@@ -223,17 +223,17 @@ struct std::hash<donner::svg::XMLQualifiedNameRef> {
 };
 
 /**
- * Hash function for \ref donner::svg::XMLQualifiedName.
+ * Hash function for \ref donner::XMLQualifiedName.
  */
 template <>
-struct std::hash<donner::svg::XMLQualifiedName> {
+struct std::hash<donner::XMLQualifiedName> {
   /**
    * Hash function for \ref XMLQualifiedName.
    *
    * @param attr Input attribute.
    * @return std::size_t Output hash.
    */
-  std::size_t operator()(const donner::svg::XMLQualifiedName& attr) const {
-    return std::hash<donner::svg::XMLQualifiedNameRef>()(attr);
+  std::size_t operator()(const donner::XMLQualifiedName& attr) const {
+    return std::hash<donner::XMLQualifiedNameRef>()(attr);
   }
 };

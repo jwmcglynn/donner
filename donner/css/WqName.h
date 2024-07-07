@@ -3,7 +3,7 @@
 
 #include <ostream>
 
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::css {
 
@@ -18,14 +18,14 @@ namespace donner::css {
  * - `*|foo`, represents the name `foo` which belongs to any namespace.
  */
 struct WqName {
-  svg::XMLQualifiedName name;
+  XMLQualifiedName name;
 
   /**
    * Create a WqName with the given namespace and name.
    *
    * @param name The name with optional namespace
    */
-  WqName(svg::XMLQualifiedName&& name) : name(std::move(name)) {}
+  WqName(XMLQualifiedName&& name) : name(std::move(name)) {}
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const WqName& obj) { return os << obj.name; }

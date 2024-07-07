@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/base/element/ElementLike.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::css {
 
@@ -26,12 +26,12 @@ struct TypeSelector {
    * Selector matcher itself, which may contain wildcards.
    *
    * In this context, the members have the following meanings:
-   * - \ref svg::XMLQualifiedName::namespacePrefix The namespace matcher of the selector, the
+   * - \ref XMLQualifiedName::namespacePrefix The namespace matcher of the selector, the
    * wildcard namespace ("*"), or empty if no namespace is specified.
-   * - \ref svg::XMLQualifiedName::name The name matcher of the selector, or "*" if the selector is
+   * - \ref XMLQualifiedName::name The name matcher of the selector, or "*" if the selector is
    * a universal selector.
    */
-  svg::XMLQualifiedName matcher;
+  XMLQualifiedName matcher;
 
   /**
    * Create a TypeSelector with the given namespace and name.
@@ -39,7 +39,7 @@ struct TypeSelector {
    * @param matcher Selector matcher, which may be a wildcard. If the namespace is "*", it will
    * match every namespaces. If the name is "*", it will match every attribute in its namespace.
    */
-  TypeSelector(svg::XMLQualifiedName&& matcher) : matcher(std::move(matcher)) {}
+  TypeSelector(XMLQualifiedName&& matcher) : matcher(std::move(matcher)) {}
 
   /**
    * Create a TypeSelector with the given namespace and name.
@@ -47,7 +47,7 @@ struct TypeSelector {
    * @param matcher Selector matcher, which may be a wildcard. If the namespace is "*", it will
    * match every namespaces. If the name is "*", it will match every attribute in its namespace.
    */
-  TypeSelector(const svg::XMLQualifiedNameRef& matcher)
+  TypeSelector(const XMLQualifiedNameRef& matcher)
       : matcher(RcString(matcher.namespacePrefix), RcString(matcher.name)) {}
 
   /// Destructor.
@@ -75,7 +75,7 @@ struct TypeSelector {
    */
   template <ElementLike T>
   bool matches(const T& element) const {
-    const svg::XMLQualifiedNameRef elementName = element.xmlTypeName();
+    const XMLQualifiedNameRef elementName = element.xmlTypeName();
 
     // Match namespace.
     const bool namespaceMatched =

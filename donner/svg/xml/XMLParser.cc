@@ -6,7 +6,7 @@
 
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/xml/AttributeParser.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/xml/details/XMLParserContext.h"
 
 namespace donner::svg::parser {
@@ -113,7 +113,7 @@ ParseResult<SVGElement> ParseAttributes(XMLParserContext& context, T element,
 
 template <size_t I = 0, typename... Types>
 ParseResult<SVGElement> CreateElement(XMLParserContext& context, SVGDocument& svgDocument,
-                                      const svg::XMLQualifiedNameRef& tagName,
+                                      const XMLQualifiedNameRef& tagName,
                                       rapidxml_ns::xml_node<>* node, entt::type_list<Types...>) {
   if constexpr (I != sizeof...(Types)) {
     if (tagName == std::tuple_element<I, std::tuple<Types...>>::type::Tag) {

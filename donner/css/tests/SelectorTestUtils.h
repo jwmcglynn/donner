@@ -3,7 +3,7 @@
 #include <gmock/gmock.h>
 
 #include "donner/css/Selector.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::css {
 
@@ -280,7 +280,7 @@ MATCHER_P2(TypeSelectorIsImpl, ns, name, "") {
 
   if constexpr (std::is_same_v<ArgType, CompoundSelector::Entry>) {
     if (const TypeSelector* selector = std::get_if<TypeSelector>(&arg)) {
-      return selector->matcher == svg::XMLQualifiedNameRef(ns, name);
+      return selector->matcher == XMLQualifiedNameRef(ns, name);
     }
 
     return false;
@@ -358,7 +358,7 @@ MATCHER_P3(AttributeSelectorIsImpl, ns, name, matcherMatcher, "") {
     selector = &arg;
   }
 
-  return selector && selector->name.name == svg::XMLQualifiedNameRef(ns, name) &&
+  return selector && selector->name.name == XMLQualifiedNameRef(ns, name) &&
          testing::ExplainMatchResult(matcherMatcher, selector->matcher, result_listener);
 }
 

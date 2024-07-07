@@ -185,7 +185,7 @@ template <ElementLike T>
 ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
   SmallVector<T, 4> stack;
 
-  for (auto child = element.firstChild(); child; child = element.nextSibling()) {
+  for (auto child = element.firstChild(); child; child = child->nextSibling()) {
     stack.push_back(child.value());
   }
 
@@ -195,7 +195,7 @@ ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
 
     co_yield current;
 
-    for (auto child = current.firstChild(); child; child = current.nextSibling()) {
+    for (auto child = current.firstChild(); child; child = child->nextSibling()) {
       stack.push_back(child.value());
     }
   }

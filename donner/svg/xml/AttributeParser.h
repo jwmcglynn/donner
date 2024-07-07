@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/xml/details/XMLParserContext.h"
 
 namespace donner::svg::parser {

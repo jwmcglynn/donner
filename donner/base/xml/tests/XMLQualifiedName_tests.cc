@@ -1,4 +1,4 @@
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 #include <gtest/gtest.h>
 

@@ -20,6 +20,7 @@ cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         "//donner/base/parser",
+        "//donner/base/xml",
         "//donner/css",
         "//donner/css/parser",
         "//donner/svg/components:document_context",
@@ -28,7 +29,6 @@ cc_library(
         "//donner/svg/graph",
         "//donner/svg/parser",
         "//donner/svg/registry",
-        "//donner/svg/xml:xml_qualified_name",
         "@frozen",
     ],
 )

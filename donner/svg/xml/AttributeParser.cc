@@ -14,7 +14,7 @@
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "donner/svg/parser/PreserveAspectRatioParser.h"
 #include "donner/svg/parser/ViewboxParser.h"
-#include "donner/svg/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/xml/details/XMLParserContext.h"
 
 namespace donner::svg::parser {

@@ -57,13 +57,13 @@ cc_library(
     deps = [
         ":document_context",
         ":transform_component",
+        "//donner/base/xml",
         "//donner/svg/components/layout:sized_element_component",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
         "//donner/svg/parser",
         "//donner/svg/properties",
         "//donner/svg/registry",
-        "//donner/svg/xml:xml_qualified_name",
     ],
 )
 
