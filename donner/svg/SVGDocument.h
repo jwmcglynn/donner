@@ -6,8 +6,11 @@
 
 namespace donner::svg {
 
-class XMLParser;
-class SVGSVGElement;
+namespace parser {
+class XMLParser;  // Forward declaration, #include "donner/svg/xml/XMLParser.h"
+}  // namespace parser
+
+class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
 
 /**
  * Represents an SVG document, which holds a collection of \ref SVGElement as the document tree.

@@ -21,7 +21,7 @@ using donner::base::parser::ParseResult;
 
 int main(int argc, char* argv[]) {
   //! [svg string]
-  // This is the base SVG we are loading, a simple path containing a line.
+  // This is the base SVG we are loading, a simple path containing a line
   donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
       <path d="M 1 1 L 4 5" stroke="blue" />
@@ -30,8 +30,7 @@ int main(int argc, char* argv[]) {
   //! [svg string]
 
   //! [svg parse]
-  // Call ParseSVG to load the SVG file, not that this modifies the original string, and the
-  // underlying string must remain valid as long as the SVGDocument is in use.
+  // Call ParseSVG to load the SVG file
   ParseResult<donner::svg::SVGDocument> maybeResult =
       donner::svg::parser::XMLParser::ParseSVG(svgContents);
   //! [svg parse]
@@ -39,8 +38,8 @@ int main(int argc, char* argv[]) {
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e << "\n";  // Includes line:column and reason
-    // or handle the error per your project's conventions here.
-    return 1;
+    std::abort();
+    // - or - handle the error per your project's conventions
   }
   //! [error handling]
 

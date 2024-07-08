@@ -1,4 +1,4 @@
-# Donner 🌩
+# Donner, a modern SVG rendering library in C++
 
 [![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC) [![Code coverage %](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner) ![Product lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.svg) ![Test lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc-tests.svg)
 ![Comments %](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/comments.svg)
@@ -19,18 +19,23 @@ Donner renders with Skia, which provides the same high-quality rendering used by
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
-## Demo
+## Try it out: Render an SVG to PNG
+
+```console
+bazel run --run_under="cd $PWD &&" //examples:svg_to_png -- donner_splash.svg
+```
+
+## API Demo
 
 ```cpp
-// This is the base SVG we are loading, a simple path containing a line.
+// This is the base SVG we are loading, a simple path containing a line
 donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
   <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
     <path d="M 1 1 L 4 5" stroke="blue" />
   </svg>
 )");
 
-// Call ParseSVG to load the SVG file, not that this modifies the original string, and the
-// underlying string must remain valid as long as the SVGDocument is in use.
+// Call ParseSVG to load the SVG file
 ParseResult<donner::svg::SVGDocument> maybeResult =
     donner::svg::parser::XMLParser::ParseSVG(svgContents);
 
@@ -59,6 +64,35 @@ if (std::optional<donner::svg::PathSpline> spline = path.computedSpline()) {
 } else {
   std::cout << "Path is empty\n";
 }
+```
+
+## API Demo 2: Rendering a SVG to PNG
+```cpp
+using namespace donner::base;
+using namespace donner::base::parser;
+using namespace donner::svg;
+using namespace donner::svg::parser;
+
+std::ifstream file("test.svg");
+if (!file) {
+  std::cerr << "Could not open file\n";
+  std::abort();
+}
+
+XMLParser::InputBuffer fileData;
+fileData.loadFromStream(file);
+
+ParseResult<SVGDocument> maybeDocument = XMLParser::ParseSVG(fileData);
+if (maybeDocument.hasError()) {
+  const ParseError& e = maybeDocument.error();
+  std::cerr << "Parse Error: " << e << "\n";
+  std::abort();
+}
+
+RendererSkia renderer;
+renderer.draw();
+
+const bool success = renderer.save("output.png");
 ```
 
 ## Documentation

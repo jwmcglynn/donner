@@ -20,8 +20,10 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererSkia.h"
 
-using donner::base::parser::ParseError;
-using donner::base::parser::ParseResult;
+using namespace donner::base;
+using namespace donner::base::parser;
+using namespace donner::svg;
+using namespace donner::svg::parser;
 
 /**
  * Main function, usage: svg_to_png <filename>
@@ -38,10 +40,10 @@ int main(int argc, char* argv[]) {
   std::ifstream file(argv[1]);
   if (!file) {
     std::cerr << "Could not open file " << argv[1] << "\n";
-    return 2;
+    std::abort();
   }
 
-  donner::svg::parser::XMLParser::InputBuffer fileData;
+  XMLParser::InputBuffer fileData;
   fileData.loadFromStream(file);
   //! [svg_to_png load_file]
 
@@ -49,18 +51,21 @@ int main(int argc, char* argv[]) {
   // SVGDocument, since it is referenced internally.
 
   //! [svg_to_png parse]
-  // The warnings list is optional, call ParseSVG(fileData) to ignore warnings.
+  XMLParser::Options options;
+  // Allow data-name attributes without generating a warning.
+  options.disableUserAttributes = false;
+
   std::vector<ParseError> warnings;
-  ParseResult<donner::svg::SVGDocument> maybeResult =
-      donner::svg::parser::XMLParser::ParseSVG(fileData, &warnings);
+  // warnings and options are optional, call ParseSVG(fileData) to use defaults and ignore warnings.
+  ParseResult<SVGDocument> maybeDocument = XMLParser::ParseSVG(fileData, &warnings, options);
   //! [svg_to_png parse]
 
   //! [svg_to_png handle_errors]
   // ParseResult either contains an SVGDocument or an error.
-  if (maybeResult.hasError()) {
-    const ParseError& e = maybeResult.error();
+  if (maybeDocument.hasError()) {
+    const ParseError& e = maybeDocument.error();
     std::cerr << "Parse Error: " << e << "\n";
-    return 3;
+    std::abort();
   }
 
   std::cout << "Parsed successfully.\n";
@@ -72,7 +77,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  donner::svg::SVGDocument document = std::move(maybeResult.result());
+  SVGDocument document = std::move(maybeDocument.result());
   //! [svg_to_png handle_errors]
 
   //! [svg_to_png set_canvas_size]
@@ -84,7 +89,7 @@ int main(int argc, char* argv[]) {
 
   //! [svg_to_png render]
   // Draw the document, store the image in-memory.
-  donner::svg::RendererSkia renderer;
+  RendererSkia renderer;
   renderer.draw(document);
 
   std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << "\n";
