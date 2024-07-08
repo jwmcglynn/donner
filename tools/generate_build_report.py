@@ -11,6 +11,8 @@ class ReportOptions:
     all: bool = False
     binary_size: bool = False
     coverage: bool = False
+    public_targets: bool = False
+    external_dependencies: bool = False
 
 
 def run_command(command):
@@ -43,6 +45,32 @@ def get_git_status() -> str:
         return status
     except subprocess.CalledProcessError:
         return "unknown"
+
+
+def get_bazel_query_command(query: str) -> str:
+    return f'bazel query "{query}"'
+
+
+def query_external_dependencies() -> typing.List[str]:
+    query_output = run_command("bazel query 'deps(//examples:svg_to_png)' --keep_going")
+
+    # Find lines beginning with @word// and return unique "word" values
+    # (i.e. the external dependencies)
+    external_dependencies = set()
+    for line in query_output.split("\n"):
+        if line.startswith("@"):
+            external_dependencies.add(line[1:].split("//")[0])
+
+    # Filter out build-only config: Lines starting with `bazel`, `@bazel`, or `rules_`
+    external_dependencies = [
+        dep
+        for dep in external_dependencies
+        if not dep.startswith(
+            ("bazel", "@bazel", "rules_", "platforms", "skia_user_config")
+        )
+    ]
+
+    return external_dependencies
 
 
 def create_build_report(
@@ -107,6 +135,30 @@ def create_build_report(
         report += coverage_output
         report += "\n```\n\n"
 
+    # Public targets report
+    if options.all or options.public_targets:
+        report += "## Public targets\n```\n"
+        public_targets_cmd = get_bazel_query_command(
+            "kind(library, set(//donner/... //:*)) intersect attr(visibility, public, //...)"
+        )
+        report += f"$ {public_targets_cmd}\n"
+
+        public_targets_output = run_command(public_targets_cmd)
+        if not public_targets_output:
+            return report
+
+        report += public_targets_output
+        report += "\n```\n\n"
+
+    # External dependencies report
+    if options.all or options.external_dependencies:
+        report += "## External dependencies\n\n"
+
+        external_dependencies = query_external_dependencies()
+        for dependency in external_dependencies:
+            report += f"- {dependency}\n"
+        report += "\n\n"
+
     return report
 
 
@@ -124,11 +176,23 @@ def main():
     parser.add_argument(
         "--coverage", action="store_true", help="Generate code coverage report"
     )
+    parser.add_argument(
+        "--public-targets", action="store_true", help="Generate public targets report"
+    )
+    parser.add_argument(
+        "--external-dependencies",
+        action="store_true",
+        help="Generate external dependencies report",
+    )
 
     args = parser.parse_args()
 
     options = ReportOptions(
-        all=args.all, binary_size=args.binary_size, coverage=args.coverage
+        all=args.all,
+        binary_size=args.binary_size,
+        coverage=args.coverage,
+        public_targets=args.public_targets,
+        external_dependencies=args.external_dependencies,
     )
 
     report = create_build_report(

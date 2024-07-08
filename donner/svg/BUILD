@@ -79,12 +79,7 @@ cc_library(
         "SVG.h",
     ],
     visibility = [
-        "//:__pkg__",
-        "//donner/svg/properties/tests:__pkg__",
-        "//donner/svg/renderer:__subpackages__",
-        "//donner/svg/tests:__pkg__",
-        "//donner/svg/xml:__pkg__",
-        "//tools:__pkg__",
+        "//visibility:public",
     ],
     deps = [
         ":svg_core",
