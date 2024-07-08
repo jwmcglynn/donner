@@ -1,34 +1,34 @@
 <svg width="512" height="508" xmlns="http://www.w3.org/2000/svg">
   <rect x="0" y="0" width="512" height="508" fill="white" />
-  <rect x="0" y="0" width="167.85835518191004" height="128" fill="#FF5733" />
-  <rect x="167.85835518191004" y="0" width="149.7814966220009" height="128" fill="#33FF57" />
-  <rect x="317.6398518039109" y="0" width="72.10666948441762" height="128" fill="#3357FF" />
-  <rect x="389.74652128832855" y="0" width="49.338255592024886" height="128" fill="#FF33A1" />
-  <rect x="439.08477688035344" y="0" width="34.335422431498934" height="128" fill="#FF8633" />
-  <rect x="473.4201993118524" y="0" width="8.590195547513225" height="128" fill="#33FFD7" />
-  <rect x="482.01039485936565" y="0" width="7.460418303934064" height="128" fill="#8333FF" />
-  <rect x="489.47081316329974" y="0" width="5.337383850324592" height="128" fill="#FF3381" />
-  <rect x="494.80819701362435" y="0" width="4.2583261238533625" height="128" fill="#33FF83" />
-  <rect x="499.0665231374777" y="0" width="2.7925320794341606" height="128" fill="#A133FF" />
-  <rect x="501.8590552169119" y="0" width="1.9121257949689938" height="128" fill="#FF8333" />
-  <rect x="503.77118101188086" y="0" width="1.7912442791950918" height="128" fill="#3381FF" />
-  <rect x="505.56242529107595" y="0" width="1.6319004629476757" height="128" fill="#FF33D7" />
-  <rect x="507.1943257540236" y="0" width="1.3554790947094524" height="128" fill="#FF5733" />
-  <rect x="508.54980484873306" y="0" width="1.2633386386300447" height="128" fill="#33FF57" />
-  <rect x="509.8131434873631" y="0" width="1.1779607848316944" height="128" fill="#3357FF" />
-  <rect x="510.9911042721948" y="0" width="0.6923214085232563" height="128" fill="#FF33A1" />
-  <rect x="511.683425680718" y="0" width="0.27050409124229796" height="128" fill="#FF8633" />
-  <rect x="511.9539297719603" y="0" width="0.04607022803970387" height="128" fill="#33FFD7" />
+  <rect x="0" y="0" width="167.86500676947463" height="128" fill="#FF5733" />
+  <rect x="167.86500676947463" y="0" width="149.59130865502098" height="128" fill="#33FF57" />
+  <rect x="317.45631542449564" y="0" width="72.10952679721296" height="128" fill="#3357FF" />
+  <rect x="389.56584222170864" y="0" width="49.34021067925899" height="128" fill="#FF33A1" />
+  <rect x="438.9060529009676" y="0" width="34.51261764026021" height="128" fill="#FF8633" />
+  <rect x="473.4186705412278" y="0" width="8.590535944259155" height="128" fill="#33FFD7" />
+  <rect x="482.00920648548697" y="0" width="7.460713931908992" height="128" fill="#8333FF" />
+  <rect x="489.46992041739594" y="0" width="5.337595350526698" height="128" fill="#FF3381" />
+  <rect x="494.8075157679226" y="0" width="4.258494865105835" height="128" fill="#33FF83" />
+  <rect x="499.06601063302844" y="0" width="2.792642736849057" height="128" fill="#A133FF" />
+  <rect x="501.8586533698775" y="0" width="1.91220156523462" height="128" fill="#FF8333" />
+  <rect x="503.77085493511214" y="0" width="1.7913152593864545" height="128" fill="#3381FF" />
+  <rect x="505.5621701944986" y="0" width="1.6319651289502362" height="128" fill="#FF33D7" />
+  <rect x="507.19413532344885" y="0" width="1.3555328071855497" height="128" fill="#FF5733" />
+  <rect x="508.5496681306344" y="0" width="1.263388699930654" height="128" fill="#33FF57" />
+  <rect x="509.8130568305651" y="0" width="1.1780074629329986" height="128" fill="#3357FF" />
+  <rect x="510.9910642934981" y="0" width="0.6923488425849487" height="128" fill="#FF33A1" />
+  <rect x="511.68341313608306" y="0" width="0.27051481028960145" height="128" fill="#FF8633" />
+  <rect x="511.9539279463727" y="0" width="0.04607205362744774" height="128" fill="#33FFD7" />
   <rect x="0" y="148" width="20" height="20" fill="#FF5733" />
   <text x="25" y="163" fill="black" font-size="12">donner/svg - 387.84 KB</text>
   <rect x="0" y="168" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="183" fill="black" font-size="12">Everything else - 346.07 KB</text>
+  <text x="25" y="183" fill="black" font-size="12">Everything else - 345.62 KB</text>
   <rect x="0" y="188" width="20" height="20" fill="#3357FF" />
   <text x="25" y="203" fill="black" font-size="12">donner/svg/properties - 166.60 KB</text>
   <rect x="0" y="208" width="20" height="20" fill="#FF33A1" />
   <text x="25" y="223" fill="black" font-size="12">donner/css/parser - 114.00 KB</text>
   <rect x="0" y="228" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="243" fill="black" font-size="12">donner/svg/xml - 79.33 KB</text>
+  <text x="25" y="243" fill="black" font-size="12">donner/svg/xml - 79.74 KB</text>
   <rect x="0" y="248" width="20" height="20" fill="#33FFD7" />
   <text x="25" y="263" fill="black" font-size="12">donner/css/parser/details - 19.85 KB</text>
   <rect x="0" y="268" width="20" height="20" fill="#8333FF" />
