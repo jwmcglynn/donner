@@ -42,10 +42,9 @@ donner::base::parser::ParseResult<donner::svg::SVGDocument> maybeResult =
     donner::svg::parser::XMLParser::ParseSVG(svgContents);
 
 if (maybeResult.hasError()) {
-  const auto& e = maybeResult.error();
-  std::cerr << "Parse Error " << e << "\n";  // Includes line:column and reason
-  // or handle the error per your project's conventions here.
-  return 1;
+  std::cerr << "Parse Error " << maybeResult.error() << "\n";  // Includes line:column and reason
+  std::abort();
+  // - or - handle the error per your project's conventions
 }
 
 donner::svg::SVGDocument document = std::move(maybeResult.result());
@@ -88,8 +87,7 @@ fileData.loadFromStream(file);
 
 ParseResult<SVGDocument> maybeDocument = XMLParser::ParseSVG(fileData);
 if (maybeDocument.hasError()) {
-  const ParseError& e = maybeDocument.error();
-  std::cerr << "Parse Error: " << e << "\n";
+  std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
   std::abort();
 }
 
