@@ -38,7 +38,7 @@ donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
 )");
 
 // Call ParseSVG to load the SVG file
-ParseResult<donner::svg::SVGDocument> maybeResult =
+donner::base::parser::ParseResult<donner::svg::SVGDocument> maybeResult =
     donner::svg::parser::XMLParser::ParseSVG(svgContents);
 
 if (maybeResult.hasError()) {
@@ -53,7 +53,7 @@ donner::svg::SVGDocument document = std::move(maybeResult.result());
 // querySelector supports standard CSS selectors, anything that's valid when defining a CSS rule
 // works here too, for example querySelector("svg > path[fill='blue']") is also valid and will
 // match the same element.
-auto maybePath = document.svgElement().querySelector("path");
+std::optional<donner::svg::SVGElement> maybePath = document.svgElement().querySelector("path");
 UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
 
 // The result of querySelector is a generic SVGElement, but we know it's a path, so we can cast
