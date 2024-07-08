@@ -63,8 +63,7 @@ int main(int argc, char* argv[]) {
   //! [svg_to_png handle_errors]
   // ParseResult either contains an SVGDocument or an error.
   if (maybeDocument.hasError()) {
-    const ParseError& e = maybeDocument.error();
-    std::cerr << "Parse Error: " << e << "\n";
+    std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
     std::abort();
   }
 
@@ -95,12 +94,11 @@ int main(int argc, char* argv[]) {
   std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << "\n";
 
   // Then save it out using the save API.
-  constexpr const char* kOutputFilename = "output.png";
-  if (renderer.save(kOutputFilename)) {
-    std::cout << "Saved to file: " << std::filesystem::absolute(kOutputFilename) << "\n";
+  if (renderer.save("output.png")) {
+    std::cout << "Saved to file: " << std::filesystem::absolute("output.png") << "\n";
     return 0;
   } else {
-    std::cerr << "Failed to save to file: " << std::filesystem::absolute(kOutputFilename) << "\n";
+    std::cerr << "Failed to save to file: " << std::filesystem::absolute("output.png") << "\n";
     return 1;
   }
   //! [svg_to_png render]

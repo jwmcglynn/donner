@@ -36,8 +36,7 @@ int main(int argc, char* argv[]) {
   //! [svg parse]
   //! [error handling]
   if (maybeResult.hasError()) {
-    const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e << "\n";  // Includes line:column and reason
+    std::cerr << "Parse Error " << maybeResult.error() << "\n";  // Includes line:column and reason
     std::abort();
     // - or - handle the error per your project's conventions
   }
@@ -49,7 +48,7 @@ int main(int argc, char* argv[]) {
   // querySelector supports standard CSS selectors, anything that's valid when defining a CSS rule
   // works here too, for example querySelector("svg > path[fill='blue']") is also valid and will
   // match the same element.
-  auto maybePath = document.svgElement().querySelector("path");
+  std::optional<donner::svg::SVGElement> maybePath = document.svgElement().querySelector("path");
   UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
 
   // The result of querySelector is a generic SVGElement, but we know it's a path, so we can cast
