@@ -92,7 +92,7 @@ if (maybeDocument.hasError()) {
 }
 
 RendererSkia renderer;
-renderer.draw();
+renderer.draw(maybeDocument.result());
 
 const bool success = renderer.save("output.png");
 ```
