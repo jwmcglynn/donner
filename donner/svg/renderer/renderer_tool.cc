@@ -105,12 +105,8 @@ extern "C" int main(int argc, char* argv[]) {
     return 2;
   }
 
-  file.seekg(0, std::ios::end);
-  const size_t fileLength = file.tellg();
-  file.seekg(0);
-
-  std::vector<char> fileData(fileLength + 1);
-  file.read(fileData.data(), static_cast<std::streamsize>(fileLength));
+  parser::XMLParser::InputBuffer fileData;
+  fileData.loadFromStream(file);
 
   std::vector<parser::ParseError> warnings;
 

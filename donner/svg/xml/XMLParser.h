@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <istream>
 #include <span>
 
 #include "donner/base/parser/ParseResult.h"
@@ -48,17 +49,91 @@ public:
   };
 
   /**
+   * Convert a string into a mutable vector<char> that is suitable for use with Donner's
+   * XMLParser.
+   */
+  struct InputBuffer : std::vector<char> {
+    /// Default constructor, for use with \ref loadFromStream.
+    InputBuffer() = default;
+
+    /**
+     * Construct an input buffer from a string. Implicit so it enables passing a raw string into the
+     * \ref XMLParser::ParseSVG function.
+     *
+     * Example:
+     * ```
+     * XMLParser::InputBuffer svgSource("<svg>...</svg>");
+     * auto result = XMLParser::ParseSVG(svgSource);
+     * // - or -
+     * auto result = XMLParser::ParseSVG("<svg>...</svg>");
+     * ```
+     *
+     * @param str String to read from.
+     */
+    /* implicit */ InputBuffer(std::string_view str) {
+      // Reserve enough space for the string, and an extra byte for the NUL ('\0') terminator if
+      // required.
+      const bool hasNul = str.ends_with('\0');
+      reserve(str.size() + (hasNul ? 0 : 1));
+      std::copy(str.begin(), str.end(), std::back_inserter(*this));
+      if (!hasNul) {
+        push_back('\0');
+      }
+    }
+
+    /**
+     * Append a string to the input buffer.
+     *
+     * @param str String to append.
+     */
+    void append(std::string_view str) {
+      // Remove the null terminator if one is set.
+      while (!empty() && back() == '\0') {
+        pop_back();
+      }
+
+      // Reserve enough space for the string.
+      reserve(size() + str.size());
+
+      // Append the string.
+      std::copy(str.begin(), str.end(), std::back_inserter(*this));
+    }
+
+    /**
+     * Load the contents of an STL stream into the input buffer.
+     *
+     * Example:
+     * ```
+     * XMLParser::InputBuffer svgSource;
+     * svgSource.loadFromStream(std::ifstream("example.svg"));
+     * ```
+     *
+     * @param stream Input stream to read from.
+     * @return The number of bytes read.
+     */
+    void loadFromStream(std::istream& stream) {
+      stream.seekg(0, std::ios::end);
+      const size_t fileLength = stream.tellg();
+      stream.seekg(0);
+
+      resize(fileLength + 1);
+      stream.read(data(), static_cast<std::streamsize>(fileLength));
+      data()[fileLength] = '\0';
+    }
+  };
+
+  /**
    * Parses an SVG XML document (typically the contents of a .svg file).
    *
    * To reduce copying, the input buffer is modified to produce substrings, so it must be mutable
    * and end with a '\0'.
    *
-   * @param str Mutable input data, which must be mutable and null-terminated.
+   * @param source Mutable input data buffer.
    * @param[out] outWarnings If non-null, append warnings encountered to this vector.
    * @param options Options to modify the parsing behavior.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
-  static ParseResult<SVGDocument> ParseSVG(std::span<char> str,
+  static ParseResult<SVGDocument> ParseSVG(InputBuffer& source,
                                            std::vector<ParseError>* outWarnings = nullptr,
                                            Options options = {}) noexcept;
 };

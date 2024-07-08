@@ -19,6 +19,48 @@ Donner renders with Skia, which provides the same high-quality rendering used by
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
+## Demo
+
+```cpp
+// This is the base SVG we are loading, a simple path containing a line.
+donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
+  <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
+    <path d="M 1 1 L 4 5" stroke="blue" />
+  </svg>
+)");
+
+// Call ParseSVG to load the SVG file, not that this modifies the original string, and the
+// underlying string must remain valid as long as the SVGDocument is in use.
+ParseResult<donner::svg::SVGDocument> maybeResult =
+    donner::svg::parser::XMLParser::ParseSVG(svgContents);
+
+if (maybeResult.hasError()) {
+  const auto& e = maybeResult.error();
+  std::cerr << "Parse Error " << e << "\n";  // Includes line:column and reason
+  // or handle the error per your project's conventions here.
+  return 1;
+}
+
+donner::svg::SVGDocument document = std::move(maybeResult.result());
+
+// querySelector supports standard CSS selectors, anything that's valid when defining a CSS rule
+// works here too, for example querySelector("svg > path[fill='blue']") is also valid and will
+// match the same element.
+auto maybePath = document.svgElement().querySelector("path");
+UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
+
+// The result of querySelector is a generic SVGElement, but we know it's a path, so we can cast
+// it. If the cast fails, an assertion will be triggered.
+donner::svg::SVGPathElement path = maybePath->cast<donner::svg::SVGPathElement>();
+
+if (std::optional<donner::svg::PathSpline> spline = path.computedSpline()) {
+  std::cout << "Path: " << *spline << "\n";
+  std::cout << "Length: " << spline->pathLength() << " userspace units\n";
+} else {
+  std::cout << "Path is empty\n";
+}
+```
+
 ## Documentation
 
 - [Getting started](https://jwmcglynn.github.io/donner/GettingStarted.html)

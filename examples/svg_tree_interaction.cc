@@ -16,34 +16,13 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGPathElement.h"
 
-namespace {
-
-/**
- * A helper that converts a string into a mutable string that is suitable for use with Donner's
- * XMLParser.
- */
-struct MutableString : std::vector<char> {
-  explicit MutableString(std::string_view str) {
-    // Reserve enough space for the string, and an extra byte for the NUL ('\0') terminator if
-    // required.
-    const bool hasNul = str.ends_with('\0');
-    reserve(str.size() + (hasNul ? 0 : 1));
-    std::copy(str.begin(), str.end(), std::back_inserter(*this));
-    if (!hasNul) {
-      push_back('\0');
-    }
-  }
-};
-
-}  // namespace
-
 using donner::base::parser::ParseError;
 using donner::base::parser::ParseResult;
 
 int main(int argc, char* argv[]) {
   //! [svg string]
   // This is the base SVG we are loading, a simple path containing a line.
-  MutableString svgContents(R"(
+  donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
       <path d="M 1 1 L 4 5" stroke="blue" />
     </svg>

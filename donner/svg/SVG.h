@@ -16,23 +16,23 @@ namespace donner {
  *
  * Loading SVG files can be done using \ref XMLParser:
  * ```
- * std::vector<char> fileData = ...;
+ * XMLParser::InputBuffer svgSource("<svg>...</svg>");
  *
  * std::vector<ParseError> warnings;
- * auto maybeResult = XMLParser::ParseSVG(fileData, &warnings);
+ * auto maybeResult = XMLParser::ParseSVG(svgSource, &warnings);
  *
  * if (maybeResult.hasError()) {
  *   const auto& e = maybeResult.error();
- *   std::cerr << "Parse Error " << e.line << ":" << e.offset << ": " << e.reason << std::endl;
+ *   std::cerr << "Parse Error: " << e << "\n";
  *   exit(1);
  * }
  *
- * std::cout << "Parsed successfully." << std::endl;
+ * std::cout << "Parsed successfully.\n";
  *
  * if (!warnings.empty()) {
- *   std::cout << "Warnings:" << std::endl;
+ *   std::cout << "Warnings:\n";
  *   for (auto& w : warnings) {
- *     std::cout << "  " << w.line << ":" << w.offset << ": " << w.reason << std::endl;
+ *     std::cout << "  " << w << "\n";
  *  }
  * }
  * ```
@@ -56,9 +56,9 @@ namespace donner {
  * renderer.draw(document);
  *
  * if (renderer.save("output.png")) {
- *   std::cout << "Saved to output.png" << std::endl;
+ *   std::cout << "Saved to output.png\n";
  * } else {
- *   std::cerr << "Failed to save to file" << std::endl;
+ *   std::cerr << "Failed to save to file\n";
  * }
  * ```
  */

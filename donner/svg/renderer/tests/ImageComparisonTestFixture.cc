@@ -57,12 +57,8 @@ SVGDocument ImageComparisonTestFixture::loadSVG(const char* filename) {
     return SVGDocument();
   }
 
-  file.seekg(0, std::ios::end);
-  const size_t fileLength = file.tellg();
-  file.seekg(0);
-
-  std::vector<char> fileData(fileLength + 1);
-  file.read(fileData.data(), static_cast<std::streamsize>(fileLength));
+  parser::XMLParser::InputBuffer fileData;
+  fileData.loadFromStream(file);
 
   auto maybeResult = parser::XMLParser::ParseSVG(fileData);
   EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();

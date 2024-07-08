@@ -4,9 +4,9 @@
 #include <string_view>
 #include <tuple>
 
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/xml/AttributeParser.h"
-#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/xml/details/XMLParserContext.h"
 
 namespace donner::svg::parser {
@@ -193,19 +193,25 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
 }
 }  // namespace
 
-ParseResult<SVGDocument> XMLParser::ParseSVG(std::span<char> str,
+ParseResult<SVGDocument> XMLParser::ParseSVG(InputBuffer& source,
                                              std::vector<ParseError>* outWarnings,
                                              XMLParser::Options options) noexcept {
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;
 
-  XMLParserContext context(std::string_view(str.data(), str.size()), outWarnings, options);
+  // Verify that the input buffer is null-terminated.
+  if (source.size() > 0 && source.data()[source.size() - 1] != '\0') {
+    source.resize(source.size() + 1);
+    source.data()[source.size() - 1] = '\0';
+  }
+
+  XMLParserContext context(std::string_view(source.data(), source.size()), outWarnings, options);
 
   rapidxml_ns::xml_document<> xmlDocument;
   try {
-    xmlDocument.parse<flags>(str.data());
+    xmlDocument.parse<flags>(source.data());
   } catch (rapidxml_ns::parse_error& e) {
-    const size_t offset = e.where<char>() - str.data();
+    const size_t offset = e.where<char>() - source.data();
     const size_t line = context.offsetToLine(offset);
 
     ParseError err;

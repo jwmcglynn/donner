@@ -14,7 +14,7 @@ static constexpr std::string_view kSuffix("\n</svg>");
 
 SVGDocument instantiateSubtree(std::string_view str, const parser::XMLParser::Options& options,
                                const Vector2i& size) {
-  std::vector<char> fileData;
+  parser::XMLParser::InputBuffer fileData;
   const std::string prefix = std::string("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"") +
                              std::to_string(size.x) + "\" height=\"" + std::to_string(size.y) +
                              "\">\n  ";

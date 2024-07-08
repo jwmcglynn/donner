@@ -42,7 +42,8 @@ extern "C" int main(int argc, char* argv[]) {
   const size_t fileLength = file.tellg();
   file.seekg(0);
 
-  std::vector<char> fileData(fileLength + 1);
+  parser::XMLParser::InputBuffer fileData;
+  fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
   std::vector<parser::ParseError> warnings;

@@ -41,12 +41,8 @@ int main(int argc, char* argv[]) {
     return 2;
   }
 
-  file.seekg(0, std::ios::end);
-  const std::streamsize fileLength = file.tellg();
-  file.seekg(0);
-
-  std::vector<char> fileData(fileLength + 1);
-  file.read(fileData.data(), fileLength);
+  donner::svg::parser::XMLParser::InputBuffer fileData;
+  fileData.loadFromStream(file);
   //! [svg_to_png load_file]
 
   // Parse the SVG. Note that the lifetime of the vector must be longer than the returned
