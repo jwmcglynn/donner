@@ -11,6 +11,8 @@ class ReportOptions:
     all: bool = False
     binary_size: bool = False
     coverage: bool = False
+    public_targets: bool = False
+    external_dependencies: bool = False
 
 
 def run_command(command):
@@ -43,6 +45,16 @@ def get_git_status() -> str:
         return status
     except subprocess.CalledProcessError:
         return "unknown"
+
+
+def query_public_targets() -> str:
+    query = 'bazel query "kind(library, //...) intersect attr(visibility, public, //...)"'
+    return run_command(query)
+
+
+def query_external_dependencies() -> str:
+    query = 'bazel query "kind(external, //...)"'
+    return run_command(query)
 
 
 def create_build_report(
@@ -107,6 +119,30 @@ def create_build_report(
         report += coverage_output
         report += "\n```\n\n"
 
+    # Public targets report
+    if options.all or options.public_targets:
+        report += "## Public targets\n```\n"
+        report += "$ bazel query 'kind(library, //...) intersect attr(visibility, public, //...)'\n"
+
+        public_targets_output = query_public_targets()
+        if not public_targets_output:
+            return report
+
+        report += public_targets_output
+        report += "\n```\n\n"
+
+    # External dependencies report
+    if options.all or options.external_dependencies:
+        report += "## External dependencies\n```\n"
+        report += "$ bazel query 'kind(external, //...)'\n"
+
+        external_dependencies_output = query_external_dependencies()
+        if not external_dependencies_output:
+            return report
+
+        report += external_dependencies_output
+        report += "\n```\n\n"
+
     return report
 
 
@@ -124,11 +160,21 @@ def main():
     parser.add_argument(
         "--coverage", action="store_true", help="Generate code coverage report"
     )
+    parser.add_argument(
+        "--public-targets", action="store_true", help="Generate public targets report"
+    )
+    parser.add_argument(
+        "--external-dependencies", action="store_true", help="Generate external dependencies report"
+    )
 
     args = parser.parse_args()
 
     options = ReportOptions(
-        all=args.all, binary_size=args.binary_size, coverage=args.coverage
+        all=args.all,
+        binary_size=args.binary_size,
+        coverage=args.coverage,
+        public_targets=args.public_targets,
+        external_dependencies=args.external_dependencies,
     )
 
     report = create_build_report(
