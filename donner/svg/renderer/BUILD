@@ -4,7 +4,7 @@ cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],
-    visibility = ["//visibility:public"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         "@stb//:image_write",
     ],

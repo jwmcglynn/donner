@@ -47,14 +47,30 @@ def get_git_status() -> str:
         return "unknown"
 
 
-def query_public_targets() -> str:
-    query = 'bazel query "kind(library, //...) intersect attr(visibility, public, //...)"'
-    return run_command(query)
+def get_bazel_query_command(query: str) -> str:
+    return f'bazel query "{query}"'
 
 
-def query_external_dependencies() -> str:
-    query = 'bazel query "kind(external, //...)"'
-    return run_command(query)
+def query_external_dependencies() -> typing.List[str]:
+    query_output = run_command("bazel query 'deps(//examples:svg_to_png)' --keep_going")
+
+    # Find lines beginning with @word// and return unique "word" values
+    # (i.e. the external dependencies)
+    external_dependencies = set()
+    for line in query_output.split("\n"):
+        if line.startswith("@"):
+            external_dependencies.add(line[1:].split("//")[0])
+
+    # Filter out build-only config: Lines starting with `bazel`, `@bazel`, or `rules_`
+    external_dependencies = [
+        dep
+        for dep in external_dependencies
+        if not dep.startswith(
+            ("bazel", "@bazel", "rules_", "platforms", "skia_user_config")
+        )
+    ]
+
+    return external_dependencies
 
 
 def create_build_report(
@@ -122,9 +138,12 @@ def create_build_report(
     # Public targets report
     if options.all or options.public_targets:
         report += "## Public targets\n```\n"
-        report += "$ bazel query 'kind(library, //...) intersect attr(visibility, public, //...)'\n"
+        public_targets_cmd = get_bazel_query_command(
+            "kind(library, set(//donner/... //:*)) intersect attr(visibility, public, //...)"
+        )
+        report += f"$ {public_targets_cmd}\n"
 
-        public_targets_output = query_public_targets()
+        public_targets_output = run_command(public_targets_cmd)
         if not public_targets_output:
             return report
 
@@ -133,15 +152,12 @@ def create_build_report(
 
     # External dependencies report
     if options.all or options.external_dependencies:
-        report += "## External dependencies\n```\n"
-        report += "$ bazel query 'kind(external, //...)'\n"
+        report += "## External dependencies\n\n"
 
-        external_dependencies_output = query_external_dependencies()
-        if not external_dependencies_output:
-            return report
-
-        report += external_dependencies_output
-        report += "\n```\n\n"
+        external_dependencies = query_external_dependencies()
+        for dependency in external_dependencies:
+            report += f"- {dependency}\n"
+        report += "\n\n"
 
     return report
 
@@ -164,7 +180,9 @@ def main():
         "--public-targets", action="store_true", help="Generate public targets report"
     )
     parser.add_argument(
-        "--external-dependencies", action="store_true", help="Generate external dependencies report"
+        "--external-dependencies",
+        action="store_true",
+        help="Generate external dependencies report",
     )
 
     args = parser.parse_args()

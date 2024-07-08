@@ -11,7 +11,7 @@ donner_cc_library(
         "CSS.h",
     ],
     visibility = [
-        "//donner/svg:__subpackages__",
+        "//visibility:public",
     ],
     deps = [
         ":core",
