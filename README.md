@@ -9,11 +9,11 @@ Donner is an under-development modern C++20 SVG rendering library which provides
 
 Currently, Donner includes:
 
-- SVG2 core functionality, such as shapes, fills, strokes, and gradients.
-- CSS3 parsing and cascading support, with a hand-rolled library.
-- An [EnTT](https://github.com/skypjack/entt) ECS-backed document tree.
-- A SVG DOM-style API to traverse, inspect, and modify documents in memory.
-- A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
+- SVG2 core functionality, such as shapes, fills, strokes, and gradients
+- CSS3 parsing and cascading support, with a hand-rolled library
+- A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree
+- A SVG DOM-style API to traverse, inspect, and modify documents in memory
+- A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering
 
 Donner renders with Skia, which provides the same high-quality rendering used by Chromium.
 
