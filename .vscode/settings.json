@@ -375,10 +375,6 @@
     "yellowgreen"
   ],
   "sourcegraph.url": "http://127.0.0.1:3080",
-  "[python]": {
-    "editor.defaultFormatter": "ms-python.black-formatter"
-  },
-  "python.formatting.provider": "none",
   "cSpell.ignorePaths": [
     "package-lock.json",
     "node_modules",
