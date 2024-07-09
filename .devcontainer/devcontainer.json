@@ -7,13 +7,19 @@
       "VARIANT": "jammy"
     }
   },
+  "hostRequirements": {
+    // 2-cpu devcontainers build super slowly (50 minutes vs. 6 minutes for 4-cpu)
+    "cpus": 4
+  },
+  "updateContentCommand": "bazel fetch //donner/...",
   "customizations": {
     "vscode": {
       "settings": {
         // Use zsh by default.
+        "terminal.integrated.defaultProfile.linux": "zsh",
         "terminal.integrated.profiles.linux": {
           "zsh": {
-            "path": "zsh"
+            "path": "/bin/zsh"
           }
         }
       },
@@ -25,9 +31,9 @@
         "github.copilot",
         "matepek.vscode-catch2-test-adapter",
         "ms-vscode.cpptools",
-        "vadimcn.vscode-lldb",
+        "vadimcn.vscode-lldb"
       ],
-    }
+    },
   },
   // Connect as non-root user.
   "remoteUser": "vscode",
