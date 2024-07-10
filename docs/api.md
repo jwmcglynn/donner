@@ -35,7 +35,9 @@ flowchart TD
 
 - Implementation details about memory allocation are hidden, and the API is designed to be used with value types. For example, \ref donner::svg::SVGElement is can be copied and passed by value.
 
-### Result handling
+### Error handling
+
+- Donner does not use C++ exceptions.
 
 - `std::optional` and \ref donner::base::parser::ParseResult are used to return values from functions. This allows the caller to check for errors and handle them as needed. `ParseResult` behaves similarly to `std::expected` (new in C++23), and may be replaced with it in the future.
 
