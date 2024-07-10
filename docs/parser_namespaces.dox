@@ -1,17 +1,17 @@
 /**
  * @namespace donner::base::parser
  *
- * Parsers for shared data types such as \ref donner::base::parser::NumberParser NumberParser and
- * \ref donner::base::parser::LengthParser LengthParser.
+ * Parsers for shared data types such as \ref donner::base::parser::NumberParser "NumberParser" and
+ * \ref donner::base::parser::LengthParser "LengthParser".
  */
 
 /**
  * @namespace donner::css::parser
  *
  * Parsers for various CSS data types, such as the top-level \ref
- * donner::css::parser::StylesheetParser StylesheetParser and \ref
- * donner::css::parser::SelectorParser SelectorParser, as well as internal details such as \ref
- * donner::css::parser::ColorParser ColorParser.
+ * donner::css::parser::StylesheetParser "StylesheetParser" and \ref
+ * donner::css::parser::SelectorParser "SelectorParser", as well as internal details such as \ref
+ * donner::css::parser::ColorParser "ColorParser".
  *
  * These are wrapped in the \ref donner::css::CSS convenience API. Using these lower-level APIs
  * allows for finer-grained control and error propagation.
@@ -20,7 +20,7 @@
 /**
  * @namespace donner::svg::parser
  *
- * Parsers for the SVG XML format, \ref donner::svg::parser::XMLParser XMLParser, as well as
- * individual parsers for SVG components, such as \ref donner::svg::parser::PathParser PathParser
- * and \ref donner::svg::parser::TransformParser TransformParser.
+ * Parsers for the SVG XML format, \ref donner::svg::parser::XMLParser "XMLParser", as well as
+ * individual parsers for SVG components, such as \ref donner::svg::parser::PathParser "PathParser"
+ * and \ref donner::svg::parser::TransformParser "TransformParser".
  */

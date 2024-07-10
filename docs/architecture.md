@@ -31,14 +31,14 @@ Each component of Donner is designed to be used in isolation, with minimal depen
 
 The parser suite consists of parsers in three layers:
 
-| Namespace                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| \ref donner::base::parser | Parsers for shared data types such as \ref donner::base::parser::NumberParser NumberParser and \ref donner::base::parser::LengthParser LengthParser                                                                                                                                                                                                                                                                                   |
-| \ref donner::css::parser  | Parsers for various CSS data types, such as the top-level \ref donner::css::parser::StylesheetParser StylesheetParser and \ref donner::css::parser::SelectorParser SelectorParser, as well as internal details such as \ref donner::css::parser::ColorParser ColorParser.<br><br>These are wrapped in the \ref donner::css::CSS convenience API. Using these lower-level APIs allows for finer-grained control and error propagation. |
-| \ref donner::svg::parser  | Parsers for the SVG XML format, \ref donner::svg::parser::XMLParser XMLParser, as well as individual parsers for SVG components, such as \ref donner::svg::parser::PathParser PathParser and \ref donner::svg::parser::TransformParser TransformParser.                                                                                                                                                                               |
+| Namespace                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| \ref donner::base::parser | Parsers for shared data types such as \ref donner::base::parser::NumberParser "NumberParser" and \ref donner::base::parser::LengthParser "LengthParser"                                                                                                                                                                                                                                                                                     |
+| \ref donner::css::parser  | Parsers for various CSS data types, such as the top-level \ref donner::css::parser::StylesheetParser "StylesheetParser" and \ref donner::css::parser::SelectorParser "SelectorParser", as well as internal details such as \ref donner::css::parser::ColorParser "ColorParser".<br><br>These are wrapped in the \ref donner::css::CSS convenience API. Using these lower-level APIs allows for finer-grained control and error propagation. |
+| \ref donner::svg::parser  | Parsers for the SVG XML format, \ref donner::svg::parser::XMLParser "XMLParser", as well as individual parsers for SVG components, such as \ref donner::svg::parser::PathParser "PathParser" and \ref donner::svg::parser::TransformParser "TransformParser".                                                                                                                                                                               |
 
-- \ref donner::svg::parser::XMLParser XMLParser depends on [rapidxml_ns](https://github.com/svgpp/rapidxml_ns)
-- \ref donner::base::parser::NumberParser NumberParser uses [absl::from_chars](https://abseil.io/about/design/charconv) as `std::from_chars` is not fully implemented in libc++.
+- \ref donner::svg::parser::XMLParser "XMLParser" depends on [rapidxml_ns](https://github.com/svgpp/rapidxml_ns)
+- \ref donner::base::parser::NumberParser "NumberParser" uses [absl::from_chars](https://abseil.io/about/design/charconv) as `std::from_chars` is not fully implemented in libc++.
 
 ### Styling
 
@@ -72,7 +72,7 @@ See \ref EcsArchitecture for more details.
 
 ### Rendering Backend
 
-The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent RenderingInstanceComponent, which are then rendered by the Skia renderer.
+The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent", which are then rendered by the Skia renderer.
 
 Rendering components are attached to the same entities as the document model components, allowing for easy synchronization between the document model and the rendering backend. When the document model is modified, the associated rendering components are invalidated.
 

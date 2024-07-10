@@ -5,13 +5,13 @@ SVG data is specified using many different micro-syntaxes such as \ref path_data
 poly_points.
 
 Donner implements a collection of parsers for these micro-syntaxes:
-- \ref donner::svg::PathParser
-- \ref donner::svg::PointsListParser
-- \ref donner::NumberParser
-- \ref donner::LengthParser
-- \ref donner::svg::ParseLengthPercentage
-- \ref donner::svg::TransformParser
-- \ref donner::svg::ViewboxParser
+- \ref donner::svg::parser::PathParser
+- \ref donner::svg::parser::PointsListParser
+- \ref donner::base::parser::NumberParser
+- \ref donner::base::parser::LengthParser
+- \ref donner::svg::parser::ParseLengthPercentage
+- \ref donner::svg::parser::TransformParser
+- \ref donner::svg::parser::ViewboxParser
 
 Additionally, Donner includes a standalone CSS parser, \ref donner::css::CSS.
 
