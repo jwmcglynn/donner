@@ -368,8 +368,8 @@ constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
 
 <div class="section_buttons">
 
-| Previous                                       | Next |
-| :--------------------------------------------- | ---: |
-| [System architecture](SystemArchitecture.html) |      |
+| Previous                                       |                                     Next |
+| :--------------------------------------------- | ---------------------------------------: |
+| [System architecture](SystemArchitecture.html) | [ECS Architecture](EcsArchitecture.html) |
 
 </div>
