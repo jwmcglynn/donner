@@ -1,5 +1,7 @@
 # Entity Component System (ECS) {#EcsArchitecture}
 
+\tableofcontents
+
 Donner uses a data-oriented Entity Component System (ECS) design pattern to store and manipulate the SVG document. This is a common pattern in game development, since it optimizes for performance via cache-friendly data structures and parallelism.
 
 ## Entities

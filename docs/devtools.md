@@ -1,5 +1,7 @@
 # Devtools {#Devtools}
 
+\tableofcontents
+
 ## Generating documentation
 
 Doxygen may be generated with:

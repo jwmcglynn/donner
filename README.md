@@ -72,6 +72,7 @@ if (std::optional<donner::svg::PathSpline> spline = path.computedSpline()) {
 Detailed docs: [svg_tree_interaction.cc](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html)
 
 ## API Demo 2: Rendering a SVG to PNG
+
 ```cpp
 using namespace donner::base;
 using namespace donner::base::parser;

@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  //! [svg_to_png load_file]
+  //! [load_file]
   // Load the file and store it in a mutable std::vector<char>.
   std::ifstream file(argv[1]);
   if (!file) {
@@ -45,12 +45,12 @@ int main(int argc, char* argv[]) {
 
   XMLParser::InputBuffer fileData;
   fileData.loadFromStream(file);
-  //! [svg_to_png load_file]
+  //! [load_file]
 
   // Parse the SVG. Note that the lifetime of the vector must be longer than the returned
   // SVGDocument, since it is referenced internally.
 
-  //! [svg_to_png parse]
+  //! [parse]
   XMLParser::Options options;
   // Allow data-name attributes without generating a warning.
   options.disableUserAttributes = false;
@@ -58,9 +58,9 @@ int main(int argc, char* argv[]) {
   std::vector<ParseError> warnings;
   // warnings and options are optional, call ParseSVG(fileData) to use defaults and ignore warnings.
   ParseResult<SVGDocument> maybeDocument = XMLParser::ParseSVG(fileData, &warnings, options);
-  //! [svg_to_png parse]
+  //! [parse]
 
-  //! [svg_to_png handle_errors]
+  //! [handle_errors]
   // ParseResult either contains an SVGDocument or an error.
   if (maybeDocument.hasError()) {
     std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
@@ -77,16 +77,16 @@ int main(int argc, char* argv[]) {
   }
 
   SVGDocument document = std::move(maybeDocument.result());
-  //! [svg_to_png handle_errors]
+  //! [handle_errors]
 
-  //! [svg_to_png set_canvas_size]
+  //! [set_canvas_size]
   // Setting the canvas size is equivalent to resizing a browser window. Some SVGs may scale to fit,
   // other ones may only render at their base size. To auto-size, either omit this call or invoke
   // useAutomaticCanvasSize().
   document.setCanvasSize(800, 600);
-  //! [svg_to_png set_canvas_size]
+  //! [set_canvas_size]
 
-  //! [svg_to_png render]
+  //! [render]
   // Draw the document, store the image in-memory.
   RendererSkia renderer;
   renderer.draw(document);
@@ -101,5 +101,5 @@ int main(int argc, char* argv[]) {
     std::cerr << "Failed to save to file: " << std::filesystem::absolute("output.png") << "\n";
     return 1;
   }
-  //! [svg_to_png render]
+  //! [render]
 }

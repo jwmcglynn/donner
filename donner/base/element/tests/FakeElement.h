@@ -11,7 +11,6 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
-#include "donner/base/Utils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner {
@@ -161,6 +160,11 @@ public:
   };
 
   DeferredPrinter printAsTree() const { return DeferredPrinter{*this}; }
+
+  bool operator<(const FakeElement& other) const {
+    // Use pointer comparison for simplicity.
+    return data_.get() < other.data_.get();
+  }
 
 private:
   struct ElementData {

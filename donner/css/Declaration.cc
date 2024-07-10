@@ -10,15 +10,14 @@ bool DeclarationOrAtRule::operator==(const DeclarationOrAtRule& other) const {
 }
 
 std::ostream& operator<<(std::ostream& os, const Declaration& declaration) {
-  os << "Declaration { \n";
-  os << "  " << declaration.name << "\n";
+  os << "  " << declaration.name << ":";
   for (const auto& value : declaration.values) {
-    os << "  " << value << "\n";
+    os << " " << value;
   }
   if (declaration.important) {
-    os << "  !important\n";
+    os << " !important";
   }
-  return os << "}";
+  return os;
 }
 
 }  // namespace donner::css

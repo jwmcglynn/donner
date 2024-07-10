@@ -142,7 +142,7 @@ private:
  * @param element The element to yield. If this is `std::nullopt`, the generator will yield nothing.
  */
 template <ElementLike T>
-ElementTraversalGenerator<T> singleElementGenerator(const T& element) {
+ElementTraversalGenerator<T> singleElementGenerator(T element) {
   co_yield element;
 }
 

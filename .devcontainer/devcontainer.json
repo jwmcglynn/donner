@@ -8,7 +8,7 @@
     }
   },
   "hostRequirements": {
-    // 2-cpu devcontainers build super slowly (50 minutes vs. 6 minutes for 4-cpu)
+    // 2-cpu devcontainers build super slowly (50 minutes vs. 10 minutes for 4-cpu)
     "cpus": 4
   },
   "updateContentCommand": "bazel fetch //donner/...",

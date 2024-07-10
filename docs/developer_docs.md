@@ -1,5 +1,7 @@
 # Developer docs {#DeveloperDocs}
 
+\tableofcontents
+
 ## Table of contents
 
 - \subpage SystemArchitecture
@@ -9,3 +11,4 @@
 - \subpage BuildingDonner
 - \subpage Maintenance
 - \subpage Devtools
+- \subpage ReSvgTestSuite

@@ -26,6 +26,20 @@ namespace donner::css {
 struct SelectorRule {
   Selector selector;                      ///< Selector for this rule.
   std::vector<Declaration> declarations;  ///< Declarations for this rule.
+
+  /**
+   * Output a human-readable representation of the delector to a stream.
+   *
+   * @param os Output stream.
+   * @param rule SelectorRule to output.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const SelectorRule& rule) {
+    os << rule.selector << " {\n";
+    for (const auto& declaration : rule.declarations) {
+      os << declaration << "\n";
+    }
+    return os << "}\n";
+  }
 };
 
 /**
@@ -44,16 +58,32 @@ public:
    */
   explicit Stylesheet(std::vector<SelectorRule>&& rules) : rules_(std::move(rules)) {}
 
-  /// Default move constructor.
-  Stylesheet(Stylesheet&&) = default;
+  /// Copyable and moveable.
+  Stylesheet(const Stylesheet&) = default;
+  Stylesheet& operator=(const Stylesheet&) = default;
+  Stylesheet(Stylesheet&&) noexcept = default;
+  Stylesheet& operator=(Stylesheet&&) noexcept = default;
 
-  /// Default move assignment operator.
-  Stylesheet& operator=(Stylesheet&&) = default;
+  /// Destructor.
+  ~Stylesheet() = default;
 
   /**
    * Get the list of rules in this stylesheet.
    */
   std::span<const SelectorRule> rules() const { return rules_; }
+
+  /**
+   * Output a human-readable representation of the stylesheet to a stream.
+   *
+   * @param os Output stream.
+   * @param stylesheet Stylesheet to output.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const Stylesheet& stylesheet) {
+    for (const auto& rule : stylesheet.rules()) {
+      os << rule << "\n";
+    }
+    return os;
+  }
 
 private:
   std::vector<SelectorRule> rules_;

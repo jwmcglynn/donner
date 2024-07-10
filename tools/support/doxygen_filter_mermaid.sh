@@ -2,7 +2,7 @@
 #
 # Usage: ./doxygen_filter_mermaid.sh <md-file>
 # 
-# Replaces markdown-style mermaid code blocks with `<pre class="mermaid>...</pre>`.
+# Replaces markdown-style mermaid code blocks with `<pre class="mermaid">...</pre>`.
 #
 # Invoke from Doxygen with the following Doxyfile config:
 #
@@ -18,8 +18,8 @@ sed -E '# Match a range starting with ```mermaid and ending with ```
   }
   # Replace the end marker with </pre>
   /^```$/ {
-    s/^```/<\/pre>/
-    # Move to next line line
+    s/^```/<\/pre>\n/
+    # Move to next line
     n
   }
 }' "${1}"

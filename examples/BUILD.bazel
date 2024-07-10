@@ -1,6 +1,16 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 
 cc_binary(
+    name = "custom_css_parser",
+    testonly = 1,
+    srcs = ["custom_css_parser.cc"],
+    deps = [
+        "@donner//donner/base/element:fake_element",
+        "@donner//donner/css",
+    ],
+)
+
+cc_binary(
     name = "svg_to_png",
     srcs = ["svg_to_png.cc"],
     deps = [

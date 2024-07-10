@@ -1,5 +1,7 @@
 # Coding style {#CodingStyle}
 
+\tableofcontents
+
 As a baseline, Donner SVG aligns with the [Google C++ coding style](https://google.github.io/styleguide/cppguide.html), with modifications to more closely align with naming conventions in the SVG standard. Additionally, since Donner SVG is designed as an experiment in C++20, coding standards that exist to support backwards-compatibility with older standards may be replaced.
 
 ## Files
@@ -194,7 +196,7 @@ Apply `const` whenever possible, for any methods that don't modify the object's 
 Vector2d pointAt(size_t index, double t) const;
 ```
 
-## `struct` and `class`
+## struct and class
 
 - Use `struct` for data classes and `class` for classes with logic. `struct` classes may have simple methods, typically for read-only access.
 - Implement comparison operators using `= default` when possible.
@@ -252,7 +254,7 @@ std::optional<Lengthd> x1() const;
 void setX1(std::optional<Lengthd> x1);
 ```
 
-## `enum class`
+## enum class
 
 - Use `enum class` for all enums, and provide an `operator<<` for debugging.
 
@@ -279,7 +281,7 @@ inline std::ostream& operator<<(std::ostream& os, ClipPathUnits units) {
 - Debug-only: `#include <cassert>` and use `std::assert(condition && "Message")`.
 - Release: `UTILS_RELEASE_ASSERT(condition)` or `UTILS_RELEASE_ASSERT(condition, "Message")`.
 
-## `"donner/base/Utils.h"`
+## "donner/base/Utils.h"
 
 - `if (UTILS_PREDICT_TRUE(condition))` for hinting the compiler about likely branches.
 - `if (UTILS_PREDICT_FALSE(condition))` for hinting the compiler about unlikely branches.
@@ -315,7 +317,7 @@ for (std::string_view part : StringUtils::Split("a,b,c", ',')) {
 }
 ```
 
-## Limit use of `auto`
+## Limit use of auto
 
 `auto` should only be used when the type is visible on the same source line, or if the type is well-understood, such as for iterators (`auto it = ...`).
 
@@ -344,7 +346,7 @@ if (maybeResult.hasError()) {
 const NumberParser::Result& result = maybeResult.result();
 ```
 
-## `operator<=>` when possible
+## operator<=> when possible
 
 Use the C++20 spaceship operator when possible, but note that gtest has a bug where `operator==` must also be supplied.
 
@@ -363,3 +365,11 @@ constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
   return (lhs <=> rhs) == std::strong_ordering::equal;
 }
 ```
+
+<div class="section_buttons">
+
+| Previous                                       | Next |
+| :--------------------------------------------- | ---: |
+| [System architecture](SystemArchitecture.html) |      |
+
+</div>

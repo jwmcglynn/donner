@@ -56,6 +56,15 @@ public:
    * @return Parsed declarations.
    */
   static std::vector<Declaration> ParseStyleAttribute(std::string_view str);
+
+  /**
+   * Parse a CSS selector string into a \ref Selector object, which can be used to implement
+   * querySelector and similar APIs.
+   *
+   * @param str Input selector string, e.g. "svg > rect".
+   * @return Parsed selector, or std::nullopt if the selector is invalid.
+   */
+  static std::optional<Selector> ParseSelector(std::string_view str);
 };
 
 }  // namespace donner::css

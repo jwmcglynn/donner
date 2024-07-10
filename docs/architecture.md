@@ -1,5 +1,7 @@
 # System architecture {#SystemArchitecture}
 
+\tableofcontents
+
 ## High-level Architecture
 
 ![System context diagram, Donner SVG Library](/docs/img/arch_system_context.svg)
@@ -10,7 +12,7 @@ Many SVG libraries load an SVG, and render and image as an output, but browsers 
 
 Donner allows loading SVGs, interacting with them through the Donner API, and then transforms the in-memory representation of the document into draw commands to render the document each frame.
 
-Donner does not render the document itself, but instead uses Skia to do the rendering, which is the same library that Chrome uses. Skia technically supports rendering SVGs, but Donner provides a more browser-like feature set.
+Donner does not render the document itself, but instead uses Skia to do the rendering, which is the same library that Chromium uses. Skia technically supports rendering SVGs, but Donner provides a more browser-like feature set.
 
 ![Container diagram, Donner SVG Library](/docs/img/arch_container.svg)
 
@@ -28,3 +30,11 @@ Donner does not render the document itself, but instead uses Skia to do the rend
   - String, math, and parsing helpers
   - Vector2, RcString, NumberParser
 - Test Suite
+
+<div class="section_buttons">
+
+| Previous                     |                             Next |
+| :--------------------------- | -------------------------------: |
+| [Donner API](DonnerAPI.html) | [Coding style](CodingStyle.html) |
+
+</div>

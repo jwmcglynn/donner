@@ -21,7 +21,9 @@ donner_cc_library(
     hdrs = [
         "tests/FakeElement.h",
     ],
-    visibility = donner_internal_visibility(),
+    visibility = donner_internal_visibility() + [
+        "//examples:__pkg__",
+    ],
     deps = [
         "@com_google_gtest//:gtest",
     ],
