@@ -15,10 +15,10 @@ using Entity = entt::entity;
 An entity is created by calling `registry.create()` without any components. Here is how the `Entity` is created for SVG elements.
 
 ```cpp
-EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& xmlTypeName,
+EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& tagName,
                                       ElementType type) {
   Entity entity = registry.create();
-  registry.emplace<components::TreeComponent>(entity, type, xmlTypeName);
+  registry.emplace<components::TreeComponent>(entity, type, tagName);
   registry.emplace<components::TransformComponent>(entity);
   return EntityHandle(registry, entity);
 }
