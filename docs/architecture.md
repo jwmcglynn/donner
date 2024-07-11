@@ -93,7 +93,8 @@ See \ref DonnerAPI for more details.
 
 The Document Model is built on top of the [EnTT](https://github.com/skypjack/entt) Entity-Component-System (ECS), which is used to build a tree of entities, components, and systems that represent the SVG document. It is designed to be efficient and flexible, allowing for easy modification and rendering of SVG documents.
 
-See \ref EcsArchitecture for more details.
+- See \ref EcsArchitecture for more details.
+- See \ref ecs_systems for a list of systems.
 
 ### Rendering Backend
 
