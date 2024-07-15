@@ -134,6 +134,7 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxTiledWithXYRendering) {
         ..####....####..
         )"));
 }
+
 TEST(SVGPatternElementTests, UserSpaceOnUseRendering) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">

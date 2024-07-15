@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="320" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 420 320">
+  <defs>
+    <style>
+      * {
+        font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Oxygen,Ubuntu,Cantarell,Fira Sans,Droid Sans,Helvetica Neue,sans-serif;
+        font-size: 12px;
+      }
+
+      .code * {
+        font-family: 'Fira Code', monospace;
+      }
+
+      .annotation {
+        font-weight: 700;
+      }
+
+      .cls-1, .cls-8 {
+        fill: #a8ddeb;
+      }
+
+      .cls-9 {
+        fill: #fdec4b;
+      }
+
+      .cls-2, .cls-13 {
+        fill: #b4b4b5;
+      }
+
+      .cls-3, .cls-14 {
+        fill: #e4cabe;
+      }
+
+      .cls-3, .cls-14, .cls-15 {
+        text-decoration: underline;
+      }
+
+      .yellow-highlight {
+        stroke: #fdec4b;
+      }
+
+      .yellow-highlight, .green-highlight, .orange-highlight {
+        fill: none;
+        stroke-miterlimit: 10;
+        stroke-width: 2px;
+      }
+
+      .cls-19 {
+        letter-spacing: -.02em;
+      }
+
+      .cls-20 {
+        letter-spacing: .02em;
+      }
+
+      .cls-21 {
+        letter-spacing: 0em;
+      }
+
+      .cls-22, .cls-15 {
+        fill: #cd7d5b;
+      }
+
+      .green-highlight {
+        stroke: #72b757;
+      }
+
+      .cls-24 {
+        fill: #fcdd02;
+      }
+
+      .cls-4 {
+        fill: #dae095;
+      }
+
+      .cls-25 {
+        fill: #c158a9;
+      }
+
+      .orange-highlight {
+        stroke: #e4a943;
+      }
+
+      .cls-5 {
+        fill: #b891bd;
+      }
+
+      .orange-text {
+        fill: #e4a943;
+      }
+
+      .cls-6, .cls-26 {
+        fill: #d3b25d;
+      }
+
+      .cls-27 {
+        letter-spacing: 0em;
+      }
+
+      .cls-28 {
+        fill: #b1ce90;
+      }
+
+      .background {
+        fill: #1e1e1e;
+        filter: url(#drop-shadow-1);
+      }
+
+      .green-text {
+        fill: #72b757;
+      }
+
+      .cls-7 {
+        fill: #6aa454;
+      }
+    </style>
+    <filter id="drop-shadow-1" filterUnits="userSpaceOnUse">
+      <feOffset dx="4.64" dy="4.5"/>
+      <feGaussianBlur result="blur" stdDeviation="10"/>
+      <feFlood flood-color="#3a3a3a" flood-opacity="1"/>
+      <feComposite in2="blur" operator="in"/>
+      <feComposite in="SourceGraphic"/>
+    </filter>
+  </defs>
+  <g id="Outline">
+    <rect class="background" x="30.76" y="23.23" width="352.27" height="264.97" rx="9.1" ry="9.1"/>
+  </g>
+  <g id="Text">
+    <text class="code" transform="translate(47.57 78.7)"><tspan class="cls-26" x="0" y="0">div</tspan><tspan class="cls-13" x="22.15" y="0">.</tspan><tspan class="cls-6" x="29.54" y="0">exampleClass</tspan><tspan class="cls-13" x="118.15" y="0">:</tspan><tspan class="cls-6" x="125.54" y="0">hover</tspan><tspan class="cls-13" x="162.46" y="0" xml:space="preserve"> &gt; </tspan><tspan class="cls-26" x="184.61" y="0">p</tspan><tspan class="cls-13" x="192" y="0">::</tspan><tspan class="cls-26" x="206.76" y="0">first-line</tspan><tspan class="cls-13" x="280.61" y="0"> </tspan><tspan class="cls-24" x="287.99" y="0">{</tspan><tspan class="cls-8" x="0" y="14.4" xml:space="preserve">  color</tspan><tspan class="cls-13" x="51.69" y="14.4">: </tspan><tspan class="cls-22" x="66.46" y="14.4">navy</tspan><tspan class="cls-13" x="96" y="14.4" xml:space="preserve">;      </tspan><tspan class="cls-7" x="147.69" y="14.4">/* This is a comment */</tspan><tspan class="cls-8" x="0" y="28.8" xml:space="preserve">  font-weight</tspan><tspan class="cls-13" x="96" y="28.8">: </tspan><tspan class="cls-22" x="110.77" y="28.8">bold</tspan><tspan class="cls-13" x="140.3" y="28.8">;</tspan><tspan class="cls-8" x="0" y="43.2" xml:space="preserve">  font-size</tspan><tspan class="cls-2" x="81.23" y="43.2">: </tspan><tspan class="cls-28" x="96" y="43.2">20px</tspan><tspan class="cls-2" x="125.54" y="43.2">;</tspan><tspan class="cls-8" x="0" y="57.6" xml:space="preserve">  background-image</tspan><tspan class="cls-13" x="132.92" y="57.6">: </tspan><tspan class="cls-4" x="147.69" y="57.6">url</tspan><tspan class="cls-2" x="169.84" y="57.6">(</tspan><tspan class="cls-14" x="177.23" y="57.6">&quot;</tspan><tspan class="cls-15" x="184.61" y="57.6">example.png</tspan><tspan class="cls-3" x="265.84" y="57.6">&quot;</tspan><tspan class="cls-13" x="273.22" y="57.6">);</tspan><tspan class="cls-24"><tspan x="0" y="72">}</tspan></tspan><tspan class="cls-13" x="0" y="129.6">@</tspan><tspan class="cls-5" x="7.38" y="129.6">media</tspan><tspan class="cls-24" x="44.31" y="129.6" xml:space="preserve"> (</tspan><tspan class="cls-1" x="59.08" y="129.6">max-width</tspan><tspan class="cls-2" x="125.54" y="129.6">: </tspan><tspan class="cls-28" x="140.3" y="129.6">600px</tspan><tspan class="cls-24" x="177.23" y="129.6">) {</tspan><tspan class="cls-13" x="0" y="144" xml:space="preserve">  </tspan><tspan class="cls-26" x="14.77" y="144">body</tspan><tspan class="cls-25" x="44.31" y="144" xml:space="preserve"> {</tspan><tspan class="cls-13" x="0" y="158.4" xml:space="preserve">    </tspan><tspan class="cls-1" x="29.54" y="158.4">background-color</tspan><tspan class="cls-2" x="147.69" y="158.4">: </tspan><tspan class="cls-22" x="162.46" y="158.4">lightblue</tspan><tspan class="cls-13" x="228.92" y="158.4">;</tspan><tspan class="cls-13" x="0" y="172.8" xml:space="preserve">  </tspan><tspan class="cls-25" x="14.77" y="172.8">}</tspan><tspan class="cls-24"><tspan x="0" y="187.2">}</tspan></tspan></text>
+  </g>
+  <g id="Annotations" class="annotations">
+    <text class="cls-9" transform="translate(46.85 62.05)"><tspan class="cls-21" x="0" y="0">Selector</tspan></text>
+    <text class="orange-text" transform="translate(204.05 107.17)"><tspan x="0" y="0">Declaration</tspan></text>
+    <rect class="yellow-highlight" x="43.93" y="66.4" width="290.07" height="16.04" rx="6.43" ry="6.43"/>
+    <rect class="orange-highlight" x="58.19" y="95.7" width="140.16" height="16.04" rx="4.47" ry="4.47"/>
+    <text class="green-text" transform="translate(39.49 43.63)"><tspan class="cls-32" x="0" y="0">QualifiedRule</tspan></text>
+    <rect class="green-highlight" x="39.49" y="49.99" width="330.32" height="109.41" rx="7.76" ry="7.76"/>
+    <text class="green-text" transform="translate(42.36 185.8)"><tspan class="cls-19" x="0" y="0">AtRule</tspan></text>
+    <rect class="green-highlight" x="39.7" y="190.9" width="252.04" height="84.15" rx="5.95" ry="5.95"/>
+  </g>
+</svg>

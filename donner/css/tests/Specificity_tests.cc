@@ -37,4 +37,15 @@ TEST(Specificity, SpecialTypes) {
   EXPECT_GT(Specificity::Important(), Specificity::StyleAttribute());
 }
 
+TEST(Specificity, Selectors) {
+  EXPECT_EQ(computeSpecificity("test"), Specificity::FromABC(0, 0, 1));
+  EXPECT_EQ(computeSpecificity("#id"), Specificity::FromABC(1, 0, 0));
+  EXPECT_EQ(computeSpecificity(".class"), Specificity::FromABC(0, 1, 0));
+  EXPECT_EQ(computeSpecificity("div"), Specificity::FromABC(0, 0, 1));
+  EXPECT_EQ(computeSpecificity("#id.class"), Specificity::FromABC(1, 1, 0));
+  EXPECT_EQ(computeSpecificity("#id.class div"), Specificity::FromABC(1, 1, 1));
+  EXPECT_EQ(computeSpecificity("#id.class > div"), Specificity::FromABC(1, 1, 1));
+  EXPECT_EQ(computeSpecificity("[class~=\"class\"]"), Specificity::FromABC(0, 1, 0));
+}
+
 }  // namespace donner::css

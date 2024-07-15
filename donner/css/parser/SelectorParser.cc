@@ -1,5 +1,8 @@
 #include "donner/css/parser/SelectorParser.h"
 
+#include <iomanip>
+#include <sstream>
+
 #include "donner/base/Utils.h"
 #include "donner/css/Selector.h"
 #include "donner/css/parser/AnbMicrosyntaxParser.h"
@@ -372,7 +375,12 @@ private:
       }
     };
 
-    for (bool first = true; true; first = false) {
+    bool nextIsFirst = true;
+
+    while (true) {
+      const bool first = nextIsFirst;
+      nextIsFirst = false;
+
       hadError = false;
       addedEntry = false;
 
@@ -543,7 +551,8 @@ private:
                                  std::make_unique<Selector>(std::move(selectorResult.result()))};
     } else {
       // Extra components, but parsing them is not supported. Discard the An+B value.
-      // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
+      addWarning(std::string("Extra components found in An+B microsyntax for pseudo-class :") +
+                 pseudoClass.ident);
       return std::nullopt;
     }
 
@@ -555,13 +564,14 @@ private:
       return nullptr;
     }
 
-    auto unwrap = [](ParseResult<Selector>&& selectorResult) -> std::unique_ptr<Selector> {
+    auto unwrap = [&pseudoClass,
+                   this](ParseResult<Selector>&& selectorResult) -> std::unique_ptr<Selector> {
       if (selectorResult.hasError()) {
-        // TODO: Propagate a warning here, ignore for now and don't set the Selector.
+        addWarning(std::string("Failed to parse selector in pseudo-class :") + pseudoClass.ident);
         return nullptr;
       }
 
-      return std::make_unique<Selector>(std::move(selectorResult.result()));
+      return std::make_unique<Selector>(std::move(selectorResult).result());
     };
 
     SelectorParserImpl parser(pseudoClass.argsIfFunction.value());
@@ -616,9 +626,8 @@ private:
     // <pseudo-element-selector> = ':' <pseudo-class-selector>
     expectAndConsumeToken<Token::Colon>();
 
-    auto maybePseudoClass = handlePseudoClassSelector();
-    if (maybePseudoClass.has_value()) {
-      PseudoElementSelector result(std::move(maybePseudoClass.value().ident));
+    if (auto maybePseudoClass = handlePseudoClassSelector()) {
+      PseudoElementSelector result(maybePseudoClass.value().ident);
       result.argsIfFunction = std::move(maybePseudoClass.value().argsIfFunction);
       return result;
     } else {
@@ -853,31 +862,65 @@ private:
 
   std::optional<AttrMatcher> handleAttrMatcher() {
     // <attr-matcher> = [ '~' | '|' | '^' | '$' | '*' ]? '='
-    std::optional<AttrMatcher> result;
-    if (const Token* token = next<Token>(); token && token->is<Token::Delim>()) {
-      switch (token->get<Token::Delim>().value) {
-        case '~': result = AttrMatcher::Includes; break;
-        case '|': result = AttrMatcher::DashMatch; break;
-        case '^': result = AttrMatcher::PrefixMatch; break;
-        case '$': result = AttrMatcher::SuffixMatch; break;
-        case '*': result = AttrMatcher::SubstringMatch; break;
-        case '=': {
-          // For '=', there can't be any subsequent tokens.
-          advance();
-          return AttrMatcher::Eq;
+
+    const auto tokenToAttrMatcher = [](const Token* token) -> std::optional<AttrMatcher> {
+      if (token && token->is<Token::Delim>()) {
+        switch (token->get<Token::Delim>().value) {
+          case '~': return AttrMatcher::Includes;
+          case '|': return AttrMatcher::DashMatch;
+          case '^': return AttrMatcher::PrefixMatch;
+          case '$': return AttrMatcher::SuffixMatch;
+          case '*': return AttrMatcher::SubstringMatch;
+          case '=': return AttrMatcher::Eq;
+          default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
         }
-        default: break;
       }
-    }
 
-    if (result.has_value()) {
+      return std::nullopt;
+    };
+
+    if (std::optional<AttrMatcher> result = tokenToAttrMatcher(next<Token>())) {
       advance();
+
+      if (result.value() == AttrMatcher::Eq) {
+        // For '=', there can't be any subsequent tokens.
+
+        // However if there is a delim *after* the '=', it should be before. Output a helpful
+        // message.
+        std::string foundStr;
+        if (auto maybeDelim = peekNextDelim()) {
+          if (std::isprint(maybeDelim.value())) {
+            foundStr = " ";
+            foundStr[0] = maybeDelim.value();
+          } else {
+            std::stringstream ss;
+            ss << std::hex << "0x" << maybeDelim.value();
+            foundStr = std::string("<non-printable: 0x") + ss.str() + ">";
+          }
+
+          setError("Expected ident or string after '=', found '=" + foundStr +
+                   "'. Did you mean '~=', '|=', '^=', '$=', or '*='?");
+          return std::nullopt;
+        }
+
+        // Otherwise the '=' is valid and means equals by itself.
+        return result;
+      }
+
+      // Look for the second token, which must be an '='.
       if (tryConsumeDelim('=')) {
-        return result.value();
+        return result;
+      } else {
+        setError(
+            "Attribute matcher missing '=' at the end, it must be either '~=', '|=', '^=', '$=', "
+            "'*=', "
+            "or '='");
+        return std::nullopt;
       }
     }
 
-    setError("Invalid attribute matcher, it must be either '~=', '|=', '^=', '$=', '*=', or '='");
+    // Fallback to a generic message.
+    setError("Expected attribute matcher ('~=', '|=', '^=', '$=', '*=', or '=')");
     return std::nullopt;
   }
 
@@ -927,13 +970,17 @@ private:
             components_[advance].get<Token>().is<T>());
   }
 
-  bool nextDelimIs(char value, size_t advance = 0) const {
+  bool nextDelimIs(char value, size_t advance = 0) const { return peekNextDelim(advance) == value; }
+
+  std::optional<char> peekNextDelim(size_t advance = 0) const {
     if (components_.size() > advance && components_[advance].is<Token>()) {
       const Token& token = components_[advance].get<Token>();
-      return token.is<Token::Delim>() && token.get<Token::Delim>().value == value;
+      if (const auto* maybeDelim = token.tryGet<Token::Delim>()) {
+        return maybeDelim->value;
+      }
     }
 
-    return false;
+    return std::nullopt;
   }
 
   void skipWhitespace() {
@@ -952,18 +999,28 @@ private:
 
   void setError(ParseError&& error) { error_ = std::move(error); }
 
+  void addWarning(std::string reason) {
+    ParseError err;
+    err.reason = std::move(reason);
+    err.location =
+        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString();
+    warnings_.push_back(std::move(err));
+  }
+
   std::optional<CompoundSelector::Entry> subclassToCompoundEntry(
       std::optional<SubclassSelector>&& subclass) {
     if (!subclass) {
       return std::nullopt;
     }
 
-    return std::visit([](auto&& arg) -> CompoundSelector::Entry { return std::move(arg); },
-                      std::move(subclass.value()));
+    return std::visit(
+        [](auto&& arg) -> CompoundSelector::Entry { return std::forward<decltype(arg)>(arg); },
+        std::move(subclass).value());
   }
 
   std::span<const ComponentValue> components_;
   std::optional<ParseError> error_;
+  std::vector<ParseError> warnings_;
 };
 
 ParseResult<Selector> SelectorParser::ParseComponents(std::span<const ComponentValue> components) {

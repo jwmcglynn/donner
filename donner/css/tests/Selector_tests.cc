@@ -19,20 +19,6 @@ namespace donner::css::parser {
 
 using namespace base::parser;  // NOLINT: For tests
 
-namespace {
-
-Specificity computeSpecificity(std::string_view str) {
-  auto maybeSelector = SelectorParser::Parse(str);
-  EXPECT_THAT(maybeSelector, NoParseError());
-  if (maybeSelector.hasError()) {
-    return Specificity();
-  }
-
-  return Specificity(maybeSelector.result().maxSpecificity());
-}
-
-}  // namespace
-
 class SelectorTests : public testing::Test {
 protected:
   bool matches(std::string_view selector, const FakeElement& element) {

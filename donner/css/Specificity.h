@@ -8,17 +8,29 @@
 namespace donner::css {
 
 /**
- * A CSS specificity value, as defined in https://www.w3.org/TR/selectors-4/#specificity-rules,
- * which is used during cascading to determine which style takes precedence.
+ * A CSS specificity value (id, class, type), as defined in
+ * https://www.w3.org/TR/selectors-4/#specificity-rules, which is used during cascading to determine
+ * which style takes precedence.
  *
  * The specificity is a 3-tuple of integers, where the first integer is the most significant, plus a
  * few special values such as "!important" which override.
  *
- * The 3-tuple is created as follows:
+ * The 3-tuple is defined as:
  * - `a`: The number of ID selectors in the selector.
  * - `b`: The number of class selectors, attributes selectors, and pseudo-classes in the selector.
  * - `c`: The number of type selectors and pseudo-elements in the selector.
  *
+ * Examples
+ * | Selector | Specificity |
+ * | ----------- | ----------- |
+ * | `#id` | (1, 0, 0) |
+ * | `.class` | (0, 1, 0) |
+ * | `div` | (0, 0, 1) |
+ * | `#id.class` | (1, 1, 0) |
+ * | `#id.class div` | (1, 1, 1) |
+ * | `#id.class > div` | (1, 1, 1) |
+ * | `[class=~"class"]` | (1, 1, 1) |
+
  * For example, the selector `#id.class` has a specificity of (1, 1, 0), while `div > p` has a
  * specificity of (0, 0, 2).
  *

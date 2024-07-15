@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="690" height="175" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 690 175">
+  <defs>
+    <style>
+      * {
+        font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Oxygen,Ubuntu,Cantarell,Fira Sans,Droid Sans,Helvetica Neue,sans-serif;
+        font-size: 12px;
+      }
+
+      .code * {
+        font-family: 'Fira Code', monospace;
+      }
+
+      rect {
+        rx: 8px;
+        ry: 8px;
+      }
+
+      .annotation {
+        font-weight: 700;
+      }
+      
+      .compoundSelector {
+        fill: #fdec4b;
+      }
+
+      .cls-6, .cls-10 {
+        fill: #e4cabe;
+      }
+
+      .cls-7, .cls-11, .cls-12 {
+        fill: #b4b4b5;
+      }
+
+      .cls-13 {
+        stroke: #fdec4b;
+      }
+
+      .cls-13, .cls-14, .cls-15, .cls-16 {
+        fill: none;
+        stroke-miterlimit: 10;
+        stroke-width: 2px;
+      }
+
+      .cls-20 {
+        fill: #a8ddeb;
+      }
+
+      .cls-24 {
+        fill: #cd7d5b;
+      }
+
+      .cls-14 {
+        stroke: #72b757;
+      }
+
+      .cls-8, .cls-26 {
+        fill: #fcdd02;
+      }
+
+      .cls-3 {
+        fill: #e26944;
+      }
+
+      .cls-15 {
+        stroke: #e26944;
+      }
+
+      .cls-30 {
+        fill: #c158a9;
+      }
+
+      .cls-16 {
+        stroke: #e4a943;
+      }
+
+      .cls-4 {
+        fill: #e4a943;
+      }
+
+      .cls-9, .cls-31, .cls-21 {
+        fill: #d3b25d;
+      }
+
+      .cls-32 {
+        letter-spacing: 0em;
+      }
+
+      .background {
+        fill: #1e1e1e;
+        filter: url(#drop-shadow-1);
+      }
+
+      .cls-5 {
+        fill: #72b757;
+      }
+    </style>
+    <filter id="drop-shadow-1" filterUnits="userSpaceOnUse" width="900" height="400">
+      <feOffset dx="4.1" dy="4.1"/>
+      <feGaussianBlur result="blur" stdDeviation="8.2"/>
+      <feFlood flood-color="#3a3a3a" flood-opacity="1"/>
+      <feComposite in2="blur" operator="in"/>
+      <feComposite in="SourceGraphic"/>
+    </filter>
+  </defs>
+  <g transform="translate(0 -75)">
+  <g id="Outline">
+    <rect class="background" x="28" y="106" width="607" height="120" />
+  </g>
+  <g id="Text">
+    <text class="code" transform="translate(71.4 172.01)"><tspan class="cls-12" x="0" y="0">.</tspan><tspan class="cls-21" x="7.38" y="0">highlight</tspan><tspan class="cls-12" x="73.84" y="0" xml:space="preserve">,  .</tspan><tspan class="cls-21" x="103.38" y="0">article</tspan><tspan class="cls-26" x="155.07" y="0">[</tspan><tspan class="cls-20" x="162.46" y="0">data-category</tspan><tspan class="cls-11" x="258.46" y="0">=</tspan><tspan class="cls-6" x="265.84" y="0">&quot;</tspan><tspan class="cls-24" x="273.22" y="0">tech</tspan><tspan class="cls-10" x="302.76" y="0">&quot;</tspan><tspan class="cls-26" x="310.15" y="0">]</tspan><tspan class="cls-7" x="317.53" y="0" xml:space="preserve"> &gt; </tspan><tspan class="cls-9" x="339.69" y="0">h2</tspan><tspan class="cls-12" x="354.45" y="0">:</tspan><tspan class="cls-9" x="361.84" y="0">has</tspan><tspan class="cls-8" x="383.99" y="0">(</tspan><tspan class="cls-12" x="391.38" y="0">+ </tspan><tspan class="cls-31" x="406.15" y="0">p</tspan><tspan class="cls-7" x="413.53" y="0">:</tspan><tspan class="cls-31" x="420.91" y="0">not</tspan><tspan class="cls-30" x="443.07" y="0">(</tspan><tspan class="cls-12" x="450.45" y="0">.</tspan><tspan class="cls-9" x="457.84" y="0">summary</tspan><tspan class="cls-30" x="509.53" y="0">)</tspan><tspan class="cls-26" x="516.91" y="0">)</tspan></text>
+  </g>
+  <g id="Annotations" class="annotation">
+    <text class="compoundSelector" transform="translate(44 145)"><tspan class="cls-29" x="0" y="0">CompoundSelector</tspan></text>
+    <rect class="cls-13" x="68.48" y="154.75" width="86.35" height="28" />
+    <text class="cls-5" transform="translate(46.71 122.72)"><tspan class="cls-29" x="0" y="0">ComplexSelector</tspan></text>
+    <rect class="cls-14" x="38.06" y="129.13" width="570.27" height="83.17" rx="8.89" ry="8.89"/>
+    <rect class="cls-13" x="163.93" y="137.78" width="434.16" height="67.49" rx="11.95" ry="11.95"/>
+    <line class="cls-16" x1="171.69" y1="178.62" x2="225.81" y2="178.62"/>
+    <line class="cls-16" x1="228.6" y1="178.62" x2="387.99" y2="178.62"/>
+    <line class="cls-16" x1="592.63" y1="178.62" x2="435.21" y2="178.62"/>
+    <line class="cls-16" x1="427.6" y1="178.62" x2="408.08" y2="178.62"/>
+    <text class="cls-4" transform="translate(183.66 193.88)"><tspan class="cls-18" x="0" y="0">Class</tspan></text>
+    <text class="cls-4" transform="translate(287.63 193.88)"><tspan class="cls-19" x="0" y="0">Attribute</tspan></text>
+    <text class="cls-4" transform="translate(405.28 193.88)"><tspan class="cls-36" x="0" y="0">Type</tspan></text>
+    <text class="cls-4" transform="translate(482.42 195.48)"><tspan class="cls-17" x="0" y="0">PseudoClass</tspan></text>
+    <text class="cls-3" transform="translate(362.57 152)"><tspan class="cls-29" x="0" y="0">Combinator</tspan></text>
+    <line class="cls-15" x1="394.43" y1="157.44" x2="403.92" y2="157.44"/>
+  </g>
+    </g>
+</svg>

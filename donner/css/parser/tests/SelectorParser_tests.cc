@@ -346,10 +346,9 @@ TEST(SelectorParser, InvalidAttributeSelector) {
   EXPECT_THAT(SelectorParser::Parse("a<test>"),
               ParseErrorIs("Unexpected token when parsing compound selector"));
 
-  EXPECT_THAT(
-      SelectorParser::Parse("[attr*]"),
-      ParseErrorIs(
-          "Invalid attribute matcher, it must be either '~=', '|=', '^=', '$=', '*=', or '='"));
+  EXPECT_THAT(SelectorParser::Parse("[attr*]"),
+              ParseErrorIs("Attribute matcher missing '=' at the end, it must be either '~=', "
+                           "'|=', '^=', '$=', '*=', or '='"));
 
   EXPECT_THAT(SelectorParser::Parse("[attr~=]"),
               ParseErrorIs(

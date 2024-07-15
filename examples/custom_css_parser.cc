@@ -99,5 +99,14 @@ int main(int argc, char* argv[]) {
   }
   //! [parse_selector]
 
+  //! [parse_style_attribute]
+  // Style attribute values, which are a list of `key: value;` pairs (css declarations).
+  std::vector<Declaration> declarations = CSS::ParseStyleAttribute("fill: red; stroke: blue;");
+  std::cout << "Parsed style attribute:\n";
+  for (const auto& declaration : declarations) {
+    std::cout << declaration << "\n";
+  }
+  //! [parse_style_attribute]
+
   return 0;
 }

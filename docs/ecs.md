@@ -161,6 +161,47 @@ This step traverses the tree and produces a sorted list of \ref donner::svg::com
 
 This list is then processed by \ref donner::svg::RendererSkia to produce the final output.
 
+# API Layer
+
+On top of the ECS model the user-facing API is implemented as a thin wrapper. For example, \ref donner::svg::SVGPathElement "SVGPathElement" proxies calls to the components layer with minimal logic:
+
+```cpp
+SVGPathElement SVGPathElement::Create(SVGDocument& document) {
+  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+  handle.emplace<components::RenderingBehaviorComponent>(
+      components::RenderingBehavior::NoTraverseChildren);
+  return SVGPathElement(handle);
+}
+
+RcString SVGPathElement::d() const {
+  if (const auto* path = handle_.try_get<components::PathComponent>()) {
+    if (auto maybeD = path->d.get()) {
+      return maybeD.value();
+    }
+  }
+
+  return "";
+}
+
+void SVGPathElement::setD(RcString d) {
+  invalidate();
+
+  auto& path = handle_.get_or_emplace<components::PathComponent>();
+  path.d.set(d, css::Specificity::Override());
+}
+
+std::optional<PathSpline> SVGPathElement::computedSpline() const {
+  compute();
+  if (const auto* computedPath = handle_.try_get<components::ComputedPathComponent>()) {
+    return computedPath->spline;
+  } else {
+    return std::nullopt;
+  }
+}
+```
+
+This enables API objects to be zero-cost and stateless. The only object held within these objects is the `EntityHandle`, which is a lightweight wrapper around the `Entity` and `Registry` (~16 bytes with alignment).
+
 <div class="section_buttons">
 
 | Previous                         | Next |

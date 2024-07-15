@@ -2,8 +2,10 @@
 
 #include <gmock/gmock.h>
 
-#include "donner/css/Selector.h"
+#include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/css/Selector.h"
+#include "donner/css/parser/SelectorParser.h"
 
 namespace donner::css {
 
@@ -19,6 +21,24 @@ namespace donner::css {
 template <typename... Args>
 auto SelectorsAre(const Args&... matchers) {
   return testing::Field("entries", &Selector::entries, testing::ElementsAre(matchers...));
+}
+
+/**
+ * Get the specificity of the Selector string (id, class, type). For example "div.class" would
+ * return (0, 1, 1). If there is a parse error, returns (0, 0, 0).
+ *
+ * @param str Selector string, for example "div.class"
+ */
+inline Specificity computeSpecificity(std::string_view str) {
+  SCOPED_TRACE(testing::Message() << "Parsing selector: " << str);
+
+  auto maybeSelector = parser::SelectorParser::Parse(str);
+  EXPECT_THAT(maybeSelector, base::parser::NoParseError());
+  if (maybeSelector.hasError()) {
+    return Specificity();
+  }
+
+  return Specificity(maybeSelector.result().maxSpecificity());
 }
 
 template <typename SelectorType>
