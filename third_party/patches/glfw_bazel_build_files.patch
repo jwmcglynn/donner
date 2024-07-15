@@ -1,0 +1,138 @@
+Subject: [PATCH] Add bazel build files
+Base-commit: b35641f4a3c62aa86a0b3c983d163bc0fe36026d
+
+---
+ BUILD.bazel  | 105 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ MODULE.bazel |   9 +++++
+ 2 files changed, 114 insertions(+)
+ create mode 100644 BUILD.bazel
+ create mode 100644 MODULE.bazel
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+new file mode 100644
+index 00000000..952ce1c3
+--- /dev/null
++++ b/BUILD.bazel
+@@ -0,0 +1,105 @@
++load("@rules_cc//cc:defs.bzl", "cc_library")
++
++package(default_visibility = ["//visibility:public"])
++
++cc_library(
++    name = "glfw",
++    srcs = [
++        "src/context.c",
++        "src/egl_context.c",
++        "src/init.c",
++        "src/input.c",
++        "src/monitor.c",
++        "src/null_init.c",
++        "src/null_joystick.c",
++        "src/null_monitor.c",
++        "src/null_window.c",
++        "src/osmesa_context.c",
++        "src/platform.c",
++        "src/posix_module.c",
++        "src/vulkan.c",
++        "src/window.c",
++    ] + select({
++        "@bazel_tools//src/conditions:darwin": [],
++        "@bazel_tools//src/conditions:windows": [
++            "src/wgl_context.c",
++            "src/win32_init.c",
++            "src/win32_joystick.c",
++            "src/win32_monitor.c",
++            "src/win32_thread.c",
++            "src/win32_time.c",
++            "src/win32_window.c",
++        ],
++        "//conditions:default": [
++            "src/glx_context.c",
++            "src/linux_joystick.c",
++            "src/posix_thread.c",
++            "src/posix_time.c",
++            "src/x11_init.c",
++            "src/x11_monitor.c",
++            "src/x11_window.c",
++            "src/xkb_unicode.c",
++        ],
++    }),
++    hdrs = [
++        "include/GLFW/glfw3.h",
++        "include/GLFW/glfw3native.h",
++    ] + glob(["src/*.h"]),
++    copts = ["-std=c99"],
++    defines = select({
++        "@bazel_tools//src/conditions:darwin": ["_GLFW_COCOA"],
++        "@bazel_tools//src/conditions:windows": ["_GLFW_WIN32"],
++        "//conditions:default": ["_GLFW_X11"],
++    }),
++    includes = ["include/"],
++    linkopts = select({
++        "@bazel_tools//src/conditions:darwin": [],
++        "@bazel_tools//src/conditions:windows": ["-lgdi32"],
++        "//conditions:default": [
++            "-lX11",
++            "-lXrandr",
++            "-lXinerama",
++            "-lXcursor",
++            "-lXi",
++            "-lm",
++            "-ldl",
++            "-lGL",
++        ],
++    }),
++    deps = select({
++        "@bazel_tools//src/conditions:darwin": [":glfw_cocoa"],
++        "//conditions:default": [],
++    }),
++)
++
++objc_library(
++    name = "glfw_cocoa",
++    srcs = [
++        "src/cocoa_init.m",
++        "src/cocoa_joystick.m",
++        "src/cocoa_monitor.m",
++        "src/cocoa_time.c",
++        "src/cocoa_window.m",
++        "src/nsgl_context.m",
++        "src/posix_thread.c",
++    ],
++    hdrs = glob(["src/*.h"]) + [
++        "include/GLFW/glfw3.h",
++        "include/GLFW/glfw3native.h",
++    ],
++    copts = [
++        "-isystem",
++        "include",
++        "-std=c99",
++        "-fno-objc-arc",
++    ],
++    defines = ["_GLFW_COCOA"],
++    includes = ["include"],
++    sdk_frameworks = [
++        "Cocoa",
++        "IOKit",
++        "CoreFoundation",
++        "QuartzCore",
++    ],
++    visibility = ["//visibility:private"],
++)
+diff --git a/MODULE.bazel b/MODULE.bazel
+new file mode 100644
+index 00000000..dcfdf080
+--- /dev/null
++++ b/MODULE.bazel
+@@ -0,0 +1,9 @@
++module(
++    name = "glfw",
++    version = "0.0.0",
++)
++
++bazel_dep(name = "apple_support", version = "1.16.0", repo_name = "build_bazel_apple_support")
++
++bazel_dep(name = "rules_cc", version = "0.0.9")
++bazel_dep(name = "platforms", version = "0.0.10")
+-- 
+2.39.3 (Apple Git-146)

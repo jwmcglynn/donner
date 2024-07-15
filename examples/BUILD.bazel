@@ -25,14 +25,3 @@ cc_binary(
         "@donner",
     ],
 )
-
-cc_binary(
-    name = "svg_viewer",
-    srcs = ["svg_viewer.cc"],
-    deps = [
-        "@donner",
-        "@imgui",
-        "@glfw",
-        "@opengl",
-    ],
-)

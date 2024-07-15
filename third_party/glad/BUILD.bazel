@@ -1,0 +1,12 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "glad",
+    srcs = ["glad/glad.c"],
+    hdrs = [
+        "KHR/khrplatform.h",
+        "glad/glad.h",
+    ],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
