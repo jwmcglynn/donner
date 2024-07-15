@@ -204,8 +204,8 @@ This enables API objects to be zero-cost and stateless. The only object held wit
 
 <div class="section_buttons">
 
-| Previous                         | Next |
-| :------------------------------- | ---: |
-| [Coding style](CodingStyle.html) |      |
+| Previous                         |                        Next |
+| :------------------------------- | --------------------------: |
+| [Coding style](CodingStyle.html) | [CSS](CssArchitecture.html) |
 
 </div>

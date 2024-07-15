@@ -1,4 +1,4 @@
-# CSS
+# CSS {#CssArchitecture}
 
 \tableofcontents
 
@@ -198,3 +198,11 @@ RuleParser --> Tokenizer
 - \ref donner::css::parser::StylesheetParser
 - \ref donner::css::parser::SelectorParser
 - \ref donner::css::parser::DeclarationListParser
+
+<div class="section_buttons">
+
+| Previous                    | Next |
+| :-------------------------- | ---: |
+| [ECS](EcsArchitecture.html) |      |
+
+</div>
