@@ -1,5 +1,7 @@
 # CSS
 
+\tableofcontents
+
 Donner implements CSS3 through a hand-rolled CSS library, \ref donner::css. Donner's CSS library is designed to have minimal dependencies and to be easy to integrate into other projects by using an adapter that satisfies the \ref donner::ElementLike concept.
 
 \ref donner::css::CSS provides a high-level API surface for parsing CSS constructs, which is implemented on top of lower-level parser APIs which provide finer-grained control over the parsing process and better error handling.
