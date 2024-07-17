@@ -29,6 +29,13 @@ build --copt=-fno-rtti
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 
+# Enable building with the latest llvm toolchain (downloaded on-demand, see MODULE.bazel)
+build:latest_llvm --extra_toolchains=@llvm_toolchain//:all
+
+# Build with the latest llvm toolchain by default on Linux. Do not set on mac since it cannot be used to build objc
+# and the imgui viewer requires it
+build:linux --config=latest_llvm
+
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
 build:libc++ --action_env=LDFLAGS=-stdlib=libc++

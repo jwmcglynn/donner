@@ -166,10 +166,14 @@ static constexpr auto kColors = frozen::make_unordered_map<frozen::string, Color
     {"currentcolor"_s, Color(Color::CurrentColor())},
 });
 
-template <class... Ts>
+template <typename... Ts>
 struct overloaded : Ts... {
   using Ts::operator()...;
 };
+
+// Deduction guide needed for older compilers.
+template <typename... Ts>
+overloaded(Ts...) -> overloaded<Ts...>;
 
 uint8_t numberToChannel(double number) {
   return static_cast<uint8_t>(Clamp(Round(number), 0.0, 255.0));

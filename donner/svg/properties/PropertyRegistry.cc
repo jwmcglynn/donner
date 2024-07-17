@@ -388,7 +388,7 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
     if (function.name.equalsLowercase("blur")) {
       // Parse optional length value as the stdDeviation.
       if (function.values.empty()) {
-        return FilterEffect(FilterEffect::Blur(Lengthd(0.0, Lengthd::Unit::Px)));
+        return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px)});
       } else if (function.values.size() == 1) {
         const auto& arg = function.values.front();
         if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
@@ -399,7 +399,7 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
             return err;
           } else {
             const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
-            return FilterEffect(FilterEffect::Blur(stdDeviation, stdDeviation));
+            return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
           }
         } else {
           parser::ParseError err;

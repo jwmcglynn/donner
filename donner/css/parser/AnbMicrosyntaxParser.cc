@@ -149,24 +149,24 @@ public:
     if (!hasLeadingPlus) {
       // odd | even |
       if (firstToken.type == AnbToken::Type::Odd) {
-        return AnbValue(2, 1);
+        return AnbValue{2, 1};
       } else if (firstToken.type == AnbToken::Type::Even) {
-        return AnbValue(2, 0);
+        return AnbValue{2, 0};
       }
       // <integer> |
       else if (firstToken.type == AnbToken::Type::SignedInteger ||
                firstToken.type == AnbToken::Type::SignlessInteger) {
-        return AnbValue(0, firstToken.value.value());
+        return AnbValue{0, firstToken.value.value()};
       }
 
       // <n-dimension> |
       else if (firstToken.type == AnbToken::Type::NDimension) {
         if (!maybeSecondTokenType.has_value()) {
-          return AnbValue(firstToken.value.value(), 0);
+          return AnbValue{firstToken.value.value(), 0};
         }
         // <n-dimension> <signed-integer> |
         else if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
-          return AnbValue(firstToken.value.value(), consumeToken().result().value.value());
+          return AnbValue{firstToken.value.value(), consumeToken().result().value.value()};
         }
         // <n-dimension> ['+' | '-'] <signless-integer>
         else if (maybeSecondTokenType == AnbToken::Type::Plus ||
@@ -180,21 +180,21 @@ public:
             // A is the dimension's value. B is the integer's value. If a '-'
             // was provided between the two, B is instead the negation of the
             // integer's value.
-            return AnbValue(firstToken.value.value(), secondToken.type == AnbToken::Type::Minus
+            return AnbValue{firstToken.value.value(), secondToken.type == AnbToken::Type::Minus
                                                           ? -thirdToken.value.value()
-                                                          : thirdToken.value.value());
+                                                          : thirdToken.value.value()};
           }
         }
       }
       // -n |
       else if (firstToken.type == AnbToken::Type::MinusN) {
         if (!maybeSecondTokenType.has_value()) {
-          return AnbValue(-1, 0);
+          return AnbValue{-1, 0};
         } else {
           // -n <signed-integer> |
           if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
             const AnbToken secondToken = consumeToken().result();
-            return AnbValue(-1, secondToken.value.value());
+            return AnbValue{-1, secondToken.value.value()};
           }
           // -n ['+' | '-'] <signless-integer>
           else if (maybeSecondTokenType == AnbToken::Type::Plus ||
@@ -207,9 +207,9 @@ public:
 
               // A is -1. B is the integer's value. If a '-' was provided between
               // the two, B is instead the negation of the integer's value.
-              return AnbValue(-1, secondToken.type == AnbToken::Type::Minus
+              return AnbValue{-1, secondToken.type == AnbToken::Type::Minus
                                       ? -thirdToken.value.value()
-                                      : thirdToken.value.value());
+                                      : thirdToken.value.value()};
             } else {
               ParseError err;
               err.reason = "An+B microsyntax unexpected end of list";
@@ -222,22 +222,22 @@ public:
 
       // <ndashdigit-dimension> |
       else if (firstToken.type == AnbToken::Type::NDashDigitDimension) {
-        return AnbValue(firstToken.value.value(), -firstToken.digitValue.value());
+        return AnbValue{firstToken.value.value(), -firstToken.digitValue.value()};
       }
       // <dashndashdigit-ident> |
       else if (firstToken.type == AnbToken::Type::DashNDashDigitIdent) {
-        return AnbValue(-1, -firstToken.digitValue.value());
+        return AnbValue{-1, -firstToken.digitValue.value()};
       }
 
       // <ndash-dimension> <signless-integer> |
       else if (firstToken.type == AnbToken::Type::NDashDimension &&
                maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
-        return AnbValue(firstToken.value.value(), -consumeToken().result().value.value());
+        return AnbValue{firstToken.value.value(), -consumeToken().result().value.value()};
       }
       // -n- <signless-integer> |
       else if (firstToken.type == AnbToken::Type::MinusNMinus &&
                maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
-        return AnbValue(-1, -consumeToken().result().value.value());
+        return AnbValue{-1, -consumeToken().result().value.value()};
       }
     }
 
@@ -246,17 +246,17 @@ public:
 
     // '+'? <ndashdigit-ident> |
     if (firstToken.type == AnbToken::Type::NDashDigitIdent) {
-      return AnbValue(1, -firstToken.digitValue.value());
+      return AnbValue{1, -firstToken.digitValue.value()};
     } else if (firstToken.type == AnbToken::Type::N) {
       // '+'? n
       if (!maybeSecondTokenType.has_value()) {
-        return AnbValue(1, 0);
+        return AnbValue{1, 0};
       }
 
       // '+'? n <signed-integer> |
       if (maybeSecondTokenType == AnbToken::Type::SignedInteger) {
         const AnbToken secondToken = consumeToken().result();
-        return AnbValue(1, secondToken.value.value());
+        return AnbValue{1, secondToken.value.value()};
       }
       // '+'? n ['+' | '-'] <signless-integer> |
       else if (maybeSecondTokenType == AnbToken::Type::Plus ||
@@ -270,15 +270,15 @@ public:
 
           // A is 1, respectively. B is the integer's value. If a '-' was provided
           // between the two, B is instead the negation of the integer's value.
-          return AnbValue(1, secondToken.type == AnbToken::Type::Minus ? -thirdToken.value.value()
-                                                                       : thirdToken.value.value());
+          return AnbValue{1, secondToken.type == AnbToken::Type::Minus ? -thirdToken.value.value()
+                                                                       : thirdToken.value.value()};
         }
       }
     }
     // '+'? n- <signless-integer> |
     else if (firstToken.type == AnbToken::Type::NMinus &&
              maybeSecondTokenType == AnbToken::Type::SignlessInteger) {
-      return AnbValue(1, -consumeToken().result().value.value());
+      return AnbValue{1, -consumeToken().result().value.value()};
     }
 
     if (components_.empty()) {
