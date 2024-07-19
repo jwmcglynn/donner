@@ -141,11 +141,28 @@ int main(int argc, char** argv) {
     ImGui::Begin("SVG Viewer");
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate,
                 ImGui::GetIO().Framerate);
+
+    const ImVec2 regionSize = ImGui::GetContentRegionAvail();
+    const float scale =
+        std::min(regionSize.x / (float)renderer.width(), regionSize.y / (float)renderer.height());
+
     ImGui::Image((void*)(intptr_t)texture,
-                 ImVec2((float)renderer.width(), (float)renderer.height()));
+                 ImVec2(scale * renderer.width(), scale * renderer.height()));
+
+    bool isHovered = ImGui::IsItemHovered();
+    ImVec2 mousePositionAbsolute = ImGui::GetMousePos();
+    ImVec2 screenPositionAbsolute = ImGui::GetItemRectMin();
+    ImVec2 mousePositionRelative =
+        ImVec2((mousePositionAbsolute.x - screenPositionAbsolute.x) / scale,
+               (mousePositionAbsolute.y - screenPositionAbsolute.y) / scale);
+
     ImGui::End();
 
     ImGui::Begin("Text");
+    ImGui::Text("Is mouse over SVG? %s", isHovered ? "Yes" : "No");
+    ImGui::Text("Position: %f, %f", mousePositionRelative.x, mousePositionRelative.y);
+    ImGui::Text("Mouse clicked: %s", ImGui::IsMouseDown(ImGuiMouseButton_Left) ? "Yes" : "No");
+
     {
       static ImGuiInputTextFlags flags = 0;
       svgChanged = ImGui::InputTextMultiline(
