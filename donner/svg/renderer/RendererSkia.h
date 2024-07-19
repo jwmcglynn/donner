@@ -37,6 +37,8 @@ public:
   int width() const { return bitmap_.width(); }
   int height() const { return bitmap_.height(); }
 
+  const SkBitmap& bitmap() const { return bitmap_; }
+
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
 private:

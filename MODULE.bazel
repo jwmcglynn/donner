@@ -16,6 +16,8 @@ new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 # Build dependencies
+bazel_dep(name = "apple_support", version = "1.16.0", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
+
 bazel_dep(name = "rules_cc", version = "0.0.9")
 bazel_dep(name = "bazel_skylib", version = "1.7.1")
 bazel_dep(name = "platforms", version = "0.0.10")
@@ -149,4 +151,30 @@ git_override(
     module_name = "bloaty",
     remote = "https://github.com/jwmcglynn/bloaty",
     commit = "1fe6c78dd0d78980f12402d159ab1b8fe5813ad8",
+)
+
+#
+# SVG Viewer
+#
+
+bazel_dep(name = "imgui", version = "0.0.0", dev_dependency = True)
+git_override(
+    module_name = "imgui",
+    remote = "https://github.com/ocornut/imgui",
+    commit = "126569ad5b3a2c5329cc8ee914dd5b2075f4dd50",
+    patches = [
+        "//third_party/patches:imgui_bazel_build_files.patch",
+    ],
+    patch_strip = 1,
+)
+
+bazel_dep(name = "glfw", version = "0.0.0", dev_dependency = True)
+git_override(
+    module_name = "glfw",
+    remote = "https://github.com/glfw/glfw",
+    commit = "b35641f4a3c62aa86a0b3c983d163bc0fe36026d",
+    patches = [
+        "//third_party/patches:glfw_bazel_build_files.patch",
+    ],
+    patch_strip = 1,
 )

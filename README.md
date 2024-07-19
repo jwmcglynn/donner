@@ -102,6 +102,16 @@ const bool success = renderer.save("output.png");
 
 Detailed docs: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)
 
+## API Demo 3: Interactive SVG Viewer using ImGui
+
+```sh
+bazel run --run_under="cd $PWD &&" //examples:svg_viewer -- <filename>
+```
+
+This example demonstrates how to create an interactive SVG viewer using ImGui. The viewer allows you to load and display SVG files, and interact with SVG elements using ImGui.
+
+Detailed docs: [svg_viewer.cc](https://jwmcglynn.github.io/donner/svg_viewer_8cc-example.html)
+
 ## Documentation
 
 - [Getting started](https://jwmcglynn.github.io/donner/GettingStarted.html)

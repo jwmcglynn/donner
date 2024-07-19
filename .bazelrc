@@ -3,6 +3,7 @@
 ##
 ## Options:
 ## 
+##   --config=latest_llvm       - Build with LLVM toolchain (downloads automatically)
 ##   --config=debug             - Build debug with configs set to simplify debugging.
 ##   --config=binary-size       - Build optimized build and symbols for binary size analysis.
 ##   --config=macos-binary-size - Same as above but with additional flags for macOS.

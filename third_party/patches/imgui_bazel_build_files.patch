@@ -1,0 +1,69 @@
+Subject: [PATCH] Add bazel build files
+Base-commit: 126569ad5b3a2c5329cc8ee914dd5b2075f4dd50
+
+---
+ BUILD.bazel  | 37 +++++++++++++++++++++++++++++++++++++
+ MODULE.bazel | 12 ++++++++++++
+ 2 files changed, 49 insertions(+)
+ create mode 100644 BUILD.bazel
+ create mode 100644 MODULE.bazel
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+new file mode 100644
+index 00000000..80ef632a
+--- /dev/null
++++ b/BUILD.bazel
+@@ -0,0 +1,37 @@
++""" Builds imgui.
++"""
++
++load("@rules_cc//cc:defs.bzl", "cc_library")
++
++package(default_visibility = ["//visibility:public"])
++
++cc_library(
++    name = "imgui",
++    srcs = [
++        "backends/imgui_impl_glfw.cpp",
++        "backends/imgui_impl_opengl3.cpp",
++        "imconfig.h",
++        "imgui.cpp",
++        "imgui_draw.cpp",
++        "imgui_internal.h",
++        "imgui_tables.cpp",
++        "imgui_widgets.cpp",
++        "imstb_rectpack.h",
++        "imstb_textedit.h",
++        "imstb_truetype.h",
++        "misc/cpp/imgui_stdlib.cpp",
++        "misc/cpp/imgui_stdlib.h",
++    ],
++    hdrs = [
++        "backends/imgui_impl_glfw.h",
++        "backends/imgui_impl_opengl3.h",
++        "backends/imgui_impl_opengl3_loader.h",
++        "imgui.h",
++    ],
++    defines = ["IMGUI_ENABLE_OSX_DEFAULT_CLIPBOARD_FUNCTIONS"],
++    includes = ["backends"],
++    visibility = ["//visibility:public"],
++    deps = [
++        "@glfw",
++    ],
++)
+diff --git a/MODULE.bazel b/MODULE.bazel
+new file mode 100644
+index 00000000..4c85d76a
+--- /dev/null
++++ b/MODULE.bazel
+@@ -0,0 +1,8 @@
++module(
++    name = "imgui",
++    version = "0.0.0",
++)
++
++bazel_dep(name = "rules_cc", version = "0.0.9")
++bazel_dep(name = "platforms", version = "0.0.10")
++bazel_dep(name = "glfw", version = "0.0.0")
+-- 
+2.39.3 (Apple Git-146)
