@@ -25,15 +25,6 @@ public:
                                              std::vector<parser::ParseError>* outWarnings);
 
   /**
-   * Updates \ref LayoutSystem with computed style information, creating \ref
-   * ComputedSizedElementComponent for the given entity.
-   *
-   * @param handle Entity handle to compute the style for
-   * @param outWarnings Containing any warnings found
-   */
-  void applyStyleToLayout(EntityHandle handle, std::vector<parser::ParseError>* outWarnings);
-
-  /**
    * Computes the style for all entities in the registry.
    *
    * @param registry Registry to compute the styles, used to query for all entities in the tree.

@@ -231,13 +231,4 @@ void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> e
   }
 }
 
-void StyleSystem::applyStyleToLayout(EntityHandle handle,
-                                     std::vector<parser::ParseError>* outWarnings) {
-  auto& style = handle.get<ComputedStyleComponent>();
-  computePropertiesInto(handle, style, outWarnings);
-
-  LayoutSystem().createComputedSizedElementComponentWithStyle(handle, style, FontMetrics(),
-                                                              outWarnings);
-}
-
 }  // namespace donner::svg::components
