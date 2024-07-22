@@ -1,5 +1,6 @@
 #include "donner/svg/components/style/StyleSystem.h"
 
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/components/AttributesComponent.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/DocumentContext.h"
@@ -12,7 +13,6 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/registry/Registry.h"
-#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::svg::components {
 
@@ -194,9 +194,6 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
   // Note that this may override the viewbox specified if we're the rootEntity above.
   if (auto* viewboxComponent = handle.try_get<ViewboxComponent>()) {
-    // If there's a viewbox, we need to resolve units with the parent viewbox.
-    computedStyle.properties->resolveUnits(computedStyle.viewbox.value(), FontMetrics());
-
     if (viewboxComponent->viewbox) {
       computedStyle.viewbox = viewboxComponent->viewbox.value();
     } else if (handle.all_of<SizedElementComponent>()) {
@@ -208,10 +205,6 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
                                                                       FontMetrics(), outWarnings);
       computedStyle.viewbox = computedSizedElement.bounds;
     }
-  } else {
-    // Convert properties to relative transforms.
-    // TODO: Set font metrics from properties.
-    computedStyle.properties->resolveUnits(computedStyle.viewbox.value(), FontMetrics());
   }
 }
 

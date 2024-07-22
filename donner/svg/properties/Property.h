@@ -381,21 +381,6 @@ struct Property {
   }
 
   /**
-   * Convert the units of this property to pixel-relative values, if it contains a value which is
-   * relative such as a font- or viewport-relative length.
-   *
-   * @param viewbox The viewbox to use for resolving relative lengths.
-   * @param fontMetrics The font metrics to use for resolving relative lengths.
-   */
-  void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
-    if constexpr (std::is_same_v<Lengthd, Type>) {
-      if (value) {
-        value = Lengthd(value->toPixels(viewbox, fontMetrics), Lengthd::Unit::Px);
-      }
-    }
-  }
-
-  /**
    * @return true if the property has any value set, including CSS built-in values.
    */
   bool hasValue() const { return state != PropertyState::NotSet; }

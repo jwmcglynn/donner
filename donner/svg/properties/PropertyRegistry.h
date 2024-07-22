@@ -175,16 +175,6 @@ public:
       PropertyInheritOptions options = PropertyInheritOptions::All) const;
 
   /**
-   * Calls \ref Property::resolveUnits for each property in the registry, which converts the units
-   * of this property to pixel-relative values, if it contains a value which is relative such as a
-   * font- or viewport-relative length.
-   *
-   * @param viewbox The viewbox to use for resolving relative lengths.
-   * @param fontMetrics The font metrics to use for resolving relative lengths.
-   */
-  void resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics);
-
-  /**
    * Parse a single declaration, adding it to the property registry.
    *
    * @param declaration Declaration to parse.

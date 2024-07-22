@@ -634,12 +634,6 @@ PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = def
   return result;
 }
 
-void PropertyRegistry::resolveUnits(const Boxd& viewbox, const FontMetrics& fontMetrics) {
-  std::apply([&viewbox, &fontMetrics](
-                 auto&&... property) { (property.resolveUnits(viewbox, fontMetrics), ...); },
-             std::tuple(allPropertiesMutable()));
-}
-
 std::optional<parser::ParseError> PropertyRegistry::parseProperty(
     const css::Declaration& declaration, css::Specificity specificity) {
   const frozen::string frozenName(declaration.name);
