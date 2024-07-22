@@ -53,15 +53,6 @@ For a real-world example, here is how the `ViewboxComponent` is created for SVG 
 struct ViewboxComponent {
   /// Stored viewbox, if any.
   std::optional<Boxd> viewbox;
-
-  /**
-   * Computes the transform for the given Viewbox per
-   * https://www.w3.org/TR/SVG2/coords.html#ComputingAViewportsTransform
-   *
-   * @param size The position and size of the element.
-   * @param preserveAspectRatio The preserveAspectRatio property.
-   */
-  Transformd computeTransform(Boxd size, PreserveAspectRatio preserveAspectRatio) const;
 };
 ```
 

@@ -94,8 +94,8 @@ public:
    * @return Transformd Transformation from the parent's coordinate system into the sized element's
    * coordinate system.
    */
-  Transformd computeTransform(EntityHandle handle,
-                              const ComputedSizedElementComponent& computedSizedElement) const;
+  Transformd computeSizedElementTransform(
+      EntityHandle handle, const ComputedSizedElementComponent& computedSizedElement) const;
 
   /// @}
 

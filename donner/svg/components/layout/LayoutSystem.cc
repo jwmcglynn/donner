@@ -186,7 +186,7 @@ Vector2i LayoutSystem::calculateViewportScaledDocumentSize(EntityHandle entity,
   return RoundSize(transform.transformPosition(documentSize));
 }
 
-Transformd LayoutSystem::computeTransform(
+Transformd LayoutSystem::computeSizedElementTransform(
     EntityHandle handle, const ComputedSizedElementComponent& computedSizedElement) const {
   const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(handle);
 

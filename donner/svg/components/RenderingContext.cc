@@ -99,7 +99,8 @@ public:
         return;
       }
 
-      transform = LayoutSystem().computeTransform(dataHandle, *sizedElement) * transform;
+      transform =
+          LayoutSystem().computeSizedElementTransform(dataHandle, *sizedElement) * transform;
 
       if (auto maybeClipRect = LayoutSystem().clipRect(dataHandle)) {
         ++layerDepth;
