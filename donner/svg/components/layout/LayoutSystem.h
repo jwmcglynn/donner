@@ -5,6 +5,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
+#include "donner/svg/components/TransformComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/registry/Registry.h"
@@ -20,7 +21,7 @@ namespace donner::svg::components {
  */
 class LayoutSystem {
 public:
-  /// Controls the behavior of \ref LayoutSystem::calculateViewportScaledDocumentSize for invalid
+  /// Controls the behavior of \ref LayoutSystem::calculateCanvasScaledDocumentSize for invalid
   /// sizes.
   enum class InvalidSizeBehavior {
     ZeroSize,       //!< Return a size of 0x0.
@@ -30,17 +31,53 @@ public:
   /// @name Regular properties
   /// @{
 
+  /**
+   * Calculate the intrinsic aspect ratio per
+   * https://svgwg.org/svg2-draft/coords.html#SizingSVGInCSS, which defines how content is scaled to
+   * fit the viewport. This may return std::nullopt if the aspect ratio is not defined.
+   *
+   * @param entity Current entity.
+   */
   std::optional<float> intrinsicAspectRatio(EntityHandle entity) const;
-  Vector2i calculateDocumentSize(EntityHandle entity) const;
 
-  Vector2i calculateViewportScaledDocumentSize(EntityHandle entity,
-                                               InvalidSizeBehavior behavior) const;
+  /**
+   * Calculate the document size of the current entity. This is the size of the document viewport
+   * (the area that the SVG content is rendered into).
+   *
+   * @param registry ECS registry
+   */
+  Vector2i calculateDocumentSize(Registry& registry) const;
+
+  /**
+   * Get the viewport affecting the current entity. This may be the viewport of a viewport-defining
+   * parent element or the document viewport.
+   *
+   * @param entity Current entity.
+   */
+  Boxd getViewport(EntityHandle entity);
+
+  /**
+   * Get the document size scaled to fit the canvas.
+   *
+   * @param registry ECS registry
+   * @param behavior Controls the behavior when the document size is invalid, either returning a
+   * default size or empty box.
+   */
+  Vector2i calculateCanvasScaledDocumentSize(Registry& registry,
+                                             InvalidSizeBehavior behavior) const;
 
   /// @}
 
   /// @name Computed properties
   /// @{
 
+  /**
+   * Create all computed components, such as \ref ComputedViewboxComponent and \ref
+   * ComputedSizedElementComponent.
+   *
+   * @param registry ECS registry.
+   * @param outWarnings Output vector of parse errors, if any.
+   */
   void instantiateAllComputedComponents(Registry& registry,
                                         std::vector<parser::ParseError>* outWarnings);
 
@@ -73,6 +110,19 @@ public:
    */
   const ComputedSizedElementComponent& createComputedSizedElementComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, FontMetrics fontMetrics,
+      std::vector<parser::ParseError>* outWarnings);
+
+  /**
+   * Creates a \ref ComputedTransformComponent for the linked entity, using precomputed style
+   * information.
+   *
+   * @param entity Entity handle.
+   * @param style Precomputed style information for this element
+   * @param fontMetrics Font metrics, used to scale lengths
+   * @param outWarnings Output vector of parse errors, if any.
+   */
+  const ComputedTransformComponent& createComputedTransformComponentWithStyle(
+      EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
       std::vector<parser::ParseError>* outWarnings);
 
   /**
@@ -112,7 +162,13 @@ private:
   Boxd calculateSizedElementBounds(EntityHandle entity, const SizedElementProperties& properties,
                                    const Boxd& inheritedViewbox, FontMetrics fontMetrics);
 
-  Vector2d calculateRawDocumentSize(EntityHandle handle) const;
+  /**
+   * Get the document size scaled to fit the canvas, as a floating-point number without rounding.
+   * This is called internally by \ref calculateDocumentSize.
+   *
+   * @param registry ECS registry
+   */
+  Vector2d calculateRawDocumentSize(Registry& registry) const;
 };
 
 }  // namespace donner::svg::components

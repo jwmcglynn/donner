@@ -1,12 +1,13 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
-    name = "sized_element_component",
+    name = "components",
     hdrs = [
         "SizedElementComponent.h",
+        "ViewboxComponent.h",
     ],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
         "//donner/svg/properties",
@@ -25,10 +26,11 @@ cc_library(
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
-        ":sized_element_component",
+        ":components",
         "//donner/svg/components:components_core",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/registry",
     ],
 )

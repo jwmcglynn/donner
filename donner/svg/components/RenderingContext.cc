@@ -416,8 +416,6 @@ void RenderingContext::createComputedComponents(std::vector<parser::ParseError>*
 
   LayoutSystem().instantiateAllComputedComponents(registry_, outWarnings);
 
-  ComputeAllTransforms(registry_, outWarnings);
-
   ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 
   PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);

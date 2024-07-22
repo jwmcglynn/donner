@@ -2,9 +2,9 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/EllipseComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
-#include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg {
 
@@ -76,19 +76,15 @@ Lengthd SVGEllipseElement::computedCy() const {
 Lengthd SVGEllipseElement::computedRx() const {
   compute();
 
-  const components::ComputedStyleComponent& style =
-      handle_.get<components::ComputedStyleComponent>();
   return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRx(
-      style.viewbox.value(), FontMetrics()));
+      components::LayoutSystem().getViewport(handle_), FontMetrics()));
 }
 
 Lengthd SVGEllipseElement::computedRy() const {
   compute();
 
-  const components::ComputedStyleComponent& style =
-      handle_.get_or_emplace<components::ComputedStyleComponent>();
   return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRy(
-      style.viewbox.value(), FontMetrics()));
+      components::LayoutSystem().getViewport(handle_), FontMetrics()));
 }
 
 void SVGEllipseElement::invalidate() const {

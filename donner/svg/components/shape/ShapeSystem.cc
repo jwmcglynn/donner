@@ -2,6 +2,7 @@
 
 #include <concepts>
 
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -155,12 +156,13 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
       circle.properties, style.properties->unparsedProperties, outWarnings);
 
-  const Vector2d center(computedCircle.properties.cx.getRequired().toPixels(
-                            style.viewbox.value(), fontMetrics, Lengthd::Extent::X),
-                        computedCircle.properties.cy.getRequired().toPixels(
-                            style.viewbox.value(), fontMetrics, Lengthd::Extent::Y));
-  const double radius =
-      computedCircle.properties.r.getRequired().toPixels(style.viewbox.value(), fontMetrics);
+  const Boxd viewport = LayoutSystem().getViewport(handle);
+
+  const Vector2d center(computedCircle.properties.cx.getRequired().toPixels(viewport, fontMetrics,
+                                                                            Lengthd::Extent::X),
+                        computedCircle.properties.cy.getRequired().toPixels(viewport, fontMetrics,
+                                                                            Lengthd::Extent::Y));
+  const double radius = computedCircle.properties.r.getRequired().toPixels(viewport, fontMetrics);
 
   if (radius > 0.0) {
     return &handle.emplace_or_replace<ComputedPathComponent>(
@@ -176,12 +178,13 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedEllipseComponent& computedEllipse = handle.get_or_emplace<ComputedEllipseComponent>(
       ellipse.properties, style.properties->unparsedProperties, outWarnings);
 
+  const Boxd viewport = LayoutSystem().getViewport(handle);
+
   const Vector2d center(
-      computedEllipse.properties.cx.getRequired().toPixels(style.viewbox.value(), fontMetrics),
-      computedEllipse.properties.cy.getRequired().toPixels(style.viewbox.value(), fontMetrics));
-  const Vector2d radius(
-      std::get<1>(computedEllipse.properties.calculateRx(style.viewbox.value(), fontMetrics)),
-      std::get<1>(computedEllipse.properties.calculateRy(style.viewbox.value(), fontMetrics)));
+      computedEllipse.properties.cx.getRequired().toPixels(viewport, fontMetrics),
+      computedEllipse.properties.cy.getRequired().toPixels(viewport, fontMetrics));
+  const Vector2d radius(std::get<1>(computedEllipse.properties.calculateRx(viewport, fontMetrics)),
+                        std::get<1>(computedEllipse.properties.calculateRy(viewport, fontMetrics)));
 
   if (radius.x > 0.0 && radius.y > 0.0) {
     return &handle.emplace_or_replace<ComputedPathComponent>(
@@ -194,10 +197,12 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
-  const Vector2d start(line.x1.toPixels(style.viewbox.value(), fontMetrics),
-                       line.y1.toPixels(style.viewbox.value(), fontMetrics));
-  const Vector2d end(line.x2.toPixels(style.viewbox.value(), fontMetrics),
-                     line.y2.toPixels(style.viewbox.value(), fontMetrics));
+  const Boxd viewport = LayoutSystem().getViewport(handle);
+
+  const Vector2d start(line.x1.toPixels(viewport, fontMetrics),
+                       line.y1.toPixels(viewport, fontMetrics));
+  const Vector2d end(line.x2.toPixels(viewport, fontMetrics),
+                     line.y2.toPixels(viewport, fontMetrics));
 
   return &handle.emplace_or_replace<ComputedPathComponent>(
       PathSpline::Builder().moveTo(start).lineTo(end).build());
@@ -267,26 +272,25 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(
       rect.properties, style.properties->unparsedProperties, outWarnings);
 
-  const Vector2d pos(computedRect.properties.x.getRequired().toPixels(
-                         style.viewbox.value(), fontMetrics, Lengthd::Extent::X),
-                     computedRect.properties.y.getRequired().toPixels(
-                         style.viewbox.value(), fontMetrics, Lengthd::Extent::Y));
-  const Vector2d size(computedRect.properties.width.getRequired().toPixels(
-                          style.viewbox.value(), fontMetrics, Lengthd::Extent::X),
-                      computedRect.properties.height.getRequired().toPixels(
-                          style.viewbox.value(), fontMetrics, Lengthd::Extent::Y));
+  const Boxd viewport = LayoutSystem().getViewport(handle);
+
+  const Vector2d pos(
+      computedRect.properties.x.getRequired().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+      computedRect.properties.y.getRequired().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const Vector2d size(computedRect.properties.width.getRequired().toPixels(viewport, fontMetrics,
+                                                                           Lengthd::Extent::X),
+                      computedRect.properties.height.getRequired().toPixels(viewport, fontMetrics,
+                                                                            Lengthd::Extent::Y));
 
   if (size.x > 0.0 && size.y > 0.0) {
     if (computedRect.properties.rx.hasValue() || computedRect.properties.ry.hasValue()) {
       // 4/3 * (1 - cos(45 deg) / sin(45 deg) = 4/3 * (sqrt 2) - 1
       const double arcMagic = 0.5522847498;
       const Vector2d radius(
-          Clamp(
-              std::get<1>(computedRect.properties.calculateRx(style.viewbox.value(), fontMetrics)),
-              0.0, size.x * 0.5),
-          Clamp(
-              std::get<1>(computedRect.properties.calculateRy(style.viewbox.value(), fontMetrics)),
-              0.0, size.y * 0.5));
+          Clamp(std::get<1>(computedRect.properties.calculateRx(viewport, fontMetrics)), 0.0,
+                size.x * 0.5),
+          Clamp(std::get<1>(computedRect.properties.calculateRy(viewport, fontMetrics)), 0.0,
+                size.y * 0.5));
 
       // Success: Draw a rect with rounded corners.
       return &handle.emplace_or_replace<ComputedPathComponent>(

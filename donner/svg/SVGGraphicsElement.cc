@@ -1,6 +1,7 @@
 #include "donner/svg/SVGGraphicsElement.h"
 
 #include "donner/svg/components/TransformComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/style/StyleSystem.h"
 
 namespace donner::svg {
@@ -22,8 +23,7 @@ void SVGGraphicsElement::invalidateTransform() {
 }
 
 void SVGGraphicsElement::computeTransform() const {
-  auto& transform = handle_.get_or_emplace<components::TransformComponent>();
-  transform.computeWithPrecomputedStyle(
+  components::LayoutSystem().createComputedTransformComponentWithStyle(
       handle_, components::StyleSystem().computeStyle(handle_, nullptr), FontMetrics(), nullptr);
 }
 

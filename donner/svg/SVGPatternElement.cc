@@ -4,10 +4,11 @@
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/TransformComponent.h"
-#include "donner/svg/components/ViewboxComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
-#include "donner/svg/components/style/StyleComponent.h"
+#include "donner/svg/components/style/StyleComponent.h"  // DoNotInheritFillOrStrokeTag
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
@@ -141,8 +142,7 @@ void SVGPatternElement::invalidateTransform() {
 }
 
 void SVGPatternElement::computeTransform() const {
-  auto& transform = handle_.get_or_emplace<components::TransformComponent>();
-  transform.computeWithPrecomputedStyle(
+  components::LayoutSystem().createComputedTransformComponentWithStyle(
       handle_, components::StyleSystem().computeStyle(handle_, nullptr), FontMetrics(), nullptr);
 }
 

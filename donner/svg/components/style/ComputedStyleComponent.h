@@ -8,7 +8,6 @@ namespace donner::svg::components {
 
 struct ComputedStyleComponent {
   std::optional<PropertyRegistry> properties;
-  std::optional<Boxd> viewbox;
 };
 
 }  // namespace donner::svg::components

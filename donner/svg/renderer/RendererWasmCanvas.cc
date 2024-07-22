@@ -7,7 +7,6 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/TransformComponent.h"
 #include "donner/svg/components/TreeComponent.h"
-#include "donner/svg/components/ViewboxComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -63,9 +62,9 @@ public:
       if (instance.visible) {
         if (const auto* path =
                 instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-          drawPath(instance.dataHandle(registry), instance, *path,
-                   styleComponent.properties.value(), styleComponent.viewbox.value(),
-                   FontMetrics());
+          drawPath(
+              instance.dataHandle(registry), instance, *path, styleComponent.properties.value(),
+              components::LayoutSystem().getViewport(instance.dataHandle(registry)), FontMetrics());
         }
       }
     }
@@ -128,9 +127,8 @@ void RendererWasmCanvas::draw(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
-      EntityHandle(registry, rootEntity),
-      components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
+      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 
   canvas_.setSize(renderingSize);
 

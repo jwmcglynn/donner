@@ -2,8 +2,8 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
-#include "donner/svg/components/ViewboxComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/ViewboxComponent.h"
 
 namespace donner::svg {
 

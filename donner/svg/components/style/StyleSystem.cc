@@ -3,12 +3,9 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/components/AttributesComponent.h"
 #include "donner/svg/components/ClassComponent.h"
-#include "donner/svg/components/DocumentContext.h"
+#include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/TreeComponent.h"
-#include "donner/svg/components/ViewboxComponent.h"
-#include "donner/svg/components/layout/LayoutSystem.h"
-#include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
@@ -174,37 +171,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
     computedStyle.properties =
         properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
-    computedStyle.viewbox = parentStyleComponent.viewbox;
   } else {
     computedStyle.properties = properties;
-  }
-
-  // If we don't have a parent, inherit the one from the root entity (which may also be this
-  // entity).
-  if (!computedStyle.viewbox) {
-    const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
-    const Vector2i documentSize = LayoutSystem().calculateViewportScaledDocumentSize(
-        EntityHandle(registry, rootEntity), LayoutSystem::InvalidSizeBehavior::ZeroSize);
-    computedStyle.viewbox = Boxd(Vector2d::Zero(), documentSize);
-  }
-
-  // If the viewbox is not set at this point, this is an error, since it means that we didn't
-  // traverse through an SVG element.
-  assert(computedStyle.viewbox.has_value());
-
-  // Note that this may override the viewbox specified if we're the rootEntity above.
-  if (auto* viewboxComponent = handle.try_get<ViewboxComponent>()) {
-    if (viewboxComponent->viewbox) {
-      computedStyle.viewbox = viewboxComponent->viewbox.value();
-    } else if (handle.all_of<SizedElementComponent>()) {
-      // TODO: This is a strange dependency inversion, where ComputedStyleComponent depends on
-      // SizedElementComponent which depends on ComputedStyleComponent to calculate the viewbox.
-      // Split the computed viewbox into a different component?
-      const ComputedSizedElementComponent& computedSizedElement =
-          LayoutSystem().createComputedSizedElementComponentWithStyle(handle, computedStyle,
-                                                                      FontMetrics(), outWarnings);
-      computedStyle.viewbox = computedSizedElement.bounds;
-    }
   }
 }
 

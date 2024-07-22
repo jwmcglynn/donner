@@ -1,6 +1,7 @@
 #include "donner/svg/SVGGradientElement.h"
 
 #include "donner/svg/components/TransformComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -10,8 +11,7 @@ namespace donner::svg {
 namespace {
 
 void computeTransform(EntityHandle handle) {
-  auto& transform = handle.get_or_emplace<components::TransformComponent>();
-  transform.computeWithPrecomputedStyle(
+  components::LayoutSystem().createComputedTransformComponentWithStyle(
       handle, components::StyleSystem().computeStyle(handle, nullptr), FontMetrics(), nullptr);
 }
 

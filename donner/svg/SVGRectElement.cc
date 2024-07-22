@@ -2,10 +2,10 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
-#include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg {
 
@@ -111,19 +111,15 @@ Lengthd SVGRectElement::computedHeight() const {
 Lengthd SVGRectElement::computedRx() const {
   compute();
 
-  const components::ComputedStyleComponent& style =
-      handle_.get<components::ComputedStyleComponent>();
   return std::get<0>(handle_.get<components::ComputedRectComponent>().properties.calculateRx(
-      style.viewbox.value(), FontMetrics()));
+      components::LayoutSystem().getViewport(handle_), FontMetrics()));
 }
 
 Lengthd SVGRectElement::computedRy() const {
   compute();
 
-  const components::ComputedStyleComponent& style =
-      handle_.get_or_emplace<components::ComputedStyleComponent>();
   return std::get<0>(handle_.get<components::ComputedRectComponent>().properties.calculateRy(
-      style.viewbox.value(), FontMetrics()));
+      components::LayoutSystem().getViewport(handle_), FontMetrics()));
 }
 
 std::optional<PathSpline> SVGRectElement::computedSpline() const {

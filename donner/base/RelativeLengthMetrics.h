@@ -8,7 +8,7 @@ namespace donner {
  * https://www.w3.org/TR/css-values/#font-relative-lengths.
  */
 struct FontMetrics {
-  // This matches the define font size of Chrome.
+  // This matches the default font size of Chrome.
   double fontSize = 16.0f;      //!< "em" measurement.
   double rootFontSize = 16.0f;  //!< The font-size of the root element, "rem".
   double exUnitInEm = 0.5f;     //!< x-height measurement.

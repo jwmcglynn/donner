@@ -3,8 +3,8 @@
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/TreeComponent.h"
-#include "donner/svg/components/ViewboxComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
@@ -191,7 +191,7 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
   // evaluate to userUnits.
   const Boxd tileViewbox = (computedPattern.patternUnits == PatternUnits::ObjectBoundingBox)
                                ? Boxd(Vector2d(), Vector2d(1.0, 1.0))
-                               : style.viewbox.value();
+                               : LayoutSystem().getViewport(handle);
 
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
       handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,

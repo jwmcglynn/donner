@@ -38,6 +38,7 @@ cc_library(
     deps = [
         ":components",
         "//donner/svg/components:components_core",
+        "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:style_system",
         "//donner/svg/registry",

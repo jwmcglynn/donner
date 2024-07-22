@@ -18,7 +18,6 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/TransformComponent.h"
 #include "donner/svg/components/TreeComponent.h"
-#include "donner/svg/components/ViewboxComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -269,9 +268,9 @@ public:
       if (instance.visible) {
         if (const auto* path =
                 instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-          drawPath(instance.dataHandle(registry), instance, *path,
-                   styleComponent.properties.value(), styleComponent.viewbox.value(),
-                   FontMetrics());
+          drawPath(
+              instance.dataHandle(registry), instance, *path, styleComponent.properties.value(),
+              components::LayoutSystem().getViewport(instance.dataHandle(registry)), FontMetrics());
         }
       }
 
@@ -800,9 +799,8 @@ void RendererSkia::draw(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
-      EntityHandle(registry, rootEntity),
-      components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
+      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 
   bitmap_.allocPixels(
       SkImageInfo::MakeN32(renderingSize.x, renderingSize.y, SkAlphaType::kUnpremul_SkAlphaType));
@@ -822,9 +820,8 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
-      EntityHandle(registry, rootEntity),
-      components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
+      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 
   assert(renderingSize.x <= 64 && renderingSize.y <= 64 &&
          "Rendering size must be less than or equal to 64x64");
@@ -871,9 +868,8 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = components::LayoutSystem().calculateViewportScaledDocumentSize(
-      EntityHandle(registry, rootEntity),
-      components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
+      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 
   SkPictureRecorder recorder;
   rootCanvas_ = recorder.beginRecording(toSkia(Boxd::WithSize(renderingSize)));

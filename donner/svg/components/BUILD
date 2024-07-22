@@ -35,7 +35,6 @@ cc_library(
     name = "components_core",
     srcs = [
         "StylesheetComponent.cc",
-        "TransformComponent.cc",
         "TreeComponent.cc",
     ],
     hdrs = [
@@ -48,7 +47,6 @@ cc_library(
         "RenderingInstanceComponent.h",
         "StylesheetComponent.h",
         "TreeComponent.h",
-        "ViewboxComponent.h",
     ],
     visibility = [
         "//donner/css:__pkg__",
@@ -58,7 +56,7 @@ cc_library(
         ":document_context",
         ":transform_component",
         "//donner/base/xml",
-        "//donner/svg/components/layout:sized_element_component",
+        "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
         "//donner/svg/parser",

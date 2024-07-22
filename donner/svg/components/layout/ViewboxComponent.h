@@ -18,4 +18,12 @@ struct ViewboxComponent {
   std::optional<Boxd> viewbox;
 };
 
+/**
+ * Computed value of a viewbox for the current element. If this element does not define a viewbox,
+ * this is the viewbox of the nearest ancestor or the document itself.
+ */
+struct ComputedViewboxComponent {
+  Boxd viewbox;  //!< The viewbox of the element, or the viewbox of the nearest ancestor.
+};
+
 }  // namespace donner::svg::components

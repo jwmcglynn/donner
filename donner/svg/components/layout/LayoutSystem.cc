@@ -5,12 +5,16 @@
 
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
-#include "donner/svg/components/ViewboxComponent.h"
+#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
+#include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
+#include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
@@ -152,14 +156,71 @@ std::optional<float> LayoutSystem::intrinsicAspectRatio(EntityHandle entity) con
   return std::nullopt;
 }
 
-Vector2i LayoutSystem::calculateDocumentSize(EntityHandle entity) const {
-  return RoundSize(calculateRawDocumentSize(entity));
+Vector2i LayoutSystem::calculateDocumentSize(Registry& registry) const {
+  return RoundSize(calculateRawDocumentSize(registry));
 }
 
-Vector2i LayoutSystem::calculateViewportScaledDocumentSize(EntityHandle entity,
-                                                           InvalidSizeBehavior behavior) const {
-  const Vector2d documentSize = calculateDocumentSize(entity);
-  const DocumentContext& ctx = entity.registry()->ctx().get<DocumentContext>();
+Boxd LayoutSystem::getViewport(EntityHandle entity) {
+  if (const auto* computedViewbox = entity.try_get<ComputedViewboxComponent>()) {
+    return computedViewbox->viewbox;
+  }
+
+  Registry& registry = *entity.registry();
+  SmallVector<Entity, 8> parents;
+
+  // Traverse up through the parent list until we find the root or a previously computed viewbox.
+  for (Entity parent = entity; parent != entt::null;
+       parent = registry.get<TreeComponent>(parent).parent()) {
+    parents.push_back(parent);
+    if (registry.any_of<ComputedViewboxComponent>(parent)) {
+      break;
+    }
+  }
+
+  // Now the parents list has parents in order from nearest -> root
+  // Iterate from the end of the list to the start and cascade the viewbox.
+  const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
+
+  std::optional<Boxd> viewbox;
+
+  while (!parents.empty()) {
+    Entity current = parents[parents.size() - 1];
+    parents.pop_back();
+
+    if (const auto* viewboxComponent = registry.try_get<ComputedViewboxComponent>(current)) {
+      viewbox = viewboxComponent->viewbox;
+    } else {
+      if (const auto* newViewbox = registry.try_get<ViewboxComponent>(current)) {
+        if (newViewbox->viewbox) {
+          viewbox = newViewbox->viewbox.value();
+        } else if (current != rootEntity && registry.all_of<SizedElementComponent>(current)) {
+          const EntityHandle handle(registry, current);
+          const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(handle, nullptr);
+
+          const ComputedSizedElementComponent& computedSizedElement =
+              createComputedSizedElementComponentWithStyle(handle, computedStyle, FontMetrics(),
+                                                           nullptr);
+          viewbox = computedSizedElement.bounds;
+        }
+      }
+
+      if (!viewbox) {
+        const Vector2i documentSize = calculateCanvasScaledDocumentSize(
+            registry, LayoutSystem::InvalidSizeBehavior::ZeroSize);
+        viewbox = Boxd(Vector2d::Zero(), documentSize);
+      }
+
+      registry.emplace<ComputedViewboxComponent>(current, viewbox.value());
+    }
+  }
+
+  return viewbox.value();
+}
+
+Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
+                                                         InvalidSizeBehavior behavior) const {
+  const Vector2d documentSize = calculateDocumentSize(registry);
+  const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
 
   std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
   if (documentSize.x <= 0.0 || documentSize.y <= 0.0) {
@@ -208,6 +269,18 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
     createComputedSizedElementComponentWithStyle(EntityHandle(registry, entity), style,
                                                  FontMetrics(), outWarnings);
   }
+
+  // Create placeholder ComputedTransformComponents for all elements in the tree.
+  for (auto entity : registry.view<TransformComponent>()) {
+    std::ignore = registry.get_or_emplace<ComputedTransformComponent>(entity);
+  }
+
+  for (auto view = registry.view<TransformComponent, ComputedStyleComponent>();
+       auto entity : view) {
+    auto [transform, style] = view.get(entity);
+    createComputedTransformComponentWithStyle(EntityHandle(registry, entity), style, FontMetrics(),
+                                              outWarnings);
+  }
 }
 
 // Evaluates SizedElementProperties and returns the resulting bounds.
@@ -229,10 +302,59 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
     std::vector<parser::ParseError>* outWarnings) {
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
+  const Entity parent = entity.get<TreeComponent>().parent();
+  const Boxd viewport = parent != entt::null ? getViewport(EntityHandle(*entity.registry(), parent))
+                                             : getViewport(entity);
+
   const Boxd bounds =
       computeSizeProperties(entity, sizedElement.properties, style.properties->unparsedProperties,
-                            style.viewbox.value(), fontMetrics, outWarnings);
-  return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, style.viewbox.value());
+                            viewport, fontMetrics, outWarnings);
+  return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, viewport);
+}
+
+const ComputedTransformComponent& LayoutSystem::createComputedTransformComponentWithStyle(
+    EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
+    std::vector<parser::ParseError>* outWarnings) {
+  TransformComponent& transform = handle.get<TransformComponent>();
+
+  // TODO: This should avoid recomputing the transform each request.
+  const auto& properties = style.properties->unparsedProperties;
+  if (auto it = properties.find("transform"); it != properties.end()) {
+    const parser::UnparsedProperty& property = it->second;
+
+    parser::PropertyParseFnParams params;
+    params.valueOrComponents = property.declaration.values;
+    params.specificity = property.specificity;
+    params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
+
+    auto maybeError = Parse(
+        params,
+        [](const parser::PropertyParseFnParams& params) {
+          if (const std::string_view* str =
+                  std::get_if<std::string_view>(&params.valueOrComponents)) {
+            return parser::TransformParser::Parse(*str).map<CssTransform>(
+                [](const Transformd& transform) { return CssTransform(transform); });
+          } else {
+            return parser::CssTransformParser::Parse(params.components());
+          }
+        },
+        &transform.transform);
+
+    if (maybeError && outWarnings) {
+      outWarnings->emplace_back(std::move(maybeError.value()));
+    }
+  }
+
+  auto& computedTransform = handle.get_or_emplace<ComputedTransformComponent>();
+  if (transform.transform.get()) {
+    computedTransform.rawCssTransform = transform.transform.get().value();
+    computedTransform.transform =
+        transform.transform.get().value().compute(getViewport(handle), fontMetrics);
+  } else {
+    computedTransform.transform = Transformd();
+  }
+
+  return computedTransform;
 }
 
 std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
@@ -259,7 +381,7 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
     if (ctx.rootEntity == entity.entity()) {
       // This is the root <svg> element.
       const Vector2i documentSize =
-          calculateViewportScaledDocumentSize(entity, InvalidSizeBehavior::ZeroSize);
+          calculateCanvasScaledDocumentSize(registry, InvalidSizeBehavior::ZeroSize);
       return Boxd(Vector2d(), documentSize);
     }
   }
@@ -288,9 +410,10 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
   return Boxd(origin, origin + size);
 }
 
-Vector2d LayoutSystem::calculateRawDocumentSize(EntityHandle entity) const {
-  const SizedElementProperties& properties = entity.get<SizedElementComponent>().properties;
-  const DocumentContext& ctx = entity.registry()->ctx().get<DocumentContext>();
+Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
+  const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
+  const EntityHandle root(registry, ctx.rootEntity);
+  const SizedElementProperties& properties = root.get<SizedElementComponent>().properties;
 
   const std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
   const Boxd canvasMaxBounds = Boxd::WithSize(
@@ -302,23 +425,22 @@ Vector2d LayoutSystem::calculateRawDocumentSize(EntityHandle entity) const {
   // Determine the document size based on the CSS Default Sizing Algorithm:
   // https://www.w3.org/TR/css-images-3/#default-sizing-algorithm
 
-  // > If the specified size is a definite width and height, the concrete object size is given
-  // that > width and height.
+  // > If the specified size is a definite width and height, the concrete object size is given that
+  // > width and height.
   if (definiteWidth && definiteHeight) {
     return Vector2d(GetDefiniteSize(properties.width), GetDefiniteSize(properties.height));
   }
 
-  const PreserveAspectRatio preserveAspectRatio =
-      GetPreserveAspectRatio(EntityHandle(*entity.registry(), ctx.rootEntity));
+  const PreserveAspectRatio preserveAspectRatio = GetPreserveAspectRatio(root);
 
-  // > If the specified size is only a width or height (but not both) then the concrete object
-  // size > is given that specified width or height.
+  // > If the specified size is only a width or height (but not both) then the concrete object size
+  // > is given that specified width or height.
   if (definiteWidth || definiteHeight) {
     // > The other dimension is calculated as follows:
 
-    // > 1. If the object has a natural aspect ratio, the missing dimension of the concrete
-    // object > size is calculated using that aspect ratio and the present dimension.
-    if (const auto maybeAspectRatio = intrinsicAspectRatio(entity);
+    // > 1. If the object has a natural aspect ratio, the missing dimension of the concrete object
+    // > size is calculated using that aspect ratio and the present dimension.
+    if (const auto maybeAspectRatio = intrinsicAspectRatio(root);
         maybeAspectRatio && preserveAspectRatio != PreserveAspectRatio::None()) {
       if (!definiteWidth) {
         const double height = GetDefiniteSize(properties.height);
@@ -329,11 +451,11 @@ Vector2d LayoutSystem::calculateRawDocumentSize(EntityHandle entity) const {
       }
     }
 
-    // TODO: What are the objects "natural dimensions" for "2. Otherwise, if the missing
-    // dimension > is present in the object’s natural dimensions"
+    // TODO: What are the objects "natural dimensions" for "2. Otherwise, if the missing dimension
+    // is present in the object’s natural dimensions"
 
-    // > 3. Otherwise, the missing dimension of the concrete object size is taken from the
-    // default > object size.
+    // > 3. Otherwise, the missing dimension of the concrete object size is taken from the default
+    // > object size.
     // TODO: PreserveAspectRatio
 
     if (!definiteWidth) {
@@ -347,7 +469,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(EntityHandle entity) const {
   // TODO: Skipping "1. If the object has a natural height or width, its size is resolved as if
   // its natural dimensions were given as the specified size." > 2. Otherwise, its size is
   // resolved as a contain constraint against the default object size.
-  const ViewboxComponent& viewbox = entity.registry()->get<ViewboxComponent>(ctx.rootEntity);
+  const ViewboxComponent& viewbox = root.get<ViewboxComponent>();
   if (!viewbox.viewbox) {
     return maybeCanvasSize.value_or(Vector2i(kDefaultWidth, kDefaultHeight));
   }
