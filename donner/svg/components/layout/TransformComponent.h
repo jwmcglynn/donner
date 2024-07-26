@@ -9,7 +9,7 @@ namespace donner::svg::components {
 
 struct ComputedStyleComponent;
 
-struct ComputedTransformComponent {
+struct ComputedLocalTransformComponent {
   Transformd transform;
   CssTransform rawCssTransform;
 };

@@ -4,13 +4,14 @@ cc_library(
     name = "components",
     hdrs = [
         "SizedElementComponent.h",
+        "TransformComponent.h",
         "ViewboxComponent.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",
     ],
     deps = [
-        "//donner/svg/properties",
+        "//donner/svg/properties:property",
     ],
 )
 

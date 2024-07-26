@@ -285,16 +285,16 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
                                                  FontMetrics(), outWarnings);
   }
 
-  // Create placeholder ComputedTransformComponents for all elements in the tree.
+  // Create placeholder ComputedLocalTransformComponents for all elements in the tree.
   for (auto entity : registry.view<TransformComponent>()) {
-    std::ignore = registry.get_or_emplace<ComputedTransformComponent>(entity);
+    std::ignore = registry.get_or_emplace<ComputedLocalTransformComponent>(entity);
   }
 
   for (auto view = registry.view<TransformComponent, ComputedStyleComponent>();
        auto entity : view) {
     auto [transform, style] = view.get(entity);
-    createComputedTransformComponentWithStyle(EntityHandle(registry, entity), style, FontMetrics(),
-                                              outWarnings);
+    createComputedLocalTransformComponentWithStyle(EntityHandle(registry, entity), style,
+                                                   FontMetrics(), outWarnings);
   }
 
   // Now traverse the tree from the root down and compute values that inherit from the parent.
@@ -352,7 +352,7 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
   return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, viewport);
 }
 
-const ComputedTransformComponent& LayoutSystem::createComputedTransformComponentWithStyle(
+const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransformComponentWithStyle(
     EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
     std::vector<parser::ParseError>* outWarnings) {
   TransformComponent& transform = handle.get<TransformComponent>();
@@ -385,16 +385,16 @@ const ComputedTransformComponent& LayoutSystem::createComputedTransformComponent
     }
   }
 
-  auto& computedTransform = handle.get_or_emplace<ComputedTransformComponent>();
+  auto& ComputedLocalTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
   if (transform.transform.get()) {
-    computedTransform.rawCssTransform = transform.transform.get().value();
-    computedTransform.transform =
+    ComputedLocalTransform.rawCssTransform = transform.transform.get().value();
+    ComputedLocalTransform.transform =
         transform.transform.get().value().compute(getViewport(handle), fontMetrics);
   } else {
-    computedTransform.transform = Transformd();
+    ComputedLocalTransform.transform = Transformd();
   }
 
-  return computedTransform;
+  return ComputedLocalTransform;
 }
 
 std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {

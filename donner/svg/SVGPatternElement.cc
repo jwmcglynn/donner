@@ -3,8 +3,8 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
-#include "donner/svg/components/TransformComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
@@ -72,7 +72,7 @@ PatternContentUnits SVGPatternElement::patternContentUnits() const {
 
 Transformd SVGPatternElement::patternTransform() const {
   computeTransform();
-  return handle_.get<components::ComputedTransformComponent>().transform;
+  return handle_.get<components::ComputedLocalTransformComponent>().transform;
 }
 
 std::optional<RcString> SVGPatternElement::href() const {
@@ -138,11 +138,11 @@ void SVGPatternElement::setHref(const std::optional<RcStringOrRef>& value) {
 }
 
 void SVGPatternElement::invalidateTransform() {
-  handle_.remove<components::ComputedTransformComponent>();
+  handle_.remove<components::ComputedLocalTransformComponent>();
 }
 
 void SVGPatternElement::computeTransform() const {
-  components::LayoutSystem().createComputedTransformComponentWithStyle(
+  components::LayoutSystem().createComputedLocalTransformComponentWithStyle(
       handle_, components::StyleSystem().computeStyle(handle_, nullptr), FontMetrics(), nullptr);
 }
 

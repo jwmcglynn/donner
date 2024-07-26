@@ -4,11 +4,11 @@
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/TransformComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
@@ -108,7 +108,8 @@ public:
       }
     }
 
-    if (const auto* tc = dataHandle.try_get<ComputedTransformComponent>(); tc && appliesTransform) {
+    if (const auto* tc = dataHandle.try_get<ComputedLocalTransformComponent>();
+        tc && appliesTransform) {
       transform = tc->transform * transform;
     }
 

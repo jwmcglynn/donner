@@ -4,8 +4,6 @@
 #include <optional>
 
 #include "donner/base/Box.h"
-#include "donner/base/Transform.h"
-#include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg::components {
 

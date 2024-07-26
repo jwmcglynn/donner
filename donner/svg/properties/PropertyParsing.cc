@@ -1,7 +1,7 @@
 #include "donner/svg/properties/PropertyParsing.h"
 
 #include "donner/css/parser/ValueParser.h"
-#include "donner/svg/components/TransformComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/parser/TransformParser.h"

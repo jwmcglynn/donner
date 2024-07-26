@@ -1,19 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
-    name = "transform_component",
-    hdrs = [
-        "TransformComponent.h",
-    ],
-    visibility = [
-        "//donner/svg:__subpackages__",
-    ],
-    deps = [
-        "//donner/base",
-    ],
-)
-
-cc_library(
     name = "document_context",
     srcs = [
         "DocumentContext.cc",
@@ -54,7 +41,6 @@ cc_library(
     ],
     deps = [
         ":document_context",
-        ":transform_component",
         "//donner/base/xml",
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",

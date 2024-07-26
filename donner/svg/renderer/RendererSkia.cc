@@ -16,12 +16,12 @@
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/TransformComponent.h"
 #include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -230,7 +230,7 @@ public:
           }
 
           if (auto* computedTransform =
-                  ref.reference.handle.try_get<components::ComputedTransformComponent>()) {
+                  ref.reference.handle.try_get<components::ComputedLocalTransformComponent>()) {
             clipPathTransform *= computedTransform->transform;
           }
 
@@ -346,8 +346,9 @@ public:
     return (point - center).lengthSquared() <= radius * radius;
   }
 
-  Transformd ResolveTransform(const components::ComputedTransformComponent* maybeTransformComponent,
-                              const Boxd& viewbox, const FontMetrics& fontMetrics) {
+  Transformd ResolveTransform(
+      const components::ComputedLocalTransformComponent* maybeTransformComponent,
+      const Boxd& viewbox, const FontMetrics& fontMetrics) {
     if (maybeTransformComponent) {
       return maybeTransformComponent->rawCssTransform.compute(viewbox, fontMetrics);
     } else {
@@ -363,7 +364,8 @@ public:
     const bool objectBoundingBox =
         computedGradient.gradientUnits == GradientUnits::ObjectBoundingBox;
 
-    const auto* maybeTransformComponent = target.try_get<components::ComputedTransformComponent>();
+    const auto* maybeTransformComponent =
+        target.try_get<components::ComputedLocalTransformComponent>();
 
     bool numbersArePercent = false;
     Transformd transform;
@@ -533,7 +535,8 @@ public:
     const bool patternContentObjectBoundingBox =
         computedPattern.patternContentUnits == PatternContentUnits::ObjectBoundingBox;
 
-    const auto* maybeTransformComponent = target.try_get<components::ComputedTransformComponent>();
+    const auto* maybeTransformComponent =
+        target.try_get<components::ComputedLocalTransformComponent>();
 
     Transformd patternTransform;
     Transformd contentRootTransform;

@@ -5,8 +5,8 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
-#include "donner/svg/components/TransformComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/registry/Registry.h"
 
@@ -113,7 +113,7 @@ public:
       std::vector<parser::ParseError>* outWarnings);
 
   /**
-   * Creates a \ref ComputedTransformComponent for the linked entity, using precomputed style
+   * Creates a \ref ComputedLocalTransformComponent for the linked entity, using precomputed style
    * information.
    *
    * @param entity Entity handle.
@@ -121,7 +121,7 @@ public:
    * @param fontMetrics Font metrics, used to scale lengths
    * @param outWarnings Output vector of parse errors, if any.
    */
-  const ComputedTransformComponent& createComputedTransformComponentWithStyle(
+  const ComputedLocalTransformComponent& createComputedLocalTransformComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
       std::vector<parser::ParseError>* outWarnings);
 
