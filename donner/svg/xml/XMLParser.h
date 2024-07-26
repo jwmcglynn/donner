@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <istream>
 #include <span>
 
@@ -64,8 +65,6 @@ public:
      * ```
      * XMLParser::InputBuffer svgSource("<svg>...</svg>");
      * auto result = XMLParser::ParseSVG(svgSource);
-     * // - or -
-     * auto result = XMLParser::ParseSVG("<svg>...</svg>");
      * ```
      *
      * @param str String to read from.

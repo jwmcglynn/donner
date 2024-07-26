@@ -128,6 +128,37 @@ double GetDefiniteSize(const Property<T, kCascade>& property) {
   return property.getRequired().toPixels(Boxd::CreateEmpty(Vector2d()), FontMetrics());
 }
 
+Boxd GetViewboxInternal(Registry& registry, Entity rootEntity, std::optional<Boxd> parentViewbox,
+                        Entity currentEntity) {
+  if (const auto* viewboxComponent = registry.try_get<ComputedViewboxComponent>(currentEntity)) {
+    return viewboxComponent->viewbox;
+  } else {
+    if (const auto* newViewbox = registry.try_get<ViewboxComponent>(currentEntity)) {
+      if (newViewbox->viewbox) {
+        return newViewbox->viewbox.value();
+      } else if (currentEntity != rootEntity &&
+                 registry.all_of<SizedElementComponent>(currentEntity)) {
+        const EntityHandle handle(registry, currentEntity);
+        const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(handle, nullptr);
+
+        const ComputedSizedElementComponent& computedSizedElement =
+            LayoutSystem().createComputedSizedElementComponentWithStyle(handle, computedStyle,
+                                                                        FontMetrics(), nullptr);
+        return computedSizedElement.bounds;
+      }
+    }
+
+    if (parentViewbox) {
+      return parentViewbox.value();
+    } else {
+      // No viewbox found, use the document size.
+      const Vector2i documentSize = LayoutSystem().calculateCanvasScaledDocumentSize(
+          registry, LayoutSystem::InvalidSizeBehavior::ZeroSize);
+      return Boxd(Vector2d::Zero(), documentSize);
+    }
+  }
+}
+
 }  // namespace
 
 std::optional<float> LayoutSystem::intrinsicAspectRatio(EntityHandle entity) const {
@@ -168,53 +199,37 @@ Boxd LayoutSystem::getViewport(EntityHandle entity) {
   Registry& registry = *entity.registry();
   SmallVector<Entity, 8> parents;
 
+  std::optional<Boxd> parentViewbox;
+
   // Traverse up through the parent list until we find the root or a previously computed viewbox.
   for (Entity parent = entity; parent != entt::null;
        parent = registry.get<TreeComponent>(parent).parent()) {
-    parents.push_back(parent);
-    if (registry.any_of<ComputedViewboxComponent>(parent)) {
+    if (const auto* computedViewbox = registry.try_get<ComputedViewboxComponent>(parent)) {
+      parentViewbox = computedViewbox->viewbox;
       break;
     }
+
+    parents.push_back(parent);
   }
+
+  assert(!parents.empty());
 
   // Now the parents list has parents in order from nearest -> root
   // Iterate from the end of the list to the start and cascade the viewbox.
   const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
 
-  std::optional<Boxd> viewbox;
-
   while (!parents.empty()) {
-    Entity current = parents[parents.size() - 1];
+    Entity currentEntity = parents[parents.size() - 1];
     parents.pop_back();
 
-    if (const auto* viewboxComponent = registry.try_get<ComputedViewboxComponent>(current)) {
-      viewbox = viewboxComponent->viewbox;
-    } else {
-      if (const auto* newViewbox = registry.try_get<ViewboxComponent>(current)) {
-        if (newViewbox->viewbox) {
-          viewbox = newViewbox->viewbox.value();
-        } else if (current != rootEntity && registry.all_of<SizedElementComponent>(current)) {
-          const EntityHandle handle(registry, current);
-          const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(handle, nullptr);
+    const Boxd currentViewbox =
+        GetViewboxInternal(registry, rootEntity, parentViewbox, currentEntity);
+    registry.emplace<ComputedViewboxComponent>(currentEntity, currentViewbox);
 
-          const ComputedSizedElementComponent& computedSizedElement =
-              createComputedSizedElementComponentWithStyle(handle, computedStyle, FontMetrics(),
-                                                           nullptr);
-          viewbox = computedSizedElement.bounds;
-        }
-      }
-
-      if (!viewbox) {
-        const Vector2i documentSize = calculateCanvasScaledDocumentSize(
-            registry, LayoutSystem::InvalidSizeBehavior::ZeroSize);
-        viewbox = Boxd(Vector2d::Zero(), documentSize);
-      }
-
-      registry.emplace<ComputedViewboxComponent>(current, viewbox.value());
-    }
+    parentViewbox = currentViewbox;
   }
 
-  return viewbox.value();
+  return parentViewbox.value();
 }
 
 Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
@@ -280,6 +295,31 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
     auto [transform, style] = view.get(entity);
     createComputedTransformComponentWithStyle(EntityHandle(registry, entity), style, FontMetrics(),
                                               outWarnings);
+  }
+
+  // Now traverse the tree from the root down and compute values that inherit from the parent.
+  struct ElementContext {
+    Entity entity;
+    std::optional<Boxd> parentViewbox;
+  };
+
+  const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
+
+  SmallVector<ElementContext, 16> stack;
+  stack.push_back(ElementContext{rootEntity, std::nullopt});
+
+  while (!stack.empty()) {
+    ElementContext current = stack[stack.size() - 1];
+    stack.pop_back();
+
+    const Boxd currentViewbox =
+        GetViewboxInternal(registry, rootEntity, current.parentViewbox, current.entity);
+    registry.emplace_or_replace<ComputedViewboxComponent>(current.entity, currentViewbox);
+
+    for (Entity child = registry.get<TreeComponent>(current.entity).firstChild();
+         child != entt::null; child = registry.get<TreeComponent>(child).nextSibling()) {
+      stack.push_back(ElementContext{child, currentViewbox});
+    }
   }
 }
 

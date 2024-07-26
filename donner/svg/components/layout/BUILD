@@ -34,3 +34,17 @@ cc_library(
         "//donner/svg/registry",
     ],
 )
+
+cc_test(
+    name = "layout_system_tests",
+    srcs = [
+        "tests/LayoutSystem_tests.cc",
+    ],
+    deps = [
+        ":layout_system",
+        "//donner/base:base_test_utils",
+        "//donner/base/parser:parser_test_utils",
+        "//donner/svg/xml",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
