@@ -231,7 +231,7 @@ public:
 
           if (auto* computedTransform =
                   ref.reference.handle.try_get<components::ComputedLocalTransformComponent>()) {
-            clipPathTransform *= computedTransform->transform;
+            clipPathTransform *= computedTransform->entityFromParent;
           }
 
           renderer_.currentCanvas_->save();

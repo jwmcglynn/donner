@@ -37,7 +37,7 @@ GradientUnits SVGGradientElement::gradientUnits() const {
 
 Transformd SVGGradientElement::gradientTransform() const {
   computeTransform(handle_);
-  return handle_.get<components::ComputedLocalTransformComponent>().transform;
+  return handle_.get<components::ComputedLocalTransformComponent>().entityFromParent;
 }
 
 GradientSpreadMethod SVGGradientElement::spreadMethod() const {

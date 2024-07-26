@@ -110,7 +110,7 @@ public:
 
     if (const auto* tc = dataHandle.try_get<ComputedLocalTransformComponent>();
         tc && appliesTransform) {
-      transform = tc->transform * transform;
+      transform = tc->entityFromParent * transform;
     }
 
     RenderingInstanceComponent& instance =

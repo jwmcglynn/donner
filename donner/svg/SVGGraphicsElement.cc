@@ -10,7 +10,7 @@ SVGGraphicsElement::SVGGraphicsElement(EntityHandle handle) : SVGElement(handle)
 
 Transformd SVGGraphicsElement::transform() const {
   computeTransform();
-  return handle_.get<components::ComputedLocalTransformComponent>().transform;
+  return handle_.get<components::ComputedLocalTransformComponent>().entityFromParent;
 }
 
 void SVGGraphicsElement::setTransform(const Transformd& transform) {

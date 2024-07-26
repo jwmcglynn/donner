@@ -72,7 +72,7 @@ PatternContentUnits SVGPatternElement::patternContentUnits() const {
 
 Transformd SVGPatternElement::patternTransform() const {
   computeTransform();
-  return handle_.get<components::ComputedLocalTransformComponent>().transform;
+  return handle_.get<components::ComputedLocalTransformComponent>().entityFromParent;
 }
 
 std::optional<RcString> SVGPatternElement::href() const {

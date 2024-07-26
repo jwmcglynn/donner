@@ -385,16 +385,16 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
     }
   }
 
-  auto& ComputedLocalTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
+  auto& computedTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
   if (transform.transform.get()) {
-    ComputedLocalTransform.rawCssTransform = transform.transform.get().value();
-    ComputedLocalTransform.transform =
+    computedTransform.rawCssTransform = transform.transform.get().value();
+    computedTransform.entityFromParent =
         transform.transform.get().value().compute(getViewport(handle), fontMetrics);
   } else {
-    ComputedLocalTransform.transform = Transformd();
+    computedTransform.entityFromParent = Transformd();
   }
 
-  return ComputedLocalTransform;
+  return computedTransform;
 }
 
 std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
