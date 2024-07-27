@@ -7,8 +7,6 @@
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/xml/XMLParser.h"
 
-using testing::ElementsAre;
-using testing::ElementsAreArray;
 using testing::Optional;
 
 namespace donner::svg {
@@ -75,6 +73,7 @@ TEST(SVGDocument, QuerySelector) {
     EXPECT_THAT(document.querySelector("rect"), Optional(ElementIdEq("rect1")));
     EXPECT_THAT(document.querySelector("#rect2"), Optional(ElementIdEq("rect2")));
     EXPECT_THAT(document.querySelector("svg > :nth-child(2)"), Optional(ElementIdEq("rect2")));
+    EXPECT_THAT(document.querySelector("does-not-exist"), testing::Eq(std::nullopt));
   }
 }
 

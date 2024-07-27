@@ -214,6 +214,7 @@ TEST_F(SVGElementTests, QuerySelector) {
     EXPECT_THAT(element.querySelector("rect"), Optional(ElementIdEq("rect1")));
     EXPECT_THAT(element.querySelector("#rect2"), Optional(ElementIdEq("rect2")));
     EXPECT_THAT(element.querySelector("svg > :nth-child(2)"), Optional(ElementIdEq("rect2")));
+    EXPECT_THAT(element.querySelector("does-not-exist"), testing::Eq(std::nullopt));
   }
 
   // Validate `:scope`
