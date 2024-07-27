@@ -26,7 +26,7 @@ static std::optional<SVGElement> querySelectorSearch(const css::Selector& select
 
   ElementTraversalGenerator<SVGElement> elements = allChildrenRecursiveGenerator(element);
   while (elements.next()) {
-    const SVGElement childElement = elements.getValue();
+    SVGElement childElement = elements.getValue();
     if (selector.matches(childElement, options).matched) {
       return childElement;
     }

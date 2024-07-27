@@ -63,9 +63,33 @@ public:
   void useAutomaticCanvasSize();
 
   /**
+   * Get the current canvas size, or the default size (512x512) if the canvas size has not been
+   * explicitly set.
+   */
+  Vector2i canvasSize();
+
+  /**
    * Returns true if the two SVGDocument handles reference the same underlying document.
    */
   bool operator==(const SVGDocument& other) const;
+
+  /**
+   * Find the first element in the tree that matches the given CSS selector.
+   *
+   * ```
+   * auto element = document.querySelector("#elementId");
+   * ```
+   *
+   * Complex selectors are supported:
+   * ```
+   * auto element = document.querySelector("svg > g:nth-child(2) > rect");
+   * ```
+   *
+   * @param selector CSS selector to match.
+   * @return The first matching element, or `std::nullopt` if no element matches.
+   */
+
+  std::optional<SVGElement> querySelector(std::string_view selector);
 
 private:
   /// Owned reference to the registry, which contains all information about the loaded document.

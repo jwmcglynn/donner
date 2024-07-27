@@ -127,8 +127,7 @@ void RendererWasmCanvas::draw(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
-      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = document.canvasSize();
 
   canvas_.setSize(renderingSize);
 

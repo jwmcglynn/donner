@@ -802,8 +802,7 @@ void RendererSkia::draw(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
-      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = document.canvasSize();
 
   bitmap_.allocPixels(
       SkImageInfo::MakeN32(renderingSize.x, renderingSize.y, SkAlphaType::kUnpremul_SkAlphaType));
@@ -823,8 +822,7 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
-  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
-      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  const Vector2i renderingSize = document.canvasSize();
 
   assert(renderingSize.x <= 64 && renderingSize.y <= 64 &&
          "Rendering size must be less than or equal to 64x64");

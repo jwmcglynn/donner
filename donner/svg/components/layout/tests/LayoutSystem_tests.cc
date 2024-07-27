@@ -11,7 +11,7 @@ namespace donner::svg::components {
 
 class LayoutSystemTest : public ::testing::Test {
 protected:
-  SVGDocument ParseSVG(const std::string& input) {
+  SVGDocument ParseSVG(std::string_view input) {
     parser::XMLParser::InputBuffer inputBuffer(input);
     auto maybeResult = parser::XMLParser::ParseSVG(inputBuffer);
     EXPECT_THAT(maybeResult, base::parser::NoParseError());
@@ -49,8 +49,8 @@ TEST_F(LayoutSystemTest, ViewportNestedSvg) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(EntityHandle(
-                  document.registry(), document.svgElement().querySelector("#nested")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(
+                  EntityHandle(document.registry(), document.querySelector("#nested")->entity())),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -62,8 +62,8 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(EntityHandle(
-                  document.registry(), document.svgElement().querySelector("#nested")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(
+                  EntityHandle(document.registry(), document.querySelector("#nested")->entity())),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -74,8 +74,8 @@ TEST_F(LayoutSystemTest, ViewportPattern) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(EntityHandle(
-                  document.registry(), document.svgElement().querySelector("pattern")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(
+                  EntityHandle(document.registry(), document.querySelector("pattern")->entity())),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -87,8 +87,8 @@ TEST_F(LayoutSystemTest, ViewportPatternWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(EntityHandle(
-                  document.registry(), document.svgElement().querySelector("pattern")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(
+                  EntityHandle(document.registry(), document.querySelector("pattern")->entity())),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
@@ -100,8 +100,8 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
     </svg>
   )-");
 
-  auto groupEntity = document.svgElement().querySelector("#group1")->entity();
-  auto rectEntity = document.svgElement().querySelector("#rect1")->entity();
+  auto groupEntity = document.querySelector("#group1")->entity();
+  auto rectEntity = document.querySelector("#rect1")->entity();
 
   // Test getting the transform for the group
   Transformd groupTransform =
@@ -128,7 +128,7 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransformWithScale) {
     </svg>
   )");
 
-  auto rectEntity = document.svgElement().querySelector("#rect1")->entity();
+  auto rectEntity = document.querySelector("#rect1")->entity();
 
   // Set a transform with scale and translation
   Transformd scaleTransform = Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0});

@@ -60,7 +60,7 @@ TEST(XmlParser, Attributes) {
 
     EXPECT_THAT(warnings, ElementsAre());
 
-    const SVGElement rect = documentResult.result().svgElement().querySelector("rect").value();
+    const SVGElement rect = documentResult.result().querySelector("rect").value();
 
     EXPECT_THAT(rect.getAttribute("stroke"), testing::Optional(RcString("red")));
     EXPECT_THAT(rect.getAttribute("user-attribute"), testing::Optional(RcString("value")));
@@ -80,7 +80,7 @@ TEST(XmlParser, Attributes) {
                 ElementsAre(ParseWarningIs(
                     2, 37, "Unknown attribute 'user-attribute' (disableUserAttributes: true)")));
 
-    const SVGElement rect = documentResult.result().svgElement().querySelector("rect").value();
+    const SVGElement rect = documentResult.result().querySelector("rect").value();
 
     EXPECT_THAT(rect.getAttribute("stroke"), testing::Optional(RcString("red")));
     EXPECT_THAT(rect.getAttribute("user-attribute"), testing::Eq(std::nullopt));

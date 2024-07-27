@@ -5,16 +5,20 @@
 
 #include <deque>
 
+#include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DocumentContext.h"
+#include "donner/svg/xml/XMLParser.h"
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 using testing::Optional;
 
 namespace donner::svg {
+
+namespace {
 
 class SVGElementTests : public testing::Test {
 protected:
@@ -51,8 +55,21 @@ protected:
     return result;
   }
 
+  SVGDocument parseSVG(std::string_view input) {
+    parser::XMLParser::InputBuffer inputBuffer(input);
+    auto maybeResult = parser::XMLParser::ParseSVG(inputBuffer);
+    EXPECT_THAT(maybeResult, base::parser::NoParseError());
+    return std::move(maybeResult).result();
+  }
+
   SVGDocument document_;
 };
+
+MATCHER_P(ElementIdEq, id, "") {
+  return arg.id() == id;
+}
+
+}  // namespace
 
 TEST_F(SVGElementTests, Equality) {
   SVGElement element1 = create();
@@ -181,6 +198,47 @@ TEST_F(SVGElementTests, Transform) {
   element.setStyle("transform: translate(1px, 2px)");
 
   EXPECT_THAT(element.transform(), TransformIs(1, 0, 0, 1, 1, 2));
+}
+
+TEST_F(SVGElementTests, QuerySelector) {
+  {
+    auto document = parseSVG(R"(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <rect id="rect1" x="10" y="10" width="100" height="100" />
+        <rect id="rect2" x="10" y="10" width="100" height="100" />
+      </svg>
+    )");
+
+    auto element = document.svgElement();
+
+    EXPECT_THAT(element.querySelector("rect"), Optional(ElementIdEq("rect1")));
+    EXPECT_THAT(element.querySelector("#rect2"), Optional(ElementIdEq("rect2")));
+    EXPECT_THAT(element.querySelector("svg > :nth-child(2)"), Optional(ElementIdEq("rect2")));
+  }
+
+  // Validate `:scope`
+  {
+    auto document = parseSVG(R"(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <rect id="rect1" x="10" y="10" width="100" height="100" />
+        <rect id="rect2" x="10" y="10" width="100" height="100" />
+        <g>
+          <rect id="rect3" x="10" y="10" width="100" height="100" />
+          <rect id="rect4" x="10" y="10" width="100" height="100" />
+        </g>
+      </svg>
+    )");
+
+    auto svgElement = document.svgElement();
+    auto gElement = svgElement.querySelector("g");
+    ASSERT_THAT(gElement, testing::Ne(std::nullopt));
+
+    auto gScopeResult = gElement->querySelector(":scope > rect");
+    EXPECT_THAT(gScopeResult, Optional(ElementIdEq("rect3")));
+
+    auto svgScopeResult = svgElement.querySelector(":scope > rect");
+    EXPECT_THAT(svgScopeResult, Optional(ElementIdEq("rect1")));
+  }
 }
 
 }  // namespace donner::svg

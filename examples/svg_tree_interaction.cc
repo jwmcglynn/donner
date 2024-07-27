@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
   // querySelector supports standard CSS selectors, anything that's valid when defining a CSS rule
   // works here too, for example querySelector("svg > path[fill='blue']") is also valid and will
   // match the same element.
-  std::optional<donner::svg::SVGElement> maybePath = document.svgElement().querySelector("path");
+  std::optional<donner::svg::SVGElement> maybePath = document.querySelector("path");
   UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
 
   // The result of querySelector is a generic SVGElement, but we know it's a path, so we can cast

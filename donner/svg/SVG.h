@@ -41,7 +41,7 @@ namespace donner {
  * ```
  * SVGDocument document = std::move(maybeResult.result());
  *
- * if (auto myPath = document.svgElement().querySelector("#myPath")) {
+ * if (auto myPath = document.querySelector("#myPath")) {
  *   std::cout << "Found #myPath" << std::endl;
  *   myPath->setStyle("fill: red");
  *   myPath->setStyle("stroke: white");

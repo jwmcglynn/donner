@@ -5,9 +5,9 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/registry/Registry.h"
-#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::base::parser {
 
@@ -303,11 +303,12 @@ public:
    * Find the first element in the tree that matches the given CSS selector.
    *
    * ```
-   * auto rect = document.querySelector("g.my-group > rect");
+   * auto element = document.svgElement().querySelector("#elementId");
    * ```
    *
+   * To find things relative to the current element, use `:scope`:
    * ```
-   * auto element = document.querySelector("#elementId");
+   * auto rectInElement = element.querySelector(":scope > rect");
    * ```
    *
    * @param selector CSS selector to match.

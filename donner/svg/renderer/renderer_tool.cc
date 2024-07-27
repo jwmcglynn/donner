@@ -136,7 +136,7 @@ extern "C" int main(int argc, char* argv[]) {
     DumpTree(document.svgElement(), 0);
   }
 
-  if (auto path1 = document.svgElement().querySelector("#path1")) {
+  if (auto path1 = document.querySelector("#path1")) {
     std::cout << "Found path1\n";
     path1->setStyle("fill: red");
     path1->setStyle("stroke: white");

@@ -6,6 +6,7 @@ cc_test(
         "ElementStyle_tests.cc",
         "SVGCircleElement_tests.cc",
         "SVGClipPathElement_tests.cc",
+        "SVGDocument_tests.cc",
         "SVGElement_tests.cc",
         "SVGEllipseElement_tests.cc",
         "SVGFilterElement_tests.cc",
@@ -18,6 +19,7 @@ cc_test(
     deps = [
         ":xml_test_utils",
         "//donner/base:base_test_utils",
+        "//donner/base/parser:parser_test_utils",
         "//donner/svg",
         "//donner/svg/core:core_test_utils",
         "//donner/svg/renderer/tests:renderer_test_utils",
