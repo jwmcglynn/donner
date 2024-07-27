@@ -258,10 +258,6 @@ public:
    * @param value The href value to set.
    */
   void setHref(const std::optional<RcStringOrRef>& value);
-
-protected:
-  void invalidateTransform();
-  void computeTransform() const;
 };
 
 }  // namespace donner::svg

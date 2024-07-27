@@ -4,12 +4,10 @@
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
-#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"  // DoNotInheritFillOrStrokeTag
-#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg {
@@ -71,8 +69,7 @@ PatternContentUnits SVGPatternElement::patternContentUnits() const {
 }
 
 Transformd SVGPatternElement::patternTransform() const {
-  computeTransform();
-  return handle_.get<components::ComputedLocalTransformComponent>().entityFromParent;
+  return components::LayoutSystem().getEntityFromParentTranform(handle_);
 }
 
 std::optional<RcString> SVGPatternElement::href() const {
@@ -122,8 +119,7 @@ void SVGPatternElement::setPatternContentUnits(PatternContentUnits value) {
 }
 
 void SVGPatternElement::setPatternTransform(Transformd transform) {
-  auto& component = handle_.get_or_emplace<components::TransformComponent>();
-  component.transform.set(CssTransform(transform), css::Specificity::Override());
+  components::LayoutSystem().setEntityFromParentTransform(handle_, transform);
 }
 
 void SVGPatternElement::setHref(const std::optional<RcStringOrRef>& value) {
@@ -135,15 +131,6 @@ void SVGPatternElement::setHref(const std::optional<RcStringOrRef>& value) {
 
   // Force the shadow tree to be regenerated.
   handle_.remove<components::ComputedShadowTreeComponent>();
-}
-
-void SVGPatternElement::invalidateTransform() {
-  handle_.remove<components::ComputedLocalTransformComponent>();
-}
-
-void SVGPatternElement::computeTransform() const {
-  components::LayoutSystem().createComputedLocalTransformComponentWithStyle(
-      handle_, components::StyleSystem().computeStyle(handle_, nullptr), FontMetrics(), nullptr);
 }
 
 }  // namespace donner::svg

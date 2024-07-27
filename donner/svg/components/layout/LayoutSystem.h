@@ -66,6 +66,37 @@ public:
   Vector2i calculateCanvasScaledDocumentSize(Registry& registry,
                                              InvalidSizeBehavior behavior) const;
 
+  /**
+   * Get the entity-from-parent transform for the current entity.
+   *
+   * @param entity Current entity.
+   */
+  Transformd getEntityFromParentTranform(EntityHandle entity);
+
+  /**
+   * Set the entity-from-parent transform for the current entity.
+   *
+   * @param handle Current entity.
+   * @param entityFromParent New transform.
+   */
+  void setEntityFromParentTransform(EntityHandle entity, const Transformd& entityFromParent);
+
+  /**
+   * Get the entity-from-world transform for the current entity, representing the entity position
+   * relative to the world after applying all parent transformations.
+   *
+   * @param entity Current entity.
+   */
+  Transformd getEntityFromWorldTransform(EntityHandle entity);
+
+  /**
+   * Invalidate cached state for the current entity, such as the computed viewport and
+   * entity-from-world transform.
+   *
+   * @param entity Current entity.
+   */
+  void invalidate(EntityHandle entity);
+
   /// @}
 
   /// @name Computed properties

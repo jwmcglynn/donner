@@ -262,6 +262,36 @@ Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
   return RoundSize(transform.transformPosition(documentSize));
 }
 
+Transformd LayoutSystem::getEntityFromParentTranform(EntityHandle entity) {
+  const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, nullptr);
+
+  const ComputedLocalTransformComponent& computedTransform =
+      createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), nullptr);
+
+  return computedTransform.entityFromParent;
+}
+
+void LayoutSystem::setEntityFromParentTransform(EntityHandle entity,
+                                                const Transformd& entityFromParent) {
+  auto& component = entity.get_or_emplace<components::TransformComponent>();
+  component.transform.set(CssTransform(entityFromParent), css::Specificity::Override());
+
+  invalidate(entity);
+}
+
+Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
+  // TODO
+  assert(false && "Not implemented");
+  return Transformd();
+}
+
+void LayoutSystem::invalidate(EntityHandle entity) {
+  entity.remove<components::ComputedLocalTransformComponent>();
+  entity.remove<components::ComputedAbsoluteTransformComponent>();
+  entity.remove<components::ComputedSizedElementComponent>();
+  entity.remove<components::ComputedViewboxComponent>();
+}
+
 Transformd LayoutSystem::computeSizedElementTransform(
     EntityHandle handle, const ComputedSizedElementComponent& computedSizedElement) const {
   const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(handle);
