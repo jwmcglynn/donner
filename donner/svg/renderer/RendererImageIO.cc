@@ -16,7 +16,9 @@ bool RendererImageIO::writeRgbaPixelsToPngFile(const char* filename,
 
   assert(width > 0);
   assert(height > 0);
-  assert(rgbaPixels.size() == width * height * 4);
+  assert(strideInPixels > 0);
+  assert(strideInPixels <= std::numeric_limits<int>::max() / 4);
+  assert(rgbaPixels.size() == static_cast<size_t>(width) * height * 4);
 
   Context context;
   context.output = std::ofstream(filename, std::ofstream::out | std::ofstream::binary);
@@ -26,11 +28,11 @@ bool RendererImageIO::writeRgbaPixelsToPngFile(const char* filename,
 
   stbi_write_png_to_func(
       [](void* context, void* data, int len) {
-        Context* contextObj = reinterpret_cast<Context*>(context);
+        Context* contextObj = static_cast<Context*>(context);
         contextObj->output.write(static_cast<const char*>(data), len);
       },
       &context, width, height, 4, rgbaPixels.data(),
-      /* stride in bytes */ strideInPixels ? strideInPixels * 4 : width * 4);
+      /* stride in bytes */ strideInPixels ? static_cast<int>(strideInPixels * 4) : width * 4);
 
   return context.output.good();
 }
