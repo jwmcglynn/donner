@@ -14,4 +14,8 @@ void SVGGraphicsElement::setTransform(const Transformd& transform) {
   components::LayoutSystem().setEntityFromParentTransform(handle_, transform);
 }
 
+Transformd SVGGraphicsElement::elementFromWorld() const {
+  return components::LayoutSystem().getEntityFromWorldTransform(handle_);
+}
+
 }  // namespace donner::svg

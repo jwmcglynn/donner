@@ -26,7 +26,7 @@ SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
   handle
       .emplace<components::RenderingBehaviorComponent>(
           components::RenderingBehavior::ShadowOnlyChildren)
-      .appliesTransform = false;
+      .inheritsParentTransform = false;
   handle.emplace<components::PatternComponent>();
   handle.emplace<components::DoNotInheritFillOrStrokeTag>();
   handle.emplace<components::ViewboxComponent>();

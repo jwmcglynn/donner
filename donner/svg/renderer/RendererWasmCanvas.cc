@@ -51,7 +51,7 @@ public:
           std::cout << " (shadow " << instance.styleHandle(registry).entity() << ")";
         }
 
-        std::cout << " transform=" << instance.transformCanvasSpace << std::endl;
+        std::cout << " transform=" << instance.entityFromWorldTransform << std::endl;
 
         std::cout << "\n";
       }

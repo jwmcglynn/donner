@@ -8,6 +8,8 @@
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/xml/XMLParser.h"
@@ -198,6 +200,24 @@ TEST_F(SVGElementTests, Transform) {
   element.setStyle("transform: translate(1px, 2px)");
 
   EXPECT_THAT(element.transform(), TransformIs(1, 0, 0, 1, 1, 2));
+}
+
+TEST_F(SVGElementTests, AbsoluteTransform) {
+  auto document = parseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <rect id="rect1" x="10" y="10" width="100" height="100" transform="translate(10 20)" />
+      <g transform="scale(2)">
+        <rect id="rect2" x="10" y="10" width="100" height="100" transform="translate(-10 -20)" />
+      </g>
+    </svg>
+    )-");
+
+  auto rect1 = document.querySelector("#rect1").value().cast<SVGRectElement>();
+  EXPECT_THAT(rect1.elementFromWorld(), TransformEq(Transformd::Translate({10, 20})));
+
+  auto rect2 = document.querySelector("#rect2").value().cast<SVGRectElement>();
+  EXPECT_THAT(rect2.elementFromWorld(),
+              TransformEq(Transformd::Translate({-10, -20}) * Transformd::Scale({2, 2})));
 }
 
 TEST_F(SVGElementTests, QuerySelector) {

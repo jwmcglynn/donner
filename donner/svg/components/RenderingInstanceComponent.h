@@ -49,8 +49,8 @@ struct RenderingInstanceComponent {
   bool isolatedLayer = false;  //!< True if this instance establishes a new rendering layer, such as
                                //!< if there is opacity.
 
-  Transformd
-      transformCanvasSpace;  //!< The canvas-space transform of the element, element-from-canvas.
+  Transformd entityFromWorldTransform;  //!< The canvas-space transform of the element,
+                                        //!< element-from-world.
 
   std::optional<Boxd> clipRect;  //!< The clip rect of the element, if set.
 

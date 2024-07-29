@@ -7,7 +7,7 @@ enum class RenderingBehavior { Default, Nonrenderable, NoTraverseChildren, Shado
 
 struct RenderingBehaviorComponent {
   RenderingBehavior behavior = RenderingBehavior::Default;
-  bool appliesTransform = true;
+  bool inheritsParentTransform = true;
 
   explicit RenderingBehaviorComponent(RenderingBehavior behavior) : behavior(behavior) {}
 };

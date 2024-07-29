@@ -10,8 +10,9 @@ SVGClipPathElement SVGClipPathElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
   EntityHandle handle = CreateEntity(registry, Tag, Type);
   handle.emplace<components::ClipPathComponent>();
-  handle.emplace<components::RenderingBehaviorComponent>(
-      components::RenderingBehavior::Nonrenderable);
+  handle
+      .emplace<components::RenderingBehaviorComponent>(components::RenderingBehavior::Nonrenderable)
+      .inheritsParentTransform = false;
   return SVGClipPathElement(handle);
 }
 

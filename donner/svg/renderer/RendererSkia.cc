@@ -182,7 +182,7 @@ public:
           std::cout << " (shadow " << instance.styleHandle(registry).entity() << ")";
         }
 
-        std::cout << " transform=" << instance.transformCanvasSpace << "\n";
+        std::cout << " transform=" << instance.entityFromWorldTransform << "\n";
 
         std::cout << "\n";
       }
@@ -193,7 +193,7 @@ public:
       }
 
       renderer_.currentCanvas_->setMatrix(
-          toSkia(layerBaseTransform_ * instance.transformCanvasSpace));
+          toSkia(layerBaseTransform_ * instance.entityFromWorldTransform));
 
       const components::ComputedStyleComponent& styleComponent =
           instance.styleHandle(registry).get<components::ComputedStyleComponent>();

@@ -52,7 +52,6 @@ public:
   /**
    * Traverse a tree, instantiating each entity in the tree.
    *
-   * @param transform The parent transform to apply to the entity.
    * @param treeEntity Current entity in the tree or shadow tree.
    * @param lastRenderedEntityIfSubtree Optional, entity of the last rendered element if this is a
    *   subtree.
@@ -60,8 +59,7 @@ public:
    */
   // TODO: Since 'stroke' and 'fill' may reference the same tree, we need to create two instances of
   // it in the render tree.
-  void traverseTree(Transformd transform, Entity treeEntity,
-                    Entity* lastRenderedEntityIfSubtree = nullptr) {
+  void traverseTree(Entity treeEntity, Entity* lastRenderedEntityIfSubtree = nullptr) {
     const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
     const EntityHandle dataHandle(
@@ -70,7 +68,6 @@ public:
     std::optional<Boxd> clipRect;
     int layerDepth = 0;
     std::optional<ContextPaintServers> savedContextPaintServers;
-    bool appliesTransform = true;
 
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable) {
@@ -82,8 +79,6 @@ public:
           traverseChildren = false;
         }
       }
-
-      appliesTransform = behavior->appliesTransform;
     }
 
     const ComputedStyleComponent& styleComponent =
@@ -99,24 +94,17 @@ public:
         return;
       }
 
-      transform =
-          LayoutSystem().computeSizedElementTransform(dataHandle, *sizedElement) * transform;
-
       if (auto maybeClipRect = LayoutSystem().clipRect(dataHandle)) {
         ++layerDepth;
         clipRect = maybeClipRect;
       }
     }
 
-    if (const auto* tc = dataHandle.try_get<ComputedLocalTransformComponent>();
-        tc && appliesTransform) {
-      transform = tc->entityFromParent * transform;
-    }
-
     RenderingInstanceComponent& instance =
         registry_.emplace<RenderingInstanceComponent>(styleEntity);
     instance.drawOrder = drawOrder_++;
-    instance.transformCanvasSpace = transform;
+    instance.entityFromWorldTransform =
+        LayoutSystem().getEntityFromWorldTransform(EntityHandle(registry_, treeEntity));
     instance.clipRect = clipRect;
     instance.dataEntity = dataHandle.entity();
 
@@ -189,7 +177,7 @@ public:
       const TreeComponent& tree = registry_.get<TreeComponent>(treeEntity);
       for (auto cur = tree.firstChild(); cur != entt::null;
            cur = registry_.get<TreeComponent>(cur).nextSibling()) {
-        traverseTree(transform, cur);
+        traverseTree(cur);
       }
     }
 
@@ -223,8 +211,7 @@ public:
     }
 
     Entity lastEntity = entt::null;
-    traverseTree(Transformd(), computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value()),
-                 &lastEntity);
+    traverseTree(computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value()), &lastEntity);
 
     if (lastEntity != entt::null) {
       return SubtreeInfo{lastEntity, 0};
@@ -430,7 +417,7 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
   const Entity rootEntity = registry_.ctx().get<DocumentContext>().rootEntity;
 
   RenderingContextImpl impl(registry_, verbose);
-  impl.traverseTree(Transformd(), rootEntity);
+  impl.traverseTree(rootEntity);
 
   registry_.sort<RenderingInstanceComponent>(
       [](const RenderingInstanceComponent& lhs, const RenderingInstanceComponent& rhs) {

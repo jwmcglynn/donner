@@ -21,12 +21,15 @@ protected:
   explicit SVGGraphicsElement(EntityHandle handle);
 
 public:
-  /// Get the 2d transformation for this element.
+  /// Get the 2d transformation for this element, element-from-parent.
   Transformd transform() const;
 
-  /// Set the 2d transformation for this element, which can be identity to make the transform a
-  /// no-op.
+  /// Set the 2d transformation for this element, element-from-parent. This is a no-op if the
+  /// transform is identity.
   void setTransform(const Transformd& transform);
+
+  /// Get the absolute element-from-world transform for this element.
+  Transformd elementFromWorld() const;
 };
 
 }  // namespace donner::svg

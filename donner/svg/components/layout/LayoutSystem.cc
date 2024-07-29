@@ -5,10 +5,13 @@
 
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
@@ -271,6 +274,22 @@ Transformd LayoutSystem::getEntityFromParentTranform(EntityHandle entity) {
   return computedTransform.entityFromParent;
 }
 
+Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity) {
+  if (const auto* sizedElement = entity.try_get<SizedElementComponent>()) {
+    const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, nullptr);
+
+    const ComputedSizedElementComponent& computedSizedElement =
+        LayoutSystem().createComputedSizedElementComponentWithStyle(entity, computedStyle,
+                                                                    FontMetrics(), nullptr);
+    return LayoutSystem().computeSizedElementTransform(entity, computedSizedElement);
+  } else if (const auto* shadowEntity = entity.try_get<ShadowEntityComponent>()) {
+    return getEntityContentFromEntityTransform(
+        EntityHandle(*entity.registry(), shadowEntity->lightEntity));
+  } else {
+    return Transformd();
+  }
+}
+
 void LayoutSystem::setEntityFromParentTransform(EntityHandle entity,
                                                 const Transformd& entityFromParent) {
   auto& component = entity.get_or_emplace<components::TransformComponent>();
@@ -280,9 +299,54 @@ void LayoutSystem::setEntityFromParentTransform(EntityHandle entity,
 }
 
 Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
-  // TODO
-  assert(false && "Not implemented");
-  return Transformd();
+  if (const auto* computedAbsoluteTransform =
+          entity.try_get<ComputedAbsoluteTransformComponent>()) {
+    return computedAbsoluteTransform->entityFromWorld;
+  }
+
+  Registry& registry = *entity.registry();
+  SmallVector<Entity, 8> parents;
+
+  Transformd parentFromWorld;
+
+  // Traverse up through the parent list until we find the root or a previously computed viewbox.
+  for (Entity parent = entity; parent != entt::null;
+       parent = registry.get<TreeComponent>(parent).parent()) {
+    if (const auto* computedAbsoluteTransform =
+            registry.try_get<ComputedAbsoluteTransformComponent>(parent)) {
+      parentFromWorld = computedAbsoluteTransform->entityFromWorld;
+      break;
+    }
+
+    Entity lightEntity = parent;
+    while (const auto* shadowEntity = registry.try_get<ShadowEntityComponent>(lightEntity)) {
+      lightEntity = shadowEntity->lightEntity;
+    }
+
+    if (const auto* renderingBehavior = registry.try_get<RenderingBehaviorComponent>(lightEntity);
+        renderingBehavior && !renderingBehavior->inheritsParentTransform) {
+      parentFromWorld = Transformd();
+      break;
+    }
+
+    parents.push_back(parent);
+  }
+
+  // Now the parents list has parents in order from nearest -> root
+  // Iterate from the end of the list to the start and cascade the transform.
+
+  while (!parents.empty()) {
+    EntityHandle currentHandle(registry, parents[parents.size() - 1]);
+    parents.pop_back();
+
+    const Transformd entityFromWorld = getEntityContentFromEntityTransform(currentHandle) *
+                                       getEntityFromParentTranform(currentHandle) * parentFromWorld;
+    currentHandle.emplace<ComputedAbsoluteTransformComponent>(entityFromWorld);
+
+    parentFromWorld = entityFromWorld;
+  }
+
+  return parentFromWorld;
 }
 
 void LayoutSystem::invalidate(EntityHandle entity) {
@@ -313,11 +377,6 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
     auto [component, style] = view.get(entity);
     createComputedSizedElementComponentWithStyle(EntityHandle(registry, entity), style,
                                                  FontMetrics(), outWarnings);
-  }
-
-  // Create placeholder ComputedLocalTransformComponents for all elements in the tree.
-  for (auto entity : registry.view<TransformComponent>()) {
-    std::ignore = registry.get_or_emplace<ComputedLocalTransformComponent>(entity);
   }
 
   for (auto view = registry.view<TransformComponent, ComputedStyleComponent>();
@@ -385,7 +444,13 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
 const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransformComponentWithStyle(
     EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
     std::vector<parser::ParseError>* outWarnings) {
-  TransformComponent& transform = handle.get<TransformComponent>();
+  std::optional<TransformComponent> shadowTransform;
+  EntityHandle lightEntity = handle;
+  if (const auto* shadowComponent = lightEntity.try_get<ShadowEntityComponent>()) {
+    lightEntity = EntityHandle(*handle.registry(), shadowComponent->lightEntity);
+  }
+
+  TransformComponent& transform = lightEntity.get<TransformComponent>();
 
   // TODO: This should avoid recomputing the transform each request.
   const auto& properties = style.properties->unparsedProperties;
@@ -537,8 +602,8 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
 
   // > If the specified size has no constraints:
   // TODO: Skipping "1. If the object has a natural height or width, its size is resolved as if
-  // its natural dimensions were given as the specified size." > 2. Otherwise, its size is
-  // resolved as a contain constraint against the default object size.
+  // its natural dimensions were given as the specified size."
+  // > 2. Otherwise, its size is resolved as a contain constraint against the default object size.
   const ViewboxComponent& viewbox = root.get<ViewboxComponent>();
   if (!viewbox.viewbox) {
     return maybeCanvasSize.value_or(Vector2i(kDefaultWidth, kDefaultHeight));
