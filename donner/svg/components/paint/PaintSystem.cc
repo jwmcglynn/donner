@@ -50,6 +50,16 @@ constexpr void ForEachShape(const F& f) {
 
 }  // namespace
 
+const ComputedStopComponent& PaintSystem::createComputedStop(
+    EntityHandle handle, const StopComponent& stop, std::vector<parser::ParseError>* outWarnings) {
+  if (const auto* computedStop = handle.try_get<ComputedStopComponent>()) {
+    return *computedStop;
+  }
+
+  const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
+  return createComputedStopWithStyle(handle, stop, style, outWarnings);
+}
+
 void PaintSystem::instantiateAllComputedComponents(Registry& registry,
                                                    std::vector<parser::ParseError>* outWarnings) {
   // Should instantiate <stop> before gradients.

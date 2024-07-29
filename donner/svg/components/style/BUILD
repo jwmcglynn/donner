@@ -4,6 +4,7 @@ cc_library(
     name = "components",
     hdrs = [
         "ComputedStyleComponent.h",
+        "DoNotInheritFillOrStrokeTag.h",
         "StyleComponent.h",
     ],
     visibility = [

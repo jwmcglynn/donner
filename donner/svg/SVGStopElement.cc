@@ -49,7 +49,6 @@ double SVGStopElement::stopOpacity() const {
 }
 
 css::Color SVGStopElement::computedStopColor() const {
-  // TODO: Cache the result so this doesn't need to recompute?
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
       handle_, handle_.get_or_emplace<components::StopComponent>(), nullptr);
   return computed.properties.stopColor.getRequired();

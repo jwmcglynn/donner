@@ -275,8 +275,6 @@ TEST(SVGRadialGradientElementTests, SpreadMethodRepeat) {
   EXPECT_THAT(gradient->spreadMethod(), testing::Eq(GradientSpreadMethod::Repeat));
 }
 
-// TODO
-
 TEST(SVGRadialGradientElementTests, SpreadMethodRendering) {
   ParsedFragment<SVGRadialGradientElement> fragment =
       instantiateSubtreeElementAs<SVGRadialGradientElement>(R"-(

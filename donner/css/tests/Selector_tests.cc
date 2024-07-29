@@ -560,7 +560,9 @@ TEST_F(SelectorTests, Specificity) {
   EXPECT_THAT(computeSpecificity("S:nth-child(2n+1)"),
               SpecificityIs(Specificity::FromABC(0, 1, 1)));
 
-  // TODO: has() is not implemented
+  // :has(<relative-selector>) has the specificity of the most specific selector in the list.
+  EXPECT_THAT(computeSpecificity(":has(> a)"), SpecificityIs(Specificity::FromABC(0, 0, 1)));
+  EXPECT_THAT(computeSpecificity(":has(> a#b, > c)"), SpecificityIs(Specificity::FromABC(1, 0, 1)));
 }
 
 }  // namespace donner::css::parser

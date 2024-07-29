@@ -7,7 +7,7 @@
 #include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
-#include "donner/svg/components/style/StyleComponent.h"  // DoNotInheritFillOrStrokeTag
+#include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg {

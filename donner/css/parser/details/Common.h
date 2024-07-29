@@ -85,8 +85,7 @@ static inline int Utf8SequenceLength(char leadingCh) {
   }
 }
 
-// TODO: Change this to output_iterator concept once standard library supports it.
-template <typename OutputIterator>
+template <std::output_iterator<char> OutputIterator>
 static inline OutputIterator Utf8Append(char32_t ch, OutputIterator it) {
   assert(IsValidCodepoint(ch));
 

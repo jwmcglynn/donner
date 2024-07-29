@@ -530,7 +530,8 @@ private:
     ParseResult<AnbMicrosyntaxParser::Result> anbParseResult =
         AnbMicrosyntaxParser::Parse(pseudoClass.argsIfFunction.value());
     if (anbParseResult.hasError()) {
-      // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
+      addWarning("Failed to parse An+B microsyntax for pseudo-class :" + pseudoClass.ident + ", " +
+                 anbParseResult.error().reason);
       return std::nullopt;
     }
 
@@ -543,7 +544,8 @@ private:
 
       ParseResult<Selector> selectorResult = parser.parseMicrosyntaxTypeSuffix();
       if (selectorResult.hasError()) {
-        // TODO: Propagate a warning here, ignore for now and don't set the AnbValue.
+        addWarning("Invalid selector in :" + pseudoClass.ident + ", " +
+                   selectorResult.error().reason);
         return std::nullopt;
       }
 
@@ -716,6 +718,8 @@ private:
     // <id-selector> = <hash-token>
     assert(nextTokenIs<Token::Hash>());
     // TODO: Is this limited to a specific hash type?
+    // https://www.w3.org/TR/selectors-4/#id-selectors says the value must be a valid identifier, so
+    // Hash::Type::Id should be set. Confirm and determine how to propagate failure to match.
     IdSelector result{next<Token>()->get<Token::Hash>().name};
     advance();
     return result;

@@ -228,8 +228,10 @@ private:
   }
 
   std::optional<ParseError> processUntilNextCommand(TokenCommand command) {
-    // TODO: Change this to a while loop
-    do {
+    bool firstIteration = true;
+    while (firstIteration || (!remaining_.empty() && !peekCommand().has_value())) {
+      firstIteration = false;
+
       if (auto error = processCommand(command)) {
         return std::move(error.value());
       }
@@ -261,7 +263,7 @@ private:
           return err;
         }
       }
-    } while (!remaining_.empty() && !peekCommand().has_value());
+    }
 
     return std::nullopt;
   }

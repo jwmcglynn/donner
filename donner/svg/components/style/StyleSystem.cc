@@ -8,6 +8,7 @@
 #include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/registry/Registry.h"
 

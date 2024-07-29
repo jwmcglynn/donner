@@ -4,10 +4,63 @@
 
 namespace donner::svg {
 
-// TODO: Test coverage to add:
-// - Constructors
-// - Copy and move operators.
-// - Cast operators.
+TEST(XMLQualifiedNameTest, Constructors) {
+  // Constructor with only name
+  XMLQualifiedName nameOnly("testName");
+  EXPECT_TRUE(nameOnly.namespacePrefix.empty());
+  EXPECT_EQ(nameOnly.name, "testName");
+
+  // Constructor with namespace and name
+  XMLQualifiedName fullName("testNamespace", "testName");
+  EXPECT_EQ(fullName.namespacePrefix, "testNamespace");
+  EXPECT_EQ(fullName.name, "testName");
+}
+
+TEST(XMLQualifiedNameTest, CopyAndMoveOperators) {
+  XMLQualifiedName original("testNamespace", "testName");
+
+  // Copy constructor
+  XMLQualifiedName copied(original);
+  EXPECT_EQ(copied.namespacePrefix, "testNamespace");
+  EXPECT_EQ(copied.name, "testName");
+
+  // Move constructor
+  XMLQualifiedName moved(std::move(copied));
+  EXPECT_EQ(moved.namespacePrefix, "testNamespace");
+  EXPECT_EQ(moved.name, "testName");
+  // Note: We can't make assumptions about the state of 'copied' after move
+
+  // Copy assignment
+  XMLQualifiedName copyAssigned("empty");
+  copyAssigned = original;
+  EXPECT_EQ(copyAssigned.namespacePrefix, "testNamespace");
+  EXPECT_EQ(copyAssigned.name, "testName");
+
+  // Move assignment
+  XMLQualifiedName moveAssigned("empty");
+  moveAssigned = std::move(copyAssigned);
+  EXPECT_EQ(moveAssigned.namespacePrefix, "testNamespace");
+  EXPECT_EQ(moveAssigned.name, "testName");
+  // Note: We can't make assumptions about the state of 'copyAssigned' after move
+}
+
+TEST(XMLQualifiedNameTest, CastOperators) {
+  XMLQualifiedName original("testNamespace", "testName");
+
+  // Cast to XMLQualifiedNameRef
+  XMLQualifiedNameRef asRef = original;
+  EXPECT_EQ(asRef.namespacePrefix, "testNamespace");
+  EXPECT_EQ(asRef.name, "testName");
+
+  // Cast to string (via toString() method)
+  std::string asString = original.toString();
+  EXPECT_EQ(asString, "testNamespace|testName");
+
+  // Test with empty namespace
+  XMLQualifiedName noNamespace("testName");
+  std::string noNamespaceString = noNamespace.toString();
+  EXPECT_EQ(noNamespaceString, "testName");
+}
 
 TEST(XMLQualifiedNameTest, WorksInMap) {
   std::map<XMLQualifiedName, int> attrMap;
@@ -88,6 +141,45 @@ TEST(XMLQualifiedNameTest, ComparisonOperatorsBetweenNamespacedAndNonNamespaced)
   EXPECT_FALSE(xlinkHref2 < href2);
   EXPECT_FALSE(xlinkHref2 < href);
   EXPECT_FALSE(xlinkHref < href2);
+}
+
+TEST(XMLQualifiedNameRefTest, Constructors) {
+  // Constructor with only name as RcStringOrRef
+  XMLQualifiedNameRef nameOnly1(RcStringOrRef("testName"));
+  EXPECT_TRUE(nameOnly1.namespacePrefix.empty());
+  EXPECT_EQ(nameOnly1.name, "testName");
+
+  // Constructor with only name as const char*
+  XMLQualifiedNameRef nameOnly2("testName");
+  EXPECT_TRUE(nameOnly2.namespacePrefix.empty());
+  EXPECT_EQ(nameOnly2.name, "testName");
+
+  // Constructor with only name as std::string_view
+  std::string_view nameView("testName");
+  XMLQualifiedNameRef nameOnly3(nameView);
+  EXPECT_TRUE(nameOnly3.namespacePrefix.empty());
+  EXPECT_EQ(nameOnly3.name, "testName");
+
+  // Constructor with namespace and name as RcStringOrRef
+  XMLQualifiedNameRef fullName1(RcStringOrRef("testNamespace"), RcStringOrRef("testName"));
+  EXPECT_EQ(fullName1.namespacePrefix, "testNamespace");
+  EXPECT_EQ(fullName1.name, "testName");
+
+  // Constructor with namespace and name as const char*
+  XMLQualifiedNameRef fullName2("testNamespace", "testName");
+  EXPECT_EQ(fullName2.namespacePrefix, "testNamespace");
+  EXPECT_EQ(fullName2.name, "testName");
+
+  // Constructor from XMLQualifiedName
+  XMLQualifiedName qualifiedName("testNamespace", "testName");
+  XMLQualifiedNameRef fromQualifiedName(qualifiedName);
+  EXPECT_EQ(fromQualifiedName.namespacePrefix, "testNamespace");
+  EXPECT_EQ(fromQualifiedName.name, "testName");
+
+  // Test with empty namespace
+  XMLQualifiedNameRef emptyNamespace("", "testName");
+  EXPECT_TRUE(emptyNamespace.namespacePrefix.empty());
+  EXPECT_EQ(emptyNamespace.name, "testName");
 }
 
 TEST(XMLQualifiedNameRefTest, WorksInMap) {

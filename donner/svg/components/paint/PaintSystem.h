@@ -28,10 +28,7 @@ public:
    * @param outWarnings Containing any warnings found
    */
   const ComputedStopComponent& createComputedStop(EntityHandle handle, const StopComponent& stop,
-                                                  std::vector<parser::ParseError>* outWarnings) {
-    const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
-    return createComputedStopWithStyle(handle, stop, style, outWarnings);
-  }
+                                                  std::vector<parser::ParseError>* outWarnings);
 
   /**
    * Create \ref ComputedGradientComponent for all entities in the registry that have a \ref

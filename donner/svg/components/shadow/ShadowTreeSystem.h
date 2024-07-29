@@ -8,7 +8,7 @@
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
-#include "donner/svg/components/style/StyleComponent.h"  // TODO: DoNotInheritFillOrStrokeTag into its own file
+#include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/registry/Registry.h"
 
