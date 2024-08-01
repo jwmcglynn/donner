@@ -161,7 +161,7 @@ bazel_dep(name = "imgui", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "imgui",
     remote = "https://github.com/ocornut/imgui",
-    commit = "5e7dc72c926b489450e9ea82ea62fd3a6432d5aa",
+    commit = "6864a7f839ce78419d5db57a46c25c4216e9c712",
     patches = [
         "//third_party/patches:imgui_bazel_build_files.patch",
     ],
