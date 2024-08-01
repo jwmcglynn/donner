@@ -27,7 +27,7 @@ bazel_dep(name = "platforms", version = "0.0.10")
 ##
 
 # Core dependencies
-bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240116.2")  # Used for number parsing
+bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240722.0")  # Used for number parsing
 
 local_repository(
     name = "skia_user_config",
