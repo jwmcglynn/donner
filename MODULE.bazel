@@ -63,7 +63,7 @@ new_local_repository(
 ##
 ## Test dependencies
 ##
-bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.14.0.bcr.1", dev_dependency = True)
+bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.15.2", dev_dependency = True)
 
 bazel_dep(name = "nlohmann_json", version = "3.11.3", dev_dependency = True)
 
