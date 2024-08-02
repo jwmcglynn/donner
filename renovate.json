@@ -11,16 +11,16 @@
   ],
   "packageRules": [
     {
-      "packagePatterns": [
-        "^com_google_absl$"
+      "matchDepNames": [
+        "com_google_absl"
       ],
       "digest": {
         "enabled": false
       }
     },
     {
-      "packagePatterns": [
-        "^imgui$"
+      "matchDepNames": [
+        "imgui"
       ],
       "digest": {
         "enabled": false
