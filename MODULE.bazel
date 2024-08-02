@@ -71,7 +71,7 @@ bazel_dep(name = "pixelmatch-cpp17", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "pixelmatch-cpp17",
     remote = "https://github.com/jwmcglynn/pixelmatch-cpp17",
-    commit = "5bf34717007aeba740550c8344354eefe03094f9",
+    commit = "0244e16ea33c5918a25d5427acb211b2d0be0121",
 )
 
 bazel_dep(name = "stb", version = "0.0.0")
