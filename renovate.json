@@ -14,7 +14,17 @@
       "packagePatterns": [
         "^com_google_absl$"
       ],
-      "enabled": false
+      "digest": {
+        "enabled": false
+      }
+    },
+    {
+      "packagePatterns": [
+        "^imgui$"
+      ],
+      "digest": {
+        "enabled": false
+      }
     }
   ],
   "ignorePaths": [
