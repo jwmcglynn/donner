@@ -33,3 +33,6 @@ __pycache__
 
 # From examples/svg_to_png.cc
 output.png
+
+# For experimental/viewer/svg_viewer.cc
+imgui.ini

@@ -417,6 +417,44 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
   return err;
 }
 
+parser::ParseResult<PointerEvents> ParsePointerEvents(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("none")) {
+        return PointerEvents::None;
+      } else if (value.equalsLowercase("bounding-box")) {
+        return PointerEvents::BoundingBox;
+      } else if (value.equalsLowercase("visibleFill")) {
+        return PointerEvents::VisibleFill;
+      } else if (value.equalsLowercase("visiblePainted")) {
+        return PointerEvents::VisiblePainted;
+      } else if (value.equalsLowercase("visibleStroke")) {
+        return PointerEvents::VisibleStroke;
+      } else if (value.equalsLowercase("visible")) {
+        return PointerEvents::Visible;
+      } else if (value.equalsLowercase("painted")) {
+        return PointerEvents::Painted;
+      } else if (value.equalsLowercase("fill")) {
+        return PointerEvents::Fill;
+      } else if (value.equalsLowercase("stroke")) {
+        return PointerEvents::Stroke;
+      } else if (value.equalsLowercase("all")) {
+        return PointerEvents::All;
+      }
+    }
+  }
+
+  parser::ParseError err;
+  err.reason = "Invalid pointer-events";
+  err.location =
+      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  return err;
+}
+
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
 static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAttributes = {
@@ -425,7 +463,7 @@ static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAtt
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 18> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 19> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        auto maybeError = Parse(
@@ -582,6 +620,15 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 18> kPro
            },
            &registry.clipPath);
      }},  //
+    {"clip-rule",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseClipRule(params.components());
+           },
+           &registry.clipRule);
+     }},  //
     {"filter",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
@@ -591,16 +638,15 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 18> kPro
            },
            &registry.filter);
      }},  //
-    // Adding the clip-rule property parsing function
-    {"clip-rule",
+    {"pointer-events",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
            [](const parser::PropertyParseFnParams& params) {
-             return ParseClipRule(params.components());
+             return ParsePointerEvents(params.components());
            },
-           &registry.clipRule);
-     }},
+           &registry.pointerEvents);
+     }},  //
 };
 
 }  // namespace

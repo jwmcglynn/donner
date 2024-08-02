@@ -15,6 +15,7 @@ cc_library(
         "Gradient.h",
         "PathSpline.h",
         "Pattern.h",
+        "PointerEvents.h",
         "PreserveAspectRatio.h",
     ],
     visibility = [

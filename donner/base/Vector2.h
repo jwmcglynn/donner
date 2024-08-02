@@ -112,6 +112,14 @@ struct Vector2 {
   [[nodiscard]] T dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
 
   /**
+   * Returns the Z component of the cross product of this vecctor and \p other in the 2D plane. The
+   * result always points perpendicular outside the plane.
+   *
+   * @param other The other vector.
+   */
+  [[nodiscard]] T cross(const Vector2<T>& other) const { return x * other.y - y * other.x; }
+
+  /**
    * Rotate this vector by \p radians
    *
    * @param radians Angle in radians.

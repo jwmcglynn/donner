@@ -273,7 +273,7 @@ public:
    * @tparam T The string type to split.
    * @param str The string to split.
    * @param ch The character to split by.
-   * @tparam T The type of the string, must be \ref StringLike (have `size()` and `data() methods).
+   * @tparam T The type of the string, must be \ref StringLike (have `size()` and `data()` methods).
    * @return A vector of the split string views.
    */
   template <StringLike T>

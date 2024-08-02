@@ -95,6 +95,8 @@ public:
   /// XML tag name, \ref xml_polyline.
   static constexpr std::string_view Tag{"polyline"};
 
+  static_assert(SVGGeometryElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_polyline element.
    *

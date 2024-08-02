@@ -73,6 +73,8 @@ public:
   /// XML tag name, \ref xml_line.
   static constexpr std::string_view Tag{"line"};
 
+  static_assert(SVGGeometryElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_line element.
    *

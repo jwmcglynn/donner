@@ -2,7 +2,6 @@
 /// @file
 
 #include "donner/svg/SVGGeometryElement.h"
-#include "donner/svg/core/PathSpline.h"
 
 namespace donner::svg {
 
@@ -95,6 +94,8 @@ public:
   /// XML tag name, \ref xml_path.
   static constexpr std::string_view Tag{"path"};
 
+  static_assert(SVGGeometryElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_path element.
    *
@@ -115,16 +116,11 @@ public:
   void setD(RcString d);
 
   /**
-   * Get the path spline, computed from the path data string, \ref d(), which has been parsed with
-   * \ref PathParser.
+   * Set the path spline manually. Overrides the value of the `d` attribute.
    *
-   * @return Path spline, or `std::nullopt` if the path data string is invalid.
+   * @param spline Path spline.
    */
-  std::optional<PathSpline> computedSpline() const;
-
-private:
-  void invalidate() const;
-  void compute() const;
+  void setSpline(const PathSpline& spline);
 };
 
 }  // namespace donner::svg

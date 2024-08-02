@@ -1,6 +1,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "donner/base/Box.h"
 #include "glad/glad.h"
 
 extern "C" {
@@ -8,13 +9,19 @@ extern "C" {
 #include "GLFW/glfw3native.h"
 }
 
-#include "donner/svg/SVG.h"  // NOLINT: Use for SVGDocument and XMLParser
+#include "absl/debugging/failure_signal_handler.h"
+#include "absl/debugging/symbolize.h"
+#include "donner/svg/DonnerController.h"
+#include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and XMLParser
+#include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "misc/cpp/imgui_stdlib.h"
 
+using namespace donner;
 using namespace donner::base;
 using namespace donner::base::parser;
 using namespace donner::svg;
@@ -51,7 +58,10 @@ std::string inputBufferToString(const XMLParser::InputBuffer& inputBuffer) {
 struct SVGState {
   bool valid = false;
   SVGDocument document;
+  std::optional<DonnerController> controller;
   std::optional<ParseError> lastError;
+  std::optional<SVGRectElement> boundsShape;
+  std::optional<SVGPathElement> selectedPathOutline;
 
   void loadSVG(XMLParser::InputBuffer& inputBuffer) {
     document = SVGDocument();
@@ -64,12 +74,54 @@ struct SVGState {
     }
 
     document = std::move(maybeDocument.result());
+    controller = DonnerController(document);
+
+    boundsShape = SVGRectElement::Create(document);
+    document.svgElement().appendChild(boundsShape.value());
+    boundsShape->setStyle(
+        "fill: none; stroke: deepskyblue; stroke-width: 1px; pointer-events: none");
+
+    selectedPathOutline = SVGPathElement::Create(document);
+    document.svgElement().appendChild(selectedPathOutline.value());
+    selectedPathOutline->setStyle(
+        "fill: none; stroke: deepskyblue; stroke-width: 1px; pointer-events: none");
+
     lastError = std::nullopt;
     valid = true;
+  }
+
+  void setBounds(const donner::Boxd& box) {
+    if (boundsShape) {
+      boundsShape->setX(donner::Lengthd(box.topLeft.x));
+      boundsShape->setY(donner::Lengthd(box.topLeft.y));
+      boundsShape->setWidth(donner::Lengthd(box.width()));
+      boundsShape->setHeight(donner::Lengthd(box.height()));
+    }
+  }
+
+  void selectShape(const SVGGeometryElement& element) {
+    if (selectedPathOutline) {
+      if (auto computedSpline = element.computedSpline()) {
+        selectedPathOutline->setSpline(computedSpline.value());
+        setBounds(element.worldBounds().value());
+      }
+    }
+  }
+
+  void handleClick(double x, double y) {
+    if (auto maybeElm = controller->findIntersecting(Vector2d(x, y))) {
+      selectShape(*maybeElm);
+    }
   }
 };
 
 int main(int argc, char** argv) {
+  // Initialize the symbolizer to get a human-readable stack trace
+  absl::InitializeSymbolizer(argv[0]);
+
+  absl::FailureSignalHandlerOptions options;
+  absl::InstallFailureSignalHandler(options);
+
   if (argc != 2) {
     std::cerr << "Usage: svg_viewer <filename>" << std::endl;
     return 1;
@@ -129,16 +181,10 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
 
-    if (state.valid) {
-      renderer.draw(state.document);
-      const SkBitmap& bitmap = renderer.bitmap();
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.width(), bitmap.height(), 0, GL_RGBA,
-                   GL_UNSIGNED_BYTE, bitmap.getPixels());
-    }
-
     ImGui::NewFrame();
 
     ImGui::Begin("SVG Viewer");
+
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate,
                 ImGui::GetIO().Framerate);
 
@@ -146,20 +192,31 @@ int main(int argc, char** argv) {
     const float scale =
         std::min(regionSize.x / (float)renderer.width(), regionSize.y / (float)renderer.height());
 
-    ImGui::Image((void*)(intptr_t)texture,
-                 ImVec2(scale * renderer.width(), scale * renderer.height()));
-
-    bool isHovered = ImGui::IsItemHovered();
     ImVec2 mousePositionAbsolute = ImGui::GetMousePos();
-    ImVec2 screenPositionAbsolute = ImGui::GetItemRectMin();
+    ImVec2 screenPositionAbsolute = ImGui::GetWindowPos();
+    screenPositionAbsolute.x += ImGui::GetCursorPosX();
+    screenPositionAbsolute.y += ImGui::GetCursorPosY();
     ImVec2 mousePositionRelative =
         ImVec2((mousePositionAbsolute.x - screenPositionAbsolute.x) / scale,
                (mousePositionAbsolute.y - screenPositionAbsolute.y) / scale);
 
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      state.handleClick(mousePositionRelative.x, mousePositionRelative.y);
+    }
+
+    if (state.valid) {
+      renderer.draw(state.document);
+      const SkBitmap& bitmap = renderer.bitmap();
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.width(), bitmap.height(), 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, bitmap.getPixels());
+    }
+
+    ImGui::Image((void*)(intptr_t)texture,
+                 ImVec2(scale * renderer.width(), scale * renderer.height()));
+
     ImGui::End();
 
     ImGui::Begin("Text");
-    ImGui::Text("Is mouse over SVG? %s", isHovered ? "Yes" : "No");
     ImGui::Text("Position: %f, %f", mousePositionRelative.x, mousePositionRelative.y);
     ImGui::Text("Mouse clicked: %s", ImGui::IsMouseDown(ImGuiMouseButton_Left) ? "Yes" : "No");
 

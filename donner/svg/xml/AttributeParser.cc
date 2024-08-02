@@ -6,6 +6,7 @@
 #include "donner/base/parser/LengthParser.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/parser/ParseError.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/AllSVGElements.h"  // IWYU pragma: keep
 #include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGFilterElement.h"
@@ -14,7 +15,6 @@
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "donner/svg/parser/PreserveAspectRatioParser.h"
 #include "donner/svg/parser/ViewboxParser.h"
-#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/xml/details/XMLParserContext.h"
 
 namespace donner::svg::parser {

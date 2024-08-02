@@ -267,6 +267,16 @@ public:
   Vector2d normalAt(size_t index, double t) const;
 
   /**
+   * Returns true if this path contains the given point within its fill.
+   */
+  bool isInside(const Vector2d& point) const;
+
+  /**
+   * Returns true if this path contains the given point within its stroke.
+   */
+  bool isOnPath(const Vector2d& point, double strokeWidth) const;
+
+  /**
    * Ostream output operator, outputs a human-readable representation of the spline.
    *
    * @param os Output stream.

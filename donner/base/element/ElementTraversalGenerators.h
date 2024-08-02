@@ -185,12 +185,11 @@ template <ElementLike T>
 ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
   SmallVector<T, 16> stack;
 
-  // Add elements, then reverse the order.
-  for (auto child = element.firstChild(); child; child = child->nextSibling()) {
+  // Add children in reverse order, so that the children are yielded in the same order as they
+  // appear in the document.
+  for (auto child = element.lastChild(); child; child = child->previousSibling()) {
     stack.push_back(child.value());
   }
-
-  std::reverse(stack.begin(), stack.end());
 
   while (!stack.empty()) {
     T current = stack[stack.size() - 1];
@@ -198,13 +197,10 @@ ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
 
     co_yield current;
 
-    // Add children and then reverse the order of the added ones.
-    size_t prevSize = stack.size();
-    for (auto child = current.firstChild(); child; child = child->nextSibling()) {
+    // Add children in reverse order.
+    for (auto child = current.lastChild(); child; child = child->previousSibling()) {
       stack.push_back(child.value());
     }
-
-    std::reverse(stack.begin() + prevSize, stack.end());
   }
 }
 

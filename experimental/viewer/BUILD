@@ -7,6 +7,8 @@ cc_binary(
         "@platforms//os:macos",
     ],
     deps = [
+        "@com_google_absl//absl/debugging:failure_signal_handler",
+        "@com_google_absl//absl/debugging:symbolize",
         "@donner",
         "@donner//third_party/glad",
         "@glfw",

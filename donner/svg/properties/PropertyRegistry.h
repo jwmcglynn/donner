@@ -8,6 +8,7 @@
 #include "donner/css/Stylesheet.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipRule.h"
+#include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"
@@ -81,19 +82,23 @@ public:
       "stroke-dashoffset",
       []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
 
-  // Clip paths
+  // Clipping
   Property<Reference, PropertyCascade::None> clipPath{
       "clip-path", []() -> std::optional<Reference> { return std::nullopt; }};
+  Property<ClipRule, PropertyCascade::Inherit> clipRule{
+      "clip-rule", []() -> std::optional<ClipRule> { return ClipRule::NonZero; }};
 
   // Filter
   Property<FilterEffect> filter{
       "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
 
-  // Adding the clip-rule property declaration
-  Property<ClipRule, PropertyCascade::Inherit> clipRule{
-      "clip-rule", []() -> std::optional<ClipRule> { return ClipRule::NonZero; }};
+  // Interaction
+  Property<PointerEvents, PropertyCascade::Inherit> pointerEvents{
+      "pointer-events",
+      []() -> std::optional<PointerEvents> { return PointerEvents::VisiblePainted; }};
 
-  /// Properties which don't have specific listings above, which are stored as raw css declarations.
+  /// Properties which don't have specific listings above, which are stored as raw css
+  /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
 
   /// Constructor.
@@ -117,7 +122,7 @@ public:
     return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
                                  stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
                                  strokeMiterlimit, strokeDasharray, strokeDashoffset, clipPath,
-                                 filter, clipRule);
+                                 clipRule, filter, pointerEvents);
   }
 
   /**

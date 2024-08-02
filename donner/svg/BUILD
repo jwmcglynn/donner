@@ -3,6 +3,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "svg_core",
     srcs = [
+        "DonnerController.cc",
         "SVGCircleElement.cc",
         "SVGClipPathElement.cc",
         "SVGDefsElement.cc",
@@ -32,6 +33,7 @@ cc_library(
     ],
     hdrs = [
         "AllSVGElements.h",
+        "DonnerController.h",
         "SVGCircleElement.h",
         "SVGClipPathElement.h",
         "SVGDefsElement.h",

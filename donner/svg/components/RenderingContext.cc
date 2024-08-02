@@ -8,7 +8,6 @@
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
-#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
@@ -322,6 +321,50 @@ void RenderingContext::instantiateRenderTree(bool verbose,
 
   createComputedComponents(outWarnings);
   instantiateRenderTreeWithPrecomputedTree(verbose);
+}
+
+Entity RenderingContext::findIntersecting(const Vector2d& point) {
+  instantiateRenderTree(false, nullptr);
+
+  auto view = registry_.view<RenderingInstanceComponent>();
+
+  // Iterate in reverse order so that the last rendered element is tested first.
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    auto entity = *it;
+
+    // Skip if this shape doesn't respond to pointer events.
+    const ComputedStyleComponent& style =
+        StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
+    const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
+
+    // TODO: Handle different PointerEvents cases.
+    if (pointerEvents == PointerEvents::None) {
+      continue;
+    }
+
+    const bool matchFill = style.properties->fill.getRequired() != PaintServer::None();
+    const bool matchStroke = style.properties->stroke.getRequired() != PaintServer::None();
+
+    if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
+        bounds && bounds->contains(point)) {
+      if (pointerEvents == PointerEvents::BoundingBox) {
+        return entity;
+      } else {
+        // Match the path.
+        if (matchFill && ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), point)) {
+          return entity;
+        }
+
+        if (matchStroke && ShapeSystem().pathStrokeIntersects(
+                               EntityHandle(registry_, entity),
+                               style.properties->strokeWidth.getRequired().value, point)) {
+          return entity;
+        }
+      }
+    }
+  }
+
+  return entt::null;
 }
 
 // 1. Setup shadow trees

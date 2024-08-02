@@ -31,4 +31,21 @@ void SVGGeometryElement::setPathLength(std::optional<double> value) {
   }
 }
 
+std::optional<PathSpline> SVGGeometryElement::computedSpline() const {
+  if (const components::ComputedPathComponent* computedPath =
+          components::ShapeSystem().createComputedPathIfShape(handle_, FontMetrics(), nullptr)) {
+    return computedPath->spline;
+  } else {
+    return std::nullopt;
+  }
+}
+
+std::optional<Boxd> SVGGeometryElement::worldBounds() const {
+  return components::ShapeSystem().getShapeWorldBounds(handle_);
+}
+
+void SVGGeometryElement::invalidate() {
+  handle_.remove<components::ComputedPathComponent>();
+}
+
 }  // namespace donner::svg

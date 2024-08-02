@@ -70,6 +70,8 @@ public:
   /// XML tag name, \ref xml_circle.
   static constexpr std::string_view Tag{"circle"};
 
+  static_assert(SVGGeometryElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_circle element.
    *

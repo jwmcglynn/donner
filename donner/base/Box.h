@@ -122,6 +122,16 @@ struct Box {
   /// Returns true if the box has zero width or height.
   bool isEmpty() const { return NearZero(width()) || NearZero(height()); }
 
+  /**
+   * Returns true if the box contains the given point.
+   *
+   * @param point Point to check.
+   */
+  bool contains(const Vector2<T>& point) const {
+    return point.x >= topLeft.x && point.x <= bottomRight.x && point.y >= topLeft.y &&
+           point.y <= bottomRight.y;
+  }
+
   /// Return the box moved by subtracting the given vector.
   Box<T> operator-(const Vector2<T>& vec) const { return Box<T>(topLeft - vec, bottomRight - vec); }
 

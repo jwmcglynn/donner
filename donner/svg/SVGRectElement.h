@@ -125,6 +125,8 @@ public:
   /// XML tag name, \ref xml_rect.
   static constexpr std::string_view Tag{"rect"};
 
+  static_assert(SVGGeometryElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_rect element.
    *

@@ -112,10 +112,13 @@ constexpr bool ForEachShape(const F& f) {
 
 }  // namespace
 
-const ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
+ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
     EntityHandle handle, const FontMetrics& fontMetrics,
     std::vector<parser::ParseError>* outWarnings) {
-  const ComputedPathComponent* computedPath = nullptr;
+  ComputedPathComponent* computedPath = handle.try_get<ComputedPathComponent>();
+  if (computedPath) {
+    return computedPath;
+  }
 
   ForEachShape<AllShapes>([&]<typename ShapeType>() -> bool {
     using ShapeComponent = ShapeType;
@@ -150,7 +153,35 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
   });
 }
 
-const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
+  if (ComputedPathComponent* computedPath =
+          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+    return LayoutSystem().getEntityFromWorldTransform(handle).transformBox(computedPath->bounds());
+  }
+
+  return std::nullopt;
+}
+
+bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point) {
+  if (ComputedPathComponent* computedPath =
+          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+    return computedPath->spline.isInside(point);
+  }
+
+  return false;
+}
+
+bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, double strokeWidth,
+                                       const Vector2d& point) {
+  if (ComputedPathComponent* computedPath =
+          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+    return computedPath->spline.isOnPath(point, strokeWidth);
+  }
+
+  return false;
+}
+
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const CircleComponent& circle, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
@@ -172,7 +203,7 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   }
 }
 
-const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const EllipseComponent& ellipse, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   const ComputedEllipseComponent& computedEllipse = handle.get_or_emplace<ComputedEllipseComponent>(
@@ -194,7 +225,7 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   }
 }
 
-const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   const Boxd viewport = LayoutSystem().getViewport(handle);
@@ -208,7 +239,7 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
       PathSpline::Builder().moveTo(start).lineTo(end).build());
 }
 
-const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const PathComponent& path, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   Property<RcString> actualD = path.d;
@@ -227,7 +258,9 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     }
   }
 
-  if (actualD.hasValue()) {
+  if (path.splineOverride) {
+    return &handle.emplace_or_replace<ComputedPathComponent>(path.splineOverride.value());
+  } else if (actualD.hasValue()) {
     auto maybePath = parser::PathParser::Parse(actualD.get().value());
     if (maybePath.hasError()) {
       // Propagate warnings, which may be set on success too.
@@ -247,7 +280,7 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   return nullptr;
 }
 
-const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const PolyComponent& poly, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   PathSpline::Builder builder;
@@ -266,7 +299,7 @@ const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   return &handle.emplace_or_replace<ComputedPathComponent>(builder.build());
 }
 
-const ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const RectComponent& rect, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
   const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(

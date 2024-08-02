@@ -79,6 +79,8 @@ public:
   /// XML tag name, \ref xml_ellipse.
   static constexpr std::string_view Tag{"ellipse"};
 
+  static_assert(SVGGeometryElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_ellipse element.
    *

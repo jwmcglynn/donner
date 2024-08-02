@@ -11,8 +11,6 @@
 
 namespace donner::svg::components {
 
-class SVGDocument;
-
 class RenderingContext {
 public:
   explicit RenderingContext(Registry& registry);
@@ -25,6 +23,14 @@ public:
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
   void instantiateRenderTree(bool verbose, std::vector<parser::ParseError>* outWarnings);
+
+  /**
+   * Find the first entity that intersects the given point.
+   *
+   * @param registry Registry used to find all shape components
+   * @param point Point to find the intersecting entity for
+   */
+  Entity findIntersecting(const Vector2d& point);
 
 private:
   /**

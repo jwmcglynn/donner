@@ -119,6 +119,27 @@ TEST(Box, IsEmpty) {
   EXPECT_FALSE(kBox1.isEmpty());
 }
 
+TEST(Box, Contains) {
+  const Boxd kBox(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0));
+
+  // Test points inside the box
+  EXPECT_TRUE(kBox.contains(Vector2d(0.0, 0.0)));
+  EXPECT_TRUE(kBox.contains(Vector2d(-1.0, -1.0)));
+  EXPECT_TRUE(kBox.contains(Vector2d(1.0, 1.0)));
+
+  // Test points on the edge of the box
+  EXPECT_TRUE(kBox.contains(Vector2d(1.0, 0.0)));
+  EXPECT_TRUE(kBox.contains(Vector2d(-1.0, 0.0)));
+  EXPECT_TRUE(kBox.contains(Vector2d(0.0, 1.0)));
+  EXPECT_TRUE(kBox.contains(Vector2d(0.0, -1.0)));
+
+  // Test points outside the box
+  EXPECT_FALSE(kBox.contains(Vector2d(2.0, 0.0)));
+  EXPECT_FALSE(kBox.contains(Vector2d(0.0, 2.0)));
+  EXPECT_FALSE(kBox.contains(Vector2d(-2.0, 0.0)));
+  EXPECT_FALSE(kBox.contains(Vector2d(0.0, -2.0)));
+}
+
 // Operators
 TEST(Box, OperatorAssign) {
   const Boxd kBox1(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));

@@ -801,4 +801,101 @@ TEST(PathSpline, NormalAt) {
   EXPECT_EQ(spline.normalAt(9, 1.0), Vector2(0.0, 0.0));
 }
 
+TEST(PathSpline, IsInsideSimpleTriangle) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0.0, 0.0));
+  builder.lineTo(Vector2d(2.0, 0.0));
+  builder.lineTo(Vector2d(1.0, 2.0));
+  builder.closePath();
+  PathSpline spline = builder.build();
+
+  // Point inside the triangle
+  EXPECT_TRUE(spline.isInside(Vector2d(1.0, 1.0)));
+
+  // Point outside the triangle
+  EXPECT_FALSE(spline.isInside(Vector2d(3.0, 1.0)));
+
+  // Point on the edge of the triangle
+  EXPECT_TRUE(spline.isInside(Vector2d(1.0, 0.0)));
+}
+
+TEST(PathSpline, IsInsideComplexShape) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0.0, 0.0));
+  builder.lineTo(Vector2d(4.0, 0.0));
+  builder.lineTo(Vector2d(4.0, 4.0));
+  builder.lineTo(Vector2d(0.0, 4.0));
+  builder.closePath();
+  builder.moveTo(Vector2d(1.0, 1.0));
+  builder.lineTo(Vector2d(3.0, 1.0));
+  builder.lineTo(Vector2d(3.0, 3.0));
+  builder.lineTo(Vector2d(1.0, 3.0));
+  builder.closePath();
+  PathSpline spline = builder.build();
+
+  // Point inside the outer square but outside the inner square
+  EXPECT_TRUE(spline.isInside(Vector2d(0.5, 0.5)));
+  EXPECT_FALSE(spline.isInside(Vector2d(2.0, 2.0)));
+
+  // Point inside the inner square
+  EXPECT_FALSE(spline.isInside(Vector2d(1.5, 1.5)));
+
+  // Point outside both squares
+  EXPECT_FALSE(spline.isInside(Vector2d(5.0, 5.0)));
+}
+
+TEST(PathSpline, IsInsideCurveShape) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0.0, 0.0));
+  builder.curveTo(Vector2d(1.0, 2.0), Vector2d(3.0, 2.0), Vector2d(4.0, 0.0));
+  builder.curveTo(Vector2d(3.0, -2.0), Vector2d(1.0, -2.0), Vector2d(0.0, 0.0));
+  builder.closePath();
+  PathSpline spline = builder.build();
+
+  // Point inside the curve
+  EXPECT_TRUE(spline.isInside(Vector2d(2.0, 0.0)));
+
+  // Point outside the curve
+  EXPECT_FALSE(spline.isInside(Vector2d(5.0, 0.0)));
+}
+
+TEST(PathSpline, IsInsideCircle) {
+  auto builder = PathSpline::Builder();
+  builder.circle(Vector2d(0.0, 0.0), 5.0);
+  PathSpline spline = builder.build();
+
+  // Point inside the circle
+  EXPECT_TRUE(spline.isInside(Vector2d(1.0, 1.0)));
+
+  // Point on the circle boundary
+  EXPECT_TRUE(spline.isInside(Vector2d(5.0, 0.0)));
+
+  // Point outside the circle
+  EXPECT_FALSE(spline.isInside(Vector2d(6.0, 0.0)));
+}
+
+TEST(PathSpline, IsInsideMultipleSubpaths) {
+  auto builder = PathSpline::Builder();
+  builder.moveTo(Vector2d(0.0, 0.0));
+  builder.lineTo(Vector2d(4.0, 0.0));
+  builder.lineTo(Vector2d(4.0, 4.0));
+  builder.lineTo(Vector2d(0.0, 4.0));
+  builder.closePath();
+  builder.moveTo(Vector2d(5.0, 5.0));
+  builder.lineTo(Vector2d(7.0, 5.0));
+  builder.lineTo(Vector2d(7.0, 7.0));
+  builder.lineTo(Vector2d(5.0, 7.0));
+  builder.closePath();
+  PathSpline spline = builder.build();
+
+  // Point inside the first subpath
+  EXPECT_TRUE(spline.isInside(Vector2d(2.0, 2.0)));
+
+  // Point inside the second subpath
+  EXPECT_TRUE(spline.isInside(Vector2d(6.0, 6.0)));
+
+  // Point outside both subpaths
+  EXPECT_FALSE(spline.isInside(Vector2d(8.0, 8.0)));
+}
+
 }  // namespace donner::svg

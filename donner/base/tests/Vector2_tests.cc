@@ -99,6 +99,29 @@ TEST(Vector2, Dot) {
   EXPECT_EQ(Vector2i(-2, 1).dot(Vector2i(2, 2)), -2);
 }
 
+TEST(Vector2, CrossProduct) {
+  EXPECT_EQ(Vector2i(1, 0).cross(Vector2i(0, 1)), 1);
+  EXPECT_EQ(Vector2i(0, 1).cross(Vector2i(1, 0)), -1);
+
+  EXPECT_EQ(Vector2i(2, 3).cross(Vector2i(4, 5)), -2);
+  EXPECT_EQ(Vector2i(4, 5).cross(Vector2i(2, 3)), 2);
+
+  EXPECT_EQ(Vector2i(1, 2).cross(Vector2i(1, 2)), 0);    // Parallel vectors.
+  EXPECT_EQ(Vector2i::Zero().cross(Vector2i(1, 2)), 0);  // Zero vector with any vector.
+  EXPECT_EQ(Vector2i(1, 2).cross(Vector2i::Zero()), 0);  // Any vector with zero vector.
+}
+
+TEST(Vector2, CrossProductFloatingPoint) {
+  EXPECT_FLOAT_EQ(Vector2f(1.0f, 0.0f).cross(Vector2f(0.0f, 1.0f)), 1.0f);
+  EXPECT_FLOAT_EQ(Vector2f(0.0f, 1.0f).cross(Vector2f(1.0f, 0.0f)), -1.0f);
+
+  EXPECT_FLOAT_EQ(Vector2f(1.0f, 2.0f).cross(Vector2f(1.0f, 2.0f)), 0.0f);  // Parallel vectors.
+  EXPECT_FLOAT_EQ(Vector2f::Zero().cross(Vector2f(1.0f, 2.0f)),
+                  0.0f);  // Zero vector with any vector.
+  EXPECT_FLOAT_EQ(Vector2f(1.0f, 2.0f).cross(Vector2f::Zero()),
+                  0.0f);  // Any vector with zero vector.
+}
+
 TEST(Vector2, Rotate) {
   EXPECT_EQ(Vector2f::XAxis().rotate(MathConstants<float>::kHalfPi), Vector2f::YAxis());
   EXPECT_EQ(Vector2f::XAxis().rotate(MathConstants<float>::kPi * 0.25f),

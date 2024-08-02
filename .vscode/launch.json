@@ -20,6 +20,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "examples/svg_viewer",
+      "program": "${workspaceFolder}/bazel-bin/experimental/viewer/svg_viewer",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "donner_splash.svg",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "base_tests",
       "program": "${workspaceFolder}/bazel-bin/donner/base/base_tests",
       "args": [

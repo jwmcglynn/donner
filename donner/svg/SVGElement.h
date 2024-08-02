@@ -22,6 +22,9 @@ namespace donner::svg {
 // Forward declaration, #include "donner/svg/SVGDocument.h"
 class SVGDocument;
 
+// Forward declaration, #include "donner/svg/DonnerController.h"
+class DonnerController;
+
 /**
  * Represents an SVG entity belonging to an \ref SVGDocument.
  *
@@ -42,6 +45,8 @@ class SVGDocument;
  * \see \ref Component
  */
 class SVGElement {
+  friend class DonnerController;
+
 protected:
   /**
    * Internal constructor to create an SVGElement from an \ref EntityHandle.
@@ -281,7 +286,13 @@ public:
    */
   template <typename Derived>
   bool isa() const {
-    return Derived::Type == type();
+    // If there is a Derived::IsBaseOf(ElementType) method, we're casting to a base class. Call it
+    // to ensure we can.
+    if constexpr (requires { Derived::IsBaseOf(ElementType{}); }) {
+      return Derived::IsBaseOf(type());
+    } else {
+      return Derived::Type == type();
+    }
   }
 
   /**
@@ -292,11 +303,60 @@ public:
    */
   template <typename Derived>
   Derived cast() {
-    UTILS_RELEASE_ASSERT(Derived::Type == type());
+    UTILS_RELEASE_ASSERT(isa<Derived>());
     // Derived must inherit from SVGElement, and have no additional members.
     static_assert(std::is_base_of_v<SVGElement, Derived>);
     static_assert(sizeof(SVGElement) == sizeof(Derived));
     return *reinterpret_cast<Derived*>(this);  // NOLINT: Reinterpret cast validated by assert.
+  }
+
+  /**
+   * Cast this element to its derived type (const version).
+   *
+   * @pre Requires this element to be of type \p Derived::Type.
+   * @return A reference to this element, cast to the derived type.
+   */
+  template <typename Derived>
+  Derived cast() const {
+    UTILS_RELEASE_ASSERT(isa<Derived>());
+    // Derived must inherit from SVGElement, and have no additional members.
+    static_assert(std::is_base_of_v<SVGElement, Derived>);
+    static_assert(sizeof(SVGElement) == sizeof(Derived));
+    // NOLINTNEXTLINE: Reinterpret cast validated by assert.
+    return *reinterpret_cast<const Derived*>(this);
+  }
+
+  /**
+   * Cast this element to its derived type, if possible. Return \c std::nullopt otherwise.
+   *
+   * @return A reference to this element, cast to the derived type, or \c std::nullopt if the
+   * element is not of the correct type.
+   */
+  template <typename Derived>
+  std::optional<Derived> tryCast() {
+    UTILS_RELEASE_ASSERT(isa<Derived>());
+    if (isa<Derived>()) {
+      return cast<Derived>();
+    }
+
+    return std::nullopt;
+  }
+
+  /**
+   * Cast this element to its derived type, if possible. Return \c std::nullopt otherwise (const
+   * version).
+   *
+   * @return A reference to this element, cast to the derived type, or \c std::nullopt if the
+   * element is not of the correct type.
+   */
+  template <typename Derived>
+  std::optional<const Derived> tryCast() const {
+    UTILS_RELEASE_ASSERT(isa<Derived>());
+    if (isa<Derived>()) {
+      return cast<Derived>();
+    }
+
+    return std::nullopt;
   }
 
   /**

@@ -95,6 +95,8 @@ public:
   /// XML tag name, \ref xml_polygon.
   static constexpr std::string_view Tag{"polygon"};
 
+  static_assert(SVGGeometryElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_polygon element.
    *
