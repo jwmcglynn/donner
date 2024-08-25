@@ -344,20 +344,29 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
 
     const bool matchFill = style.properties->fill.getRequired() != PaintServer::None();
     const bool matchStroke = style.properties->stroke.getRequired() != PaintServer::None();
+    const double strokeWidth =
+        matchStroke ? style.properties->strokeWidth.getRequired().value : 0.0;
 
     if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
-        bounds && bounds->contains(point)) {
+        bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
       if (pointerEvents == PointerEvents::BoundingBox) {
         return entity;
       } else {
+        const Vector2d pointInLocal =
+            LayoutSystem()
+                .getEntityFromWorldTransform(EntityHandle(registry_, entity))
+                .inversed()
+                .transformPosition(point);
+
         // Match the path.
-        if (matchFill && ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), point)) {
+        if (matchFill &&
+            ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
+                                             style.properties->fillRule.getRequired())) {
           return entity;
         }
 
-        if (matchStroke && ShapeSystem().pathStrokeIntersects(
-                               EntityHandle(registry_, entity),
-                               style.properties->strokeWidth.getRequired().value, point)) {
+        if (matchStroke && ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity),
+                                                              pointInLocal, strokeWidth)) {
           return entity;
         }
       }

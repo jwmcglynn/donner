@@ -5,6 +5,7 @@
 #include "donner/base/parser/ParseResult.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/Specificity.h"
+#include "donner/svg/core/FillRule.h"
 
 namespace donner::svg {
 
@@ -88,31 +89,6 @@ inline std::ostream& operator<<(std::ostream& os, Visibility value) {
     case Visibility::Visible: return os << "visible";
     case Visibility::Hidden: return os << "hidden";
     case Visibility::Collapse: return os << "collapse";
-  }
-
-  UTILS_UNREACHABLE();
-}
-
-/**
- * The parsed result of the 'fill-rule' property, see:
- * https://www.w3.org/TR/SVG2/painting.html#FillRuleProperty
- */
-enum class FillRule {
-  NonZero,  ///< [DEFAULT] Determines "insideness" of a point by counting crossings of a ray drawn
-            ///< from that point to infinity and path segments. If crossings is non-zero, the point
-            ///< is inside, else outside.
-  EvenOdd   ///< Determines "insideness" of a point by counting the number of path segments from the
-            ///< shape crossed by a ray drawn from that point to infinity. If count is odd, point is
-            ///< inside, else outside.
-};
-
-/**
- * Ostream output operator for \ref FillRule enum, outputs the CSS value.
- */
-inline std::ostream& operator<<(std::ostream& os, FillRule value) {
-  switch (value) {
-    case FillRule::NonZero: return os << "nonzero";
-    case FillRule::EvenOdd: return os << "evenodd";
   }
 
   UTILS_UNREACHABLE();

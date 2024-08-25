@@ -140,6 +140,26 @@ TEST(Box, Contains) {
   EXPECT_FALSE(kBox.contains(Vector2d(0.0, -2.0)));
 }
 
+TEST(Box, InflatedBy) {
+  const Boxd kBox(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));
+
+  // Inflate by 1.0 in all directions
+  Boxd inflatedBox = kBox.inflatedBy(1.0);
+  EXPECT_EQ(inflatedBox, Boxd(Vector2d(0.0, 1.0), Vector2d(4.0, 5.0)));
+
+  // Inflate by 0.0 (no change)
+  inflatedBox = kBox.inflatedBy(0.0);
+  EXPECT_EQ(inflatedBox, kBox);
+
+  // Inflate by a negative value (shrink the box)
+  inflatedBox = kBox.inflatedBy(-0.5);
+  EXPECT_EQ(inflatedBox, Boxd(Vector2d(1.5, 2.5), Vector2d(2.5, 3.5)));
+
+  // Inflate by a large value
+  inflatedBox = kBox.inflatedBy(10.0);
+  EXPECT_EQ(inflatedBox, Boxd(Vector2d(-9.0, -8.0), Vector2d(13.0, 14.0)));
+}
+
 // Operators
 TEST(Box, OperatorAssign) {
   const Boxd kBox1(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));

@@ -162,17 +162,18 @@ std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
   return std::nullopt;
 }
 
-bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point) {
+bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,
+                                     FillRule fillRule) {
   if (ComputedPathComponent* computedPath =
           createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
-    return computedPath->spline.isInside(point);
+    return computedPath->spline.isInside(point, fillRule);
   }
 
   return false;
 }
 
-bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, double strokeWidth,
-                                       const Vector2d& point) {
+bool ShapeSystem::pathStrokeIntersects(EntityHandle handle,
+                                       const Vector2d& point,  double strokeWidth) {
   if (ComputedPathComponent* computedPath =
           createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
     return computedPath->spline.isOnPath(point, strokeWidth);

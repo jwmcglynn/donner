@@ -220,10 +220,10 @@ struct Transform {
    * @param box Box to transform.
    */
   Box<T> transformBox(const Box<T>& box) const {
-    const Vector2<T> corners[4] = {box.topLeft,                                   //
-                                   Vector2<T>(box.bottomRight.x, box.topLeft.y),  //
-                                   box.bottomRight,                               //
-                                   Vector2<T>(box.topLeft.x, box.bottomRight.y)};
+    const Vector2<T> corners[4] = {box.topLeft,                                    //
+                                   Vector2<T>(box.bottomRight.x, box.topLeft.y),   // topRight
+                                   box.bottomRight,                                //
+                                   Vector2<T>(box.topLeft.x, box.bottomRight.y)};  // bottomLeft
 
     Box<T> result = Box<T>::CreateEmpty(transformPosition(corners[0]));
     result.addPoint(transformPosition(corners[1]));

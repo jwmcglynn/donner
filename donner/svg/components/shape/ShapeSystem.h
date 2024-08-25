@@ -85,14 +85,22 @@ public:
 
   /**
    * Returns true if the shape's path fill intersects the given point.
+   *
+   * @param handle Entity handle containing the shape
+   * @param point Point to intersect
+   * @param fillRule Fill rule to use for the intersection test
    */
-  bool pathFillIntersects(EntityHandle handle, const Vector2d& point);
+  bool pathFillIntersects(EntityHandle handle, const Vector2d& point, FillRule fillRule);
 
   /**
    * Returns true if the shape's path stroke intersects the given point, using an approximate
    * computation from the stroke-width.
+   *
+   * @param handle Entity handle containing the shape
+   * @param point Point to intersect
+   * @param strokeWidth Stroke width to use for the intersection test
    */
-  bool pathStrokeIntersects(EntityHandle handle, double strokeWidth, const Vector2d& point);
+  bool pathStrokeIntersects(EntityHandle handle, const Vector2d& point, double strokeWidth);
 
 private:
   using AllShapes = entt::type_list<CircleComponent, EllipseComponent, LineComponent, PathComponent,

@@ -12,6 +12,7 @@ cc_library(
         "ClipPathUnits.h",
         "ClipRule.h",
         "CssTransform.h",
+        "FillRule.h",
         "Gradient.h",
         "PathSpline.h",
         "Pattern.h",

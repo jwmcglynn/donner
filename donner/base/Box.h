@@ -132,6 +132,15 @@ struct Box {
            point.y <= bottomRight.y;
   }
 
+  /**
+   * Inflates the box size by the given amount in all directions.
+   *
+   * @param amount Amount to inflate the box by.
+   */
+  Box<T> inflatedBy(T amount) const {
+    return Box<T>(topLeft - Vector2<T>(amount, amount), bottomRight + Vector2<T>(amount, amount));
+  }
+
   /// Return the box moved by subtracting the given vector.
   Box<T> operator-(const Vector2<T>& vec) const { return Box<T>(topLeft - vec, bottomRight - vec); }
 

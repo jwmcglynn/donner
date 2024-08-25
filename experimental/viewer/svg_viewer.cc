@@ -103,6 +103,7 @@ struct SVGState {
     if (selectedPathOutline) {
       if (auto computedSpline = element.computedSpline()) {
         selectedPathOutline->setSpline(computedSpline.value());
+        selectedPathOutline->setTransform(element.elementFromWorld());
         setBounds(element.worldBounds().value());
       }
     }

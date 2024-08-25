@@ -14,8 +14,12 @@ namespace {
  * @param points The points of the curve segment.
  * @param tolerance Controls the accuracy of the subdivision, based a which limits
  * the amount of error in the length.
+ * @param depth Current depth of the subdivision.
  */
-double SubdivideAndMeasureCubic(const std::array<Vector2d, 4>& points, double tolerance) {
+double SubdivideAndMeasureCubic(const std::array<Vector2d, 4>& points, double tolerance,
+                                int depth = 0) {
+  const int maxDepth = 20;
+
   auto midPoint = [](const Vector2d& p1, const Vector2d& p2) { return (p1 + p2) * 0.5; };
 
   const Vector2d& p0 = points[0];
@@ -33,14 +37,15 @@ double SubdivideAndMeasureCubic(const std::array<Vector2d, 4>& points, double to
   const double chord = p0.distance(p3);
   const double contNet = p0.distance(p1) + p1.distance(p2) + p2.distance(p3);
 
-  if ((contNet - chord) <= tolerance) {
+  if ((contNet - chord) <= tolerance || depth >= maxDepth) {
     return (chord + contNet) / 2;
   }
 
   const std::array<Vector2d, 4> left = {p0, p01, p012, p0123};
   const std::array<Vector2d, 4> right = {p0123, p123, p23, p3};
 
-  return SubdivideAndMeasureCubic(left, tolerance) + SubdivideAndMeasureCubic(right, tolerance);
+  return SubdivideAndMeasureCubic(left, tolerance, depth + 1) +
+         SubdivideAndMeasureCubic(right, tolerance, depth + 1);
 };
 
 /**
@@ -92,7 +97,7 @@ int WindingNumberContribution(const Vector2d& p0, const Vector2d& p1, const Vect
 double DistanceFromPointToLine(const Vector2d& p, const Vector2d& a, const Vector2d& b) {
   const Vector2d ab = b - a;
   const Vector2d ap = p - a;
-  const double abLengthSquared = ab.dot(ab);
+  const double abLengthSquared = ab.lengthSquared();
 
   if (NearZero(abLengthSquared)) {
     // 'a' and 'b' are the same point
@@ -100,7 +105,7 @@ double DistanceFromPointToLine(const Vector2d& p, const Vector2d& a, const Vecto
   }
 
   double t = ap.dot(ab) / abLengthSquared;
-  t = std::clamp(t, 0.0, 1.0);
+  t = Clamp(t, 0.0, 1.0);
 
   const Vector2d projection = a + t * ab;
   return (p - projection).length();
@@ -142,9 +147,12 @@ int WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1, const
 }
 
 bool IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0, const Vector2d& p1,
-                          const Vector2d& p2, const Vector2d& p3, double tolerance) {
+                          const Vector2d& p2, const Vector2d& p3, double tolerance, int depth = 0) {
+  // Define maximum recursion depth to prevent infinite recursion
+  const int maxDepth = 10;
+
   // Use the subdivision approach to check if the point is close to any segment of the curve
-  if (IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
+  if (IsCurveFlatEnough(p0, p1, p2, p3, tolerance) || depth > maxDepth) {
     // Approximate the curve with a straight line segment and check the distance
     return DistanceFromPointToLine(point, p0, p3) <= tolerance;
   }
@@ -157,8 +165,8 @@ bool IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0, const Vecto
   const Vector2d p123 = (p12 + p23) * 0.5;
   const Vector2d p0123 = (p012 + p123) * 0.5;
 
-  return IsPointOnCubicBezier(point, p0, p01, p012, p0123, tolerance) ||
-         IsPointOnCubicBezier(point, p0123, p123, p23, p3, tolerance);
+  return IsPointOnCubicBezier(point, p0, p01, p012, p0123, tolerance, depth + 1) ||
+         IsPointOnCubicBezier(point, p0123, p123, p23, p3, tolerance, depth + 1);
 }
 
 }  // namespace
@@ -468,7 +476,7 @@ Vector2d PathSpline::normalAt(size_t index, double t) const {
   return Vector2d(-tangent.y, tangent.x);
 }
 
-bool PathSpline::isInside(const Vector2d& point) const {
+bool PathSpline::isInside(const Vector2d& point, FillRule fillRule) const {
   const double kTolerance = 0.1;
 
   int windingNumber = 0;
@@ -478,6 +486,7 @@ bool PathSpline::isInside(const Vector2d& point) const {
     switch (command.type) {
       case CommandType::MoveTo: currentPoint = points_[command.pointIndex]; break;
 
+      case CommandType::ClosePath: [[fallthrough]];
       case CommandType::LineTo: {
         const Vector2d& endPoint = points_[command.pointIndex];
         if (DistanceFromPointToLine(point, currentPoint, endPoint) <= kTolerance) {
@@ -501,15 +510,18 @@ bool PathSpline::isInside(const Vector2d& point) const {
         currentPoint = endPoint;
         break;
       }
-
-      case CommandType::ClosePath: break;  // Already handled with LineTo
     }
   }
 
-  // For complex shapes with holes, a point is considered inside if its winding number is non-zero.
-  // However, if the winding number is negative, it means the point lies inside a hole.
-  // TODO: Add support for FillRule setting.
-  return windingNumber != 0 && windingNumber % 2 != 0;
+  if (fillRule == FillRule::NonZero) {
+    // Non-zero rule: The point is inside if the winding number is non-zero.
+    return windingNumber != 0;
+  } else if (fillRule == FillRule::EvenOdd) {
+    // Even-odd rule: The point is inside if the winding number is odd.
+    return (windingNumber % 2) != 0;
+  }
+
+  UTILS_UNREACHABLE();
 }
 
 bool PathSpline::isOnPath(const Vector2d& point, double strokeWidth) const {
@@ -519,11 +531,14 @@ bool PathSpline::isOnPath(const Vector2d& point, double strokeWidth) const {
     switch (command.type) {
       case CommandType::MoveTo: currentPoint = points_[command.pointIndex]; break;
 
+      case CommandType::ClosePath: [[fallthrough]];
       case CommandType::LineTo: {
         const Vector2d& endPoint = points_[command.pointIndex];
         if (DistanceFromPointToLine(point, currentPoint, endPoint) <= strokeWidth) {
           return true;  // Point is on the line
         }
+        currentPoint = endPoint;
+        break;
       }
 
       case CommandType::CurveTo: {
@@ -537,8 +552,6 @@ bool PathSpline::isOnPath(const Vector2d& point, double strokeWidth) const {
         currentPoint = endPoint;
         break;
       }
-
-      case CommandType::ClosePath: break;  // Already handled with LineTo
     }
   }
 

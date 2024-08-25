@@ -5,6 +5,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/core/FillRule.h"
 
 namespace donner::svg {
 
@@ -268,8 +269,11 @@ public:
 
   /**
    * Returns true if this path contains the given point within its fill.
+   *
+   * @param point Point to check.
+   * @param fillRule Fill rule to use, defaults to \ref FillRule::NonZero.
    */
-  bool isInside(const Vector2d& point) const;
+  bool isInside(const Vector2d& point, FillRule fillRule = FillRule::NonZero) const;
 
   /**
    * Returns true if this path contains the given point within its stroke.
