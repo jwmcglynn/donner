@@ -10,8 +10,7 @@ namespace donner::svg::components {
 // Resolve unspecified attributes to default values or inherit from the given base gradient element.
 // This method is used to propagate attributes such as `x1`, `y1`, `cx`, `cy`, `r`, etc from the
 // base element to the current element.
-void ComputedGradientComponent::resolveAndInheritAttributes(EntityHandle handle,
-                                                            EntityHandle base) {
+void ComputedGradientComponent::inheritAttributesFrom(EntityHandle handle, EntityHandle base) {
   if (base) {
     if (auto* computedBase = base.try_get<ComputedGradientComponent>()) {
       gradientUnits = computedBase->gradientUnits;

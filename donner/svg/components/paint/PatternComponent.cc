@@ -1,14 +1,11 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 
-#include "donner/svg/components/EvaluatedReferenceComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
-#include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
 
-void ComputedPatternComponent::resolveAndInheritAttributes(EntityHandle handle, EntityHandle base) {
+void ComputedPatternComponent::inheritAttributesFrom(EntityHandle handle, EntityHandle base) {
   const PatternComponent& pattern = handle.get<PatternComponent>();
 
   if (base) {

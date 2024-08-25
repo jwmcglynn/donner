@@ -120,7 +120,7 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
       auto& curComputed = cur.get_or_emplace<ComputedGradientComponent>();
       initializeComputedGradient(cur, curComputed, outWarnings);
 
-      computedGradient.resolveAndInheritAttributes(cur, base);
+      computedGradient.inheritAttributesFrom(cur, base);
 
       base = cur;
     }
@@ -187,7 +187,7 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
     auto& curComputed = cur.get_or_emplace<ComputedPatternComponent>();
     initializeComputedPattern(cur, curComputed, outWarnings);
 
-    computedPattern.resolveAndInheritAttributes(cur, base);
+    computedPattern.inheritAttributesFrom(cur, base);
 
     base = cur;
   }

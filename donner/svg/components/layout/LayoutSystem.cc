@@ -387,6 +387,7 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
   }
 
   // Now traverse the tree from the root down and compute values that inherit from the parent.
+  // TODO: Also calculate the absolute transform
   struct ElementContext {
     Entity entity;
     std::optional<Boxd> parentViewbox;

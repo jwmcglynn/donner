@@ -71,7 +71,7 @@ struct ComputedGradientComponent {
    * @param base Base entity handle to inherit from, if any. If no base is specified, unspecified
    * attributes are resolved to default values.
    */
-  void resolveAndInheritAttributes(EntityHandle handle, EntityHandle base);
+  void inheritAttributesFrom(EntityHandle handle, EntityHandle base);
 };
 
 }  // namespace donner::svg::components
