@@ -1,172 +1,12 @@
 #pragma once
 /// @file
 
-#include "donner/base/Box.h"
-#include "donner/base/parser/ParseResult.h"
-#include "donner/css/Declaration.h"
+#include <optional>
+#include <ostream>
+
 #include "donner/css/Specificity.h"
-#include "donner/svg/core/FillRule.h"
 
 namespace donner::svg {
-
-/**
- * The parsed result of the CSS 'display' property, see
- * https://www.w3.org/TR/CSS2/visuren.html#propdef-display.
- *
- * Note that in SVG2, there are only two distinct behaviors, 'none', and everything else rendered as
- * normal, see https://www.w3.org/TR/SVG2/render.html#VisibilityControl
- *
- * > Elements that have any other display value than none are rendered as normal.
- *
- */
-enum class Display {
-  Inline,       ///< [DEFAULT] "inline": Causes an element to generate one or more inline boxes.
-  Block,        ///< "block": Causes an element to generate a block box.
-  ListItem,     ///< "list-item": Causes an element to act as a list item.
-  InlineBlock,  ///< "inline-block": Causes an element to generate an inline-level block container.
-  Table,        ///< "table": Specifies that an element defines a block-level table, see
-                ///< https://www.w3.org/TR/CSS2/tables.html#table-display.
-  InlineTable,  ///< "inline-table": Specifies that an element defines a inline-level table, see
-                ///< https://www.w3.org/TR/CSS2/tables.html#table-display.
-  TableRowGroup,     ///< "table-row-group": Specifies that an element groups one or more rows.
-  TableHeaderGroup,  ///< "table-header-group": Like 'table-row-group', but for visual formatting,
-                     ///< the row group is always displayed before all other rows and row groups and
-                     ///< after any top captions.
-  TableFooterGroup,  ///< "table-footer-group": Like 'table-row-group', but for visual formatting,
-                     ///< the row group is always displayed after all other rows and row groups and
-                     ///< before any bottom captions.
-  TableRow,          ///< "table-row": Specifies that an element is a row of cells.
-  TableColumnGroup,  ///< "table-column-group": Specifies that an element groups one or more
-                     ///< columns.
-  TableColumn,       ///< "table-column": Specifies that an element is a column of cells.
-  TableCell,         ///< "table-cell": Specifies that an element represents a table cell.
-  TableCaption,      ///< "table-caption": Specifies a caption for the table.
-  None,              ///< "none": The element is not rendered.
-};
-
-/**
- * Ostream output operator for \ref Display enum, outputs the CSS value.
- */
-inline std::ostream& operator<<(std::ostream& os, Display value) {
-  switch (value) {
-    case Display::Inline: return os << "inline";
-    case Display::Block: return os << "block";
-    case Display::ListItem: return os << "list-item";
-    case Display::InlineBlock: return os << "inline-block";
-    case Display::Table: return os << "table";
-    case Display::InlineTable: return os << "inline-table";
-    case Display::TableRowGroup: return os << "table-row-group";
-    case Display::TableHeaderGroup: return os << "table-header-group";
-    case Display::TableFooterGroup: return os << "table-footer-group";
-    case Display::TableRow: return os << "table-row";
-    case Display::TableColumnGroup: return os << "table-column-group";
-    case Display::TableColumn: return os << "table-column";
-    case Display::TableCell: return os << "table-cell";
-    case Display::TableCaption: return os << "table-caption";
-    case Display::None: return os << "none";
-  }
-
-  UTILS_UNREACHABLE();
-}
-
-/**
- * The parsed result of the 'visibility' property, see:
- * https://www.w3.org/TR/CSS2/visufx.html#propdef-visibility
- *
- * This determines whether the element is visible or hidden, and whether it affects layout.
- */
-enum class Visibility {
-  Visible,   ///< [DEFAULT] Visible is the default value.
-  Hidden,    ///< Hidden elements are invisible, but still affect layout.
-  Collapse,  ///< Collapsed elements are invisible, and do not affect layout.
-};
-
-/**
- * Ostream output operator for \ref Visibility enum, outputs the CSS value.
- */
-inline std::ostream& operator<<(std::ostream& os, Visibility value) {
-  switch (value) {
-    case Visibility::Visible: return os << "visible";
-    case Visibility::Hidden: return os << "hidden";
-    case Visibility::Collapse: return os << "collapse";
-  }
-
-  UTILS_UNREACHABLE();
-}
-
-/**
- * The parsed result of the 'stroke-linecap' property, see:
- * https://www.w3.org/TR/SVG2/painting.html#StrokeLinecapProperty
- */
-enum class StrokeLinecap {
-  Butt,   ///< [DEFAULT] The stroke is squared off at the endpoint of the path.
-  Round,  ///< The stroke is rounded at the endpoint of the path.
-  Square  ///< The stroke extends beyond the endpoint of the path by half of the stroke width and
-          ///< is squared off.
-};
-
-/**
- * Ostream output operator for \ref StrokeLinecap enum, outputs the CSS value.
- */
-inline std::ostream& operator<<(std::ostream& os, StrokeLinecap value) {
-  switch (value) {
-    case StrokeLinecap::Butt: return os << "butt";
-    case StrokeLinecap::Round: return os << "round";
-    case StrokeLinecap::Square: return os << "square";
-  }
-
-  UTILS_UNREACHABLE();
-}
-
-/**
- * The parsed result of the 'stroke-linejoin' property, see:
- * https://www.w3.org/TR/SVG2/painting.html#StrokeLinejoinProperty
- */
-enum class StrokeLinejoin {
-  Miter,      ///< [DEFAULT] The outer edges of the strokes for the two segments are extended until
-              ///< they meet at an angle, creating a sharp point.
-  MiterClip,  ///< Same as miter except the stroke will be clipped if the miter limit is exceeded.
-  Round,      ///< The corners of the stroke are rounded off using an arc of a circle with a radius
-              ///< equal to the half of the stroke width.
-  Bevel,      ///< A triangular shape is used to fill the area between the two stroked segments.
-  Arcs  ///< Similar to miter join, but uses an elliptical arc to join the segments, creating a
-        ///< smoother joint than miter join when the angle is acute. It is only used for large
-        ///< angles where a miter join would be too sharp.
-};
-
-/**
- * Ostream output operator for \ref StrokeLinejoin enum, outputs the CSS value.
- */
-inline std::ostream& operator<<(std::ostream& os, StrokeLinejoin value) {
-  switch (value) {
-    case StrokeLinejoin::Miter: return os << "miter";
-    case StrokeLinejoin::MiterClip: return os << "miter-clip";
-    case StrokeLinejoin::Round: return os << "round";
-    case StrokeLinejoin::Bevel: return os << "bevel";
-    case StrokeLinejoin::Arcs: return os << "arcs";
-  }
-
-  UTILS_UNREACHABLE();
-}
-
-/**
- * The parsed result of the 'stroke-dasharray' property, see:
- * https://www.w3.org/TR/SVG2/painting.html#StrokeDasharrayProperty
- */
-using StrokeDasharray = std::vector<Lengthd>;
-
-/**
- * Ostream output operator for \ref StrokeDasharray enum, outputs the CSS value.
- */
-inline std::ostream& operator<<(std::ostream& os, const StrokeDasharray& value) {
-  for (size_t i = 0; i < value.size(); ++i) {
-    if (i > 0) {
-      os << ",";
-    }
-    os << value[i];
-  }
-  return os;
-}
 
 /**
  * Defines how this property cascades between the parent and child elements.
@@ -222,8 +62,14 @@ using GetInitialFn = std::optional<T> (*)();
  */
 template <typename T, PropertyCascade kCascade = PropertyCascade::None>
 struct Property {
-  using Type = T;
+  using Type = T;  ///< Type of the property value.
 
+  /**
+   * Property constructor, which is initially unset.
+   *
+   * @param name Name of the property, such as "color".
+   * @param getInitialFn Function to get the initial value of the property.
+   */
   Property(
       std::string_view name,
       GetInitialFn<T> getInitialFn = []() -> std::optional<T> { return std::nullopt; })

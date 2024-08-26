@@ -2,7 +2,6 @@
 /// @file
 
 #include "donner/svg/properties/PropertyRegistry.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

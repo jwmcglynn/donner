@@ -463,6 +463,9 @@ static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAtt
     // The properties which may apply to any element in the SVG namespace are omitted.
 };
 
+using PropertyParseFn = std::optional<parser::ParseError> (*)(
+    PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
+
 static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 19> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

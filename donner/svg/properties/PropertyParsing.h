@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include "donner/base/parser/ParseResult.h"
+#include "donner/css/Declaration.h"
 #include "donner/css/Specificity.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/registry/Registry.h"

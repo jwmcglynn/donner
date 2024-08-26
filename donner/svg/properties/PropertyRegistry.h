@@ -1,14 +1,16 @@
 #pragma once
 /// @file
 
-#include "donner/base/Box.h"
 #include "donner/base/parser/ParseResult.h"
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
-#include "donner/css/Stylesheet.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipRule.h"
+#include "donner/svg/core/Display.h"
+#include "donner/svg/core/FillRule.h"
 #include "donner/svg/core/PointerEvents.h"
+#include "donner/svg/core/Stroke.h"
+#include "donner/svg/core/Visibility.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"
@@ -18,6 +20,14 @@ namespace donner::svg {
 
 namespace details {
 
+/**
+ * Helper function used by \ref as_mutable to convert a tuple of const-refs to mutable-refs, given a
+ * tuple and index sequence for each element.
+ *
+ * @tparam T Tuple type.
+ * @tparam I Index sequence type.
+ * @param tuple Tuple to convert.
+ */
 template <typename T, std::size_t... I>
 auto tuple_remove_const(T tuple, std::index_sequence<I...>) {
   using TupleType = std::remove_reference_t<T>;
@@ -30,6 +40,13 @@ auto tuple_remove_const(T tuple, std::index_sequence<I...>) {
           std::get<I>(tuple)))...);
 }
 
+/**
+ * Converts a tuple containing const-refs to mutable-refs, e.g. `std::tuple<const T&...>` to
+ * `std::tuple<T&...>`.
+ *
+ * @tparam Args Types of the tuple elements.
+ * @param tuple Tuple to convert.
+ */
 template <typename... Args>
 auto as_mutable(const std::tuple<Args...>& tuple) {
   auto result = tuple_remove_const(tuple, std::index_sequence_for<Args...>{});
@@ -40,59 +57,154 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
 
 }  // namespace details
 
-class PropertyRegistry;
-using PropertyParseFn = std::optional<parser::ParseError> (*)(
-    PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
-
+/**
+ * Holds CSS properties for a single element. This class stores common properties which may be
+ * applied to any element, plus \ref unparsedProperties which contains element-specific properties
+ * which are applied if the element matches.
+ *
+ * For \ref unparsedProperties, presentation attributes specified in CSS such as `transform` will be
+ * stored here until they can be applied to the element.
+ *
+ * # Supported properties
+ *
+ * | Property | Member | Default |
+ * |----------|--------|---------|
+ * | `color` | \ref color | `black` |
+ * | `display` | \ref display | `inline` |
+ * | `opacity` | \ref opacity | `1.0` |
+ * | `visibility` | \ref visibility | `visible` |
+ * | `fill` | \ref fill | `black` |
+ * | `fill-rule` | \ref fillRule | `nonzero` |
+ * | `fill-opacity` | \ref fillOpacity | `1.0` |
+ * | `stroke` | \ref stroke | `none` |
+ * | `stroke-opacity` | \ref strokeOpacity | `1.0` |
+ * | `stroke-width` | \ref strokeWidth | `1.0` |
+ * | `stroke-linecap` | \ref strokeLinecap | `butt` |
+ * | `stroke-linejoin` | \ref strokeLinejoin | `miter` |
+ * | `stroke-miterlimit` | \ref strokeMiterlimit | `4.0` |
+ * | `stroke-dasharray` | \ref strokeDasharray | `none` |
+ * | `stroke-dashoffset` | \ref strokeDashoffset | `0` |
+ * | `clip-path` | \ref clipPath | `none` |
+ * | `clip-rule` | \ref clipRule | `nonzero` |
+ * | `filter` | \ref filter | `none` |
+ * | `pointer-events` | \ref pointerEvents | `auto` |
+ */
 class PropertyRegistry {
 public:
+  /// `color` property, which stores the context color of the element. For painting shapes, use \ref
+  /// stroke or \ref fill instead.
   Property<css::Color, PropertyCascade::Inherit> color{
       "color", []() -> std::optional<css::Color> { return css::Color(css::RGBA(0, 0, 0, 0xFF)); }};
+
+  /// `display` property, which determines how the element is rendered. Set to \ref Display::None to
+  /// hide the element.
   Property<Display> display{"display", []() -> std::optional<Display> { return Display::Inline; }};
+
+  /// `opacity` property, which determines the opacity of the element. A value of 0.0 will make the
+  /// element invisible.
   Property<double> opacity{"opacity", []() -> std::optional<double> { return 1.0; }};
+
+  /// `visibility` property, which determines whether the element is visible. Set to \ref
+  /// Visibility::Hidden to hide the element. Compared to \ref display with \ref Display::None,
+  /// hiding the element will not remove it from the document, so it will still contribute to
+  /// bounding boxes.
   Property<Visibility, PropertyCascade::Inherit> visibility{
       "visibility", []() -> std::optional<Visibility> { return Visibility::Visible; }};
 
+  //
   // Fill
+  //
+
+  /// `fill` property, which determines the color of the element's interior. Defaults to black.
   Property<PaintServer, PropertyCascade::PaintInherit> fill{
       "fill", []() -> std::optional<PaintServer> {
         return PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0)));
       }};
+
+  /// `fill-rule` property, which determines how the interior of the element is filled in the case
+  /// of overlapping shapes. Defaults to \ref FillRule::NonZero.
   Property<FillRule, PropertyCascade::Inherit> fillRule{
       "fill-rule", []() -> std::optional<FillRule> { return FillRule::NonZero; }};
+
+  /// `fill-opacity` property, which determines the opacity of the element's interior. Defaults
+  /// to 1.0. A value of 0.0 will make the interior invisible.
   Property<double, PropertyCascade::Inherit> fillOpacity{
       "fill-opacity", []() -> std::optional<double> { return 1.0; }};
 
+  //
   // Stroke
+  //
+
+  /// `stroke` property, which determines the color of the element's outline stroke. Defaults to
+  /// none.
   Property<PaintServer, PropertyCascade::PaintInherit> stroke{
       "stroke", []() -> std::optional<PaintServer> { return PaintServer::None(); }};
+
+  /// `stroke-opacity` property, which determines the opacity of the element's outline stroke.
+  /// Defaults to 1.0. A value of 0.0 will make the outline invisible.
   Property<double, PropertyCascade::Inherit> strokeOpacity{
       "stroke-opacity", []() -> std::optional<double> { return 1.0; }};
+
+  /// `stroke-width` property, which determines the width of the element's outline stroke. Defaults
+  /// to 1.0.
   Property<Lengthd, PropertyCascade::Inherit> strokeWidth{
       "stroke-width", []() -> std::optional<Lengthd> { return Lengthd(1, Lengthd::Unit::None); }};
+
+  /// `stroke-linecap` property, which determines the shape of the element's outline stroke at the
+  /// ends of the path. Defaults to \ref StrokeLinecap::Butt.
   Property<StrokeLinecap, PropertyCascade::Inherit> strokeLinecap{
       "stroke-linecap", []() -> std::optional<StrokeLinecap> { return StrokeLinecap::Butt; }};
+
+  /// `stroke-linejoin` property, which determines the shape of the element's outline stroke in
+  /// between line segments. Defaults to \ref StrokeLinejoin::Miter.
   Property<StrokeLinejoin, PropertyCascade::Inherit> strokeLinejoin{
       "stroke-linejoin", []() -> std::optional<StrokeLinejoin> { return StrokeLinejoin::Miter; }};
+
+  /// `stroke-miterlimit` property, which determines the limit of the ratio of the miter length to
+  /// the stroke width. Defaults to 4.0.
   Property<double, PropertyCascade::Inherit> strokeMiterlimit{
       "stroke-miterlimit", []() -> std::optional<double> { return 4.0; }};
+
+  /// `stroke-dasharray` property, which determines the pattern of dashes and gaps used to stroke
+  /// paths.
   Property<StrokeDasharray, PropertyCascade::Inherit> strokeDasharray{
       "stroke-dasharray", []() -> std::optional<StrokeDasharray> { return std::nullopt; }};
+
+  /// `stroke-dashoffset` property, which determines the distance into the dash pattern to start the
+  /// stroke.
   Property<Lengthd, PropertyCascade::Inherit> strokeDashoffset{
       "stroke-dashoffset",
       []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
 
+  //
   // Clipping
+  //
+
+  /// `clip-path` property, which determines the shape of the element's clipping region. Defaults to
+  /// none.
   Property<Reference, PropertyCascade::None> clipPath{
       "clip-path", []() -> std::optional<Reference> { return std::nullopt; }};
+
+  /// `clip-rule` property, which determines how the interior of the element is filled in the case
+  /// of overlapping shapes. Defaults to \ref ClipRule::NonZero.
   Property<ClipRule, PropertyCascade::Inherit> clipRule{
       "clip-rule", []() -> std::optional<ClipRule> { return ClipRule::NonZero; }};
 
+  //
   // Filter
+  //
+
+  /// `filter` property, which determines the filter effect to apply to the element. Defaults to
+  /// none.
   Property<FilterEffect> filter{
       "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
 
+  //
   // Interaction
+  //
+
+  /// `pointer-events` property, which determines how the element responds to pointer events (such
+  /// as clicks or hover). Defaults to \ref PointerEvents::VisiblePainted.
   Property<PointerEvents, PropertyCascade::Inherit> pointerEvents{
       "pointer-events",
       []() -> std::optional<PointerEvents> { return PointerEvents::VisiblePainted; }};

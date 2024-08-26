@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "donner/base/RcString.h"
+#include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/properties/PropertyRegistry.h"
