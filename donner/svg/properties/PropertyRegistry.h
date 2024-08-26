@@ -13,8 +13,8 @@
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
-#include "donner/svg/properties/PropertyParsing.h"
-#include "donner/svg/registry/Registry.h"  // For EntityHandle
+#include "donner/svg/properties/PropertyParsing.h"  // IWYU pragma: keep, used for parser::UnparsedProperty
+#include "donner/svg/registry/Registry.h"           // For EntityHandle
 
 namespace donner::svg {
 

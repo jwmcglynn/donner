@@ -22,21 +22,9 @@ std::span<const css::ComponentValue> TrimTrailingWhitespace(
 
 }  // namespace
 
-std::span<const css::ComponentValue> PropertyParseFnParams::components() const {
-  if (const std::string_view* str = std::get_if<std::string_view>(&valueOrComponents)) {
-    if (!parsedComponents_) {
-      parsedComponents_ = std::make_optional(css::parser::ValueParser::Parse(*str));
-    }
-
-    return parsedComponents_.value();
-  } else {
-    return std::get<std::span<const css::ComponentValue>>(valueOrComponents);
-  }
-}
-
-PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
-                                          css::Specificity specificity,
-                                          PropertyParseBehavior parseBehavior) {
+PropertyParseFnParams PropertyParseFnParams::Create(const css::Declaration& declaration,
+                                                    css::Specificity specificity,
+                                                    PropertyParseBehavior parseBehavior) {
   PropertyParseFnParams params;
   params.valueOrComponents = TrimTrailingWhitespace(declaration.values);
   params.parseBehavior = parseBehavior;
@@ -57,6 +45,18 @@ PropertyParseFnParams CreateParseFnParams(const css::Declaration& declaration,
   params.specificity = declaration.important ? css::Specificity::Important() : specificity;
 
   return params;
+}
+
+std::span<const css::ComponentValue> PropertyParseFnParams::components() const {
+  if (const std::string_view* str = std::get_if<std::string_view>(&valueOrComponents)) {
+    if (!parsedComponents_) {
+      parsedComponents_ = std::make_optional(css::parser::ValueParser::Parse(*str));
+    }
+
+    return parsedComponents_.value();
+  } else {
+    return std::get<std::span<const css::ComponentValue>>(valueOrComponents);
+  }
 }
 
 ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::string_view name,

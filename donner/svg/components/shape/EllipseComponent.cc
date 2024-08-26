@@ -66,9 +66,9 @@ ComputedEllipseComponent::ComputedEllipseComponent(
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
-      auto maybeError = it->second(
-          properties, CreateParseFnParams(property.declaration, property.specificity,
-                                          parser::PropertyParseBehavior::AllowUserUnits));
+      auto maybeError = it->second(properties, parser::PropertyParseFnParams::Create(
+                                                   property.declaration, property.specificity,
+                                                   parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }

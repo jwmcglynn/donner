@@ -13,13 +13,13 @@ void DumpTree(SVGElement element, int depth) {
     std::cout << "  ";
   }
 
-  std::cout << TypeToString(element.type()) << ", id: '" << element.id() << "'";
+  std::cout << element.type() << ", id: '" << element.id() << "'";
   if (element.type() == ElementType::SVG) {
     if (auto viewbox = element.cast<SVGSVGElement>().viewbox()) {
       std::cout << ", viewbox: " << *viewbox;
     }
   }
-  std::cout << std::endl;
+  std::cout << "\n";
   for (auto elm = element.firstChild(); elm; elm = elm->nextSibling()) {
     DumpTree(elm.value(), depth + 1);
   }
@@ -27,19 +27,19 @@ void DumpTree(SVGElement element, int depth) {
 
 extern "C" int main(int argc, char* argv[]) {
   if (argc != 2) {
-    std::cerr << "Unexpected arg count." << std::endl;
-    std::cerr << "USAGE: xml_tool <filename>" << std::endl;
+    std::cerr << "Unexpected arg count.\n";
+    std::cerr << "USAGE: xml_tool <filename>\n";
     return 1;
   }
 
   std::ifstream file(argv[1]);
   if (!file) {
-    std::cerr << "Could not open file " << argv[1] << std::endl;
+    std::cerr << "Could not open file " << argv[1] << "\n";
     return 2;
   }
 
   file.seekg(0, std::ios::end);
-  const size_t fileLength = file.tellg();
+  const std::streamsize fileLength = file.tellg();
   file.seekg(0);
 
   parser::XMLParser::InputBuffer fileData;

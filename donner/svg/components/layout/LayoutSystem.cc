@@ -19,6 +19,7 @@
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
+#include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
 
@@ -91,9 +92,9 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));
     if (it != kProperties.end()) {
-      auto maybeError = it->second(
-          properties, CreateParseFnParams(property.declaration, property.specificity,
-                                          parser::PropertyParseBehavior::AllowUserUnits));
+      auto maybeError = it->second(properties, parser::PropertyParseFnParams::Create(
+                                                   property.declaration, property.specificity,
+                                                   parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }

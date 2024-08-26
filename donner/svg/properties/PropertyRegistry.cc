@@ -688,8 +688,9 @@ std::optional<parser::ParseError> PropertyRegistry::parseProperty(
   const frozen::string frozenName(declaration.name);
   const auto it = kProperties.find(frozenName);
   if (it != kProperties.end()) {
-    return it->second(*this, CreateParseFnParams(declaration, specificity,
-                                                 parser::PropertyParseBehavior::AllowUserUnits));
+    return it->second(*this,
+                      parser::PropertyParseFnParams::Create(
+                          declaration, specificity, parser::PropertyParseBehavior::AllowUserUnits));
   }
 
   // Only store unparsed properties if they are valid presentation attribute names.

@@ -108,7 +108,7 @@ public:
     instance.dataEntity = dataHandle.entity();
 
     if (verbose_) {
-      std::cout << "Instantiating " << TypeToString(dataHandle.get<TreeComponent>().type()) << " ";
+      std::cout << "Instantiating " << dataHandle.get<TreeComponent>().type() << " ";
 
       if (const auto* idComponent = dataHandle.try_get<IdComponent>()) {
         std::cout << "id=" << idComponent->id << " ";

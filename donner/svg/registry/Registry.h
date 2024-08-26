@@ -64,7 +64,8 @@ enum class ElementType {
   Use,             //!< \ref xml_use
 };
 
-std::string_view TypeToString(ElementType type);
+/// Ostream output operator for \ref ElementType, outputs the element name.
+std::ostream& operator<<(std::ostream& os, ElementType type);
 
 template <typename ReturnType, typename FnT>
 ReturnType ToConstexpr(ElementType type, FnT fn) {

@@ -1,31 +1,33 @@
 #include "donner/svg/registry/Registry.h"
 
+#include <ostream>
+
 #include "donner/base/Utils.h"
 
 namespace donner::svg {
 
-std::string_view TypeToString(ElementType type) {
+std::ostream& operator<<(std::ostream& os, ElementType type) {
   switch (type) {
-    case ElementType::Circle: return "Circle";
-    case ElementType::ClipPath: return "ClipPath";
-    case ElementType::Defs: return "Defs";
-    case ElementType::Ellipse: return "Ellipse";
-    case ElementType::FeGaussianBlur: return "FeGaussianBlur";
-    case ElementType::Filter: return "Filter";
-    case ElementType::G: return "G";
-    case ElementType::Line: return "Line";
-    case ElementType::LinearGradient: return "LinearGradient";
-    case ElementType::Use: return "Use";
-    case ElementType::SVG: return "SVG";
-    case ElementType::Path: return "Path";
-    case ElementType::Pattern: return "Pattern";
-    case ElementType::Polygon: return "Polygon";
-    case ElementType::Polyline: return "Polyline";
-    case ElementType::RadialGradient: return "RadialGradient";
-    case ElementType::Rect: return "Rect";
-    case ElementType::Stop: return "Stop";
-    case ElementType::Style: return "Style";
-    case ElementType::Unknown: return "Unknown";
+    case ElementType::Circle: os << "Circle";
+    case ElementType::ClipPath: os << "ClipPath";
+    case ElementType::Defs: os << "Defs";
+    case ElementType::Ellipse: os << "Ellipse";
+    case ElementType::FeGaussianBlur: os << "FeGaussianBlur";
+    case ElementType::Filter: os << "Filter";
+    case ElementType::G: os << "G";
+    case ElementType::Line: os << "Line";
+    case ElementType::LinearGradient: os << "LinearGradient";
+    case ElementType::Use: os << "Use";
+    case ElementType::SVG: os << "SVG";
+    case ElementType::Path: os << "Path";
+    case ElementType::Pattern: os << "Pattern";
+    case ElementType::Polygon: os << "Polygon";
+    case ElementType::Polyline: os << "Polyline";
+    case ElementType::RadialGradient: os << "RadialGradient";
+    case ElementType::Rect: os << "Rect";
+    case ElementType::Stop: os << "Stop";
+    case ElementType::Style: os << "Style";
+    case ElementType::Unknown: os << "Unknown";
   }
 
   UTILS_UNREACHABLE();

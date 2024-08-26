@@ -168,9 +168,7 @@ public:
 
       if (renderer_.verbose_) {
         std::cout << "Rendering "
-                  << TypeToString(
-                         registry.get<components::TreeComponent>(instance.dataEntity).type())
-                  << " ";
+                  << registry.get<components::TreeComponent>(instance.dataEntity).type() << " ";
 
         if (const auto* idComponent =
                 registry.try_get<components::IdComponent>(instance.dataEntity)) {

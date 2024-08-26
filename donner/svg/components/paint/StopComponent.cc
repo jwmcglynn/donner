@@ -56,9 +56,9 @@ ComputedStopComponent::ComputedStopComponent(
     std::vector<parser::ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
-    const parser::PropertyParseFnParams params =
-        CreateParseFnParams(unparsedProperty.declaration, unparsedProperty.specificity,
-                            parser::PropertyParseBehavior::AllowUserUnits);
+    const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
+        unparsedProperty.declaration, unparsedProperty.specificity,
+        parser::PropertyParseBehavior::AllowUserUnits);
 
     auto result = ParseProperty(name, params, properties);
     if (result.hasError() && outWarnings) {
