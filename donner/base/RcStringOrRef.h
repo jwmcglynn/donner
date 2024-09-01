@@ -135,8 +135,7 @@ public:
     return compareStringViews(lhs, rhs);
   }
 
-  /// Spaceship equality operator to a StringLike type such as \ref std::string_view or \ref
-  /// RcString.
+  /// Spaceship equality operator to a StringLike type such as \c std::string_view or \ref RcString.
   template <StringLike StringT>
   constexpr friend auto operator<=>(const RcStringOrRef& lhs, const StringT& rhs) {
     return compareStringViews(lhs, rhs);
@@ -146,8 +145,7 @@ public:
   // Reversed comparison operators.
   //
 
-  /// Spaceship equality operator to a StringLike type such as \ref std::string_view or \ref
-  /// RcString.
+  /// Spaceship equality operator to a StringLike type such as \c std::string_view or \ref RcString.
   template <StringLike StringT>
   constexpr friend auto operator<=>(const StringT& lhs, const RcStringOrRef& rhs) {
     return compareStringViews(lhs, rhs);

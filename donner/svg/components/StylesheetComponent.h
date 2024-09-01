@@ -1,9 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/css/CSS.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"
-#include "donner/svg/properties/PropertyRegistry.h"
+#include "donner/css/Stylesheet.h"
 
 namespace donner::svg::components {
 
@@ -13,8 +11,8 @@ namespace donner::svg::components {
  * See https://www.w3.org/TR/SVG2/styling.html#StyleElement
  */
 struct StylesheetComponent {
-  css::Stylesheet stylesheet;
-  RcString type;
+  css::Stylesheet stylesheet;  ///< The parsed stylesheet from the \ref xml_style element.
+  RcString type;               ///< The type attribute of the \ref xml_style element.
 
   /**
    * Returns true if the \ref xml_style element has either no `type` attribute, or if it has been
@@ -27,7 +25,7 @@ struct StylesheetComponent {
    *
    * @param str The contents of the \ref xml_style element.
    */
-  void parseStylesheet(const RcStringOrRef& str) { stylesheet = css::CSS::ParseStylesheet(str); }
+  void parseStylesheet(const RcStringOrRef& str);
 };
 
 }  // namespace donner::svg::components

@@ -11,15 +11,22 @@ namespace donner::svg::components {
 
 /**
  * Parameters for a \ref xml_filter element.
+ *
+ * Contains the filter bounds, which determines how large the canvas needs to be when applying the
+ * filter, and filter configuration such as units for its parameters.
  */
 struct FilterComponent {
+  /// The x-coordinate of the filter, defaults to -10% (outside the element itself).
   std::optional<Lengthd> x;
+  /// The y-coordinate of the filter, defaults to -10% (outside the element itself).
   std::optional<Lengthd> y;
+  /// Width of the filter, defaults to 120% (outside of the element itself).
   std::optional<Lengthd> width;
+  /// Height of the filter, defaults to 120% (outside of the element itself).
   std::optional<Lengthd> height;
 
-  FilterUnits filterUnits = FilterUnits::Default;
-  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;
+  FilterUnits filterUnits = FilterUnits::Default;           ///< The filter units.
+  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;  ///< The primitive units.
 };
 
 /**
@@ -27,14 +34,16 @@ struct FilterComponent {
  * a \ref xml_filter element.
  */
 struct ComputedFilterComponent {
-  Lengthd x = Lengthd(-10.0, Lengthd::Unit::Percent);
-  Lengthd y = Lengthd(-10.0, Lengthd::Unit::Percent);
-  Lengthd width = Lengthd(120.0, Lengthd::Unit::Percent);
-  Lengthd height = Lengthd(120.0, Lengthd::Unit::Percent);
+  Lengthd x = Lengthd(-10.0, Lengthd::Unit::Percent);  ///< The computed x-coordinate of the filter.
+  Lengthd y = Lengthd(-10.0, Lengthd::Unit::Percent);  ///< The computed y-coordinate of the filter.
+  Lengthd width = Lengthd(120.0, Lengthd::Unit::Percent);   ///< The computed width of the filter.
+  Lengthd height = Lengthd(120.0, Lengthd::Unit::Percent);  ///< The computed height of the filter.
 
-  FilterUnits filterUnits = FilterUnits::Default;
-  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;
+  FilterUnits filterUnits = FilterUnits::Default;           ///< The computed filter units.
+  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;  ///< The computed primitive units.
 
+  /// Parsed list of effects, which can be chained together to create complex effects. These are
+  /// evaluated in order.
   std::vector<FilterEffect> effectChain;
 };
 

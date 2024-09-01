@@ -8,7 +8,7 @@ namespace donner::svg {
 
 // clang-format off
 /**
- * @defgroup xml_style '<style>'
+ * @defgroup xml_style "<style>"
  *
  * Defines a CSS stylesheet for the document. Multiple \ref xml_style elements may be defined in a
  * single document, and the aggregate document style is computed from that using CSS cascading

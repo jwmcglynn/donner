@@ -33,6 +33,12 @@ public:
   /// Destructor.
   ~Tokenizer();
 
+  // No copy or move.
+  Tokenizer(const Tokenizer&) = delete;
+  Tokenizer& operator=(const Tokenizer&) = delete;
+  Tokenizer(Tokenizer&&) = delete;
+  Tokenizer& operator=(Tokenizer&&) = delete;
+
   /**
    * Get the next token from the input string. If the end of the input is reached, the token will be
    * of type \ref Token::EofToken.

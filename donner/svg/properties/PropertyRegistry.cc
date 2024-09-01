@@ -4,10 +4,8 @@
 #include <frozen/unordered_map.h>
 #include <frozen/unordered_set.h>
 
-#include "donner/base/parser/LengthParser.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
-#include "donner/css/parser/ValueParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
@@ -151,7 +149,7 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
           } else if (token.is<css::Token::Ident>()) {
             const RcString& value = token.get<css::Token::Ident>().value;
             if (value.equalsLowercase("none")) {
-              // TODO: Is there a difference between omitted and "none"?
+              // TODO(jwmcglynn): Is there a difference between omitted and "none"?
               return PaintServer(PaintServer::ElementReference(url.value, std::nullopt));
             }
           }
@@ -160,8 +158,7 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
         // If we couldn't identify a fallback yet, try parsing it as a color.
         auto colorResult = css::parser::ColorParser::Parse(components.subspan(i));
         if (colorResult.hasResult()) {
-          return PaintServer(
-              PaintServer::ElementReference(url.value, std::move(colorResult.result())));
+          return PaintServer(PaintServer::ElementReference(url.value, colorResult.result()));
         } else {
           // Invalid paint.
           parser::ParseError err;
@@ -180,7 +177,7 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
   // If we couldn't parse yet, try parsing as a color.
   auto colorResult = css::parser::ColorParser::Parse(components);
   if (colorResult.hasResult()) {
-    return PaintServer(PaintServer::Solid(std::move(colorResult.result())));
+    return PaintServer(PaintServer::Solid(colorResult.result()));
   }
 
   parser::ParseError err;
@@ -361,7 +358,7 @@ parser::ParseResult<Reference> ParseReference(std::string_view tag,
 }
 
 parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
-  // TODO: Handle parsing a list of filter effects
+  // TODO(https://github.com/jwmcglynn/donner/issues/151): Handle parsing a list of filter effects
   // https://www.w3.org/TR/filter-effects/#FilterProperty
   if (components.empty()) {
     parser::ParseError err;
@@ -717,8 +714,8 @@ void PropertyRegistry::parseStyle(std::string_view str) {
 parser::ParseResult<bool> PropertyRegistry::parsePresentationAttribute(
     std::string_view name, std::string_view value, std::optional<ElementType> type,
     EntityHandle handle) {
-  /* TODO: The SVG2 spec says the name may be similar to the attribute, not necessarily the same.
-   * There may need to be a second mapping.
+  /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not necessarily
+   * the same. There may need to be a second mapping.
    */
   /* For attributes, fields may be unitless, in which case they are specified in "user units",
    * see https://www.w3.org/TR/SVG2/coords.html#TermUserUnits. For this case, the spec says to
@@ -752,6 +749,8 @@ parser::ParseResult<bool> PropertyRegistry::parsePresentationAttribute(
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
   os << "PropertyRegistry {\n";
 
+  // const_cast avoids unnecessary code duplication for `allProperties()` for a debug codepath.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   const auto resultProperties = const_cast<PropertyRegistry&>(registry).allProperties();
   PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>(
       [&os, &resultProperties](auto i) {

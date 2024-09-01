@@ -97,7 +97,7 @@ graph LR
     Computed-->Render
 ```
 
-Each operation saves its state through a set of components. For example, during **Style propopagation** in \ref donner::svg::components::StyleSystem::computeAllStyles "StyleSystem::computeAllStyles", these transformations occur:
+Each operation saves its state through a set of components. For example, during **Style propagation** in \ref donner::svg::components::StyleSystem::computeAllStyles "StyleSystem::computeAllStyles", these transformations occur:
 
 | User component                                                              | Styled component                                                                            |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -108,7 +108,7 @@ While StyleComponent stores user-provided style information, it does not apply t
 
 This continues for the **Computed tree** and **Render tree**.
 
-\ref donner::svg::components::PathComponent "PathComponent" and shape-specific components such as \ref donner::svg::components::RectComponent "RectComponent" store the user-provided shape information. These are transformed at the **Computed tree** stage into \ref donner::svg::components::ComputedPathComponent "ComputedPathComponent", which contains the \ref donner::PathSpline "PathSpline" for the shape.
+\ref donner::svg::components::PathComponent "PathComponent" and shape-specific components such as \ref donner::svg::components::RectComponent "RectComponent" store the user-provided shape information. These are transformed at the **Computed tree** stage into \ref donner::svg::components::ComputedPathComponent "ComputedPathComponent", which contains the \ref donner::svg::PathSpline "PathSpline" for the shape.
 
 This step must happen _after_ the styling phase to ensure SVG2 presentation attributes are properly propagated.
 

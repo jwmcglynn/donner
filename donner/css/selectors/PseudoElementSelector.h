@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
-#include "donner/base/element/ElementLike.h"
+#include "donner/base/element/ElementLike.h"  // IWYU pragma: keep, for ElementLike
 #include "donner/css/ComponentValue.h"
 
 namespace donner::css {

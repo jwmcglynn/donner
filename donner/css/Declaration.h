@@ -1,8 +1,7 @@
 #pragma once
 /// @file
 
-#include <iostream>
-#include <optional>
+#include <ostream>
 #include <variant>
 #include <vector>
 
@@ -36,6 +35,9 @@ struct Declaration {
         values(std::move(values)),
         sourceOffset(sourceOffset),
         important(important) {}
+
+  /// Destructor.
+  ~Declaration() = default;
 
   // Copy and move constructors and assignment operators.
   Declaration(const Declaration& other) = default;

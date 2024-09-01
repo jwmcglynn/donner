@@ -7,7 +7,7 @@
 namespace donner::svg::parser {
 
 /**
- * Options for \ref ParseAngle, which controls whether bare zero is allowed.
+ * Options for \ref donner::svg::parser::ParseAngle, which controls whether bare zero is allowed.
  */
 enum class AngleParseOptions {
   None,          ///< Angles require a dimension suffix, such as '30deg' or '2rad'.
@@ -19,7 +19,7 @@ enum class AngleParseOptions {
  *
  * @param component The CSS component value to parse.
  * @param options Options for parsing.
- * @return The angle in radians, or a \ref ParseError if parsing failed.
+ * @return The angle in radians, or a \ref donner::base::parser::ParseError if parsing failed.
  */
 ParseResult<double> ParseAngle(const css::ComponentValue& component,
                                AngleParseOptions options = AngleParseOptions::None);

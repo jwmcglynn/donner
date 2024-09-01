@@ -388,7 +388,7 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
   }
 
   // Now traverse the tree from the root down and compute values that inherit from the parent.
-  // TODO: Also calculate the absolute transform
+  // TODO(jwmcglynn): Also calculate the absolute transform
   struct ElementContext {
     Entity entity;
     std::optional<Boxd> parentViewbox;
@@ -454,7 +454,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
 
   TransformComponent& transform = lightEntity.get<TransformComponent>();
 
-  // TODO: This should avoid recomputing the transform each request.
+  // TODO(jwmcglynn): This should avoid recomputing the transform each request.
   const auto& properties = style.properties->unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
     const parser::UnparsedProperty& property = it->second;
@@ -588,12 +588,12 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
       }
     }
 
-    // TODO: What are the objects "natural dimensions" for "2. Otherwise, if the missing dimension
-    // is present in the object’s natural dimensions"
+    // TODO(jwmcglynn): What are the objects "natural dimensions" for "2. Otherwise, if the missing
+    // dimension is present in the object’s natural dimensions"
 
     // > 3. Otherwise, the missing dimension of the concrete object size is taken from the default
     // > object size.
-    // TODO: PreserveAspectRatio
+    // TODO(jwmcglynn): PreserveAspectRatio
 
     if (!definiteWidth) {
       return Vector2d(canvasMaxBounds.size().x, GetDefiniteSize(properties.height));
@@ -603,8 +603,9 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   }
 
   // > If the specified size has no constraints:
-  // TODO: Skipping "1. If the object has a natural height or width, its size is resolved as if
-  // its natural dimensions were given as the specified size."
+  // TODO(jwmcglynn): Skipping "1. If the object has a natural height or width, its size is resolved
+  // as if its natural dimensions were given as the specified size."
+  //
   // > 2. Otherwise, its size is resolved as a contain constraint against the default object size.
   const ViewboxComponent& viewbox = root.get<ViewboxComponent>();
   if (!viewbox.viewbox) {

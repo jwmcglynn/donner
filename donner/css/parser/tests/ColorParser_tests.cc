@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
+#include "donner/css/Color.h"
 
 using testing::ElementsAre;
 using testing::Eq;
@@ -14,7 +15,8 @@ namespace donner::css::parser {
 using namespace base::parser;  // NOLINT: For tests
 
 TEST(Color, ColorPrintTo) {
-  using namespace string_literals;
+  using string_literals::operator""_rgb;
+  using string_literals::operator""_rgba;
 
   EXPECT_EQ(testing::PrintToString(Color(RGBA(0x11, 0x22, 0x33, 0x44))),
             "Color(rgba(17, 34, 51, 68))");

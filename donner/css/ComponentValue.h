@@ -122,9 +122,13 @@ struct ComponentValue {
   ~ComponentValue();
 
   // Copy and move constructors.
+  /// Copy constructor.
   ComponentValue(const ComponentValue&) = default;
+  /// Move constructor.
   ComponentValue& operator=(const ComponentValue&) = default;
+  /// Move assignment operator.
   ComponentValue(ComponentValue&&) noexcept = default;
+  /// Copy assignment operator.
   ComponentValue& operator=(ComponentValue&&) noexcept = default;
 
   /// Equality operator.

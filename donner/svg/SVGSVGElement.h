@@ -12,7 +12,7 @@ namespace donner::svg {
 
 // clang-format off
 /**
- * @page xml_svg '<svg>'
+ * @page xml_svg "<svg>"
  * @ingroup elements_structural
  *
  * The root element of an SVG document.

@@ -4,13 +4,14 @@
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DocumentContext.h"
+#include "donner/svg/components/RenderingContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 
 namespace donner::svg {
 
 SVGDocument::SVGDocument() : registry_(std::make_unique<Registry>()) {
-  components::DocumentContext& ctx =
-      registry_->ctx().emplace<components::DocumentContext>(*this, *registry_);
+  components::DocumentContext& ctx = registry_->ctx().emplace<components::DocumentContext>(
+      components::DocumentContext::InternalCtorTag{}, *this, *registry_);
   ctx.rootEntity = SVGSVGElement::Create(*this).entity();
 }
 
@@ -23,13 +24,13 @@ SVGSVGElement SVGDocument::svgElement() const {
 }
 
 void SVGDocument::setCanvasSize(int width, int height) {
-  // TODO: Invalidate render tree?
   assert(width > 0 && height > 0);
+  components::RenderingContext(*registry_).invalidateRenderTree();
   registry_->ctx().get<components::DocumentContext>().canvasSize = Vector2i(width, height);
 }
 
 void SVGDocument::useAutomaticCanvasSize() {
-  // TODO: Invalidate render tree?
+  components::RenderingContext(*registry_).invalidateRenderTree();
   registry_->ctx().get<components::DocumentContext>().canvasSize = std::nullopt;
 }
 

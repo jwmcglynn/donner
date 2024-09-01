@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_filter '<filter>'
+ * @defgroup xml_filter "<filter>"
  *
  * Defines filter effects which can be applied to graphical elements.
  *

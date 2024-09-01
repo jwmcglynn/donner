@@ -8,9 +8,19 @@
 
 namespace donner::svg::parser {
 
+/**
+ * Contains the start location within a string where a subparser was invoked, used for remapping
+ * errors back to their original text.
+ */
 struct ParserOrigin {
+  /// 0-based offset into the string where the subparser started.
   size_t startOffset;
 
+  /**
+   * Create a ParserOrigin with the given start offset.
+   *
+   * @param startOffset 0-based offset into the string where the subparser started.
+   */
   static ParserOrigin StartOffset(size_t offset) { return ParserOrigin{offset}; }
 };
 

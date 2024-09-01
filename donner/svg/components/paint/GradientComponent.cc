@@ -1,7 +1,6 @@
 #include "donner/svg/components/paint/GradientComponent.h"
 
 #include "donner/base/MathUtils.h"
-#include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 

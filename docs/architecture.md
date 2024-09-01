@@ -49,7 +49,7 @@ See [Using the CSS API](DonnerAPI.html#using-the-css-api) for more details.
 The CSS layer parses stylesheets into lists of \ref donner::css::SelectorRule "SelectorRule" objects, which contains:
 
 - A \ref donner::css::Selector "Selector" object, which contains a matching pattern that can be used to match against a document tree.
-- A list of \ref donner::css::Declaraction "Declaration" objects, which correspond to the key-value pairs such as `color: red`
+- A list of \ref donner::css::Declaration "Declaration" objects, which correspond to the key-value pairs such as `color: red`
 
 At this layer, the style information has no semantics, it contains raw parsed data and the ability to cascade it to the document tree. This raw data is consumed by the **Styling** component to parse these values into meaningful styling information.
 
@@ -112,7 +112,7 @@ The `//donner/base` library contains common utility code used by the other libra
 - \ref donner::Length "Length" - a simple class to represent a length with a specific unit, such as `10px` or `10cm`.
 - and more...
 
-This library also contains common parsers such as \ref donner::NumberParser "NumberParser", which can parse a string into a number.
+This library also contains common parsers such as \ref donner::base::parser::NumberParser "NumberParser", which can parse a string into a number.
 
 The base library has minimal dependencies and the types within it may be suitable for other libraries, however the base library is not publicly exported.
 
@@ -122,7 +122,7 @@ Donner has a multi-level testing strategy and aims to make the library productio
 
 ### Unit tests
 
-All components should be unittested, and test coverage is measured using [Codecov](https://app.codecov.io/gh/jwmcglynn/donner).
+All components should be unit-tested, and test coverage is measured using [Codecov](https://app.codecov.io/gh/jwmcglynn/donner).
 
 ### Image comparison tests
 

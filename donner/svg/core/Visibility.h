@@ -1,8 +1,9 @@
 #pragma once
 /**
- * @file
- * Defines the \ref Visibility enum, which is used to determine whether an element is visible or
- * hidden.
+ * @file Visibility.h
+ *
+ * Defines the \ref donner::svg::Visibility enum, which is used to determine whether an element is
+ * visible or hidden.
  */
 
 #include <ostream>

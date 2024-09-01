@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/base/RcString.h"
-#include "donner/base/element/ElementLike.h"
+#include "donner/base/element/ElementLike.h"  // IWYU pragma: keep, for ElementLike
 
 namespace donner::css {
 
@@ -25,10 +25,14 @@ struct ClassSelector {
   /// Destructor.
   ~ClassSelector() noexcept = default;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Move constructor.
   ClassSelector(ClassSelector&&) = default;
+  /// Move assignment operator.
   ClassSelector& operator=(ClassSelector&&) = default;
+  /// Copy constructor.
   ClassSelector(const ClassSelector&) = default;
+  /// Copy assignment operator.
   ClassSelector& operator=(const ClassSelector&) = default;
 
   /// Returns true if this is a valid selector.

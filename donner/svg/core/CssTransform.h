@@ -25,7 +25,7 @@ namespace donner::svg {
  * See https://www.w3.org/TR/css-transforms-1/#two-d-transform-functions for more details about CSS
  * transforms.
  *
- * CssTransform is parsed by \ref CssTransformParser.
+ * CssTransform is parsed by \ref donner::svg::parser::CssTransformParser.
  */
 class CssTransform {
 public:
@@ -39,7 +39,7 @@ public:
    *
    * @param transform Initial transform.
    */
-  explicit CssTransform(Transformd transform) { addTransform(std::move(transform)); }
+  explicit CssTransform(const Transformd& transform) { addTransform(transform); }
 
   /**
    * Stores a precomputed transform.
@@ -87,7 +87,7 @@ public:
    *
    * @param transform Transform to add.
    */
-  void addTransform(Transformd transform) {
+  void addTransform(const Transformd& transform) {
     if (!elements_.empty()) {
       if (Simple* s = std::get_if<Simple>(&elements_.back())) {
         s->transform = s->transform * transform;

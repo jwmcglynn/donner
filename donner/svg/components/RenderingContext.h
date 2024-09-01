@@ -3,16 +3,20 @@
 
 #include <vector>
 
-#include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/parser/ParseError.h"
-#include "donner/svg/components/IdComponent.h"
 #include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 
+/**
+ * Rendering controller, which instantiates and and manages the rendering tree.
+ *
+ * Used during the rendering phase in combination with the rendering backend.
+ */
 class RenderingContext {
 public:
+  /// Constructor.
   explicit RenderingContext(Registry& registry);
 
   /**
@@ -27,10 +31,14 @@ public:
   /**
    * Find the first entity that intersects the given point.
    *
-   * @param registry Registry used to find all shape components
    * @param point Point to find the intersecting entity for
    */
   Entity findIntersecting(const Vector2d& point);
+
+  /**
+   * Invalidate the rendering tree, forcing it to be recreated on the next render.
+   */
+  void invalidateRenderTree();
 
 private:
   /**
@@ -47,7 +55,9 @@ private:
    */
   void instantiateRenderTreeWithPrecomputedTree(bool verbose);
 
-  Registry& registry_;
+private:
+  /// Reference to the registry containing the render tree.
+  Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
 };
 
 }  // namespace donner::svg::components

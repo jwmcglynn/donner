@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file
- * Defines the \ref FillRule enum used for determining how fills are painted on shapes.
+ * Defines the \ref donner::svg::FillRule enum used for determining how fills are painted on shapes.
  */
 
 #include <ostream>

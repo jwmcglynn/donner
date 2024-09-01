@@ -9,7 +9,7 @@
 namespace donner::svg::components {
 
 /**
- * Parameters for a <ellipse> element.
+ * Parameters for a \ref xml_ellipse element.
  */
 struct EllipseProperties {
   Property<Lengthd> cx{"cx",

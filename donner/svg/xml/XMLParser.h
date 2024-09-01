@@ -3,7 +3,6 @@
 
 #include <cstddef>
 #include <istream>
-#include <span>
 
 #include "donner/base/parser/ParseResult.h"
 #include "donner/svg/SVGDocument.h"
@@ -108,7 +107,6 @@ public:
      * ```
      *
      * @param stream Input stream to read from.
-     * @return The number of bytes read.
      */
     void loadFromStream(std::istream& stream) {
       stream.seekg(0, std::ios::end);

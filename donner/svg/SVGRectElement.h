@@ -9,7 +9,7 @@ namespace donner::svg {
 
 // clang-format off
 /**
- * @page xml_rect '<rect>'
+ * @page xml_rect "<rect>"
  * @ingroup elements_basic_shapes
  *
  * Creates a rectangle with the top-left corner at (`x`, `y`) and the specified `width` and

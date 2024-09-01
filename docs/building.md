@@ -61,7 +61,7 @@ bazel run //experimental/wasm:serve_http
 
 ## Build reports
 
-See the latest [Build report](../build_report.md).
+See the latest [Build report](./build_report.md).
 
 To generate a build report locally, run:
 

@@ -1,5 +1,19 @@
+/**
+ * @file renderer_tool.cc
+ *
+ * # Donner SVG Renderer Tool
+ *
+ * Renders an `.svg` file and prints debugging information about it, such as the parsed tree and
+ * warnings. Saves the output to `output.png`.
+ *
+ * ```
+ * USAGE: renderer_tool <filename> [--quiet]
+ *
+ *  filename: The SVG file to render.
+ *  --quiet: Do not output the parsed tree or warnings.
+ * ```
+ */
 #include <chrono>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -13,12 +27,48 @@
 
 namespace donner::svg {
 
+/**
+ * Implements a simple RAII execution time tracer.
+ *
+ * Usage:
+ * ```
+ * {
+ *   Trace trace("My trace");
+ *  ...
+ * }
+ * ```
+ *
+ * This will print the execution time of the code within the block.
+ **/
 class Trace {
 public:
+  /// Start a new trace with the given name.
   explicit Trace(const char* name) : name_(name) {}
 
+  // No copy or move.
+  Trace(const Trace&) = delete;
+  Trace(Trace&&) = delete;
+  Trace& operator=(const Trace&) = delete;
+  Trace& operator=(Trace&&) = delete;
+
+  /// Stop the trace.
   ~Trace() { stop(); }
 
+  /**
+   *
+   * Explicitly stop the trace, to stop before this object is destructed. Once stopped, the trace
+   * cannot be restarted.
+   *
+   * Example:
+   * ```
+   * {
+   *   Trace trace("My trace");
+   *   ...
+   *   trace.stop();
+   *   ...
+   * }
+   * ```
+   */
   void stop() {
     if (!stopped_) {
       stopped_ = true;
@@ -31,13 +81,21 @@ public:
   }
 
 private:
-  const char* name_;
-  bool stopped_ = false;
+  const char* name_;      //!< Trace name.
+  bool stopped_ = false;  //!< True if the trace has been stopped.
+  /// Trace start time.
   std::chrono::time_point<std::chrono::high_resolution_clock> start_ =
       std::chrono::high_resolution_clock::now();
 };
 
-void DumpTree(SVGElement element, int depth) {
+/**
+ * Dump the SVG tree to the console, starting with \p element.
+ *
+ * @param element The root element of the tree to dump.
+ * @param depth The depth of the current element in the tree, used to control indentation. Defaults
+ * to 0 for the root.
+ */
+void DumpTree(SVGElement element, int depth = 0) {
   for (int i = 0; i < depth; ++i) {
     std::cout << "  ";
   }
@@ -54,6 +112,7 @@ void DumpTree(SVGElement element, int depth) {
   }
 }
 
+/// Tool entry point, usage is described in the file header.
 extern "C" int main(int argc, char* argv[]) {
   // Initialize the symbolizer to get a human-readable stack trace
   absl::InitializeSymbolizer(argv[0]);

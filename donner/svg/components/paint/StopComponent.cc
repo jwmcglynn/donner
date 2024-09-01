@@ -1,7 +1,7 @@
 #include "donner/svg/components/paint/StopComponent.h"
 
 #include "donner/css/parser/ColorParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"
+#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, For ParsePresentationAttribute
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
@@ -28,11 +28,19 @@ std::optional<parser::ParseError> ParseStopOpacity(StopProperties& properties,
       &properties.stopOpacity);
 }
 
-// Returns true if the property was found and parsed successfully.
-parser::ParseResult<bool> ParseProperty(std::string_view name,
-                                        const parser::PropertyParseFnParams& params,
-                                        StopProperties& properties) {
-  // TODO: Case insensitive?
+/**
+ * Parse presentation attributes for a \ref xml_stop element, such as `stop-color` and
+ * `stop-opacity`.
+ *
+ * @param name Presentation attribute name (e.g. `stop-color`)
+ * @param params Parameters for the property parsing function.
+ * @param properties Properties storage for the parsed result.
+ * @return True if the property was found and parsed successfully.
+ */
+parser::ParseResult<bool> ParseStopPresentationAttribute(
+    std::string_view name, const parser::PropertyParseFnParams& params,
+    StopProperties& properties) {
+  // TODO(jwmcglynn): Case insensitive?
   if (name == "stop-color") {
     if (auto maybeError = ParseStopColor(properties, params)) {
       return std::move(maybeError.value());
@@ -60,7 +68,7 @@ ComputedStopComponent::ComputedStopComponent(
         unparsedProperty.declaration, unparsedProperty.specificity,
         parser::PropertyParseBehavior::AllowUserUnits);
 
-    auto result = ParseProperty(name, params, properties);
+    auto result = ParseStopPresentationAttribute(name, params, properties);
     if (result.hasError() && outWarnings) {
       outWarnings->emplace_back(std::move(result.error()));
     }
@@ -82,7 +90,7 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Stop>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   components::StopProperties& properties =
       handle.get_or_emplace<components::StopComponent>().properties;
-  return components::ParseProperty(name, params, properties);
+  return components::ParseStopPresentationAttribute(name, params, properties);
 }
 
 }  // namespace donner::svg::parser

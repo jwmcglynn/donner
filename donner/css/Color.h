@@ -6,8 +6,6 @@
 #include <string_view>
 #include <variant>
 
-#include "donner/base/Utils.h"
-
 namespace donner::css {
 
 /**
@@ -83,7 +81,7 @@ struct HSLA {
    * @param s The saturation component, as a percentage [0, 1].
    * @param l The lightness component, as a percentage [0, 1].
    */
-  static constexpr HSLA HSL(float h, float s, float l) { return {h, s, l, 0xFF}; }
+  static constexpr HSLA HSL(float hDeg, float s, float l) { return {hDeg, s, l, 0xFF}; }
 
   /// Convert the color to an RGBA color.
   RGBA toRGBA() const;
@@ -106,7 +104,7 @@ struct HSLA {
  * Represents a CSS color value, like a \ref RGBA color from a `#rrggbb` or `#rgb` hex value, or the
  * `currentcolor` keyword.
  *
- * Colors are parsed using \ref ColorParser.
+ * Colors are parsed using \ref donner::css::parser::ColorParser.
  *
  * Note that non-RGB colors, such as HSL are not yet supported, see bug
  * https://github.com/jwmcglynn/donner/issues/6.

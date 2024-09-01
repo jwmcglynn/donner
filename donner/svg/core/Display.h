@@ -1,7 +1,9 @@
 #pragma once
 /**
- * @file
- * Defines the \ref Display enum, which is used to determine how an element is rendered.
+ * @file Display.h
+ *
+ * Defines the \ref donner::svg::Display enum, which is used to determine how an element is
+ * rendered.
  */
 
 #include <ostream>

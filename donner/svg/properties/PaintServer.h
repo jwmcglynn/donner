@@ -1,13 +1,9 @@
 #pragma once
 /// @file
 
-#include <cassert>
 #include <optional>
-#include <string_view>
 #include <variant>
-#include <vector>
 
-#include "donner/base/RcString.h"
 #include "donner/css/Color.h"
 #include "donner/svg/graph/Reference.h"
 

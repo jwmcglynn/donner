@@ -156,7 +156,7 @@ Pseudo-classes are used to match elements in special states, such as the first c
 
   \snippet custom_css_parser.cc parse_style_attribute
 
-- \ref donner::css::CSS:ParseSelector "ParseSelector" parses a CSS selector, and may be used for implementing `querySelector`.
+- \ref donner::css::CSS::ParseSelector "ParseSelector" parses a CSS selector, and may be used for implementing `querySelector`.
 
   \snippet custom_css_parser.cc parse_selector
 

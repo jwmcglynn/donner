@@ -1,5 +1,12 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 
+#include "donner/svg/components/TreeComponent.h"
+#include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
+
 namespace donner::svg::components {
 
 namespace {
@@ -27,7 +34,8 @@ inline std::tuple<Entity, RcString> GetPaintTarget(Registry& registry, Entity li
 }  // namespace
 
 void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent& shadow) {
-  // TODO: Ideally TreeComponents should automatically cleanup when the Entity is deleted.
+  // TODO(jwmcglynn): Ideally TreeComponents should automatically cleanup when the Entity is
+  // deleted.
   if (shadow.mainBranch) {
     for (const auto& shadow : shadow.mainBranch->shadowEntities) {
       registry.get<TreeComponent>(shadow).remove(registry);

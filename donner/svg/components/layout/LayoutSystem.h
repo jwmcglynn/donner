@@ -98,7 +98,7 @@ public:
   /**
    * Set the entity-from-parent transform for the current entity.
    *
-   * @param handle Current entity.
+   * @param entity Current entity.
    * @param entityFromParent New transform.
    */
   void setEntityFromParentTransform(EntityHandle entity, const Transformd& entityFromParent);
@@ -155,7 +155,7 @@ public:
    * Creates a \ref ComputedSizedElementComponent for the linked entity, using precomputed style
    * information.
    *
-   * @param entity Entity handle.
+   * @param handle Entity handle.
    * @param style Precomputed style information for this element
    * @param fontMetrics Font metrics, used to scale lengths
    * @param outWarnings Output vector of parse errors, if any.
@@ -169,7 +169,7 @@ public:
    * Creates a \ref ComputedLocalTransformComponent for the linked entity, using precomputed style
    * information.
    *
-   * @param entity Entity handle.
+   * @param handle Entity handle.
    * @param style Precomputed style information for this element
    * @param fontMetrics Font metrics, used to scale lengths
    * @param outWarnings Output vector of parse errors, if any.

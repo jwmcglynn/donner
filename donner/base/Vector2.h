@@ -387,13 +387,13 @@ struct Vector2 {
 /// @addtogroup Typedefs
 /// @{
 
-/// Shorthand for \ref Vector2<float>.
+/// Shorthand for \c Vector2<float>
 typedef Vector2<float> Vector2f;
 
-/// Shorthand for \ref Vector2<double>.
+/// Shorthand for \c Vector2<double>
 typedef Vector2<double> Vector2d;
 
-/// Shorthand for \ref Vector2<int>.
+/// Shorthand for \c Vector2<int>
 typedef Vector2<int> Vector2i;
 
 /// @}

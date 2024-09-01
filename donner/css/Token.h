@@ -37,8 +37,8 @@ struct Token {
    * Raw CSS tokens, which are created as a first step when parsing a CSS string. See
    * https://www.w3.org/TR/css-syntax-3/#tokenization for more details.
    *
-   * Tokens are created by \ref donner::css::details::Tokenizer, which is automatically used within
-   * the CSS parser suite.
+   * Tokens are created by \ref donner::css::parser::details::Tokenizer, which is automatically used
+   * within the CSS parser suite.
    *
    * A full list of tokens can be found in the \ref TokenValue variant list.
    *
@@ -495,8 +495,8 @@ struct Token {
     RcString suffixString;  //!< Raw string of the unit suffix, e.g. 'px'.
     std::optional<Lengthd::Unit>
         suffixUnit;  //!< The parsed unit of the suffix, if known. If the input string has an
-                     //!< invalid suffix, and \ref LengthParser failed to identify it, this will
-                     //!< `std::nullopt`.
+                     //!< invalid suffix, and \ref donner::base::parser::LengthParser failed to
+                     //!< identify it, this will be \c std::nullopt.
     RcString valueString;  ///< The original string of the \ref value number.
     NumberType type;       ///< The type of number, either integer or floating point.
   };
@@ -934,14 +934,13 @@ struct Token {
    */
   bool isParseError() const {
     switch (value_.index()) {
-      case indexOf<BadUrl>():
-      case indexOf<BadString>():
-      case indexOf<CloseParenthesis>():
-      case indexOf<CloseSquareBracket>():
+      case indexOf<BadUrl>(): [[fallthrough]];
+      case indexOf<BadString>(): [[fallthrough]];
+      case indexOf<CloseParenthesis>(): [[fallthrough]];
+      case indexOf<CloseSquareBracket>(): [[fallthrough]];
       case indexOf<CloseCurlyBracket>(): return true;
+      default: return false;
     }
-
-    return false;
   }
 
   /// Equality operator.

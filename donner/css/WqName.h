@@ -18,6 +18,7 @@ namespace donner::css {
  * - `*|foo`, represents the name `foo` which belongs to any namespace.
  */
 struct WqName {
+  /// Name with optional namespace.
   XMLQualifiedName name;
 
   /**

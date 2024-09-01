@@ -1,13 +1,12 @@
 #include "donner/svg/components/RenderingContext.h"
 
 #include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
-#include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
@@ -15,6 +14,7 @@
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -56,8 +56,8 @@ public:
    *   subtree.
    * @return The last rendered entity.
    */
-  // TODO: Since 'stroke' and 'fill' may reference the same tree, we need to create two instances of
-  // it in the render tree.
+  // TODO(jwmcglynn): Since 'stroke' and 'fill' may reference the same tree, we need to create two
+  // instances of it in the render tree.
   void traverseTree(Entity treeEntity, Entity* lastRenderedEntityIfSubtree = nullptr) {
     const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
@@ -144,7 +144,7 @@ public:
     if (properties.opacity.getRequired() < 1.0 || instance.resolvedFilter || instance.clipPath) {
       instance.isolatedLayer = true;
 
-      // TODO: Calculate hint for size of layer.
+      // TODO(jwmcglynn): Calculate hint for size of layer.
       ++layerDepth;
     }
 
@@ -282,11 +282,14 @@ public:
   }
 
 private:
-  Registry& registry_;
-  bool verbose_;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  Registry& registry_;  //!< Registry being operated on for rendering..
+  bool verbose_;        //!< If true, enable verbose logging.
 
-  int drawOrder_ = 0;
-  Entity lastRenderedEntity_ = entt::null;
+  int drawOrder_ = 0;                       //!< The current draw order index.
+  Entity lastRenderedEntity_ = entt::null;  //!< The last entity rendered.
+  /// Holds the current paint servers for resolving the `context-fill` and `context-stroke` paint
+  /// values.
   ContextPaintServers contextPaintServers_;
 };
 
@@ -311,8 +314,9 @@ RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
 
 void RenderingContext::instantiateRenderTree(bool verbose,
                                              std::vector<parser::ParseError>* outWarnings) {
+  // TODO(jwmcglynn): Support partial invalidation, where we only recompute the subtree that has
+  // changed.
   // Call ShadowTreeSystem::teardown() to destroy any existing shadow trees.
-  // TODO: Only do this when this part of the tree is invalidated.
   for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
     auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
     ShadowTreeSystem().teardown(registry_, shadow);
@@ -337,7 +341,7 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
         StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
     const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
 
-    // TODO: Handle different PointerEvents cases.
+    // TODO(jwmcglynn): Handle different PointerEvents cases.
     if (pointerEvents == PointerEvents::None) {
       continue;
     }
@@ -374,6 +378,10 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
   }
 
   return entt::null;
+}
+
+void RenderingContext::invalidateRenderTree() {
+  registry_.clear<RenderingInstanceComponent>();
 }
 
 // 1. Setup shadow trees
@@ -464,7 +472,7 @@ void RenderingContext::createComputedComponents(std::vector<parser::ParseError>*
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
-  registry_.clear<RenderingInstanceComponent>();
+  invalidateRenderTree();
 
   const Entity rootEntity = registry_.ctx().get<DocumentContext>().rootEntity;
 

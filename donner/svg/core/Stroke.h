@@ -1,8 +1,9 @@
 #pragma once
 /**
- * @file
- * Defines stroke CSS property enums and types, \ref StrokeLinecap, \ref StrokeLinejoin, and \ref
- * StrokeDasharray.
+ * @file Stroke.h
+ *
+ * Defines stroke CSS property enums and types, \ref donner::svg::StrokeLinecap, \ref
+ * donner::svg::StrokeLinejoin, and \ref donner::svg::StrokeDasharray.
  */
 
 #include <ostream>

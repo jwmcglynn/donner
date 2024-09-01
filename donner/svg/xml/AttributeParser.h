@@ -12,7 +12,7 @@ namespace donner::svg::parser {
 class AttributeParser {
 public:
   /**
-   * Parse an XML attribute and set it on the given \ref element.
+   * Parse an XML attribute and set it on the given \c element.
    *
    * @param context The parser context, used to store XML document metadata and store warnings.
    * @param element The element to set the attribute on.

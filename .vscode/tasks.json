@@ -21,7 +21,8 @@
         }
       },
       "group": {
-        "kind": "build"
+        "kind": "build",
+        "isDefault": true
       },
       "presentation": {
         "revealProblems": "always"
@@ -67,10 +68,7 @@
       "problemMatcher": [
         "$gcc"
       ],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
+      "group": "build",
       "presentation": {
         "clear": true
       }

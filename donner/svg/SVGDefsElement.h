@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_defs '<defs>'
+ * @page xml_defs "<defs>"
  * @ingroup elements_structural
  *
  * Container for \b definitions of reusable graphics elements. It is not rendered directly,

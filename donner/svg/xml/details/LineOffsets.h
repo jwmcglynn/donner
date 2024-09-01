@@ -65,6 +65,8 @@ public:
 
   /**
    * Returns the offset of a given 1-indexed line number.
+   *
+   * @param line Line number, starting from 1.
    */
   size_t lineOffset(size_t line) const {
     if (line == 1) {
@@ -76,6 +78,7 @@ public:
   }
 
 private:
+  /// 0-indexed offsets of the start of each line.
   std::vector<size_t> offsets_;
 };
 

@@ -21,7 +21,9 @@ struct AttributesComponent {
   // No copy, move-only.
   AttributesComponent(const AttributesComponent&) = delete;
   AttributesComponent& operator=(const AttributesComponent&) = delete;
+  /// Move constructor.
   AttributesComponent(AttributesComponent&&) = default;
+  /// Move assignment operator.
   AttributesComponent& operator=(AttributesComponent&&) = default;
 
   /// Destructor.

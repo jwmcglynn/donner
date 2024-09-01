@@ -4,7 +4,6 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
-#include "donner/css/details/AnbValue.h"
 #include "donner/css/parser/details/ComponentValueParser.h"
 
 using testing::ElementsAre;

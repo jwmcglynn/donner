@@ -69,6 +69,19 @@ struct Transform {
    */
   explicit Transform(UninitializedTag) {}
 
+  /// Destructor.
+  ~Transform() = default;
+
+  // Copyable and moveable.
+  /// Copy constructor.
+  Transform(const Transform<T>&) = default;
+  /// Move constructor.
+  Transform(Transform<T>&&) = default;
+  /// Copy assignment operator.
+  Transform<T>& operator=(const Transform<T>&) = default;
+  /// Move assignment operator.
+  Transform<T>& operator=(Transform<T>&&) = default;
+
   /**
    * Return a 2D rotation matrix with the given angle, in radians.
    *
@@ -266,19 +279,6 @@ struct Transform {
     return *this;
   }
 
-  /// Assignment operator.
-  Transform<T>& operator=(const Transform<T>& other) {
-    if (this == &other) {
-      return *this;
-    }
-
-    for (int i = 0; i < 6; ++i) {
-      data[i] = other.data[i];
-    }
-
-    return *this;
-  }
-
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const Transform<T>& t) {
     os << "matrix(" << t.data[0] << " " << t.data[1] << " " << t.data[2] << " " << t.data[3] << " "
@@ -294,10 +294,10 @@ struct Transform {
 /// @addtogroup Typedefs
 /// @{
 
-/// Shorthand for \ref Transform<float>.
+/// Shorthand for \c Transform<float>
 typedef Transform<float> Transformf;
 
-/// Shorthand for \ref Transform<double>.
+/// Shorthand for \c Transform<double>
 typedef Transform<double> Transformd;
 
 /// @}

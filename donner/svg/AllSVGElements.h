@@ -35,7 +35,8 @@
 namespace donner::svg {
 
 /**
- * A type list of all SVG element types, used by \ref AttributeParser and \ref XMLParser.
+ * A type list of all SVG element types, used by \ref donner::svg::parser::AttributeParser and \ref
+ * donner::svg::parser::XMLParser.
  */
 using AllSVGElements = entt::type_list<  //
     SVGCircleElement,                    //

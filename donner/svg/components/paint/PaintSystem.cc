@@ -29,7 +29,7 @@ bool HasNoStructuralChildren(EntityHandle handle) {
   const TreeComponent& tree = handle.get<TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = registry.get<TreeComponent>(cur).nextSibling()) {
-    // TODO: Detect <desc>, <metadata>, <title> elements.
+    // TODO(jwmcglynn): Detect <desc>, <metadata>, <title> elements.
     return false;
   }
 

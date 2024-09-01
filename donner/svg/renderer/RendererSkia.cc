@@ -94,8 +94,8 @@ SkPaint::Cap toSkia(StrokeLinecap lineCap) {
 }
 
 SkPaint::Join toSkia(StrokeLinejoin lineJoin) {
-  // TODO: Implement MiterClip and Arcs. For now, fallback to Miter, which is the default linejoin,
-  // since the feature is not implemented.
+  // TODO(jwmcglynn): Implement MiterClip and Arcs. For now, fallback to Miter, which is the default
+  // linejoin, since the feature is not implemented.
   switch (lineJoin) {
     case StrokeLinejoin::Miter: return SkPaint::Join::kMiter_Join;
     case StrokeLinejoin::MiterClip: return SkPaint::Join::kMiter_Join;
@@ -150,10 +150,11 @@ SkTileMode toSkia(GradientSpreadMethod spreadMethod) {
 
 }  // namespace
 
+/// Implementation class for \ref RendererSkia
 class RendererSkia::Impl {
 public:
-  Impl(RendererSkia& renderer, RenderingInstanceView&& view)
-      : renderer_(renderer), view_(std::move(view)) {}
+  Impl(RendererSkia& renderer, const RenderingInstanceView& view)
+      : renderer_(renderer), view_(view) {}
 
   void drawUntil(Registry& registry, Entity endEntity) {
     bool foundEndEntity = false;
@@ -203,14 +204,14 @@ public:
           SkPaint opacityPaint;
           opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
 
-          // TODO: Calculate hint for size of layer.
+          // TODO(jwmcglynn): Calculate hint for size of layer.
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
         } else if (instance.resolvedFilter) {
           SkPaint filterPaint;
           filterPaint.setAntiAlias(renderer_.antialias_);
           createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
 
-          // TODO: Calculate the bounds.
+          // TODO(jwmcglynn): Calculate the bounds.
           renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
         } else if (instance.clipPath) {
           const components::ResolvedClipPath& ref = instance.clipPath.value();
@@ -436,9 +437,9 @@ public:
 
       SkPaint paint;
       paint.setAntiAlias(renderer_.antialias_);
-      paint.setShader(SkGradientShader::MakeLinear(points, color.data(), pos.data(), numStops,
-                                                   toSkia(computedGradient.spreadMethod), 0,
-                                                   &localMatrix));
+      paint.setShader(SkGradientShader::MakeLinear(
+          static_cast<const SkPoint*>(points), color.data(), pos.data(), numStops,
+          toSkia(computedGradient.spreadMethod), 0, &localMatrix));
       return paint;
     } else {
       const auto& radialGradient = target.get<components::ComputedRadialGradientComponent>();

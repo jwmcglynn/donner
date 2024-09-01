@@ -44,9 +44,13 @@ struct XMLQualifiedName {
   ~XMLQualifiedName() = default;
 
   // Move and copy constructors.
+  /// Move constructor.
   XMLQualifiedName(XMLQualifiedName&&) = default;
+  /// Copy constructor.
   XMLQualifiedName(const XMLQualifiedName&) = default;
+  /// Move assignment operator.
   XMLQualifiedName& operator=(XMLQualifiedName&&) = default;
+  /// Copy assignment operator.
   XMLQualifiedName& operator=(const XMLQualifiedName&) = default;
 
   /// Comparison operator.
@@ -108,7 +112,7 @@ struct XMLQualifiedNameRef {
   /* implicit */ constexpr XMLQualifiedNameRef(const char* name) : namespacePrefix(), name(name) {}
 
   /**
-   * Construct from an attribute name as a \ref std::string_view, assumes no namespacePrefix.
+   * Construct from an attribute name as a \c std::string_view, assumes no namespacePrefix.
    *
    * @param name The attribute name.
    */
@@ -135,9 +139,13 @@ struct XMLQualifiedNameRef {
   ~XMLQualifiedNameRef() = default;
 
   // Move and copy constructors.
+  /// Move constructor.
   XMLQualifiedNameRef(XMLQualifiedNameRef&&) = default;
+  /// Copy constructor.
   XMLQualifiedNameRef(const XMLQualifiedNameRef&) = default;
+  /// Move assignment operator.
   XMLQualifiedNameRef& operator=(XMLQualifiedNameRef&&) = default;
+  /// Copy assignment operator.
   XMLQualifiedNameRef& operator=(const XMLQualifiedNameRef&) = default;
 
   /// Comparison operator.
@@ -161,6 +169,7 @@ struct XMLQualifiedNameRef {
     return lhs.namespacePrefix <=> rhs.namespacePrefix;
   }
 
+  /// Friend operator for \ref XMLQualifiedName comparison.
   friend std::strong_ordering operator<=>(const XMLQualifiedName& lhs,
                                           const XMLQualifiedNameRef& rhs) {
     if (lhs.name != rhs.name) {
@@ -174,6 +183,7 @@ struct XMLQualifiedNameRef {
     return lhs.name == rhs.name && lhs.namespacePrefix == rhs.namespacePrefix;
   }
 
+  /// Friend operator for \ref XMLQualifiedName equality for gtest.
   friend bool operator==(const XMLQualifiedNameRef& lhs, const XMLQualifiedName& rhs) {
     return lhs.name == rhs.name && lhs.namespacePrefix == rhs.namespacePrefix;
   }
@@ -209,7 +219,7 @@ struct XMLQualifiedNameRef {
 template <>
 struct std::hash<donner::XMLQualifiedNameRef> {
   /**
-   * Hash function for \ref XMLQualifiedName.
+   * Hash function for \ref donner::XMLQualifiedName.
    *
    * @param attr Input attribute.
    * @return std::size_t Output hash.
@@ -228,7 +238,7 @@ struct std::hash<donner::XMLQualifiedNameRef> {
 template <>
 struct std::hash<donner::XMLQualifiedName> {
   /**
-   * Hash function for \ref XMLQualifiedName.
+   * Hash function for \ref donner::XMLQualifiedName.
    *
    * @param attr Input attribute.
    * @return std::size_t Output hash.

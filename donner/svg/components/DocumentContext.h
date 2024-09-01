@@ -1,8 +1,6 @@
 #pragma once
 /// @file
 
-#include <vector>
-
 #include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/IdComponent.h"
@@ -17,32 +15,80 @@ class SVGDocument;
 
 namespace donner::svg::components {
 
+/**
+ * Holds global state of an SVG document, such as the root element, id-to-element mapping, and the
+ * document size.
+ *
+ * One instance of this class is created per SVG document.
+ *
+ * Access the document context via the \ref Registry::ctx API:
+ * ```
+ * DocumentContext& context = registry.ctx().get<DocumentContext>();
+ * Entity foo = context.getEntityById("foo");
+ * ```
+ */
 class DocumentContext {
-public:
-  DocumentContext(SVGDocument& document, Registry& registry);
+private:
+  friend class ::donner::svg::SVGDocument;
 
+  /// Tag to allow internal construction, used by \ref SVGDocument.
+  struct InternalCtorTag {};
+
+public:
+  /**
+   * Internal constructor, creates a context on the given \ref SVGDocument.
+   *
+   * To use this class, access it via the \ref Registry::ctx API.
+   * ```
+   * DocumentContext& context = registry.ctx().get<DocumentContext>();
+   * ```
+   *
+   * @param ctorTag Internal tag to allow construction.
+   * @param document The SVG document.
+   * @param registry Underlying registry for the document.
+   */
+  explicit DocumentContext(InternalCtorTag ctorTag, SVGDocument& document, Registry& registry);
+
+  /// Current canvas size, if set. Equivalent to the window size, which controls how the SVG
+  /// contents are rendered.
   std::optional<Vector2i> canvasSize;
+
+  /// Root entity of the document, which contains the \ref xml_svg element.
   Entity rootEntity = entt::null;
 
+  /// Get the SVGDocument instance.
   SVGDocument& document() const { return document_; }
 
+  /**
+   * Get the entity with the given ID, using the internal id-to-entity mapping.
+   *
+   * If multiple elements have the same id, the first one that was created will be returned.
+   *
+   * @param id ID to find the entity for.
+   */
   Entity getEntityById(const RcString& id) const {
     const auto it = idToEntity_.find(id);
     return (it != idToEntity_.end()) ? it->second : entt::null;
   }
 
 private:
+  /// Called when an ID is added to an element.
   void onIdSet(Registry& registry, Entity entity) {
     auto& idComponent = registry.get<IdComponent>(entity);
     idToEntity_.emplace(idComponent.id, entity);
   }
 
+  /// Called when an ID is removed from an element.
   void onIdDestroy(Registry& registry, Entity entity) {
     auto& idComponent = registry.get<IdComponent>(entity);
     idToEntity_.erase(idComponent.id);
   }
 
-  SVGDocument& document_;
+  /// Document reference. Note that this operates off of a forward declaration due to dependency
+  /// inversion. This class cannot use SVGDocument directly.
+  SVGDocument& document_; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+
+  /// Mapping from ID to entity.
   std::unordered_map<RcString, Entity> idToEntity_;
 };
 
