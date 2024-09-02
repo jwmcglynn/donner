@@ -93,7 +93,8 @@ concept OptionalSelectorLike = requires(const T t, const ElementType element) {
  *   https://www.w3.org/TR/selectors-4/#structural-pseudos
  */
 struct PseudoClassSelector {
-  RcString ident;  ///< The name of the pseudo-class.
+  RcString ident;  //!< The name of the pseudo-class.
+
   /// The arguments of the pseudo-class, if it is a function.
   std::optional<std::vector<ComponentValue>> argsIfFunction;
   /// The An+B value of the pseudo-class, for An+B pseudo-classes such as `:nth-child`.

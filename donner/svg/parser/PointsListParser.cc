@@ -6,10 +6,23 @@
 
 namespace donner::svg::parser {
 
+namespace {
+
+/// Implementation of \ref PointsListParser.
 class PointsListParserImpl : public base::parser::ParserBase {
 public:
-  PointsListParserImpl(std::string_view str) : ParserBase(str) {}
+  /**
+   * Construct a PointsListParserImpl.
+   *
+   * @param str The string to parse.
+   */
+  explicit PointsListParserImpl(std::string_view str) : ParserBase(str) {}
 
+  /**
+   * Parse the points list.
+   *
+   * @return The parsed points list, or an error if parsing failed.
+   */
   ParseResult<std::vector<Vector2d>> parse() {
     skipWhitespace();
 
@@ -52,6 +65,8 @@ private:
 
   std::vector<Vector2d> points_;
 };
+
+}  // namespace
 
 ParseResult<std::vector<Vector2d>> PointsListParser::Parse(std::string_view str) {
   PointsListParserImpl parser(str);

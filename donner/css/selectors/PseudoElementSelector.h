@@ -21,7 +21,8 @@ namespace donner::css {
  * For SVG, there are no supported pseudo-elements, however pseudo-classes are supported.
  */
 struct PseudoElementSelector {
-  RcString ident;  ///< The identifier of the pseudo-element.
+  RcString ident;  //!< The identifier of the pseudo-element.
+
   /// The arguments to the function, if this is a function.
   std::optional<std::vector<ComponentValue>> argsIfFunction;
 

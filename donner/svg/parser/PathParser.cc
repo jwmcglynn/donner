@@ -7,6 +7,8 @@
 
 namespace donner::svg::parser {
 
+namespace {
+
 /**
  * Implementation of \ref PathParser.
  *
@@ -15,8 +17,18 @@ namespace donner::svg::parser {
  */
 class PathParserImpl {
 public:
-  PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}
+  /**
+   * Construct a PathParserImpl.
+   *
+   * @param d The string to parse.
+   */
+  explicit PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}
 
+  /**
+   * Parse the path data.
+   *
+   * @return The parsed path data, or an error if parsing failed.
+   */
   ParseResult<PathSpline> parse() {
     skipWhitespace();
     if (remaining_.empty()) {
@@ -33,7 +45,7 @@ public:
         return ParseResult(spline_.build(), std::move(maybeCommand.error()));
       }
 
-      const TokenCommand command = std::move(maybeCommand.result());
+      const TokenCommand command = maybeCommand.result();
       if (command.token != Token::MoveTo) {
         ParseError err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
@@ -53,7 +65,7 @@ public:
       assert(maybeCommand.hasResult());  // processUntilNextCommand guarantees that the next read
                                          // contains a command.
 
-      TokenCommand command = std::move(maybeCommand.result());
+      const TokenCommand command = maybeCommand.result();
       std::optional<ParseError> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
         return ParseResult(spline_.build(), std::move(maybeError.value()));
@@ -475,6 +487,8 @@ private:
   Vector2d current_point_;       //!< Current point.
   Vector2d prev_control_point_;  //!< Previous curve's control point, for use with smooth curves.
 };
+
+}  // namespace
 
 ParseResult<PathSpline> PathParser::Parse(std::string_view d) {
   PathParserImpl parser(d);

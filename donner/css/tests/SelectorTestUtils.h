@@ -16,7 +16,7 @@ namespace donner::css {
  * EXPECT_THAT(selector, SelectorsAre(ComplexSelectorIs(...)));
  * @endcode
  *
- * @param complexSelectorsMatcher Matcher against a ComplexSelector array.
+ * @param matchers Matcher against a ComplexSelector array.
  */
 template <typename... Args>
 auto SelectorsAre(const Args&... matchers) {

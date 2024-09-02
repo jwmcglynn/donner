@@ -19,7 +19,7 @@ struct ParserOrigin {
   /**
    * Create a ParserOrigin with the given start offset.
    *
-   * @param startOffset 0-based offset into the string where the subparser started.
+   * @param offset 0-based offset into the string where the subparser started.
    */
   static ParserOrigin StartOffset(size_t offset) { return ParserOrigin{offset}; }
 };

@@ -173,7 +173,7 @@ public:
       const RcString& name = function->name;
       ComponentValueParser subparser(function->values);
 
-      // TODO: Should this be case-insensitive?
+      // TODO(jwmcglynn): Should this be case-insensitive?
       if (name == "matrix") {
         return parseMatrix(subparser);
       } else if (name == "translate") {
