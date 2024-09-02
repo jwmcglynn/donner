@@ -160,13 +160,13 @@ public:
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
-  /// Equality operator to a StringLike type such as \ref std::string_view or \ref RcString.
+  /// Equality operator to a StringLike type such as \c std::string_view or \ref RcString.
   template <StringLike StringT>
   constexpr friend bool operator==(const RcStringOrRef& lhs, const StringT& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
-  /// Reversed equality operator to a StringLike type such as \ref std::string_view or \ref
+  /// Reversed equality operator to a StringLike type such as \c std::string_view or \ref
   /// RcString.
   template <StringLike StringT>
   constexpr friend bool operator==(const StringT& lhs, const RcStringOrRef& rhs) {

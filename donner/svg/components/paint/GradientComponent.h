@@ -3,7 +3,6 @@
 
 #include <vector>
 
-#include "donner/base/parser/ParseError.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/registry/Registry.h"
@@ -44,11 +43,11 @@ struct GradientComponent {
  * Upon construction, fields are initialized to default values. The `initialize` method must be
  * called to complete initialization.
  *
- * To construct this object, call \ref GradientComponent::compute.
+ * To construct this object, call \ref PaintSystem::instantiateAllComputedComponents.
  */
 struct ComputedGradientComponent {
-  /// True if \ref initialize has been called on this component. If this is false, all other fields
-  /// of this component will be invalid.
+  /// True if this component has been initialized (it has two-phase construction). If this is false,
+  /// all other fields of this component will be invalid.
   bool initialized = false;
 
   /// Resolved value of the "gradientsUnits" attribute, considering inheritance and the default

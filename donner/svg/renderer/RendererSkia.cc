@@ -220,8 +220,8 @@ public:
           if (ref.units == ClipPathUnits::ObjectBoundingBox) {
             if (const auto* path =
                     instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-              // TODO: Extend this to get the element bounds for all child elements by adding an API
-              // to LayoutSystem.
+              // TODO(jwmcglynn): Extend this to get the element bounds for all child elements by
+              // adding an API to LayoutSystem.
               const Boxd bounds = path->spline.bounds();
               clipPathTransform =
                   Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
@@ -239,7 +239,8 @@ public:
           SkPath fullPath;
 
           // Iterate over children and add any paths to the clip.
-          // TODO: Move path/clip-rule aggregation and to a Computed component pre-calculation?
+          // TODO(jwmcglynn): Move path/clip-rule aggregation and to a Computed component
+          // pre-calculation?
           components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
             if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
               SkPath path = toSkia(clipPathData->spline);
@@ -388,7 +389,7 @@ public:
       transform *= Transformd::Scale(pathBounds.size());
       transform *= Transformd::Translate(pathBounds.topLeft);
 
-      // TODO: Can numbersArePercent be represented by the transform instead?
+      // TODO(jwmcglynn): Can numbersArePercent be represented by the transform instead?
       numbersArePercent = true;
     } else {
       transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
@@ -756,7 +757,7 @@ public:
       std::visit(entt::overloaded{//
                                   [&](const FilterEffect::None&) {},
                                   [&](const FilterEffect::Blur& blur) {
-                                    // TODO: Convert these Length units
+                                    // TODO(jwmcglynn): Convert these Length units
                                     filterPaint.setImageFilter(SkImageFilters::Blur(
                                         static_cast<float>(blur.stdDeviationX.value),
                                         static_cast<float>(blur.stdDeviationY.value), nullptr));
@@ -798,7 +799,7 @@ void RendererSkia::draw(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();
 
-  // TODO: Plumb outWarnings.
+  // TODO(jwmcglynn): Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
   const Vector2i renderingSize = document.canvasSize();
@@ -818,7 +819,7 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();
 
-  // TODO: Plumb outWarnings.
+  // TODO(jwmcglynn): Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
   const Vector2i renderingSize = document.canvasSize();
@@ -865,7 +866,7 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   Registry& registry = document.registry();
   const Entity rootEntity = document.rootEntity();
 
-  // TODO: Plumb outWarnings.
+  // TODO(jwmcglynn): Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
   const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(

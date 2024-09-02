@@ -3,7 +3,6 @@
 
 #include <ostream>
 #include <string>
-#include <string_view>
 
 #include "donner/base/parser/FileOffset.h"
 
@@ -19,7 +18,7 @@ struct ParseError {
   /// Location of the error, containing a character offset and optional line number.
   FileOffset location = FileOffset::Offset(0);
 
-  /// Print the error to an ostream.
+  /// Ostream output operator for \ref ParseError, outputs the error message.
   friend std::ostream& operator<<(std::ostream& os, const ParseError& error);
 };
 

@@ -40,9 +40,13 @@ struct Declaration {
   ~Declaration() = default;
 
   // Copy and move constructors and assignment operators.
+  /// Copy constructor.
   Declaration(const Declaration& other) = default;
+  /// Move constructor.
   Declaration(Declaration&& other) noexcept = default;
+  /// Copy assignment operator.
   Declaration& operator=(const Declaration& other) = default;
+  /// Move assignment operator.
   Declaration& operator=(Declaration&& other) noexcept = default;
 
   /// Equality operator.
@@ -64,7 +68,7 @@ struct Declaration {
 
 /**
  * Return value of parsers that may return either a declaration or an AtRule, specifically \ref
- * DeclarationListParser::Parse.
+ * donner::css::parser::DeclarationListParser::Parse.
  */
 struct DeclarationOrAtRule {
   /**

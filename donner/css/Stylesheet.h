@@ -58,10 +58,14 @@ public:
    */
   explicit Stylesheet(std::vector<SelectorRule>&& rules) : rules_(std::move(rules)) {}
 
-  /// Copyable and moveable.
+  // Copyable and moveable.
+  /// Copy constructor.
   Stylesheet(const Stylesheet&) = default;
+  /// Copy assignment operator.
   Stylesheet& operator=(const Stylesheet&) = default;
+  /// Move constructor.
   Stylesheet(Stylesheet&&) noexcept = default;
+  /// Move assignment operator.
   Stylesheet& operator=(Stylesheet&&) noexcept = default;
 
   /// Destructor.

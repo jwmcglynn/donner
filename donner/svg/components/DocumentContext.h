@@ -21,7 +21,7 @@ namespace donner::svg::components {
  *
  * One instance of this class is created per SVG document.
  *
- * Access the document context via the \ref Registry::ctx API:
+ * Access the document context via the \c Registry::ctx API:
  * ```
  * DocumentContext& context = registry.ctx().get<DocumentContext>();
  * Entity foo = context.getEntityById("foo");
@@ -38,7 +38,7 @@ public:
   /**
    * Internal constructor, creates a context on the given \ref SVGDocument.
    *
-   * To use this class, access it via the \ref Registry::ctx API.
+   * To use this class, access it via the \c Registry::ctx API.
    * ```
    * DocumentContext& context = registry.ctx().get<DocumentContext>();
    * ```
@@ -86,7 +86,7 @@ private:
 
   /// Document reference. Note that this operates off of a forward declaration due to dependency
   /// inversion. This class cannot use SVGDocument directly.
-  SVGDocument& document_; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+  SVGDocument& document_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
 
   /// Mapping from ID to entity.
   std::unordered_map<RcString, Entity> idToEntity_;

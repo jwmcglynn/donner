@@ -57,7 +57,7 @@ std::optional<parser::ParseError> ParseDFromAttributes(
 }
 
 /**
- * Concept for the callback type of \ref ForEachShape.
+ * Concept for the callback type of \c ForEachShape
  *
  * Matches lambdas with this signature:
  * ```

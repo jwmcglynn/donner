@@ -1,19 +1,18 @@
 #pragma once
 /// @file
 
-#include <compare>
 #include <entt/entt.hpp>
 #include <ostream>
-#include <string_view>
 
 namespace donner::svg {
 
 /**
- * Entity type for the SVG \ref Registry, a `std::uint32_t` alias.
+ * Entity type for the SVG \ref Registry, a \c std::uint32_t alias.
  *
- * This is a core type for the \ref ECS, and is used to identify entities in the \ref Registry.
+ * This is a core type for the the ECS, and is used to identify entities in the \ref Registry.
  *
- * \see \ref Registry
+ * @see \ref EcsArchitecture
+ * @see \ref Registry
  */
 using Entity = entt::entity;
 
@@ -27,7 +26,29 @@ inline std::ostream& operator<<(std::ostream& os, const Entity& entity) {
   return os << "#" << static_cast<std::uint32_t>(entity);
 }
 
-/// Registry type for the SVG \ref ECS.
+/**
+ * Registry type for the SVG ECS, which is the entry point for storing all data.
+ *
+ * It is used to create new entities:
+ * ```
+ * Registry registry;
+ * const Entity entity = registry.create();
+ * ```
+ *
+ * Attach or remove data classes to entities:
+ * ```
+ * registry.emplace<components::TreeComponent>(entity, ElementType::Unknown, "unknown");
+ * registry.remove<components::TreeComponent>(entity);
+ * ```
+ *
+ * Store global objects (singleton-like):
+ * ```
+ * registry.ctx().emplace<components::RenderingContext>(registry));
+ * const Entity root = registry.ctx().get<components::RenderingContext>().rootEntity;
+ * ```
+ *
+ * @see \ref EcsArchitecture
+ */
 using Registry = entt::basic_registry<Entity, std::allocator<Entity>>;
 
 /**
@@ -67,6 +88,39 @@ enum class ElementType {
 /// Ostream output operator for \ref ElementType, outputs the element name.
 std::ostream& operator<<(std::ostream& os, ElementType type);
 
+/**
+ * Converts a \ref ElementType runtime value to a compile-time value, allowing conditional behavior
+ * for different element types with `constexpr`. Takes the runtime value and invokes a function with
+ * \c std::integral_constant<ElementType> as a parameter.
+ *
+ * Example 1:
+ * ```
+ * SVGElement element = ...;
+ * ToConstexpr<void>(element.type(), [&](auto elementType) {
+ *   if constexpr (std::is_same_v<elementType(), ElementType::Circle>) {
+ *     // Handle circle element.
+ *     return ParseCircleAttributes(element);
+ *   }
+ * }
+ * ```
+ *
+ * Example 2:
+ * ```
+ * template <ElementType Type>
+ * ParseResult<bool> myFunction();
+ *
+ * ElementType type = element.type();
+ * return ToConstexpr<ParseResult<bool>>(type, [&](auto elementType) {
+ *    return ParsePresentationAttribute<elementType()>(element, name, value);
+ *});
+ * ```
+ *
+ * @tparam ReturnType Return type of the function.
+ * @tparam FnT Function type, with signature `ReturnType(std::integral_constant<ElementType>)`.
+ * @param type Runtime element type.
+ * @param fn Function to call with the compile-time element type, with signature
+ *`ReturnType(std::integral_constant<ElementType>)`.
+ */
 template <typename ReturnType, typename FnT>
 ReturnType ToConstexpr(ElementType type, FnT fn) {
   switch (type) {

@@ -12,7 +12,7 @@ SVGUseElement SVGUseElement::Create(SVGDocument& document) {
   return SVGUseElement(CreateEntity(registry, Tag, Type));
 }
 
-void SVGUseElement::setHref(RcString value) {
+void SVGUseElement::setHref(const RcString& value) {
   auto& shadowTree = handle_.emplace_or_replace<components::ShadowTreeComponent>();
   shadowTree.setMainHref(value);
   shadowTree.setsContextColors = true;

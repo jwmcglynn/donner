@@ -24,18 +24,44 @@ struct ParserOrigin {
   static ParserOrigin StartOffset(size_t offset) { return ParserOrigin{offset}; }
 };
 
+/**
+ * Stores the current state of \ref XMLParser during parsing. Used to add parse warnings and
+ * store global state like the parsing options.
+ */
 class XMLParserContext {
 public:
+  /**
+   * Construct a new context for the given input string.
+   *
+   * @param input Input string.
+   * @param warningsStorage Storage for warnings, may be \c nullptr to disable warnings.
+   * @param options Options for parsing.
+   */
   XMLParserContext(std::string_view input, std::vector<ParseError>* warningsStorage,
                    const XMLParser::Options& options)
       : input_(input), lineOffsets_(input), warnings_(warningsStorage), options_(options) {}
 
+  /// Get the parser options.
   XMLParser::Options options() const { return options_; }
 
+  /**
+   * Set the XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".
+   *
+   * @param namespacePrefix The default namespace prefix, such as "http://www.w3.org/2000/svg".
+   */
   void setNamespacePrefix(std::string_view namespacePrefix) { namespacePrefix_ = namespacePrefix; }
 
+  /// Get the XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".
   std::string_view namespacePrefix() const { return namespacePrefix_; }
 
+  /**
+   * Remap a parse error from a subparser back to the original input string, translating the line
+   * numbers.
+   *
+   * @param error Error to remap.
+   * @param origin Origin of the subparser.
+   * @return ParseError Remapped error.
+   */
   ParseError fromSubparser(ParseError&& error, ParserOrigin origin) {
     const size_t line = lineOffsets_.offsetToLine(origin.startOffset);
 
@@ -49,16 +75,34 @@ public:
     return newError;
   }
 
+  /**
+   * Add a warning to the list of warnings.
+   *
+   * @param warning Warning to add.
+   */
   void addWarning(ParseError&& warning) {
     if (warnings_) {
       warnings_->emplace_back(std::move(warning));
     }
   }
 
+  /**
+   * Add a warning from a subparser to the list of warnings, remapping the error back to the
+   * original input string.
+   *
+   * @param warning Warning to add.
+   * @param origin Origin of the subparser.
+   */
   void addSubparserWarning(ParseError&& warning, ParserOrigin origin) {
     addWarning(fromSubparser(std::move(warning), origin));
   }
 
+  /**
+   * Create a \ref ParserOrigin for the given substring, where \p substring is within the XML
+   * parser's original string, \ref input_.
+   *
+   * @param substring Substring within the XML parser's original string.
+   */
   ParserOrigin parserOriginFrom(std::string_view substring) const {
     if (substring.begin() > input_.begin() && substring.end() < input_.end()) {
       return ParserOrigin::StartOffset(substring.begin() - input_.begin());
@@ -81,15 +125,25 @@ public:
 
   /**
    * Returns the offset of a given 1-indexed line number.
+   *
+   * @param line Line number, 1-indexed.
    */
   size_t lineOffset(size_t line) const { return lineOffsets_.lineOffset(line); }
 
 private:
+  /// Original string containing the XML text, used for remapping errors.
   std::string_view input_;
+
+  /// Offsets of the start of each line in the input string.
   LineOffsets lineOffsets_;
+
+  /// Storage for warnings, may be \c nullptr to disable warnings.
   std::vector<ParseError>* warnings_;
+
+  /// Options for parsing.
   XMLParser::Options options_;
 
+  /// The XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".
   std::string_view namespacePrefix_;
 };
 

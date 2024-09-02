@@ -88,10 +88,14 @@ struct AttributeSelector {
   /// Destructor.
   ~AttributeSelector() noexcept = default;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Move constructor.
   AttributeSelector(AttributeSelector&&) noexcept = default;
+  /// Move assignment operator.
   AttributeSelector& operator=(AttributeSelector&&) noexcept = default;
+  /// Copy constructor.
   AttributeSelector(const AttributeSelector&) noexcept = default;
+  /// Copy assignment operator.
   AttributeSelector& operator=(const AttributeSelector&) noexcept = default;
 
   /// Returns true if this is a valid selector.
@@ -131,7 +135,8 @@ struct AttributeSelector {
     }
   }
 
-  /// Ostream output operator.
+  /// Ostream output operator, which outputs a debug string, e.g.
+  /// `AttributeSelector(name Eq(=) value)`
   friend std::ostream& operator<<(std::ostream& os, const AttributeSelector& obj) {
     os << "AttributeSelector(" << obj.name;
     if (obj.matcher) {
@@ -145,6 +150,12 @@ struct AttributeSelector {
   }
 
 private:
+  /**
+   * Returns true if the provided attribute value matches the given matcher.
+   *
+   * @param m The attribute matcher, which includes the operator and value to match against.
+   * @param value Curent attribute value to check.
+   */
   static bool valueMatches(const Matcher& m, const RcString& value) {
     switch (m.op) {
       case AttrMatcher::Includes:

@@ -19,23 +19,24 @@ class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement
  * root. SVGDocument is responsible for managing the lifetime of all elements in the document, by
  * storing a shared pointer to the internal Registry data-store.
  *
- * Data is stored using the Entity Component System (\ref ECS) pattern, which is a data-oriented
- * design optimized for fast data access and cache locality, particularly during rendering.
+ * Data is stored using the Entity Component System (\ref EcsArchitecture) pattern, which is a
+ * data-oriented design optimized for fast data access and cache locality, particularly during
+ * rendering.
  *
- * SVGDocument and \ref SVGElement provide a facade over the \ref ECS, and surface a familiar
+ * SVGDocument and \ref SVGElement provide a facade over the ECS, and surface a familiar
  * Document Object Model (DOM) API to traverse and manipulate the document tree, which is internally
  * stored within Components in the ECS.  This makes \ref SVGElement a thin wrapper around an \ref
  * Entity, making the object lightweight and usable on the stack.
  *
- * \see \ref SVGElement
- * \see \ref ECS
+ * @see \ref SVGElement
+ * @see \ref EcsArchitecture
  */
 class SVGDocument {
 public:
   /**
    * Constructor to create an empty SVGDocument.
    *
-   * To load a document from an SVG file, use \ref XMLParser::ParseSVG.
+   * To load a document from an SVG file, use \ref donner::svg::parser::XMLParser::ParseSVG.
    */
   SVGDocument();
 

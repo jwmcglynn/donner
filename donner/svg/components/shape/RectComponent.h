@@ -12,7 +12,7 @@
 namespace donner::svg::components {
 
 /**
- * Parameters for a <rect> element.
+ * Parameters for a \ref xml_rect element.
  */
 struct RectProperties {
   Property<Lengthd> x{"x",

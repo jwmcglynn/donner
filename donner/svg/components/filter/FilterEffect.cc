@@ -6,6 +6,7 @@ bool FilterEffect::operator==(const FilterEffect& other) const {
   return value == other.value;
 }
 
+/// Ostream output operator.
 std::ostream& operator<<(std::ostream& os, const FilterEffect& paint) {
   os << "FilterEffect(";
   if (paint.is<FilterEffect::None>()) {

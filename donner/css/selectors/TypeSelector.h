@@ -53,10 +53,14 @@ struct TypeSelector {
   /// Destructor.
   ~TypeSelector() noexcept = default;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Move constructor.
   TypeSelector(TypeSelector&&) = default;
+  /// Move assignment operator.
   TypeSelector& operator=(TypeSelector&&) = default;
+  /// Copy constructor.
   TypeSelector(const TypeSelector&) = default;
+  /// Copy assignment operator.
   TypeSelector& operator=(const TypeSelector&) = default;
 
   /// Returns true if this is a universal selector.
@@ -64,7 +68,7 @@ struct TypeSelector {
 
   /// Returns true if this is a valid selector.
   bool isValid() const {
-    // TODO: Error out if the namespace has not been registered.
+    // TODO(jwmcglynn): Error out if the namespace has not been registered.
     return true;
   }
 
@@ -93,7 +97,8 @@ struct TypeSelector {
     return matcher.name.equalsIgnoreCase(elementName.name);
   }
 
-  /// Ostream output operator.
+  /// Ostream output operator for \ref TypeSelector, outputs a debug string e.g.
+  /// `TypeSelector(div)`.
   friend std::ostream& operator<<(std::ostream& os, const TypeSelector& obj) {
     return os << "TypeSelector(" << obj.matcher << ")";
   }

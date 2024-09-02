@@ -67,6 +67,12 @@ struct PaintServer {
   /// Current paint server.
   Type value;
 
+  /**
+   * Construct a paint server with the given value.
+   *
+   * @param value The value of the paint server, one of the supported subtypes of \ref PaintServer
+   * as listed by the \ref Type variant.
+   */
   /* implicit */ PaintServer(Type value) : value(std::move(value)) {}
 
   // Allow constexpr construction for None and Solid.

@@ -80,9 +80,8 @@ struct AttributesComponent {
    * Set the value of a generic XML attribute, which may be either a presentation attribute or
    * custom user-provided attribute.
    *
-   * This API supports a superset of \ref trySetPresentationAttribute, however its parse errors are
-   * ignored. If the attribute is not a presentation attribute, or there are parse errors the
-   * attribute will be stored as a custom attribute instead.
+   * This API only stores the underlying strings for the attribute name and value, and does not
+   * parse them. To parse, use the upper-layer API: \ref SVGElement::setAttribute.
    *
    * @param name Name of the attribute to set.
    * @param value New value to set.
@@ -99,6 +98,11 @@ struct AttributesComponent {
     }
   }
 
+  /**
+   * Remove an attribute from the element.
+   *
+   * @param name Name of the attribute to remove.
+   */
   void removeAttribute(const XMLQualifiedNameRef& name) {
     const auto it = attributes_.find(name);
     if (it != attributes_.end()) {
@@ -131,9 +135,9 @@ private:
     ~Storage() = default;
   };
 
-  std::map<XMLQualifiedNameRef, Storage>
-      attributes_;  ///< Map of attribute name to value, note that the key values are references to
-                    ///< the value in \ref attrNameStorage_.
+  /// Map of attribute name to value, note that the key values are references to the value in \ref
+  /// attrNameStorage_.
+  std::map<XMLQualifiedNameRef, Storage> attributes_;
   std::set<XMLQualifiedName> attrNameStorage_;  ///< Storage for XMLQualifiedName.
 };
 

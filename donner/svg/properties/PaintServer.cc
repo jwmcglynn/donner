@@ -6,6 +6,7 @@ bool PaintServer::operator==(const PaintServer& other) const {
   return value == other.value;
 }
 
+/// Output stream operator for PaintServer.
 std::ostream& operator<<(std::ostream& os, const PaintServer& paint) {
   os << "PaintServer(";
   if (paint.is<PaintServer::None>()) {

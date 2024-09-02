@@ -35,10 +35,14 @@ struct CompoundSelector {
   /// Destructor.
   ~CompoundSelector() noexcept = default;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Copy constructor.
   CompoundSelector(const CompoundSelector&) = default;
+  /// Move constructor.
   CompoundSelector(CompoundSelector&&) = default;
+  /// Copy assignment operator.
   CompoundSelector& operator=(const CompoundSelector&) = default;
+  /// Move assignment operator.
   CompoundSelector& operator=(CompoundSelector&&) = default;
 
   /// The list of simple selectors in this compound selector.
@@ -99,7 +103,7 @@ struct CompoundSelector {
     return !entries.empty();
   }
 
-  /// Ostream output operator.
+  /// Ostream output operator, outputs a debug string, e.g. `CompoundSelector(TypeSelector(name))`.
   friend std::ostream& operator<<(std::ostream& os, const CompoundSelector& obj) {
     os << "CompoundSelector(";
     bool first = true;

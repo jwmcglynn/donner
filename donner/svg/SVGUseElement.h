@@ -93,7 +93,7 @@ public:
    *
    * @param value URI to the element to reuse, such as `#elementId`
    */
-  void setHref(RcString value);
+  void setHref(const RcString& value);
 
   /**
    * Set the X coordinate to position the referenced element.

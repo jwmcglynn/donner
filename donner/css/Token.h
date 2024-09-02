@@ -19,7 +19,7 @@ using TokenIndex = size_t;
 
 /**
  * Indicates if a number is an integer or a floating point number, used for number-containing tokens
- * such as \ref Token::Number and \ref Token::Dimension.
+ * such as \ref `Token::Number` and \ref Token::Dimension.
  */
 enum class NumberType {
   Integer,  ///< Integer number (no decimal point).

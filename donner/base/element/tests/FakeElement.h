@@ -11,10 +11,15 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/element/ElementLike.h"  // IWYU pragma: keep, for ElementLike
 #include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner {
 
+/**
+ * A test fake for a type that satisfies the \ref ElementLike concept. This is used for testing
+ * purposes, and has simple implementations for each API.
+ */
 class FakeElement {
 public:
   explicit FakeElement(const XMLQualifiedNameRef& tagName = "unknown")
@@ -176,6 +181,7 @@ private:
     std::optional<std::weak_ptr<ElementData>> parent;
 
     ElementData() : tagName("unknown") {}
+    ~ElementData() = default;
 
     // No copy.
     ElementData(const ElementData&) = delete;
@@ -201,5 +207,7 @@ private:
 
   std::shared_ptr<ElementData> data_;
 };
+
+static_assert(ElementLike<FakeElement>, "FakeElement must satisfy ElementLike");
 
 }  // namespace donner

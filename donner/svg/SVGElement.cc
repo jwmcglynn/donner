@@ -166,7 +166,7 @@ void SVGElement::setAttribute(const XMLQualifiedNameRef& name, std::string_view 
   }
 
   // If it's not in the list above, it may be presentation attribute.
-  // TODO: Add support for namespace when parsing presentation attributes.
+  // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
   // Only parse empty namespaces for now.
   if (name.namespacePrefix.empty()) {
     const auto trySetResult = trySetPresentationAttribute(name.name, value);
@@ -190,7 +190,7 @@ void SVGElement::removeAttribute(const XMLQualifiedNameRef& name) {
   } else if (name == XMLQualifiedNameRef("style")) {
     setStyle("");
   } else {
-    // TODO: Add support for namespace when parsing presentation attributes.
+    // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.
     if (name.namespacePrefix.empty()) {
       [[maybe_unused]] auto trySetResult =

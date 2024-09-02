@@ -5,6 +5,9 @@
 
 namespace donner::svg {
 
+/**
+ * Utility functions for the renderer.
+ */
 class RendererUtils {
 public:
   /**

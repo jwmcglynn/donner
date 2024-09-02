@@ -22,8 +22,8 @@ namespace donner::css {
  */
 struct PseudoElementSelector {
   RcString ident;  ///< The identifier of the pseudo-element.
-  std::optional<std::vector<ComponentValue>>
-      argsIfFunction;  ///< The arguments to the function, if this is a function.
+  /// The arguments to the function, if this is a function.
+  std::optional<std::vector<ComponentValue>> argsIfFunction;
 
   /**
    * Create a PseudoElementSelector with the given identifier.
@@ -35,10 +35,14 @@ struct PseudoElementSelector {
   /// Destructor.
   ~PseudoElementSelector() noexcept = default;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Move constructor.
   PseudoElementSelector(PseudoElementSelector&&) = default;
+  /// Move assignment operator.
   PseudoElementSelector& operator=(PseudoElementSelector&&) = default;
+  /// Copy constructor.
   PseudoElementSelector(const PseudoElementSelector&) = default;
+  /// Copy assignment operator.
   PseudoElementSelector& operator=(const PseudoElementSelector&) = default;
 
   /**
@@ -59,7 +63,8 @@ struct PseudoElementSelector {
     return false;
   }
 
-  /// Ostream output operator.
+  /// Ostream output operator for \ref PseudoElementSelector, outputs a debug string e.g.
+  /// `PseudoElementSelector(first-line)`.
   friend std::ostream& operator<<(std::ostream& os, const PseudoElementSelector& obj) {
     os << "PseudoElementSelector(" << obj.ident;
     if (obj.argsIfFunction.has_value()) {

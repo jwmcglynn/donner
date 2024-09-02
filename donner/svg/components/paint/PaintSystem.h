@@ -5,7 +5,6 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
-#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
@@ -24,7 +23,7 @@ public:
    * StopComponent, which applies CSS styling information and presentation attributes.
    *
    * @param handle Entity handle to create the computed gradient for
-   * @param stop Stop component attached to \ref handle
+   * @param stop Stop component attached to \p handle
    * @param outWarnings Containing any warnings found
    */
   const ComputedStopComponent& createComputedStop(EntityHandle handle, const StopComponent& stop,
@@ -34,7 +33,7 @@ public:
    * Create \ref ComputedGradientComponent for all entities in the registry that have a \ref
    * GradientComponent.
    *
-   * This assumes that \ref EvaluateConditionalGradientShadowTrees has already been called.
+   * This assumes that \ref createShadowTrees has already been called.
    *
    * Note that this function does not produce any warnings, its signature is used to create a common
    * API pattern.

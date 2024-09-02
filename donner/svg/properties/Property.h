@@ -41,7 +41,7 @@ enum class PropertyState {
  */
 enum class PropertyInheritOptions {
   All,      ///< Inherit everything (default).
-  NoPaint,  ///< Inherit everything except paint servers, for <pattern> elements.
+  NoPaint,  ///< Inherit everything except paint servers, for \ref xml_pattern elements.
 };
 
 /**

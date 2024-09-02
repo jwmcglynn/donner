@@ -25,10 +25,14 @@ struct IdSelector {
   /// Destructor.
   ~IdSelector() noexcept = default;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Move constructor.
   IdSelector(IdSelector&&) = default;
+  /// Move assignment operator.
   IdSelector& operator=(IdSelector&&) = default;
+  /// Copy constructor.
   IdSelector(const IdSelector&) = default;
+  /// Copy assignment operator.
   IdSelector& operator=(const IdSelector&) = default;
 
   /// Returns true if this is a valid selector.
@@ -45,7 +49,7 @@ struct IdSelector {
     return element.id() == name;
   }
 
-  /// Ostream output operator.
+  /// Ostream output operator, outputs a debug string e.g. `IdSelector(foo)`.
   friend std::ostream& operator<<(std::ostream& os, const IdSelector& obj) {
     os << "IdSelector(" << obj.name << ")";
     return os;

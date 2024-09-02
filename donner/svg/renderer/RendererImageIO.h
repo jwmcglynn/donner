@@ -5,6 +5,9 @@
 
 namespace donner::svg {
 
+/**
+ * Utility class for saving images to disk.
+ */
 class RendererImageIO {
 public:
   /**

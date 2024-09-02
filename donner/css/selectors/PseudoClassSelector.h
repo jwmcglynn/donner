@@ -30,9 +30,9 @@ namespace details {
  */
 template <typename T, typename ElementType>
 concept OptionalSelectorLike = requires(const T t, const ElementType element) {
-                                 { bool(t) } -> std::same_as<bool>;
-                                 { bool(t.operator->()->matches(element)) } -> std::same_as<bool>;
-                               };
+  { bool(t) } -> std::same_as<bool>;
+  { bool(t.operator->()->matches(element)) } -> std::same_as<bool>;
+};
 
 }  // namespace details
 
@@ -94,13 +94,14 @@ concept OptionalSelectorLike = requires(const T t, const ElementType element) {
  */
 struct PseudoClassSelector {
   RcString ident;  ///< The name of the pseudo-class.
-  std::optional<std::vector<ComponentValue>>
-      argsIfFunction;  ///< The arguments of the pseudo-class, if it is a function.
-  std::optional<AnbValue> anbValueIfAnb;  ///< The An+B value of the pseudo-class, for An+B
-                                          ///< pseudo-classes such as `:nth-child`.
-  std::unique_ptr<Selector>
-      selector;  ///< The selector of the pseudo-class, for pseudo-classes such
-                 ///< as `:is()` and `:not()`, or `:nth-child(An+B of S)`.
+  /// The arguments of the pseudo-class, if it is a function.
+  std::optional<std::vector<ComponentValue>> argsIfFunction;
+  /// The An+B value of the pseudo-class, for An+B pseudo-classes such as `:nth-child`.
+  std::optional<AnbValue> anbValueIfAnb;
+
+  /// The selector of the pseudo-class, for pseudo-classes such as `:is()` and `:not()`, or
+  /// `:nth-child(An+B of S)`.
+  std::unique_ptr<Selector> selector;
 
   /**
    * Create a PseudoClassSelector with the given ident.
@@ -112,12 +113,14 @@ struct PseudoClassSelector {
   /// Destructor.
   ~PseudoClassSelector() noexcept;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Move constructor.
   PseudoClassSelector(PseudoClassSelector&&) noexcept;
+  /// Move assignment operator.
   PseudoClassSelector& operator=(PseudoClassSelector&&) noexcept;
-
+  /// Copy constructor.
   PseudoClassSelector(const PseudoClassSelector& other);
-
+  /// Copy assignment operator.
   PseudoClassSelector& operator=(const PseudoClassSelector& other);
 
   /**
@@ -176,7 +179,8 @@ struct PseudoClassSelector {
    */
   Specificity::ABC computeSpecificity() const;
 
-  /// Ostream output operator.
+  /// Ostream output operator for \ref PseudoClassSelector, outputs a debug string e.g.
+  /// `PseudoClassSelector(after)`.
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj);
 
 private:

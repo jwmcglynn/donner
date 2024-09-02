@@ -38,7 +38,7 @@ public:
    * - \ref RectComponent
    *
    * @param handle Entity handle to create the computed path for
-   * @param component Shape component attached to \ref handle
+   * @param component Shape component attached to \p handle
    * @param fontMetrics Font metrics, used to scale lengths
    * @param outWarnings Containing any warnings found
    */

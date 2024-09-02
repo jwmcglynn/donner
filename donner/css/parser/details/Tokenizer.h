@@ -3,7 +3,6 @@
 
 #include <string_view>
 
-#include "donner/base/RcString.h"
 #include "donner/css/Token.h"
 
 namespace donner::css::parser::details {

@@ -56,6 +56,8 @@ Specificity::ABC PseudoClassSelector::computeSpecificity() const {
   }
 }
 
+/// Ostream output operator for \ref PseudoClassSelector, outputs a debug string e.g.
+/// `PseudoClassSelector(after)`.
 std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj) {
   os << "PseudoClassSelector(" << obj.ident;
   if (obj.argsIfFunction.has_value()) {

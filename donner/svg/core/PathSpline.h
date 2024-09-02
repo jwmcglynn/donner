@@ -14,7 +14,7 @@ namespace donner::svg {
  *
  * This is used to represent the `d` attribute of the \ref SVGPathElement (\ref xml_path), see
  * https://www.w3.org/TR/SVG2/paths.html#PathData. To parse SVG path data into a PathSpline, use the
- * \ref PathParser.
+ * \ref donner::svg::parser::PathParser.
  *
  * The spline is composed of a series of \ref CommandType commands, which describe how to connect
  * the points. The points are stored in a separate vector, and the commands reference the points by

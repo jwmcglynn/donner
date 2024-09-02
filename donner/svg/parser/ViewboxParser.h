@@ -9,7 +9,7 @@
 namespace donner::svg::parser {
 
 /**
- * Parse an SVG viewBox attribute, such as `0 0 100 100`.
+ * Parse an SVG viewBox attribute, such as "0 0 100 100".
  *
  * @see https://www.w3.org/TR/SVG/coords.html#ViewBoxAttribute
  */
@@ -25,11 +25,11 @@ public:
    * <min-x>,? <min-y>,? <width>,? <height>
    * ```
    *
-   * Each parameter is a `<number>` type, as parsed by \ref NumberParser. `<width>` and `<height>`
-   * must be positive, but the caller must ensure that they are non-zero; a value of zero should
-   * disable rendering of the element.
+   * Each parameter is a "<number>" type, as parsed by \ref donner::base::parser::NumberParser.
+   * "<width>" and "<height>" must be positive, but the caller must ensure that they are non-zero;
+   * a value of zero should disable rendering of the element.
    *
-   * @param str Input string.
+   * @param str Input string, e.g. "0 0 100 100".
    * @return Parsed box, or an error.
    */
   static ParseResult<Boxd> Parse(std::string_view str);

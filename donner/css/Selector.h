@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/base/element/ElementLike.h"
+#include "donner/base/element/ElementLike.h"  // IWYU pragma: keep, for ElementLike
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/ComplexSelector.h"
@@ -23,15 +23,22 @@ struct Selector {
   /// Destructor.
   ~Selector() noexcept;
 
-  /// Moveable and copyable.
+  // Moveable and copyable.
+  /// Move constructor.
   Selector(Selector&&) noexcept;
+  /// Move assignment operator.
   Selector& operator=(Selector&&) noexcept;
+  /// Copy constructor.
   Selector(const Selector&);
+  /// Copy assignment operator.
   Selector& operator=(const Selector&);
 
   /// The list of \ref ComplexSelector entries that compose this selector.
   std::vector<ComplexSelector> entries;
 
+  /**
+   * Get the max specificity of all ComplexSelectors in the Selector.
+   */
   Specificity::ABC maxSpecificity() const {
     Specificity::ABC result;
     for (const auto& entry : entries) {
@@ -65,9 +72,8 @@ struct Selector {
     return SelectorMatchResult::None();
   }
 
-  /**
-   * Ostream output operator for Selector in a human-readable format.
-   */
+  /// Ostream output operator for \ref Selector, prints a debug representation of the selector, e.g.
+  /// `Selector(div, .class, #id)`.
   friend std::ostream& operator<<(std::ostream& os, const Selector& obj);
 };
 
@@ -96,8 +102,7 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
     } else if (ident.equalsLowercase("last-of-type")) {
       return isLastOfType(element, element.tagName());
     } else if (ident.equalsLowercase("only-of-type")) {
-      return isFirstOfType(element, element.tagName()) &&
-             isLastOfType(element, element.tagName());
+      return isFirstOfType(element, element.tagName()) && isLastOfType(element, element.tagName());
     } else if (ident.equalsLowercase("defined")) {
       return element.isKnownType();
     }

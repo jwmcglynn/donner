@@ -32,6 +32,7 @@ public:
     /// The number of characters of the input string that were consumed to parse the number.
     size_t consumedChars = 0;
 
+    /// Ostream output operator.
     friend std::ostream& operator<<(std::ostream& os, const Result& self) {
       return os << "Result {" << self.length << ", consumedChars: " << self.consumedChars << "}";
     }

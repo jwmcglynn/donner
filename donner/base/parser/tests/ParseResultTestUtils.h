@@ -2,20 +2,24 @@
 
 #include <gmock/gmock.h>
 
-#include <concepts>
 #include <ostream>
 
 #include "donner/base/parser/ParseResult.h"
 
 namespace donner::base::parser {
 
-// TODO: Move this to a more general location, like base/concepts/is_optional_like.h
+namespace details {
+
+/// Check if a type behaves like \c std::optional, with \c has_value() and \c value() methods.
 template <typename T>
 concept IsOptionalLike = requires(T t) {
   { t.has_value() } -> std::same_as<bool>;
   t.value();
 };
 
+}  // namespace details
+
+/// Outputs a ParseResult to a stream for debugging purposes.
 template <typename T>
 void PrintTo(const ParseResult<T>& result, std::ostream* os) {
   *os << "ParseResult {";
@@ -51,7 +55,7 @@ MATCHER_P(ParseErrorIs, errorMessageMatcher, "") {
 
   if constexpr (std::is_same_v<ArgType, ParseError>) {
     return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener);
-  } else if constexpr (IsOptionalLike<ArgType>) {
+  } else if constexpr (details::IsOptionalLike<ArgType>) {
     if (!arg.has_value()) {
       return false;
     }

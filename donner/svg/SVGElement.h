@@ -33,17 +33,17 @@ class DonnerController;
  * root. SVGDocument is responsible for managing the lifetime of all elements in the document, by
  * storing a shared pointer to the internal Registry data-store.
  *
- * Data is stored using the Entity Component System (\ref ECS) pattern, which is a data-oriented
- * design optimized for fast data access and cache locality, particularly during rendering.
+ * Data is stored using the Entity Component System (\ref EcsArchitecture) pattern, which is a
+ * data-oriented design optimized for fast data access and cache locality, particularly during
+ * rendering.
  *
- * SVGDocument and \ref SVGElement provide a facade over the \ref ECS, and surface a familiar
- * Document Object Model (DOM) API to traverse and manipulate the document tree, which is internally
- * stored within Components in the ECS.  This makes \ref SVGElement a thin wrapper around an \ref
- * Entity, making the object lightweight and usable on the stack.
+ * SVGDocument and \ref SVGElement provide a facade over the ECS, and surface a familiar Document
+ * Object Model (DOM) API to traverse and manipulate the document tree, which is internally stored
+ * within Components in the ECS.  This makes \ref SVGElement a thin wrapper around an \ref Entity,
+ * making the object lightweight and usable on the stack.
  *
- * \see \ref SVGDocument
- * \see \ref ECS
- * \see \ref Component
+ * @see \ref SVGDocument
+ * @see \ref EcsArchitecture
  */
 class SVGElement {
   friend class DonnerController;
@@ -52,7 +52,7 @@ protected:
   /**
    * Internal constructor to create an SVGElement from an \ref EntityHandle.
    *
-   * To create an SVGElement, use the static \ref Create methods on the derived class, such as \ref
+   * To create an SVGElement, use the static \c Create methods on the derived class, such as \ref
    * SVGCircleElement::Create.
    *
    * @param handle EntityHandle to wrap.
@@ -126,7 +126,7 @@ public:
    * @param name Name of the attribute to set.
    * @param value New value to set.
    * @return true if the attribute was set, false if the attribute is not a valid presentation
-   *   attribute for this element, or a \ref ParseError if the value is invalid.
+   * attribute for this element, or a \ref donner::base::parser::ParseError if the value is invalid.
    */
   base::parser::ParseResult<bool> trySetPresentationAttribute(std::string_view name,
                                                               std::string_view value);

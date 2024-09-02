@@ -219,10 +219,14 @@ public:
   /// Destructor.
   ~PropertyRegistry();
 
-  /// Copy and move constructors.
+  // Copy and move constructors.
+  /// Copy constructor.
   PropertyRegistry(const PropertyRegistry&);
+  /// Move constructor.
   PropertyRegistry(PropertyRegistry&&) noexcept;
+  /// Copy assignment operator.
   PropertyRegistry& operator=(const PropertyRegistry&);
+  /// Move assignment operator.
   PropertyRegistry& operator=(PropertyRegistry&&) noexcept;
 
   /**
@@ -302,10 +306,13 @@ public:
                                                   css::Specificity specificity);
 
   /**
-   * Parse a HTML/SVG style attribute, corresponding to a CSS <declaration-list>, ignoring any parse
-   * errors or unsupported properties.
+   * Parse a SVG style attribute, and set the parsed values on this PropertyRegistry. Does not
+   * clear existing properties, new ones are applied additively.
    *
-   * @param str Input string.
+   * Parses the string as a CSS "<declaration-list>", ignoring any parse errors or unsupported
+   * properties
+   *
+   * @param str Input string from a style attribute, e.g. "fill: red; stroke: blue".
    */
   void parseStyle(std::string_view str);
 
@@ -319,7 +326,7 @@ public:
    * @param type If set, parses additional presentation attributes for the given element type.
    * @param handle Entity handle to use for parsing additional attributes.
    * @return true if the element supports this attribute and it was parsed successfully, or a \ref
-   *   ParseError if parsing failed.
+   *   donner::base::parser::ParseError if parsing failed.
    */
   parser::ParseResult<bool> parsePresentationAttribute(
       std::string_view name, std::string_view value, std::optional<ElementType> type = std::nullopt,

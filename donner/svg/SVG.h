@@ -14,7 +14,7 @@ namespace donner {
 /**
  * Donner SVG library, which can load, manipulate and render SVG files.
  *
- * Loading SVG files can be done using \ref donner::svg::parser::XMLParser:
+ * Loading SVG files can be done using \ref donner::svg::parser::XMLParser
  * ```
  * XMLParser::InputBuffer svgSource("<svg>...</svg>");
  *
@@ -48,7 +48,7 @@ namespace donner {
  * }
  * ```
  *
- * The SVG file can be rendered using \ref donner::svg::RendererSkia:
+ * The SVG file can be rendered using \ref donner::svg::RendererSkia
  * ```
  * #include "donner/svg/renderer/RendererSkia.h"
  *

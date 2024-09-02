@@ -8,7 +8,8 @@
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/registry/Registry.h"
 
-// TODO: Automatically delete ComputedShadowTreeComponent when ShadowTreeComponent is removed.
+// TODO(jwmcglynn): Automatically delete ComputedShadowTreeComponent when ShadowTreeComponent is
+// removed.
 
 namespace donner::svg::components {
 
@@ -26,6 +27,7 @@ public:
    * Destroy the instantiated shadow tree.
    *
    * @param registry The registry.
+   * @param shadow The computed shadow tree component to tear down.
    */
   void teardown(Registry& registry, ComputedShadowTreeComponent& shadow);
 
@@ -45,8 +47,8 @@ public:
    * @param lightTarget Target entity to reflect in the shadow tree.
    * @param href The value of the href attribute for the shadow tree, for diagnostics.
    * @param outWarnings If provided, warnings will be added to this vector.
-   * @returns The index of the offscreen shadow tree, if \ref branchType is \ref
-   * ShadowBranchType::HiddenOffscreen, or std::nullopt otherwise.
+   * @returns The index of the offscreen shadow tree, if \p branchType is not the \ref
+   * ShadowBranchType::Main branch. Returns \c std::nullopt if it is.
    */
   std::optional<size_t> populateInstance(EntityHandle entity, ComputedShadowTreeComponent& shadow,
                                          ShadowBranchType branchType, Entity lightTarget,

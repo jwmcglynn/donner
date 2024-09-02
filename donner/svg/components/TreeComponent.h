@@ -3,16 +3,28 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
-#include "donner/svg/registry/Registry.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 
+/**
+ * Stores the tree structure for an SVG element, such as the parent, children, and siblings.
+ *
+ * This component is added to all entities that are part of the SVG tree, and is used to navigate
+ * the tree structure.
+ */
 class TreeComponent {
 public:
+  /**
+   * Construct a new tree component with the given \p type and \p tagName.
+   *
+   * @param type The type of the element.
+   * @param tagName The qualified tag name of the element, which may include a namespace. (e.g.
+   * "svg")
+   */
   TreeComponent(ElementType type, const XMLQualifiedNameRef& tagName)
-      : type_(type),
-        tagName_(RcString(tagName.namespacePrefix), RcString(tagName.name)) {}
+      : type_(type), tagName_(RcString(tagName.namespacePrefix), RcString(tagName.name)) {}
 
   /**
    * Insert \a newNode as a child, before \a referenceNode. If \a referenceNode is entt::null,
@@ -67,28 +79,53 @@ public:
    */
   void remove(Registry& registry);
 
+  /// Get the parsed element type as an enum.
   ElementType type() const { return type_; }
 
+  /// Get the qualified tag name of the element, e.g. "svg".
   XMLQualifiedNameRef tagName() const { return tagName_; }
 
+  /// Get the parent of this node, if it has one. Returns \c entt::null if this is the root.
   Entity parent() const { return parent_; }
+
+  /// Get the first child of this node, if it has one. Returns \c entt::null if this has no
+  /// children.
   Entity firstChild() const { return firstChild_; }
+
+  /// Get the last child of this node, if it has one. Returns \c entt::null if this has no children.
   Entity lastChild() const { return lastChild_; }
+
+  /// Get the previous sibling of this node, if it has one. Returns \c entt::null if this is the
+  /// first child.
   Entity previousSibling() const { return previousSibling_; }
+
+  /// Get the next sibling of this node, if it has one. Returns \c entt::null if this is the last
+  /// child.
   Entity nextSibling() const { return nextSibling_; }
 
 private:
-  ElementType type_;
-  XMLQualifiedName tagName_;
+  ElementType type_;  //!< Type of the element as a parsed enum, if known (e.g. SVG, Circle, etc.)
+  XMLQualifiedName tagName_;  //!< Qualified tag name of the element, e.g. "svg"
 
-  Entity parent_{entt::null};
-  Entity firstChild_{entt::null};
-  Entity lastChild_{entt::null};
-  Entity previousSibling_{entt::null};
-  Entity nextSibling_{entt::null};
+  Entity parent_{entt::null};      //!< Parent of this node, or \c entt::null if this is the root.
+  Entity firstChild_{entt::null};  //!< First child of this node, or \c entt::null if this has no
+                                   //!< children.
+  Entity lastChild_{entt::null};   //!< Last child of this node, or \c entt::null if this has no
+                                   //!< children.
+  Entity previousSibling_{entt::null};  //!< Previous sibling of this node, or \c entt::null if this
+                                        //!< is the first child.
+  Entity nextSibling_{entt::null};      //!< Next sibling of this node, or \c entt::null if this is
+                                        //!< the last child.
 };
 
-// TODO: Find a better place for this helper
+// TODO(jwmcglynn): Find a better place for this helper
+/**
+ * Iterate over all children of the given entity and call the given functor for each child.
+ * Iterates in pre-order traversal order.
+ *
+ * @param handle Entity handle to iterate over.
+ * @param func Functor to call for each child.
+ */
 template <typename Func>
 void ForAllChildren(EntityHandle handle, const Func& func) {
   assert(handle.valid());
@@ -106,8 +143,8 @@ void ForAllChildren(EntityHandle handle, const Func& func) {
 
     // Add all children to the stack
     auto& treeComponent = currentHandle.get<components::TreeComponent>();
-    for (entt::entity child = treeComponent.firstChild(); child != entt::null;
-         child = registry.get<components::TreeComponent>(child).nextSibling()) {
+    for (entt::entity child = treeComponent.lastChild(); child != entt::null;
+         child = registry.get<components::TreeComponent>(child).previousSibling()) {
       stack.push_back(child);
     }
   }

@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * Base class for all \ref basic_shapes.
+ * Base class for all \ref elements_basic_shapes.
  *
  * This is the DOM base class for all basic shapes, such as \ref SVGCircleElement, \ref
  * SVGRectElement, \ref SVGPathElement, etc.
@@ -17,7 +17,7 @@ protected:
   /**
    * Internal constructor to create an SVGGeometryElement from an \ref EntityHandle.
    *
-   * To create a geometry element, use the static \ref Create methods on the derived class, such as
+   * To create a geometry element, use the static \c Create methods on the derived class, such as
    * \ref SVGCircleElement::Create.
    *
    * @param handle EntityHandle to wrap.
@@ -49,10 +49,10 @@ public:
   void setPathLength(std::optional<double> value);
 
   /**
-   * Get the path spline, computed from the path data string, \ref d(), which has been parsed with
-   * \ref PathParser.
+   * Get the path spline, computed by converting this shape's path to a spline. For \ref xml_path,
+   * this is the value of \ref SVGPathElement::d() parsed by \ref donner::svg::parser::PathParser.
    *
-   * @return Path spline, or `std::nullopt` if the path data string is invalid.
+   * @return Path spline, or \c std::nullopt if the path data string is invalid.
    */
   std::optional<PathSpline> computedSpline() const;
 

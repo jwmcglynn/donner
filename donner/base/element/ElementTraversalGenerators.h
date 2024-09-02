@@ -4,7 +4,7 @@
 #include <coroutine>
 
 #include "donner/base/Utils.h"
-#include "donner/base/element/ElementLike.h"
+#include "donner/base/element/ElementLike.h"  // IWYU pragma: keep, used for ElementLike
 
 namespace donner {
 

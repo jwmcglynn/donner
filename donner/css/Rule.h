@@ -91,9 +91,13 @@ struct QualifiedRule {
   ~QualifiedRule() = default;
 
   // Copy and move constructors.
+  /// Copy constructor.
   QualifiedRule(const QualifiedRule& other) = default;
+  /// Copy assignment operator.
   QualifiedRule& operator=(const QualifiedRule& other) = default;
+  /// Move constructor.
   QualifiedRule(QualifiedRule&& other) = default;
+  /// Move assignment operator.
   QualifiedRule& operator=(QualifiedRule&& other) = default;
 
   /// Equality operator.
@@ -220,9 +224,13 @@ struct Rule {
   ~Rule() = default;
 
   // Copy and move constructors and operators.
+  /// Copy constructor.
   Rule(const Rule& other) = default;
+  /// Move constructor.
   Rule(Rule&& other) noexcept = default;
+  /// Copy assignment operator.
   Rule& operator=(const Rule& other) = default;
+  /// Move assignment operator.
   Rule& operator=(Rule&& other) noexcept = default;
 
   /// Equality operator.

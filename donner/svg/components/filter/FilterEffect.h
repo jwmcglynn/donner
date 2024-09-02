@@ -76,7 +76,7 @@ struct FilterEffect {
   }
 
   /**
-   * Returns the filter effect as type \c T, asserting that the filter effect is of type \ref T.
+   * Returns the filter effect as type \c T, asserting that the filter effect is of type \c T.
    *
    * @tparam T Type to get.
    */
@@ -86,7 +86,7 @@ struct FilterEffect {
   }
 
   /**
-   * Returns the filter effect as type \c T, asserting that the filter effect is of type \ref T.
+   * Returns the filter effect as type \c T, asserting that the filter effect is of type \c T.
    *
    * @tparam T Type to get.
    */
@@ -96,7 +96,7 @@ struct FilterEffect {
   }
 
   /**
-   * Returns the filter effect as type \c T, asserting that the filter effect is of type \ref T.
+   * Returns the filter effect as type \c T, asserting that the filter effect is of type \c T.
    *
    * @tparam T Type to get.
    */

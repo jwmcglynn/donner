@@ -7,8 +7,8 @@ namespace donner::svg::components {
 
 /**
  * There are two types of shadow trees:
- * - \b Main: One for elements in the \b main render graph, such as <use> elements, where each
- * \ref xml_use element holds one instantiation, which behaves as if the referenced element was
+ * - \b Main: One for elements in the \b main render graph, such as \ref xml_use elements, where
+ * each \ref xml_use element holds one instantiation, which behaves as if the referenced element was
  * copy-pasted within the tree.
  * - \b Offscreen: Shadow trees for paint servers and offscreen purposes, which are not
  * enumerated as part of the render graph. For example, a 'fill' attribute may reference a

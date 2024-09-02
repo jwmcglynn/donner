@@ -47,6 +47,7 @@ enum class LengthUnit {
   /// @}
 };
 
+/// OStream output operator, writes the enum value as a stream, e.g. `Percent` or `Px`.
 inline std::ostream& operator<<(std::ostream& os, LengthUnit unit) {
   switch (unit) {
     case LengthUnit::None: return os << "None";
