@@ -36,6 +36,8 @@ enum class PointerEvents {
         //!< the pointer is within either the fill or stroke areas.
 };
 
+/// Output stream operator for \ref PointerEvents, outputs the CSS string representation for this
+/// enum, e.g. "none", "bounding-box", etc.
 inline std::ostream& operator<<(std::ostream& os, PointerEvents value) {
   switch (value) {
     case PointerEvents::None: return os << "none";

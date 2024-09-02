@@ -13,6 +13,20 @@ class SVGDocument;
 
 }  // namespace donner::svg
 
+/**
+ * Contains the implementation of the Donner ECS, \see \ref EcsArchitecture.
+ *
+ * Classes are named as follows:
+ * - `*System` - Stateless object that accesses and manipulates components.
+ * - `*Component` - Data storage struct with minimal logic, which may be attached to an \ref Entity.
+ * - `Computed*Component` - Created when processing the tree and preparing it for rendering, stores
+ * intermediate object state derived from regular components. Is used to apply the CSS cascade and
+ * to cache shape path data.
+ * - `*Context` - Contains global state of an SVG document, which are stored in the \c
+ * Registry::ctx().
+ * - `*Tag` - Used to tag an entity with a specific purpose, like to disable rendering behavior
+ * (like inheritance with \ref DoNotInheritFillOrStrokeTag).
+ */
 namespace donner::svg::components {
 
 /**

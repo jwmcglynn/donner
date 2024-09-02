@@ -15,9 +15,10 @@ namespace donner::svg {
  */
 
 /**
- * For elements with two radius properties, such as \ref xml_rect or \ref xml_ellipse which provide
- * `rx` and `ry` properties, compute the current value of `rx` or `ry`, while respecting the "auto"
- * identifier and handling negative values.
+ * Calculates the the radius for elements with `rx` and `ry` radius, in pixels, taking into account
+ * the "auto" identifier and handling negative values.
+ *
+ * This is used for \ref xml_rect or \ref xml_ellipse.
  *
  * @param property The property to compute, the storage for either `rx` or `ry`.
  * @param fallbackProperty The other property to use if the first one is "auto".

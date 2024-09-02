@@ -53,6 +53,8 @@ Specificity::ABC ComplexSelector::computeSpecificity() const {
   return result;
 }
 
+/// Ostream output operator for \ref ComplexSelector, outputs debug strings e.g.
+/// "ComplexSelector(CompoundSelector(TypeSelector(name)))"
 std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj) {
   os << "ComplexSelector(";
   bool first = true;

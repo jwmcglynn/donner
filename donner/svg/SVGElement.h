@@ -143,7 +143,7 @@ public:
    * Get the value of an attribute, if it exists.
    *
    * @param name Name of the attribute to get.
-   * @return The value of the attribute, or std::nullopt if the attribute does not exist.
+   * @return The value of the attribute, or \c std::nullopt if the attribute does not exist.
    */
   std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const;
 
@@ -190,35 +190,36 @@ public:
    * Get this element's parent, if it exists. If the parent is not set, this document is either the
    * root element or has not been inserted into the document tree.
    *
-   * @return The parent element, or `std::nullopt` if the parent is not set.
+   * @return The parent element, or \c std::nullopt if the parent is not set.
    */
   std::optional<SVGElement> parentElement() const;
 
   /**
    * Get the first child of this element, if it exists.
    *
-   * @return The first child element, or `std::nullopt` if the element has no children.
+   * @return The first child element, or \c std::nullopt if the element has no children.
    */
   std::optional<SVGElement> firstChild() const;
 
   /**
    * Get the last child of this element, if it exists.
    *
-   * @return The last child element, or `std::nullopt` if the element has no children.
+   * @return The last child element, or \c std::nullopt if the element has no children.
    */
   std::optional<SVGElement> lastChild() const;
 
   /**
    * Get the previous sibling of this element, if it exists.
    *
-   * @return The previous sibling element, or `std::nullopt` if the element has no previous sibling.
+   * @return The previous sibling element, or \c std::nullopt if the element has no previous
+   * sibling.
    */
   std::optional<SVGElement> previousSibling() const;
 
   /**
    * Get the next sibling of this element, if it exists.
    *
-   * @return The next sibling element, or `std::nullopt` if the element has no next sibling.
+   * @return The next sibling element, or \c std::nullopt if the element has no next sibling.
    */
   std::optional<SVGElement> nextSibling() const;
 
@@ -230,8 +231,8 @@ public:
    * inserting the child will create a cycle, the behavior is undefined.
    *
    * @param newNode New node to insert.
-   * @param referenceNode A child of this node to insert \p newNode before, or std::nullopt. Must be
-   *                      a child of the current node.
+   * @param referenceNode A child of this node to insert \p newNode before, or \c std::nullopt. Must
+   * be a child of the current node.
    */
   SVGElement insertBefore(SVGElement newNode, std::optional<SVGElement> referenceNode);
 

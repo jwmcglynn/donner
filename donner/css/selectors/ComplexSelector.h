@@ -203,7 +203,8 @@ struct ComplexSelector {
     return SelectorMatchResult::None();
   }
 
-  /// Output a human-readable representation of the selector.
+  /// Ostream output operator for \ref ComplexSelector, outputs debug strings e.g.
+  /// "ComplexSelector(CompoundSelector(TypeSelector(name)))"
   friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj);
 
 private:

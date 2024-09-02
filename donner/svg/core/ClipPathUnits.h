@@ -32,6 +32,8 @@ enum class ClipPathUnits {
   Default = UserSpaceOnUse,
 };
 
+/// Ostream output operator for \ref ClipPathUnits enum, outputs the enum name with prefix, e.g.
+/// `ClipPathUnits::UserSpaceOnUse`.
 inline std::ostream& operator<<(std::ostream& os, ClipPathUnits units) {
   switch (units) {
     case ClipPathUnits::UserSpaceOnUse: return os << "ClipPathUnits::UserSpaceOnUse";
