@@ -45,10 +45,10 @@ JAVA_HOME=$(dirname $(dirname $(which java)))
   GENHTML_OPTIONS="--highlight --legend --branch-coverage --output-directory coverage-report"
 
   if [ "$QUIET" = true ]; then
-    bazel coverage --ui_event_filters=-info,-stdout,-stderr --noshow_progress $TARGETS
+    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $TARGETS
     genhtml --quiet $(bazel info output_path)/_coverage/_coverage_report.dat $GENHTML_OPTIONS
   else
-    bazel coverage $TARGETS
+    bazel coverage --config=latest_llvm $TARGETS
     genhtml $(bazel info output_path)/_coverage/_coverage_report.dat $GENHTML_OPTIONS
   fi
 )

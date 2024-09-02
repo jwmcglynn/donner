@@ -56,13 +56,13 @@ fi
 # To see symbols only: -d donner_package,symbol
 
 # Output an <svg> with a bar chart of the binary size by directory
-bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty_compileunits.csv
+bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty_compileunits.csv
 python3 tools/python/generate_size_barchart_svg.py build-binary-size/xml_tool.bloaty_compileunits.csv > build-binary-size/binary_size_bargraph.svg
 
 echo ""
 
 # Create the binary_size_report webtreemap
-bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty.csv
+bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty.csv
 python3 tools/binary_size_analysis.py build-binary-size/xml_tool.bloaty.csv build-binary-size/binary_size_report.html
 
 # Output summary
@@ -70,6 +70,6 @@ echo ""
 echo '`bloaty -d compileunits -n 20` output'
 echo '```'
 
-bazel run $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/xml_tool
+bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/xml_tool
 
 echo '```'
