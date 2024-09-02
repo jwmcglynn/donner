@@ -86,6 +86,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `stroke-dashoffset` | \ref strokeDashoffset | `0` |
  * | `clip-path` | \ref clipPath | `none` |
  * | `clip-rule` | \ref clipRule | `nonzero` |
+ * | `mask` | \ref mask | `none` |
  * | `filter` | \ref filter | `none` |
  * | `pointer-events` | \ref pointerEvents | `auto` |
  */
@@ -177,7 +178,7 @@ public:
       []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
 
   //
-  // Clipping
+  // Clipping and masking
   //
 
   /// `clip-path` property, which determines the shape of the element's clipping region. Defaults to
@@ -189,6 +190,11 @@ public:
   /// of overlapping shapes. Defaults to \ref ClipRule::NonZero.
   Property<ClipRule, PropertyCascade::Inherit> clipRule{
       "clip-rule", []() -> std::optional<ClipRule> { return ClipRule::NonZero; }};
+
+  /// `mask` property, which determines the shape of the element's clipping region. Defaults to
+  /// none.
+  Property<Reference, PropertyCascade::None> mask{
+      "mask", []() -> std::optional<Reference> { return std::nullopt; }};
 
   //
   // Filter
@@ -238,7 +244,7 @@ public:
     return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
                                  stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
                                  strokeMiterlimit, strokeDasharray, strokeDashoffset, clipPath,
-                                 clipRule, filter, pointerEvents);
+                                 clipRule, mask, filter, pointerEvents);
   }
 
   /**

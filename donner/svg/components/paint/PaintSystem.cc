@@ -6,6 +6,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"

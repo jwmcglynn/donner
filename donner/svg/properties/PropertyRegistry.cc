@@ -463,7 +463,7 @@ static constexpr frozen::unordered_set<frozen::string, 15> kValidPresentationAtt
 using PropertyParseFn = std::optional<parser::ParseError> (*)(
     PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 19> kProperties = {
+static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 20> kProperties = {
     {"color",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        auto maybeError = Parse(
@@ -628,6 +628,15 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 19> kPro
              return ParseClipRule(params.components());
            },
            &registry.clipRule);
+     }},  //
+    {"mask",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseReference("mask", params.components());
+           },
+           &registry.mask);
      }},  //
     {"filter",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

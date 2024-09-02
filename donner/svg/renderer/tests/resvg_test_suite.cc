@@ -310,6 +310,10 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO: e-marker
 // TODO: e-mask
 
+
+INSTANTIATE_TEST_SUITE_P(Mask, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-mask")),
+                         TestNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-path")),
                          TestNameFromFilename);
 

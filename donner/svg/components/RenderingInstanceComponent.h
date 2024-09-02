@@ -7,6 +7,7 @@
 #include "donner/base/Transform.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipPathUnits.h"
+#include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/registry/Registry.h"
 
@@ -21,7 +22,8 @@ struct SubtreeInfo {
   /// entities until it reaches this one, then it will pop \ref restorePopDepth isolated layers from
   /// the render state.
   Entity lastRenderedEntity;
-  int restorePopDepth = 0;  //!< How many isolated layers to pop after rendering this entity.
+  /// How many isolated layers to pop after rendering this entity.
+  int restorePopDepth = 0;
 };
 
 /**
@@ -50,6 +52,24 @@ struct ResolvedClipPath {
   ClipPathUnits units;
 
   /// Returns true if the reference is valid, or false if this the \ref xml_clipPath did not
+  /// properly resolve.
+  bool valid() const { return reference.valid(); }
+};
+
+
+/**
+ * Contains resolved information about the `mask` property, such as which element it is
+ * pointing to.
+ */
+struct ResolvedMask {
+  /// Reference to a \ref xml_mask element.
+  ResolvedReference reference;
+  /// Contains subtree info to inform the renderer how to render the mask.
+  std::optional<SubtreeInfo> subtreeInfo;
+  /// The mask content units to use for this mask.
+  MaskContentUnits contentUnits;
+
+  /// Returns true if the reference is valid, or false if this the \ref xml_mask did not
   /// properly resolve.
   bool valid() const { return reference.valid(); }
 };
@@ -95,6 +115,8 @@ struct RenderingInstanceComponent {
   std::optional<Boxd> clipRect;  //!< The clip rect of the element, if set.
 
   std::optional<ResolvedClipPath> clipPath;  //!< The clip path of the element, if set.
+
+  std::optional<ResolvedMask> mask;  //!< The mask of the element, if set.
 
   /**
    * The entity containing the structural components of the instance, element-specific

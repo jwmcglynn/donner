@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererSkia.h"
 
 // Skia
+#include "include/core/SkColorFilter.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
@@ -9,6 +10,7 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
+#include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
 //
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
@@ -24,6 +26,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -260,6 +263,43 @@ public:
           });
 
           renderer_.currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
+
+        } else if (instance.mask) {
+          const components::ResolvedMask& ref = instance.mask.value();
+
+          Transformd maskTransform;
+          if (ref.contentUnits == MaskContentUnits::ObjectBoundingBox) {
+            if (const auto* path =
+                    instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+              // TODO(jwmcglynn): Extend this to get the element bounds for all child elements by
+              // adding an API to LayoutSystem.
+              const Boxd bounds = path->spline.bounds();
+              maskTransform =
+                  Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
+            }
+          }
+
+          SkPaint maskFilter;
+          // TODO: SRGB conversion
+          maskFilter.setColorFilter(SkLumaColorFilter::Make());
+
+          // TODO(jwmcglynn): Calculate hint for size of layer.
+          renderer_.currentCanvas_->saveLayer(nullptr, &maskFilter);
+
+          // Render the mask content.
+          instantiateMask(ref.reference.handle, instance.dataHandle(registry), ref);
+
+          // renderer_.currentCanvas_->restore();
+
+          // Content layer
+          // Dst is the mask, Src is the content.
+          // kSrcIn multiplies the mask alpha: r = s * da
+          // TODO: This needs SK_SL enabled for the mask effect to work.
+          SkPaint maskPaint;
+          maskPaint.setBlendMode(SkBlendMode::kSrcIn);
+          renderer_.currentCanvas_->saveLayer(nullptr, &maskPaint);
+
+          // TODO: Apply clipRect for mask bounds.
 
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
@@ -510,6 +550,44 @@ public:
   }
 
   /**
+   * Renders the mask contents to the current layer. The caller should call saveLayer before this
+   * call.
+   *
+   * @param dataHandle The handle to the pattern data.
+   * @param target The target entity to which the pattern is applied.
+   * @param ref The reference to the mask.
+   */
+  void instantiateMask(EntityHandle dataHandle, EntityHandle target,
+                       const components::ResolvedMask& ref) {
+    if (!ref.subtreeInfo) {
+      // Subtree did not instantiate, indicating that recursion was detected.
+      return;
+    }
+
+    Registry& registry = *dataHandle.registry();
+    const Transformd savedLayerBaseTransform = layerBaseTransform_;
+
+    if (renderer_.verbose_) {
+      std::cout << "Start mask contents\n";
+    }
+
+    // TODO: Fill actual value
+    // const SkRect skTileRect = toSkia(Boxd(Vector2d(0, 0), Vector2d(100, 100)));
+
+    layerBaseTransform_ = Transformd();
+
+    // Render the subtree into the offscreen SkPictureRecorder.
+    assert(ref.subtreeInfo);
+    drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+
+    if (renderer_.verbose_) {
+      std::cout << "End mask contents\n";
+    }
+
+    layerBaseTransform_ = savedLayerBaseTransform;
+  }
+
+  /**
    * Instantiates a pattern paint. See \ref PatternUnits, \ref PatternContentUnits for details on
    * their behavior.
    *
@@ -631,8 +709,8 @@ public:
                                 viewbox, currentColor, opacity);
     }
 
-    UTILS_UNREACHABLE();  // The computed tree should invalidate any references that don't point to
-                          // a valid point server, see IsValidPaintServer.
+    UTILS_UNREACHABLE();  // The computed tree should invalidate any references that don't point
+                          // to a valid point server, see IsValidPaintServer.
   }
 
   void drawPathFillWithSkPaint(const components::ComputedPathComponent& path, SkPaint& skPaint,

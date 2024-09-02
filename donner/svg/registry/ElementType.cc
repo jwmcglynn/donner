@@ -16,6 +16,7 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::Image: return os << "Image";
     case ElementType::Line: return os << "Line";
     case ElementType::LinearGradient: return os << "LinearGradient";
+    case ElementType::Mask: return os << "Mask";
     case ElementType::Use: return os << "Use";
     case ElementType::SVG: return os << "SVG";
     case ElementType::Path: return os << "Path";
