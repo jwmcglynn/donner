@@ -5,6 +5,7 @@
 #include "donner/css/Declaration.h"
 #include "donner/css/Specificity.h"
 #include "donner/svg/properties/Property.h"
+#include "donner/svg/registry/ElementType.h"
 #include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::parser {

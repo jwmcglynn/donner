@@ -17,6 +17,7 @@ cc_library(
         "SVGGeometryElement.cc",
         "SVGGradientElement.cc",
         "SVGGraphicsElement.cc",
+        "SVGImageElement.cc",
         "SVGLineElement.cc",
         "SVGLinearGradientElement.cc",
         "SVGPathElement.cc",
@@ -30,7 +31,6 @@ cc_library(
         "SVGStyleElement.cc",
         "SVGUnknownElement.cc",
         "SVGUseElement.cc",
-        "SVGImageElement.cc",
     ],
     hdrs = [
         "AllSVGElements.h",
@@ -48,6 +48,7 @@ cc_library(
         "SVGGeometryElement.h",
         "SVGGradientElement.h",
         "SVGGraphicsElement.h",
+        "SVGImageElement.h",
         "SVGLineElement.h",
         "SVGLinearGradientElement.h",
         "SVGPathElement.h",
@@ -61,7 +62,6 @@ cc_library(
         "SVGStyleElement.h",
         "SVGUnknownElement.h",
         "SVGUseElement.h",
-        "SVGImageElement.h",
     ],
     visibility = [
         "//:__pkg__",
@@ -74,6 +74,7 @@ cc_library(
         "//donner/svg/components",
         "//donner/svg/core",
         "//donner/svg/parser",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
     ],
 )
 

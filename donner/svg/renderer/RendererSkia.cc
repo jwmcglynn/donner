@@ -26,6 +26,7 @@
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -35,7 +36,6 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
-#include "donner/svg/SVGImageElement.h"
 
 namespace donner::svg {
 
@@ -272,8 +272,9 @@ public:
           drawPath(
               instance.dataHandle(registry), instance, *path, styleComponent.properties.value(),
               components::LayoutSystem().getViewport(instance.dataHandle(registry)), FontMetrics());
-        } else if (const auto* imageElement = instance.dataHandle(registry).try_get<SVGImageElement>()) {
-          renderer_.renderImageElement(*imageElement);
+        } else if (const auto* image =
+                       instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
+          drawImage(instance.dataHandle(registry), instance, *image);
         }
       }
 
@@ -755,6 +756,41 @@ public:
     }
   }
 
+  void drawImage(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                 const components::LoadedImageComponent& image) {
+    if (!image.image) {
+      return;
+    }
+
+    SkBitmap bitmap;
+    bitmap.allocPixels(SkImageInfo::MakeN32Premul(image.image->width, image.image->height));
+    memcpy(bitmap.getPixels(), image.image->data.data(), image.image->data.size());
+
+    sk_sp<SkImage> skImage = SkImages::RasterFromBitmap(bitmap);
+
+    SkPaint paint;
+    paint.setAntiAlias(renderer_.antialias_);
+    paint.setStroke(true);
+    paint.setColor(toSkia(css::RGBA(255, 255, 255, 255)));
+
+    const auto& sizedElement = dataHandle.get<components::ComputedSizedElementComponent>();
+
+    const PreserveAspectRatio preserveAspectRatio =
+        dataHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
+
+    const Boxd intrinsicSize = Boxd::WithSize(Vector2d(image.image->width, image.image->height));
+
+    const Transformd imageFromLocal =
+        preserveAspectRatio.computeTransform(sizedElement.bounds, intrinsicSize);
+
+    renderer_.currentCanvas_->save();
+    renderer_.currentCanvas_->clipRect(toSkia(sizedElement.bounds));
+    renderer_.currentCanvas_->concat(toSkia(imageFromLocal));
+    renderer_.currentCanvas_->drawImage(skImage, 0, 0, SkSamplingOptions(SkFilterMode::kLinear),
+                                        &paint);
+    renderer_.currentCanvas_->restore();
+  }
+
   void createFilterChain(SkPaint& filterPaint, const std::vector<FilterEffect>& effectList) {
     for (const FilterEffect& effect : effectList) {
       std::visit(entt::overloaded{//
@@ -900,26 +936,6 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 void RendererSkia::draw(Registry& registry, Entity root) {
   Impl impl(*this, RenderingInstanceView{registry});
   impl.drawUntil(registry, entt::null);
-}
-
-void RendererSkia::renderImageElement(const SVGImageElement& imageElement) {
-  int width, height;
-  std::vector<uint8_t> imageData = RendererImageIO::loadImage(std::string(imageElement.href()), width, height);
-
-  SkBitmap bitmap;
-  bitmap.allocPixels(SkImageInfo::MakeN32Premul(width, height));
-  memcpy(bitmap.getPixels(), imageData.data(), imageData.size());
-
-  SkPaint paint;
-  paint.setAntiAlias(antialias_);
-
-  SkRect destRect = SkRect::MakeXYWH(
-      static_cast<SkScalar>(imageElement.computedX().toPixels()),
-      static_cast<SkScalar>(imageElement.computedY().toPixels()),
-      static_cast<SkScalar>(imageElement.computedWidth().toPixels()),
-      static_cast<SkScalar>(imageElement.computedHeight().toPixels()));
-
-  currentCanvas_->drawBitmapRect(bitmap, destRect, &paint);
 }
 
 }  // namespace donner::svg

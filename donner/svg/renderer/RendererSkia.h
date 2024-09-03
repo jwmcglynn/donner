@@ -129,13 +129,6 @@ public:
    */
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
-  /**
-   * Render an SVGImageElement.
-   *
-   * @param imageElement The SVGImageElement to render.
-   */
-  void renderImageElement(const SVGImageElement& imageElement);
-
 private:
   /// Implementation class.
   class Impl;

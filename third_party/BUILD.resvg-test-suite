@@ -13,3 +13,11 @@ filegroup(
     ]),
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "images",
+    srcs = glob([
+        "images/*.*",
+    ]),
+    visibility = ["//visibility:public"],
+)

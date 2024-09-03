@@ -15,6 +15,7 @@
 #include "donner/svg/SVGFEGaussianBlurElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGFilterElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGGElement.h"               // IWYU pragma: export
+#include "donner/svg/SVGImageElement.h"           // IWYU pragma: export
 #include "donner/svg/SVGLineElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGLinearGradientElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGPathElement.h"            // IWYU pragma: export
@@ -27,7 +28,6 @@
 #include "donner/svg/SVGStopElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGStyleElement.h"           // IWYU pragma: export
 #include "donner/svg/SVGUseElement.h"             // IWYU pragma: export
-#include "donner/svg/SVGImageElement.h"           // IWYU pragma: export
 
 // Types that are not fully-fledged SVG elements by themselves, so they aren't included in \ref
 // AllSVGElements.
@@ -47,6 +47,7 @@ using AllSVGElements = entt::type_list<  //
     SVGFEGaussianBlurElement,            //
     SVGFilterElement,                    //
     SVGGElement,                         //
+    SVGImageElement,                     //
     SVGLineElement,                      //
     SVGLinearGradientElement,            //
     SVGStopElement,                      //
@@ -58,7 +59,6 @@ using AllSVGElements = entt::type_list<  //
     SVGRectElement,                      //
     SVGStyleElement,                     //
     SVGSVGElement,                       //
-    SVGUseElement,                       //
-    SVGImageElement>;
+    SVGUseElement>;
 
 }  // namespace donner::svg

@@ -1,82 +1,81 @@
 #include "donner/svg/SVGImageElement.h"
 
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
-#include "donner/svg/components/AttributesComponent.h"
-#include "donner/svg/components/style/StyleComponent.h"
+#include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 
 namespace donner::svg {
+
+namespace {
+
+/// The default `xMidYMid meet` value for \ref xml_image `preserveAspectRatio`
+static constexpr PreserveAspectRatio kImageDefaultPreserveAspectRatio{
+    PreserveAspectRatio::Align::XMidYMid, PreserveAspectRatio::MeetOrSlice::Meet};
+
+}  // namespace
 
 SVGImageElement SVGImageElement::Create(SVGDocument& document) {
   EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
+  handle.emplace<components::SizedElementComponent>();
+  handle.emplace<components::PreserveAspectRatioComponent>(kImageDefaultPreserveAspectRatio);
   return SVGImageElement(handle);
 }
 
-void SVGImageElement::setHref(std::string_view value) {
-  handle_.get_or_emplace<components::AttributesComponent>().setAttribute(XMLQualifiedName("href"),
-                                                                         RcString(value));
+void SVGImageElement::setHref(RcStringOrRef value) {
+  handle_.get_or_emplace<components::ImageComponent>().href = RcString(value);
 }
 
-std::string_view SVGImageElement::href() const {
-  return handle_.get<components::AttributesComponent>().getAttribute(XMLQualifiedName("href")).value_or("");
+RcString SVGImageElement::href() const {
+  return handle_.get_or_emplace<components::ImageComponent>().href;
+}
+
+void SVGImageElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
+  handle_.get_or_emplace<components::PreserveAspectRatioComponent>().preserveAspectRatio =
+      preserveAspectRatio;
+}
+
+PreserveAspectRatio SVGImageElement::preserveAspectRatio() const {
+  return handle_.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 }
 
 void SVGImageElement::setX(Lengthd value) {
-  handle_.get_or_emplace<components::StyleComponent>().setPresentationAttribute("x", value.toString());
-}
-
-Lengthd SVGImageElement::x() const {
-  return handle_.get<components::StyleComponent>().getPresentationAttribute<Lengthd>("x").value_or(Lengthd());
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.x.set(
+      value, css::Specificity::Override());
 }
 
 void SVGImageElement::setY(Lengthd value) {
-  handle_.get_or_emplace<components::StyleComponent>().setPresentationAttribute("y", value.toString());
-}
-
-Lengthd SVGImageElement::y() const {
-  return handle_.get<components::StyleComponent>().getPresentationAttribute<Lengthd>("y").value_or(Lengthd());
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.y.set(
+      value, css::Specificity::Override());
 }
 
 void SVGImageElement::setWidth(Lengthd value) {
-  handle_.get_or_emplace<components::StyleComponent>().setPresentationAttribute("width", value.toString());
-}
-
-Lengthd SVGImageElement::width() const {
-  return handle_.get<components::StyleComponent>().getPresentationAttribute<Lengthd>("width").value_or(Lengthd());
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.width.set(
+      value, css::Specificity::Override());
 }
 
 void SVGImageElement::setHeight(Lengthd value) {
-  handle_.get_or_emplace<components::StyleComponent>().setPresentationAttribute("height", value.toString());
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.height.set(
+      value, css::Specificity::Override());
 }
 
-Lengthd SVGImageElement::height() const {
-  return handle_.get<components::StyleComponent>().getPresentationAttribute<Lengthd>("height").value_or(Lengthd());
+Lengthd SVGImageElement::x() const {
+  return handle_.get_or_emplace<components::SizedElementComponent>().properties.x.getRequired();
 }
 
-Lengthd SVGImageElement::computedX() const {
-  return getComputedStyle().get<Lengthd>("x").value_or(Lengthd());
+Lengthd SVGImageElement::y() const {
+  return handle_.get_or_emplace<components::SizedElementComponent>().properties.y.getRequired();
 }
 
-Lengthd SVGImageElement::computedY() const {
-  return getComputedStyle().get<Lengthd>("y").value_or(Lengthd());
+std::optional<Lengthd> SVGImageElement::width() const {
+  return handle_.get_or_emplace<components::SizedElementComponent>().properties.width.get();
 }
 
-Lengthd SVGImageElement::computedWidth() const {
-  return getComputedStyle().get<Lengthd>("width").value_or(Lengthd());
-}
-
-Lengthd SVGImageElement::computedHeight() const {
-  return getComputedStyle().get<Lengthd>("height").value_or(Lengthd());
-}
-
-void SVGImageElement::invalidate() const {
-  handle_.remove<components::ComputedStyleComponent>();
-}
-
-void SVGImageElement::compute() const {
-  components::StyleSystem().computeStyle(handle_, nullptr);
+std::optional<Lengthd> SVGImageElement::height() const {
+  return handle_.get_or_emplace<components::SizedElementComponent>().properties.height.get();
 }
 
 }  // namespace donner::svg

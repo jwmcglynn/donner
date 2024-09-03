@@ -3,9 +3,11 @@
 
 #include "donner/base/Length.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg {
 
+// clang-format off
 /**
  * @page xml_image "<image>"
  * @ingroup elements_graphics
@@ -17,12 +19,14 @@ namespace donner::svg {
  *
  * | Attribute | Default | Description  |
  * | --------: | :-----: | :----------- |
- * | `href`    | `""`    | URL or base64 data string of the image. |
+ * | `href`    | (none)  | URL or base64 data string of the image. |
+ * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the image to fit the rectangle defined by `width` and `height` if the image's intrinsic size is different. |
  * | `x`       | `0`     | X coordinate of the image. |
  * | `y`       | `0`     | Y coordinate of the image. |
  * | `width`   | `0`     | Width of the image. |
  * | `height`  | `0`     | Height of the image. |
  */
+// clang-format on
 
 /**
  * DOM object for a \ref xml_image element.
@@ -40,8 +44,6 @@ public:
   /// XML tag name, \ref xml_image.
   static constexpr std::string_view Tag{"image"};
 
-  static_assert(SVGGraphicsElement::IsBaseOf(Type));
-
   /**
    * Create a new \ref xml_image element.
    *
@@ -54,12 +56,26 @@ public:
    *
    * @param value URL or base64 data string of the image.
    */
-  void setHref(std::string_view value);
+  void setHref(RcStringOrRef value);
 
   /**
    * Get the href attribute.
    */
-  std::string_view href() const;
+  RcString href() const;
+
+  /**
+   * Set the `preserveAspectRatio` attribute, which defines how to scale the image to fit the
+   * rectangle defined by `width` and `height` if the image's intrinsic size doesn't match.
+   *
+   * @param preserveAspectRatio The preserveAspectRatio value to set.
+   */
+  void setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio);
+
+  /**
+   * The value of the `preserveAspectRatio` attribute, which defines how to scale the image to fit
+   * the rectangle defined by `width` and `height` if the image's intrinsic size doesn't match.
+   */
+  PreserveAspectRatio preserveAspectRatio() const;
 
   /**
    * Set the X coordinate.
@@ -95,7 +111,7 @@ public:
   /**
    * Get the width.
    */
-  Lengthd width() const;
+  std::optional<Lengthd> width() const;
 
   /**
    * Set the height.
@@ -107,33 +123,7 @@ public:
   /**
    * Get the height.
    */
-  Lengthd height() const;
-
-  /**
-   * Applies stylesheet rules to the element, and returns the computed value of the `x` property.
-   */
-  Lengthd computedX() const;
-
-  /**
-   * Applies stylesheet rules to the element, and returns the computed value of the `y` property.
-   */
-  Lengthd computedY() const;
-
-  /**
-   * Applies stylesheet rules to the element, and returns the computed value of the `width` property.
-   */
-  Lengthd computedWidth() const;
-
-  /**
-   * Applies stylesheet rules to the element, and returns the computed value of the `height` property.
-   */
-  Lengthd computedHeight() const;
-
-private:
-  /// Invalidates cached data from the render tree.
-  void invalidate() const;
-  /// Create the computed data for this image, to be used for rendering.
-  void compute() const;
+  std::optional<Lengthd> height() const;
 };
 
 }  // namespace donner::svg

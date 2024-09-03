@@ -1,10 +1,23 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
-    name = "registry",
+    name = "element_type",
     srcs = [
-        "Registry.cc",
+        "ElementType.cc",
     ],
+    hdrs = [
+        "ElementType.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+cc_library(
+    name = "registry",
     hdrs = [
         "Registry.h",
     ],
@@ -13,7 +26,7 @@ cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
-        "//donner/base",
+        ":element_type",  # TODO: Remove this dep and update callers to use it directly
         "@entt",
     ],
 )

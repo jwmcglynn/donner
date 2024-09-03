@@ -6,6 +6,7 @@
 
 #include "donner/base/parser/ParseResult.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::parser {
 
@@ -128,11 +129,12 @@ public:
    * @param source Mutable input data buffer.
    * @param[out] outWarnings If non-null, append warnings encountered to this vector.
    * @param options Options to modify the parsing behavior.
+   * @param resourceLoader Resource loader to use for loading external resources.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
-  static ParseResult<SVGDocument> ParseSVG(InputBuffer& source,
-                                           std::vector<ParseError>* outWarnings = nullptr,
-                                           Options options = {}) noexcept;
+  static ParseResult<SVGDocument> ParseSVG(
+      InputBuffer& source, std::vector<ParseError>* outWarnings = nullptr, Options options = {},
+      std::unique_ptr<ResourceLoaderInterface> resourceLoader = nullptr) noexcept;
 };
 
 }  // namespace donner::svg::parser

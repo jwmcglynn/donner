@@ -10,6 +10,8 @@
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -20,6 +22,7 @@
 #include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 #include "donner/svg/properties/PropertyParsing.h"
+#include "donner/svg/registry/ElementType.h"
 
 namespace donner::svg::components {
 
@@ -365,6 +368,11 @@ Transformd LayoutSystem::computeSizedElementTransform(
   if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
     return preserveAspectRatio.computeTransform(computedSizedElement.bounds, viewbox->viewbox);
   } else {
+    // TODO: Remove this workaround for computing image transforms.
+    if (handle.get<TreeComponent>().type() == ElementType::Image) {
+      return Transformd();
+    }
+
     // This branch is hit for <use> elements.
     return preserveAspectRatio.computeTransform(computedSizedElement.bounds,
                                                 computedSizedElement.inheritedViewbox);
@@ -544,6 +552,33 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
   const Vector2d origin(
       properties.x.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::X),
       properties.y.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::Y));
+
+  if (registry.all_of<ImageComponent>(entity)) {
+    if (auto maybeImageSize = registry.ctx().get<ResourceManagerContext>().getImageSize(entity)) {
+      const Vector2i imageSize = *maybeImageSize;
+
+      // Use the default sizing algorithm to detect the size if any parameters are missing.
+      // See https://www.w3.org/TR/css-images-3/#default-sizing
+      if (properties.width.hasValue() && properties.height.hasValue()) {
+        return Boxd(origin, origin + size);
+      } else if (!properties.width.hasValue() && !properties.height.hasValue()) {
+        size = Vector2d(imageSize);
+      } else {
+        const float aspectRatio = static_cast<float>(imageSize.x) / static_cast<float>(imageSize.y);
+
+        if (!properties.width.hasValue()) {
+          size.x = properties.height.getRequired().toPixels(inheritedViewbox, fontMetrics,
+                                                            Lengthd::Extent::X) *
+                   aspectRatio;
+        } else if (!properties.height.hasValue()) {
+          size.y = properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics,
+                                                           Lengthd::Extent::Y) /
+                   aspectRatio;
+        }
+      }
+    }
+  }
+
   return Boxd(origin, origin + size);
 }
 
@@ -643,6 +678,13 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::SVG>(
 // SVGUseElement shares this component.
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Use>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return components::ParseSizedElementPresentationAttribute(handle, name, params);
+}
+
+// SVGImageElement shares this component.
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::Image>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return components::ParseSizedElementPresentationAttribute(handle, name, params);
 }

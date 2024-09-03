@@ -22,6 +22,7 @@ struct ImageComparisonParams {
   float threshold = kDefaultThreshold;
   int maxMismatchedPixels = kDefaultMismatchedPixels;
   bool skip = false;
+  bool saveDebugSkpOnFailure = true;
 
   static ImageComparisonParams Skip() {
     ImageComparisonParams result;
@@ -35,6 +36,11 @@ struct ImageComparisonParams {
     result.threshold = threshold;
     result.maxMismatchedPixels = maxMismatchedPixels;
     return result;
+  }
+
+  ImageComparisonParams& disableDebugSkpOnFailure() {
+    saveDebugSkpOnFailure = false;
+    return *this;
   }
 };
 
@@ -55,7 +61,8 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
 
 class ImageComparisonTestFixture : public testing::TestWithParam<ImageComparisonTestcase> {
 protected:
-  SVGDocument loadSVG(const char* filename);
+  SVGDocument loadSVG(const char* filename,
+                      const std::optional<std::filesystem::path>& resourceDir = std::nullopt);
 
   void renderAndCompare(SVGDocument& document, const std::filesystem::path& svgFilename,
                         const char* goldenImageFilename);

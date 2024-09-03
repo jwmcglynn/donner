@@ -8,6 +8,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
+#include "donner/svg/resources/SandboxedFileResourceLoader.h"
 #include "donner/svg/xml/XMLParser.h"
 
 // Skia
@@ -50,7 +51,8 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
   }
 }
 
-SVGDocument ImageComparisonTestFixture::loadSVG(const char* filename) {
+SVGDocument ImageComparisonTestFixture::loadSVG(
+    const char* filename, const std::optional<std::filesystem::path>& resourceDir) {
   std::ifstream file(filename);
   EXPECT_TRUE(file) << "Failed to open file: " << filename;
   if (!file) {
@@ -60,7 +62,15 @@ SVGDocument ImageComparisonTestFixture::loadSVG(const char* filename) {
   parser::XMLParser::InputBuffer fileData;
   fileData.loadFromStream(file);
 
-  auto maybeResult = parser::XMLParser::ParseSVG(fileData);
+  parser::XMLParser::Options options;
+  std::unique_ptr<ResourceLoaderInterface> resourceLoader;
+  if (resourceDir) {
+    resourceLoader = std::make_unique<SandboxedFileResourceLoader>(*resourceDir,
+                                                                   std::filesystem::path(filename));
+  }
+
+  auto maybeResult = parser::XMLParser::ParseSVG(fileData, /*outWarnings=*/nullptr, options,
+                                                 std::move(resourceLoader));
   EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
   if (maybeResult.hasError()) {
     return SVGDocument();
@@ -125,25 +135,28 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
-    std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
+    if (params.saveDebugSkpOnFailure) {
+      std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
 
-    {
-      RendererSkia rendererVerbose(/*verbose*/ true);
-      sk_sp<SkPicture> picture = rendererVerbose.drawIntoSkPicture(document);
-
-      sk_sp<SkData> pictureData = picture->serialize();
-
-      const std::filesystem::path skpFilePath =
-          std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
       {
-        std::ofstream file(skpFilePath.string());
-        file.write(reinterpret_cast<const char*>(pictureData->data()),  // NOLINT: Intentional cast
-                   static_cast<std::streamsize>(pictureData->size()));
-        EXPECT_TRUE(file.good());
-      }
+        RendererSkia rendererVerbose(/*verbose*/ true);
+        sk_sp<SkPicture> picture = rendererVerbose.drawIntoSkPicture(document);
 
-      std::cout << "Load this .skp into https://debugger.skia.org/\n"
-                << "=> " << skpFilePath.string() << "\n";
+        sk_sp<SkData> pictureData = picture->serialize();
+
+        const std::filesystem::path skpFilePath =
+            std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
+        {
+          std::ofstream file(skpFilePath.string());
+          file.write(
+              reinterpret_cast<const char*>(pictureData->data()),  // NOLINT: Intentional cast
+              static_cast<std::streamsize>(pictureData->size()));
+          EXPECT_TRUE(file.good());
+        }
+
+        std::cout << "Load this .skp into https://debugger.skia.org/\n"
+                  << "=> " << skpFilePath.string() << "\n";
+      }
     }
 
     FAIL() << mismatchedPixels << " pixels different.";

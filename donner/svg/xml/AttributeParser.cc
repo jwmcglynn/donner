@@ -10,6 +10,7 @@
 #include "donner/svg/AllSVGElements.h"  // IWYU pragma: keep
 #include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGFilterElement.h"
+#include "donner/svg/SVGImageElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/parser/Number2dParser.h"
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
@@ -313,6 +314,28 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(XMLParserCont
 }
 
 template <>
+std::optional<ParseError> ParseAttribute<SVGImageElement>(XMLParserContext& context,
+                                                          SVGImageElement element,
+                                                          const XMLQualifiedNameRef& name,
+                                                          std::string_view value) {
+  if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
+    element.setHref(value);
+  } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
+    auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
+    if (maybeAspectRatio.hasError()) {
+      context.addSubparserWarning(std::move(maybeAspectRatio.error()),
+                                  context.parserOriginFrom(value));
+    } else {
+      element.setPreserveAspectRatio(maybeAspectRatio.result());
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
 std::optional<ParseError> ParseAttribute<SVGLineElement>(XMLParserContext& context,
                                                          SVGLineElement element,
                                                          const XMLQualifiedNameRef& name,
@@ -588,7 +611,23 @@ std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& contex
                                                         SVGUseElement element,
                                                         const XMLQualifiedNameRef& name,
                                                         std::string_view value) {
-  if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
+  if (name == XMLQualifiedNameRef("x")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("y")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("width")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setWidth(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("height")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setHeight(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     element.setHref(RcString(value));
   } else {
     return ParseCommonAttribute(context, element, name, value);

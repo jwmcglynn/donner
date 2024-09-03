@@ -1,18 +1,25 @@
 #include "donner/svg/SVGDocument.h"
 
+#include <filesystem>
+
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/RenderingContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 
 namespace donner::svg {
 
-SVGDocument::SVGDocument() : registry_(std::make_unique<Registry>()) {
+SVGDocument::SVGDocument(Settings settings) : registry_(std::make_unique<Registry>()) {
   components::DocumentContext& ctx = registry_->ctx().emplace<components::DocumentContext>(
       components::DocumentContext::InternalCtorTag{}, *this, *registry_);
   ctx.rootEntity = SVGSVGElement::Create(*this).entity();
+
+  components::ResourceManagerContext& resourceCtx =
+      registry_->ctx().emplace<components::ResourceManagerContext>(*registry_);
+  resourceCtx.setResourceLoader(std::move(settings.resourceLoader));
 }
 
 Entity SVGDocument::rootEntity() const {

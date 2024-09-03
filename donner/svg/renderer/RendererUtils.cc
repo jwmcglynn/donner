@@ -2,6 +2,7 @@
 
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/RenderingContext.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/registry/Registry.h"
 
 namespace donner::svg {
@@ -13,6 +14,7 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, bool verb
     registry.ctx().emplace<components::RenderingContext>(registry);
   }
 
+  registry.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
   registry.ctx().get<components::RenderingContext>().instantiateRenderTree(verbose, outWarnings);
 }
 
