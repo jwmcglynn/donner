@@ -29,6 +29,7 @@ cc_library(
         "//donner/svg/graph",
         "//donner/svg/parser",
         "//donner/svg/registry",
+        "//donner/svg/registry:element_type",
         "@frozen",
     ],
 )

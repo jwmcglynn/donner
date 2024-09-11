@@ -63,6 +63,7 @@ cc_test(
         "resvg_test_suite.cc",
     ],
     data = [
+        "@resvg-test-suite//:images",
         "@resvg-test-suite//:png",
         "@resvg-test-suite//:svg",
     ],

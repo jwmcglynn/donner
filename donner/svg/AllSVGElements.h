@@ -15,6 +15,7 @@
 #include "donner/svg/SVGFEGaussianBlurElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGFilterElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGGElement.h"               // IWYU pragma: export
+#include "donner/svg/SVGImageElement.h"           // IWYU pragma: export
 #include "donner/svg/SVGLineElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGLinearGradientElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGPathElement.h"            // IWYU pragma: export
@@ -46,6 +47,7 @@ using AllSVGElements = entt::type_list<  //
     SVGFEGaussianBlurElement,            //
     SVGFilterElement,                    //
     SVGGElement,                         //
+    SVGImageElement,                     //
     SVGLineElement,                      //
     SVGLinearGradientElement,            //
     SVGStopElement,                      //

@@ -26,6 +26,7 @@
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -271,6 +272,9 @@ public:
           drawPath(
               instance.dataHandle(registry), instance, *path, styleComponent.properties.value(),
               components::LayoutSystem().getViewport(instance.dataHandle(registry)), FontMetrics());
+        } else if (const auto* image =
+                       instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
+          drawImage(instance.dataHandle(registry), instance, *image);
         }
       }
 
@@ -750,6 +754,41 @@ public:
                                   fontMetrics);
       }
     }
+  }
+
+  void drawImage(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                 const components::LoadedImageComponent& image) {
+    if (!image.image) {
+      return;
+    }
+
+    SkBitmap bitmap;
+    bitmap.allocPixels(SkImageInfo::MakeN32Premul(image.image->width, image.image->height));
+    memcpy(bitmap.getPixels(), image.image->data.data(), image.image->data.size());
+
+    sk_sp<SkImage> skImage = SkImages::RasterFromBitmap(bitmap);
+
+    SkPaint paint;
+    paint.setAntiAlias(renderer_.antialias_);
+    paint.setStroke(true);
+    paint.setColor(toSkia(css::RGBA(255, 255, 255, 255)));
+
+    const auto& sizedElement = dataHandle.get<components::ComputedSizedElementComponent>();
+
+    const PreserveAspectRatio preserveAspectRatio =
+        dataHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
+
+    const Boxd intrinsicSize = Boxd::WithSize(Vector2d(image.image->width, image.image->height));
+
+    const Transformd imageFromLocal =
+        preserveAspectRatio.computeTransform(sizedElement.bounds, intrinsicSize);
+
+    renderer_.currentCanvas_->save();
+    renderer_.currentCanvas_->clipRect(toSkia(sizedElement.bounds));
+    renderer_.currentCanvas_->concat(toSkia(imageFromLocal));
+    renderer_.currentCanvas_->drawImage(skImage, 0, 0, SkSamplingOptions(SkFilterMode::kLinear),
+                                        &paint);
+    renderer_.currentCanvas_->restore();
   }
 
   void createFilterChain(SkPaint& filterPaint, const std::vector<FilterEffect>& effectList) {

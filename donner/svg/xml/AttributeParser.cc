@@ -10,6 +10,7 @@
 #include "donner/svg/AllSVGElements.h"  // IWYU pragma: keep
 #include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGFilterElement.h"
+#include "donner/svg/SVGImageElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/parser/Number2dParser.h"
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
@@ -30,7 +31,7 @@ bool IsAlwaysGenericAttribute(const XMLQualifiedNameRef& name) {
          name == XMLQualifiedNameRef("style");
 }
 
-static std::optional<double> ParseNumberNoSuffix(std::string_view str) {
+std::optional<double> ParseNumberNoSuffix(std::string_view str) {
   const auto maybeResult = base::parser::NumberParser::Parse(str);
   if (maybeResult.hasResult()) {
     if (maybeResult.result().consumedChars != str.size()) {
@@ -44,8 +45,7 @@ static std::optional<double> ParseNumberNoSuffix(std::string_view str) {
   }
 }
 
-static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
-                                                   std::string_view value) {
+std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context, std::string_view value) {
   base::parser::LengthParser::Options options;
   options.unitOptional = true;
 
@@ -67,7 +67,7 @@ static std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context,
   return maybeLengthResult.result().length;
 }
 
-static std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view value) {
+std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view value) {
   // Since we want to both parse a number or percent, use a LengthParser and then filter the allowed
   // suffixes.
   base::parser::LengthParser::Options options;
@@ -98,8 +98,46 @@ static std::optional<float> ParseStopOffset(XMLParserContext& context, std::stri
   }
 }
 
-static void ParsePresentationAttribute(XMLParserContext& context, SVGElement& element,
-                                       const XMLQualifiedNameRef& name, std::string_view value) {
+/**
+ * Parses x, y, width, and height values for elements that have them. Returns true if the attribute
+ * was found, so that the caller may use that information to skip other attribute parsing.
+ *
+ * @tparam T Element type, should should have setter methods for `setX`, `setY`, `setWidth`, and
+ * `setHeight`.
+ * @param context The XML parser context.
+ * @param element The element to set the values on.
+ * @param name The name of the attribute.
+ * @param value The value of the attribute.
+ * @return True if the attribute was x, y, width, or height.
+ */
+template <typename T>
+bool ParseXYWidthHeight(XMLParserContext& context, T element, const XMLQualifiedNameRef& name,
+                        std::string_view value) {
+  if (name == XMLQualifiedNameRef("x")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setX(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("y")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setY(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("width")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setWidth(length.value());
+    }
+  } else if (name == XMLQualifiedNameRef("height")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setHeight(length.value());
+    }
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+void ParsePresentationAttribute(XMLParserContext& context, SVGElement& element,
+                                const XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Move this logic into SVGElement::setAttribute.
 
   // TODO: Detect the SVG namespace here and only parse elements in that namespace.
@@ -121,9 +159,8 @@ static void ParsePresentationAttribute(XMLParserContext& context, SVGElement& el
   element.setAttribute(name, value);
 }
 
-static void ParseUnconditionalCommonAttribute(XMLParserContext& context, SVGElement& element,
-                                              const XMLQualifiedNameRef& name,
-                                              std::string_view value) {
+void ParseUnconditionalCommonAttribute(XMLParserContext& context, SVGElement& element,
+                                       const XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Support namespaces on presentation attributes.
   // For now, only parse attributes that are not in a namespace as presentation attributes.
   if (IsAlwaysGenericAttribute(name)) {
@@ -224,22 +261,9 @@ std::optional<ParseError> ParseAttribute<SVGFilterElement>(XMLParserContext& con
                                                            SVGFilterElement element,
                                                            const XMLQualifiedNameRef& name,
                                                            std::string_view value) {
-  if (name == XMLQualifiedNameRef("x")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setX(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("y")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setY(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("width")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setWidth(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("height")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setHeight(length.value());
-    }
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
   } else if (name == XMLQualifiedNameRef("filterUnits")) {
     if (value == "userSpaceOnUse") {
       element.setFilterUnits(FilterUnits::UserSpaceOnUse);
@@ -272,22 +296,9 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(XMLParserCont
                                                                    SVGFEGaussianBlurElement element,
                                                                    const XMLQualifiedNameRef& name,
                                                                    std::string_view value) {
-  if (name == XMLQualifiedNameRef("x")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setX(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("y")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setY(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("width")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setWidth(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("height")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setHeight(length.value());
-    }
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
   } else if (name == XMLQualifiedNameRef("stdDeviation")) {
     const auto maybeNumber2d = Number2dParser::Parse(value);
     if (maybeNumber2d.hasResult()) {
@@ -304,6 +315,28 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(XMLParserCont
       ParseError err;
       err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGImageElement>(XMLParserContext& context,
+                                                          SVGImageElement element,
+                                                          const XMLQualifiedNameRef& name,
+                                                          std::string_view value) {
+  if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
+    element.setHref(value);
+  } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
+    auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
+    if (maybeAspectRatio.hasError()) {
+      context.addSubparserWarning(std::move(maybeAspectRatio.error()),
+                                  context.parserOriginFrom(value));
+    } else {
+      element.setPreserveAspectRatio(maybeAspectRatio.result());
     }
   } else {
     return ParseCommonAttribute(context, element, name, value);
@@ -373,22 +406,9 @@ std::optional<ParseError> ParseAttribute<SVGPatternElement>(XMLParserContext& co
                                                             SVGPatternElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
-  if (name == XMLQualifiedNameRef("x")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setX(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("y")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setY(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("width")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setWidth(length.value());
-    }
-  } else if (name == XMLQualifiedNameRef("height")) {
-    if (auto length = ParseLengthAttribute(context, value)) {
-      element.setHeight(length.value());
-    }
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
   } else if (name == XMLQualifiedNameRef("viewBox")) {
     auto maybeViewbox = ViewboxParser::Parse(value);
     if (maybeViewbox.hasError()) {
@@ -588,7 +608,10 @@ std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& contex
                                                         SVGUseElement element,
                                                         const XMLQualifiedNameRef& name,
                                                         std::string_view value) {
-  if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     element.setHref(RcString(value));
   } else {
     return ParseCommonAttribute(context, element, name, value);

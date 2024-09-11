@@ -3,6 +3,7 @@
 
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/registry/Registry.h"
+#include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
 
@@ -33,12 +34,20 @@ class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement
  */
 class SVGDocument {
 public:
+  /// Document settings which configure the document behavior.
+  struct Settings {
+    /// Resource loader to use for loading external resources.
+    std::unique_ptr<ResourceLoaderInterface> resourceLoader;
+  };
+
   /**
    * Constructor to create an empty SVGDocument.
    *
    * To load a document from an SVG file, use \ref donner::svg::parser::XMLParser::ParseSVG.
+   *
+   * @param settings Settings to configure the document.
    */
-  SVGDocument();
+  SVGDocument(Settings settings = Settings());
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() { return *registry_; }

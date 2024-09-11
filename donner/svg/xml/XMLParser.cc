@@ -193,9 +193,9 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
 }
 }  // namespace
 
-ParseResult<SVGDocument> XMLParser::ParseSVG(InputBuffer& source,
-                                             std::vector<ParseError>* outWarnings,
-                                             XMLParser::Options options) noexcept {
+ParseResult<SVGDocument> XMLParser::ParseSVG(
+    InputBuffer& source, std::vector<ParseError>* outWarnings, XMLParser::Options options,
+    std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept {
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;
 
@@ -220,7 +220,11 @@ ParseResult<SVGDocument> XMLParser::ParseSVG(InputBuffer& source,
     return err;
   }
 
-  SVGDocument svgDocument;
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::move(resourceLoader);
+
+  SVGDocument svgDocument(std::move(settings));
+
   if (auto error = WalkChildren(context, svgDocument, std::nullopt, &xmlDocument)) {
     return std::move(error.value());
   }

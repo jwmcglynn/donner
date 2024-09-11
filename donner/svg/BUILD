@@ -17,6 +17,7 @@ cc_library(
         "SVGGeometryElement.cc",
         "SVGGradientElement.cc",
         "SVGGraphicsElement.cc",
+        "SVGImageElement.cc",
         "SVGLineElement.cc",
         "SVGLinearGradientElement.cc",
         "SVGPathElement.cc",
@@ -47,6 +48,7 @@ cc_library(
         "SVGGeometryElement.h",
         "SVGGradientElement.h",
         "SVGGraphicsElement.h",
+        "SVGImageElement.h",
         "SVGLineElement.h",
         "SVGLinearGradientElement.h",
         "SVGPathElement.h",
@@ -72,6 +74,7 @@ cc_library(
         "//donner/svg/components",
         "//donner/svg/core",
         "//donner/svg/parser",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
     ],
 )
 

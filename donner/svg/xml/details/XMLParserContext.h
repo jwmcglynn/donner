@@ -42,7 +42,7 @@ public:
       : input_(input), lineOffsets_(input), warnings_(warningsStorage), options_(options) {}
 
   /// Get the parser options.
-  XMLParser::Options options() const { return options_; }
+  const XMLParser::Options& options() const { return options_; }
 
   /**
    * Set the XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".

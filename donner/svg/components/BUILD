@@ -68,6 +68,8 @@ cc_library(
         "//donner/svg/components/filter:filter_system",
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/paint:paint_system",
+        "//donner/svg/components/resources:components",
+        "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/components/shape:shape_system",

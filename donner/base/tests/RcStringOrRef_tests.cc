@@ -22,7 +22,8 @@ TEST(RcStringOrRef, Construct) {
   }
 
   {
-    RcStringOrRef str(std::string("hello"));
+    std::string sourceString("hello");
+    RcStringOrRef str(sourceString);  // casts to std::string_view
     EXPECT_EQ(str, "hello");
   }
 

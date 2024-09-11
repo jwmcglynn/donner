@@ -24,6 +24,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
 namespace donner::svg {
 
@@ -144,9 +145,12 @@ extern "C" int main(int argc, char* argv[]) {
 
   std::string filename;
   bool quiet = false;
+  bool verbose = false;
   for (int i = 1; i < argc; ++i) {
     if (argv[i] == std::string_view("--quiet")) {
       quiet = true;
+    } else if (argv[i] == std::string_view("--verbose")) {
+      verbose = true;
     } else {
       filename = argv[i];
     }
@@ -167,9 +171,13 @@ extern "C" int main(int argc, char* argv[]) {
   fileData.loadFromStream(file);
 
   std::vector<parser::ParseError> warnings;
+  parser::XMLParser::Options xmlOptions;
+  auto resourceLoader =
+      std::make_unique<SandboxedFileResourceLoader>(std::filesystem::current_path(), filename);
 
   Trace traceParse("Parse");
-  auto maybeResult = parser::XMLParser::ParseSVG(fileData, quiet ? nullptr : &warnings);
+  auto maybeResult = parser::XMLParser::ParseSVG(fileData, quiet ? nullptr : &warnings, xmlOptions,
+                                                 std::move(resourceLoader));
   traceParse.stop();
 
   if (maybeResult.hasError()) {
@@ -200,7 +208,7 @@ extern "C" int main(int argc, char* argv[]) {
     path1->setStyle("stroke: white");
   }
 
-  document.setCanvasSize(800, 600);
+  document.setCanvasSize(600, 600);
 
   {
     warnings.clear();
@@ -219,7 +227,7 @@ extern "C" int main(int argc, char* argv[]) {
   }
 
   Trace traceCreateRenderer("Create Renderer");
-  RendererSkia renderer;
+  RendererSkia renderer(verbose);
   traceCreateRenderer.stop();
 
   {

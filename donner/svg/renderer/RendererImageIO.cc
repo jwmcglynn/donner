@@ -16,7 +16,6 @@ bool RendererImageIO::writeRgbaPixelsToPngFile(const char* filename,
 
   assert(width > 0);
   assert(height > 0);
-  assert(strideInPixels > 0);
   assert(strideInPixels <= std::numeric_limits<int>::max() / 4);
   assert(rgbaPixels.size() == static_cast<size_t>(width) * height * 4);
 
