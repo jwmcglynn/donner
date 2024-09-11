@@ -15,14 +15,36 @@ namespace donner::svg {
  * - DOM object: SVGImageElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/embedded.html#ImageElement
  *
+ * If `width` or `height` are omitted, the sizes will be inferred using the image's intrinsic size, using the CSS default sizing algorithm, https://www.w3.org/TR/css-images-3/#default-sizing.
+ *
+ * To reference an external image, provide its name or URL. Note that Donner must have a valid ResourceLoader provided to \ref parser::XMLParser::ParseSVG, such as \ref SandboxedFileResourceLoader.
+ * ```xml
+ * <image href="image.png" x="10" y="10" width="100" height="100" />
+ * ```
+ *
+ * To reference an embedded image using a data URL:
+ * ```xml
+ * <image href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQBAMAAADt3eJSAAAAFVBMVEUAAAAisUztHCSo5h3/8gD/fgBNbfOxiPXkAAAAAXRSTlMAQObYZgAAAD9JREFUCNdjwASMDIxABGIICEIZQAFBARADDOEMZMCkxMrAwmAMZCmwBrgwM4AZLCzMbAlABlCKmSEBrgYPAACkeQLx8K5PDQAAAABJRU5ErkJggg==" />
+ * ```
+ *
+ * \htmlonly
+ * <svg viewbox="-2 -2 18 18" width="300" height="300" xmlns="http://www.w3.org/2000/svg">
+ *   <image style="image-rendering: pixelated" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQBAMAAADt3eJSAAAAFVBMVEUAAAAisUztHCSo5h3/8gD/fgBNbfOxiPXkAAAAAXRSTlMAQObYZgAAAD9JREFUCNdjwASMDIxABGIICEIZQAFBARADDOEMZMCkxMrAwmAMZCmwBrgwM4AZLCzMbAlABlCKmSEBrgYPAACkeQLx8K5PDQAAAABJRU5ErkJggg==" />
+ * </svg>
+ * \endhtmlonly
+ *
+ * @note The `image-rendering: pixelated` style is used to render the image in a pixelated style in this example. This is not yet supported by Donner.
+ *
+ * @todo Add support for `image-rendering` property, https://drafts.csswg.org/css-images/#the-image-rendering
+ *
  * | Attribute | Default | Description  |
  * | --------: | :-----: | :----------- |
- * | `href`    | (none)  | URL or base64 data string of the image. |
+ * | `href`    | (none) | URL or base64 data URL of the image. |
  * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the image to fit the rectangle defined by `width` and `height` if the image's intrinsic size is different. |
- * | `x`       | `0`     | X coordinate of the image. |
- * | `y`       | `0`     | Y coordinate of the image. |
- * | `width`   | `0`     | Width of the image. |
- * | `height`  | `0`     | Height of the image. |
+ * | `x`       | `0` | X coordinate of the image. |
+ * | `y`       | `0` | Y coordinate of the image. |
+ * | `width`   | `auto` | Width of the image. If omitted, this value will be inferred from the `height` attribute (if provided), or it will fall back to the image's intrinsic size. |
+ * | `height`  | `auto` | Height of the image. If omitted, this value will be inferred from the `width` attribute (if provided), or it will fall back to the image's intrinsic size. |
  */
 
 /**

@@ -369,7 +369,8 @@ Transformd LayoutSystem::computeSizedElementTransform(
     return preserveAspectRatio.computeTransform(computedSizedElement.bounds, viewbox->viewbox);
   } else if (handle.all_of<ImageComponent>()) {
     // Images compute their transform based on the image's intrinsic size, not the viewbox.
-    // TODO: This should be based on the image's intrinsic size, move this transform computation here from RendererSkia.
+    // TODO: This should be based on the image's intrinsic size, move this transform computation
+    // here from RendererSkia.
     return Transformd();
   } else {
     // This branch is hit for <use> elements.
