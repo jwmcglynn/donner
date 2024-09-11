@@ -1,6 +1,5 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 
-#include <curl/curl.h>
 #include <stb/stb_image_write.h>
 
 #include <cassert>

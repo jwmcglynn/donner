@@ -2,8 +2,6 @@
 /// @file
 
 #include <span>
-#include <string>
-#include <vector>
 
 namespace donner::svg {
 

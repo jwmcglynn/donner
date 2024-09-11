@@ -1,7 +1,5 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
-#include <iostream>
-
 #include "donner/base/parser/ParseError.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/resources/ImageLoader.h"
@@ -12,7 +10,11 @@ ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(r
 
 void ResourceManagerContext::loadResources(std::vector<parser::ParseError>* outWarnings) {
   if (!loader_) {
-    std::cerr << "No loader!\n";
+    if (outWarnings) {
+      parser::ParseError err;
+      err.reason = "Could not load external resources, no ResourceLoader provided";
+      outWarnings->emplace_back(std::move(err));
+    }
     return;
   }
 
@@ -30,30 +32,23 @@ void ResourceManagerContext::loadResources(std::vector<parser::ParseError>* outW
     auto maybeImageData = imageLoader.fromUri(image.href);
     if (std::holds_alternative<ImageLoaderError>(maybeImageData)) {
       if (outWarnings) {
-        base::parser::ParseError err;
+        parser::ParseError err;
         err.reason = std::string(ToString(std::get<ImageLoaderError>(maybeImageData)));
 
         outWarnings->emplace_back(std::move(err));
       }
 
-      std::cerr << "Failed to load image at " << image.href << " -- "
-                << ToString(std::get<ImageLoaderError>(maybeImageData)) << "\n";
-
       // Create an empty LoadedImageComponent to prevent loading again.
       registry_.emplace<LoadedImageComponent>(entity);
     } else {
-      // We got an image.
-      auto data = std::get<ImageResource>(maybeImageData);
-
-      std::cerr << "Loaded image! size=" << data.width << "x" << data.height << "\n";
-
-      registry_.emplace<LoadedImageComponent>(entity, data);
+      registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(maybeImageData));
     }
   }
 }
 
 std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) const {
-  if (const auto* loadedImageComponent = registry_.try_get<LoadedImageComponent>(entity)) {
+  if (const auto* loadedImageComponent = registry_.try_get<LoadedImageComponent>(entity);
+      loadedImageComponent && loadedImageComponent->image) {
     return Vector2i(loadedImageComponent->image->width, loadedImageComponent->image->height);
   }
 
@@ -76,19 +71,13 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
   auto maybeImageData = imageLoader.fromUri(image->href);
   if (std::holds_alternative<ImageLoaderError>(maybeImageData)) {
     // TODO: Plumb loading error out.
-
-    std::cerr << "Failed to load image at " << image->href << " -- "
-              << ToString(std::get<ImageLoaderError>(maybeImageData)) << "\n";
-
-    // Create an empty LoadedImageComponent to prevent loading again.
-    return &registry_.emplace<LoadedImageComponent>(entity);
+    // Until a warning is plumbed, avoid creating an empty LoadedImageComponent (like in
+    // loadResources). This will avoid silent failures as this will be reattempted in loadResources,
+    // but this may result in duplicate image load attempts which is not ideal.
+    return nullptr;
   } else {
-    // We got an image.
-    auto data = std::get<ImageResource>(maybeImageData);
-
-    std::cerr << "Loaded image! size=" << data.width << "x" << data.height << "\n";
-
-    return &registry_.emplace<LoadedImageComponent>(entity, data);
+    return &registry_.emplace<LoadedImageComponent>(entity,
+                                                    std::get<ImageResource>(maybeImageData));
   }
 }
 

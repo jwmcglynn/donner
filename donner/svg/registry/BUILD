@@ -26,7 +26,6 @@ cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
-        ":element_type",  # TODO: Remove this dep and update callers to use it directly
         "@entt",
     ],
 )

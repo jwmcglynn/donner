@@ -258,8 +258,6 @@ INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(G, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-g")),
                          TestNameFromFilename);
 
-// TODO: e-image
-
 INSTANTIATE_TEST_SUITE_P(
     Image, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-image",
@@ -275,7 +273,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"e-image-021.svg", Params::Skip()},  // Not impl: .svg image
                                     {"e-image-022.svg", Params::Skip()},  // Not impl: .svg image
                                     {"e-image-023.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-024.svg", Params::Skip()},  // Not impl: .svg image
+                                    {"e-image-024.svg", Params::Skip()},  // Not impl: .svg imageg
                                     {"e-image-029.svg", Params::Skip()},  // Not impl: .svg image
                                     {"e-image-030.svg", Params::Skip()},  // Not impl: .svg image
                                     {"e-image-031.svg", Params::Skip()},  // Not impl: .svg image

@@ -367,12 +367,11 @@ Transformd LayoutSystem::computeSizedElementTransform(
   // If this entity also has a viewbox, this SizedElementComponent is used to define a viewport.
   if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
     return preserveAspectRatio.computeTransform(computedSizedElement.bounds, viewbox->viewbox);
+  } else if (handle.all_of<ImageComponent>()) {
+    // Images compute their transform based on the image's intrinsic size, not the viewbox.
+    // TODO: This should be based on the image's intrinsic size, move this transform computation here from RendererSkia.
+    return Transformd();
   } else {
-    // TODO: Remove this workaround for computing image transforms.
-    if (handle.get<TreeComponent>().type() == ElementType::Image) {
-      return Transformd();
-    }
-
     // This branch is hit for <use> elements.
     return preserveAspectRatio.computeTransform(computedSizedElement.bounds,
                                                 computedSizedElement.inheritedViewbox);
