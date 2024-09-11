@@ -7,7 +7,6 @@
 
 namespace donner::svg {
 
-// clang-format off
 /**
  * @page xml_rect "<rect>"
  * @ingroup elements_basic_shapes
@@ -66,7 +65,6 @@ namespace donner::svg {
  * | `rx`      | `auto` (\ref xy_auto) | For rounded corners, the radius of the curve along the X axis. |
  * | `ry`      | `auto` (\ref xy_auto) | For rounded corners, the radius of the curve along the Y axis. |
  */
-// clang-format on
 
 /**
  * DOM object for the \ref xml_rect element.

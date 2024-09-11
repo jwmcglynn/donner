@@ -12,7 +12,6 @@
 
 namespace donner::svg {
 
-// clang-format off
 /**
  * @page xml_pattern "<pattern>"
  * @ingroup elements_paint_servers
@@ -99,7 +98,6 @@ namespace donner::svg {
  * | `patternTransform` | identity | Optional transformation from the pattern coordinate system onto the target coordinate system, allowing things like skewing the pattern tiles. |
  * | `href`   | (none)  | Reference to another pattern element to use as a template. |
  */
-// clang-format on
 class SVGPatternElement : public SVGElement {
 protected:
   /// Create an SVGPatternElement wrapper from an entity.

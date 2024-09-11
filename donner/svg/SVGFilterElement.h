@@ -28,7 +28,7 @@ namespace donner::svg {
  * </filter>
  * ```
  *
- * To reference it with a filter:
+ * To reference it with the filter attribute:
  * ```xml
  * <rect filter="url(#MyFilter)" width="300" height="300" />
  * ```

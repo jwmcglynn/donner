@@ -8,15 +8,14 @@
 
 namespace donner::svg::parser {
 
-// clang-format off
 /**
  * @page path_data Path data syntax
  * @ingroup data_formats
  *
- * \details The `d` attribute of a \ref xml_path element defines the shape of the path. It is a sequence of
- * commands, each of which is a single letter followed by a sequence of numbers, such as `M 40 50`.
- * To parse the `d` attribute, use \ref PathParser::Parse.
- * 
+ * \details The `d` attribute of a \ref xml_path element defines the shape of the path. It is a
+ * sequence of commands, each of which is a single letter followed by a sequence of numbers, such as
+ * `M 40 50`. To parse the `d` attribute, use \ref PathParser::Parse.
+ *
  * If the letter is uppercase, the coordinates that follow are absolute coordinates. If the letter
  * is lowercase, the coordinates are relative to the current point.
  *
@@ -36,10 +35,9 @@ namespace donner::svg::parser {
  * | **T**   | Smooth quadratic curve to | `(x y)+` | Draw a quadratic Bezier curve from the current point to `(x, y)`, using a reflection of the previous command's control point as the control point, creating a smooth curve. |
  * | **Elliptical arc commands** ||||
  * | **A**   | \ref PathSpline::Builder::arcTo | `(rx ry x-axis-rotation large-arc-flag sweep-flag x y)+` | Draw an elliptical arc from the current point to `(x, y)`, using `(rx, ry)` as the radii of the ellipse, and `x-axis-rotation` as the rotation of the ellipse. The `large-arc-flag` and `sweep-flag` parameters control the size and orientation of the arc. |
- * 
+ *
  * @see https://www.w3.org/TR/SVG2/paths.html#PathData
  */
-// clang-format on
 
 /**
  * Parse an SVG path "d"-string, see \ref path_data.

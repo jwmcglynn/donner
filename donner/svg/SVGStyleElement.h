@@ -6,7 +6,6 @@
 
 namespace donner::svg {
 
-// clang-format off
 /**
  * @defgroup xml_style "<style>"
  *
@@ -79,7 +78,6 @@ namespace donner::svg {
  *
  * Note that `type` is defined to be a media type [[rfc2046](https://www.ietf.org/rfc/rfc2046.txt)].
  */
-// clang-format on
 class SVGStyleElement : public SVGElement {
 protected:
   /// Create an SVGStyleElement wrapper from an entity.

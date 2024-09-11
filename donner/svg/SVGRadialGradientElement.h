@@ -6,7 +6,6 @@
 
 namespace donner::svg {
 
-// clang-format off
 /**
  * @page xml_radialGradient "<radialGradient>"
  * @ingroup elements_paint_servers
@@ -137,7 +136,6 @@ namespace donner::svg {
  *
  * @see \ref SVGLinearGradientElement, \ref SVGStopElement
  */
-// clang-format on
 class SVGRadialGradientElement : public SVGGradientElement {
 protected:
   /// Create an SVGRadialGradientElement wrapper from an entity.

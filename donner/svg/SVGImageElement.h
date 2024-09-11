@@ -7,10 +7,8 @@
 
 namespace donner::svg {
 
-// clang-format off
 /**
- * @page xml_image "<image>"
- * @ingroup elements_graphics
+ * @defgroup xml_image "<image>"
  *
  * Embeds an image into the SVG document.
  *
@@ -26,7 +24,6 @@ namespace donner::svg {
  * | `width`   | `0`     | Width of the image. |
  * | `height`  | `0`     | Height of the image. |
  */
-// clang-format on
 
 /**
  * DOM object for a \ref xml_image element.

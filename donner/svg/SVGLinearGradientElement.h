@@ -8,7 +8,6 @@
 
 namespace donner::svg {
 
-// clang-format off
 /**
  * @page xml_linearGradient "<linearGradient>"
  * @ingroup elements_paint_servers
@@ -97,8 +96,7 @@ namespace donner::svg {
  *     text { font-size: 16px; font-weight: bold; color: black }
  *   </style>
  *   <defs>
- *     <linearGradient id="ExampleGradient" x1="100" y1="100" x2="200" y2="200"
- * gradientUnits="userSpaceOnUse">
+ *     <linearGradient id="ExampleGradient" x1="100" y1="100" x2="200" y2="200" gradientUnits="userSpaceOnUse">
  *       <stop offset="0%" stop-color="#afa" />
  *       <stop offset="100%" stop-color="#fac" />
  *     </linearGradient>
@@ -128,7 +126,6 @@ namespace donner::svg {
  *
  * @see \ref SVGRadialGradientElement, \ref SVGStopElement
  */
-// clang-format on
 class SVGLinearGradientElement : public SVGGradientElement {
 protected:
   /// Create an SVGLinearGradientElement wrapper from an entity.

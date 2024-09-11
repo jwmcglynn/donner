@@ -12,3 +12,12 @@ DerivePointerAlignment: false
 PointerAlignment: Left
 
 IncludeIsMainRegex: '(_tests?)?$'
+
+#
+# Disable formatting for comments containing these conditions:
+#
+# '|' - For Doxygen comments containing markdown tables
+# 'NOLINT' - For linter suppressions
+# '>' - For markdown blockquotes
+# ' *<' - For embedded XML, a '<' with optional spaces before it (e.g. '<svg>...')
+CommentPragmas: '^(\||NOLINT|\>| *<)'
