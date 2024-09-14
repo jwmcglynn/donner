@@ -29,6 +29,9 @@ bazel_dep(name = "platforms", version = "0.0.10")
 # Core dependencies
 bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240722.0")  # Used for number parsing
 
+# Skia dependencies
+bazel_dep(name = "rules_license", version = "1.0.0")
+
 local_repository(
     name = "skia_user_config",
     path = "third_party/skia_user_config",
@@ -36,8 +39,8 @@ local_repository(
 
 git_repository(
     name = "skia",
-    commit = "7cb161c9d259c4f8ab6e1edf986c88c622b19443",
-    remote = "https://github.com/jwmcglynn/skia",
+    commit = "0ec9b089fa9e8a7daa9e4a6c655870cc5d54feb6",
+    remote = "https://github.com/google/skia",
 )
 
 git_repos_from_deps = use_repo_rule("@skia//bazel:deps.bzl", "git_repos_from_deps")

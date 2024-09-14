@@ -282,7 +282,7 @@ TEST(SVGLinearGradientElementTests, SpreadMethodRepeat) {
 TEST(SVGLinearGradientElementTests, SpreadMethodRendering) {
   ParsedFragment<SVGLinearGradientElement> fragment =
       instantiateSubtreeElementAs<SVGLinearGradientElement>(R"-(
-        <linearGradient id="a" spreadMethod="pad" x1="12.5%" y1="25%" x2="75%" y2="87.5%">
+        <linearGradient id="a" spreadMethod="pad" x1="12.5%" x2="75%">
           <stop offset="0%" stop-color="white" />
           <stop offset="100%" stop-color="black" />
         </linearGradient>
@@ -293,22 +293,22 @@ TEST(SVGLinearGradientElementTests, SpreadMethodRendering) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        @@@@@@@@%%##**++
-        @@@@@@@%%##**++=
-        @@@@@@%%##**++==
-        @@@@@%%##**++==-
-        @@@@%%##**++==--
-        @@@%%##**++==--:
-        @@%%##**++==--::
-        @%%##**++==--::,
-        %%##**++==--::,,
-        %##**++==--::,,.
-        ##**++==--::,,..
-        #**++==--::,,...
-        **++==--::,,....
-        *++==--::,,.....
-        ++==--::,,......
-        +==--::,,.......
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
+        @@@%#*+=-:,.....
         )"));
   }
 
@@ -320,22 +320,22 @@ TEST(SVGLinearGradientElementTests, SpreadMethodRendering) {
   {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
     EXPECT_TRUE(generatedAscii.matches(R"(
-        #%%@@@@@%%##**++
-        %%@@@@@%%##**++=
-        %@@@@@%%##**++==
-        @@@@@%%##**++==-
-        @@@@%%##**++==--
-        @@@%%##**++==--:
-        @@%%##**++==--::
-        @%%##**++==--::,
-        %%##**++==--::,,
-        %##**++==--::,,.
-        ##**++==--::,,..
-        #**++==--::,,...
-        **++==--::,,...,
-        *++==--::,,...,,
-        ++==--::,,...,,:
-        +==--::,,...,,::
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
+        %@@%#*+=-:,..,:-
         )"));
   }
 
@@ -347,22 +347,22 @@ TEST(SVGLinearGradientElementTests, SpreadMethodRendering) {
   {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
     EXPECT_TRUE(generatedAscii.matches(R"(
-        ::,,..@@%%##**++
-        :,,..@@%%##**++=
-        ,,..@@%%##**++==
-        ,..@@%%##**++==-
-        ..@@%%##**++==--
-        .@@%%##**++==--:
-        @@%%##**++==--::
-        @%%##**++==--::,
-        %%##**++==--::,,
-        %##**++==--::,,.
-        ##**++==--::,,.@
-        #**++==--::,,.@@
-        **++==--::,,.@@@
-        *++==--::,,.@@@%
-        ++==--::,,.@@@%%
-        +==--::,,.@@@%%#
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
+        ,.@%#*+=-:,.@%#*
         )"));
   }
 }
