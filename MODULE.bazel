@@ -43,7 +43,9 @@ git_repository(
     remote = "https://github.com/google/skia",
 )
 
-git_repos_from_deps = use_repo_rule("@skia//bazel:deps.bzl", "git_repos_from_deps")
+bazel_deps = use_repo_rule("@skia//bazel:deps.bzl", "bazel_deps")
+c_plus_plus_deps = use_repo_rule("@skia//bazel:deps.bzl", "c_plus_plus_deps")
+header_based_configs = use_repo_rule("@skia//bazel:deps.bzl", "header_based_configs")
 
 new_local_repository(
     name = "rapidxml_ns",

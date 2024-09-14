@@ -73,13 +73,13 @@ struct FileOffset {
   }
 
   /// Print the offset to an ostream.
-  friend std::ostream& operator<<(std::ostream& os, const FileOffset& offset) {
-    if (offset.line != 0) {
-      os << "line " << offset.line << ", column ";
+  friend std::ostream& operator<<(std::ostream& os, const FileOffset& value) {
+    if (value.line != 0) {
+      os << "line " << value.line << ", column ";
     }
 
-    if (offset.offset.has_value()) {
-      os << offset.offset.value();
+    if (value.offset.has_value()) {
+      os << value.offset.value();
     } else {
       os << "<eos>";
     }

@@ -645,7 +645,7 @@ public:
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
-      const Vector2 rectSize = rect.size();
+      const Vector2d rectSize = rect.size();
 
       rect.topLeft = rect.topLeft * pathBounds.size() + pathBounds.topLeft;
       rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
@@ -780,7 +780,7 @@ public:
 
       // We need to repeat if there are an odd number of values, Skia requires an even number
       // of dash lengths.
-      const size_t numRepeats = (dashes.size() & 1) ? 2 : 1;
+      const int numRepeats = (dashes.size() & 1) ? 2 : 1;
 
       std::vector<SkScalar> skiaDashes;
       skiaDashes.reserve(dashes.size() * numRepeats);
@@ -899,8 +899,9 @@ public:
     if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
       createFilterChain(filterPaint, *effects);
     } else if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
-      if (const auto* filter = registry.try_get<components::ComputedFilterComponent>(*reference)) {
-        createFilterChain(filterPaint, filter->effectChain);
+      if (const auto* computedFilter =
+              registry.try_get<components::ComputedFilterComponent>(*reference)) {
+        createFilterChain(filterPaint, computedFilter->effectChain);
       }
     }
   }
@@ -972,7 +973,7 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   for (int y = 0; y < renderingSize.y; ++y) {
     for (int x = 0; x < renderingSize.x; ++x) {
       const uint8_t pixel = *bitmap_.getAddr8(x, y);
-      int index = pixel / static_cast<int>(256 / grayscaleTable.size());
+      size_t index = pixel / static_cast<size_t>(256 / grayscaleTable.size());
       if (index >= grayscaleTable.size()) {
         index = grayscaleTable.size() - 1;
       }
