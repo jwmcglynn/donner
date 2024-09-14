@@ -171,6 +171,8 @@ public:
       const Entity entity = view_.currentEntity();
       view_.advance();
 
+      const Transformd entityFromCanvas = layerBaseTransform_ * instance.entityFromWorldTransform;
+
       if (renderer_.verbose_) {
         std::cout << "Rendering "
                   << registry.get<components::TreeComponent>(instance.dataEntity).type() << " ";
@@ -185,7 +187,7 @@ public:
           std::cout << " (shadow " << instance.styleHandle(registry).entity() << ")";
         }
 
-        std::cout << " transform=" << instance.entityFromWorldTransform << "\n";
+        std::cout << " transform=" << entityFromCanvas << "\n";
 
         std::cout << "\n";
       }
@@ -195,8 +197,7 @@ public:
         renderer_.currentCanvas_->clipRect(toSkia(instance.clipRect.value()));
       }
 
-      renderer_.currentCanvas_->setMatrix(
-          toSkia(layerBaseTransform_ * instance.entityFromWorldTransform));
+      renderer_.currentCanvas_->setMatrix(toSkia(entityFromCanvas));
 
       const components::ComputedStyleComponent& styleComponent =
           instance.styleHandle(registry).get<components::ComputedStyleComponent>();
@@ -287,19 +288,19 @@ public:
           renderer_.currentCanvas_->saveLayer(nullptr, &maskFilter);
 
           // Render the mask content.
-          instantiateMask(ref.reference.handle, instance.dataHandle(registry), ref);
-
-          // renderer_.currentCanvas_->restore();
+          instantiateMask(ref.reference.handle, instance, instance.dataHandle(registry), ref);
 
           // Content layer
           // Dst is the mask, Src is the content.
           // kSrcIn multiplies the mask alpha: r = s * da
-          // TODO: This needs SK_SL enabled for the mask effect to work.
           SkPaint maskPaint;
           maskPaint.setBlendMode(SkBlendMode::kSrcIn);
           renderer_.currentCanvas_->saveLayer(nullptr, &maskPaint);
 
           // TODO: Apply clipRect for mask bounds.
+
+          // TODO: Why does this clear the matrix when starting a layer?
+          renderer_.currentCanvas_->setMatrix(toSkia(entityFromCanvas));
 
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
@@ -554,10 +555,13 @@ public:
    * call.
    *
    * @param dataHandle The handle to the pattern data.
+   * @param instance The rendering instance component for the currently rendered entity (same entity
+   * as \p target).
    * @param target The target entity to which the pattern is applied.
    * @param ref The reference to the mask.
    */
-  void instantiateMask(EntityHandle dataHandle, EntityHandle target,
+  void instantiateMask(EntityHandle dataHandle,
+                       const components::RenderingInstanceComponent& instance, EntityHandle target,
                        const components::ResolvedMask& ref) {
     if (!ref.subtreeInfo) {
       // Subtree did not instantiate, indicating that recursion was detected.
@@ -567,14 +571,13 @@ public:
     Registry& registry = *dataHandle.registry();
     const Transformd savedLayerBaseTransform = layerBaseTransform_;
 
+    layerBaseTransform_ = instance.entityFromWorldTransform;
+
     if (renderer_.verbose_) {
       std::cout << "Start mask contents\n";
     }
 
-    // TODO: Fill actual value
-    // const SkRect skTileRect = toSkia(Boxd(Vector2d(0, 0), Vector2d(100, 100)));
-
-    layerBaseTransform_ = Transformd();
+    // TODO: Apply clipRect for mask bounds.
 
     // Render the subtree into the offscreen SkPictureRecorder.
     assert(ref.subtreeInfo);
@@ -729,6 +732,10 @@ public:
                     const components::ResolvedPaintServer& paint, const PropertyRegistry& style,
                     const Boxd& viewbox) {
     const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
+
+    if (renderer_.verbose_) {
+      std::cout << "Drawing path bounds " << path.spline.bounds() << "\n";
+    }
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;

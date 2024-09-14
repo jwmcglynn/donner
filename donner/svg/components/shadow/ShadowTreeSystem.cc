@@ -203,6 +203,7 @@ void ShadowTreeSystem::computeChildren(Registry& registry, ShadowBranchType bran
 
     for (auto child = registry.get<TreeComponent>(lightTarget).firstChild(); child != entt::null;
          child = registry.get<TreeComponent>(child).nextSibling()) {
+      // RecursionGuard childGuard = guard.with(child);
       computeChildren(registry, branchType, storage, guard, shadow, child, shadowHostParents,
                       outWarnings);
     }
