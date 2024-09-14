@@ -30,7 +30,8 @@ cc_library(
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",
-        "@skia//:skia_public",
+        "@skia//:core",
+        "@skia//:pathops",
     ],
 )
 

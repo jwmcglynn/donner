@@ -6,7 +6,6 @@
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkGraphics.h"
-#include "include/core/SkImageEncoder.h"
 
 namespace donner::svg {
 
@@ -143,7 +142,6 @@ private:
 
   bool verbose_;  //!< If true, print verbose logging.
 
-  SkAutoGraphics ag_;                  //!< Skia graphics context.
   SkBitmap bitmap_;                    //!< The bitmap to render into.
   SkCanvas* rootCanvas_ = nullptr;     //!< The root canvas.
   SkCanvas* currentCanvas_ = nullptr;  //!< The current canvas.
