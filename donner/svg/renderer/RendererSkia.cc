@@ -766,6 +766,7 @@ public:
     bitmap.allocPixels(SkImageInfo::MakeN32Premul(image.image->width, image.image->height));
     memcpy(bitmap.getPixels(), image.image->data.data(), image.image->data.size());
 
+    bitmap.setImmutable();
     sk_sp<SkImage> skImage = SkImages::RasterFromBitmap(bitmap);
 
     SkPaint paint;
