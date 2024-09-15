@@ -81,7 +81,7 @@ std::optional<RcString> SVGPatternElement::href() const {
   }
 }
 
-void SVGPatternElement::setViewbox(std::optional<Boxd> viewbox) {
+void SVGPatternElement::setViewbox(OptionalRef<Boxd> viewbox) {
   handle_.get<components::ViewboxComponent>().viewbox = viewbox;
 }
 
@@ -100,12 +100,12 @@ void SVGPatternElement::setY(Lengthd value) {
                                                                    css::Specificity::Override());
 }
 
-void SVGPatternElement::setWidth(std::optional<Lengthd> value) {
+void SVGPatternElement::setWidth(OptionalRef<Lengthd> value) {
   handle_.get<components::PatternComponent>().sizeProperties.width.set(
       value, css::Specificity::Override());
 }
 
-void SVGPatternElement::setHeight(std::optional<Lengthd> value) {
+void SVGPatternElement::setHeight(OptionalRef<Lengthd> value) {
   handle_.get<components::PatternComponent>().sizeProperties.height.set(
       value, css::Specificity::Override());
 }
@@ -122,7 +122,7 @@ void SVGPatternElement::setPatternTransform(Transformd transform) {
   components::LayoutSystem().setEntityFromParentTransform(handle_, transform);
 }
 
-void SVGPatternElement::setHref(const std::optional<RcStringOrRef>& value) {
+void SVGPatternElement::setHref(OptionalRef<RcStringOrRef> value) {
   if (value) {
     handle_.get_or_emplace<components::PatternComponent>().href = RcString(value.value());
   } else {

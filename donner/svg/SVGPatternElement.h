@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "donner/base/Length.h"
+#include "donner/base/OptionalRef.h"
 #include "donner/base/RcStringOrRef.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGElement.h"
@@ -184,7 +185,7 @@ public:
    *
    * @param viewbox The viewBox value to set.
    */
-  void setViewbox(std::optional<Boxd> viewbox);
+  void setViewbox(OptionalRef<Boxd> viewbox);
 
   /**
    * Set the `preserveAspectRatio` attribute, which defines how to scale the viewport to fit the
@@ -216,7 +217,7 @@ public:
    *
    * @param value The width value to set.
    */
-  void setWidth(std::optional<Lengthd> value);
+  void setWidth(OptionalRef<Lengthd> value);
 
   /**
    * Set the `height` attribute, which defines the height of the rectangle indicating how pattern
@@ -224,7 +225,7 @@ public:
    *
    * @param value The height value to set.
    */
-  void setHeight(std::optional<Lengthd> value);
+  void setHeight(OptionalRef<Lengthd> value);
 
   /**
    * Set the `patternUnits` attribute, which defines the coordinate system for attributes `x`, `y`,
@@ -255,7 +256,7 @@ public:
    *
    * @param value The href value to set.
    */
-  void setHref(const std::optional<RcStringOrRef>& value);
+  void setHref(OptionalRef<RcStringOrRef> value);
 };
 
 }  // namespace donner::svg
