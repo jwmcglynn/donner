@@ -701,6 +701,10 @@ public:
       // > then the given effect (e.g., a gradient or a filter) will be ignored.
       //
       if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
+        // Skip rendering the pattern contents
+        assert(ref.subtreeInfo);
+        skipUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+
         return createFallbackPaint(ref, currentColor, opacity);
       }
 

@@ -140,12 +140,9 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
-            {"a-stroke-007.svg", Params::Skip()},  // Not impl: <text>
-            {"a-stroke-008.svg", Params::Skip()},  // Not impl: <text>
-            {"a-stroke-009.svg", Params::Skip()},  // Not impl: <pattern>, <text>
-            {"a-stroke-012.svg",
-             Params::Skip()},  // Not impl: Not impl: <pattern> / stroke interaction
-            {"a-stroke-013.svg", Params::Skip()},  // Not impl: <pattern>, "null shape" and fallback
+            {"a-stroke-007.svg", Params::Skip()},            // Not impl: <text>
+            {"a-stroke-008.svg", Params::Skip()},            // Not impl: <text>
+            {"a-stroke-009.svg", Params::Skip()},            // Not impl: <text>
             {"a-stroke-dasharray-005.svg", Params::Skip()},  // Not impl: "font-size"? "em" units
                                                              // (font-size="20" not impl)
             {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
