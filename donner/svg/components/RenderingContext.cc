@@ -290,8 +290,7 @@ public:
         resolvedRef && IsValidMask(resolvedRef->handle)) {
       return ResolvedMask{resolvedRef.value(),
                           instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
-                          resolvedRef->handle.get<MaskComponent>().maskContentUnits.value_or(
-                              MaskContentUnits::Default)};
+                          resolvedRef->handle.get<MaskComponent>().maskContentUnits};
     }
 
     return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};

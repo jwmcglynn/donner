@@ -583,6 +583,13 @@ public:
     }
 
     // TODO: Apply clipRect for mask bounds.
+    const components::MaskComponent& maskComponent =
+        ref.reference.handle.get<components::MaskComponent>();
+
+    if (!maskComponent.useAutoBounds()) {
+      // Create a Boxd from the bounds, first by resolving the lengths.
+      // TODO
+    }
 
     // Render the subtree into the offscreen SkPictureRecorder.
     assert(ref.subtreeInfo);
