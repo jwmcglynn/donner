@@ -323,6 +323,17 @@ public:
     renderer_.currentCanvas_->restoreToCount(1);
   }
 
+  void skipUntil(Registry& registry, Entity endEntity) {
+    bool foundEndEntity = false;
+
+    while (!view_.done() && !foundEndEntity) {
+      // When we find the end we do one more iteration of the loop and then exit.
+      foundEndEntity = view_.currentEntity() == endEntity;
+
+      view_.advance();
+    }
+  }
+
   void drawPath(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
                 const components::ComputedPathComponent& path, const PropertyRegistry& style,
                 const Boxd& viewbox, const FontMetrics& fontMetrics) {
@@ -572,31 +583,30 @@ public:
     const components::MaskComponent& maskComponent =
         ref.reference.handle.get<components::MaskComponent>();
 
+    // Get x, y, width, height with default values
+    const Lengthd x = maskComponent.x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+    const Lengthd y = maskComponent.y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+    const Lengthd width = maskComponent.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+    const Lengthd height = maskComponent.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+    Boxd shapeBounds = Boxd();  // If no shape can be found, this will be an empty box
+    if (const auto* path =
+            instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      shapeBounds = path->spline.bounds();
+    }
+
+    // Compute the reference bounds based on maskUnits
+    Boxd maskUnitsBounds;
+
+    if (maskComponent.maskUnits == MaskUnits::ObjectBoundingBox) {
+      maskUnitsBounds = shapeBounds;
+    } else {
+      // maskUnits == UserSpaceOnUse
+      // Use the viewport as bounds
+      maskUnitsBounds = components::LayoutSystem().getViewport(instance.dataHandle(registry));
+    }
+
     if (!maskComponent.useAutoBounds()) {
-      // Get x, y, width, height with default values
-      const Lengthd x = maskComponent.x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-      const Lengthd y = maskComponent.y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-      const Lengthd width = maskComponent.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-      const Lengthd height = maskComponent.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-
-      // Compute the reference bounds based on maskUnits
-      Boxd maskUnitsBounds;
-
-      if (maskComponent.maskUnits == MaskUnits::ObjectBoundingBox) {
-        // Get the bounding box of the element being masked
-        if (const auto* path =
-                instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-          maskUnitsBounds = path->spline.bounds();
-        } else {
-          // If no path is available, use a default unit box
-          maskUnitsBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
-        }
-      } else {
-        // maskUnits == UserSpaceOnUse
-        // Use the viewport as bounds
-        maskUnitsBounds = components::LayoutSystem().getViewport(instance.dataHandle(registry));
-      }
-
       // Resolve x, y, width, height
       const double x_px = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
       const double y_px = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
@@ -604,7 +614,7 @@ public:
       const double height_px = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
 
       // Create maskBounds
-      Boxd maskBounds = Boxd::FromXYWH(x_px, y_px, width_px, height_px);
+      const Boxd maskBounds = Boxd::FromXYWH(x_px, y_px, width_px, height_px);
 
       // Apply clipRect with maskBounds
       renderer_.currentCanvas_->clipRect(toSkia(maskBounds), SkClipOp::kIntersect, true);
@@ -612,20 +622,9 @@ public:
 
     // Adjust layerBaseTransform_ according to maskContentUnits
     if (maskComponent.maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
-      // Get the bounding box of the element being masked
-      Boxd contentUnitsBounds;
-
-      if (const auto* path =
-              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        contentUnitsBounds = path->spline.bounds();
-      } else {
-        // If no path is available, use a default unit box
-        contentUnitsBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
-      }
-
       // Compute the transform from mask content coordinate system to user space
-      Transformd userSpaceFromMaskContent = Transformd::Translate(contentUnitsBounds.topLeft) *
-                                            Transformd::Scale(contentUnitsBounds.size());
+      const Transformd userSpaceFromMaskContent =
+          Transformd::Scale(shapeBounds.size()) * Transformd::Translate(shapeBounds.topLeft);
 
       // Update the layer base transform
       layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
@@ -636,7 +635,12 @@ public:
 
     // Render the mask content
     assert(ref.subtreeInfo);
-    drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+    if (!shapeBounds.isEmpty()) {
+      drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+    } else {
+      // Skip child elements.
+      skipUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+    }
 
     if (renderer_.verbose_) {
       std::cout << "End mask contents\n";

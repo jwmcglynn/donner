@@ -324,10 +324,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-mask-025.svg", Params::Skip()},  // BUG: Self-recursive
             {"e-mask-026.svg", Params::Skip()},  // BUG: Mask on self
             {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child
-            {"e-mask-028.svg", Params::Skip()},  // BUG: On a small object
             {"e-mask-029.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
             {"e-mask-030.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
-            {"e-mask-031.svg", Params::Skip()},  // BUG: On a horizontal line
         })),
     TestNameFromFilename);
 
