@@ -3,8 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <sstream>
-
-#include "donner/base/Utils.h"
+#include <string>
+#include <type_traits>
 
 namespace donner {
 
@@ -124,11 +124,7 @@ TEST(OptionalRef, Reset) {
 
 TEST(OptionalRef, ValueWhenEmpty) {
   OptionalRef<int> ref;
-#if UTILS_EXCEPTIONS_ENABLED()
-  EXPECT_THROW(ref.value(), std::runtime_error);
-#else
-  EXPECT_DEATH(ref.value(), ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
-#endif
+  EXPECT_DEATH((void)ref.value(), ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
 }
 
 TEST(OptionalRef, DereferenceOperator) {
@@ -139,11 +135,7 @@ TEST(OptionalRef, DereferenceOperator) {
 
 TEST(OptionalRef, DereferenceOperatorEmpty) {
   OptionalRef<int> ref;
-#if UTILS_EXCEPTIONS_ENABLED()
-  EXPECT_THROW(*ref, std::runtime_error);
-#else
-  EXPECT_DEATH(*ref, ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
-#endif
+  EXPECT_DEATH((void)*ref, ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
 }
 
 struct TestStruct {
@@ -158,11 +150,7 @@ TEST(OptionalRef, ArrowOperator) {
 
 TEST(OptionalRef, ArrowOperatorEmpty) {
   OptionalRef<TestStruct> ref;
-#if UTILS_EXCEPTIONS_ENABLED()
-  EXPECT_THROW((void)ref->value, std::runtime_error);
-#else
   EXPECT_DEATH((void)ref->value, ".*OptionalRef::operator->\\(\\) called on empty OptionalRef.*");
-#endif
 }
 
 TEST(OptionalRef, CompareWithOptionalRef) {
@@ -217,6 +205,43 @@ TEST(OptionalRef, FunctionCall) {
   OptionalRef<int> ref(x);
   EXPECT_TRUE(isSet(ref));
   EXPECT_FALSE(isSet(std::nullopt));
+}
+
+TEST(OptionalRef, ImplicitConversionToOptional) {
+  int x = 42;
+  OptionalRef<int> ref(x);
+  std::optional<int> opt = ref;
+  EXPECT_TRUE(opt.has_value());
+  EXPECT_EQ(opt.value(), 42);
+
+  OptionalRef<int> refEmpty;
+  std::optional<int> optEmpty = refEmpty;
+  EXPECT_FALSE(optEmpty.has_value());
+}
+
+TEST(OptionalRef, TypeAlias) {
+  // Testing that the Type alias is correct
+  static_assert(std::is_same_v<OptionalRef<int>::Type, const int>);
+  static_assert(std::is_same_v<OptionalRef<const int&>::Type, const int>);
+  static_assert(std::is_same_v<OptionalRef<std::string>::Type, const std::string>);
+}
+
+TEST(OptionalRef, CannotModifyThroughOptionalRef) {
+  struct NonConstStruct {
+    int value;
+    void setValue(int v) { value = v; }
+  };
+
+  NonConstStruct s{42};
+  OptionalRef<NonConstStruct> ref(s);
+  EXPECT_EQ(ref->value, 42);
+
+  // The following line should not compile because ref->setValue(43) is not allowed
+  // due to const qualification. Uncommenting this line should result in a compilation error.
+  // ref->setValue(43);
+
+  // Verify that we cannot modify the object through OptionalRef
+  static_assert(std::is_const_v<std::remove_pointer_t<decltype(ref.operator->())>>);
 }
 
 }  // namespace donner

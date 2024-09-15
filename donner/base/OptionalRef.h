@@ -4,6 +4,7 @@
 #include <cassert>
 #include <optional>
 #include <ostream>
+#include <type_traits>
 
 namespace donner {
 
@@ -23,6 +24,9 @@ namespace donner {
 template <typename T>
 class OptionalRef {
 public:
+  /// Type of the referenced object.
+  using Type = const std::remove_cvref_t<T>;
+
   /**
    * Constructs an empty `OptionalRef`.
    */
@@ -133,9 +137,16 @@ public:
    *
    * @note Asserts that the `OptionalRef` is not empty.
    */
-  constexpr const T* operator->() const noexcept {
+  constexpr const Type* operator->() const noexcept {
     assert(ptr_ && "OptionalRef::operator->() called on empty OptionalRef");
     return ptr_;
+  }
+
+  /**
+   * Implicit conversion to a `std::optional<T>`.
+   */
+  constexpr operator std::optional<T>() const {
+    return hasValue() ? std::optional<T>(value()) : std::nullopt;
   }
 
   /// Equality operator to another `OptionalRef`.
@@ -169,7 +180,7 @@ public:
   }
 
 private:
-  const T* ptr_ = nullptr;  //!< Pointer to the referenced object, or `nullptr` if empty.
+  const Type* ptr_ = nullptr;  //!< Pointer to the referenced object, or `nullptr` if empty.
 };
 
 }  // namespace donner
