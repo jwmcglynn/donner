@@ -5,7 +5,8 @@ CORE_COPTS = [
     "//conditions:default": [
         # On Android, this option causes the linker to fail
         # (e.g. "undefined reference to `SkString::data()'").
-        "-fvisibility=hidden",
+        # TODO(jwmcglynn): Setting this option to "hidden" causes Linux builds to fail.
+        # "-fvisibility=hidden",
     ],
 }) + select({
     "@platforms//os:windows": [],
