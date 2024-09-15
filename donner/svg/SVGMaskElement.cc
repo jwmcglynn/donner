@@ -10,8 +10,10 @@ SVGMaskElement SVGMaskElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
   EntityHandle handle = CreateEntity(registry, Tag, Type);
   handle.emplace<components::MaskComponent>();
-  handle.emplace<components::RenderingBehaviorComponent>(
-      components::RenderingBehavior::ShadowOnlyChildren);
+  handle
+      .emplace<components::RenderingBehaviorComponent>(
+          components::RenderingBehavior::ShadowOnlyChildren)
+      .inheritsParentTransform = false;
   return SVGMaskElement(handle);
 }
 

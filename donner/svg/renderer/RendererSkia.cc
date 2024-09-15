@@ -268,33 +268,15 @@ public:
         } else if (instance.mask) {
           const components::ResolvedMask& ref = instance.mask.value();
 
-          Transformd maskTransform;
-          if (ref.contentUnits == MaskContentUnits::ObjectBoundingBox) {
-            if (const auto* path =
-                    instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-              // TODO(jwmcglynn): Extend this to get the element bounds for all child elements by
-              // adding an API to LayoutSystem.
-              const Boxd bounds = path->spline.bounds();
-              maskTransform =
-                  Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
-            }
-          }
-
           SkPaint maskFilter;
-          // TODO: SRGB conversion
+          // TODO: SRGB colorspace conversion
+          // Use Luma color filter for the mask, which converts the mask to alpha.
           maskFilter.setColorFilter(SkLumaColorFilter::Make());
 
-          const auto& sizedElement =
-              instance.styleHandle(registry).get<components::ComputedSizedElementComponent>();
-          // TODO: Handle percentage sizes correctly, and handle if none of the attributes are
-          // specified
-
-          // TODO: Apply clipRect for mask bounds.
-
-          // TODO(jwmcglynn): Calculate hint for size of layer.
+          // Save the current layer with the mask filter
           renderer_.currentCanvas_->saveLayer(nullptr, &maskFilter);
 
-          // Render the mask content.
+          // Render the mask content
           instantiateMask(ref.reference.handle, instance, instance.dataHandle(registry), ref);
 
           // Content layer
@@ -304,9 +286,8 @@ public:
           maskPaint.setBlendMode(SkBlendMode::kSrcIn);
           renderer_.currentCanvas_->saveLayer(nullptr, &maskPaint);
 
-          // TODO: Why does this clear the matrix when starting a layer?
+          // Restore the matrix after starting the layer
           renderer_.currentCanvas_->setMatrix(toSkia(entityFromCanvas));
-
         } else {
           assert(false && "Failed to find reason for isolatedLayer");
         }
@@ -582,16 +563,70 @@ public:
       std::cout << "Start mask contents\n";
     }
 
-    // TODO: Apply clipRect for mask bounds.
+    // Get maskUnits and maskContentUnits
     const components::MaskComponent& maskComponent =
         ref.reference.handle.get<components::MaskComponent>();
 
     if (!maskComponent.useAutoBounds()) {
-      // Create a Boxd from the bounds, first by resolving the lengths.
-      // TODO
+      // Get x, y, width, height with default values
+      const Lengthd x = maskComponent.x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+      const Lengthd y = maskComponent.y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+      const Lengthd width = maskComponent.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+      const Lengthd height = maskComponent.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+      // Compute the reference bounds based on maskUnits
+      Boxd refBounds = Boxd::CreateEmpty(Vector2d::Zero());
+
+      if (maskComponent.maskUnits == MaskUnits::ObjectBoundingBox) {
+        // Get the bounding box of the element being masked
+        if (const auto* path =
+                instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+          refBounds = path->spline.bounds();
+        } else {
+          // If no path is available, use a default unit box
+          refBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
+        }
+      } else {
+        // maskComponent.maskUnits == MaskUnits::UserSpaceOnUse
+        // Use the viewport as bounds
+        refBounds = components::LayoutSystem().getViewport(instance.dataHandle(registry));
+      }
+
+      // Resolve x, y, width, height
+      const double x_px = x.toPixels(refBounds, FontMetrics(), Lengthd::Extent::X);
+      const double y_px = y.toPixels(refBounds, FontMetrics(), Lengthd::Extent::Y);
+      const double width_px = width.toPixels(refBounds, FontMetrics(), Lengthd::Extent::X);
+      const double height_px = height.toPixels(refBounds, FontMetrics(), Lengthd::Extent::Y);
+
+      // Create maskBounds
+      Boxd maskBounds = Boxd(Vector2d(x_px, y_px), Vector2d(x_px + width_px, y_px + height_px));
+
+      // Apply clipRect with maskBounds
+      renderer_.currentCanvas_->clipRect(toSkia(maskBounds), SkClipOp::kIntersect, true);
     }
 
-    // Render the subtree into the offscreen SkPictureRecorder.
+    // Adjust layerBaseTransform_ according to maskContentUnits
+    if (maskComponent.maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
+      // Get the bounding box of the element being masked
+      Boxd contentBounds = Boxd::CreateEmpty(Vector2d::Zero());
+      if (const auto* path =
+              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+        contentBounds = path->spline.bounds();
+      } else {
+        // If no path is available, use a default unit box
+        contentBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
+      }
+
+      // Map from [0,1] to maskBounds
+      Transformd contentFromUser =
+          Transformd::Translate(contentBounds.topLeft) * Transformd::Scale(contentBounds.size());
+      layerBaseTransform_ = contentFromUser * layerBaseTransform_;
+    } else {
+      // maskContentUnits == UserSpaceOnUse
+      // No adjustment needed
+    }
+
+    // Render the mask content
     assert(ref.subtreeInfo);
     drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
 
