@@ -106,7 +106,69 @@ public:
    */
   void setMaskContentUnits(MaskContentUnits value);
 
-  // TODO: x/y/width/height
+  /**
+   * Get the top-left X coordinate of the mask region. If this is not specified and at least one of
+   * the attributes `y`, `width`, or `height` is specified the effect is as if the initial value is
+   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   */
+  std::optional<Lengthd> x() const;
+
+  /**
+   * Get the top-left Y coordinate of the mask region. If this is not specified and at least one of
+   * the attributes `x`, `width`, or `height` is specified the effect is as if the initial value is
+   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   */
+  std::optional<Lengthd> y() const;
+
+  /**
+   * Get the width of the mask region. If this is not specified and at least one of the attributes
+   * `x`, `y`, or `height` is specified the effect is as if the initial value is '120%'. If no
+   * attributes are specified, the effect will fill the canvas.
+   */
+  std::optional<Lengthd> width() const;
+
+  /**
+   * Get the height of the mask region. If this is not specified and at least one of the attributes
+   * `x`, `y`, or `width` is specified the effect is as if the initial value is '120%'. If no
+   * attributes are specified, the effect will fill the canvas.
+   */
+  std::optional<Lengthd> height() const;
+
+  /**
+   * Set the top-left X coordinate of the mask region. If this is not specified and at least one of
+   * the attributes `y`, `width`, or `height` is specified the effect is as if the initial value is
+   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   *
+   * @param value Coordinate value.
+   */
+  void setX(std::optional<Lengthd> value);
+
+  /**
+   * Set the top-left Y coordinate of the mask region. If this is not specified and at least one of
+   * the attributes `x`, `width`, or `height` is specified the effect is as if the initial value is
+   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   *
+   * @param value Coordinate value.
+   */
+  void setY(std::optional<Lengthd> value);
+
+  /**
+   * Set the width of the mask region. If this is not specified and at least one of the attributes
+   * `x`, `y`, or `height` is specified the effect is as if the initial value is '120%'. If no
+   * attributes are specified, the effect will fill the canvas.
+   *
+   * @param value Dimension value.
+   */
+  void setWidth(std::optional<Lengthd> value);
+
+  /**
+   * Set the height of the mask region. If this is not specified and at least one of the attributes
+   * `x`, `y`, or `width` is specified the effect is as if the initial value is '120%'. If no
+   * attributes are specified, the effect will fill the canvas.
+   *
+   * @param value Dimension value.
+   */
+  void setHeight(std::optional<Lengthd> value);
 };
 
 }  // namespace donner::svg

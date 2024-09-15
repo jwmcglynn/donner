@@ -46,8 +46,8 @@ struct ComputedSizedElementComponent {
 
 /**
  * Stores the properties of a sized element, `x`, `y`, `width`, `height`. Used for \ref xml_svg,
- * \ref xml_image and \ref xml_foreignObject by the standard, and also internally with \ref use for
- * Donner.
+ * \ref xml_image and \ref xml_foreignObject by the standard, and also internally with \ref xml_use
+ * for Donner.
  */
 struct SizedElementComponent {
   /// The properties of the sized element, `x`, `y`, `width`, `height`.

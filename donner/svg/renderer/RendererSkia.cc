@@ -284,6 +284,13 @@ public:
           // TODO: SRGB conversion
           maskFilter.setColorFilter(SkLumaColorFilter::Make());
 
+          const auto& sizedElement =
+              instance.styleHandle(registry).get<components::ComputedSizedElementComponent>();
+          // TODO: Handle percentage sizes correctly, and handle if none of the attributes are
+          // specified
+
+          // TODO: Apply clipRect for mask bounds.
+
           // TODO(jwmcglynn): Calculate hint for size of layer.
           renderer_.currentCanvas_->saveLayer(nullptr, &maskFilter);
 
@@ -296,8 +303,6 @@ public:
           SkPaint maskPaint;
           maskPaint.setBlendMode(SkBlendMode::kSrcIn);
           renderer_.currentCanvas_->saveLayer(nullptr, &maskPaint);
-
-          // TODO: Apply clipRect for mask bounds.
 
           // TODO: Why does this clear the matrix when starting a layer?
           renderer_.currentCanvas_->setMatrix(toSkia(entityFromCanvas));

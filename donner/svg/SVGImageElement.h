@@ -15,9 +15,12 @@ namespace donner::svg {
  * - DOM object: SVGImageElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/embedded.html#ImageElement
  *
- * If `width` or `height` are omitted, the sizes will be inferred using the image's intrinsic size, using the CSS default sizing algorithm, https://www.w3.org/TR/css-images-3/#default-sizing.
+ * If `width` or `height` are omitted, the sizes will be inferred using the image's intrinsic size,
+ * using the CSS default sizing algorithm, https://www.w3.org/TR/css-images-3/#default-sizing.
  *
- * To reference an external image, provide its name or URL. Note that Donner must have a valid ResourceLoader provided to \ref parser::XMLParser::ParseSVG, such as \ref SandboxedFileResourceLoader.
+ * To reference an external image, provide its name or URL. Note that Donner must have a valid
+ * ResourceLoader provided to \ref parser::XMLParser::ParseSVG, such as \ref
+ * SandboxedFileResourceLoader.
  * ```xml
  * <image href="image.png" x="10" y="10" width="100" height="100" />
  * ```
@@ -33,9 +36,11 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * @note The `image-rendering: pixelated` style is used to render the image in a pixelated style in this example. This is not yet supported by Donner.
+ * @note The `image-rendering: pixelated` style is used to render the image in a pixelated style in
+ * this example. This is not yet supported by Donner.
  *
- * @todo Add support for `image-rendering` property, https://drafts.csswg.org/css-images/#the-image-rendering
+ * @todo Add support for `image-rendering` property,
+ * https://drafts.csswg.org/css-images/#the-image-rendering
  *
  * | Attribute | Default | Description  |
  * | --------: | :-----: | :----------- |
@@ -121,11 +126,11 @@ public:
   Lengthd y() const;
 
   /**
-   * Set the width.
+   * Set the width, or \c std::nullopt to use the image's intrinsic width.
    *
    * @param value Width value.
    */
-  void setWidth(Lengthd value);
+  void setWidth(std::optional<Lengthd> value);
 
   /**
    * Get the width.
@@ -133,11 +138,11 @@ public:
   std::optional<Lengthd> width() const;
 
   /**
-   * Set the height.
+   * Set the height, or \c std::nullopt to use the image's intrinsic height.
    *
    * @param value Height value.
    */
-  void setHeight(Lengthd value);
+  void setHeight(std::optional<Lengthd> value);
 
   /**
    * Get the height.

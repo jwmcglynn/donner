@@ -3,6 +3,7 @@
 #include <entt/entt.hpp>
 #include <string_view>
 
+#include "donner/base/RcString.h"
 #include "donner/base/parser/LengthParser.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/parser/ParseError.h"
@@ -445,7 +446,7 @@ std::optional<ParseError> ParseAttribute<SVGPatternElement>(XMLParserContext& co
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
   } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
-    element.setHref(RcString(value));
+    element.setHref(RcStringOrRef(RcString(value)));
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }
