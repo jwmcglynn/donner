@@ -147,7 +147,8 @@ public:
     }
 
     if (properties.mask.get()) {
-      if (auto resolved = resolveMask(dataHandle, properties.mask.getRequired());
+      if (auto resolved =
+              resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
           resolved.valid()) {
         instance.mask = resolved;
       }
@@ -281,14 +282,14 @@ public:
     return ResolvedClipPath{ResolvedReference{EntityHandle()}, ClipPathUnits::Default};
   }
 
-  ResolvedMask resolveMask(EntityHandle dataHandle, const Reference& reference) {
+  ResolvedMask resolveMask(EntityHandle styleHandle, const Reference& reference) {
     // Only resolve paints if the paint server references a supported <mask> element, and the
     // shadow tree was instantiated. If the shadow tree is not instantiated, that indicates
     // there was recursion and we treat the reference as invalid.
-    if (auto resolvedRef = reference.resolve(*dataHandle.registry());
+    if (auto resolvedRef = reference.resolve(*styleHandle.registry());
         resolvedRef && IsValidMask(resolvedRef->handle)) {
       return ResolvedMask{resolvedRef.value(),
-                          instantiateOffscreenSubtree(dataHandle, ShadowBranchType::OffscreenMask),
+                          instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
                           resolvedRef->handle.get<MaskComponent>().maskContentUnits.value_or(
                               MaskContentUnits::Default)};
     }
