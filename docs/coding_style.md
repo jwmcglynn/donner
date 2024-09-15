@@ -43,7 +43,7 @@ namespace donner::svg {
 
 ## Documentation
 
-1. Struct and class documentation:
+1. **Struct and class documentation**:
    - Use `/**` style multi-line comments for detailed descriptions.
    - Provide comprehensive explanations, offering new details that are not immediately obvious from the code. Include usage context and examples where relevant.
 
@@ -60,10 +60,10 @@ namespace donner::svg {
    };
    ```
 
-2. Member documentation
+2. **Member documentation**:
 
    - Use `//!<` for inline member documentation, or `/**` for long descriptions.
-   - For struct members either provide brief single-line descriptions or detailed explanations if relevant.
+   - For struct members, either provide brief single-line descriptions or detailed explanations if relevant.
 
    ```cpp
    struct Command {
@@ -85,27 +85,27 @@ namespace donner::svg {
    };
    ```
 
-3. Method documentation
+3. **Method documentation**:
 
    - Use `/**` style multi-line comments for methods.
-   - Omit the `@brief` prefix, the first line will be the brief by default
-   - Describes the purpose and behavior of the method.
-   - Mention return values when relevant, but doesn't always use explicit `@return` tags.
+   - Omit the `@brief` prefix; the first line will be the brief by default.
+   - Describe the purpose and behavior of the method.
+   - Mention return values when relevant, but don't always use explicit `@return` tags.
 
    ```cpp
    /**
-   * Get a point on the spline.
-   *
-   * @param index Spline index.
-   * @param t Position on spline, between 0.0 and 1.0.
-   */
+    * Get a point on the spline.
+    *
+    * @param index Spline index.
+    * @param t Position on spline, between 0.0 and 1.0.
+    */
    Vector2d pointAt(size_t index, double t) const;
    ```
 
-4. Documentation content:
-   - Includes tables for complex explanations (e.g., attribute descriptions).
-   - Provides notes about limitations or unsupported features.
-   - Cross-references other parts of the code using `\ref`.
+4. **Documentation content**:
+   - Include tables for complex explanations (e.g., attribute descriptions).
+   - Provide notes about limitations or unsupported features.
+   - Cross-reference other parts of the code using `\ref`.
 
    ```cpp
    /**
@@ -115,7 +115,7 @@ namespace donner::svg {
 
 ## Includes
 
-Include paths for Donner files are relative to the donner svg directory and use double quotes:
+Include paths for Donner files are relative to the Donner SVG directory and use double quotes:
 
 ```cpp
 // GOOD:
@@ -141,7 +141,7 @@ STL and third-party dependencies do not use this, and use angle brackets:
 - **Free functions**: UpperCamelCase.
 - **Member variables**: lowerCamelCaseWithTrailingUnderscore_.
 - **Parameters and local variables**: lowerCamelCase
-- **Constants**: `k` prefix, and then UpperCamelCase: kExampleConstant
+- **Constants**: `k` prefix, and then UpperCamelCase: `kExampleConstant`
 
 Example in context:
 
@@ -180,15 +180,15 @@ The column limit is set at 100 characters.
 
 ## Formatting
 
-The `.clang-format` file is the repo root in the source of truth for formatting.
+The `.clang-format` file in the repo root is the source of truth for formatting.
 
 ## Tests
 
 Tests are placed in a `tests/` directory near the file they are testing. Test files should have the suffix of `_tests.cc`.
 
-# Code conventions
+## Code conventions
 
-## Const correctness
+### Const correctness
 
 Apply `const` whenever possible, for any methods that don't modify the object's state.
 
@@ -196,7 +196,7 @@ Apply `const` whenever possible, for any methods that don't modify the object's 
 Vector2d pointAt(size_t index, double t) const;
 ```
 
-## struct and class
+### struct and class
 
 - Use `struct` for data classes and `class` for classes with logic. `struct` classes may have simple methods, typically for read-only access.
 - Implement comparison operators using `= default` when possible.
@@ -231,7 +231,7 @@ private:
 };
 ```
 
-## Properties (getters and setters)
+### Properties (getters and setters)
 
 - Use `thing()` and `setThing(...)` naming.
 
@@ -254,7 +254,7 @@ std::optional<Lengthd> x1() const;
 void setX1(std::optional<Lengthd> x1);
 ```
 
-## enum class
+### enum class
 
 - Use `enum class` for all enums, and provide an `operator<<` for debugging.
 
@@ -276,12 +276,12 @@ inline std::ostream& operator<<(std::ostream& os, ClipPathUnits units) {
 }
 ```
 
-## Asserts
+### Asserts
 
-- Debug-only: `#include <cassert>` and use `std::assert(condition && "Message")`.
-- Release: `UTILS_RELEASE_ASSERT(condition)` or `UTILS_RELEASE_ASSERT(condition, "Message")`.
+- Debug-only: `#include <cassert>` and use `assert(condition && "Message")`.
+- Release: `UTILS_RELEASE_ASSERT(condition)` or `UTILS_RELEASE_ASSERT_MSG(condition, "Message")`.
 
-## "donner/base/Utils.h"
+### "donner/base/Utils.h"
 
 - `if (UTILS_PREDICT_TRUE(condition))` for hinting the compiler about likely branches.
 - `if (UTILS_PREDICT_FALSE(condition))` for hinting the compiler about unlikely branches.
@@ -290,7 +290,7 @@ inline std::ostream& operator<<(std::ostream& os, ClipPathUnits units) {
 - `UTILS_RELEASE_ASSERT_MSG(condition, "Message")` for release-mode assertions with a message.
 - `#if UTILS_EXCEPTIONS_ENABLED()` for code that should only be compiled when exceptions are enabled.
 
-## Strings
+### Strings
 
 - Use `std::string_view` for non-owning references.
 - Use `RcString` for owning references.
@@ -300,7 +300,7 @@ For passing strings as parameters:
 
 - `void fn(std::string_view str)` for non-owning references.
 - `void fn(const RcString& str)` for owning references.
-- `void fn(const RcStringOrRef& str)` for API surfaces which may extend the lifetime of the RcString. This is typically seen at public API surfaces.
+- `void fn(const RcStringOrRef& str)` for API surfaces which may extend the lifetime of the `RcString`. This is typically seen at public API surfaces.
 
 For common string helpers, see `donner/base/StringUtils.h`:
 
@@ -317,7 +317,7 @@ for (std::string_view part : StringUtils::Split("a,b,c", ',')) {
 }
 ```
 
-## Limit use of auto
+### Limit use of auto
 
 `auto` should only be used when the type is visible on the same source line, or if the type is well-understood, such as for iterators (`auto it = ...`).
 
@@ -333,7 +333,7 @@ if (auto maybeUnit = parseUnit(str, &charsConsumed)) {
 }
 ```
 
-- For `ParseResult<Type>` _maybeResult_ types - the type should be visible nearby, and the ParseResult pattern is ubiquitous in the codebase.
+- For `ParseResult<Type>` _maybeResult_ types - the type should be visible nearby, and the `ParseResult` pattern is ubiquitous in the codebase.
 
 ```cpp
 auto maybeResult = NumberParser::Parse(remaining_);
@@ -346,25 +346,105 @@ if (maybeResult.hasError()) {
 const NumberParser::Result& result = maybeResult.result();
 ```
 
-## operator<=> when possible
+### Operator overloading and comparisons
 
-Use the C++20 spaceship operator when possible, but note that gtest has a bug where `operator==` must also be supplied.
+#### Use of `operator<=>` when possible
+
+- Use the C++20 spaceship operator (`operator<=>`) when possible for automatic generation of comparison operators.
+- Be aware that `operator<=>` may not work as intended with pointers or when custom comparison logic is needed.
+- **Note**: Due to a bug in gtest, `operator==` must also be supplied when using `operator<=>`.
+
+#### Writing custom comparison operators
+
+- When the default behavior of `operator<=>` is not suitable (e.g., when comparing pointers or references), explicitly define comparison operators.
+- Ensure that the comparison logic accurately reflects the semantics of the class.
+
+Example:
 
 ```cpp
-/// Spaceship equality operator to another \ref RcString.
-constexpr friend auto operator<=>(const RcString& lhs, const RcString& rhs) {
-  return compareStringViews(lhs, rhs);
-}
-
-//
-// For gtest, also implement operator== in terms of operator<=>.
-//
-
-/// Equality operator to another \ref RcString.
-constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
-  return (lhs <=> rhs) == std::strong_ordering::equal;
+// Custom equality operator for a class that holds a pointer.
+constexpr friend bool operator==(const OptionalRef& lhs, const OptionalRef& rhs) {
+  return lhs.hasValue() == rhs.hasValue() &&
+         (!lhs.hasValue() || lhs.value() == rhs.value());
 }
 ```
+
+- Avoid relying on `operator<=>` in cases where member-wise comparison does not align with the intended behavior.
+
+#### Providing `operator<<` for debugging
+
+- Implement `operator<<` for classes to streamline debugging and logging.
+- The output should be clear and provide meaningful information about the object's state.
+
+Example:
+
+```cpp
+friend std::ostream& operator<<(std::ostream& os, const OptionalRef& opt) {
+  if (opt) {
+    return os << *opt;
+  } else {
+    return os << "nullopt";
+  }
+}
+```
+
+### Use of `constexpr`
+
+- Use `constexpr` for functions and methods that can be evaluated at compile-time.
+- This can improve performance and enable compile-time checks.
+- Apply `constexpr` to constructors and operators where appropriate.
+
+Example:
+
+```cpp
+constexpr OptionalRef() noexcept = default;
+constexpr OptionalRef(const OptionalRef& other) noexcept = default;
+```
+
+### Asserting preconditions
+
+- Use `assert` statements to enforce preconditions in debug builds.
+- Ensure that `assert` messages are informative.
+
+Example:
+
+```cpp
+constexpr const T& value() const {
+  assert(ptr_ && "OptionalRef::value() called on empty OptionalRef");
+  return *ptr_;
+}
+```
+
+To assert in release builds, use `UTILS_RELEASE_ASSERT` or `UTILS_RELEASE_ASSERT_MSG`.
+
+```cpp
+#include "donner/base/Utils.h"
+
+UTILS_RELEASE_ASSERT(!str.empty());
+UTILS_RELEASE_ASSERT_MSG(str.size() < 100, "String is too long");
+```
+
+### Method naming conventions
+
+- **Class methods**: Use `lowerCamelCase`, aligning with the SVG standard.
+  - Example: `hasValue()`, `reset()`, `value()`
+
+### Implicit constructors
+
+- Use `/* implicit */` comment to indicate intentional implicit constructors, especially when they take a single argument.
+- This clarifies the intent and aids in code reviews.
+
+Example:
+
+```cpp
+/* implicit */ OptionalRef(std::nullopt_t nullopt) noexcept {}
+```
+
+### General coding practices
+
+- Be cautious when dealing with raw pointers and references.
+- Ensure that lifetime and ownership semantics are clear and properly documented.
+- When overloading operators, make sure they are consistent with the class's semantics and do not introduce unexpected behavior.
 
 <div class="section_buttons">
 
