@@ -235,7 +235,7 @@ public:
 
           if (auto* computedTransform =
                   ref.reference.handle.try_get<components::ComputedLocalTransformComponent>()) {
-            clipPathTransform *= computedTransform->entityFromParent;
+            clipPathTransform = clipPathTransform * computedTransform->entityFromParent;
           }
 
           renderer_.currentCanvas_->save();
@@ -399,7 +399,8 @@ public:
         target.try_get<components::ComputedLocalTransformComponent>();
 
     bool numbersArePercent = false;
-    Transformd transform;
+    Transformd gradientFromGradientUnits;
+
     if (objectBoundingBox) {
       // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
       //
@@ -414,16 +415,20 @@ public:
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
-      transform = ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
+      gradientFromGradientUnits =
+          ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
 
-      // Note that this applies *before* transform.
-      transform *= Transformd::Scale(pathBounds.size());
-      transform *= Transformd::Translate(pathBounds.topLeft);
+      // Apply scaling and translation from unit box to path bounds
+      const Transformd objectBoundingBoxFromUnitBox =
+          Transformd::Scale(pathBounds.size()) * Transformd::Translate(pathBounds.topLeft);
+
+      // Combine the transforms
+      gradientFromGradientUnits = gradientFromGradientUnits * objectBoundingBoxFromUnitBox;
 
       // TODO(jwmcglynn): Can numbersArePercent be represented by the transform instead?
       numbersArePercent = true;
     } else {
-      transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+      gradientFromGradientUnits = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
     }
 
     const Boxd& bounds = objectBoundingBox ? kUnitPathBounds : viewbox;
@@ -458,7 +463,7 @@ public:
 
     // Transform applied to the gradient coordinates, and for radial gradients the focal point and
     // radius.
-    const SkMatrix localMatrix = toSkiaMatrix(transform);
+    const SkMatrix skGradientFromGradientUnits = toSkiaMatrix(gradientFromGradientUnits);
 
     if (const auto* linearGradient =
             target.try_get<components::ComputedLinearGradientComponent>()) {
@@ -471,7 +476,7 @@ public:
       paint.setAntiAlias(renderer_.antialias_);
       paint.setShader(SkGradientShader::MakeLinear(
           static_cast<const SkPoint*>(points), color.data(), pos.data(), numStops,
-          toSkia(computedGradient.spreadMethod), 0, &localMatrix));
+          toSkia(computedGradient.spreadMethod), 0, &skGradientFromGradientUnits));
       return paint;
     } else {
       const auto& radialGradient = target.get<components::ComputedRadialGradientComponent>();
@@ -515,13 +520,13 @@ public:
       SkPaint paint;
       paint.setAntiAlias(renderer_.antialias_);
       if (NearZero(focalRadius) && focalCenter == center) {
-        paint.setShader(
-            SkGradientShader::MakeRadial(toSkia(center), radius, color.data(), pos.data(), numStops,
-                                         toSkia(computedGradient.spreadMethod), 0, &localMatrix));
+        paint.setShader(SkGradientShader::MakeRadial(
+            toSkia(center), radius, color.data(), pos.data(), numStops,
+            toSkia(computedGradient.spreadMethod), 0, &skGradientFromGradientUnits));
       } else {
         paint.setShader(SkGradientShader::MakeTwoPointConical(
             toSkia(focalCenter), focalRadius, toSkia(center), radius, color.data(), pos.data(),
-            numStops, toSkia(computedGradient.spreadMethod), 0, &localMatrix));
+            numStops, toSkia(computedGradient.spreadMethod), 0, &skGradientFromGradientUnits));
       }
       return paint;
     }
@@ -555,8 +560,8 @@ public:
     }
 
     Registry& registry = *dataHandle.registry();
-    const Transformd savedLayerBaseTransform = layerBaseTransform_;
 
+    const Transformd savedLayerBaseTransform = layerBaseTransform_;
     layerBaseTransform_ = instance.entityFromWorldTransform;
 
     if (renderer_.verbose_) {
@@ -575,31 +580,31 @@ public:
       const Lengthd height = maskComponent.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
 
       // Compute the reference bounds based on maskUnits
-      Boxd refBounds = Boxd::CreateEmpty(Vector2d::Zero());
+      Boxd maskUnitsBounds;
 
       if (maskComponent.maskUnits == MaskUnits::ObjectBoundingBox) {
         // Get the bounding box of the element being masked
         if (const auto* path =
                 instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-          refBounds = path->spline.bounds();
+          maskUnitsBounds = path->spline.bounds();
         } else {
           // If no path is available, use a default unit box
-          refBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
+          maskUnitsBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
         }
       } else {
-        // maskComponent.maskUnits == MaskUnits::UserSpaceOnUse
+        // maskUnits == UserSpaceOnUse
         // Use the viewport as bounds
-        refBounds = components::LayoutSystem().getViewport(instance.dataHandle(registry));
+        maskUnitsBounds = components::LayoutSystem().getViewport(instance.dataHandle(registry));
       }
 
       // Resolve x, y, width, height
-      const double x_px = x.toPixels(refBounds, FontMetrics(), Lengthd::Extent::X);
-      const double y_px = y.toPixels(refBounds, FontMetrics(), Lengthd::Extent::Y);
-      const double width_px = width.toPixels(refBounds, FontMetrics(), Lengthd::Extent::X);
-      const double height_px = height.toPixels(refBounds, FontMetrics(), Lengthd::Extent::Y);
+      const double x_px = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double y_px = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+      const double width_px = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double height_px = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
 
       // Create maskBounds
-      Boxd maskBounds = Boxd(Vector2d(x_px, y_px), Vector2d(x_px + width_px, y_px + height_px));
+      Boxd maskBounds = Boxd::FromXYWH(x_px, y_px, width_px, height_px);
 
       // Apply clipRect with maskBounds
       renderer_.currentCanvas_->clipRect(toSkia(maskBounds), SkClipOp::kIntersect, true);
@@ -608,19 +613,22 @@ public:
     // Adjust layerBaseTransform_ according to maskContentUnits
     if (maskComponent.maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
       // Get the bounding box of the element being masked
-      Boxd contentBounds = Boxd::CreateEmpty(Vector2d::Zero());
+      Boxd contentUnitsBounds;
+
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        contentBounds = path->spline.bounds();
+        contentUnitsBounds = path->spline.bounds();
       } else {
         // If no path is available, use a default unit box
-        contentBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
+        contentUnitsBounds = Boxd(Vector2d(0, 0), Vector2d(1, 1));
       }
 
-      // Map from [0,1] to maskBounds
-      Transformd contentFromUser =
-          Transformd::Translate(contentBounds.topLeft) * Transformd::Scale(contentBounds.size());
-      layerBaseTransform_ = contentFromUser * layerBaseTransform_;
+      // Compute the transform from mask content coordinate system to user space
+      Transformd userSpaceFromMaskContent = Transformd::Translate(contentUnitsBounds.topLeft) *
+                                            Transformd::Scale(contentUnitsBounds.size());
+
+      // Update the layer base transform
+      layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
     } else {
       // maskContentUnits == UserSpaceOnUse
       // No adjustment needed
@@ -670,8 +678,8 @@ public:
     const auto* maybeTransformComponent =
         target.try_get<components::ComputedLocalTransformComponent>();
 
-    Transformd patternTransform;
-    Transformd contentRootTransform;
+    Transformd patternContentFromPatternTile;
+    Transformd patternTileFromTarget;
     Boxd rect = computedPattern.tileRect;
 
     if (NearZero(computedPattern.tileRect.width()) || NearZero(computedPattern.tileRect.height())) {
@@ -699,14 +707,14 @@ public:
     }
 
     if (computedPattern.viewbox) {
-      contentRootTransform = computedPattern.preserveAspectRatio.computeTransform(
+      patternContentFromPatternTile = computedPattern.preserveAspectRatio.computeTransform(
           rect.toOrigin(), computedPattern.viewbox);
     } else if (patternContentObjectBoundingBox) {
-      contentRootTransform = Transformd::Scale(pathBounds.size());
+      patternContentFromPatternTile = Transformd::Scale(pathBounds.size());
     }
 
-    patternTransform = Transformd::Translate(rect.topLeft);
-    patternTransform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+    patternTileFromTarget = Transformd::Translate(rect.topLeft) *
+                            ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
 
     const SkRect skTileRect = toSkia(rect.toOrigin());
 
@@ -719,7 +727,7 @@ public:
 
     SkPictureRecorder recorder;
     renderer_.currentCanvas_ = recorder.beginRecording(skTileRect);
-    layerBaseTransform_ = contentRootTransform;
+    layerBaseTransform_ = patternContentFromPatternTile;
 
     // Render the subtree into the offscreen SkPictureRecorder.
     assert(ref.subtreeInfo);
@@ -733,13 +741,13 @@ public:
     layerBaseTransform_ = savedLayerBaseTransform;
 
     // Transform to apply to the pattern contents.
-    const SkMatrix localMatrix = toSkiaMatrix(patternTransform);
+    const SkMatrix skPatternContentFromPatternTile = toSkiaMatrix(patternTileFromTarget);
 
     SkPaint skPaint;
     skPaint.setAntiAlias(renderer_.antialias_);
     skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
-        SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix,
-        &skTileRect));
+        SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear,
+        &skPatternContentFromPatternTile, &skTileRect));
     return skPaint;
   }
 

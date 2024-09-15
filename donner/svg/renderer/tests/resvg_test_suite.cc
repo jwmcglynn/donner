@@ -308,11 +308,28 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 
 // TODO: e-marker
-// TODO: e-mask
 
-
-INSTANTIATE_TEST_SUITE_P(Mask, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-mask")),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Mask, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-mask",
+        {
+            {"e-mask-012.svg", Params::Skip()},  // BUG: opacity interaction
+            {"e-mask-014.svg", Params::Skip()},  // BUG: opacity interaction
+            {"e-mask-015.svg", Params::Skip()},  // BUG: clip-path interaction
+            {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
+            {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
+            {"e-mask-023.svg", Params::Skip()},  // BUG: Self-recursive
+            {"e-mask-024.svg", Params::Skip()},  // BUG: Recursive
+            {"e-mask-025.svg", Params::Skip()},  // BUG: Self-recursive
+            {"e-mask-026.svg", Params::Skip()},  // BUG: Mask on self
+            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child
+            {"e-mask-028.svg", Params::Skip()},  // BUG: On a small object
+            {"e-mask-029.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
+            {"e-mask-030.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
+            {"e-mask-031.svg", Params::Skip()},  // BUG: On a horizontal line
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-path")),
                          TestNameFromFilename);

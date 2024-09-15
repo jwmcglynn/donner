@@ -45,6 +45,8 @@ TEST(Transform, Inverse) {
   {
     Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5) *
                    Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
+
+    // The inverse should apply the inverse transformations in reverse order
     EXPECT_THAT(t.inversed(),
                 TransformEq(Transformd::Translate({50, -100}) * Transformd::Scale({0.5, 0.5}) *
                             Transformd::Rotation(MathConstants<double>::kHalfPi * -0.5)));
@@ -52,14 +54,21 @@ TEST(Transform, Inverse) {
 }
 
 TEST(Transform, MultiplicationOrder) {
-  const Transformd t1 = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5) *
-                        Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
+  const double angle = MathConstants<double>::kHalfPi * 0.5;  // 45 degrees
+  const double cos45 = std::cos(angle);                       // cos(45 degrees)
+  const double sin45 = std::sin(angle);                       // sin(45 degrees)
+  const double scaleFactor = 2.0;
 
-  Transformd t2 = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
-  t2 *= Transformd::Scale({2, 2});
-  t2 *= Transformd::Translate({-50, 100});
+  const Transformd t = Transformd::Rotation(angle) * Transformd::Scale({scaleFactor, scaleFactor}) *
+                       Transformd::Translate({-50, 100});
 
-  EXPECT_THAT(t1, TransformEq(t2));
+  EXPECT_THAT(t, TransformIs(cos45 * scaleFactor,   // a
+                             sin45 * scaleFactor,   // b
+                             -sin45 * scaleFactor,  // c
+                             cos45 * scaleFactor,   // d
+                             -50.0,                 // e
+                             100.0                  // f
+                             ));
 }
 
 TEST(Transform, TransformVectorOrPosition) {
@@ -115,6 +124,7 @@ TEST(Transform, TransformVectorOrPosition) {
   {
     Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi) *
                    Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
+
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(-100, 100));
     EXPECT_THAT(t.transformVector({100, 50}), Vector2Near(-100, 200));
@@ -157,10 +167,9 @@ TEST(Transform, Output) {
 
   EXPECT_EQ((std::ostringstream() << t).str(),
             "matrix(1 -2 3 -4 5 -6) =>\n"
-            "[ 1\t3\t0\t5\n"
-            "  -2\t-4\t0\t-6\n"
-            "  0\t0\t1\t0\n"
-            "  0\t0\t0\t1 ]\n");
+            "[ 1\t3\t5\n"
+            "  -2\t-4\t-6\n"
+            "  0\t0\t1 ]\n");
 }
 
 }  // namespace donner
