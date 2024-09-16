@@ -154,6 +154,7 @@ if (element.isa<SVGCircleElement>()) {
 | \ref donner::svg::SVGGraphicsElement       | (none, base class)      |
 | \ref donner::svg::SVGLinearGradientElement | \ref xml_linearGradient |
 | \ref donner::svg::SVGLineElement           | \ref xml_line           |
+| \ref donner::svg::SVGMaskElement           | \ref xml_mask           |
 | \ref donner::svg::SVGPathElement           | \ref xml_path           |
 | \ref donner::svg::SVGPatternElement        | \ref xml_pattern        |
 | \ref donner::svg::SVGPolygonElement        | \ref xml_polygon        |
