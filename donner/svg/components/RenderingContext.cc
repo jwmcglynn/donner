@@ -156,15 +156,24 @@ public:
 
     // Create a new layer if opacity is less than 1 or if there is an effect that requires an
     // isolated group.
-    if (properties.opacity.getRequired() < 1.0 || instance.resolvedFilter || instance.clipPath ||
-        instance.mask) {
+    if (properties.opacity.getRequired() < 1.0) {
       instance.isolatedLayer = true;
-
-      // TODO(jwmcglynn): Calculate hint for size of layer.
       ++layerDepth;
-      if (instance.mask) {
-        ++layerDepth;  // Mask requires two layers.
-      }
+    }
+
+    if (instance.resolvedFilter) {
+      instance.isolatedLayer = true;
+      ++layerDepth;
+    }
+
+    if (instance.clipPath) {
+      instance.isolatedLayer = true;
+      ++layerDepth;
+    }
+
+    if (instance.mask) {
+      instance.isolatedLayer = true;
+      layerDepth += 2;
     }
 
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
@@ -288,9 +297,16 @@ public:
     // there was recursion and we treat the reference as invalid.
     if (auto resolvedRef = reference.resolve(*styleHandle.registry());
         resolvedRef && IsValidMask(resolvedRef->handle)) {
-      return ResolvedMask{resolvedRef.value(),
-                          instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
-                          resolvedRef->handle.get<MaskComponent>().maskContentUnits};
+      if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
+          computedShadow &&
+          computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
+        {
+          return ResolvedMask{
+              resolvedRef.value(),
+              instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
+              resolvedRef->handle.get<MaskComponent>().maskContentUnits};
+        }
+      }
     }
 
     return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};
@@ -401,7 +417,7 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
         const Vector2d pointInLocal =
             LayoutSystem()
                 .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-                .inversed()
+                .inverse()
                 .transformPosition(point);
 
         // Match the path.

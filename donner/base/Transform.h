@@ -173,7 +173,7 @@ struct Transform {
   /**
    * Returns the inverse of this transform.
    */
-  Transform<T> inversed() const {
+  Transform<T> inverse() const {
     const T invDet = T(1.0) / determinant();
 
     Transform<T> result(uninitialized);

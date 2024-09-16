@@ -313,11 +313,10 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
-            {"e-mask-023.svg", Params::Skip()},  // BUG: Self-recursive
-            {"e-mask-024.svg", Params::Skip()},  // BUG: Recursive
-            {"e-mask-025.svg", Params::Skip()},  // BUG: Self-recursive
-            {"e-mask-026.svg", Params::Skip()},  // BUG: Mask on self
-            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child
+            {"e-mask-025.svg", Params::Skip()},  // BUG: Rendering issue, mask is clipped. Repros in
+                                                 // renderer_tool but not viewer.
+            {"e-mask-026.svg", Params::Skip()},  // BUG: Mask on self, also a bug in browsers
+            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child doesn't apply
             {"e-mask-029.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
             {"e-mask-030.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
         })),

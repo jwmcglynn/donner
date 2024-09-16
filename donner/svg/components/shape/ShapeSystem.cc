@@ -2,6 +2,7 @@
 
 #include <concepts>
 
+#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
@@ -154,12 +155,26 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
 }
 
 std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
+  std::optional<Boxd> overallBounds;
+
   if (ComputedPathComponent* computedPath =
           createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
-    return LayoutSystem().getEntityFromWorldTransform(handle).transformBox(computedPath->bounds());
+    const Boxd bounds =
+        LayoutSystem().getEntityFromWorldTransform(handle).transformBox(computedPath->bounds());
+    overallBounds = bounds;
   }
 
-  return std::nullopt;
+  // Iterate over all children and accumulate their bounds.
+  ForAllChildren(handle, [this, &overallBounds](EntityHandle child) {
+    if (ComputedPathComponent* computedPath =
+            createComputedPathIfShape(child, FontMetrics(), nullptr)) {
+      const Boxd bounds =
+          LayoutSystem().getEntityFromWorldTransform(child).transformBox(computedPath->bounds());
+      overallBounds = overallBounds ? Boxd::Union(overallBounds.value(), bounds) : bounds;
+    }
+  });
+
+  return overallBounds;
 }
 
 bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,

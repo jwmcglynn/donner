@@ -18,28 +18,28 @@ TEST(Transform, Construct) {
 TEST(Transform, Inverse) {
   {
     Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
-    EXPECT_THAT(t.inversed(),
+    EXPECT_THAT(t.inverse(),
                 TransformEq(Transformd::Rotation(MathConstants<double>::kHalfPi * -0.5)));
   }
 
   {
     Transformd t = Transformd::Scale({2, 2});
-    EXPECT_THAT(t.inversed(), TransformEq(Transformd::Scale({0.5, 0.5})));
+    EXPECT_THAT(t.inverse(), TransformEq(Transformd::Scale({0.5, 0.5})));
   }
 
   {
     Transformd t = Transformd::Translate({50, -100});
-    EXPECT_THAT(t.inversed(), TransformEq(Transformd::Translate({-50, 100})));
+    EXPECT_THAT(t.inverse(), TransformEq(Transformd::Translate({-50, 100})));
   }
 
   {
     Transformd t = Transformd::SkewX(0.5);
-    EXPECT_THAT(t.inversed(), TransformEq(Transformd::SkewX(-0.5)));
+    EXPECT_THAT(t.inverse(), TransformEq(Transformd::SkewX(-0.5)));
   }
 
   {
     Transformd t = Transformd::SkewY(0.2);
-    EXPECT_THAT(t.inversed(), TransformEq(Transformd::SkewY(-0.2)));
+    EXPECT_THAT(t.inverse(), TransformEq(Transformd::SkewY(-0.2)));
   }
 
   {
@@ -47,7 +47,7 @@ TEST(Transform, Inverse) {
                    Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
 
     // The inverse should apply the inverse transformations in reverse order
-    EXPECT_THAT(t.inversed(),
+    EXPECT_THAT(t.inverse(),
                 TransformEq(Transformd::Translate({50, -100}) * Transformd::Scale({0.5, 0.5}) *
                             Transformd::Rotation(MathConstants<double>::kHalfPi * -0.5)));
   }

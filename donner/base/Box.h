@@ -99,6 +99,18 @@ struct Box {
   static Box<T> WithSize(const Vector2<T>& size) { return Box<T>(Vector2<T>(), size); }
 
   /**
+   * Create a new box that is expanded to include both boxes.
+   *
+   * @param a First box.
+   * @param b Second box.
+   */
+  static Box<T> Union(const Box<T>& a, const Box<T>& b) {
+    Box<T> result = a;
+    result.addBox(b);
+    return result;
+  }
+
+  /**
    * Expand to include the provided point.
    *
    * @param point Point to include.

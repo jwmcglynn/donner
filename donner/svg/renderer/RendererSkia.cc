@@ -34,6 +34,7 @@
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -209,7 +210,7 @@ public:
           SkPaint opacityPaint;
           opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
 
-          // TODO(jwmcglynn): Calculate hint for size of layer.
+          // const SkRect layerBounds = toSkia(shapeWorldBounds.value_or(Boxd()));
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
         }
 
@@ -218,32 +219,34 @@ public:
           filterPaint.setAntiAlias(renderer_.antialias_);
           createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
 
-          // TODO(jwmcglynn): Calculate the bounds.
+          // const SkRect layerBounds = toSkia(shapeWorldBounds.value_or(Boxd()));
           renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
         }
 
         if (instance.clipPath) {
           const components::ResolvedClipPath& ref = instance.clipPath.value();
 
-          Transformd clipPathTransform;
+          Transformd userSpaceFromClipPathContent;
           if (ref.units == ClipPathUnits::ObjectBoundingBox) {
             if (const auto* path =
                     instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
               // TODO(jwmcglynn): Extend this to get the element bounds for all child elements by
-              // adding an API to LayoutSystem.
+              // uing ShapeSystem::getShapeWorldBounds()
               const Boxd bounds = path->spline.bounds();
-              clipPathTransform =
+              userSpaceFromClipPathContent =
                   Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
             }
           }
 
           if (auto* computedTransform =
                   ref.reference.handle.try_get<components::ComputedLocalTransformComponent>()) {
-            clipPathTransform = clipPathTransform * computedTransform->entityFromParent;
+            userSpaceFromClipPathContent =
+                userSpaceFromClipPathContent * computedTransform->entityFromParent;
           }
 
           renderer_.currentCanvas_->save();
-          const SkMatrix skClipPathTransform = toSkiaMatrix(clipPathTransform);
+          const SkMatrix skUserSpaceFromClipPathContent =
+              toSkiaMatrix(userSpaceFromClipPathContent);
 
           SkPath fullPath;
 
@@ -253,7 +256,7 @@ public:
           components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
             if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
               SkPath path = toSkia(clipPathData->spline);
-              path.transform(skClipPathTransform);
+              path.transform(skUserSpaceFromClipPathContent);
 
               if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
                 const auto& style = computedStyle->properties.value();
@@ -592,17 +595,16 @@ public:
     const Lengthd width = maskComponent.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
     const Lengthd height = maskComponent.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
 
-    Boxd shapeBounds = Boxd();  // If no shape can be found, this will be an empty box
-    if (const auto* path =
-            instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-      shapeBounds = path->spline.bounds();
-    }
+    const std::optional<Boxd> shapeWorldBounds =
+        components::ShapeSystem().getShapeWorldBounds(target);
+    const Boxd shapeLocalBounds =
+        instance.entityFromWorldTransform.inverse().transformBox(shapeWorldBounds.value_or(Boxd()));
 
     // Compute the reference bounds based on maskUnits
     Boxd maskUnitsBounds;
 
     if (maskComponent.maskUnits == MaskUnits::ObjectBoundingBox) {
-      maskUnitsBounds = shapeBounds;
+      maskUnitsBounds = shapeLocalBounds;
     } else {
       // maskUnits == UserSpaceOnUse
       // Use the viewport as bounds
@@ -626,8 +628,8 @@ public:
     // Adjust layerBaseTransform_ according to maskContentUnits
     if (maskComponent.maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
       // Compute the transform from mask content coordinate system to user space
-      const Transformd userSpaceFromMaskContent =
-          Transformd::Scale(shapeBounds.size()) * Transformd::Translate(shapeBounds.topLeft);
+      const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
+                                                  Transformd::Translate(shapeLocalBounds.topLeft);
 
       // Update the layer base transform
       layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
@@ -638,7 +640,7 @@ public:
 
     // Render the mask content
     assert(ref.subtreeInfo);
-    if (!shapeBounds.isEmpty()) {
+    if (!shapeLocalBounds.isEmpty()) {
       drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
     } else {
       // Skip child elements.
@@ -992,7 +994,14 @@ void RendererSkia::draw(SVGDocument& document) {
   const Entity rootEntity = document.rootEntity();
 
   // TODO(jwmcglynn): Plumb outWarnings.
-  RendererUtils::prepareDocumentForRendering(document, verbose_);
+  std::vector<parser::ParseError> warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, verbose_ ? &warnings : nullptr);
+
+  if (!warnings.empty()) {
+    for (const parser::ParseError& warning : warnings) {
+      std::cerr << warning << '\n';
+    }
+  }
 
   const Vector2i renderingSize = document.canvasSize();
 
