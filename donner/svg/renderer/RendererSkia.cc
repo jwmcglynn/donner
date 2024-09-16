@@ -211,14 +211,18 @@ public:
 
           // TODO(jwmcglynn): Calculate hint for size of layer.
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
-        } else if (instance.resolvedFilter) {
+        }
+
+        if (instance.resolvedFilter) {
           SkPaint filterPaint;
           filterPaint.setAntiAlias(renderer_.antialias_);
           createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
 
           // TODO(jwmcglynn): Calculate the bounds.
           renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
-        } else if (instance.clipPath) {
+        }
+
+        if (instance.clipPath) {
           const components::ResolvedClipPath& ref = instance.clipPath.value();
 
           Transformd clipPathTransform;
@@ -264,8 +268,9 @@ public:
           });
 
           renderer_.currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
+        }
 
-        } else if (instance.mask) {
+        if (instance.mask) {
           const components::ResolvedMask& ref = instance.mask.value();
 
           SkPaint maskFilter;
@@ -288,8 +293,6 @@ public:
 
           // Restore the matrix after starting the layer
           renderer_.currentCanvas_->setMatrix(toSkia(entityFromCanvas));
-        } else {
-          assert(false && "Failed to find reason for isolatedLayer");
         }
       }
 

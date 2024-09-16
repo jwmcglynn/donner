@@ -311,9 +311,6 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-mask",
         {
-            {"e-mask-012.svg", Params::Skip()},  // BUG: opacity interaction
-            {"e-mask-014.svg", Params::Skip()},  // BUG: opacity interaction
-            {"e-mask-015.svg", Params::Skip()},  // BUG: clip-path interaction
             {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
             {"e-mask-023.svg", Params::Skip()},  // BUG: Self-recursive
