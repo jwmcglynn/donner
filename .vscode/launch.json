@@ -249,7 +249,7 @@
       "name": "renderer_tool",
       "program": "${workspaceFolder}/bazel-bin/donner/svg/renderer/renderer_tool",
       "args": [
-        "${workspaceFolder}/mask.svg"
+        "${workspaceFolder}/donner_splash.svg"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
