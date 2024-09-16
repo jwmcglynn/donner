@@ -28,6 +28,7 @@
 #include "donner/svg/SVGStopElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGStyleElement.h"           // IWYU pragma: export
 #include "donner/svg/SVGUseElement.h"             // IWYU pragma: export
+#include "donner/svg/SVGMaskElement.h"            // IWYU pragma: export
 
 // Types that are not fully-fledged SVG elements by themselves, so they aren't included in \ref
 // AllSVGElements.
@@ -59,6 +60,7 @@ using AllSVGElements = entt::type_list<  //
     SVGRectElement,                      //
     SVGStyleElement,                     //
     SVGSVGElement,                       //
-    SVGUseElement>;
+    SVGUseElement,                       //
+    SVGMaskElement>;
 
 }  // namespace donner::svg

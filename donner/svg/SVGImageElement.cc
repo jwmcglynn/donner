@@ -52,12 +52,12 @@ void SVGImageElement::setY(Lengthd value) {
       value, css::Specificity::Override());
 }
 
-void SVGImageElement::setWidth(Lengthd value) {
+void SVGImageElement::setWidth(std::optional<Lengthd> value) {
   handle_.get_or_emplace<components::SizedElementComponent>().properties.width.set(
       value, css::Specificity::Override());
 }
 
-void SVGImageElement::setHeight(Lengthd value) {
+void SVGImageElement::setHeight(std::optional<Lengthd> value) {
   handle_.get_or_emplace<components::SizedElementComponent>().properties.height.set(
       value, css::Specificity::Override());
 }

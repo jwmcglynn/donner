@@ -10,6 +10,7 @@
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
@@ -577,6 +578,9 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
         }
       }
     }
+  } else if (registry.all_of<MaskComponent>(entity)) {
+    // The bounds of a shadow entity are determined by the light entity.
+    return Boxd(origin, origin + size);
   }
 
   return Boxd(origin, origin + size);

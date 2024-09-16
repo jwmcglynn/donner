@@ -25,10 +25,17 @@ filegroup(
 
 config_setting(
     name = "debug_build",
-    values = {
-        "compilation_mode": "dbg",
-    },
-    visibility = ["//visibility:public"],
+    values = {"compilation_mode": "dbg"},
+)
+
+config_setting(
+    name = "fast_build",
+    values = {"compilation_mode": "fastbuild"},
+)
+
+config_setting(
+    name = "release_build",
+    values = {"compilation_mode": "opt"},
 )
 
 filegroup(

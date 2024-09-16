@@ -25,8 +25,13 @@ struct FilterComponent {
   /// Height of the filter, defaults to 120% (outside of the element itself).
   std::optional<Lengthd> height;
 
-  FilterUnits filterUnits = FilterUnits::Default;           ///< The filter units.
-  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;  ///< The primitive units.
+  /// The parsed value of the "filterUnits" attribute, which defines the coordinate system for the
+  /// `x`, `y`, `width`, and `height` attributes of the mask.
+  FilterUnits filterUnits = FilterUnits::Default;
+
+  /// The parsed value of the "primitiveUnits" attribute, which defines the coordinate system for
+  /// the various attributes of the filter effects.
+  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;
 };
 
 /**

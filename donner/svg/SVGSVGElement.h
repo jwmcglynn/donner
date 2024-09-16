@@ -10,7 +10,6 @@
 
 namespace donner::svg {
 
-// clang-format off
 /**
  * @page xml_svg "<svg>"
  * @ingroup elements_structural
@@ -60,7 +59,6 @@ namespace donner::svg {
  * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the SVG viewport to fit the SVG content. |
  * | `transform` | (none) | Transformation matrix to apply to SVG content. |
  */
-// clang-format on
 class SVGSVGElement : public SVGGraphicsElement {
   friend class SVGDocument;
 

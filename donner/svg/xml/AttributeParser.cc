@@ -3,6 +3,7 @@
 #include <entt/entt.hpp>
 #include <string_view>
 
+#include "donner/base/RcString.h"
 #include "donner/base/parser/LengthParser.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/parser/ParseError.h"
@@ -12,6 +13,7 @@
 #include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
+#include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/parser/Number2dParser.h"
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "donner/svg/parser/PreserveAspectRatioParser.h"
@@ -257,6 +259,41 @@ std::optional<ParseError> ParseAttribute<SVGClipPathElement>(XMLParserContext& c
 }
 
 template <>
+std::optional<ParseError> ParseAttribute<SVGMaskElement>(XMLParserContext& context,
+                                                         SVGMaskElement element,
+                                                         const XMLQualifiedNameRef& name,
+                                                         std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("maskUnits")) {
+    if (value == "userSpaceOnUse") {
+      element.setMaskUnits(MaskUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setMaskUnits(MaskUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid maskUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("maskContentUnits")) {
+    if (value == "userSpaceOnUse") {
+      element.setMaskContentUnits(MaskContentUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setMaskContentUnits(MaskContentUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid maskContentUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
 std::optional<ParseError> ParseAttribute<SVGFilterElement>(XMLParserContext& context,
                                                            SVGFilterElement element,
                                                            const XMLQualifiedNameRef& name,
@@ -445,7 +482,7 @@ std::optional<ParseError> ParseAttribute<SVGPatternElement>(XMLParserContext& co
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
   } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
-    element.setHref(RcString(value));
+    element.setHref(RcStringOrRef(RcString(value)));
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

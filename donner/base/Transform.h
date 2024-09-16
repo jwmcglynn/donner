@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cmath>
 #include <ostream>
 
 #include "donner/base/Box.h"
@@ -12,14 +13,13 @@ namespace donner {
 /**
  * A 2D matrix representing an affine transformation.
  *
- * It stores six parameters, and is equivalent to the 4x4 matrix:
+ * It stores six parameters, and is equivalent to the 3x3 matrix:
  *
  * \f[
  * \begin{bmatrix}
- *   a & c & 0 & e  \\
- *   b & d & 0 & f  \\
- *   0 & 0 & 1 & 0  \\
- *   0 & 0 & 0 & 1  \\
+ *   a & c & e  \\
+ *   b & d & f  \\
+ *   0 & 0 & 1  \\
  * \end{bmatrix}
  * \f]
  *
@@ -39,25 +39,23 @@ struct Transform {
    *
    * Elements are stored in the following order:
    *
-   * - 0 = scaleX
-   * - 1 = skewY
-   * - 2 = skewX
-   * - 3 = scaleY
-   * - 4 = translateX
-   * - 5 = translateY
-   *
-   * For the layout documented in \ref Transform, this stores `[a b c d e f]`.
+   * - 0 = scaleX (a)
+   * - 1 = skewY  (b)
+   * - 2 = skewX  (c)
+   * - 3 = scaleY (d)
+   * - 4 = translateX (e)
+   * - 5 = translateY (f)
    */
   T data[6];
 
   /// Construct an identity transform.
   Transform() {
-    data[0] = T(1);
-    data[1] = T(0);
-    data[2] = T(0);
-    data[3] = T(1);
-    data[4] = T(0);
-    data[5] = T(0);
+    data[0] = T(1);  // a
+    data[1] = T(0);  // b
+    data[2] = T(0);  // c
+    data[3] = T(1);  // d
+    data[4] = T(0);  // e
+    data[5] = T(0);  // f
   }
 
   /**
@@ -72,7 +70,7 @@ struct Transform {
   /// Destructor.
   ~Transform() = default;
 
-  // Copyable and moveable.
+  // Copyable and movable.
   /// Copy constructor.
   Transform(const Transform<T>&) = default;
   /// Move constructor.
@@ -92,12 +90,12 @@ struct Transform {
     const T cos_val = std::cos(theta);
 
     Transform<T> result(uninitialized);
-    result.data[0] = cos_val;
-    result.data[1] = sin_val;
-    result.data[2] = -sin_val;
-    result.data[3] = cos_val;
-    result.data[4] = T(0);
-    result.data[5] = T(0);
+    result.data[0] = cos_val;   // a
+    result.data[1] = sin_val;   // b
+    result.data[2] = -sin_val;  // c
+    result.data[3] = cos_val;   // d
+    result.data[4] = T(0);      // e
+    result.data[5] = T(0);      // f
     return result;
   }
 
@@ -108,12 +106,12 @@ struct Transform {
    */
   static Transform Scale(const Vector2<T>& extent) {
     Transform<T> result(uninitialized);
-    result.data[0] = extent.x;
-    result.data[1] = T(0);
-    result.data[2] = T(0);
-    result.data[3] = extent.y;
-    result.data[4] = T(0);
-    result.data[5] = T(0);
+    result.data[0] = extent.x;  // a
+    result.data[1] = T(0);      // b
+    result.data[2] = T(0);      // c
+    result.data[3] = extent.y;  // d
+    result.data[4] = T(0);      // e
+    result.data[5] = T(0);      // f
     return result;
   }
 
@@ -124,14 +122,15 @@ struct Transform {
    */
   static Transform Translate(const Vector2<T>& offset) {
     Transform<T> result;
-    result.data[4] = offset.x;
-    result.data[5] = offset.y;
+    result.data[4] = offset.x;  // e
+    result.data[5] = offset.y;  // f
     return result;
   }
 
   /**
-   * Returns a 2D skew transformation along the X axis, as defined by
-   * https://www.w3.org/TR/css-transforms-1/#SkewXDefined
+   * Returns a 2D skew transformation along the X axis.
+   *
+   * @see https://www.w3.org/TR/css-transforms-1/#SkewXDefined
    *
    * @param theta Angle in radians.
    */
@@ -139,13 +138,14 @@ struct Transform {
     const T shear = std::tan(theta);
 
     Transform<T> result;
-    result.data[2] = shear;
+    result.data[2] = shear;  // c
     return result;
   }
 
   /**
-   * Returns a 2D skew transformation along the Y axis, as defined by
-   * https://www.w3.org/TR/css-transforms-1/#SkewYDefined
+   * Returns a 2D skew transformation along the Y axis.
+   *
+   * @see https://www.w3.org/TR/css-transforms-1/#SkewYDefined
    *
    * @param theta Angle in radians.
    */
@@ -153,7 +153,7 @@ struct Transform {
     const T shear = std::tan(theta);
 
     Transform<T> result;
-    result.data[1] = shear;
+    result.data[1] = shear;  // b
     return result;
   }
 
@@ -173,7 +173,7 @@ struct Transform {
   /**
    * Returns the inverse of this transform.
    */
-  Transform<T> inversed() const {
+  Transform<T> inverse() const {
     const T invDet = T(1.0) / determinant();
 
     Transform<T> result(uninitialized);
@@ -181,8 +181,8 @@ struct Transform {
     result.data[1] = -data[1] * invDet;
     result.data[2] = -data[2] * invDet;
     result.data[3] = data[0] * invDet;
-    result.data[4] = -data[4] * result.data[0] - data[5] * result.data[2];
-    result.data[5] = -data[4] * result.data[1] - data[5] * result.data[3];
+    result.data[4] = -(data[4] * result.data[0] + data[5] * result.data[2]);
+    result.data[5] = -(data[4] * result.data[1] + data[5] * result.data[3]);
     return result;
   }
 
@@ -193,13 +193,12 @@ struct Transform {
    *   v' = M \begin{bmatrix}
    *            v_x  \\
    *            v_y  \\
-   *             0   \\
-   *             0
+   *            0
    *          \end{bmatrix}
    * \f]
    *
    * @param v Vector to transform.
-   * @result Transformed vector.
+   * @return Transformed vector.
    */
   Vector2<T> transformVector(const Vector2<T>& v) const {
     return Vector2<T>(data[0] * v.x + data[2] * v.y,  //
@@ -213,13 +212,12 @@ struct Transform {
    *  v' = M \begin{bmatrix}
    *           v_x  \\
    *           v_y  \\
-   *            0   \\
-   *            1
+   *           1
    *         \end{bmatrix}
    * \f]
    *
    * @param v Vector to transform.
-   * @result Transformed vector.
+   * @return Transformed vector.
    */
   Vector2<T> transformPosition(const Vector2<T>& v) const {
     return Vector2<T>(data[0] * v.x + data[2] * v.y + data[4],
@@ -266,27 +264,13 @@ struct Transform {
     return result;
   }
 
-  /**
-   * Post-multiplies rhs with this transform, equivalent to (*this * rhs).
-   *
-   * Note that when applying transformations, transformations typically need to be applied
-   * right-to-left so this operator may be backwards.
-   *
-   * @param rhs Other transform.
-   */
-  Transform<T>& operator*=(const Transform<T>& rhs) {
-    *this = (*this * rhs);
-    return *this;
-  }
-
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const Transform<T>& t) {
     os << "matrix(" << t.data[0] << " " << t.data[1] << " " << t.data[2] << " " << t.data[3] << " "
        << t.data[4] << " " << t.data[5] << ") =>" << std::endl
-       << "[ " << t.data[0] << "\t" << t.data[2] << "\t0\t" << t.data[4] << std::endl
-       << "  " << t.data[1] << "\t" << t.data[3] << "\t0\t" << t.data[5] << std::endl
-       << "  0\t0\t1\t0" << std::endl
-       << "  0\t0\t0\t1 ]" << std::endl;
+       << "[ " << t.data[0] << "\t" << t.data[2] << "\t" << t.data[4] << std::endl
+       << "  " << t.data[1] << "\t" << t.data[3] << "\t" << t.data[5] << std::endl
+       << "  0\t0\t1 ]" << std::endl;
     return os;
   }
 };

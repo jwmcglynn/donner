@@ -23,6 +23,7 @@ enum class ShadowBranchType {
   Main,             //!< For entities enumerated in the main render graph.
   OffscreenFill,    //!< For 'fill' attributes.
   OffscreenStroke,  //!< For 'stroke' attributes.
+  OffscreenMask,    //!< For mask contents, used for the 'mask' attribute.
 };
 
 }  // namespace donner::svg::components

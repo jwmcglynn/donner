@@ -61,7 +61,7 @@ public:
 
 private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  StorageType& storage_;
+  StorageType& storage_; //!< The storage containing the components.
   Iterator current_;  //!< The current iterator.
   Iterator end_;      //!< The end iterator.
 };

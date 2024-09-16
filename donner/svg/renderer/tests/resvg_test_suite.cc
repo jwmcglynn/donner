@@ -140,12 +140,9 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
-            {"a-stroke-007.svg", Params::Skip()},  // Not impl: <text>
-            {"a-stroke-008.svg", Params::Skip()},  // Not impl: <text>
-            {"a-stroke-009.svg", Params::Skip()},  // Not impl: <pattern>, <text>
-            {"a-stroke-012.svg",
-             Params::Skip()},  // Not impl: Not impl: <pattern> / stroke interaction
-            {"a-stroke-013.svg", Params::Skip()},  // Not impl: <pattern>, "null shape" and fallback
+            {"a-stroke-007.svg", Params::Skip()},            // Not impl: <text>
+            {"a-stroke-008.svg", Params::Skip()},            // Not impl: <text>
+            {"a-stroke-009.svg", Params::Skip()},            // Not impl: <text>
             {"a-stroke-dasharray-005.svg", Params::Skip()},  // Not impl: "font-size"? "em" units
                                                              // (font-size="20" not impl)
             {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
@@ -308,7 +305,22 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 
 // TODO: e-marker
-// TODO: e-mask
+
+INSTANTIATE_TEST_SUITE_P(
+    Mask, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-mask",
+        {
+            {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
+            {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
+            {"e-mask-025.svg", Params::Skip()},  // BUG: Rendering issue, mask is clipped. Repros in
+                                                 // renderer_tool but not viewer.
+            {"e-mask-026.svg", Params::Skip()},  // BUG: Mask on self, also a bug in browsers
+            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child doesn't apply
+            {"e-mask-029.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
+            {"e-mask-030.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-path")),
                          TestNameFromFilename);

@@ -29,6 +29,9 @@ struct Box {
   /// The bottom-right corner of the box.
   Vector2<T> bottomRight;
 
+  /// Default constructor: Creates an empty box centered on (0, 0).
+  Box() : topLeft(Vector2<T>()), bottomRight(Vector2<T>()) {}
+
   /**
    * Construct a new box with the given top-left and bottom-right corners.
    *
@@ -40,6 +43,18 @@ struct Box {
 
   /// Destructor.
   ~Box() = default;
+
+  /**
+   * Creates a Box from x, y, width, and height.
+   *
+   * @param x X coordinate of the top-left corner.
+   * @param y Y coordinate of the top-left corner.
+   * @param width Width of the box.
+   * @param height Height of the box.
+   */
+  static Box<T> FromXYWH(T x, T y, T width, T height) {
+    return Box<T>(Vector2<T>(x, y), Vector2<T>(x + width, y + height));
+  }
 
   /**
    * Copy constructor.
@@ -82,6 +97,18 @@ struct Box {
    * @param size Size of the box.
    */
   static Box<T> WithSize(const Vector2<T>& size) { return Box<T>(Vector2<T>(), size); }
+
+  /**
+   * Create a new box that is expanded to include both boxes.
+   *
+   * @param a First box.
+   * @param b Second box.
+   */
+  static Box<T> Union(const Box<T>& a, const Box<T>& b) {
+    Box<T> result = a;
+    result.addBox(b);
+    return result;
+  }
 
   /**
    * Expand to include the provided point.

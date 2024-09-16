@@ -1,5 +1,7 @@
 #include "donner/svg/components/RenderingContext.h"
 
+#include <optional>
+
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -9,6 +11,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
@@ -41,6 +44,10 @@ bool IsValidPaintServer(EntityHandle handle) {
 
 bool IsValidClipPath(EntityHandle handle) {
   return handle.all_of<ClipPathComponent>();
+}
+
+bool IsValidMask(EntityHandle handle) {
+  return handle.all_of<MaskComponent>();
 }
 
 class RenderingContextImpl {
@@ -139,13 +146,34 @@ public:
       }
     }
 
+    if (properties.mask.get()) {
+      if (auto resolved =
+              resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
+          resolved.valid()) {
+        instance.mask = resolved;
+      }
+    }
+
     // Create a new layer if opacity is less than 1 or if there is an effect that requires an
     // isolated group.
-    if (properties.opacity.getRequired() < 1.0 || instance.resolvedFilter || instance.clipPath) {
+    if (properties.opacity.getRequired() < 1.0) {
       instance.isolatedLayer = true;
-
-      // TODO(jwmcglynn): Calculate hint for size of layer.
       ++layerDepth;
+    }
+
+    if (instance.resolvedFilter) {
+      instance.isolatedLayer = true;
+      ++layerDepth;
+    }
+
+    if (instance.clipPath) {
+      instance.isolatedLayer = true;
+      ++layerDepth;
+    }
+
+    if (instance.mask) {
+      instance.isolatedLayer = true;
+      layerDepth += 2;
     }
 
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
@@ -250,9 +278,9 @@ public:
   }
 
   ResolvedClipPath resolveClipPath(EntityHandle dataHandle, const Reference& reference) {
-    // Only resolve paints if the paint server references a supported <pattern> or gradient
-    // element, and the shadow tree was instantiated. If the shadow tree is not instantiated, that
-    // indicates there was recursion and we treat the reference as invalid.
+    // Only resolve paints if the paint server references a supported <clipPath> element, and the
+    // shadow tree was instantiated. If the shadow tree is not instantiated, that indicates there
+    // was recursion and we treat the reference as invalid.
     if (auto resolvedRef = reference.resolve(*dataHandle.registry());
         resolvedRef && IsValidClipPath(resolvedRef->handle)) {
       return ResolvedClipPath{resolvedRef.value(),
@@ -261,6 +289,27 @@ public:
     }
 
     return ResolvedClipPath{ResolvedReference{EntityHandle()}, ClipPathUnits::Default};
+  }
+
+  ResolvedMask resolveMask(EntityHandle styleHandle, const Reference& reference) {
+    // Only resolve paints if the paint server references a supported <mask> element, and the
+    // shadow tree was instantiated. If the shadow tree is not instantiated, that indicates
+    // there was recursion and we treat the reference as invalid.
+    if (auto resolvedRef = reference.resolve(*styleHandle.registry());
+        resolvedRef && IsValidMask(resolvedRef->handle)) {
+      if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
+          computedShadow &&
+          computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
+        {
+          return ResolvedMask{
+              resolvedRef.value(),
+              instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
+              resolvedRef->handle.get<MaskComponent>().maskContentUnits};
+        }
+      }
+    }
+
+    return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};
   }
 
   ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {
@@ -305,6 +354,15 @@ void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchT
           registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
       offscreenShadowComponent.setBranchHref(branchType, ref.reference.href);
     }
+  }
+}
+
+void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Reference& reference,
+                               std::vector<parser::ParseError>* outWarnings) {
+  if (auto resolvedRef = reference.resolve(registry);
+      resolvedRef && resolvedRef->handle.all_of<MaskComponent>()) {
+    auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
+    offscreenShadowComponent.setBranchHref(ShadowBranchType::OffscreenMask, reference.href);
   }
 }
 
@@ -359,7 +417,7 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
         const Vector2d pointInLocal =
             LayoutSystem()
                 .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-                .inversed()
+                .inverse()
                 .transformPosition(point);
 
         // Match the path.
@@ -432,6 +490,10 @@ void RenderingContext::createComputedComponents(std::vector<parser::ParseError>*
     if (auto stroke = properties.stroke.get()) {
       InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenStroke,
                                  stroke.value(), outWarnings);
+    }
+
+    if (auto mask = properties.mask.get()) {
+      InstantiateMaskShadowTree(registry_, entity, mask.value(), outWarnings);
     }
   }
 

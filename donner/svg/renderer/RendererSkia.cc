@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererSkia.h"
 
 // Skia
+#include "include/core/SkColorFilter.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
@@ -9,6 +10,7 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
+#include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
 //
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
@@ -24,6 +26,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -31,6 +34,7 @@
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -168,6 +172,8 @@ public:
       const Entity entity = view_.currentEntity();
       view_.advance();
 
+      const Transformd entityFromCanvas = layerBaseTransform_ * instance.entityFromWorldTransform;
+
       if (renderer_.verbose_) {
         std::cout << "Rendering "
                   << registry.get<components::TreeComponent>(instance.dataEntity).type() << " ";
@@ -182,7 +188,7 @@ public:
           std::cout << " (shadow " << instance.styleHandle(registry).entity() << ")";
         }
 
-        std::cout << " transform=" << instance.entityFromWorldTransform << "\n";
+        std::cout << " transform=" << entityFromCanvas << "\n";
 
         std::cout << "\n";
       }
@@ -192,8 +198,7 @@ public:
         renderer_.currentCanvas_->clipRect(toSkia(instance.clipRect.value()));
       }
 
-      renderer_.currentCanvas_->setMatrix(
-          toSkia(layerBaseTransform_ * instance.entityFromWorldTransform));
+      renderer_.currentCanvas_->setMatrix(toSkia(entityFromCanvas));
 
       const components::ComputedStyleComponent& styleComponent =
           instance.styleHandle(registry).get<components::ComputedStyleComponent>();
@@ -205,37 +210,43 @@ public:
           SkPaint opacityPaint;
           opacityPaint.setAlphaf(NarrowToFloat(properties.opacity.getRequired()));
 
-          // TODO(jwmcglynn): Calculate hint for size of layer.
+          // const SkRect layerBounds = toSkia(shapeWorldBounds.value_or(Boxd()));
           renderer_.currentCanvas_->saveLayer(nullptr, &opacityPaint);
-        } else if (instance.resolvedFilter) {
+        }
+
+        if (instance.resolvedFilter) {
           SkPaint filterPaint;
           filterPaint.setAntiAlias(renderer_.antialias_);
           createFilterPaint(filterPaint, registry, instance.resolvedFilter.value());
 
-          // TODO(jwmcglynn): Calculate the bounds.
+          // const SkRect layerBounds = toSkia(shapeWorldBounds.value_or(Boxd()));
           renderer_.currentCanvas_->saveLayer(nullptr, &filterPaint);
-        } else if (instance.clipPath) {
+        }
+
+        if (instance.clipPath) {
           const components::ResolvedClipPath& ref = instance.clipPath.value();
 
-          Transformd clipPathTransform;
+          Transformd userSpaceFromClipPathContent;
           if (ref.units == ClipPathUnits::ObjectBoundingBox) {
             if (const auto* path =
                     instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
               // TODO(jwmcglynn): Extend this to get the element bounds for all child elements by
-              // adding an API to LayoutSystem.
+              // uing ShapeSystem::getShapeWorldBounds()
               const Boxd bounds = path->spline.bounds();
-              clipPathTransform =
+              userSpaceFromClipPathContent =
                   Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
             }
           }
 
           if (auto* computedTransform =
                   ref.reference.handle.try_get<components::ComputedLocalTransformComponent>()) {
-            clipPathTransform *= computedTransform->entityFromParent;
+            userSpaceFromClipPathContent =
+                userSpaceFromClipPathContent * computedTransform->entityFromParent;
           }
 
           renderer_.currentCanvas_->save();
-          const SkMatrix skClipPathTransform = toSkiaMatrix(clipPathTransform);
+          const SkMatrix skUserSpaceFromClipPathContent =
+              toSkiaMatrix(userSpaceFromClipPathContent);
 
           SkPath fullPath;
 
@@ -245,7 +256,7 @@ public:
           components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
             if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
               SkPath path = toSkia(clipPathData->spline);
-              path.transform(skClipPathTransform);
+              path.transform(skUserSpaceFromClipPathContent);
 
               if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
                 const auto& style = computedStyle->properties.value();
@@ -260,9 +271,31 @@ public:
           });
 
           renderer_.currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
+        }
 
-        } else {
-          assert(false && "Failed to find reason for isolatedLayer");
+        if (instance.mask) {
+          const components::ResolvedMask& ref = instance.mask.value();
+
+          SkPaint maskFilter;
+          // TODO: SRGB colorspace conversion
+          // Use Luma color filter for the mask, which converts the mask to alpha.
+          maskFilter.setColorFilter(SkLumaColorFilter::Make());
+
+          // Save the current layer with the mask filter
+          renderer_.currentCanvas_->saveLayer(nullptr, &maskFilter);
+
+          // Render the mask content
+          instantiateMask(ref.reference.handle, instance, instance.dataHandle(registry), ref);
+
+          // Content layer
+          // Dst is the mask, Src is the content.
+          // kSrcIn multiplies the mask alpha: r = s * da
+          SkPaint maskPaint;
+          maskPaint.setBlendMode(SkBlendMode::kSrcIn);
+          renderer_.currentCanvas_->saveLayer(nullptr, &maskPaint);
+
+          // Restore the matrix after starting the layer
+          renderer_.currentCanvas_->setMatrix(toSkia(entityFromCanvas));
         }
       }
 
@@ -294,6 +327,17 @@ public:
     }
 
     renderer_.currentCanvas_->restoreToCount(1);
+  }
+
+  void skipUntil(Registry& registry, Entity endEntity) {
+    bool foundEndEntity = false;
+
+    while (!view_.done() && !foundEndEntity) {
+      // When we find the end we do one more iteration of the loop and then exit.
+      foundEndEntity = view_.currentEntity() == endEntity;
+
+      view_.advance();
+    }
   }
 
   void drawPath(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
@@ -372,7 +416,8 @@ public:
         target.try_get<components::ComputedLocalTransformComponent>();
 
     bool numbersArePercent = false;
-    Transformd transform;
+    Transformd gradientFromGradientUnits;
+
     if (objectBoundingBox) {
       // From https://www.w3.org/TR/SVG2/coords.html#ObjectBoundingBoxUnits:
       //
@@ -387,16 +432,20 @@ public:
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
-      transform = ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
+      gradientFromGradientUnits =
+          ResolveTransform(maybeTransformComponent, kUnitPathBounds, FontMetrics());
 
-      // Note that this applies *before* transform.
-      transform *= Transformd::Scale(pathBounds.size());
-      transform *= Transformd::Translate(pathBounds.topLeft);
+      // Apply scaling and translation from unit box to path bounds
+      const Transformd objectBoundingBoxFromUnitBox =
+          Transformd::Scale(pathBounds.size()) * Transformd::Translate(pathBounds.topLeft);
+
+      // Combine the transforms
+      gradientFromGradientUnits = gradientFromGradientUnits * objectBoundingBoxFromUnitBox;
 
       // TODO(jwmcglynn): Can numbersArePercent be represented by the transform instead?
       numbersArePercent = true;
     } else {
-      transform = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+      gradientFromGradientUnits = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
     }
 
     const Boxd& bounds = objectBoundingBox ? kUnitPathBounds : viewbox;
@@ -431,7 +480,7 @@ public:
 
     // Transform applied to the gradient coordinates, and for radial gradients the focal point and
     // radius.
-    const SkMatrix localMatrix = toSkiaMatrix(transform);
+    const SkMatrix skGradientFromGradientUnits = toSkiaMatrix(gradientFromGradientUnits);
 
     if (const auto* linearGradient =
             target.try_get<components::ComputedLinearGradientComponent>()) {
@@ -444,7 +493,7 @@ public:
       paint.setAntiAlias(renderer_.antialias_);
       paint.setShader(SkGradientShader::MakeLinear(
           static_cast<const SkPoint*>(points), color.data(), pos.data(), numStops,
-          toSkia(computedGradient.spreadMethod), 0, &localMatrix));
+          toSkia(computedGradient.spreadMethod), 0, &skGradientFromGradientUnits));
       return paint;
     } else {
       const auto& radialGradient = target.get<components::ComputedRadialGradientComponent>();
@@ -488,13 +537,13 @@ public:
       SkPaint paint;
       paint.setAntiAlias(renderer_.antialias_);
       if (NearZero(focalRadius) && focalCenter == center) {
-        paint.setShader(
-            SkGradientShader::MakeRadial(toSkia(center), radius, color.data(), pos.data(), numStops,
-                                         toSkia(computedGradient.spreadMethod), 0, &localMatrix));
+        paint.setShader(SkGradientShader::MakeRadial(
+            toSkia(center), radius, color.data(), pos.data(), numStops,
+            toSkia(computedGradient.spreadMethod), 0, &skGradientFromGradientUnits));
       } else {
         paint.setShader(SkGradientShader::MakeTwoPointConical(
             toSkia(focalCenter), focalRadius, toSkia(center), radius, color.data(), pos.data(),
-            numStops, toSkia(computedGradient.spreadMethod), 0, &localMatrix));
+            numStops, toSkia(computedGradient.spreadMethod), 0, &skGradientFromGradientUnits));
       }
       return paint;
     }
@@ -507,6 +556,102 @@ public:
     }
 
     return PreserveAspectRatio::None();
+  }
+
+  /**
+   * Renders the mask contents to the current layer. The caller should call saveLayer before this
+   * call.
+   *
+   * @param dataHandle The handle to the pattern data.
+   * @param instance The rendering instance component for the currently rendered entity (same entity
+   * as \p target).
+   * @param target The target entity to which the pattern is applied.
+   * @param ref The reference to the mask.
+   */
+  void instantiateMask(EntityHandle dataHandle,
+                       const components::RenderingInstanceComponent& instance, EntityHandle target,
+                       const components::ResolvedMask& ref) {
+    if (!ref.subtreeInfo) {
+      // Subtree did not instantiate, indicating that recursion was detected.
+      return;
+    }
+
+    Registry& registry = *dataHandle.registry();
+
+    const Transformd savedLayerBaseTransform = layerBaseTransform_;
+    layerBaseTransform_ = instance.entityFromWorldTransform;
+
+    if (renderer_.verbose_) {
+      std::cout << "Start mask contents\n";
+    }
+
+    // Get maskUnits and maskContentUnits
+    const components::MaskComponent& maskComponent =
+        ref.reference.handle.get<components::MaskComponent>();
+
+    // Get x, y, width, height with default values
+    const Lengthd x = maskComponent.x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+    const Lengthd y = maskComponent.y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+    const Lengthd width = maskComponent.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+    const Lengthd height = maskComponent.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+    const std::optional<Boxd> shapeWorldBounds =
+        components::ShapeSystem().getShapeWorldBounds(target);
+    const Boxd shapeLocalBounds =
+        instance.entityFromWorldTransform.inverse().transformBox(shapeWorldBounds.value_or(Boxd()));
+
+    // Compute the reference bounds based on maskUnits
+    Boxd maskUnitsBounds;
+
+    if (maskComponent.maskUnits == MaskUnits::ObjectBoundingBox) {
+      maskUnitsBounds = shapeLocalBounds;
+    } else {
+      // maskUnits == UserSpaceOnUse
+      // Use the viewport as bounds
+      maskUnitsBounds = components::LayoutSystem().getViewport(instance.dataHandle(registry));
+    }
+
+    if (!maskComponent.useAutoBounds()) {
+      // Resolve x, y, width, height
+      const double x_px = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double y_px = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+      const double width_px = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double height_px = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+
+      // Create maskBounds
+      const Boxd maskBounds = Boxd::FromXYWH(x_px, y_px, width_px, height_px);
+
+      // Apply clipRect with maskBounds
+      renderer_.currentCanvas_->clipRect(toSkia(maskBounds), SkClipOp::kIntersect, true);
+    }
+
+    // Adjust layerBaseTransform_ according to maskContentUnits
+    if (maskComponent.maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
+      // Compute the transform from mask content coordinate system to user space
+      const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
+                                                  Transformd::Translate(shapeLocalBounds.topLeft);
+
+      // Update the layer base transform
+      layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
+    } else {
+      // maskContentUnits == UserSpaceOnUse
+      // No adjustment needed
+    }
+
+    // Render the mask content
+    assert(ref.subtreeInfo);
+    if (!shapeLocalBounds.isEmpty()) {
+      drawUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+    } else {
+      // Skip child elements.
+      skipUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+    }
+
+    if (renderer_.verbose_) {
+      std::cout << "End mask contents\n";
+    }
+
+    layerBaseTransform_ = savedLayerBaseTransform;
   }
 
   /**
@@ -542,8 +687,8 @@ public:
     const auto* maybeTransformComponent =
         target.try_get<components::ComputedLocalTransformComponent>();
 
-    Transformd patternTransform;
-    Transformd contentRootTransform;
+    Transformd patternContentFromPatternTile;
+    Transformd patternTileFromTarget;
     Boxd rect = computedPattern.tileRect;
 
     if (NearZero(computedPattern.tileRect.width()) || NearZero(computedPattern.tileRect.height())) {
@@ -561,24 +706,28 @@ public:
       // > then the given effect (e.g., a gradient or a filter) will be ignored.
       //
       if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
+        // Skip rendering the pattern contents
+        assert(ref.subtreeInfo);
+        skipUntil(registry, ref.subtreeInfo->lastRenderedEntity);
+
         return createFallbackPaint(ref, currentColor, opacity);
       }
 
-      const Vector2 rectSize = rect.size();
+      const Vector2d rectSize = rect.size();
 
       rect.topLeft = rect.topLeft * pathBounds.size() + pathBounds.topLeft;
       rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
     }
 
     if (computedPattern.viewbox) {
-      contentRootTransform = computedPattern.preserveAspectRatio.computeTransform(
+      patternContentFromPatternTile = computedPattern.preserveAspectRatio.computeTransform(
           rect.toOrigin(), computedPattern.viewbox);
     } else if (patternContentObjectBoundingBox) {
-      contentRootTransform = Transformd::Scale(pathBounds.size());
+      patternContentFromPatternTile = Transformd::Scale(pathBounds.size());
     }
 
-    patternTransform = Transformd::Translate(rect.topLeft);
-    patternTransform *= ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+    patternTileFromTarget = Transformd::Translate(rect.topLeft) *
+                            ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
 
     const SkRect skTileRect = toSkia(rect.toOrigin());
 
@@ -591,7 +740,7 @@ public:
 
     SkPictureRecorder recorder;
     renderer_.currentCanvas_ = recorder.beginRecording(skTileRect);
-    layerBaseTransform_ = contentRootTransform;
+    layerBaseTransform_ = patternContentFromPatternTile;
 
     // Render the subtree into the offscreen SkPictureRecorder.
     assert(ref.subtreeInfo);
@@ -605,13 +754,13 @@ public:
     layerBaseTransform_ = savedLayerBaseTransform;
 
     // Transform to apply to the pattern contents.
-    const SkMatrix localMatrix = toSkiaMatrix(patternTransform);
+    const SkMatrix skPatternContentFromPatternTile = toSkiaMatrix(patternTileFromTarget);
 
     SkPaint skPaint;
     skPaint.setAntiAlias(renderer_.antialias_);
     skPaint.setShader(recorder.finishRecordingAsPicture()->makeShader(
-        SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear, &localMatrix,
-        &skTileRect));
+        SkTileMode::kRepeat, SkTileMode::kRepeat, SkFilterMode::kLinear,
+        &skPatternContentFromPatternTile, &skTileRect));
     return skPaint;
   }
 
@@ -631,8 +780,8 @@ public:
                                 viewbox, currentColor, opacity);
     }
 
-    UTILS_UNREACHABLE();  // The computed tree should invalidate any references that don't point to
-                          // a valid point server, see IsValidPaintServer.
+    UTILS_UNREACHABLE();  // The computed tree should invalidate any references that don't point
+                          // to a valid point server, see IsValidPaintServer.
   }
 
   void drawPathFillWithSkPaint(const components::ComputedPathComponent& path, SkPaint& skPaint,
@@ -651,6 +800,10 @@ public:
                     const components::ResolvedPaintServer& paint, const PropertyRegistry& style,
                     const Boxd& viewbox) {
     const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
+
+    if (renderer_.verbose_) {
+      std::cout << "Drawing path bounds " << path.spline.bounds() << "\n";
+    }
 
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
       SkPaint skPaint;
@@ -695,7 +848,7 @@ public:
 
       // We need to repeat if there are an odd number of values, Skia requires an even number
       // of dash lengths.
-      const size_t numRepeats = (dashes.size() & 1) ? 2 : 1;
+      const int numRepeats = (dashes.size() & 1) ? 2 : 1;
 
       std::vector<SkScalar> skiaDashes;
       skiaDashes.reserve(dashes.size() * numRepeats);
@@ -814,8 +967,9 @@ public:
     if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
       createFilterChain(filterPaint, *effects);
     } else if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
-      if (const auto* filter = registry.try_get<components::ComputedFilterComponent>(*reference)) {
-        createFilterChain(filterPaint, filter->effectChain);
+      if (const auto* computedFilter =
+              registry.try_get<components::ComputedFilterComponent>(*reference)) {
+        createFilterChain(filterPaint, computedFilter->effectChain);
       }
     }
   }
@@ -840,7 +994,14 @@ void RendererSkia::draw(SVGDocument& document) {
   const Entity rootEntity = document.rootEntity();
 
   // TODO(jwmcglynn): Plumb outWarnings.
-  RendererUtils::prepareDocumentForRendering(document, verbose_);
+  std::vector<parser::ParseError> warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, verbose_ ? &warnings : nullptr);
+
+  if (!warnings.empty()) {
+    for (const parser::ParseError& warning : warnings) {
+      std::cerr << warning << '\n';
+    }
+  }
 
   const Vector2i renderingSize = document.canvasSize();
 
@@ -887,7 +1048,7 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   for (int y = 0; y < renderingSize.y; ++y) {
     for (int x = 0; x < renderingSize.x; ++x) {
       const uint8_t pixel = *bitmap_.getAddr8(x, y);
-      int index = pixel / static_cast<int>(256 / grayscaleTable.size());
+      size_t index = pixel / static_cast<size_t>(256 / grayscaleTable.size());
       if (index >= grayscaleTable.size()) {
         index = grayscaleTable.size() - 1;
       }
