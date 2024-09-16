@@ -124,7 +124,7 @@ TEST(OptionalRef, Reset) {
 
 TEST(OptionalRef, ValueWhenEmpty) {
   OptionalRef<int> ref;
-  EXPECT_DEATH((void)ref.value(), ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
+  EXPECT_DEBUG_DEATH((void)ref.value(), ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
 }
 
 TEST(OptionalRef, DereferenceOperator) {
@@ -135,7 +135,7 @@ TEST(OptionalRef, DereferenceOperator) {
 
 TEST(OptionalRef, DereferenceOperatorEmpty) {
   OptionalRef<int> ref;
-  EXPECT_DEATH((void)*ref, ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
+  EXPECT_DEBUG_DEATH((void)*ref, ".*OptionalRef::value\\(\\) called on empty OptionalRef.*");
 }
 
 struct TestStruct {
@@ -150,7 +150,8 @@ TEST(OptionalRef, ArrowOperator) {
 
 TEST(OptionalRef, ArrowOperatorEmpty) {
   OptionalRef<TestStruct> ref;
-  EXPECT_DEATH((void)ref->value, ".*OptionalRef::operator->\\(\\) called on empty OptionalRef.*");
+  EXPECT_DEBUG_DEATH((void)ref->value,
+                     ".*OptionalRef::operator->\\(\\) called on empty OptionalRef.*");
 }
 
 TEST(OptionalRef, CompareWithOptionalRef) {
