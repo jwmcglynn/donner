@@ -40,6 +40,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
+#include "donner/svg/SVGMarkerElement.h"
 
 namespace donner::svg {
 
@@ -350,6 +351,8 @@ public:
     if (HasPaint(instance.resolvedStroke)) {
       drawPathStroke(dataHandle, path, instance.resolvedStroke, style, viewbox, fontMetrics);
     }
+
+    drawMarkers(dataHandle, path, style, viewbox, fontMetrics);
   }
 
   std::optional<SkPaint> createFallbackPaint(const components::PaintResolvedReference& ref,
@@ -972,6 +975,67 @@ public:
         createFilterChain(filterPaint, computedFilter->effectChain);
       }
     }
+  }
+
+  void drawMarkers(EntityHandle dataHandle, const components::ComputedPathComponent& path,
+                   const PropertyRegistry& style, const Boxd& viewbox,
+                   const FontMetrics& fontMetrics) {
+    const auto& points = path.spline.points();
+    const auto& commands = path.spline.commands();
+
+    if (style.markerStart.hasValue() || style.markerMid.hasValue() || style.markerEnd.hasValue()) {
+      for (size_t i = 0; i < commands.size(); ++i) {
+        const auto& command = commands[i];
+
+        if (command.type == PathSpline::CommandType::MoveTo) {
+          if (style.markerStart.hasValue()) {
+            drawMarker(dataHandle, style.markerStart.get().value(), points[command.pointIndex],
+                       viewbox, fontMetrics);
+          }
+        } else if (command.type == PathSpline::CommandType::LineTo) {
+          if (style.markerMid.hasValue()) {
+            drawMarker(dataHandle, style.markerMid.get().value(), points[command.pointIndex],
+                       viewbox, fontMetrics);
+          }
+        } else if (command.type == PathSpline::CommandType::ClosePath) {
+          if (style.markerEnd.hasValue()) {
+            drawMarker(dataHandle, style.markerEnd.get().value(), points[command.pointIndex],
+                       viewbox, fontMetrics);
+          }
+        }
+      }
+    }
+  }
+
+  void drawMarker(EntityHandle dataHandle, const Reference& markerRef, const Vector2d& position,
+                  const Boxd& viewbox, const FontMetrics& fontMetrics) {
+    const auto& registry = *dataHandle.registry();
+    const auto markerHandle = registry.getHandle(markerRef.entity);
+
+    if (!markerHandle) {
+      return;
+    }
+
+    const auto& markerElement = markerHandle.get<SVGMarkerElement>();
+
+    SkPaint paint;
+    paint.setAntiAlias(renderer_.antialias_);
+
+    const auto markerWidth = markerElement.markerWidth();
+    const auto markerHeight = markerElement.markerHeight();
+    const auto refX = markerElement.refX();
+    const auto refY = markerElement.refY();
+
+    SkMatrix matrix;
+    matrix.setTranslate(NarrowToFloat(position.x - refX), NarrowToFloat(position.y - refY));
+
+    renderer_.currentCanvas_->save();
+    renderer_.currentCanvas_->concat(matrix);
+
+    SkRect markerRect = SkRect::MakeWH(NarrowToFloat(markerWidth), NarrowToFloat(markerHeight));
+    renderer_.currentCanvas_->drawRect(markerRect, paint);
+
+    renderer_.currentCanvas_->restore();
   }
 
 private:
