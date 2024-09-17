@@ -53,12 +53,6 @@ cc_library(
 
 cc_library(
     name = "components",
-    srcs = [
-        "RenderingContext.cc",
-    ],
-    hdrs = [
-        "RenderingContext.h",
-    ],
     visibility = [
         "//donner/css:__pkg__",
         "//donner/svg:__subpackages__",

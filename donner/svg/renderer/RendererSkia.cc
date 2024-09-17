@@ -13,6 +13,7 @@
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
 //
+#include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -26,6 +27,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
@@ -40,8 +42,6 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
-#include "donner/svg/SVGMarkerElement.h"
-#include "donner/svg/components/paint/MarkerComponent.h"
 
 namespace donner::svg {
 
@@ -353,7 +353,7 @@ public:
       drawPathStroke(dataHandle, path, instance.resolvedStroke, style, viewbox, fontMetrics);
     }
 
-    drawMarkers(dataHandle, path, style, viewbox, fontMetrics);
+    drawMarkers(dataHandle, instance, path, viewbox, fontMetrics);
   }
 
   std::optional<SkPaint> createFallbackPaint(const components::PaintResolvedReference& ref,
@@ -977,64 +977,140 @@ public:
       }
     }
   }
-
-  void drawMarkers(EntityHandle dataHandle, const components::ComputedPathComponent& path,
-                   const PropertyRegistry& style, const Boxd& viewbox,
+  void drawMarkers(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                   const components::ComputedPathComponent& path, const Boxd& viewbox,
                    const FontMetrics& fontMetrics) {
     const auto& points = path.spline.points();
     const auto& commands = path.spline.commands();
 
-    if (style.markerStart.hasValue() || style.markerMid.hasValue() || style.markerEnd.hasValue()) {
+    bool hasMarkerStart = instance.markerStart.has_value();
+    bool hasMarkerMid = instance.markerMid.has_value();
+    bool hasMarkerEnd = instance.markerEnd.has_value();
+
+    if (hasMarkerStart || hasMarkerMid || hasMarkerEnd) {
+      Vector2d previousPoint;
+      Vector2d currentPoint;
+      Vector2d nextPoint;
+
       for (size_t i = 0; i < commands.size(); ++i) {
         const auto& command = commands[i];
 
         if (command.type == PathSpline::CommandType::MoveTo) {
-          if (style.markerStart.hasValue()) {
-            drawMarker(dataHandle, style.markerStart.get().value(), points[command.pointIndex],
-                       viewbox, fontMetrics);
+          previousPoint = points[command.pointIndex];
+          currentPoint = previousPoint;
+
+          // For markerStart, direction is from currentPoint to next point
+          if (hasMarkerStart && i + 1 < commands.size()) {
+            const auto& nextCommand = commands[i + 1];
+            if (nextCommand.type == PathSpline::CommandType::LineTo ||
+                nextCommand.type == PathSpline::CommandType::CurveTo) {
+              nextPoint = points[nextCommand.pointIndex];
+              Vector2d direction = nextPoint - currentPoint;
+              if (direction.lengthSquared() > 0) {
+                drawMarker(dataHandle, instance, instance.markerStart.value(), currentPoint,
+                           direction, viewbox, fontMetrics);
+              }
+            }
           }
-        } else if (command.type == PathSpline::CommandType::LineTo) {
-          if (style.markerMid.hasValue()) {
-            drawMarker(dataHandle, style.markerMid.get().value(), points[command.pointIndex],
-                       viewbox, fontMetrics);
+        } else if (command.type == PathSpline::CommandType::LineTo ||
+                   command.type == PathSpline::CommandType::CurveTo) {
+          previousPoint = currentPoint;
+          currentPoint = points[command.pointIndex];
+
+          // For markerMid
+          if (hasMarkerMid) {
+            // Direction is from previousPoint to currentPoint
+            Vector2d direction = currentPoint - previousPoint;
+            if (direction.lengthSquared() > 0) {
+              drawMarker(dataHandle, instance, instance.markerMid.value(), currentPoint, direction,
+                         viewbox, fontMetrics);
+            }
           }
         } else if (command.type == PathSpline::CommandType::ClosePath) {
-          if (style.markerEnd.hasValue()) {
-            drawMarker(dataHandle, style.markerEnd.get().value(), points[command.pointIndex],
-                       viewbox, fontMetrics);
+          // For markerEnd
+          if (hasMarkerEnd) {
+            // Direction is from previousPoint to currentPoint (if path is closed)
+            Vector2d direction = currentPoint - previousPoint;
+            if (direction.lengthSquared() > 0) {
+              drawMarker(dataHandle, instance, instance.markerEnd.value(), currentPoint, direction,
+                         viewbox, fontMetrics);
+            }
           }
         }
       }
     }
   }
 
-  void drawMarker(EntityHandle dataHandle, const Reference& markerRef, const Vector2d& position,
-                  const Boxd& viewbox, const FontMetrics& fontMetrics) {
-    const auto& registry = *dataHandle.registry();
-    const auto markerHandle = registry.getHandle(markerRef.entity);
+  void drawMarker(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                  const components::ResolvedMarker& marker, const Vector2d& position,
+                  const Vector2d& direction, const Boxd& viewbox, const FontMetrics& fontMetrics) {
+    Registry& registry = *dataHandle.registry();
 
-    if (!markerHandle) {
+    const EntityHandle markerHandle = marker.reference.handle;
+
+    if (!markerHandle.valid()) {
       return;
     }
 
+    // Get the marker component
     const auto& markerComponent = markerHandle.get<components::MarkerComponent>();
 
-    SkPaint paint;
-    paint.setAntiAlias(renderer_.antialias_);
+    // Get the marker's viewBox and preserveAspectRatio
+    const Boxd markerViewBox = markerComponent.viewBox.value_or(
+        Boxd::FromXYWH(0, 0, markerComponent.markerWidth, markerComponent.markerHeight));
+    const PreserveAspectRatio preserveAspectRatio = markerComponent.preserveAspectRatio;
 
-    const auto markerWidth = markerComponent.markerWidth;
-    const auto markerHeight = markerComponent.markerHeight;
-    const auto refX = markerComponent.refX;
-    const auto refY = markerComponent.refY;
+    // Compute the marker's transformation
+    Transformd markerTransform;
 
-    SkMatrix matrix;
-    matrix.setTranslate(NarrowToFloat(position.x - refX), NarrowToFloat(position.y - refY));
+    // Compute scale according to markerUnits
+    double markerScale = 1.0;
+    if (marker.markerUnits == MarkerUnits::StrokeWidth) {
+      // Scale by stroke width
+      const components::ComputedStyleComponent& styleComponent =
+          instance.styleHandle(registry).get<components::ComputedStyleComponent>();
+      const double strokeWidth = styleComponent.properties->strokeWidth.getRequired().value;
+      markerScale = strokeWidth;
+    }
 
+    // Compute the rotation angle according to the orient attribute
+    double angle = 0.0;
+    if (markerComponent.orientAuto) {
+      // Compute angle from direction vector
+      angle = std::atan2(direction.y, direction.x) * 180.0 / M_PI;
+    } else {
+      angle = markerComponent.orientAngle;
+    }
+
+    // Build the marker transform
+    markerTransform = Transformd::Translate(position) * Transformd::Rotate(angle) *
+                      Transformd::Scale(markerScale) *
+                      Transformd::Translate(-markerComponent.refX, -markerComponent.refY);
+
+    // Apply preserveAspectRatio
+    Transformd markerViewTransform = preserveAspectRatio.computeTransform(
+        Boxd::FromXYWH(0, 0, markerComponent.markerWidth, markerComponent.markerHeight),
+        markerViewBox);
+
+    // Combine transforms
+    Transformd finalTransform = markerTransform * markerViewTransform;
+
+    // Now, render the marker's content with the computed transform
     renderer_.currentCanvas_->save();
-    renderer_.currentCanvas_->concat(matrix);
+    renderer_.currentCanvas_->concat(toSkiaMatrix(finalTransform));
 
-    SkRect markerRect = SkRect::MakeWH(NarrowToFloat(markerWidth), NarrowToFloat(markerHeight));
-    renderer_.currentCanvas_->drawRect(markerRect, paint);
+    // Render the marker's content
+    if (marker.subtreeInfo) {
+      // Save current layer base transform
+      const Transformd savedLayerBaseTransform = layerBaseTransform_;
+      layerBaseTransform_ = finalTransform;
+
+      // Draw the marker's subtree
+      drawUntil(registry, marker.subtreeInfo->lastRenderedEntity);
+
+      // Restore layer base transform
+      layerBaseTransform_ = savedLayerBaseTransform;
+    }
 
     renderer_.currentCanvas_->restore();
   }

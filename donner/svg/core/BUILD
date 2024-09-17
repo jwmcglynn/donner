@@ -15,6 +15,7 @@ cc_library(
         "Display.h",
         "FillRule.h",
         "Gradient.h",
+        "MarkerUnits.h",
         "MaskUnits.h",
         "PathSpline.h",
         "Pattern.h",

@@ -78,6 +78,7 @@ cc_library(
         "//donner/svg/components",
         "//donner/svg/core",
         "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
         "//donner/svg/resources:sandboxed_file_resource_loader",
     ],
 )

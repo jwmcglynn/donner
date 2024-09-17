@@ -517,14 +517,14 @@ TEST(TransformParserCss, SkewY_ParseErrors) {
 TEST(TransformParserCss, MultiplicationOrder) {
   {
     const Transformd t = Transformd::Translate({-50, 100}) * Transformd::Scale({2, 2}) *
-                         Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
+                         Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
 
     EXPECT_THAT(parseAsCss("rotate(45deg) scale(2) translate(-50px, 100px)"),
                 ParseResultIs(TransformEq(t)));
   }
 
   {
-    const Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5) *
+    const Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5) *
                          Transformd::Scale({1.5, 1.5}) * Transformd::Translate({80, 80});
 
     EXPECT_THAT(parseAsCss("translate(80px, 80px) scale(1.5, 1.5) \n rotate(45deg) "),

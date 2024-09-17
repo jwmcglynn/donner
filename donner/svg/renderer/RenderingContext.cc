@@ -1,4 +1,4 @@
-#include "donner/svg/components/RenderingContext.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 #include <optional>
 
@@ -11,6 +11,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -48,6 +49,10 @@ bool IsValidClipPath(EntityHandle handle) {
 
 bool IsValidMask(EntityHandle handle) {
   return handle.all_of<MaskComponent>();
+}
+
+bool IsValidMarker(EntityHandle handle) {
+  return handle.all_of<MarkerComponent>();
 }
 
 class RenderingContextImpl {
@@ -151,6 +156,33 @@ public:
               resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
           resolved.valid()) {
         instance.mask = resolved;
+      }
+    }
+
+    if (properties.markerStart.get()) {
+      if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+                                        properties.markerStart.getRequired(),
+                                        ShadowBranchType::OffscreenMarkerStart);
+          resolved.valid()) {
+        instance.markerStart = resolved;
+      }
+    }
+
+    if (properties.markerMid.get()) {
+      if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+                                        properties.markerMid.getRequired(),
+                                        ShadowBranchType::OffscreenMarkerMid);
+          resolved.valid()) {
+        instance.markerMid = resolved;
+      }
+    }
+
+    if (properties.markerEnd.get()) {
+      if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+                                        properties.markerEnd.getRequired(),
+                                        ShadowBranchType::OffscreenMarkerEnd);
+          resolved.valid()) {
+        instance.markerEnd = resolved;
       }
     }
 
@@ -312,6 +344,20 @@ public:
     return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};
   }
 
+  ResolvedMarker resolveMarker(EntityHandle styleHandle, const Reference& reference,
+                               ShadowBranchType branchType) {
+    if (auto resolvedRef = reference.resolve(*styleHandle.registry());
+        resolvedRef && IsValidMarker(resolvedRef->handle)) {
+      if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
+          computedShadow && computedShadow->findOffscreenShadow(branchType).has_value()) {
+        return ResolvedMarker{resolvedRef.value(),
+                              instantiateOffscreenSubtree(styleHandle, branchType),
+                              resolvedRef->handle.get<MarkerComponent>().markerUnits};
+      }
+    }
+    return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt, MarkerUnits::Default};
+  }
+
   ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {
     if (filter.is<FilterEffect::ElementReference>()) {
       const FilterEffect::ElementReference& ref = filter.get<FilterEffect::ElementReference>();
@@ -363,6 +409,16 @@ void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Referenc
       resolvedRef && resolvedRef->handle.all_of<MaskComponent>()) {
     auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
     offscreenShadowComponent.setBranchHref(ShadowBranchType::OffscreenMask, reference.href);
+  }
+}
+
+void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
+                                 const Reference& reference,
+                                 std::vector<parser::ParseError>* outWarnings) {
+  if (auto resolvedRef = reference.resolve(registry);
+      resolvedRef && resolvedRef->handle.all_of<MarkerComponent>()) {
+    auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
+    offscreenShadowComponent.setBranchHref(branchType, reference.href);
   }
 }
 
@@ -494,6 +550,21 @@ void RenderingContext::createComputedComponents(std::vector<parser::ParseError>*
 
     if (auto mask = properties.mask.get()) {
       InstantiateMaskShadowTree(registry_, entity, mask.value(), outWarnings);
+    }
+
+    if (auto markerStart = properties.markerStart.get()) {
+      InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerStart,
+                                  markerStart.value(), outWarnings);
+    }
+
+    if (auto markerMid = properties.markerMid.get()) {
+      InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerMid,
+                                  markerMid.value(), outWarnings);
+    }
+
+    if (auto markerEnd = properties.markerEnd.get()) {
+      InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerEnd,
+                                  markerEnd.value(), outWarnings);
     }
   }
 

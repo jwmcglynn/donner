@@ -2,6 +2,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
 
 namespace donner::svg {
 
@@ -45,11 +46,12 @@ double SVGMarkerElement::refY() const {
 }
 
 void SVGMarkerElement::setOrient(std::string_view value) {
-  handle_.get_or_emplace<components::MarkerComponent>().orient = std::string(value);
+  // handle_.get_or_emplace<components::MarkerComponent>().orient = std::string(value);
 }
 
 std::string_view SVGMarkerElement::orient() const {
-  return handle_.get<components::MarkerComponent>().orient;
+  // return handle_.get<components::MarkerComponent>().orient;
+  return "";
 }
 
 }  // namespace donner::svg

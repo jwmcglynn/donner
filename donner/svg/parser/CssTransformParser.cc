@@ -214,7 +214,7 @@ public:
           return std::move(result.error());
         }
 
-        transform_.addTransform(Transformd::Rotation(result.result()));
+        transform_.addTransform(Transformd::Rotate(result.result()));
       } else if (name == "skew") {
         return parseSkew(subparser);
       } else if (name == "skewX") {

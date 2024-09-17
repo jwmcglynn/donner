@@ -20,10 +20,13 @@ namespace donner::svg::components {
  * Main being an offscreen branch.
  */
 enum class ShadowBranchType {
-  Main,             //!< For entities enumerated in the main render graph.
-  OffscreenFill,    //!< For 'fill' attributes.
-  OffscreenStroke,  //!< For 'stroke' attributes.
-  OffscreenMask,    //!< For mask contents, used for the 'mask' attribute.
+  Main,                  //!< For entities enumerated in the main render graph.
+  OffscreenFill,         //!< For 'fill' attributes.
+  OffscreenStroke,       //!< For 'stroke' attributes.
+  OffscreenMask,         //!< For mask contents, used for the 'mask' attribute.
+  OffscreenMarkerStart,  //!< For the 'marker-start' attribute.
+  OffscreenMarkerMid,    //!< For the 'marker-mid' attribute.
+  OffscreenMarkerEnd,    //!< For the 'marker-end' attribute.
 };
 
 }  // namespace donner::svg::components
