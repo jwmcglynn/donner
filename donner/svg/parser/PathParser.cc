@@ -33,7 +33,7 @@ public:
     skipWhitespace();
     if (remaining_.empty()) {
       // Empty string, return empty path.
-      return spline_.build();
+      return std::move(spline_);
     }
 
     // Read first command separately, since it must be a MoveTo command.
@@ -42,7 +42,7 @@ public:
 
       ParseResult<TokenCommand> maybeCommand = readCommand();
       if (maybeCommand.hasError()) {
-        return ParseResult(spline_.build(), std::move(maybeCommand.error()));
+        return ParseResult(std::move(spline_), std::move(maybeCommand.error()));
       }
 
       const TokenCommand command = maybeCommand.result();
@@ -50,11 +50,11 @@ public:
         ParseError err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
         err.location = sourceOffset;
-        return ParseResult(spline_.build(), std::move(err));
+        return ParseResult(std::move(spline_), std::move(err));
       }
 
       if (auto error = processUntilNextCommand(command)) {
-        return ParseResult(spline_.build(), std::move(error.value()));
+        return ParseResult(std::move(spline_), std::move(error.value()));
       }
       skipWhitespace();
     }
@@ -68,11 +68,11 @@ public:
       const TokenCommand command = maybeCommand.result();
       std::optional<ParseError> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
-        return ParseResult(spline_.build(), std::move(maybeError.value()));
+        return ParseResult(std::move(spline_), std::move(maybeError.value()));
       }
     }
 
-    return spline_.build();
+    return std::move(spline_);
   }
 
 private:
@@ -476,7 +476,7 @@ private:
     return last_token_ == Token::QuadCurveTo || last_token_ == Token::SmoothQuadCurveTo;
   }
 
-  PathSpline::Builder spline_;
+  PathSpline spline_;
 
   std::string_view d_;
   std::string_view remaining_;

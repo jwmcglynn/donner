@@ -212,8 +212,10 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const double radius = computedCircle.properties.r.getRequired().toPixels(viewport, fontMetrics);
 
   if (radius > 0.0) {
-    return &handle.emplace_or_replace<ComputedPathComponent>(
-        PathSpline::Builder().circle(center, radius).build());
+    PathSpline path;
+    path.circle(center, radius);
+
+    return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
   } else {
     return nullptr;
   }
@@ -234,8 +236,10 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
                         std::get<1>(computedEllipse.properties.calculateRy(viewport, fontMetrics)));
 
   if (radius.x > 0.0 && radius.y > 0.0) {
-    return &handle.emplace_or_replace<ComputedPathComponent>(
-        PathSpline::Builder().ellipse(center, radius).build());
+    PathSpline path;
+    path.ellipse(center, radius);
+
+    return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
   } else {
     return nullptr;
   }
@@ -251,8 +255,10 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const Vector2d end(line.x2.toPixels(viewport, fontMetrics),
                      line.y2.toPixels(viewport, fontMetrics));
 
-  return &handle.emplace_or_replace<ComputedPathComponent>(
-      PathSpline::Builder().moveTo(start).lineTo(end).build());
+  PathSpline path;
+  path.moveTo(start);
+  path.lineTo(end);
+  return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
@@ -299,20 +305,21 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const PolyComponent& poly, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<parser::ParseError>* outWarnings) {
-  PathSpline::Builder builder;
+  PathSpline path;
+
   if (!poly.points.empty()) {
-    builder.moveTo(poly.points[0]);
+    path.moveTo(poly.points[0]);
   }
 
   for (size_t i = 1; i < poly.points.size(); ++i) {
-    builder.lineTo(poly.points[i]);
+    path.lineTo(poly.points[i]);
   }
 
   if (poly.type == PolyComponent::Type::Polygon) {
-    builder.closePath();
+    path.closePath();
   }
 
-  return &handle.emplace_or_replace<ComputedPathComponent>(builder.build());
+  return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
@@ -342,46 +349,47 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
                 size.y * 0.5));
 
       // Success: Draw a rect with rounded corners.
-      return &handle.emplace_or_replace<ComputedPathComponent>(
-          PathSpline::Builder()
-              // Draw top line.
-              .moveTo(pos + Vector2d(radius.x, 0))
-              .lineTo(pos + Vector2d(size.x - radius.x, 0.0))
-              // Curve to the right line.
-              .curveTo(pos + Vector2d(size.x - radius.x + radius.x * arcMagic, 0.0),
-                       pos + Vector2d(size.x, radius.y - radius.y * arcMagic),
-                       pos + Vector2d(size.x, radius.y))
-              // Draw right line.
-              .lineTo(pos + Vector2d(size.x, size.y - radius.y))
-              // Curve to the bottom line.
-              .curveTo(pos + Vector2d(size.x, size.y - radius.y + radius.y * arcMagic),
-                       pos + Vector2d(size.x - radius.x + radius.x * arcMagic, size.y),
-                       pos + Vector2d(size.x - radius.x, size.y))
-              // Draw bottom line.
-              .lineTo(pos + Vector2d(radius.x, size.y))
-              // Curve to the left line.
-              .curveTo(pos + Vector2d(radius.x - radius.x * arcMagic, size.y),
-                       pos + Vector2d(0.0, size.y - radius.y + radius.y * arcMagic),
-                       pos + Vector2d(0.0, size.y - radius.y))
-              // Draw right line.
-              .lineTo(pos + Vector2d(0.0, radius.y))
-              // Curve to the top line.
-              .curveTo(pos + Vector2d(0.0, radius.y - radius.y * arcMagic),
-                       pos + Vector2d(radius.x - radius.x * arcMagic, 0.0),
-                       pos + Vector2d(radius.x, 0.0))
-              .closePath()
-              .build());
+      PathSpline path;
+
+      // Draw top line.
+      path.moveTo(pos + Vector2d(radius.x, 0));
+      path.lineTo(pos + Vector2d(size.x - radius.x, 0.0));
+      // Curve to the right line.
+      path.curveTo(pos + Vector2d(size.x - radius.x + radius.x * arcMagic, 0.0),
+                   pos + Vector2d(size.x, radius.y - radius.y * arcMagic),
+                   pos + Vector2d(size.x, radius.y));
+      // Draw right line.
+      path.lineTo(pos + Vector2d(size.x, size.y - radius.y));
+      // Curve to the bottom line.
+      path.curveTo(pos + Vector2d(size.x, size.y - radius.y + radius.y * arcMagic),
+                   pos + Vector2d(size.x - radius.x + radius.x * arcMagic, size.y),
+                   pos + Vector2d(size.x - radius.x, size.y));
+      // Draw bottom line.
+      path.lineTo(pos + Vector2d(radius.x, size.y));
+      // Curve to the left line.
+      path.curveTo(pos + Vector2d(radius.x - radius.x * arcMagic, size.y),
+                   pos + Vector2d(0.0, size.y - radius.y + radius.y * arcMagic),
+                   pos + Vector2d(0.0, size.y - radius.y));
+      // Draw right line.
+      path.lineTo(pos + Vector2d(0.0, radius.y));
+      // Curve to the top line.
+      path.curveTo(pos + Vector2d(0.0, radius.y - radius.y * arcMagic),
+                   pos + Vector2d(radius.x - radius.x * arcMagic, 0.0),
+                   pos + Vector2d(radius.x, 0.0));
+      path.closePath();
+
+      return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
 
     } else {
       // Success: Draw a rect with sharp corners
-      return &handle.emplace_or_replace<ComputedPathComponent>(
-          PathSpline::Builder()
-              .moveTo(pos)
-              .lineTo(pos + Vector2d(size.x, 0))
-              .lineTo(pos + size)
-              .lineTo(pos + Vector2d(0, size.y))
-              .closePath()
-              .build());
+      PathSpline path;
+      path.moveTo(pos);
+      path.lineTo(pos + Vector2d(size.x, 0));
+      path.lineTo(pos + size);
+      path.lineTo(pos + Vector2d(0, size.y));
+      path.closePath();
+
+      return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
     }
   }
 

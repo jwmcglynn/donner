@@ -139,7 +139,7 @@
   // Tests
   "testMate.cpp.test.advancedExecutables": [
     {
-      "pattern": "bazel-bin/base/base_tests",
+      "pattern": "bazel-bin/donner/base/base_tests",
       "runTask": {
         "before": [
           "base_tests"
@@ -147,7 +147,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/base/parser/parser_tests",
+      "pattern": "bazel-bin/donner/base/parser/parser_tests",
       "runTask": {
         "before": [
           "base_parser_tests"
@@ -155,7 +155,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/svg/core/core_tests",
+      "pattern": "bazel-bin/donner/svg/core/core_tests",
       "runTask": {
         "before": [
           "core_tests"
@@ -163,7 +163,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/svg/parser/parser_tests",
+      "pattern": "bazel-bin/donner/svg/parser/parser_tests",
       "runTask": {
         "before": [
           "svg_parser_tests"
@@ -171,7 +171,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/svg/components/components_tests",
+      "pattern": "bazel-bin/donner/svg/components/components_tests",
       "runTask": {
         "before": [
           "components_tests"
@@ -179,7 +179,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/svg/properties/tests/properties_tests",
+      "pattern": "bazel-bin/donner/svg/properties/tests/properties_tests",
       "runTask": {
         "before": [
           "properties_tests"
@@ -187,7 +187,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/svg/tests/svg_tests",
+      "pattern": "bazel-bin/donner/svg/tests/svg_tests",
       "runTask": {
         "before": [
           "svg_tests"
@@ -195,7 +195,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/svg/xml/xml_tests",
+      "pattern": "bazel-bin/donner/svg/xml/xml_tests",
       "runTask": {
         "before": [
           "xml_tests"
@@ -203,7 +203,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/svg/xml/xml_details_tests",
+      "pattern": "bazel-bin/donner/svg/xml/xml_details_tests",
       "runTask": {
         "before": [
           "xml_details_tests"
@@ -211,7 +211,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/css/parser/parser_tests",
+      "pattern": "bazel-bin/donner/css/parser/parser_tests",
       "runTask": {
         "before": [
           "css_parser_tests"

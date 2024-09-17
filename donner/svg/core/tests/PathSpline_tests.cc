@@ -31,33 +31,30 @@ constexpr Vector2d kVec4(1819.0, -2021.22);
 
 }  // namespace
 
-TEST(PathSplineBuilder, MoveTo) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  PathSpline spline = builder.build();
+TEST(PathSpline, MoveTo) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
 
-  EXPECT_THAT(spline, PointsAndCommandsAre(ElementsAre(kVec1),
-                                           ElementsAre(Command{CommandType::MoveTo, 0})));
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1));
+  EXPECT_THAT(spline.commands(), ElementsAre(Command(CommandType::MoveTo, 0)));
 }
 
-TEST(PathSplineBuilder, MoveToReplace) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.moveTo(kVec2);
-  PathSpline spline = builder.build();
+TEST(PathSpline, MoveToMultiple) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.moveTo(kVec2);
 
-  // Only the last command remains.
-  EXPECT_THAT(spline, PointsAndCommandsAre(ElementsAre(kVec2),
-                                           ElementsAre(Command{CommandType::MoveTo, 0})));
+  // Only the last moveTo is used.
+  EXPECT_THAT(spline.points(), ElementsAre(kVec2));
+  EXPECT_THAT(spline.commands(), ElementsAre(Command(CommandType::MoveTo, 0)));
 }
 
-TEST(PathSplineBuilder, MoveToMultipleSegments) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  builder.moveTo(kVec3);
-  builder.lineTo(kVec4);
-  PathSpline spline = builder.build();
+TEST(PathSpline, MoveToMultipleSegments) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.moveTo(kVec3);
+  spline.lineTo(kVec4);
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
   EXPECT_THAT(spline.commands(),
@@ -65,22 +62,22 @@ TEST(PathSplineBuilder, MoveToMultipleSegments) {
                           Command{CommandType::MoveTo, 2}, Command{CommandType::LineTo, 3}));
 }
 
-TEST(PathSplineBuilder, MoveToUnusedRemoved) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  builder.moveTo(kVec3);
-  PathSpline spline = builder.build();
+TEST(PathSpline, MoveToUnused) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.moveTo(kVec3);
 
-  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3));
   EXPECT_THAT(spline.commands(),
-              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::MoveTo, 2}));
 }
-TEST(PathSplineBuilder, LineTo) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  PathSpline spline = builder.build();
+
+TEST(PathSpline, LineTo) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
 
   // Only the last command remains.
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
@@ -88,15 +85,14 @@ TEST(PathSplineBuilder, LineTo) {
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
 }
 
-TEST(PathSplineBuilder, LineToComplex) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d::Zero());
-  builder.lineTo(kVec1);
+TEST(PathSpline, LineToComplex) {
+  PathSpline spline;
+  spline.moveTo(Vector2d::Zero());
+  spline.lineTo(kVec1);
   // Create a separate line with two segments.
-  builder.moveTo(Vector2d::Zero());
-  builder.lineTo(kVec2);
-  builder.lineTo(kVec1);
-  PathSpline spline = builder.build();
+  spline.moveTo(Vector2d::Zero());
+  spline.lineTo(kVec2);
+  spline.lineTo(kVec1);
 
   EXPECT_THAT(spline.points(),
               ElementsAre(Vector2d::Zero(), kVec1, Vector2d::Zero(), kVec2, kVec1));
@@ -106,29 +102,27 @@ TEST(PathSplineBuilder, LineToComplex) {
                           Command{CommandType::LineTo, 4}));
 }
 
-TEST(PathSplineBuilder, LineToFailsWithoutStart) {
-  auto builder = PathSpline::Builder();
-  EXPECT_DEATH(builder.lineTo(kVec1), "without calling MoveTo");
+TEST(PathSpline, LineToFailsWithoutStart) {
+  PathSpline spline;
+  EXPECT_DEATH(spline.lineTo(kVec1), "without calling moveTo");
 }
 
-TEST(PathSplineBuilder, CurveTo) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.curveTo(kVec2, kVec3, kVec4);
-  PathSpline spline = builder.build();
+TEST(PathSpline, CurveTo) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.curveTo(kVec2, kVec3, kVec4);
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1}));
 }
 
-TEST(PathSplineBuilder, CurveToChained) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.curveTo(kVec2, kVec3, kVec4);
-  builder.curveTo(kVec1, kVec2, Vector2d::Zero());
-  builder.lineTo(kVec1);
-  PathSpline spline = builder.build();
+TEST(PathSpline, CurveToChained) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.curveTo(kVec2, kVec3, kVec4);
+  spline.curveTo(kVec1, kVec2, Vector2d::Zero());
+  spline.lineTo(kVec1);
 
   EXPECT_THAT(spline.points(),
               ElementsAre(kVec1, kVec2, kVec3, kVec4, kVec1, kVec2, Vector2d::Zero(), kVec1));
@@ -137,29 +131,26 @@ TEST(PathSplineBuilder, CurveToChained) {
                           Command{CommandType::CurveTo, 4}, Command{CommandType::LineTo, 7}));
 }
 
-TEST(PathSplineBuilder, CurveToFailsWithoutStart) {
-  auto builder = PathSpline::Builder();
-  EXPECT_DEATH(builder.curveTo(kVec1, kVec2, kVec3), "without calling MoveTo");
+TEST(PathSpline, CurveToFailsWithoutStart) {
+  PathSpline spline;
+  EXPECT_DEATH(spline.curveTo(kVec1, kVec2, kVec3), "without calling moveTo");
 }
 
-TEST(PathSplineBuilder, ArcTo) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(1.0, 0.0));
-  builder.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, false, false,
-                Vector2d(0.0, 2.0));
-  PathSpline spline = builder.build();
+TEST(PathSpline, ArcTo) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(1.0, 0.0));
+  spline.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, false, false,
+               Vector2d(0.0, 2.0));
 
   EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 0.0), _, _, Vector2d(0.0, 2.0)));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1}));
 }
 
-TEST(PathSplineBuilder, ArcToLargeArc) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(1.0, 0.0));
-  builder.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, true, false,
-                Vector2d(0.0, 2.0));
-  PathSpline spline = builder.build();
+TEST(PathSpline, ArcToLargeArc) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(1.0, 0.0));
+  spline.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, true, false, Vector2d(0.0, 2.0));
 
   EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 0.0), _, _, Vector2d(0.0, -2.0), _, _, _,
                                            _, _, Vector2d(0.0, 2.0)));
@@ -168,45 +159,55 @@ TEST(PathSplineBuilder, ArcToLargeArc) {
                           Command{CommandType::CurveTo, 4}, Command{CommandType::CurveTo, 7}));
 }
 
-TEST(PathSplineBuilder, ClosePath) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  builder.closePath();
-  builder.lineTo(kVec3);
-  PathSpline spline = builder.build();
+TEST(PathSpline, ClosePath) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.closePath();
 
-  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3));
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                          Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 0},
-                          Command{CommandType::LineTo, 2}));
+                          Command{CommandType::ClosePath, 0}));
 }
 
-TEST(PathSplineBuilder, ClosePathFailsWithoutStart) {
-  auto builder = PathSpline::Builder();
-  EXPECT_DEATH(builder.closePath(), "without an open path");
+TEST(PathSpline, ClosePathNeedsModeToReopen) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.closePath();
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec3);
+
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec1, kVec3));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 2},
+                          Command{CommandType::LineTo, 3}));
 }
 
-TEST(PathSplineBuilder, ClosePathAfterMoveTo) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.closePath();
-  PathSpline spline = builder.build();
+TEST(PathSpline, ClosePathFailsWithoutStart) {
+  PathSpline spline;
+  EXPECT_DEATH(spline.closePath(), "without an open path");
+}
+
+TEST(PathSpline, ClosePathAfterMoveTo) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.closePath();
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
 }
 
-TEST(PathSplineBuilder, ClosePathMoveToReplace) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  builder.closePath();
-  builder.moveTo(kVec3);
-  builder.lineTo(kVec4);
-  PathSpline spline = builder.build();
+TEST(PathSpline, ClosePathMoveToReplace) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.closePath();
+  spline.moveTo(kVec3);
+  spline.lineTo(kVec4);
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
   EXPECT_THAT(spline.commands(),
@@ -215,10 +216,9 @@ TEST(PathSplineBuilder, ClosePathMoveToReplace) {
                           Command{CommandType::LineTo, 3}));
 }
 
-TEST(PathSplineBuilder, Ellipse) {
-  auto builder = PathSpline::Builder();
-  builder.ellipse(Vector2d(0.0, 1.0), Vector2d(2.0, 1.0));
-  PathSpline spline = builder.build();
+TEST(PathSpline, Ellipse) {
+  PathSpline spline;
+  spline.ellipse(Vector2d(0.0, 1.0), Vector2d(2.0, 1.0));
 
   EXPECT_THAT(spline.points(),
               ElementsAre(Vector2d(2.0, 1.0), _, _, Vector2d(0.0, 2.0), _, _, Vector2d(-2.0, 1.0),
@@ -229,10 +229,9 @@ TEST(PathSplineBuilder, Ellipse) {
                           Command{CommandType::CurveTo, 10}, Command{CommandType::ClosePath, 0}));
 }
 
-TEST(PathSplineBuilder, Circle) {
-  auto builder = PathSpline::Builder();
-  builder.circle(Vector2d(0.0, 1.0), 2.0);
-  PathSpline spline = builder.build();
+TEST(PathSpline, Circle) {
+  PathSpline spline;
+  spline.circle(Vector2d(0.0, 1.0), 2.0);
 
   EXPECT_THAT(spline.points(),
               ElementsAre(Vector2d(2.0, 1.0), _, _, Vector2d(0.0, 3.0), _, _, Vector2d(-2.0, 1.0),
@@ -243,40 +242,31 @@ TEST(PathSplineBuilder, Circle) {
                           Command{CommandType::CurveTo, 10}, Command{CommandType::ClosePath, 0}));
 }
 
-TEST(PathSplineBuilder, BuildMultipleTimesFails) {
-  auto builder = PathSpline::Builder();
-  PathSpline spline1 = builder.build();
-
-  EXPECT_DEATH(builder.build(), "can only be used once");
-}
-
 TEST(PathSpline, Empty) {
-  PathSpline spline = PathSpline::Builder().build();
+  PathSpline spline;
   EXPECT_TRUE(spline.empty());
 }
 
 TEST(PathSpline, PathLengthEmpty) {
-  PathSpline spline = PathSpline::Builder().build();
+  PathSpline spline;
   EXPECT_EQ(spline.pathLength(), 0.0);
 }
 
 TEST(PathSpline, PathLengthSingleLine) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
 
   const double expectedLength = (kVec2 - kVec1).length();
   EXPECT_DOUBLE_EQ(spline.pathLength(), expectedLength);
 }
 
 TEST(PathSpline, PathLengthMultipleSegments) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  builder.lineTo(kVec3);
-  builder.lineTo(kVec4);
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.lineTo(kVec3);
+  spline.lineTo(kVec4);
 
   const double expectedLength =
       (kVec2 - kVec1).length() + (kVec3 - kVec2).length() + (kVec4 - kVec3).length();
@@ -284,10 +274,9 @@ TEST(PathSpline, PathLengthMultipleSegments) {
 }
 
 TEST(PathSpline, PathLengthCurveTo) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.curveTo(kVec2, kVec3, kVec4);
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.curveTo(kVec2, kVec3, kVec4);
 
   const double tolerance = 0.001;
   double expectedLength = 4106.97786;
@@ -295,72 +284,73 @@ TEST(PathSpline, PathLengthCurveTo) {
 }
 
 TEST(PathSpline, PathLengthComplexPath) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kVec1);
-  builder.lineTo(kVec2);
-  builder.curveTo(kVec3, kVec4, Vector2d(1.0, 1.0));
-  builder.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, false, false,
-                Vector2d(0.0, 2.0));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.curveTo(kVec3, kVec4, Vector2d(1.0, 1.0));
+  spline.arcTo(Vector2d(2.0, 1.0), MathConstants<double>::kHalfPi, false, false,
+               Vector2d(0.0, 2.0));
 
+  SCOPED_TRACE(testing::Message() << "Path: " << spline);
+
+  // Value is saved from a previous run, it should not change.
   const double tolerance = 0.001;
   double expectedLength = 3674.25092;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
 
 TEST(PathSpline, PathLengthSimpleCurve) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0, 0));
-  builder.curveTo(Vector2d(1, 2), Vector2d(3, 2), Vector2d(4, 0));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.curveTo(Vector2d(1, 2), Vector2d(3, 2), Vector2d(4, 0));
 
   // Calculate the expected length of the simple cubic Bezier curve
+  // Values from: bazel run //donner/svg/core:generate_test_pathlength_numpy
   const double expectedLength = 5.26836554;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
 
 TEST(PathSpline, PathLengthLoop) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0, 0));
-  builder.curveTo(Vector2d(1, 2), Vector2d(3, -2), Vector2d(4, 0));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.curveTo(Vector2d(1, 2), Vector2d(3, -2), Vector2d(4, 0));
 
   // Calculate the expected length of the cubic Bezier curve with a loop
+  // Values from: bazel run //donner/svg/core:generate_test_pathlength_numpy
   const double expectedLength = 4.79396527;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
 
 TEST(PathSpline, PathLengthCusp) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0, 0));
-  builder.curveTo(Vector2d(1, 2), Vector2d(2, 2), Vector2d(3, 0));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.curveTo(Vector2d(1, 2), Vector2d(2, 2), Vector2d(3, 0));
 
   // Calculate the expected length of the cubic Bezier curve with a cusp
+  // Values from: bazel run //donner/svg/core:generate_test_pathlength_numpy
   const double expectedLength = 4.43682857;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
 
 TEST(PathSpline, PathLengthInflectionPoint) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0, 0));
-  builder.curveTo(Vector2d(1, 2), Vector2d(2, -2), Vector2d(3, 0));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.curveTo(Vector2d(1, 2), Vector2d(2, -2), Vector2d(3, 0));
 
   // Calculate the expected length of the cubic Bezier curve with an inflection point
+  // Values from: bazel run //donner/svg/core:generate_test_pathlength_numpy
   const double expectedLength = 3.93406628;
   const double tolerance = 0.001;
   EXPECT_NEAR(spline.pathLength(), expectedLength, tolerance);
 }
 
 TEST(PathSpline, PathLengthCollinearControlPoints) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0, 0));
-  builder.curveTo(Vector2d(1, 1), Vector2d(2, 2), Vector2d(3, 3));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.curveTo(Vector2d(1, 1), Vector2d(2, 2), Vector2d(3, 3));
 
   // For collinear control points, the curve should be a straight line
   const double expectedLength = (Vector2d(3, 3) - Vector2d(0, 0)).length();
@@ -368,34 +358,31 @@ TEST(PathSpline, PathLengthCollinearControlPoints) {
 }
 
 TEST(PathSpline, BoundsEmptyFails) {
-  PathSpline spline = PathSpline::Builder().build();
+  PathSpline spline;
   EXPECT_DEATH(spline.bounds(), "!empty()");
   EXPECT_DEATH(spline.strokeMiterBounds(1.0, 1.0), "!empty()");
 }
 
 TEST(PathSpline, Bounds) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d::Zero());
-  builder.lineTo(kVec1);
-  builder.lineTo(kVec2);
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d::Zero());
+  spline.lineTo(kVec1);
+  spline.lineTo(kVec2);
 
   EXPECT_EQ(spline.bounds(), Boxd(Vector2d(0.0, 0.0), Vector2d(123.0, 1011.12)));
 }
 
 TEST(PathSpline, BoundsCurve) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.curveTo(Vector2d(8.0, 9.0), Vector2d(2.0, 0.0), Vector2d(0.0, 0.0));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.curveTo(Vector2d(8.0, 9.0), Vector2d(2.0, 0.0), Vector2d(0.0, 0.0));
 
   EXPECT_THAT(spline.bounds(), BoxEq(Vector2d(0.0, 0.0), Vector2Near(4.04307, 4.0)));
 }
 
 TEST(PathSpline, BoundsEllipse) {
-  auto builder = PathSpline::Builder();
-  builder.ellipse(Vector2d(1.0, 2.0), Vector2d(2.0, 1.0));
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.ellipse(Vector2d(1.0, 2.0), Vector2d(2.0, 1.0));
 
   EXPECT_THAT(spline.bounds(), Boxd(Vector2d(-1.0, 1.0), Vector2d(3.0, 3.0)));
 }
@@ -416,12 +403,12 @@ TEST(PathSpline, StrokeMiterBounds) {
   const Vector2 kBottomLeft = Vector2(-kXHalfExtent, 0.0);
   const Vector2 kBottomRight = Vector2(kXHalfExtent, 0.0);
 
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kBottomLeft);
-  builder.lineTo(Vector2(0.0, 100.0));
-  builder.lineTo(kBottomRight);
+  PathSpline spline;
+  spline.moveTo(kBottomLeft);
+  spline.lineTo(Vector2(0.0, 100.0));
+  spline.lineTo(kBottomRight);
 
-  PathSpline spline = builder.build();
+  SCOPED_TRACE(testing::Message() << "Path: " << spline);
 
   ASSERT_THAT(spline.commands(), SizeIs(3));
 
@@ -462,13 +449,11 @@ TEST(PathSpline, StrokeMiterBoundsClosePath) {
   const Vector2 kBottomLeft = Vector2(-kXHalfExtent, 0.0);
   const Vector2 kBottomRight = Vector2(kXHalfExtent, 0.0);
 
-  auto builder = PathSpline::Builder();
-  builder.moveTo(kBottomLeft);
-  builder.lineTo(Vector2(0.0, 100.0));
-  builder.lineTo(kBottomRight);
-  builder.closePath();
-
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(kBottomLeft);
+  spline.lineTo(Vector2(0.0, 100.0));
+  spline.lineTo(kBottomRight);
+  spline.closePath();
 
   ASSERT_THAT(spline.commands(), SizeIs(4));
 
@@ -501,12 +486,10 @@ TEST(PathSpline, StrokeMiterBoundsColinear) {
   //   .-------->.-------->.
   // (0, 0)   (50, 0)   (100, 0)
   //
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d::Zero());
-  builder.lineTo(Vector2d(0.0, 50.0));
-  builder.lineTo(Vector2d(0.0, 100.0));
-
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d::Zero());
+  spline.lineTo(Vector2d(0.0, 50.0));
+  spline.lineTo(Vector2d(0.0, 100.0));
 
   ASSERT_THAT(spline.commands(), SizeIs(3));
 
@@ -529,12 +512,10 @@ TEST(PathSpline, StrokeMiterBoundsInfinite) {
   //   .<===========>.
   // (0, 0)       (100, 0)
   //
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d::Zero());
-  builder.lineTo(Vector2d(0.0, 100.0));
-  builder.lineTo(Vector2d::Zero());
-
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d::Zero());
+  spline.lineTo(Vector2d(0.0, 100.0));
+  spline.lineTo(Vector2d::Zero());
 
   ASSERT_THAT(spline.commands(), SizeIs(3));
 
@@ -561,14 +542,12 @@ TEST(PathSpline, PointAtTriangle) {
   //   /__________\
   //  (0, 0)      (2, 0)
 
-  auto builder = PathSpline::Builder();
+  PathSpline spline;
   // Triangle.
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.lineTo(Vector2(1.0, 2.0));
-  builder.lineTo(Vector2(2.0, 0.0));
-  builder.closePath();
-
-  PathSpline spline = builder.build();
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2(1.0, 2.0));
+  spline.lineTo(Vector2(2.0, 0.0));
+  spline.closePath();
 
   ASSERT_THAT(spline.commands(), SizeIs(4));
 
@@ -605,14 +584,12 @@ TEST(PathSpline, PointAtMultipleSegments) {
   //   .__________.
   //  (0, 0)      (2, 0)
 
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.lineTo(Vector2(2.0, 0.0));
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2(2.0, 0.0));
 
-  builder.moveTo(Vector2(1.0, 1.0));
-  builder.lineTo(Vector2(1.0, 3.0));
-
-  PathSpline spline = builder.build();
+  spline.moveTo(Vector2(1.0, 1.0));
+  spline.lineTo(Vector2(1.0, 3.0));
 
   ASSERT_THAT(spline.commands(), SizeIs(4));
 
@@ -649,15 +626,14 @@ TEST(PathSpline, TangentAt) {
   //   ___________     `'-...-'`
   // (0, 0)      (1, 0)
 
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.lineTo(Vector2(1.0, 2.0));
-  builder.lineTo(Vector2(2.0, 0.0));
-  builder.closePath();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2(1.0, 2.0));
+  spline.lineTo(Vector2(2.0, 0.0));
+  spline.closePath();
 
-  builder.circle(Vector2d(4.0, 1.0), 1.0);
+  spline.circle(Vector2d(4.0, 1.0), 1.0);
 
-  PathSpline spline = builder.build();
   ASSERT_THAT(spline.commands(), SizeIs(10));
 
   // Triangle.
@@ -730,15 +706,14 @@ TEST(PathSpline, NormalAt) {
   //   ___________     `'-...-'`
   // (0, 0)      (1, 0)
 
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.lineTo(Vector2(1.0, 2.0));
-  builder.lineTo(Vector2(2.0, 0.0));
-  builder.closePath();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2(1.0, 2.0));
+  spline.lineTo(Vector2(2.0, 0.0));
+  spline.closePath();
 
-  builder.circle(Vector2d(4.0, 1.0), 1.0);
+  spline.circle(Vector2d(4.0, 1.0), 1.0);
 
-  PathSpline spline = builder.build();
   ASSERT_THAT(spline.commands(), SizeIs(10));
 
   // Triangle.
@@ -802,12 +777,11 @@ TEST(PathSpline, NormalAt) {
 }
 
 TEST(PathSpline, IsInsideSimpleTriangle) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.lineTo(Vector2d(2.0, 0.0));
-  builder.lineTo(Vector2d(1.0, 2.0));
-  builder.closePath();
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2d(2.0, 0.0));
+  spline.lineTo(Vector2d(1.0, 2.0));
+  spline.closePath();
 
   // Point inside the triangle
   EXPECT_TRUE(spline.isInside(Vector2d(1.0, 1.0), FillRule::NonZero));
@@ -837,18 +811,17 @@ TEST(PathSpline, IsInsideComplexShape) {
   // +------------>------------+
   // (0, 0)                    (4, 0)
 
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.lineTo(Vector2d(4.0, 0.0));
-  builder.lineTo(Vector2d(4.0, 4.0));
-  builder.lineTo(Vector2d(0.0, 4.0));
-  builder.closePath();
-  builder.moveTo(Vector2d(1.0, 1.0));
-  builder.lineTo(Vector2d(3.0, 1.0));
-  builder.lineTo(Vector2d(3.0, 3.0));
-  builder.lineTo(Vector2d(1.0, 3.0));
-  builder.closePath();
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2d(4.0, 0.0));
+  spline.lineTo(Vector2d(4.0, 4.0));
+  spline.lineTo(Vector2d(0.0, 4.0));
+  spline.closePath();
+  spline.moveTo(Vector2d(1.0, 1.0));
+  spline.lineTo(Vector2d(3.0, 1.0));
+  spline.lineTo(Vector2d(3.0, 3.0));
+  spline.lineTo(Vector2d(1.0, 3.0));
+  spline.closePath();
 
   // Point inside the outer square but outside the inner square
   EXPECT_TRUE(spline.isInside(Vector2d(0.5, 0.5), FillRule::NonZero));
@@ -866,12 +839,11 @@ TEST(PathSpline, IsInsideComplexShape) {
 }
 
 TEST(PathSpline, IsInsideCurveShape) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.curveTo(Vector2d(1.0, 2.0), Vector2d(3.0, 2.0), Vector2d(4.0, 0.0));
-  builder.curveTo(Vector2d(3.0, -2.0), Vector2d(1.0, -2.0), Vector2d(0.0, 0.0));
-  builder.closePath();
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.curveTo(Vector2d(1.0, 2.0), Vector2d(3.0, 2.0), Vector2d(4.0, 0.0));
+  spline.curveTo(Vector2d(3.0, -2.0), Vector2d(1.0, -2.0), Vector2d(0.0, 0.0));
+  spline.closePath();
 
   // Point inside the curve
   EXPECT_TRUE(spline.isInside(Vector2d(2.0, 0.0), FillRule::NonZero));
@@ -883,9 +855,8 @@ TEST(PathSpline, IsInsideCurveShape) {
 }
 
 TEST(PathSpline, IsInsideCircle) {
-  auto builder = PathSpline::Builder();
-  builder.circle(Vector2d(0.0, 0.0), 5.0);
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.circle(Vector2d(0.0, 0.0), 5.0);
 
   // Point inside the circle
   EXPECT_TRUE(spline.isInside(Vector2d(1.0, 1.0), FillRule::NonZero));
@@ -901,18 +872,17 @@ TEST(PathSpline, IsInsideCircle) {
 }
 
 TEST(PathSpline, IsInsideMultipleSubpaths) {
-  auto builder = PathSpline::Builder();
-  builder.moveTo(Vector2d(0.0, 0.0));
-  builder.lineTo(Vector2d(4.0, 0.0));
-  builder.lineTo(Vector2d(4.0, 4.0));
-  builder.lineTo(Vector2d(0.0, 4.0));
-  builder.closePath();
-  builder.moveTo(Vector2d(5.0, 5.0));
-  builder.lineTo(Vector2d(7.0, 5.0));
-  builder.lineTo(Vector2d(7.0, 7.0));
-  builder.lineTo(Vector2d(5.0, 7.0));
-  builder.closePath();
-  PathSpline spline = builder.build();
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2d(4.0, 0.0));
+  spline.lineTo(Vector2d(4.0, 4.0));
+  spline.lineTo(Vector2d(0.0, 4.0));
+  spline.closePath();
+  spline.moveTo(Vector2d(5.0, 5.0));
+  spline.lineTo(Vector2d(7.0, 5.0));
+  spline.lineTo(Vector2d(7.0, 7.0));
+  spline.lineTo(Vector2d(5.0, 7.0));
+  spline.closePath();
 
   // Point inside the first subpath
   EXPECT_TRUE(spline.isInside(Vector2d(2.0, 2.0), FillRule::NonZero));
@@ -925,6 +895,43 @@ TEST(PathSpline, IsInsideMultipleSubpaths) {
   // Point outside both subpaths
   EXPECT_FALSE(spline.isInside(Vector2d(8.0, 8.0), FillRule::NonZero));
   EXPECT_FALSE(spline.isInside(Vector2d(8.0, 8.0), FillRule::EvenOdd));
+}
+
+// Test for the 'appendJoin' method
+TEST(PathSpline, AppendJoin) {
+  PathSpline spline1;
+  spline1.moveTo(kVec1);
+  spline1.lineTo(kVec2);
+
+  PathSpline spline2;
+  spline2.moveTo(kVec2);
+  spline2.lineTo(kVec3);
+
+  spline1.appendJoin(spline2);
+
+  EXPECT_THAT(spline1.points(), ElementsAre(kVec1, kVec2, kVec3));
+  EXPECT_THAT(spline1.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::LineTo, 2}));
+}
+
+// appendJoin should remove the first moveTo, so if the start/stop points don't match there is a
+// change
+TEST(PathSpline, AppendJoinWithJump) {
+  PathSpline spline1;
+  spline1.moveTo(kVec1);
+  spline1.lineTo(kVec2);
+
+  PathSpline spline2;
+  spline2.moveTo(kVec3);
+  spline2.lineTo(kVec4);
+
+  spline1.appendJoin(spline2);
+
+  EXPECT_THAT(spline1.points(), ElementsAre(kVec1, kVec2, kVec4));
+  EXPECT_THAT(spline1.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::LineTo, 2}));
 }
 
 }  // namespace donner::svg
