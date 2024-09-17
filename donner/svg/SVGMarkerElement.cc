@@ -13,43 +13,43 @@ SVGMarkerElement SVGMarkerElement::Create(SVGDocument& document) {
 }
 
 void SVGMarkerElement::setMarkerWidth(double value) {
-  handle_.setAttribute("markerWidth", std::to_string(value));
+  handle_.get_or_emplace<components::MarkerComponent>().markerWidth = value;
 }
 
 double SVGMarkerElement::markerWidth() const {
-  return std::stod(handle_.getAttribute("markerWidth").value_or("0"));
+  return handle_.get<components::MarkerComponent>().markerWidth;
 }
 
 void SVGMarkerElement::setMarkerHeight(double value) {
-  handle_.setAttribute("markerHeight", std::to_string(value));
+  handle_.get_or_emplace<components::MarkerComponent>().markerHeight = value;
 }
 
 double SVGMarkerElement::markerHeight() const {
-  return std::stod(handle_.getAttribute("markerHeight").value_or("0"));
+  return handle_.get<components::MarkerComponent>().markerHeight;
 }
 
 void SVGMarkerElement::setRefX(double value) {
-  handle_.setAttribute("refX", std::to_string(value));
+  handle_.get_or_emplace<components::MarkerComponent>().refX = value;
 }
 
 double SVGMarkerElement::refX() const {
-  return std::stod(handle_.getAttribute("refX").value_or("0"));
+  return handle_.get<components::MarkerComponent>().refX;
 }
 
 void SVGMarkerElement::setRefY(double value) {
-  handle_.setAttribute("refY", std::to_string(value));
+  handle_.get_or_emplace<components::MarkerComponent>().refY = value;
 }
 
 double SVGMarkerElement::refY() const {
-  return std::stod(handle_.getAttribute("refY").value_or("0"));
+  return handle_.get<components::MarkerComponent>().refY;
 }
 
 void SVGMarkerElement::setOrient(std::string_view value) {
-  handle_.setAttribute("orient", std::string(value));
+  handle_.get_or_emplace<components::MarkerComponent>().orient = std::string(value);
 }
 
 std::string_view SVGMarkerElement::orient() const {
-  return handle_.getAttribute("orient").value_or("");
+  return handle_.get<components::MarkerComponent>().orient;
 }
 
 }  // namespace donner::svg

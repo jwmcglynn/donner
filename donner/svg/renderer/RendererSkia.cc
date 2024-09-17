@@ -41,6 +41,7 @@
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/SVGMarkerElement.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
 
 namespace donner::svg {
 
@@ -1016,15 +1017,15 @@ public:
       return;
     }
 
-    const auto& markerElement = markerHandle.get<SVGMarkerElement>();
+    const auto& markerComponent = markerHandle.get<components::MarkerComponent>();
 
     SkPaint paint;
     paint.setAntiAlias(renderer_.antialias_);
 
-    const auto markerWidth = markerElement.markerWidth();
-    const auto markerHeight = markerElement.markerHeight();
-    const auto refX = markerElement.refX();
-    const auto refY = markerElement.refY();
+    const auto markerWidth = markerComponent.markerWidth;
+    const auto markerHeight = markerComponent.markerHeight;
+    const auto refX = markerComponent.refX;
+    const auto refY = markerComponent.refY;
 
     SkMatrix matrix;
     matrix.setTranslate(NarrowToFloat(position.x - refX), NarrowToFloat(position.y - refY));
