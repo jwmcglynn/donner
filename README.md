@@ -19,6 +19,12 @@ Donner renders with Skia, which provides the same high-quality rendering used by
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
+## Supported Elements
+
+[`<circle>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_circle) [`<clipPath>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_clipPath) [`<defs>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_defs) [`<ellipse>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_ellipse) [`<g>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_g) [`<image>`](https://jwmcglynn.github.io/donner/group__xml__image.html) [`<line>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_line) [`<linearGradient>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_linearGradient) [`<mask>`](https://jwmcglynn.github.io/donner/group__xml__mask.html) [`<path>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_path) [`<pattern>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_pattern) [`<polygon>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_polygon) [`<polyline>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_polyline) [`<radialGradient>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_radialGradient) [`<rect>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_rect) [`<stop>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_stop) [`<style>`](https://jwmcglynn.github.io/donner/group__xml__style.html) [`<svg>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_svg) [`<use>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_use)
+
+Not yet supported: `<a>` `<marker>` `<symbol>` `<text>` `<tspan>`
+
 ## Try it out: Render an SVG to PNG
 
 ```sh
