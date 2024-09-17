@@ -12,6 +12,7 @@
 #include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/SVGImageElement.h"
+#include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/parser/Number2dParser.h"
@@ -650,6 +651,52 @@ std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& contex
     return std::nullopt;
   } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     element.setHref(RcString(value));
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGMarkerElement>(XMLParserContext& context,
+                                                           SVGMarkerElement element,
+                                                           const XMLQualifiedNameRef& name,
+                                                           std::string_view value) {
+  if (name == XMLQualifiedNameRef("markerWidth")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setMarkerWidth(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid markerWidth value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("markerHeight")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setMarkerHeight(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid markerHeight value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("refX")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setRefX(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid refX value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("refY")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setRefY(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid refY value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("orient")) {
+    element.setOrient(value);
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

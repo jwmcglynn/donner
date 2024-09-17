@@ -89,6 +89,9 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `mask` | \ref mask | `none` |
  * | `filter` | \ref filter | `none` |
  * | `pointer-events` | \ref pointerEvents | `auto` |
+ * | `marker-start` | \ref markerStart | `none` |
+ * | `marker-mid` | \ref markerMid | `none` |
+ * | `marker-end` | \ref markerEnd | `none` |
  */
 class PropertyRegistry {
 public:
@@ -215,6 +218,22 @@ public:
       "pointer-events",
       []() -> std::optional<PointerEvents> { return PointerEvents::VisiblePainted; }};
 
+  //
+  // Markers
+  //
+
+  /// `marker-start` property, which determines the marker to be drawn at the start of the path.
+  Property<Reference, PropertyCascade::None> markerStart{
+      "marker-start", []() -> std::optional<Reference> { return std::nullopt; }};
+
+  /// `marker-mid` property, which determines the marker to be drawn at the middle of the path.
+  Property<Reference, PropertyCascade::None> markerMid{
+      "marker-mid", []() -> std::optional<Reference> { return std::nullopt; }};
+
+  /// `marker-end` property, which determines the marker to be drawn at the end of the path.
+  Property<Reference, PropertyCascade::None> markerEnd{
+      "marker-end", []() -> std::optional<Reference> { return std::nullopt; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
@@ -244,7 +263,8 @@ public:
     return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
                                  stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
                                  strokeMiterlimit, strokeDasharray, strokeDashoffset, clipPath,
-                                 clipRule, mask, filter, pointerEvents);
+                                 clipRule, mask, filter, pointerEvents, markerStart, markerMid,
+                                 markerEnd);
   }
 
   /**

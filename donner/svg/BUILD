@@ -32,6 +32,7 @@ cc_library(
         "SVGStyleElement.cc",
         "SVGUnknownElement.cc",
         "SVGUseElement.cc",
+        "SVGMarkerElement.cc",
     ],
     hdrs = [
         "AllSVGElements.h",
@@ -64,6 +65,7 @@ cc_library(
         "SVGStyleElement.h",
         "SVGUnknownElement.h",
         "SVGUseElement.h",
+        "SVGMarkerElement.h",
     ],
     visibility = [
         "//:__pkg__",
