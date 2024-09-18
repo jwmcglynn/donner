@@ -85,17 +85,17 @@ struct Transform {
    *
    * @param theta Angle in radians.
    */
-  static Transform Rotate(T theta) {
-    const T sin_val = std::sin(theta);
-    const T cos_val = std::cos(theta);
+  static Transform Rotate(T angleRadians) {
+    const T sinVal = std::sin(angleRadians);
+    const T cosVal = std::cos(angleRadians);
 
     Transform<T> result(uninitialized);
-    result.data[0] = cos_val;   // a
-    result.data[1] = sin_val;   // b
-    result.data[2] = -sin_val;  // c
-    result.data[3] = cos_val;   // d
-    result.data[4] = T(0);      // e
-    result.data[5] = T(0);      // f
+    result.data[0] = cosVal;   // a
+    result.data[1] = sinVal;   // b
+    result.data[2] = -sinVal;  // c
+    result.data[3] = cosVal;   // d
+    result.data[4] = T(0);     // e
+    result.data[5] = T(0);     // f
     return result;
   }
 
@@ -149,9 +149,7 @@ struct Transform {
    * @param x Horizontal translation offset.
    * @param y Vertical translation offset.
    */
-  static Transform Translate(T x, T y) {
-    return Translate(Vector2<T>(x, y));
-  }
+  static Transform Translate(T x, T y) { return Translate(Vector2<T>(x, y)); }
 
   /**
    * Returns a 2D skew transformation along the X axis.

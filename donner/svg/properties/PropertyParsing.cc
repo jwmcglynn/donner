@@ -11,6 +11,10 @@ namespace donner::svg::parser {
 
 namespace {
 
+// Presentation attributes have a specificity of 0.
+static constexpr css::Specificity kSpecificityPresentationAttribute =
+    css::Specificity::FromABC(0, 0, 0);
+
 std::span<const css::ComponentValue> TrimTrailingWhitespace(
     std::span<const css::ComponentValue> components) {
   while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
@@ -43,6 +47,24 @@ PropertyParseFnParams PropertyParseFnParams::Create(const css::Declaration& decl
   }
 
   params.specificity = declaration.important ? css::Specificity::Important() : specificity;
+
+  return params;
+}
+
+PropertyParseFnParams PropertyParseFnParams::CreateForAttribute(std::string_view value) {
+  PropertyParseFnParams params;
+  params.valueOrComponents = value;
+  params.specificity = kSpecificityPresentationAttribute;
+  params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
+
+  const std::string_view trimmedValue = StringUtils::TrimWhitespace(value);
+  if (StringUtils::EqualsLowercase(trimmedValue, std::string_view("initial"))) {
+    params.explicitState = PropertyState::ExplicitInitial;
+  } else if (StringUtils::EqualsLowercase(trimmedValue, std::string_view("inherit"))) {
+    params.explicitState = PropertyState::Inherit;
+  } else if (StringUtils::EqualsLowercase(trimmedValue, std::string_view("unset"))) {
+    params.explicitState = PropertyState::ExplicitUnset;
+  }
 
   return params;
 }

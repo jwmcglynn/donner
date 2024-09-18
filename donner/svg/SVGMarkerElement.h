@@ -2,7 +2,8 @@
 /// @file
 
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/core/MarkerOrient.h"
+#include "donner/svg/core/MarkerUnits.h"
 
 namespace donner::svg {
 
@@ -144,18 +145,36 @@ public:
   double refY() const;
 
   /**
-   * Set the orientation of the marker.
+   * Get the `markerUnits` attribute which defines the coordinate system for attributes
+   * `markerWidth`, `markerHeight`, and the contents of the marker.
+   *
+   * Defaults to \ref MarkerUnits::StrokeWidth.
+   *
+   * @return Coordinate system for marker attributes and contents.
+   */
+  MarkerUnits markerUnits() const;
+
+  /**
+   * Set the `markerUnits` attribute which defines the coordinate system for attributes
+   * `markerWidth`, `markerHeight`, and the contents of the marker.
+   *
+   * @param value Coordinate system for marker attributes and contents.
+   */
+  void setMarkerUnits(MarkerUnits value);
+
+  /**
+   * Set the orientation of the marker, the `orient` attribute.
    *
    * @param value Orientation of the marker relative to the path.
    */
-  void setOrient(std::string_view value);
+  void setOrient(MarkerOrient value);
 
   /**
-   * Get the orientation of the marker.
+   * Get the orientation of the marker, the `orient`  attribute.
    *
    * @return Orientation of the marker relative to the path.
    */
-  std::string_view orient() const;
+  MarkerOrient orient() const;
 };
 
 }  // namespace donner::svg

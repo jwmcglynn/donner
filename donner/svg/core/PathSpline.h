@@ -85,6 +85,10 @@ public:
     /// Used to determine if markers should be placed on the point.
     bool isInternalPoint = false;
 
+    /// If \ref type is \ref CommandType::MoveTo, this is the index of the ClosePath at the end of
+    /// the path.
+    size_t closePathIndex = size_t(-1);
+
     /**
      * Command constructor.
      *
@@ -108,6 +112,14 @@ public:
      * @param command Command to output.
      */
     friend std::ostream& operator<<(std::ostream& os, const Command& command);
+  };
+
+  /**
+   * Vertex of the path, including the orientation. Used to place markers for \ref xml_marker.
+   */
+  struct Vertex {
+    Vector2d point;        ///< Point on the path.
+    Vector2d orientation;  ///< Orientation of the path at the point, normalized.
   };
 
   /**
@@ -183,12 +195,12 @@ public:
   void circle(const Vector2d& center, double radius);
 
   /**
-   * Append an existing spline to this spline, joining the two splines together. This will ignore
-   * the moveTo comand at the start of \p spline.
+   * Append an existing spline to this spline, joining the two splines together. This will
+   * ignore the moveTo comand at the start of \p spline.
    *
    * @param spline Spline to append.
-   * @param asInternalPath True if the spline should be treated as an internal path, which means
-   * that markers will not be rendered onto its segments.
+   * @param asInternalPath True if the spline should be treated as an internal path, which
+   * means that markers will not be rendered onto its segments.
    */
   void appendJoin(const PathSpline& spline, bool asInternalPath = false);
 
@@ -230,7 +242,8 @@ public:
   Boxd bounds() const;
 
   /**
-   * Get the bounds of critical points created by miter joints when applying a stroke to this path.
+   * Get the bounds of critical points created by miter joints when applying a stroke to this
+   * path.
    *
    * @param strokeWidth Width of stroke.
    * @param miterLimit Miter limit of the stroke.
@@ -247,7 +260,7 @@ public:
   Vector2d pointAt(size_t index, double t) const;
 
   /**
-   * Get the tangent vector on the spline.
+   * Get the un-normalized tangent vector on the spline.
    *
    * @param index Index of the command in the spline.
    * @param t Position on the segment, between 0.0 and 1.0.
@@ -263,6 +276,12 @@ public:
    * @return Vector2d Normal vector at the specified position.
    */
   Vector2d normalAt(size_t index, double t) const;
+
+  /**
+   * Get the vertices of the path, including the orientation. Used to place markers for \ref
+   * xml_marker.
+   */
+  std::vector<Vertex> vertices() const;
 
   /**
    * Returns true if this path contains the given point within its fill.
@@ -306,8 +325,8 @@ private:
   Vector2d endPoint(size_t index) const;
 
   /**
-   * Auto-reopen the path if it is closed. This will reissue the last moveTo() command, starting a
-   * new path at the same start coordinate.
+   * Auto-reopen the path if it is closed. This will reissue the last moveTo() command,
+   * starting a new path at the same start coordinate.
    */
   void maybeAutoReopen();
 
@@ -317,9 +336,12 @@ private:
   /// Index of the last MoveTo point in \ref points_.
   size_t moveToPointIndex_ = size_t(-1);
 
+  /// Index of the start of the current segment (if it is open), pointing to the MoveTo command.
+  size_t currentSegmentStartCommandIndex_ = size_t(-1);
+
   /// True if the path is closed, but it may auto-reopen and MoveTo on the next draw command.
-  /// This enables sequences such as "M 0 0 1 1 z L -1 -1" which close the path and then draw a new
-  /// line.
+  /// This enables sequences such as "M 0 0 1 1 z L -1 -1" which close the path and then draw
+  /// a new line.
   bool mayAutoReopen_ = false;
 };
 

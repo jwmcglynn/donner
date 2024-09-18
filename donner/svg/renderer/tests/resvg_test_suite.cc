@@ -44,8 +44,12 @@ std::vector<ImageComparisonTestcase> getTestsWithPrefix(
 TEST_P(ImageComparisonTestFixture, ResvgTest) {
   const ImageComparisonTestcase& testcase = GetParam();
 
-  const std::filesystem::path goldenFilename =
-      kGoldenDir / testcase.svgFilename.filename().replace_extension(".png");
+  std::filesystem::path goldenFilename;
+  if (testcase.params.overrideGoldenFilename.empty()) {
+    goldenFilename = kGoldenDir / testcase.svgFilename.filename().replace_extension(".png");
+  } else {
+    goldenFilename = testcase.params.overrideGoldenFilename;
+  }
 
   SVGDocument document = loadSVG(testcase.svgFilename.string().c_str(), kResourceSandboxDir);
   renderAndCompare(document, testcase.svgFilename, goldenFilename.string().c_str());
@@ -104,7 +108,10 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(text): a-kerning
 // TODO(text): a-lengthAdjust
 // TODO(text): a-letter-spacing
-// TODO(marker): a-marker
+
+INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-marker")), TestNameFromFilename);
+
 // TODO(filter): a-mark
 // TODO(filter): a-mix-blend-mode
 
@@ -120,7 +127,8 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-// TODO(text): a-overflow
+INSTANTIATE_TEST_SUITE_P(Overflow, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-overflow")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Shape, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-shape",
@@ -229,7 +237,6 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-clipPath-034.svg", Params::Skip()},  // Not impl: `clip-path` on children
             {"e-clipPath-036.svg", Params::Skip()},  // Not impl: `clip-path` on self
             {"e-clipPath-037.svg", Params::Skip()},  // Not impl: Recursive with self
-            {"e-clipPath-038.svg", Params::Skip()},  // Not impl: marker
             {"e-clipPath-039.svg", Params::Skip()},  // Not impl: `mask` has no effect
             {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
             {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
@@ -304,7 +311,27 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-// TODO: e-marker
+INSTANTIATE_TEST_SUITE_P(
+    Marker, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-marker",
+        {
+            {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
+            {"e-marker-009.svg", Params::Skip()},  // Not impl: marker `viewBox`
+            {"e-marker-017.svg", Params::Skip()},  // Not impl: `text`
+            {"e-marker-018.svg", Params::Skip()},  // Not impl: `text`
+            {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image
+            {"e-marker-022.svg", Params::Skip()},  // BUG: Nested
+            {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
+            {"e-marker-044.svg", Params::Skip()},  // BUG: Multiple closepaths (M L L Z Z Z)
+            // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
+            {"e-marker-045.svg", Params::WithGoldenOverride(
+                                     "donner/svg/renderer/testdata/golden/resvg-e-marker-045.png")},
+            // BUG? Disagreement about marker direction on cusp
+            {"e-marker-051.svg", Params::WithGoldenOverride(
+                                     "donner/svg/renderer/testdata/golden/resvg-e-marker-051.png")},
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Mask, ImageComparisonTestFixture,
@@ -358,15 +385,15 @@ INSTANTIATE_TEST_SUITE_P(
         "e-radialGradient",
         {
             {"e-radialGradient-031.svg",
-             Params::Skip()},  // Test suite bug? In SVG2 this was changed to draw conical
-                               // gradient instead of correcting focal point.
+             Params::Skip()},  // Test suite bug? In SVG2 this was changed to draw
+                               // conical gradient instead of correcting focal point.
             {"e-radialGradient-032.svg", Params::Skip()},  // UB: Negative `r`
             {"e-radialGradient-039.svg", Params::Skip()},  // UB: Invalid `gradientUnits`
             {"e-radialGradient-040.svg", Params::Skip()},  // UB: Invalid `gradientTransform`
             {"e-radialGradient-043.svg", Params::Skip()},  // UB: fr=0.5 (SVG 2)
-            {"e-radialGradient-044.svg",
-             Params::Skip()},  // Test suite bug? fr > default value of r (0.5) should not
-                               //  render.
+            {"e-radialGradient-044.svg", Params::Skip()},  // Test suite bug? fr > default value of
+                                                           // r (0.5) should not
+                                                           //  render.
             {"e-radialGradient-045.svg", Params::Skip()},  // UB: fr=-1 (SVG 2)
         })),
     TestNameFromFilename);

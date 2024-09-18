@@ -355,6 +355,27 @@ bool IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0, const Vecto
          IsPointOnCubicBezier(point, p0123, p123, p23, p3, tolerance, depth + 1);
 }
 
+/**
+ * Interpolates between two tangents and returns a vector that represents the halfway direction.
+ * If the tangents are opposite, returns a perpendicular vector.
+ *
+ * @param prevTangent The tangent vector at the previous position.
+ * @param nextTangent The tangent vector at the current position.
+ * @return Interpolated tangent vector.
+ */
+Vector2d InterpolateTangents(const Vector2d& prevTangent, const Vector2d& nextTangent) {
+  const Vector2d sum = prevTangent + nextTangent;
+
+  if (!NearZero(sum.lengthSquared())) {
+    // If the tangents are not opposite, normalize the sum to get the halfway tangent
+    return sum.normalize();
+  } else {
+    // If the tangents are opposite, choose a perpendicular vector
+    // Rotate prevTangent by 90 degrees counter-clockwise
+    return Vector2d(prevTangent.y, -prevTangent.x);
+  }
+}
+
 }  // namespace
 
 // TODO: Move these later in the file
@@ -412,10 +433,12 @@ void PathSpline::moveTo(const Vector2d& point) {
     }
   } else {
     const size_t pointIndex = points_.size();
+    const size_t commandIndex = commands_.size();
     points_.push_back(point);
     commands_.emplace_back(CommandType::MoveTo, pointIndex);
 
     moveToPointIndex_ = pointIndex;
+    currentSegmentStartCommandIndex_ = commandIndex;
   }
 
   mayAutoReopen_ = false;
@@ -458,11 +481,19 @@ void PathSpline::arcTo(const Vector2d& radius, double rotationRadians, bool larg
 void PathSpline::closePath() {
   UTILS_RELEASE_ASSERT((moveToPointIndex_ != kNPos || !commands_.empty()) &&
                        "ClosePath without an open path");
+  if (currentSegmentStartCommandIndex_ == kNPos) {
+    // The path was already closed.
+    return;
+  }
 
   // Close the path, which will draw a line back to the start.
+  const size_t commandIndex = commands_.size();
   commands_.emplace_back(CommandType::ClosePath, moveToPointIndex_);
 
+  commands_[currentSegmentStartCommandIndex_].closePathIndex = commandIndex;
+
   mayAutoReopen_ = true;
+  currentSegmentStartCommandIndex_ = kNPos;
 }
 
 void PathSpline::ellipse(const Vector2d& center, const Vector2d& radius) {
@@ -801,10 +832,27 @@ Vector2d PathSpline::tangentAt(size_t index, double t) const {
       const Vector2d p_2_1 = points_[command.pointIndex + 1] - points_[command.pointIndex];
       const Vector2d p_3_2 = points_[command.pointIndex + 2] - points_[command.pointIndex + 1];
 
-      return 3.0 * (rev_t * rev_t * p_1_0      // (1 - t)^2 * (P_1 - P_0)
-                    + 2.0 * t * rev_t * p_2_1  // (1 - t) * t * (P_2 - P_1)
-                    + t * t * p_3_2            // t^2 * (P_3 - P_2)
-                   );
+      const Vector2d derivative = 3.0 * (rev_t * rev_t * p_1_0      // (1 - t)^2 * (P_1 - P_0)
+                                         + 2.0 * t * rev_t * p_2_1  // (1 - t) * t * (P_2 - P_1)
+                                         + t * t * p_3_2            // t^2 * (P_3 - P_2)
+                                        );
+
+      if (NearZero(derivative.lengthSquared())) {
+        // First derivative is zero, which indicates two control points are the same (a degenerate
+        // curve). Adjust the t value and try again.
+        double adjustedT = t;
+        if (NearEquals(t, 0.0, 0.000001)) {
+          adjustedT = 0.01;
+        } else if (NearEquals(t, 1.0, 0.000001)) {
+          adjustedT = 0.99;
+        } else {
+          return derivative;
+        }
+
+        return tangentAt(index, adjustedT);
+      } else {
+        return derivative;
+      }
     }
     default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
   }
@@ -813,6 +861,113 @@ Vector2d PathSpline::tangentAt(size_t index, double t) const {
 Vector2d PathSpline::normalAt(size_t index, double t) const {
   const Vector2d tangent = tangentAt(index, t);
   return Vector2d(-tangent.y, tangent.x);
+}
+
+std::vector<PathSpline::Vertex> PathSpline::vertices() const {
+  std::vector<Vertex> vertices;
+  std::optional<size_t> openPathCommand;
+  size_t closePathIndex = size_t(-1);
+  bool justMoved = false;
+  bool wasInternalPoint = false;
+
+  // Create vertices at the start of each segment.
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    const Command& command = commands_[i];
+    const bool shouldSkip = wasInternalPoint;
+    wasInternalPoint = command.isInternalPoint;
+
+    if (shouldSkip) {
+      continue;
+    }
+
+    if (command.type == CommandType::MoveTo) {
+      if (openPathCommand) {
+        assert(i > 0);
+
+        // Place a vertex at the previous point. For open subpaths, the orientation is the
+        // direction of the line.
+        const Vector2d point = pointAt(i - 1, 1.0);
+        const Vector2d orientation = tangentAt(i - 1, 1.0).normalize();
+        vertices.push_back(Vertex{point, orientation});
+      }
+
+      openPathCommand = i;
+      closePathIndex = command.closePathIndex;
+      justMoved = true;
+
+    } else if (command.type == CommandType::ClosePath) {
+      // If this ClosePath draws a line back to the starting point, place a vertex at the
+      // starting point. Since this is a closed subpath, the orientation is halfway between the
+      // starting point and the end point.
+      assert(openPathCommand);
+      assert(i > 0);
+
+      const Vector2d startPoint = pointAt(i - 1, 1.0);
+      const Vector2d endPoint = pointAt(*openPathCommand, 0.0);
+
+      // If the line is very short, we don't want to place a vertex at the start point, as it
+      // will be very close to the end point.
+      if (!NearZero((startPoint - endPoint).lengthSquared())) {
+        const Vector2d prevTangent = tangentAt(i - 1, 1.0).normalize();
+        const Vector2d nextTangent = tangentAt(i, 0.0).normalize();
+
+        const Vector2d orientationStart = InterpolateTangents(prevTangent, nextTangent);
+        vertices.push_back(Vertex{startPoint, orientationStart});
+      }
+
+      // Place a vertex at the end point. For closed subpaths, the orientation is halfway between
+      // the start point and the end point.
+      {
+        const Vector2d prevTangent = tangentAt(i, 1.0).normalize();
+        const Vector2d nextTangent = tangentAt(*openPathCommand, 0.0).normalize();
+
+        const Vector2d orientationEnd = InterpolateTangents(prevTangent, nextTangent);
+        vertices.push_back(Vertex{endPoint, orientationEnd});
+      }
+
+      openPathCommand = std::nullopt;
+      justMoved = false;
+    } else {
+      // This is a LineTo or CurveTo, place a vertex at the start point.
+      assert(i > 0);
+
+      const Vector2d startPoint = pointAt(i, 0.0);
+      const Vector2d startOrientation = tangentAt(i, 0.0).normalize();
+
+      if (justMoved) {
+        // If this is the first point of a new subpath, we need to orient the anchor differently
+        // if the subpath is closed.
+        if (closePathIndex != size_t(-1)) {
+          // For closed subpaths, the orientation is halfway between the starting point and the
+          // end.
+          const Vector2d closeOrientation = tangentAt(closePathIndex, 1.0).normalize();
+          vertices.push_back(
+              Vertex{startPoint, InterpolateTangents(closeOrientation, startOrientation)});
+        } else {
+          // For open subpaths, the orientation is the direction of the line.
+          vertices.push_back(Vertex{startPoint, startOrientation});
+        }
+      } else {
+        // Otherwise place a vertex at the start with the orientation halfway between the start of
+        // this segment and end of the previous.
+        const Vector2d prevOrientation = tangentAt(i - 1, 1.0).normalize();
+
+        vertices.push_back(
+            Vertex{startPoint, InterpolateTangents(prevOrientation, startOrientation)});
+      }
+
+      justMoved = false;
+    }
+  }
+
+  // This is an open path, place the final vertex.
+  if (openPathCommand && commands_.size() > 1) {
+    const Vector2d point = pointAt(commands_.size() - 1, 1.0);
+    const Vector2d orientation = tangentAt(commands_.size() - 1, 1.0);
+    vertices.push_back(Vertex{point, orientation});
+  }
+
+  return vertices;
 }
 
 bool PathSpline::isInside(const Vector2d& point, FillRule fillRule) const {
@@ -947,8 +1102,11 @@ Vector2d PathSpline::endPoint(size_t index) const {
 void PathSpline::maybeAutoReopen() {
   if (mayAutoReopen_) {
     // If the path is already closed, we need to reopen it.
+    const size_t commandIndex = commands_.size();
     commands_.emplace_back(CommandType::MoveTo, moveToPointIndex_);
+
     mayAutoReopen_ = false;
+    currentSegmentStartCommandIndex_ = commandIndex;
   }
 }
 

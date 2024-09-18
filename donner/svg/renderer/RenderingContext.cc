@@ -79,6 +79,7 @@ public:
     std::optional<Boxd> clipRect;
     int layerDepth = 0;
     std::optional<ContextPaintServers> savedContextPaintServers;
+    const bool isShape = dataHandle.all_of<ComputedPathComponent>();
 
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable) {
@@ -159,30 +160,32 @@ public:
       }
     }
 
-    if (properties.markerStart.get()) {
-      if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
-                                        properties.markerStart.getRequired(),
-                                        ShadowBranchType::OffscreenMarkerStart);
-          resolved.valid()) {
-        instance.markerStart = resolved;
+    if (isShape) {
+      if (properties.markerStart.get()) {
+        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+                                          properties.markerStart.getRequired(),
+                                          ShadowBranchType::OffscreenMarkerStart);
+            resolved.valid()) {
+          instance.markerStart = resolved;
+        }
       }
-    }
 
-    if (properties.markerMid.get()) {
-      if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
-                                        properties.markerMid.getRequired(),
-                                        ShadowBranchType::OffscreenMarkerMid);
-          resolved.valid()) {
-        instance.markerMid = resolved;
+      if (properties.markerMid.get()) {
+        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+                                          properties.markerMid.getRequired(),
+                                          ShadowBranchType::OffscreenMarkerMid);
+            resolved.valid()) {
+          instance.markerMid = resolved;
+        }
       }
-    }
 
-    if (properties.markerEnd.get()) {
-      if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
-                                        properties.markerEnd.getRequired(),
-                                        ShadowBranchType::OffscreenMarkerEnd);
-          resolved.valid()) {
-        instance.markerEnd = resolved;
+      if (properties.markerEnd.get()) {
+        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+                                          properties.markerEnd.getRequired(),
+                                          ShadowBranchType::OffscreenMarkerEnd);
+            resolved.valid()) {
+          instance.markerEnd = resolved;
+        }
       }
     }
 
@@ -241,7 +244,7 @@ public:
     }
 
     if (layerDepth > 0) {
-      instance.subtreeInfo = SubtreeInfo{lastRenderedEntity_, layerDepth};
+      instance.subtreeInfo = SubtreeInfo{styleEntity, lastRenderedEntity_, layerDepth};
     }
 
     if (savedContextPaintServers) {
@@ -269,11 +272,12 @@ public:
       return std::nullopt;
     }
 
+    Entity firstEntity = computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value());
     Entity lastEntity = entt::null;
-    traverseTree(computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value()), &lastEntity);
+    traverseTree(firstEntity, &lastEntity);
 
     if (lastEntity != entt::null) {
-      return SubtreeInfo{lastEntity, 0};
+      return SubtreeInfo{firstEntity, lastEntity, 0};
     } else {
       // This could happen if the subtree has no nodes.
       return std::nullopt;

@@ -19,6 +19,10 @@ namespace donner::svg::components {
  * subtree, plus how many isolated layers need to be popped when the subtree is complete.
  */
 struct SubtreeInfo {
+  /// Indicates the first entity within the current subtree. The renderer will continue rendering
+  /// entities until it reaches this one, then it will pop \ref restorePopDepth isolated layers from
+  /// the render state.
+  Entity firstRenderedEntity;
   /// Indicates the last entity within the current subtree. The renderer will continue rendering
   /// entities until it reaches this one, then it will pop \ref restorePopDepth isolated layers from
   /// the render state.

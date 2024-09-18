@@ -46,6 +46,20 @@ namespace donner::css {
  */
 class Specificity {
 public:
+  /**
+   * Special values for specificity, which take precedence over the 3-tuple.
+   *
+   * The order of these values is important, since operator<=> considers later enum values to be
+   * greater.
+   */
+  enum class SpecialType {
+    UserAgent,       ///< User agent stylesheet, lowest precedence in CSS.
+    None,            ///< No special value.
+    StyleAttribute,  ///< Style attribute, second highest precedence in CSS.
+    Important,       ///< `!important` declaration, highest precedence in CSS.
+    Override         ///< Values set from C++ API, which overrides all other values.
+  };
+
   /// A 3-tuple of integers representing the specificity before modifiers such as the "!important"
   /// flag have been applied.
   struct ABC {
@@ -159,20 +173,20 @@ public:
   /// Gets the 3-tuple of integers.
   const ABC& abc() const { return abc_; }
 
-private:
-  /**
-   * Special values for specificity, which take precedence over the 3-tuple.
-   *
-   * The order of these values is important, since operator<=> considers later enum values to be
-   * greater.
-   */
-  enum class SpecialType {
-    None,            ///< No special value.
-    StyleAttribute,  ///< Style attribute, second highest precedence in CSS.
-    Important,       ///< `!important` declaration, highest precedence in CSS.
-    Override         ///< Values set from C++ API, which overrides all other values.
-  };
+  /// Gets the special value of the specificity, defaults to \ref SpecialType::None.
+  SpecialType specialValue() const { return special_; }
 
+  /// Converts this Specificity into a UserAgent-specific Specificity (lowering the priority).
+  Specificity toUserAgentSpecificity() const {
+    Specificity result = *this;
+    if (result.special_ == SpecialType::None) {
+      result.special_ = SpecialType::UserAgent;
+    }
+
+    return result;
+  }
+
+private:
   /// Internal constructor for special values.
   explicit constexpr Specificity(SpecialType special) : special_(special) {}
 

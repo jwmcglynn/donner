@@ -15,7 +15,7 @@ protected:
     marker_.setMarkerHeight(10);
     marker_.setRefX(5);
     marker_.setRefY(5);
-    marker_.setOrient("auto");
+    marker_.setOrient(MarkerOrient::Auto());
 
     document_.svgElement().appendChild(marker_);
   }
@@ -29,7 +29,7 @@ TEST_F(SVGMarkerElementTests, MarkerAttributes) {
   EXPECT_EQ(marker_.markerHeight(), 10);
   EXPECT_EQ(marker_.refX(), 5);
   EXPECT_EQ(marker_.refY(), 5);
-  // EXPECT_EQ(marker_.orient(), "auto");
+  EXPECT_EQ(marker_.orient(), MarkerOrient::Auto());
 }
 
 TEST_F(SVGMarkerElementTests, MarkerStartProperty) {

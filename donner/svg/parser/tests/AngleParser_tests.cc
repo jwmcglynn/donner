@@ -61,7 +61,18 @@ TEST(AngleParserTest, InvalidUnit) {
 TEST(AngleParserTest, BareZero) {
   css::ComponentValue component("0"_cv);
   EXPECT_THAT(ParseAngle(component, AngleParseOptions::AllowBareZero), ParseResultIs(0.0));
+  EXPECT_THAT(ParseAngle(component, AngleParseOptions::AllowNumbersInDegrees), ParseResultIs(0.0));
   EXPECT_THAT(ParseAngle(component, AngleParseOptions::None), ParseErrorIs("Invalid angle"));
+}
+
+TEST(AngleParserTest, BareNumber) {
+  css::ComponentValue component("30"_cv);
+  EXPECT_THAT(ParseAngle(component, AngleParseOptions::AllowNumbersInDegrees),
+              ParseResultIs(30.0 * MathConstants<double>::kDegToRad));
+
+  EXPECT_THAT(ParseAngle(component, AngleParseOptions::None), ParseErrorIs("Invalid angle"));
+  EXPECT_THAT(ParseAngle(component, AngleParseOptions::AllowBareZero),
+              ParseErrorIs("Invalid angle"));
 }
 
 }  // namespace donner::svg::parser

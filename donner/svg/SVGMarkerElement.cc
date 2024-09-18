@@ -8,8 +8,11 @@ namespace donner::svg {
 
 SVGMarkerElement SVGMarkerElement::Create(SVGDocument& document) {
   EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
-  handle.emplace<components::RenderingBehaviorComponent>(
-      components::RenderingBehavior::NoTraverseChildren);
+  handle.emplace<components::MarkerComponent>();
+  handle
+      .emplace<components::RenderingBehaviorComponent>(
+          components::RenderingBehavior::ShadowOnlyChildren)
+      .inheritsParentTransform = false;
   return SVGMarkerElement(handle);
 }
 
@@ -45,13 +48,20 @@ double SVGMarkerElement::refY() const {
   return handle_.get<components::MarkerComponent>().refY;
 }
 
-void SVGMarkerElement::setOrient(std::string_view value) {
-  // handle_.get_or_emplace<components::MarkerComponent>().orient = std::string(value);
+MarkerUnits SVGMarkerElement::markerUnits() const {
+  return handle_.get_or_emplace<components::MarkerComponent>().markerUnits;
 }
 
-std::string_view SVGMarkerElement::orient() const {
-  // return handle_.get<components::MarkerComponent>().orient;
-  return "";
+void SVGMarkerElement::setMarkerUnits(MarkerUnits value) {
+  handle_.get_or_emplace<components::MarkerComponent>().markerUnits = value;
+}
+
+void SVGMarkerElement::setOrient(MarkerOrient value) {
+  handle_.get_or_emplace<components::MarkerComponent>().orient = value;
+}
+
+MarkerOrient SVGMarkerElement::orient() const {
+  return handle_.get<components::MarkerComponent>().orient;
 }
 
 }  // namespace donner::svg

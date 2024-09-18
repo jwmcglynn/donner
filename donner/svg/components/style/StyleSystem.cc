@@ -148,8 +148,13 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
       if (css::SelectorMatchResult match =
               rule.selector.matches(ShadowedElementAdapter(registry, handle.entity(), dataEntity));
           match) {
+        css::Specificity specificity = match.specificity;
+        if (stylesheet.isUserAgentStylesheet) {
+          specificity = specificity.toUserAgentSpecificity();
+        }
+
         for (const auto& declaration : rule.declarations) {
-          if (auto error = properties.parseProperty(declaration, match.specificity)) {
+          if (auto error = properties.parseProperty(declaration, specificity)) {
             if (outWarnings) {
               outWarnings->push_back(std::move(error.value()));
             }
