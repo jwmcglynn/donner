@@ -20,6 +20,7 @@ cc_library(
         "SVGImageElement.cc",
         "SVGLineElement.cc",
         "SVGLinearGradientElement.cc",
+        "SVGMarkerElement.cc",
         "SVGMaskElement.cc",
         "SVGPathElement.cc",
         "SVGPatternElement.cc",
@@ -52,6 +53,7 @@ cc_library(
         "SVGImageElement.h",
         "SVGLineElement.h",
         "SVGLinearGradientElement.h",
+        "SVGMarkerElement.h",
         "SVGMaskElement.h",
         "SVGPathElement.h",
         "SVGPatternElement.h",
@@ -76,6 +78,7 @@ cc_library(
         "//donner/svg/components",
         "//donner/svg/core",
         "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
         "//donner/svg/resources:sandboxed_file_resource_loader",
     ],
 )

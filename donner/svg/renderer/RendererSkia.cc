@@ -13,6 +13,7 @@
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
 //
+#include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -26,6 +27,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
@@ -340,6 +342,20 @@ public:
     }
   }
 
+  void drawRange(Registry& registry, Entity startEntity, Entity endEntity) {
+    bool foundStartEntity = false;
+
+    while (!view_.done() && !foundStartEntity) {
+      if (view_.currentEntity() == startEntity) {
+        break;
+      } else {
+        view_.advance();
+      }
+    }
+
+    drawUntil(registry, endEntity);
+  }
+
   void drawPath(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
                 const components::ComputedPathComponent& path, const PropertyRegistry& style,
                 const Boxd& viewbox, const FontMetrics& fontMetrics) {
@@ -350,6 +366,8 @@ public:
     if (HasPaint(instance.resolvedStroke)) {
       drawPathStroke(dataHandle, path, instance.resolvedStroke, style, viewbox, fontMetrics);
     }
+
+    drawMarkers(dataHandle, instance, path, viewbox, fontMetrics);
   }
 
   std::optional<SkPaint> createFallbackPaint(const components::PaintResolvedReference& ref,
@@ -578,8 +596,7 @@ public:
 
     Registry& registry = *dataHandle.registry();
 
-    const Transformd savedLayerBaseTransform = layerBaseTransform_;
-    layerBaseTransform_ = instance.entityFromWorldTransform;
+    auto layerBaseRestore = overrideLayerBaseTransform(instance.entityFromWorldTransform);
 
     if (renderer_.verbose_) {
       std::cout << "Start mask contents\n";
@@ -650,8 +667,6 @@ public:
     if (renderer_.verbose_) {
       std::cout << "End mask contents\n";
     }
-
-    layerBaseTransform_ = savedLayerBaseTransform;
   }
 
   /**
@@ -974,7 +989,153 @@ public:
     }
   }
 
+  void drawMarkers(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                   const components::ComputedPathComponent& path, const Boxd& viewbox,
+                   const FontMetrics& fontMetrics) {
+    const auto& commands = path.spline.commands();
+
+    if (commands.size() < 2) {
+      return;
+    }
+
+    bool hasMarkerStart = instance.markerStart.has_value();
+    bool hasMarkerMid = instance.markerMid.has_value();
+    bool hasMarkerEnd = instance.markerEnd.has_value();
+
+    if (hasMarkerStart || hasMarkerMid || hasMarkerEnd) {
+      const RenderingInstanceView::SavedState viewSnapshot = view_.save();
+
+      const std::vector<PathSpline::Vertex> vertices = path.spline.vertices();
+
+      for (size_t i = 0; i < vertices.size(); ++i) {
+        const PathSpline::Vertex& vertex = vertices[i];
+
+        if (i == 0) {
+          if (hasMarkerStart) {
+            drawMarker(dataHandle, instance, instance.markerStart.value(), vertex.point,
+                       vertex.orientation, /*isMarkerStart*/ true, viewbox, fontMetrics);
+          }
+        } else if (i == vertices.size() - 1) {
+          if (hasMarkerEnd) {
+            drawMarker(dataHandle, instance, instance.markerEnd.value(), vertex.point,
+                       vertex.orientation, /*isMarkerStart*/ false, viewbox, fontMetrics);
+          }
+        } else if (hasMarkerMid) {
+          drawMarker(dataHandle, instance, instance.markerMid.value(), vertex.point,
+                     vertex.orientation, /*isMarkerStart*/ false, viewbox, fontMetrics);
+        }
+
+        view_.restore(viewSnapshot);
+      }
+
+      // Skipping the rendered marker definitions to avoid duplication
+      if (hasMarkerEnd) {
+        skipUntil(*dataHandle.registry(),
+                  instance.markerEnd.value().subtreeInfo->lastRenderedEntity);
+      } else if (hasMarkerMid) {
+        skipUntil(*dataHandle.registry(),
+                  instance.markerMid.value().subtreeInfo->lastRenderedEntity);
+      } else if (hasMarkerStart) {
+        skipUntil(*dataHandle.registry(),
+                  instance.markerStart.value().subtreeInfo->lastRenderedEntity);
+      }
+    }
+  }
+
+  void drawMarker(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                  const components::ResolvedMarker& marker, const Vector2d& vertexPosition,
+                  const Vector2d& direction, bool isMarkerStart, const Boxd& viewbox,
+                  const FontMetrics& fontMetrics) {
+    Registry& registry = *dataHandle.registry();
+
+    const EntityHandle markerHandle = marker.reference.handle;
+
+    if (!markerHandle.valid()) {
+      return;
+    }
+
+    // Get the marker component
+    const auto& markerComponent = markerHandle.get<components::MarkerComponent>();
+
+    if (markerComponent.markerWidth <= 0.0 || markerComponent.markerHeight <= 0.0) {
+      return;
+    }
+
+    // Get the marker's viewBox and preserveAspectRatio
+    const Boxd markerViewBox = markerComponent.viewBox.value_or(
+        Boxd::FromXYWH(0, 0, markerComponent.markerWidth, markerComponent.markerHeight));
+    const PreserveAspectRatio preserveAspectRatio = markerComponent.preserveAspectRatio;
+
+    // Compute the rotation angle according to the orient attribute
+    const double angleRadians =
+        markerComponent.orient.computeAngleRadians(direction, isMarkerStart);
+
+    // Compute scale according to markerUnits
+    double markerScale = 1.0;
+    if (markerComponent.markerUnits == MarkerUnits::StrokeWidth) {
+      // Scale by stroke width
+      const components::ComputedStyleComponent& styleComponent =
+          instance.styleHandle(registry).get<components::ComputedStyleComponent>();
+      const double strokeWidth = styleComponent.properties->strokeWidth.getRequired().value;
+      markerScale = strokeWidth;
+    }
+
+    const Transformd markerUserSpaceFromVertex =
+        Transformd::Translate(-markerComponent.refX, -markerComponent.refY) *
+        preserveAspectRatio.computeTransform(
+            Boxd::FromXYWH(0, 0, markerComponent.markerWidth, markerComponent.markerHeight),
+            markerViewBox);
+
+    const Transformd vertexFromEntity = Transformd::Scale(markerScale) *
+                                        Transformd::Rotate(angleRadians) *
+                                        Transformd::Translate(vertexPosition);
+
+    const Transformd markerUserSpaceFromEntity = markerUserSpaceFromVertex * vertexFromEntity;
+
+    const Transformd markerUserSpaceFromWorld =
+        markerUserSpaceFromEntity * layerBaseTransform_ * instance.entityFromWorldTransform;
+
+    // Now, render the marker's content with the computed transform
+    auto layerBaseRestore = overrideLayerBaseTransform(markerUserSpaceFromWorld);
+
+    renderer_.currentCanvas_->save();
+    renderer_.currentCanvas_->resetMatrix();
+
+    const auto& computedStyle = markerHandle.get<components::ComputedStyleComponent>();
+    const Overflow overflow = computedStyle.properties->overflow.getRequired();
+    if (overflow != Overflow::Visible && overflow != Overflow::Auto) {
+      renderer_.currentCanvas_->clipRect(
+          toSkia(markerUserSpaceFromWorld.transformBox(markerViewBox)));
+    }
+
+    // Render the marker's content
+    if (marker.subtreeInfo) {
+      // Draw the marker's subtree
+      drawRange(registry, marker.subtreeInfo->firstRenderedEntity,
+                marker.subtreeInfo->lastRenderedEntity);
+    }
+
+    renderer_.currentCanvas_->restore();
+  }
+
 private:
+  struct LayerBaseRestore {
+    LayerBaseRestore(RendererSkia::Impl& impl, const Transformd& savedTransform)
+        : impl_(impl), savedTransform_(savedTransform) {}
+
+    ~LayerBaseRestore() { impl_.layerBaseTransform_ = savedTransform_; }
+
+  private:
+    RendererSkia::Impl& impl_;
+    Transformd savedTransform_;
+  };
+
+  LayerBaseRestore overrideLayerBaseTransform(const Transformd& newLayerBaseTransform) {
+    const Transformd savedTransform = layerBaseTransform_;
+    layerBaseTransform_ = newLayerBaseTransform;
+    return LayerBaseRestore(*this, savedTransform);
+  }
+
   RendererSkia& renderer_;
   RenderingInstanceView view_;
 

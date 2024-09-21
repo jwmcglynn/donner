@@ -290,6 +290,32 @@ public:
     return std::vector<std::string_view>{splitRange.begin(), splitRange.end()};
   }
 
+  /**
+   * Trims leading and trailing whitespace from a string, returning a view of the trimmed string.
+   *
+   * ```
+   * std::string_view result = StringUtils::TrimWhitespace("  hello  ");
+   * // result is "hello"
+   * ```
+   *
+   * @param str The string to trim.
+   * @tparam T The type of the string, must be \ref StringLike (have `size()` and `data()` methods).
+   * @return A view of the trimmed string.
+   */
+  template <StringLike T>
+  static std::string_view TrimWhitespace(const T& str) {
+    constexpr const char* kWhitespaceChars = " \t\n\r\f\v";
+
+    const std::string_view strView(str.data(), str.size());
+    const size_t start = strView.find_first_not_of(kWhitespaceChars);
+    if (start == std::string_view::npos) {
+      return {};  // String is all whitespace.
+    }
+
+    const size_t end = strView.find_last_not_of(kWhitespaceChars);
+    return strView.substr(start, end - start + 1);
+  }
+
 private:
   /**
    * Compares two character arrays, using a StringComparison type to determine if the comparison is

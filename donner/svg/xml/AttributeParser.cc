@@ -8,12 +8,15 @@
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/parser/ParseError.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/css/parser/ValueParser.h"
 #include "donner/svg/AllSVGElements.h"  // IWYU pragma: keep
 #include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/SVGImageElement.h"
+#include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/core/MaskUnits.h"
+#include "donner/svg/parser/AngleParser.h"
 #include "donner/svg/parser/Number2dParser.h"
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "donner/svg/parser/PreserveAspectRatioParser.h"
@@ -136,6 +139,39 @@ bool ParseXYWidthHeight(XMLParserContext& context, T element, const XMLQualified
   }
 
   return true;
+}
+
+std::optional<double> ParseAngleAttribute(XMLParserContext& context, std::string_view value) {
+  // Use the ValueParser to parse the string into ComponentValues
+  auto componentValues = css::parser::ValueParser::Parse(value);
+
+  if (componentValues.empty()) {
+    ParseError err;
+    err.reason = "Invalid angle value '" + std::string(value) + "'";
+    context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  // Use the first ComponentValue to parse the angle
+  const css::ComponentValue& componentValue = componentValues.front();
+
+  // Use ParseAngle with AllowBareZero to accept bare numbers as degrees
+  auto parseResult =
+      svg::parser::ParseAngle(componentValue, AngleParseOptions::AllowNumbersInDegrees);
+
+  if (parseResult.hasError()) {
+    context.addSubparserWarning(std::move(parseResult.error()), context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  // Check if there are extra tokens after the angle
+  if (componentValues.size() > 1) {
+    ParseError err;
+    err.reason = "Unexpected data after angle value in '" + std::string(value) + "'";
+    context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+  }
+
+  return parseResult.result();
 }
 
 void ParsePresentationAttribute(XMLParserContext& context, SVGElement& element,
@@ -650,6 +686,74 @@ std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& contex
     return std::nullopt;
   } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     element.setHref(RcString(value));
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+// Update the ParseAttribute function for SVGMarkerElement
+template <>
+std::optional<ParseError> ParseAttribute<SVGMarkerElement>(XMLParserContext& context,
+                                                           SVGMarkerElement element,
+                                                           const XMLQualifiedNameRef& name,
+                                                           std::string_view value) {
+  if (name == XMLQualifiedNameRef("markerWidth")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setMarkerWidth(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid markerWidth value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("markerHeight")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setMarkerHeight(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid markerHeight value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("refX")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setRefX(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid refX value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("refY")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setRefY(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid refY value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("orient")) {
+    if (value == "auto") {
+      element.setOrient(MarkerOrient::Auto());
+    } else if (value == "auto-start-reverse") {
+      element.setOrient(MarkerOrient::AutoStartReverse());
+    } else {
+      auto maybeAngleRadians = ParseAngleAttribute(context, value);
+      if (maybeAngleRadians) {
+        element.setOrient(MarkerOrient::Angle(maybeAngleRadians.value()));
+      } else {
+        // Error already reported in ParseAngleAttribute
+      }
+    }
+  } else if (name == XMLQualifiedNameRef("markerUnits")) {
+    if (value == "strokeWidth") {
+      element.setMarkerUnits(MarkerUnits::StrokeWidth);
+    } else if (value == "userSpaceOnUse") {
+      element.setMarkerUnits(MarkerUnits::UserSpaceOnUse);
+    } else {
+      ParseError err;
+      err.reason = "Invalid markerUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

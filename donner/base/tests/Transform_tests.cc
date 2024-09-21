@@ -15,11 +15,101 @@ TEST(Transform, Construct) {
   EXPECT_TRUE(transform_double.isIdentity());
 }
 
+TEST(Transform, Rotate) {
+  {
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi);
+    EXPECT_THAT(t, TransformIs(0, 1, -1, 0, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Rotate(-MathConstants<double>::kHalfPi);
+    EXPECT_THAT(t, TransformIs(0, -1, 1, 0, 0, 0));
+  }
+}
+
+TEST(Transform, Scale) {
+  {
+    Transformd t = Transformd::Scale(2);
+    EXPECT_THAT(t, TransformIs(2, 0, 0, 2, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Scale(0.5);
+    EXPECT_THAT(t, TransformIs(0.5, 0, 0, 0.5, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Scale({-1, 1});
+    EXPECT_THAT(t, TransformIs(-1, 0, 0, 1, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Scale(1, -1);
+    EXPECT_THAT(t, TransformIs(1, 0, 0, -1, 0, 0));
+  }
+}
+
+TEST(Transform, Translate) {
+  {
+    Transformd t = Transformd::Translate({50, -100});
+    EXPECT_THAT(t, TransformIs(1, 0, 0, 1, 50, -100));
+  }
+
+  {
+    Transformd t = Transformd::Translate(-50, 100);
+    EXPECT_THAT(t, TransformIs(1, 0, 0, 1, -50, 100));
+  }
+}
+
+TEST(Transform, SkewX) {
+  {
+    Transformd t = Transformd::SkewX(MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, 0, 1, 1, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::SkewX(-MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, 0, -1, 1, 0, 0));
+  }
+}
+
+TEST(Transform, SkewY) {
+  {
+    Transformd t = Transformd::SkewY(MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, 1, 0, 1, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::SkewY(-MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, -1, 0, 1, 0, 0));
+  }
+}
+
+TEST(Transform, IsIdentity) {
+  Transformd defaultConstruct;
+  EXPECT_TRUE(defaultConstruct.isIdentity());
+
+  Transformd noTranslation = Transformd::Translate(0, 0);
+  EXPECT_TRUE(noTranslation.isIdentity());
+}
+
+TEST(Transform, Determinant) {
+  {
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_EQ(t.determinant(), 1);
+  }
+
+  {
+    Transformd t = Transformd::Scale({2, 2});
+    EXPECT_EQ(t.determinant(), 4);
+  }
+}
+
 TEST(Transform, Inverse) {
   {
-    Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t.inverse(),
-                TransformEq(Transformd::Rotation(MathConstants<double>::kHalfPi * -0.5)));
+                TransformEq(Transformd::Rotate(MathConstants<double>::kHalfPi * -0.5)));
   }
 
   {
@@ -43,13 +133,13 @@ TEST(Transform, Inverse) {
   }
 
   {
-    Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5) *
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5) *
                    Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
 
     // The inverse should apply the inverse transformations in reverse order
     EXPECT_THAT(t.inverse(),
                 TransformEq(Transformd::Translate({50, -100}) * Transformd::Scale({0.5, 0.5}) *
-                            Transformd::Rotation(MathConstants<double>::kHalfPi * -0.5)));
+                            Transformd::Rotate(MathConstants<double>::kHalfPi * -0.5)));
   }
 }
 
@@ -59,7 +149,7 @@ TEST(Transform, MultiplicationOrder) {
   const double sin45 = std::sin(angle);                       // sin(45 degrees)
   const double scaleFactor = 2.0;
 
-  const Transformd t = Transformd::Rotation(angle) * Transformd::Scale({scaleFactor, scaleFactor}) *
+  const Transformd t = Transformd::Rotate(angle) * Transformd::Scale({scaleFactor, scaleFactor}) *
                        Transformd::Translate({-50, 100});
 
   EXPECT_THAT(t, TransformIs(cos45 * scaleFactor,   // a
@@ -73,7 +163,7 @@ TEST(Transform, MultiplicationOrder) {
 
 TEST(Transform, TransformVectorOrPosition) {
   {
-    Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t.transformVector({100, 100}), Vector2Near(0, 100 * sqrt(2)));
     EXPECT_THAT(t.transformVector({-100, 0}), Vector2Near(-100 / sqrt(2), -100 / sqrt(2)));
 
@@ -122,8 +212,8 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi) *
-                   Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi) * Transformd::Scale({2, 2}) *
+                   Transformd::Translate({-50, 100});
 
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(-100, 100));
@@ -137,7 +227,7 @@ TEST(Transform, TransformVectorOrPosition) {
 
 TEST(Transform, TransformBox) {
   {
-    Transformd t = Transformd::Rotation(MathConstants<double>::kHalfPi * 0.5);
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t.transformBox(Boxd({-100, -100}, {100, 100})),
                 BoxEq(Vector2Near(-100 * sqrt(2), -100 * sqrt(2)),
                       Vector2Near(100 * sqrt(2), 100 * sqrt(2))));

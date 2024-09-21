@@ -37,6 +37,22 @@ TEST(Specificity, SpecialTypes) {
   EXPECT_GT(Specificity::Important(), Specificity::StyleAttribute());
 }
 
+TEST(Specificity, SpecialValue) {
+  EXPECT_EQ(Specificity::FromABC(0, 0, 0).specialValue(), Specificity::SpecialType::None);
+  EXPECT_EQ(Specificity::Important().specialValue(), Specificity::SpecialType::Important);
+  EXPECT_EQ(Specificity::StyleAttribute().specialValue(), Specificity::SpecialType::StyleAttribute);
+  EXPECT_EQ(Specificity::Override().specialValue(), Specificity::SpecialType::Override);
+  EXPECT_EQ(Specificity::FromABC(0, 0, 0).toUserAgentSpecificity().specialValue(),
+            Specificity::SpecialType::UserAgent);
+}
+
+TEST(Specificity, ToUserAgentSpecificity) {
+  EXPECT_LT(Specificity::FromABC(0, 0, 0).toUserAgentSpecificity(), Specificity::FromABC(0, 0, 0));
+  EXPECT_EQ(Specificity::Important().toUserAgentSpecificity(), Specificity::Important());
+  EXPECT_EQ(Specificity::StyleAttribute().toUserAgentSpecificity(), Specificity::StyleAttribute());
+  EXPECT_EQ(Specificity::Override().toUserAgentSpecificity(), Specificity::Override());
+}
+
 TEST(Specificity, Selectors) {
   EXPECT_EQ(computeSpecificity("test"), Specificity::FromABC(0, 0, 1));
   EXPECT_EQ(computeSpecificity("#id"), Specificity::FromABC(1, 0, 0));

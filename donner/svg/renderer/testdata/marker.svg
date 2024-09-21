@@ -1,0 +1,131 @@
+<svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- A marker to be used as an arrowhead -->
+    <marker
+      id="arrow"
+      viewBox="0 0 10 10"
+      refX="5"
+      refY="5"
+      markerWidth="6"
+      markerHeight="6"
+      orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    
+    <!-- Dot marker definition -->
+    <marker
+      id="dot"
+      viewBox="0 0 10 10"
+      refX="5"
+      refY="5"
+      markerWidth="5"
+      markerHeight="5">
+      <circle cx="5" cy="5" r="5" fill="red" />
+    </marker>
+  </defs>
+
+  
+  <!-- Coordinate axes with an arrowhead in both directions -->
+  <polyline
+    points="10,10 10,90 90,90"
+    fill="none"
+    stroke="black"
+    marker-start="url(#arrow)"
+    marker-end="url(#arrow)" />
+
+  <!-- Data line with polymarkers -->
+  <polyline
+    points="15,80 29,50 43,60 57,30 71,40 85,15"
+    fill="none"
+    stroke="grey"
+    marker-start="url(#dot)"
+    marker-mid="url(#dot)"
+    marker-end="url(#dot)" />
+  
+  <!-- A line with a marker -->
+  <line
+    x1="110"
+    y1="30"
+    x2="140"
+    y2="60"
+    stroke="black"
+    marker-end="url(#arrow)" />
+
+  <!-- A curved path with markers -->
+  <path
+    d="M 110 10
+       C 120 20, 130 20, 140 10
+       C 150 0, 160 0, 170 10
+       C 180 20, 190 20, 200 10"
+    stroke="black"
+    fill="none"
+    marker-start="url(#arrow)"
+    marker-mid="url(#arrow)"
+    marker-end="url(#arrow)" />
+
+  <!-- A polygon with markers -->
+  <polygon
+    points="155,80 179,50 193,60 217,30 231,40 235,75"
+    fill="none"
+    stroke="grey"
+    marker-start="url(#arrow)"
+    marker-mid="url(#arrow)"
+    marker-end="url(#dot)" />
+  
+  <!-- An ellipse with markers -->
+  <ellipse
+    cx="30"
+    cy="150"
+    rx="20"
+    ry="40"
+    stroke="black"
+    fill="none"
+    marker-start="url(#arrow)"
+    marker-mid="url(#arrow)"
+    marker-end="url(#arrow)" />
+
+  <!-- A circle with markers -->
+  <circle
+    cx="80"
+    cy="150"
+    r="20"
+    stroke="black"
+    fill="none"
+    marker-start="url(#arrow)"
+    marker-mid="url(#arrow)"
+    marker-end="url(#arrow)" />
+
+  
+  <!-- A rect with markers -->
+  <rect
+    x="120"
+    y="110"
+    width="25"
+    height="50"
+    stroke="black"
+    fill="none"
+    marker-start="url(#arrow)"
+    marker-mid="url(#arrow)"
+    marker-end="url(#arrow)" />
+  
+  <!-- A rect with rounded corners -->
+  <rect
+    x="150"
+    y="110"
+    width="25"
+    height="50"
+    rx="5"
+    stroke="black"
+    fill="none"
+    marker-start="url(#arrow)"
+    marker-mid="url(#arrow)"
+    marker-end="url(#arrow)" />
+
+    <!-- A path with arcs -->
+    <path transform="translate(210 130)" d="M -25,0 A 25,25 0 0 0 25,0 A 25,25 0 0 0 -25,0 z"
+      fill="none"
+      stroke="gray"
+      marker-mid="url(#dot)"
+      marker-start="url(#arrow)"
+      marker-end="url(#arrow)" />
+</svg>

@@ -2,6 +2,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
 
@@ -13,6 +14,32 @@ SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
   handle.emplace<components::ViewboxComponent>();
   handle.emplace<components::PreserveAspectRatioComponent>();
   handle.emplace<components::SizedElementComponent>();
+
+  auto& stylesheetComponent = handle.emplace<components::StylesheetComponent>();
+  stylesheetComponent.isUserAgentStylesheet = true;
+
+  // From https://www.w3.org/TR/SVG2/styling.html#UAStyleSheet
+  stylesheetComponent.parseStylesheet(R"(
+    @namespace url(http://www.w3.org/2000/svg);
+    @namespace xml url(http://www.w3.org/XML/1998/namespace);
+
+    svg:not(:root), image, marker, pattern, symbol { overflow: hidden; }
+
+    *:not(svg),
+    *:not(foreignObject) > svg {
+      transform-origin: 0 0;
+    }
+
+    *[xml|space=preserve] {
+      text-space-collapse: preserve-spaces;
+    }
+
+    :host(use) > symbol {
+      display: inline !important;
+    }
+    :link, :visited {
+      cursor: pointer;
+    })");
   return SVGSVGElement(handle);
 }
 

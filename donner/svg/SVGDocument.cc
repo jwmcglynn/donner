@@ -1,14 +1,12 @@
 #include "donner/svg/SVGDocument.h"
 
-#include <filesystem>
-
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/components/RenderingContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 

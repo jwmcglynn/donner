@@ -20,6 +20,17 @@ cc_library(
     ],
 )
 
+
+cc_library(
+    name = "rendering_context",
+    srcs = ["RenderingContext.cc"],
+    hdrs = ["RenderingContext.h"],
+    deps = [
+        "//donner/svg/components",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+)
+
 cc_library(
     name = "renderer_skia",
     srcs = ["RendererSkia.cc"],

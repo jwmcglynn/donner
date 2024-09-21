@@ -53,6 +53,13 @@ struct PropertyParseFnParams {
       const css::Declaration& declaration, css::Specificity specificity,
       PropertyParseBehavior parseBehavior = PropertyParseBehavior::Default);
 
+  /**
+   * Create a new \ref PropertyParseFnParams from a declaration and specificity.
+   *
+   * @param value Presentation attribute value, e.g. "translate(10px, 20px)".
+   */
+  static PropertyParseFnParams CreateForAttribute(std::string_view value);
+
   /// Property value, which may either be a string or list of \ref css::ComponentValue.
   std::variant<std::string_view, std::span<const css::ComponentValue>> valueOrComponents;
 
@@ -89,7 +96,7 @@ private:
 template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
 std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
                                 Property<T, kCascade>* destination) {
-  if (params.specificity < destination->specificity) {
+  if (destination->hasValue() && params.specificity < destination->specificity) {
     // Existing specificity is higher than the new one, so we don't need to parse.
     return std::nullopt;
   }

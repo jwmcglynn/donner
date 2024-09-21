@@ -63,6 +63,7 @@ cc_test(
         "resvg_test_suite.cc",
     ],
     data = [
+        "//donner/svg/renderer/testdata",
         "@resvg-test-suite//:images",
         "@resvg-test-suite//:png",
         "@resvg-test-suite//:svg",

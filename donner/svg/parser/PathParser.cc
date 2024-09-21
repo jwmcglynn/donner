@@ -33,7 +33,7 @@ public:
     skipWhitespace();
     if (remaining_.empty()) {
       // Empty string, return empty path.
-      return spline_.build();
+      return std::move(spline_);
     }
 
     // Read first command separately, since it must be a MoveTo command.
@@ -42,7 +42,7 @@ public:
 
       ParseResult<TokenCommand> maybeCommand = readCommand();
       if (maybeCommand.hasError()) {
-        return ParseResult(spline_.build(), std::move(maybeCommand.error()));
+        return ParseResult(std::move(spline_), std::move(maybeCommand.error()));
       }
 
       const TokenCommand command = maybeCommand.result();
@@ -50,11 +50,11 @@ public:
         ParseError err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
         err.location = sourceOffset;
-        return ParseResult(spline_.build(), std::move(err));
+        return ParseResult(std::move(spline_), std::move(err));
       }
 
       if (auto error = processUntilNextCommand(command)) {
-        return ParseResult(spline_.build(), std::move(error.value()));
+        return ParseResult(std::move(spline_), std::move(error.value()));
       }
       skipWhitespace();
     }
@@ -68,11 +68,11 @@ public:
       const TokenCommand command = maybeCommand.result();
       std::optional<ParseError> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
-        return ParseResult(spline_.build(), std::move(maybeError.value()));
+        return ParseResult(std::move(spline_), std::move(maybeError.value()));
       }
     }
 
-    return spline_.build();
+    return std::move(spline_);
   }
 
 private:
@@ -283,7 +283,7 @@ private:
   Vector2d makeAbsolute(TokenCommand command, std::span<double, 2> coords) {
     Vector2d point = Vector2d(coords[0], coords[1]);
     if (command.relative) {
-      point += current_point_;
+      point += currentPoint_;
     }
 
     return point;
@@ -299,13 +299,13 @@ private:
 
       Vector2d point = makeAbsolute(command, coords);
       spline_.moveTo(point);
-      initial_point_ = point;
-      current_point_ = point;
+      initialPoint_ = point;
+      currentPoint_ = point;
     } else if (command.token == Token::ClosePath) {
       // 9.3.4: "closepath": https://www.w3.org/TR/SVG/paths.html#PathDataClosePathCommand
 
       spline_.closePath();
-      current_point_ = initial_point_;
+      currentPoint_ = initialPoint_;
 
     } else if (command.token == Token::LineTo) {
       // 9.3.5 "lineto": https://www.w3.org/TR/SVG/paths.html#PathDataLinetoCommands
@@ -316,7 +316,7 @@ private:
 
       const Vector2d point = makeAbsolute(command, coords);
       spline_.lineTo(point);
-      current_point_ = point;
+      currentPoint_ = point;
 
     } else if (command.token == Token::HorizontalLineTo) {
       // 9.3.5 "lineto": https://www.w3.org/TR/SVG/paths.html#PathDataLinetoCommands
@@ -325,10 +325,10 @@ private:
         return std::move(maybeX.error());
       }
 
-      const Vector2d point(maybeX.result() + (command.relative ? current_point_.x : 0.0),
-                           current_point_.y);
+      const Vector2d point(maybeX.result() + (command.relative ? currentPoint_.x : 0.0),
+                           currentPoint_.y);
       spline_.lineTo(point);
-      current_point_ = point;
+      currentPoint_ = point;
 
     } else if (command.token == Token::VerticalLineTo) {
       // 9.3.5 "lineto": https://www.w3.org/TR/SVG/paths.html#PathDataLinetoCommands
@@ -337,10 +337,10 @@ private:
         return std::move(maybeY.error());
       }
 
-      const Vector2d point(current_point_.x,
-                           maybeY.result() + (command.relative ? current_point_.y : 0.0));
+      const Vector2d point(currentPoint_.x,
+                           maybeY.result() + (command.relative ? currentPoint_.y : 0.0));
       spline_.lineTo(point);
-      current_point_ = point;
+      currentPoint_ = point;
 
     } else if (command.token == Token::CurveTo) {
       // 9.3.6: https://www.w3.org/TR/SVG/paths.html#PathDataCubicBezierCommands
@@ -357,8 +357,8 @@ private:
 
       spline_.curveTo(point1, point2, end);
 
-      prev_control_point_ = point2;
-      current_point_ = end;
+      prevControlPoint_ = point2;
+      currentPoint_ = end;
 
     } else if (command.token == Token::SmoothCurveTo) {
       // 9.3.6: https://www.w3.org/TR/SVG/paths.html#PathDataCubicBezierCommands
@@ -369,14 +369,14 @@ private:
 
       const std::span<double, 4> coordsSpan(coords);
 
-      const Vector2 point1 = lastCommandWasCurveTo() ? reflectedControlPoint() : current_point_;
+      const Vector2 point1 = lastCommandWasCurveTo() ? reflectedControlPoint() : currentPoint_;
       const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
       spline_.curveTo(point1, point2, end);
 
-      prev_control_point_ = point2;
-      current_point_ = end;
+      prevControlPoint_ = point2;
+      currentPoint_ = end;
     } else if (command.token == Token::QuadCurveTo) {
       // 9.3.7: https://www.w3.org/TR/SVG/paths.html#PathDataQuadraticBezierCommands
       double coords[4];
@@ -391,8 +391,8 @@ private:
 
       quadCurveTo(point1, end);
 
-      prev_control_point_ = point1;
-      current_point_ = end;
+      prevControlPoint_ = point1;
+      currentPoint_ = end;
 
     } else if (command.token == Token::SmoothQuadCurveTo) {
       // 9.3.7: https://www.w3.org/TR/SVG/paths.html#PathDataQuadraticBezierCommands
@@ -401,13 +401,13 @@ private:
         return error;
       }
 
-      const Vector2 point1 = lastCommandWasQuadCurveTo() ? reflectedControlPoint() : current_point_;
+      const Vector2 point1 = lastCommandWasQuadCurveTo() ? reflectedControlPoint() : currentPoint_;
       const Vector2d end = makeAbsolute(command, coords);
 
       quadCurveTo(point1, end);
 
-      prev_control_point_ = point1;
-      current_point_ = end;
+      prevControlPoint_ = point1;
+      currentPoint_ = end;
     } else if (command.token == Token::EllipticalArc) {
       // 9.3.8: https://www.w3.org/TR/SVG/paths.html#PathDataEllipticalArcCommands
       double radiusAndRotation[3];
@@ -439,7 +439,7 @@ private:
       const Vector2d end = makeAbsolute(command, endCoords);
 
       spline_.arcTo(radius, rotationRadians, largeArcFlag, sweepFlag, end);
-      current_point_ = end;
+      currentPoint_ = end;
 
     } else {
       ParseError err;
@@ -448,7 +448,7 @@ private:
       return err;
     }
 
-    last_token_ = command.token;
+    lastToken_ = command.token;
     return std::nullopt;
   }
 
@@ -457,7 +457,7 @@ private:
     // See https://stackoverflow.com/questions/3162645/convert-a-quadratic-bezier-to-a-cubic-one
 
     // Generate a quadratic bezier with the control point.
-    const Vector2d cubicPoint1 = (current_point_ + point1 * 2.0) * (1.0 / 3.0);
+    const Vector2d cubicPoint1 = (currentPoint_ + point1 * 2.0) * (1.0 / 3.0);
     const Vector2d cubicPoint2 = (end + point1 * 2.0) * (1.0 / 3.0);
 
     spline_.curveTo(cubicPoint1, cubicPoint2, end);
@@ -465,27 +465,27 @@ private:
 
   Vector2d reflectedControlPoint() const {
     // Per 9.5.2: https://www.w3.org/TR/SVG/paths.html#ReflectedControlPoints
-    return 2.0 * current_point_ - prev_control_point_;
+    return 2.0 * currentPoint_ - prevControlPoint_;
   }
 
   bool lastCommandWasCurveTo() const {
-    return last_token_ == Token::CurveTo || last_token_ == Token::SmoothCurveTo;
+    return lastToken_ == Token::CurveTo || lastToken_ == Token::SmoothCurveTo;
   }
 
   bool lastCommandWasQuadCurveTo() const {
-    return last_token_ == Token::QuadCurveTo || last_token_ == Token::SmoothQuadCurveTo;
+    return lastToken_ == Token::QuadCurveTo || lastToken_ == Token::SmoothQuadCurveTo;
   }
 
-  PathSpline::Builder spline_;
+  PathSpline spline_;
 
   std::string_view d_;
   std::string_view remaining_;
 
-  Token last_token_ = Token::InvalidCommand;
+  Token lastToken_ = Token::InvalidCommand;
 
-  Vector2d initial_point_;       //!< Initial point, used for ClosePath operations.
-  Vector2d current_point_;       //!< Current point.
-  Vector2d prev_control_point_;  //!< Previous curve's control point, for use with smooth curves.
+  Vector2d initialPoint_;      //!< Initial point, used for ClosePath operations.
+  Vector2d currentPoint_;      //!< Current point.
+  Vector2d prevControlPoint_;  //!< Previous curve's control point, for use with smooth curves.
 };
 
 }  // namespace

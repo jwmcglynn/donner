@@ -56,14 +56,24 @@ public:
     return entt::to_entity(storage_, *current_);
   }
 
+  struct SavedState {
+    Iterator current;
+  };
+
+  /// Saves the current state.
+  SavedState save() const { return {current_}; }
+
+  /// Restores the state.
+  void restore(const SavedState& state) { current_ = state.current; }
+
   /// Returns the current component.
   const components::RenderingInstanceComponent& get() const { return *current_; }
 
 private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  StorageType& storage_; //!< The storage containing the components.
-  Iterator current_;  //!< The current iterator.
-  Iterator end_;      //!< The end iterator.
+  StorageType& storage_;  //!< The storage containing the components.
+  Iterator current_;      //!< The current iterator.
+  Iterator end_;          //!< The end iterator.
 };
 
 }  // namespace donner::svg

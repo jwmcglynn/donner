@@ -23,6 +23,7 @@ struct ImageComparisonParams {
   int maxMismatchedPixels = kDefaultMismatchedPixels;
   bool skip = false;
   bool saveDebugSkpOnFailure = true;
+  std::string_view overrideGoldenFilename;
 
   static ImageComparisonParams Skip() {
     ImageComparisonParams result;
@@ -35,6 +36,12 @@ struct ImageComparisonParams {
     ImageComparisonParams result;
     result.threshold = threshold;
     result.maxMismatchedPixels = maxMismatchedPixels;
+    return result;
+  }
+
+  static ImageComparisonParams WithGoldenOverride(std::string_view filename) {
+    ImageComparisonParams result;
+    result.overrideGoldenFilename = filename;
     return result;
   }
 

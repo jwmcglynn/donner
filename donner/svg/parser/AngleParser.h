@@ -10,8 +10,9 @@ namespace donner::svg::parser {
  * Options for \ref donner::svg::parser::ParseAngle, which controls whether bare zero is allowed.
  */
 enum class AngleParseOptions {
-  None,          ///< Angles require a dimension suffix, such as '30deg' or '2rad'.
-  AllowBareZero  ///< Allow '0' to be parsed as an angle.
+  None,                   ///< Angles require a dimension suffix, such as '30deg' or '2rad'.
+  AllowBareZero,          ///< Allow '0' to be parsed as an angle.
+  AllowNumbersInDegrees,  ///< Allow raw numbers to be parsed as an angle in degrees.
 };
 
 /**

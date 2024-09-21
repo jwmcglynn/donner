@@ -25,8 +25,8 @@ public:
   /**
    * Type of command to connect the points.
    *
-   * Note that these do not map 1:1 to the SVG path commands, since SVG path commands can be
-   * simplified into these basic commands.
+   * Note that these may not map 1:1 to the SVG path commands, as the commands are decomposed into
+   * simpler curves.
    */
   enum class CommandType {
     /**
@@ -38,7 +38,15 @@ public:
     MoveTo,
 
     /**
-     * Draw a cubic bézier curve from the current point to a new point.
+     * Draw a line from the current point to a new point.
+     *
+     * Consumes 1 point:
+     * - 1: End point of the line.
+     */
+    LineTo,
+
+    /**
+     * Draw a cubic Bézier curve from the current point to a new point.
      *
      * Consumes 3 points:
      * - 1: First control point.
@@ -46,14 +54,6 @@ public:
      * - 3: End point of the curve.
      */
     CurveTo,
-
-    /**
-     * Draw a line from the current point to a new point.
-     *
-     * Consumes 1 point:
-     * - 1: End point of the line.
-     */
-    LineTo,
 
     /**
      * Close the path.
@@ -79,17 +79,26 @@ public:
    */
   struct Command {
     CommandType type;   ///< Type of command.
-    size_t pointIndex;  ///< Index of the first point used by this command. The number of points
-                        ///< consumed by the command is determined by the command type.
+    size_t pointIndex;  ///< Index of the first point of this command.
+
+    /// True if the point is derived from an arc and does not represent an original user command.
+    /// Used to determine if markers should be placed on the point.
+    bool isInternalPoint = false;
+
+    /// If \ref type is \ref CommandType::MoveTo, this is the index of the ClosePath at the end of
+    /// the path.
+    size_t closePathIndex = size_t(-1);
 
     /**
-     * Construct a new Command.
+     * Command constructor.
      *
      * @param type Type of command.
-     * @param pointIndex Index of the first point used by this command.
-     * @see CommandType
+     * @param pointIndex Index of the first point of this command.
+     * @param isInternalPoint True if the point is derived from an arc and does not represent an
+     * original user command. Defaults to false.
      */
-    Command(CommandType type, size_t pointIndex) : type(type), pointIndex(pointIndex) {}
+    Command(CommandType type, size_t pointIndex, bool isInternalPoint = false)
+        : type(type), pointIndex(pointIndex), isInternalPoint(isInternalPoint) {}
 
     /// Equality operator.
     friend inline bool operator==(const Command& lhs, const Command& rhs) {
@@ -106,103 +115,101 @@ public:
   };
 
   /**
-   * Builder to construct a new PathSpline.
-   *
-   * ```
-   * const PathSpline spline = PathSpline::Builder()
-   *   .moveTo({0, 0})
-   *   .lineTo({1, 0})
-   *   .closePath()
-   *   .build();
-   * ```
+   * Vertex of the path, including the orientation. Used to place markers for \ref xml_marker.
    */
-  class Builder {
-  public:
-    /**
-     * Construct a new Builder.
-     */
-    Builder();
+  struct Vertex {
+    Vector2d point;        ///< Point on the path.
+    Vector2d orientation;  ///< Orientation of the path at the point, normalized.
 
-    /**
-     * Move the starting point of the spline to a new point, creating a new subpath. If this is
-     * called multiple times in a row, subsequent calls will replace the previous.
-     *
-     * @param point Point to move to.
-     */
-    Builder& moveTo(const Vector2d& point);
-
-    /**
-     * Draw a line from the current point to a new point.
-     *
-     * @param point End point of the line.
-     */
-    Builder& lineTo(const Vector2d& point);
-
-    /**
-     * Draw a bézier curve from the current point to \p point3, using \p point1 and \p point2 as
-     * anchors.
-     *
-     * @param point1 First control point.
-     * @param point2 Second control point.
-     * @param point3 End point of the curve.
-     */
-    Builder& curveTo(const Vector2d& point1, const Vector2d& point2, const Vector2d& point3);
-
-    /**
-     * Add an elliptical arc to the path.
-     *
-     * @param radius Radius before rotation.
-     * @param rotationRadians Rotation to the x-axis of the ellipse formed by the arc.
-     * @param largeArcFlag false for arc length <= 180, true for arc >= 180.
-     * @param sweepFlag false for negative angle, true for positive angle.
-     * @param endPoint End point.
-     */
-    Builder& arcTo(const Vector2d& radius, double rotationRadians, bool largeArcFlag,
-                   bool sweepFlag, const Vector2d& endPoint);
-
-    /**
-     * Close the path.
-     *
-     * An automatic straight line is drawn from the current point back to the initial point of
-     * the current subpath.
-     */
-    Builder& closePath();
-
-    //
-    // Complex drawing.
-    //
-
-    /**
-     * Draw an ellipse.
-     *
-     * @param center Center of the ellipse.
-     * @param radius Ellipse radius, for both the x and y axis.
-     */
-    Builder& ellipse(const Vector2d& center, const Vector2d& radius);
-
-    /**
-     * Draw a circle
-     *
-     * @param center Center of the circle.
-     * @param radius Radius.
-     */
-    Builder& circle(const Vector2d& center, double radius);
-
-    /**
-     * Construct the PathSpline.
-     */
-    PathSpline build();
-
-  private:
-    static constexpr size_t kNPos = ~size_t(0);
-
-    bool valid_ = true;
-    std::vector<Vector2d> points_;
-    std::vector<Command> commands_;
-
-    // Index of last moveto point in the points_ vector.
-    size_t moveToPointIndex_ = kNPos;
+    /// Ostream operator for Vertex, which outputs a human-readable representation.
+    friend std::ostream& operator<<(std::ostream& os, const Vertex& vertex) {
+      return os << "Vertex(point=" << vertex.point << ", orientation=" << vertex.orientation << ")";
+    }
   };
+
+  /**
+   * Construct a new empty PathSpline.
+   */
+  PathSpline() = default;
+
+  /// @addtogroup Modification
+  /// @{
+
+  /**
+   * Move the starting point of the spline to a new point, creating a new subpath. If this is
+   * called multiple times in a row, subsequent calls will replace the previous.
+   *
+   * @param point Point to move to.
+   */
+  void moveTo(const Vector2d& point);
+
+  /**
+   * Draw a line from the current point to a new point.
+   *
+   * @param point End point of the line.
+   */
+  void lineTo(const Vector2d& point);
+
+  /**
+   * Draw a cubic Bézier curve from the current point to a new point.
+   *
+   * @param control1 First control point.
+   * @param control2 Second control point.
+   * @param endPoint End point of the curve.
+   */
+  void curveTo(const Vector2d& control1, const Vector2d& control2, const Vector2d& endPoint);
+
+  /**
+   * Add an elliptical arc to the path.
+   *
+   * @param radius Radius before rotation.
+   * @param rotationRadians Rotation of the x-axis of the ellipse.
+   * @param largeArcFlag False for arc length ≤ 180°, true for arc length ≥ 180°.
+   * @param sweepFlag False for negative angle, true for positive angle.
+   * @param endPoint End point of the arc.
+   */
+  void arcTo(const Vector2d& radius, double rotationRadians, bool largeArcFlag, bool sweepFlag,
+             const Vector2d& endPoint);
+
+  /**
+   * Close the path.
+   *
+   * An automatic straight line is drawn from the current point back to the initial point of
+   * the current subpath.
+   */
+  void closePath();
+
+  //
+  // Complex drawing.
+  //
+
+  /**
+   * Draw an ellipse (uses multiple curve segments).
+   *
+   * @param center Center of the ellipse.
+   * @param radius Ellipse radius, for both the x and y axis.
+   */
+  void ellipse(const Vector2d& center, const Vector2d& radius);
+
+  /**
+   * Draw a circle (uses multiple curve segments).
+   *
+   * @param center Center of the circle.
+   * @param radius Radius.
+   */
+  void circle(const Vector2d& center, double radius);
+
+  /**
+   * Append an existing spline to this spline, joining the two splines together. This will
+   * ignore the moveTo comand at the start of \p spline.
+   *
+   * @param spline Spline to append.
+   * @param asInternalPath True if the spline should be treated as an internal path, which
+   * means that markers will not be rendered onto its segments.
+   */
+  void appendJoin(const PathSpline& spline, bool asInternalPath = false);
+
+  /** @} */
 
   /**
    * Returns true if the spline is empty.
@@ -230,12 +237,18 @@ public:
   double pathLength() const;
 
   /**
+   * Get the end point of the path, where new draw commands will originate.
+   */
+  Vector2d currentPoint() const;
+
+  /**
    * Returns the bounding box for this spline.
    */
   Boxd bounds() const;
 
   /**
-   * Get the bounds of critical points created by miter joints when applying a stroke to this path.
+   * Get the bounds of critical points created by miter joints when applying a stroke to this
+   * path.
    *
    * @param strokeWidth Width of stroke.
    * @param miterLimit Miter limit of the stroke.
@@ -245,27 +258,35 @@ public:
   /**
    * Get a point on the spline.
    *
-   * @param index Spline index.
-   * @param t Position on spline, between 0.0 and 1.0.
-   * @return Vector2d
+   * @param index Index of the command in the spline.
+   * @param t Position on the segment, between 0.0 and 1.0.
+   * @return Vector2d Point at the specified position.
    */
   Vector2d pointAt(size_t index, double t) const;
 
   /**
-   * Get the tangent vector on the spline.
+   * Get the un-normalized tangent vector on the spline.
    *
-   * @param index Spline index.
-   * @param t Position on spline, between 0.0 and 1.0.
+   * @param index Index of the command in the spline.
+   * @param t Position on the segment, between 0.0 and 1.0.
+   * @return Vector2d Tangent vector at the specified position.
    */
   Vector2d tangentAt(size_t index, double t) const;
 
   /**
    * Get the normal vector on the spline.
    *
-   * @param index Spline index.
-   * @param t Position on spline, between 0.0 and 1.0.
+   * @param index Index of the command in the spline.
+   * @param t Position on the segment, between 0.0 and 1.0.
+   * @return Vector2d Normal vector at the specified position.
    */
   Vector2d normalAt(size_t index, double t) const;
+
+  /**
+   * Get the vertices of the path, including the orientation. Used to place markers for \ref
+   * xml_marker.
+   */
+  std::vector<Vertex> vertices() const;
 
   /**
    * Returns true if this path contains the given point within its fill.
@@ -277,6 +298,9 @@ public:
 
   /**
    * Returns true if this path contains the given point within its stroke.
+   *
+   * @param point Point to check.
+   * @param strokeWidth Width of the stroke.
    */
   bool isOnPath(const Vector2d& point, double strokeWidth) const;
 
@@ -289,18 +313,41 @@ public:
   friend std::ostream& operator<<(std::ostream& os, const PathSpline& spline);
 
 private:
-  PathSpline(std::vector<Vector2d>&& points,
-             std::vector<Command>&& commands);  // NOLINT: Internal constructor.
-
   /**
-   * Get the start point of a command.
+   * Get the starting point of a command.
    *
-   * @param index Spline index.
+   * @param index Index of the command.
+   * @return Vector2d Starting point of the command.
    */
   Vector2d startPoint(size_t index) const;
 
-  std::vector<Vector2d> points_;
-  std::vector<Command> commands_;
+  /**
+   * Get the ending point of a command.
+   *
+   * @param index Index of the command.
+   * @return Vector2d Ending point of the command.
+   */
+  Vector2d endPoint(size_t index) const;
+
+  /**
+   * Auto-reopen the path if it is closed. This will reissue the last moveTo() command,
+   * starting a new path at the same start coordinate.
+   */
+  void maybeAutoReopen();
+
+  std::vector<Vector2d> points_;   //!< Vector of points in the spline.
+  std::vector<Command> commands_;  //!< Vector of commands that define how the points are connected.
+
+  /// Index of the last MoveTo point in \ref points_.
+  size_t moveToPointIndex_ = size_t(-1);
+
+  /// Index of the start of the current segment (if it is open), pointing to the MoveTo command.
+  size_t currentSegmentStartCommandIndex_ = size_t(-1);
+
+  /// True if the path is closed, but it may auto-reopen and MoveTo on the next draw command.
+  /// This enables sequences such as "M 0 0 1 1 z L -1 -1" which close the path and then draw
+  /// a new line.
+  bool mayAutoReopen_ = false;
 };
 
 }  // namespace donner::svg

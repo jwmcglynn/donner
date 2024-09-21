@@ -7,6 +7,7 @@
 #include "donner/base/Transform.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipPathUnits.h"
+#include "donner/svg/core/MarkerUnits.h"
 #include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/registry/Registry.h"
@@ -18,6 +19,10 @@ namespace donner::svg::components {
  * subtree, plus how many isolated layers need to be popped when the subtree is complete.
  */
 struct SubtreeInfo {
+  /// Indicates the first entity within the current subtree. The renderer will continue rendering
+  /// entities until it reaches this one, then it will pop \ref restorePopDepth isolated layers from
+  /// the render state.
+  Entity firstRenderedEntity;
   /// Indicates the last entity within the current subtree. The renderer will continue rendering
   /// entities until it reaches this one, then it will pop \ref restorePopDepth isolated layers from
   /// the render state.
@@ -56,7 +61,6 @@ struct ResolvedClipPath {
   bool valid() const { return reference.valid(); }
 };
 
-
 /**
  * Contains resolved information about the `mask` property, such as which element it is
  * pointing to.
@@ -68,6 +72,19 @@ struct ResolvedMask {
   std::optional<SubtreeInfo> subtreeInfo;
   /// The mask content units to use for this mask.
   MaskContentUnits contentUnits;
+
+  /// Returns true if the reference is valid, or false if this the \ref xml_mask did not
+  /// properly resolve.
+  bool valid() const { return reference.valid(); }
+};
+
+struct ResolvedMarker {
+  /// Reference to a \ref xml_marker element.
+  ResolvedReference reference;
+  /// Contains subtree info to inform the renderer how to render the marker.
+  std::optional<SubtreeInfo> subtreeInfo;
+  /// Defines the coordinate system for marker attributes and contents.
+  MarkerUnits markerUnits;
 
   /// Returns true if the reference is valid, or false if this the \ref xml_mask did not
   /// properly resolve.
@@ -117,6 +134,15 @@ struct RenderingInstanceComponent {
   std::optional<ResolvedClipPath> clipPath;  //!< The clip path of the element, if set.
 
   std::optional<ResolvedMask> mask;  //!< The mask of the element, if set.
+
+  /// The resolved marker for marker-start, if any.
+  std::optional<ResolvedMarker> markerStart;
+
+  /// The resolved marker for marker-mid, if any.
+  std::optional<ResolvedMarker> markerMid;
+
+  /// The resolved marker for marker-end, if any.
+  std::optional<ResolvedMarker> markerEnd;
 
   /**
    * The entity containing the structural components of the instance, element-specific

@@ -20,6 +20,7 @@ enum class ElementType {
   Image,           //!< \ref xml_image
   Line,            //!< \ref xml_line
   LinearGradient,  //!< \ref xml_linearGradient
+  Marker,          //!< \ref xml_marker
   Mask,            //!< \ref xml_mask
   Path,            //!< \ref xml_path
   Pattern,         //!< \ref xml_pattern
@@ -88,6 +89,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Line: return fn(std::integral_constant<ElementType, ElementType::Line>());
     case ElementType::LinearGradient:
       return fn(std::integral_constant<ElementType, ElementType::LinearGradient>());
+    case ElementType::Marker: return fn(std::integral_constant<ElementType, ElementType::Marker>());
     case ElementType::Mask: return fn(std::integral_constant<ElementType, ElementType::Mask>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
     case ElementType::Pattern:

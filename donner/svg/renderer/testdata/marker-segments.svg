@@ -1,0 +1,26 @@
+<svg id="svg1" viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <marker id="markerMid" markerWidth="16" markerHeight="16" refX="8" refY="8">
+      <circle cx="8" cy="8" r="8" fill="blue" opacity="0.8"/>
+  </marker>
+  <marker id="markerStart" markerWidth="16" markerHeight="16" refX="8" refY="8">
+      <polygon points="0,0 0,16 16,8" fill="lime" opacity="0.8" />
+  </marker>
+  <marker id="markerEnd" markerWidth="8" markerHeight="8" refX="4" refY="4">
+      <polygon points="0,0 0,8 8,4" fill="red" opacity="0.8" />
+  </marker>
+
+  <path fill="none" stroke="green" d="M 100 15 l 50 160 l -130 -100 l 160 0 l -130 100 z"
+        marker-start="url(#markerStart)" marker-mid="url(#markerMid)" marker-end="url(#markerEnd)" />
+
+  <path transform="translate(200 15)" fill="none" stroke="green" d="M 0 0 h 50 v 50"
+        marker-start="url(#markerStart)" marker-mid="url(#markerMid)" marker-end="url(#markerEnd)"/>
+
+  <path transform="translate(275 15)" fill="none" stroke="green" d="M 0 0 h 50 v 50 z"
+        marker-start="url(#markerStart)" marker-mid="url(#markerMid)" marker-end="url(#markerEnd)"/>
+
+  <circle cx="225" cy="120" r="25" fill="none" stroke="green" marker-start="url(#markerStart)" marker-mid="url(#markerMid)" marker-end="url(#markerEnd)" />
+
+  <path transform="translate(275 100)" fill="none" stroke="green" d="M 0 0 h 50 v 50 L 0 0 z"
+        marker-start="url(#markerStart)" marker-mid="url(#markerMid)" marker-end="url(#markerEnd)"/>
+
+</svg>

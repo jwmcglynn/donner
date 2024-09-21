@@ -8,6 +8,7 @@
 #include "donner/svg/core/ClipRule.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/FillRule.h"
+#include "donner/svg/core/Overflow.h"
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/Visibility.h"
@@ -73,6 +74,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `display` | \ref display | `inline` |
  * | `opacity` | \ref opacity | `1.0` |
  * | `visibility` | \ref visibility | `visible` |
+ * | `overflow`   | \ref overflow | `visible` |
  * | `fill` | \ref fill | `black` |
  * | `fill-rule` | \ref fillRule | `nonzero` |
  * | `fill-opacity` | \ref fillOpacity | `1.0` |
@@ -89,6 +91,9 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `mask` | \ref mask | `none` |
  * | `filter` | \ref filter | `none` |
  * | `pointer-events` | \ref pointerEvents | `auto` |
+ * | `marker-start` | \ref markerStart | `none` |
+ * | `marker-mid` | \ref markerMid | `none` |
+ * | `marker-end` | \ref markerEnd | `none` |
  */
 class PropertyRegistry {
 public:
@@ -111,6 +116,11 @@ public:
   /// bounding boxes.
   Property<Visibility, PropertyCascade::Inherit> visibility{
       "visibility", []() -> std::optional<Visibility> { return Visibility::Visible; }};
+
+  /// `overflow` property, which determines how content that overflows the element's box is handled.
+  /// Defaults to `visible`.
+  Property<Overflow> overflow{"overflow",
+                              []() -> std::optional<Overflow> { return Overflow::Visible; }};
 
   //
   // Fill
@@ -215,6 +225,22 @@ public:
       "pointer-events",
       []() -> std::optional<PointerEvents> { return PointerEvents::VisiblePainted; }};
 
+  //
+  // Markers
+  //
+
+  /// `marker-start` property, which determines the marker to be drawn at the start of the path.
+  Property<Reference, PropertyCascade::Inherit> markerStart{
+      "marker-start", []() -> std::optional<Reference> { return std::nullopt; }};
+
+  /// `marker-mid` property, which determines the marker to be drawn at the middle of the path.
+  Property<Reference, PropertyCascade::Inherit> markerMid{
+      "marker-mid", []() -> std::optional<Reference> { return std::nullopt; }};
+
+  /// `marker-end` property, which determines the marker to be drawn at the end of the path.
+  Property<Reference, PropertyCascade::Inherit> markerEnd{
+      "marker-end", []() -> std::optional<Reference> { return std::nullopt; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
@@ -241,10 +267,11 @@ public:
    * To get the size of the tuple, use \ref numProperties().
    */
   auto allProperties() const {
-    return std::forward_as_tuple(color, display, opacity, visibility, fill, fillRule, fillOpacity,
-                                 stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
-                                 strokeMiterlimit, strokeDasharray, strokeDashoffset, clipPath,
-                                 clipRule, mask, filter, pointerEvents);
+    return std::forward_as_tuple(color, display, opacity, visibility, overflow, fill, fillRule,
+                                 fillOpacity, stroke, strokeOpacity, strokeWidth, strokeLinecap,
+                                 strokeLinejoin, strokeMiterlimit, strokeDasharray,
+                                 strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
+                                 markerStart, markerMid, markerEnd);
   }
 
   /**

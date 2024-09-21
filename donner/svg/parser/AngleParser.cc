@@ -19,7 +19,9 @@ ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseO
       return err;
     }
   } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-    if (options == AngleParseOptions::AllowBareZero && number->valueString == "0") {
+    if (options == AngleParseOptions::AllowNumbersInDegrees) {
+      return number->value * MathConstants<double>::kDegToRad;
+    } else if (options == AngleParseOptions::AllowBareZero && number->valueString == "0") {
       return 0.0;
     }
   }

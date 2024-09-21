@@ -85,22 +85,29 @@ struct Transform {
    *
    * @param theta Angle in radians.
    */
-  static Transform Rotation(T theta) {
-    const T sin_val = std::sin(theta);
-    const T cos_val = std::cos(theta);
+  static Transform Rotate(T angleRadians) {
+    const T sinVal = std::sin(angleRadians);
+    const T cosVal = std::cos(angleRadians);
 
     Transform<T> result(uninitialized);
-    result.data[0] = cos_val;   // a
-    result.data[1] = sin_val;   // b
-    result.data[2] = -sin_val;  // c
-    result.data[3] = cos_val;   // d
-    result.data[4] = T(0);      // e
-    result.data[5] = T(0);      // f
+    result.data[0] = cosVal;   // a
+    result.data[1] = sinVal;   // b
+    result.data[2] = -sinVal;  // c
+    result.data[3] = cosVal;   // d
+    result.data[4] = T(0);     // e
+    result.data[5] = T(0);     // f
     return result;
   }
 
   /**
-   * Return a 2D scale matrix.
+   * Return a 2D scale matrix with uniform scaling.
+   *
+   * @param extent Scale x/y parameters.
+   */
+  static Transform Scale(T extent) { return Scale(Vector2<T>(extent, extent)); }
+
+  /**
+   * Return a 2D scale matrix with horizontal and vertical scaling from a Vector2.
    *
    * @param extent Scale x/y parameters.
    */
@@ -116,6 +123,15 @@ struct Transform {
   }
 
   /**
+   * Return a 2D scale matrix with horizontal and vertical scaling, convenience API accepting two
+   * parameters.
+   *
+   * @param x Horizontal scale.
+   * @param y Vertical scale.
+   */
+  static Transform Scale(T x, T y) { return Scale(Vector2<T>(x, y)); }
+
+  /**
    * Return a 2D translation matrix.
    *
    * @param offset Translation offset.
@@ -126,6 +142,14 @@ struct Transform {
     result.data[5] = offset.y;  // f
     return result;
   }
+
+  /**
+   * Return a 2D translation matrix, convenience API accepting two parameters.
+   *
+   * @param x Horizontal translation offset.
+   * @param y Vertical translation offset.
+   */
+  static Transform Translate(T x, T y) { return Translate(Vector2<T>(x, y)); }
 
   /**
    * Returns a 2D skew transformation along the X axis.

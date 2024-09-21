@@ -110,7 +110,7 @@ TEST(TransformIs, Success) {
   EXPECT_THAT(Transformd(), TransformIs(1.0, 0.0, 0.0, 1.0, 0.0, 0.0));
   EXPECT_THAT(Transformd::Translate(Vector2d(1.0, 2.0)), TransformIs(1.0, 0.0, 0.0, 1.0, 1.0, 2.0));
   EXPECT_THAT(Transformd::Scale(Vector2d(2.0, 3.0)), TransformIs(2.0, 0.0, 0.0, 3.0, 0.0, 0.0));
-  EXPECT_THAT(Transformd::Rotation(0.5),
+  EXPECT_THAT(Transformd::Rotate(0.5),
               TransformIs(0.877582, 0.479426, -0.479426, 0.877582, 0.0, 0.0));
 }
 

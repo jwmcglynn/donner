@@ -1,9 +1,9 @@
 #include "donner/svg/renderer/RendererUtils.h"
 
 #include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/components/RenderingContext.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/registry/Registry.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 
