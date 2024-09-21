@@ -17,34 +17,38 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/painting.html#MarkerElement
  *
  * ```xml
- * <marker id="arrow" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
- *   <path d="M0,0 L10,5 L0,10 Z" />
+ * <marker id="arrow" refX="3" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+ *   <path d="M 0 0 L 6 3 L 0 6 z" fill="red" />
  * </marker>
  * ```
  *
  * \htmlonly
- * <svg id="xml_marker" width="300" height="300" style="background-color: white">
- *   <style>
- *     #xml_marker path {
- *       fill: red;
- *     }
- *   </style>
+ * <svg width="300" height="300" xmlns="http://www.w3.org/2000/svg" style="background-color: white">
  *   <defs>
- *     <marker id="arrow" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
- *       <path d="M0,0 L10,5 L0,10 Z" />
+ *     <marker id="arrow" refX="3" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+ *       <path d="M 0 0 L 6 3 L 0 6 z" fill="red" />
  *     </marker>
  *   </defs>
- *   <path d="M50,50 L250,50 L150,150 L250,250 L50,250" marker-mid="url(#arrow)" />
+ *
+ *   <path
+ *     d="m17,151 c29,146 58,146 87,0 c29,-146 58,-146 87,0 c29,146 58,146 87,0"
+ *     stroke="black"
+ *     fill="none"
+ *     marker-start="url(#arrow)"
+ *     marker-mid="url(#arrow)"
+ *     marker-end="url(#arrow)"
+ *     stroke-width="3px"
+ *      />
  * </svg>
  * \endhtmlonly
  *
  * | Attribute      | Default | Description  |
  * | -------------: | :-----: | :----------- |
- * | `markerWidth`  | (none)  | Width of the marker viewport. |
- * | `markerHeight` | (none)  | Height of the marker viewport. |
- * | `refX`         | (none)  | X coordinate for the reference point of the marker. |
- * | `refY`         | (none)  | Y coordinate for the reference point of the marker. |
- * | `orient`       | (none)  | Orientation of the marker relative to the path. |
+ * | `markerWidth`  | `3`     | Width of the marker viewport. |
+ * | `markerHeight` | `3`     | Height of the marker viewport. |
+ * | `refX`         | `0`     | X coordinate for the reference point of the marker, where the marker is centered. |
+ * | `refY`         | `0`     | Y coordinate for the reference point of the marker, where the marker is centered. |
+ * | `orient`       | `0`     | Orientation of the marker relative to the path. Supported values: `auto`, `auto-start-reverse`, or an angle for a fixed rotation such as `45deg` or `3.14rad`. |
  */
 
 /**
