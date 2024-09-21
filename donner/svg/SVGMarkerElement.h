@@ -1,9 +1,11 @@
 #pragma once
 /// @file
 
+#include "donner/base/OptionalRef.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/core/MarkerOrient.h"
 #include "donner/svg/core/MarkerUnits.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg {
 
@@ -44,6 +46,8 @@ namespace donner::svg {
  *
  * | Attribute      | Default | Description  |
  * | -------------: | :-----: | :----------- |
+ * | `viewBox` | (none)  | A list of four numbers (min-x, min-y, width, height) separated by whitespace and/or a comma, that specify a rectangle in userspace that should be mapped to the SVG viewport bounds established by the marker. |
+ * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the viewport to fit the content. Only applies is `viewBox` is specified. |
  * | `markerWidth`  | `3`     | Width of the marker viewport. |
  * | `markerHeight` | `3`     | Height of the marker viewport. |
  * | `refX`         | `0`     | X coordinate for the reference point of the marker, where the marker is centered. |
@@ -52,26 +56,8 @@ namespace donner::svg {
  */
 
 /**
- * DOM object for a \ref xml_marker element.
- *
- * The `<marker>` element is used to define graphical objects that can be used repeatedly in a
- * drawing, such as arrowheads or other markers on paths.
- *
- * \htmlonly
- * <svg id="xml_marker" width="300" height="300" style="background-color: white">
- *   <style>
- *     #xml_marker path {
- *       fill: red;
- *     }
- *   </style>
- *   <defs>
- *     <marker id="arrow" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
- *       <path d="M0,0 L10,5 L0,10 Z" />
- *     </marker>
- *   </defs>
- *   <path d="M50,50 L250,50 L150,150 L250,250 L50,250" marker-mid="url(#arrow)" />
- * </svg>
- * \endhtmlonly
+ * DOM object for a \ref xml_marker element, which is used to define graphical objects that can be
+ * used repeatedly along a path, such as arrowheads or other markers on paths.
  */
 class SVGMarkerElement : public SVGElement {
 private:
@@ -90,6 +76,34 @@ public:
    * @param document Containing document.
    */
   static SVGMarkerElement Create(SVGDocument& document);
+
+  /**
+   * Set the `viewBox` attribute, which defines a rectangle in userspace that should be mapped to
+   * the SVG viewport bounds established by the pattern.
+   *
+   * @param viewbox The viewBox value to set.
+   */
+  void setViewbox(OptionalRef<Boxd> viewbox);
+
+  /**
+   * Get the parsed value of the `viewBox` attribute, if specified, which defines a rectangle in
+   * userspace that should be mapped to the SVG viewport bounds established by the pattern.
+   */
+  std::optional<Boxd> viewbox() const;
+
+  /**
+   * Set the `preserveAspectRatio` attribute, which defines how to scale the viewport to fit the
+   * content. Only applies if `viewBox` is specified.
+   *
+   * @param preserveAspectRatio The preserveAspectRatio value to set.
+   */
+  void setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio);
+
+  /**
+   * The value of the `preserveAspectRatio` attribute, which defines how to scale the viewport to
+   * fit the content. Only applies is `viewBox` is specified.
+   */
+  PreserveAspectRatio preserveAspectRatio() const;
 
   /**
    * Set the marker width.

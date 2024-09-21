@@ -12,14 +12,6 @@
 
 namespace donner::svg {
 
-namespace {
-
-/// The default `xMidYMid meet` value for \ref xml_pattern `preserveAspectRatio`
-static constexpr PreserveAspectRatio kPatternDefaultPreserveAspectRatio{
-    PreserveAspectRatio::Align::XMidYMid, PreserveAspectRatio::MeetOrSlice::Meet};
-
-}  // namespace
-
 SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
   Registry& registry = document.registry();
   EntityHandle handle = CreateEntity(registry, Tag, Type);
@@ -30,7 +22,7 @@ SVGPatternElement SVGPatternElement::Create(SVGDocument& document) {
   handle.emplace<components::PatternComponent>();
   handle.emplace<components::DoNotInheritFillOrStrokeTag>();
   handle.emplace<components::ViewboxComponent>();
-  handle.emplace<components::PreserveAspectRatioComponent>(kPatternDefaultPreserveAspectRatio);
+  handle.emplace<components::PreserveAspectRatioComponent>();
   return SVGPatternElement(handle);
 }
 

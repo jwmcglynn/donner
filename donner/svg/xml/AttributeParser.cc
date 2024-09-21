@@ -104,8 +104,8 @@ std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view
 }
 
 /**
- * Parses x, y, width, and height values for elements that have them. Returns true if the attribute
- * was found, so that the caller may use that information to skip other attribute parsing.
+ * Parses `x`, `y`, `width`, and `height` values for elements that have them. Returns true if the
+ * attribute was found, so that the caller may use that information to skip other attribute parsing.
  *
  * @tparam T Element type, should should have setter methods for `setX`, `setY`, `setWidth`, and
  * `setHeight`.
@@ -113,7 +113,7 @@ std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view
  * @param element The element to set the values on.
  * @param name The name of the attribute.
  * @param value The value of the attribute.
- * @return True if the attribute was x, y, width, or height.
+ * @return True if the attribute was `x`, `y`, `width`, or `height`.
  */
 template <typename T>
 bool ParseXYWidthHeight(XMLParserContext& context, T element, const XMLQualifiedNameRef& name,
@@ -133,6 +133,44 @@ bool ParseXYWidthHeight(XMLParserContext& context, T element, const XMLQualified
   } else if (name == XMLQualifiedNameRef("height")) {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setHeight(length.value());
+    }
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Parses `viewBox` and `preserveAspectRatio` values for elements that have them. Returns true if
+ * the attribute was found, so that the caller may use that information to skip other attribute
+ * parsing.
+ *
+ * @tparam T Element type, should should have setter methods for `setViewBox` and
+ * `setPreserveAspectRatio`.
+ * @param context The XML parser context.
+ * @param element The element to set the values on.
+ * @param name The name of the attribute.
+ * @param value The value of the attribute.
+ * @return True if the attribute was `viewBox` or `preserveAspectRatio`.
+ */
+template <typename T>
+bool ParseViewBoxPreserveAspectRatio(XMLParserContext& context, T element,
+                                     const XMLQualifiedNameRef& name, std::string_view value) {
+  if (name == XMLQualifiedNameRef("viewBox")) {
+    auto maybeViewbox = ViewboxParser::Parse(value);
+    if (maybeViewbox.hasError()) {
+      context.addSubparserWarning(std::move(maybeViewbox.error()), context.parserOriginFrom(value));
+    } else {
+      element.setViewbox(maybeViewbox.result());
+    }
+  } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
+    auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
+    if (maybeAspectRatio.hasError()) {
+      context.addSubparserWarning(std::move(maybeAspectRatio.error()),
+                                  context.parserOriginFrom(value));
+    } else {
+      element.setPreserveAspectRatio(maybeAspectRatio.result());
     }
   } else {
     return false;
@@ -482,21 +520,9 @@ std::optional<ParseError> ParseAttribute<SVGPatternElement>(XMLParserContext& co
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
-  } else if (name == XMLQualifiedNameRef("viewBox")) {
-    auto maybeViewbox = ViewboxParser::Parse(value);
-    if (maybeViewbox.hasError()) {
-      context.addSubparserWarning(std::move(maybeViewbox.error()), context.parserOriginFrom(value));
-    } else {
-      element.setViewbox(maybeViewbox.result());
-    }
-  } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
-    auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
-    if (maybeAspectRatio.hasError()) {
-      context.addSubparserWarning(std::move(maybeAspectRatio.error()),
-                                  context.parserOriginFrom(value));
-    } else {
-      element.setPreserveAspectRatio(maybeAspectRatio.result());
-    }
+  } else if (ParseViewBoxPreserveAspectRatio(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
   } else if (name == XMLQualifiedNameRef("patternUnits")) {
     if (value == "userSpaceOnUse") {
       element.setPatternUnits(PatternUnits::UserSpaceOnUse);
@@ -613,21 +639,9 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
                                                         SVGSVGElement element,
                                                         const XMLQualifiedNameRef& name,
                                                         std::string_view value) {
-  if (name == XMLQualifiedNameRef("viewBox")) {
-    auto maybeViewbox = ViewboxParser::Parse(value);
-    if (maybeViewbox.hasError()) {
-      context.addSubparserWarning(std::move(maybeViewbox.error()), context.parserOriginFrom(value));
-    } else {
-      element.setViewbox(maybeViewbox.result());
-    }
-  } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
-    auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);
-    if (maybeAspectRatio.hasError()) {
-      context.addSubparserWarning(std::move(maybeAspectRatio.error()),
-                                  context.parserOriginFrom(value));
-    } else {
-      element.setPreserveAspectRatio(maybeAspectRatio.result());
-    }
+  if (ParseViewBoxPreserveAspectRatio(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
   } else if (name.namespacePrefix == "xmlns" || name == XMLQualifiedNameRef("xmlns")) {
     // This was already parsed by @ref ParseXmlNsAttribute.
   } else {
@@ -693,13 +707,15 @@ std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& contex
   return std::nullopt;
 }
 
-// Update the ParseAttribute function for SVGMarkerElement
 template <>
 std::optional<ParseError> ParseAttribute<SVGMarkerElement>(XMLParserContext& context,
                                                            SVGMarkerElement element,
                                                            const XMLQualifiedNameRef& name,
                                                            std::string_view value) {
-  if (name == XMLQualifiedNameRef("markerWidth")) {
+  if (ParseViewBoxPreserveAspectRatio(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("markerWidth")) {
     if (auto maybeNumber = ParseNumberNoSuffix(value)) {
       element.setMarkerWidth(maybeNumber.value());
     } else {

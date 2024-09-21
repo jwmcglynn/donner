@@ -8,20 +8,12 @@
 
 namespace donner::svg {
 
-namespace {
-
-/// The default `xMidYMid meet` value for \ref xml_image `preserveAspectRatio`
-static constexpr PreserveAspectRatio kImageDefaultPreserveAspectRatio{
-    PreserveAspectRatio::Align::XMidYMid, PreserveAspectRatio::MeetOrSlice::Meet};
-
-}  // namespace
-
 SVGImageElement SVGImageElement::Create(SVGDocument& document) {
   EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   handle.emplace<components::SizedElementComponent>();
-  handle.emplace<components::PreserveAspectRatioComponent>(kImageDefaultPreserveAspectRatio);
+  handle.emplace<components::PreserveAspectRatioComponent>();
   return SVGImageElement(handle);
 }
 
