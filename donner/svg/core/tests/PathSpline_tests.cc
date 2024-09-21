@@ -934,4 +934,61 @@ TEST(PathSpline, AppendJoinWithJump) {
                           Command{CommandType::LineTo, 2}));
 }
 
+TEST(PathSpline, VerticesSimple) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.lineTo(kVec3);
+  spline.lineTo(kVec4);
+
+  EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec3, kVec4));
+}
+
+TEST(PathSpline, VerticesWithJump) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.moveTo(kVec3);
+  spline.lineTo(kVec4);
+
+  EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec3, kVec4));
+}
+
+TEST(PathSpline, VerticesClosePath) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.lineTo(kVec3);
+  spline.closePath();
+
+  EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec3, kVec1));
+}
+
+TEST(PathSpline, VerticesClosePathWithoutLine) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.moveTo(kVec1);
+  spline.closePath();
+
+  EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec1));
+}
+
+TEST(PathSpline, VerticesCircle) {
+  PathSpline spline;
+  spline.circle(Vector2d(0.0, 0.0), 5.0);
+  EXPECT_THAT(spline.vertices(),
+              VertexPointsAre(Vector2d(5.0, 0.0), Vector2d(0.0, 5.0), Vector2d(-5.0, 0.0),
+                              Vector2d(0.0, -5.0), Vector2d(5.0, 0.0)));
+}
+
+TEST(PathSpline, VerticesArc) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.arcTo(Vector2d(5.0, 5.0), 0.0, /*largeArcFlag=*/true, /*sweepFlag=*/true,
+               Vector2d(5.0, 0.0));
+
+  EXPECT_THAT(spline.vertices(), VertexPointsAre(Vector2d(0.0, 0.0), Vector2Near(5.0, 0.0)));
+}
+
 }  // namespace donner::svg

@@ -15,6 +15,96 @@ TEST(Transform, Construct) {
   EXPECT_TRUE(transform_double.isIdentity());
 }
 
+TEST(Transform, Rotate) {
+  {
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi);
+    EXPECT_THAT(t, TransformIs(0, 1, -1, 0, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Rotate(-MathConstants<double>::kHalfPi);
+    EXPECT_THAT(t, TransformIs(0, -1, 1, 0, 0, 0));
+  }
+}
+
+TEST(Transform, Scale) {
+  {
+    Transformd t = Transformd::Scale(2);
+    EXPECT_THAT(t, TransformIs(2, 0, 0, 2, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Scale(0.5);
+    EXPECT_THAT(t, TransformIs(0.5, 0, 0, 0.5, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Scale({-1, 1});
+    EXPECT_THAT(t, TransformIs(-1, 0, 0, 1, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::Scale(1, -1);
+    EXPECT_THAT(t, TransformIs(1, 0, 0, -1, 0, 0));
+  }
+}
+
+TEST(Transform, Translate) {
+  {
+    Transformd t = Transformd::Translate({50, -100});
+    EXPECT_THAT(t, TransformIs(1, 0, 0, 1, 50, -100));
+  }
+
+  {
+    Transformd t = Transformd::Translate(-50, 100);
+    EXPECT_THAT(t, TransformIs(1, 0, 0, 1, -50, 100));
+  }
+}
+
+TEST(Transform, SkewX) {
+  {
+    Transformd t = Transformd::SkewX(MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, 0, 1, 1, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::SkewX(-MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, 0, -1, 1, 0, 0));
+  }
+}
+
+TEST(Transform, SkewY) {
+  {
+    Transformd t = Transformd::SkewY(MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, 1, 0, 1, 0, 0));
+  }
+
+  {
+    Transformd t = Transformd::SkewY(-MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t, TransformIs(1, -1, 0, 1, 0, 0));
+  }
+}
+
+TEST(Transform, IsIdentity) {
+  Transformd defaultConstruct;
+  EXPECT_TRUE(defaultConstruct.isIdentity());
+
+  Transformd noTranslation = Transformd::Translate(0, 0);
+  EXPECT_TRUE(noTranslation.isIdentity());
+}
+
+TEST(Transform, Determinant) {
+  {
+    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_EQ(t.determinant(), 1);
+  }
+
+  {
+    Transformd t = Transformd::Scale({2, 2});
+    EXPECT_EQ(t.determinant(), 4);
+  }
+}
+
 TEST(Transform, Inverse) {
   {
     Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);

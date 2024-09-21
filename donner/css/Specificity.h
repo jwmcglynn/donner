@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <ostream>
 
+#include "donner/base/Utils.h"
+
 namespace donner::css {
 
 /**
@@ -59,6 +61,19 @@ public:
     Important,       ///< `!important` declaration, highest precedence in CSS.
     Override         ///< Values set from C++ API, which overrides all other values.
   };
+
+  /// Output stream operator.
+  friend std::ostream& operator<<(std::ostream& os, const SpecialType& type) {
+    switch (type) {
+      case SpecialType::UserAgent: return os << "UserAgent";
+      case SpecialType::None: return os << "None";
+      case SpecialType::StyleAttribute: return os << "StyleAttribute";
+      case SpecialType::Important: return os << "Important";
+      case SpecialType::Override: return os << "Override";
+    }
+
+    UTILS_UNREACHABLE();
+  }
 
   /// A 3-tuple of integers representing the specificity before modifiers such as the "!important"
   /// flag have been applied.
@@ -152,7 +167,8 @@ public:
   static constexpr Specificity StyleAttribute() { return Specificity(SpecialType::StyleAttribute); }
 
   /**
-   * Creates a specificity that overrides any other value, for overriding styles from the C++ API.
+   * Creates a specificity that overrides any other value, for overriding styles from the C++
+   * API.
    */
   static constexpr Specificity Override() { return Specificity(SpecialType::Override); }
 

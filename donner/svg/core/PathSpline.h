@@ -120,6 +120,11 @@ public:
   struct Vertex {
     Vector2d point;        ///< Point on the path.
     Vector2d orientation;  ///< Orientation of the path at the point, normalized.
+
+    /// Ostream operator for Vertex, which outputs a human-readable representation.
+    friend std::ostream& operator<<(std::ostream& os, const Vertex& vertex) {
+      return os << "Vertex(point=" << vertex.point << ", orientation=" << vertex.orientation << ")";
+    }
   };
 
   /**

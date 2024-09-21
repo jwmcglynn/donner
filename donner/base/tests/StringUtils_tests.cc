@@ -91,7 +91,7 @@ TEST(StringUtils, Equals) {
                                    "test STRING that is longer than 30 characters"sv));
 }
 
-TEST(StringUtils, Equals_IgnoreCase) {
+TEST(StringUtils, EqualsIgnoreCase) {
   EXPECT_TRUE(StringUtils::Equals<StringComparison::IgnoreCase>(""sv, ""sv));
   EXPECT_TRUE(StringUtils::Equals<StringComparison::IgnoreCase>("heLlo"sv, "hello"sv));
   EXPECT_TRUE(StringUtils::Equals<StringComparison::IgnoreCase>("none"sv, "NONE"sv));
@@ -128,7 +128,7 @@ TEST(StringUtils, StartsWith) {
       << "A string always starts with the empty string";
 }
 
-TEST(StringUtils, StartsWith_IgnoreCase) {
+TEST(StringUtils, StartsWithIgnoreCase) {
   EXPECT_TRUE(StringUtils::StartsWith<StringComparison::IgnoreCase>("Hello"sv, "hello"sv));
   EXPECT_TRUE(StringUtils::StartsWith<StringComparison::IgnoreCase>("hello"sv, "HEL"sv));
 }
@@ -147,7 +147,7 @@ TEST(StringUtils, EndsWith) {
       << "A string always ends with the empty string";
 }
 
-TEST(StringUtils, EndsWith_IgnoreCase) {
+TEST(StringUtils, EndsWithIgnoreCase) {
   EXPECT_TRUE(StringUtils::EndsWith<StringComparison::IgnoreCase>("hellO"sv, "llo"sv));
   EXPECT_TRUE(StringUtils::EndsWith<StringComparison::IgnoreCase>("hello"sv, "ELLO"sv));
 }
@@ -167,7 +167,7 @@ TEST(StringUtils, Contains) {
       << "A string always contains the empty string";
 }
 
-TEST(StringUtils, Contains_IgnoreCase) {
+TEST(StringUtils, ContainsIgnoreCase) {
   EXPECT_TRUE(StringUtils::Contains<StringComparison::IgnoreCase>("heLlo"sv, "Ello"sv));
   EXPECT_TRUE(StringUtils::Contains<StringComparison::IgnoreCase>("HELLO"sv, "ell"sv));
   EXPECT_TRUE(StringUtils::Contains<StringComparison::IgnoreCase>("hello"sv, "ELLO"sv));
@@ -209,6 +209,15 @@ TEST(StringUtils, Split) {
 
     EXPECT_THAT(result, ElementsAre("test"sv, "data"sv, "is"sv, "hard"sv));
   }
+}
+
+TEST(StringUtils, TrimWhitespace) {
+  EXPECT_EQ(StringUtils::TrimWhitespace(""sv), ""sv);
+  EXPECT_EQ(StringUtils::TrimWhitespace(" "sv), ""sv);
+  EXPECT_EQ(StringUtils::TrimWhitespace("  "sv), ""sv);
+  EXPECT_EQ(StringUtils::TrimWhitespace("  \t\n\r\v\f  "sv), ""sv);
+  EXPECT_EQ(StringUtils::TrimWhitespace("  \t\n\r\v\f  hello world  \t\n\r\v\f  "sv),
+            "hello world"sv);
 }
 
 }  // namespace donner
