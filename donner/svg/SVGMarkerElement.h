@@ -8,8 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_marker "<marker>"
- * @ingroup elements_basic_shapes
+ * @defgroup xml_marker "<marker>"
  *
  * Creates a marker element that can be used to define graphical objects that can be used repeatedly
  * in a drawing, such as arrowheads or other markers on paths.
