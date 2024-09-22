@@ -57,6 +57,13 @@ public:
   Boxd getViewport(EntityHandle entity);
 
   /**
+   * Returns true if the given entity overrides the viewport.
+   *
+   * @param entity Current entity.
+   */
+  bool overridesViewport(EntityHandle entity) const;
+
+  /**
    * Get the document size scaled to fit the canvas.
    *
    * @param registry ECS registry

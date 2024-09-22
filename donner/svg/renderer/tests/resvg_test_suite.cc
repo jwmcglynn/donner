@@ -317,7 +317,6 @@ INSTANTIATE_TEST_SUITE_P(
         "e-marker",
         {
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
-            {"e-marker-009.svg", Params::Skip()},  // Not impl: marker `viewBox`
             {"e-marker-017.svg", Params::Skip()},  // Not impl: `text`
             {"e-marker-018.svg", Params::Skip()},  // Not impl: `text`
             {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image

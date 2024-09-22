@@ -1061,10 +1061,18 @@ public:
       return;
     }
 
+    const Boxd markerSize =
+        Boxd::FromXYWH(0, 0, markerComponent.markerWidth, markerComponent.markerHeight);
+
     // Get the marker's viewBox and preserveAspectRatio
-    const Boxd markerViewBox = markerComponent.viewBox.value_or(
-        Boxd::FromXYWH(0, 0, markerComponent.markerWidth, markerComponent.markerHeight));
-    const PreserveAspectRatio preserveAspectRatio = markerComponent.preserveAspectRatio;
+    components::LayoutSystem layoutSystem;
+
+    const std::optional<Boxd> markerViewBox =
+        layoutSystem.overridesViewport(markerHandle)
+            ? std::optional<Boxd>(layoutSystem.getViewport(markerHandle))
+            : std::nullopt;
+    const PreserveAspectRatio preserveAspectRatio =
+        markerHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 
     // Compute the rotation angle according to the orient attribute
     const double angleRadians =
@@ -1080,20 +1088,23 @@ public:
       markerScale = strokeWidth;
     }
 
-    const Transformd markerUserSpaceFromVertex =
-        Transformd::Translate(-markerComponent.refX, -markerComponent.refY) *
-        preserveAspectRatio.computeTransform(
-            Boxd::FromXYWH(0, 0, markerComponent.markerWidth, markerComponent.markerHeight),
-            markerViewBox);
+    const Transformd markerUnitsFromViewbox =
+        preserveAspectRatio.computeTransform(markerSize, markerViewBox);
+
+    const Transformd markerOffsetFromVertex =
+        Transformd::Translate(-markerComponent.refX * markerUnitsFromViewbox.data[0],
+                              -markerComponent.refY * markerUnitsFromViewbox.data[3]);
 
     const Transformd vertexFromEntity = Transformd::Scale(markerScale) *
                                         Transformd::Rotate(angleRadians) *
                                         Transformd::Translate(vertexPosition);
 
-    const Transformd markerUserSpaceFromEntity = markerUserSpaceFromVertex * vertexFromEntity;
+    const Transformd vertexFromWorld =
+        vertexFromEntity * layerBaseTransform_ * instance.entityFromWorldTransform;
 
     const Transformd markerUserSpaceFromWorld =
-        markerUserSpaceFromEntity * layerBaseTransform_ * instance.entityFromWorldTransform;
+        Transformd::Scale(markerUnitsFromViewbox.data[0], markerUnitsFromViewbox.data[3]) *
+        markerOffsetFromVertex * vertexFromWorld;
 
     // Now, render the marker's content with the computed transform
     auto layerBaseRestore = overrideLayerBaseTransform(markerUserSpaceFromWorld);
@@ -1105,7 +1116,7 @@ public:
     const Overflow overflow = computedStyle.properties->overflow.getRequired();
     if (overflow != Overflow::Visible && overflow != Overflow::Auto) {
       renderer_.currentCanvas_->clipRect(
-          toSkia(markerUserSpaceFromWorld.transformBox(markerViewBox)));
+          toSkia(markerUserSpaceFromWorld.transformBox(markerViewBox.value_or(markerSize))));
     }
 
     // Render the marker's content

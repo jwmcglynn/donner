@@ -22,9 +22,6 @@ struct MarkerComponent {
 
   MarkerUnits markerUnits =
       MarkerUnits::Default;  //!< Coordinate system for marker attributes and contents.
-
-  std::optional<Boxd> viewBox;              //!< Optional viewBox attribute.
-  PreserveAspectRatio preserveAspectRatio;  //!< preserveAspectRatio property.
 };
 
 }  // namespace donner::svg::components

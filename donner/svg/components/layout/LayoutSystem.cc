@@ -240,6 +240,14 @@ Boxd LayoutSystem::getViewport(EntityHandle entity) {
   return parentViewbox.value();
 }
 
+bool LayoutSystem::overridesViewport(EntityHandle entity) const {
+  if (const auto* viewboxComponent = entity.try_get<ViewboxComponent>()) {
+    return viewboxComponent->viewbox.has_value();
+  }
+
+  return false;
+}
+
 Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
                                                          InvalidSizeBehavior behavior) const {
   const Vector2d documentSize = calculateDocumentSize(registry);
