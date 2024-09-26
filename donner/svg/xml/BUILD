@@ -1,5 +1,5 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
 
 ENABLE_EXCEPTIONS_OPTS = ["-fexceptions"]
 
@@ -77,5 +77,16 @@ donner_cc_library(
     deps = [
         ":xml_details",
         "//donner/svg:svg_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "xml_parser_fuzzer",
+    srcs = [
+        "tests/XMLParser_fuzzer.cc",
+    ],
+    corpus = "tests/xml_parser_corpus",
+    deps = [
+        ":xml",
     ],
 )
