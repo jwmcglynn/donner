@@ -143,6 +143,13 @@ STL and third-party dependencies do not use this, and use angle brackets:
 - **Parameters and Local Variables**: `lowerCamelCase`.
 - **Constants**: Use the `k` prefix, and then `UpperCamelCase`: `kExampleConstant`.
 
+For variables that hold values with units, such as milliseconds, either use a strongly-typed container or include the unit in the variable name:
+
+```cpp
+const int kTimeoutMs = 100; // ok
+const Duration kTimeout = Duration::Milliseconds(2.0); // ok
+```
+
 **Example in context:**
 
 ```cpp
@@ -284,6 +291,19 @@ Apply `const` whenever possible, for any methods that don't modify the object's 
 
 ```cpp
 Vector2d pointAt(size_t index, double t) const;
+```
+
+For variables, use `const` whenever possible. Only variables that are modified after initialization should be non-const.
+
+```cpp
+const int result = computeResult();
+
+// Mutable variables are ok but should be used sparingly.
+int timeoutRemainingMs = 100;
+while (timeoutRemainingMs > 0) {
+  // ...
+  timeoutRemainingMs -= elapsedTime();
+}
 ```
 
 #### struct and class
