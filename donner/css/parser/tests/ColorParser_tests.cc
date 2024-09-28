@@ -115,8 +115,6 @@ TEST(ColorParser, Block) {
 }
 
 TEST(ColorParser, FunctionNotImplemented) {
-  EXPECT_THAT(ColorParser::ParseString("lab(1,2,3)"), ParseErrorIs("Not implemented"));
-  EXPECT_THAT(ColorParser::ParseString("lch(1,2,3)"), ParseErrorIs("Not implemented"));
   EXPECT_THAT(ColorParser::ParseString("color(1,2,3)"), ParseErrorIs("Not implemented"));
   EXPECT_THAT(ColorParser::ParseString("device-cmyk(1,2,3)"), ParseErrorIs("Not implemented"));
 }
@@ -315,6 +313,96 @@ TEST(ColorParser, Hwb) {
               ParseErrorIs("Unexpected EOF when parsing function 'hwb'"));
   EXPECT_THAT(ColorParser::ParseString("hwb(0 0% 0% 0% 0%)"),
               ParseErrorIs("Missing delimiter for alpha when parsing function 'hwb'"));
+}
+
+TEST(ColorParser, Lab) {
+  // Valid lab() parsing
+  // Mid gray (L=50%, a=0, b=0)
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 255))));
+  // White (L=100%)
+  EXPECT_THAT(ColorParser::ParseString("lab(100% 0 0)"),
+              ParseResultIs(Color(RGBA(255, 255, 255, 255))));
+  // Black (L=0%)
+  EXPECT_THAT(ColorParser::ParseString("lab(0% 0 0)"), ParseResultIs(Color(RGBA(0, 0, 0, 255))));
+  // Red color
+  EXPECT_THAT(ColorParser::ParseString("lab(54.29% 80.81 69.89)"),
+              ParseResultIs(Color(RGBA(255, 0, 0, 255))));
+  // With alpha value
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 / 0.5)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 128))));
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 / 50%)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 127))));
+  // Percentages for a and b
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 20% -40%)"),
+              ParseResultIs(Color(RGBA(122, 106, 205, 255))));
+  // Clamping L below 0%
+  EXPECT_THAT(ColorParser::ParseString("lab(-10% 0 0)"), ParseResultIs(Color(RGBA(0, 0, 0, 255))));
+  // Clamping L above 100%
+  EXPECT_THAT(ColorParser::ParseString("lab(110% 0 0)"),
+              ParseResultIs(Color(RGBA(255, 255, 255, 255))));
+}
+
+TEST(ColorParser, LabErrors) {
+  // Missing components
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0)"),
+              ParseErrorIs("Unexpected EOF when parsing function 'lab'"));
+  // Extra components
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 0)"),
+              ParseErrorIs("Missing delimiter for alpha when parsing function 'lab'"));
+  // Invalid tokens
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 invalid)"),
+              ParseErrorIs("Missing delimiter for alpha when parsing function 'lab'"));
+  // Missing slash before alpha
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 0.5)"),
+              ParseErrorIs("Missing delimiter for alpha when parsing function 'lab'"));
+  // Invalid alpha value
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 / invalid)"),
+              ParseErrorIs("Unexpected alpha value"));
+}
+
+TEST(ColorParser, Lch) {
+  // Valid lch() parsing
+  // Mid gray (L=50%, C=0)
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 255))));
+  // Red color
+  EXPECT_THAT(ColorParser::ParseString("lch(54.29% 106.84 40.86)"),
+              ParseResultIs(Color(RGBA(255, 0, 0, 255))));
+  // With alpha value
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 / 0.5)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 128))));
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 / 50%)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 127))));
+  // Clamping L below 0%
+  EXPECT_THAT(ColorParser::ParseString("lch(-10% 0 0)"), ParseResultIs(Color(RGBA(0, 0, 0, 255))));
+  // Clamping L above 100%
+  EXPECT_THAT(ColorParser::ParseString("lch(110% 0 0)"),
+              ParseResultIs(Color(RGBA(255, 255, 255, 255))));
+  // Negative chroma clamped to 0
+  EXPECT_THAT(ColorParser::ParseString("lch(50% -10 30)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 255))));
+  // Hue angle normalization
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 50 -30deg)"),
+              ParseResultIs(Color(RGBA(173, 87, 163, 255))));
+}
+
+TEST(ColorParser, LchErrors) {
+  // Missing components
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0)"),
+              ParseErrorIs("Unexpected EOF when parsing function 'lch'"));
+  // Extra components
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 0)"),
+              ParseErrorIs("Missing delimiter for alpha when parsing function 'lch'"));
+  // Invalid tokens
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 invalid)"),
+              ParseErrorIs("Missing delimiter for alpha when parsing function 'lch'"));
+  // Missing slash before alpha
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 0.5)"),
+              ParseErrorIs("Missing delimiter for alpha when parsing function 'lch'"));
+  // Invalid alpha value
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 / invalid)"),
+              ParseErrorIs("Unexpected alpha value"));
 }
 
 }  // namespace donner::css::parser
