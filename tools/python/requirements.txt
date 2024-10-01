@@ -2,6 +2,6 @@ certifi==2024.8.30
 charset-normalizer==3.3.2
 idna==3.8
 requests==2.32.3
-urllib3==2.2.2
+urllib3==2.2.3
 numpy==2.1.1
 scipy==1.14.1
