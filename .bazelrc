@@ -31,7 +31,8 @@ build --copt=-fno-rtti
 build --incompatible_enable_cc_toolchain_resolution
 
 # Enable building with the latest llvm toolchain (downloaded on-demand, see MODULE.bazel)
-build:latest_llvm --extra_toolchains=@llvm_toolchain//:all
+common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
+common:latest_llvm --//build_defs:llvm_latest=1
 
 # Build with the latest llvm toolchain by default on Linux. Do not set on mac since it cannot be used to build objc
 # and the imgui viewer requires it
@@ -94,6 +95,7 @@ test:coverage --collect_code_coverage
 test:coverage --nocache_test_results
 
 # Basic ASAN/UBSAN that works for gcc
+build:asan --config=latest_llvm
 build:asan --linkopt -ldl
 build:asan --copt -fsanitize=address,undefined
 build:asan --linkopt -fsanitize=address,undefined
@@ -108,7 +110,6 @@ build:asan --strip=never
 # Fuzzing builds
 build:asan-fuzzer --config=asan
 build:asan-fuzzer --define=FUZZING_ENGINE=libfuzzer
-build:asan-fuzzer --copt=-fsanitize=fuzzer-no-link
 build:asan-fuzzer --copt=-fno-omit-frame-pointer
 build:asan-fuzzer --copt=-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 build:asan-fuzzer --test_env=UBSAN_OPTIONS=print_stacktrace=1

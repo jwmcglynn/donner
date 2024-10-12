@@ -28,3 +28,9 @@ When a failure occurs, a repro file is saved out. To guard against future crashe
 ```sh
 mv ./crash-0f6f12d023e0ad5ed83b29763cd67315e0ee0c6b donner/css/parser/tests/declaration_list_parser_corpus/
 ```
+
+# To run all fuzz tests
+
+```sh
+bazel test --config=asan-fuzzer --test_tag_filters=fuzz_target //...
+```
