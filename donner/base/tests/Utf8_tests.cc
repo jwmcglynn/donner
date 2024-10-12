@@ -1,10 +1,8 @@
-#include "donner/css/parser/details/Common.h"
+#include "donner/base/Utf8.h"
 
 #include <gtest/gtest.h>
 
-namespace donner::css::parser {
-
-using details::Utf8SequenceLength;
+namespace donner::base {
 
 TEST(CommonUtf8, SequenceLength) {
   for (int i = 0; i < 0x80; ++i) {
@@ -34,4 +32,4 @@ TEST(CommonUtf8, SequenceLength) {
   }
 }
 
-}  // namespace donner::css::parser
+}  // namespace donner::base

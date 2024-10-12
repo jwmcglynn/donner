@@ -15,6 +15,7 @@ donner_cc_library(
         "SmallVector.h",
         "StringUtils.h",
         "Transform.h",
+        "Utf8.h",
         "Utils.h",
         "Vector2.h",
     ],

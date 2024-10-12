@@ -42,7 +42,6 @@ cc_test(
     srcs = [
         "tests/AnbMicrosyntaxParser_tests.cc",
         "tests/ColorParser_tests.cc",
-        "tests/Common_tests.cc",
         "tests/DeclarationListParser_tests.cc",
         "tests/RuleParser_tests.cc",
         "tests/SelectorParser_tests.cc",
