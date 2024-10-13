@@ -215,7 +215,7 @@ public:
   /**
    * @return if the string is empty.
    */
-  bool empty() const { return data_.short_.size() == 0; }
+  bool empty() const { return !data_.isLong() && data_.short_.size() == 0; }
 
   /**
    * @return the length of the string.

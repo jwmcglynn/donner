@@ -259,6 +259,13 @@ TEST(RcString, Size) {
     EXPECT_FALSE(str.empty());
     EXPECT_EQ(str.size(), 45);
   }
+
+  for (size_t i = 1; i < 512; ++i) {
+    std::string origStr(i, 'a');
+    RcString str(origStr);
+    EXPECT_FALSE(str.empty()) << "i = " << i;
+    EXPECT_EQ(str.size(), i);
+  }
 }
 
 TEST(RcString, Str) {
