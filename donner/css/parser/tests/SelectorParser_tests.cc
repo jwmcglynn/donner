@@ -355,6 +355,9 @@ TEST(SelectorParser, InvalidAttributeSelector) {
                   "Expected string or ident after matcher ('~=', '|=', '^=', '$=', '*=', or '=')"));
   EXPECT_THAT(SelectorParser::Parse("[attr~=extra[]]"),
               ParseErrorIs("Expected end of attribute selector, but found more items"));
+
+  EXPECT_THAT(SelectorParser::Parse("[attr/]"),
+              ParseErrorIs("Expected attribute matcher ('~=', '|=', '^=', '$=', '*=', or '=')"));
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm

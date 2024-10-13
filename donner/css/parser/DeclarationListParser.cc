@@ -56,7 +56,7 @@ struct ParseUntilSemicolonOrEOF {
 
   ~ParseUntilSemicolonOrEOF() {
     while (!isEOF()) {
-      next_ = std::move(tokenizer_.next());
+      (void)next();
     }
   }
 
@@ -90,6 +90,9 @@ std::optional<Declaration> parseDeclarationGeneric(T& tokenizer, Token&& token) 
     Token::Ident ident = std::move(token.get<Token::Ident>());
 
     // A declaration list ends when it reaches a <semicolon-token> or <EOF-token>.
+    if (tokenizer.isEOF()) {
+      return std::nullopt;
+    }
     ParseUntilSemicolonOrEOF<T> declarationInputTokenizer(tokenizer);
     return consumeDeclaration(declarationInputTokenizer, std::move(ident), token.offset());
   } else {
@@ -197,6 +200,9 @@ std::vector<Declaration> DeclarationListParser::ParseOnlyDeclarations(std::strin
 std::vector<Declaration> DeclarationListParser::ParseRuleDeclarations(
     std::span<ComponentValue> components) {
   std::vector<Declaration> result;
+  if (components.empty()) {
+    return result;
+  }
 
   SubTokenizer<ComponentValue> tokenizer(components);
   details::DeclarationComponentValueTokenizer declarationTokenizer(tokenizer);

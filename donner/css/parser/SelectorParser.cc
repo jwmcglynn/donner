@@ -876,7 +876,7 @@ private:
           case '$': return AttrMatcher::SuffixMatch;
           case '*': return AttrMatcher::SubstringMatch;
           case '=': return AttrMatcher::Eq;
-          default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
+          default: return std::nullopt;
         }
       }
 
