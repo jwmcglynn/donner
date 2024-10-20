@@ -4,10 +4,16 @@ cd "$(bazel info workspace)"
 
 mkdir -p build-binary-size
 
-# Bazel options used:
-# --incompatible_strict_action_env disables the warning when the analysis cache is discarded (when changing options such as compilation mode)
-# --ui_event_filters=-info,-stdout,-stderr --noshow_progress hides all compile output
-BAZEL_QUIET_OPTIONS="--ui_event_filters=-info,-warning,-stdout,-stderr --noshow_progress"
+# If verbose is set, show all output
+if [[ "$1" == "--verbose" ]]; then
+  BAZEL_QUIET_OPTIONS=""
+  set -ex
+else
+  # Bazel options used:
+  # --incompatible_strict_action_env disables the warning when the analysis cache is discarded (when changing options such as compilation mode)
+  # --ui_event_filters=-info,-stdout,-stderr --noshow_progress hides all compile output
+  BAZEL_QUIET_OPTIONS="--ui_event_filters=-info,-warning,-stdout,-stderr --noshow_progress"
+fi
 
 BAZEL_CONFIGS="--config=binary-size"
 

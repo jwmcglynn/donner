@@ -155,6 +155,7 @@ def create_build_report(
         report += "## External dependencies\n\n"
 
         external_dependencies = query_external_dependencies()
+        external_dependencies.sort()
         for dependency in external_dependencies:
             report += f"- {dependency}\n"
         report += "\n\n"
