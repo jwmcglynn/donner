@@ -14,7 +14,6 @@ donner_cc_library(
         ":parser_header",
         "//donner/base/xml",
         "//donner/svg:svg_core",
-        "@rapidxml_ns",
     ],
 )
 
