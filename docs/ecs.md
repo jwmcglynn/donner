@@ -18,7 +18,8 @@ An entity is created by calling `registry.create()` without any components. Here
 EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& tagName,
                                       ElementType type) {
   Entity entity = registry.create();
-  registry.emplace<components::TreeComponent>(entity, type, tagName);
+  registry.emplace<components::TreeComponent>(entity, tagName);
+  registry.emplace<components::ElementTypeComponent>(entity, type);
   registry.emplace<components::TransformComponent>(entity);
   return EntityHandle(registry, entity);
 }

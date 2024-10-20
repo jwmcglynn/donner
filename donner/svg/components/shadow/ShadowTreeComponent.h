@@ -1,10 +1,10 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RcStringOrRef.h"
 #include "donner/svg/graph/Reference.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

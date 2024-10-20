@@ -3,9 +3,9 @@
 
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/graph/Reference.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

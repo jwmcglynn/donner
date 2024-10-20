@@ -1,11 +1,11 @@
 #include "donner/svg/renderer/RendererWasmCanvas.h"
 
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
@@ -37,7 +37,8 @@ public:
 
       if (renderer_.verbose_) {
         std::cout << "Rendering "
-                  << registry.get<components::TreeComponent>(instance.dataEntity).type() << " ";
+                  << registry.get<components::ElementTypeComponent>(instance.dataEntity).type()
+                  << " ";
 
         if (const auto* idComponent =
                 registry.try_get<components::IdComponent>(instance.dataEntity)) {

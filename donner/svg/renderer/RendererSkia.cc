@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererSkia.h"
 
 // Skia
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
@@ -13,13 +14,13 @@
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
 //
+#include "donner/base/xml/components/TreeComponent.h"  // ForAllChildren
 #include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -178,7 +179,8 @@ public:
 
       if (renderer_.verbose_) {
         std::cout << "Rendering "
-                  << registry.get<components::TreeComponent>(instance.dataEntity).type() << " ";
+                  << registry.get<components::ElementTypeComponent>(instance.dataEntity).type()
+                  << " ";
 
         if (const auto* idComponent =
                 registry.try_get<components::IdComponent>(instance.dataEntity)) {
@@ -255,7 +257,7 @@ public:
           // Iterate over children and add any paths to the clip.
           // TODO(jwmcglynn): Move path/clip-rule aggregation and to a Computed component
           // pre-calculation?
-          components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
+          donner::components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
             if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
               SkPath path = toSkia(clipPathData->spline);
               path.transform(skUserSpaceFromClipPathContent);

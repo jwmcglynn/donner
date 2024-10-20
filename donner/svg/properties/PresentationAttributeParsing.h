@@ -1,8 +1,8 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"  // For EntityHandle
 #include "donner/svg/properties/PropertyParsing.h"
-#include "donner/svg/registry/Registry.h"  // For EntityHandle
 
 namespace donner::svg::parser {
 

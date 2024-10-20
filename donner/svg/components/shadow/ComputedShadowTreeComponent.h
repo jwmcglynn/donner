@@ -3,8 +3,8 @@
 
 #include <span>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
-#include "donner/svg/registry/Registry.h"
 
 // TODO(jwmcglynn): Automatically delete ComputedShadowTreeComponent when ShadowTreeComponent is
 // removed.

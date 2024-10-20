@@ -14,7 +14,6 @@ cc_library(
     ],
     deps = [
         "//donner/base",
-        "//donner/svg/registry",
     ],
 )
 
@@ -22,18 +21,16 @@ cc_library(
     name = "components_core",
     srcs = [
         "StylesheetComponent.cc",
-        "TreeComponent.cc",
     ],
     hdrs = [
-        "AttributesComponent.h",
         "ClassComponent.h",
+        "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
         "PathLengthComponent.h",
         "PreserveAspectRatioComponent.h",
         "RenderingBehaviorComponent.h",
         "RenderingInstanceComponent.h",
         "StylesheetComponent.h",
-        "TreeComponent.h",
     ],
     visibility = [
         "//donner/css:__pkg__",
@@ -41,13 +38,14 @@ cc_library(
     ],
     deps = [
         ":document_context",
+        "//donner/base",
         "//donner/base/xml",
+        "//donner/base/xml/components",
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
         "//donner/svg/parser",
         "//donner/svg/properties",
-        "//donner/svg/registry",
     ],
 )
 
@@ -67,18 +65,5 @@ cc_library(
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/components/shape:shape_system",
-    ],
-)
-
-cc_test(
-    name = "components_tests",
-    srcs = [
-        "tests/AttributesComponent_tests.cc",
-        "tests/TreeComponent_tests.cc",
-    ],
-    deps = [
-        ":components",
-        "//donner/base:base_test_utils",
-        "@com_google_gtest//:gtest_main",
     ],
 )

@@ -1,6 +1,6 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 
-#include "donner/svg/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
@@ -38,7 +38,7 @@ void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent&
   // deleted.
   if (shadow.mainBranch) {
     for (const auto& shadow : shadow.mainBranch->shadowEntities) {
-      registry.get<TreeComponent>(shadow).remove(registry);
+      registry.get<donner::components::TreeComponent>(shadow).remove(registry);
     }
 
     registry.destroy(shadow.mainBranch->shadowEntities.begin(),
@@ -47,7 +47,7 @@ void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent&
 
   for (const auto& branch : shadow.branches) {
     for (const auto& shadow : branch.shadowEntities) {
-      registry.get<TreeComponent>(shadow).remove(registry);
+      registry.get<donner::components::TreeComponent>(shadow).remove(registry);
     }
 
     registry.destroy(branch.shadowEntities.begin(), branch.shadowEntities.end());
@@ -79,8 +79,8 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(
   }
 
   std::set<Entity> shadowHostParents;
-  for (auto cur = entity.get<TreeComponent>().parent(); cur != entt::null;
-       cur = entity.registry()->get<TreeComponent>(cur).parent()) {
+  for (auto cur = entity.get<donner::components::TreeComponent>().parent(); cur != entt::null;
+       cur = entity.registry()->get<donner::components::TreeComponent>(cur).parent()) {
     shadowHostParents.insert(cur);
   }
 
@@ -114,8 +114,8 @@ Entity ShadowTreeSystem::createShadowEntity(Registry& registry, ShadowBranchType
                                             ComputedShadowTreeComponent::BranchStorage& storage,
                                             Entity lightTarget, Entity shadowParent) {
   const Entity shadow = registry.create();
-  const TreeComponent& lightTargetTree = registry.get<TreeComponent>(lightTarget);
-  registry.emplace<TreeComponent>(shadow, lightTargetTree.type(), lightTargetTree.tagName());
+  const auto& lightTargetTree = registry.get<donner::components::TreeComponent>(lightTarget);
+  registry.emplace<donner::components::TreeComponent>(shadow, lightTargetTree.tagName());
   registry.emplace<ShadowEntityComponent>(shadow, lightTarget);
   registry.emplace<ComputedStyleComponent>(shadow);
 
@@ -127,7 +127,7 @@ Entity ShadowTreeSystem::createShadowEntity(Registry& registry, ShadowBranchType
 
   // Don't attach to the parent if this is the start of an offscreen tree.
   if (branchType == ShadowBranchType::Main || lightTarget != storage.lightTarget) {
-    registry.get<TreeComponent>(shadowParent).appendChild(registry, shadow);
+    registry.get<donner::components::TreeComponent>(shadowParent).appendChild(registry, shadow);
   }
 
   storage.shadowEntities.push_back(shadow);
@@ -201,8 +201,9 @@ void ShadowTreeSystem::computeChildren(Registry& registry, ShadowBranchType bran
     const Entity shadow =
         createShadowEntity(registry, branchType, storage, lightTarget, shadowParent);
 
-    for (auto child = registry.get<TreeComponent>(lightTarget).firstChild(); child != entt::null;
-         child = registry.get<TreeComponent>(child).nextSibling()) {
+    for (auto child = registry.get<donner::components::TreeComponent>(lightTarget).firstChild();
+         child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
       RecursionGuard childGuard = guard.with(child);
       computeChildren(registry, branchType, storage, guard, shadow, child, shadowHostParents,
                       outWarnings);

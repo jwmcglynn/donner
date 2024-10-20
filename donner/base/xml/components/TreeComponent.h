@@ -1,16 +1,15 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/svg/registry/ElementType.h"
-#include "donner/svg/registry/Registry.h"
 
-namespace donner::svg::components {
+namespace donner::components {
 
 /**
- * Stores the tree structure for an SVG element, such as the parent, children, and siblings.
+ * Stores the tree structure for an XML element, such as the parent, children, and siblings.
  *
  * This component is added to all entities that are part of the SVG tree, and is used to navigate
  * the tree structure.
@@ -20,12 +19,11 @@ public:
   /**
    * Construct a new tree component with the given \p type and \p tagName.
    *
-   * @param type The type of the element.
    * @param tagName The qualified tag name of the element, which may include a namespace. (e.g.
    * "svg")
    */
-  TreeComponent(ElementType type, const XMLQualifiedNameRef& tagName)
-      : type_(type), tagName_(RcString(tagName.namespacePrefix), RcString(tagName.name)) {}
+  explicit TreeComponent(const XMLQualifiedNameRef& tagName)
+      : tagName_(RcString(tagName.namespacePrefix), RcString(tagName.name)) {}
 
   /**
    * Insert \a newNode as a child, before \a referenceNode. If \a referenceNode is entt::null,
@@ -80,9 +78,6 @@ public:
    */
   void remove(Registry& registry);
 
-  /// Get the parsed element type as an enum.
-  ElementType type() const { return type_; }
-
   /// Get the qualified tag name of the element, e.g. "svg".
   XMLQualifiedNameRef tagName() const { return tagName_; }
 
@@ -105,7 +100,6 @@ public:
   Entity nextSibling() const { return nextSibling_; }
 
 private:
-  ElementType type_;  //!< Type of the element as a parsed enum, if known (e.g. SVG, Circle, etc.)
   XMLQualifiedName tagName_;  //!< Qualified tag name of the element, e.g. "svg"
 
   Entity parent_{entt::null};      //!< Parent of this node, or \c entt::null if this is the root.
@@ -151,4 +145,4 @@ void ForAllChildren(EntityHandle handle, const Func& func) {
   }
 }
 
-}  // namespace donner::svg::components
+}  // namespace donner::components

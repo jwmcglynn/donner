@@ -49,7 +49,7 @@ cc_library(
     ],
     deps = [
         ":components",
+        "//donner/base",
         "//donner/svg/components:components_core",
-        "//donner/svg/registry",
     ],
 )

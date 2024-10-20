@@ -1,9 +1,9 @@
 #pragma once
 /// @file
 
-#include "donner/svg/components/TreeComponent.h"
+#include "donner/base/EcsRegistry.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/properties/PropertyRegistry.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 
@@ -37,8 +37,8 @@ struct StyleComponent {
    */
   parser::ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
                                                         std::string_view value) {
-    return properties.parsePresentationAttribute(name, value, handle.get<TreeComponent>().type(),
-                                                 handle);
+    return properties.parsePresentationAttribute(name, value,
+                                                 handle.get<ElementTypeComponent>().type(), handle);
   }
 };
 

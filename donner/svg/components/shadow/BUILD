@@ -13,8 +13,8 @@ cc_library(
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
+        "//donner/base",
         "//donner/svg/graph",
-        "//donner/svg/registry",
     ],
 )
 

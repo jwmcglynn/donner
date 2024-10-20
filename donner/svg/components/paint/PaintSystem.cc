@@ -1,8 +1,8 @@
 #include "donner/svg/components/paint/PaintSystem.h"
 
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
@@ -28,9 +28,9 @@ namespace {
 bool HasNoStructuralChildren(EntityHandle handle) {
   const Registry& registry = *handle.registry();
 
-  const TreeComponent& tree = handle.get<TreeComponent>();
+  const auto& tree = handle.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
-       cur = registry.get<TreeComponent>(cur).nextSibling()) {
+       cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
     // TODO(jwmcglynn): Detect <desc>, <metadata>, <title> elements.
     return false;
   }
@@ -154,9 +154,9 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
   //
   // 3. Parse GradientStop information into the computed component.
   //
-  const TreeComponent& tree = treeEntity.get<TreeComponent>();
+  const auto& tree = treeEntity.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
-       cur = registry.get<TreeComponent>(cur).nextSibling()) {
+       cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
     if (const auto* stop = registry.try_get<ComputedStopComponent>(cur)) {
       computedGradient.stops.emplace_back(
           GradientStop{stop->properties.offset, stop->properties.stopColor.getRequired(),

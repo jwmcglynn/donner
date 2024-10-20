@@ -1,4 +1,4 @@
-#include "donner/svg/components/AttributesComponent.h"
+#include "donner/base/xml/components/AttributesComponent.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -7,7 +7,7 @@
 
 using testing::ElementsAre;
 
-namespace donner::svg::components {
+namespace donner::components {
 
 TEST(AttributesComponent, FindMatchingAttributes) {
   AttributesComponent component;
@@ -27,4 +27,4 @@ TEST(AttributesComponent, FindMatchingAttributes) {
                   XMLQualifiedNameRef("namespace", "test")));
 }
 
-}  // namespace donner::svg::components
+}  // namespace donner::components

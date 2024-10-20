@@ -1,16 +1,17 @@
 #include "donner/svg/components/style/StyleSystem.h"
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/svg/components/AttributesComponent.h"
+#include "donner/base/xml/components/AttributesComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ClassComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/StyleComponent.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 
@@ -27,36 +28,42 @@ struct ShadowedElementAdapter {
   Entity entity() const { return treeEntity_; }
 
   std::optional<ShadowedElementAdapter> parentElement() const {
-    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).parent();
+    const Entity target =
+        registry_.get().get<donner::components::TreeComponent>(treeEntity_).parent();
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
   std::optional<ShadowedElementAdapter> firstChild() const {
-    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).firstChild();
+    const Entity target =
+        registry_.get().get<donner::components::TreeComponent>(treeEntity_).firstChild();
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
   std::optional<ShadowedElementAdapter> lastChild() const {
-    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).lastChild();
+    const Entity target =
+        registry_.get().get<donner::components::TreeComponent>(treeEntity_).lastChild();
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
   std::optional<ShadowedElementAdapter> previousSibling() const {
-    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).previousSibling();
+    const Entity target =
+        registry_.get().get<donner::components::TreeComponent>(treeEntity_).previousSibling();
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
   std::optional<ShadowedElementAdapter> nextSibling() const {
-    const Entity target = registry_.get().get<TreeComponent>(treeEntity_).nextSibling();
+    const Entity target =
+        registry_.get().get<donner::components::TreeComponent>(treeEntity_).nextSibling();
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
   XMLQualifiedNameRef tagName() const {
-    return registry_.get().get<TreeComponent>(treeEntity_).tagName();
+    return registry_.get().get<donner::components::TreeComponent>(treeEntity_).tagName();
   }
 
   bool isKnownType() const {
-    return registry_.get().get<TreeComponent>(treeEntity_).type() != svg::ElementType::Unknown;
+    return registry_.get().get<ElementTypeComponent>(treeEntity_).type() !=
+           svg::ElementType::Unknown;
   }
 
   RcString id() const {
@@ -76,7 +83,8 @@ struct ShadowedElementAdapter {
   }
 
   bool hasAttribute(const XMLQualifiedNameRef& name) const {
-    if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
+    if (const auto* component =
+            registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->hasAttribute(name);
     } else {
       return false;
@@ -84,7 +92,8 @@ struct ShadowedElementAdapter {
   }
 
   std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const {
-    if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
+    if (const auto* component =
+            registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->getAttribute(name);
     } else {
       return std::nullopt;
@@ -93,7 +102,8 @@ struct ShadowedElementAdapter {
 
   SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
       const XMLQualifiedNameRef& matcher) const {
-    if (const auto* component = registry_.get().try_get<AttributesComponent>(dataEntity_)) {
+    if (const auto* component =
+            registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->findMatchingAttributes(matcher);
     } else {
       return {};
@@ -165,7 +175,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   // Inherit from parent.
-  if (const Entity parent = handle.get<TreeComponent>().parent(); parent != entt::null) {
+  if (const Entity parent = handle.get<donner::components::TreeComponent>().parent();
+      parent != entt::null) {
     auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
     computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, outWarnings);
 
@@ -187,7 +198,7 @@ void StyleSystem::computeAllStyles(Registry& registry,
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating
   // computed style components also creates the parents, and we can't modify the component list
   // while iterating it.
-  auto view = registry.view<TreeComponent>();
+  auto view = registry.view<donner::components::TreeComponent>();
   for (auto entity : view) {
     std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
   }

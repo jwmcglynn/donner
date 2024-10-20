@@ -4,9 +4,9 @@
 #include <memory>
 #include <string_view>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/core/PathSpline.h"
-#include "donner/svg/registry/Registry.h"
 #include "donner/svg/renderer/wasm_canvas/Canvas.h"
 
 namespace donner::svg {

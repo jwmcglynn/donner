@@ -1,8 +1,8 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/registry/Registry.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkGraphics.h"

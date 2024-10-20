@@ -1,8 +1,8 @@
-#include "donner/svg/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 
 #include "donner/base/Utils.h"
 
-namespace donner::svg::components {
+namespace donner::components {
 
 void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity referenceNode) {
   UTILS_RELEASE_ASSERT_MSG(newNode != entt::null, "newNode is null");
@@ -134,4 +134,4 @@ void TreeComponent::remove(Registry& registry) {
   }
 }
 
-}  // namespace donner::svg::components
+}  // namespace donner::components

@@ -1,6 +1,6 @@
 #include "donner/svg/components/filter/FilterSystem.h"
 
-#include "donner/svg/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 
 namespace donner::svg::components {
@@ -12,9 +12,9 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
   std::vector<FilterEffect> effectChain;
 
   // Find all FilterPrimitiveComponent instances in this filter
-  const TreeComponent& tree = handle.get<TreeComponent>();
+  const donner::components::TreeComponent& tree = handle.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
-       cur = registry.get<TreeComponent>(cur).nextSibling()) {
+       cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
     if (const auto* primitive = registry.try_get<FilterPrimitiveComponent>(cur)) {
       // Determine which filter primitive we have.
       if (auto* blur = registry.try_get<FEGaussianBlurComponent>(cur)) {

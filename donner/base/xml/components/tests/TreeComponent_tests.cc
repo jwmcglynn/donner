@@ -1,4 +1,4 @@
-#include "donner/svg/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest-death-test.h>
@@ -9,13 +9,13 @@
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 
-namespace donner::svg::components {
+namespace donner::components {
 
 class TreeComponentTests : public testing::Test {
 protected:
   Entity createEntity() {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::Unknown, XMLQualifiedNameRef("unknown"));
+    registry_.emplace<TreeComponent>(entity, XMLQualifiedNameRef("unknown"));
     return entity;
   }
 
@@ -294,19 +294,6 @@ TEST_F(TreeComponentTests, Remove) {
   EXPECT_THAT(children(root), ElementsAre(child3));
 }
 
-TEST_F(TreeComponentTests, Type) {
-  {
-    auto entity = createEntity();
-    EXPECT_EQ(tree(entity).type(), ElementType::Unknown);
-  }
-
-  {
-    auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::SVG, XMLQualifiedNameRef("svg"));
-    EXPECT_EQ(tree(entity).type(), ElementType::SVG);
-  }
-}
-
 TEST_F(TreeComponentTests, TypeString) {
   {
     auto entity = createEntity();
@@ -315,10 +302,9 @@ TEST_F(TreeComponentTests, TypeString) {
 
   {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, ElementType::Unknown,
-                                     XMLQualifiedNameRef("test-entity"));
+    registry_.emplace<TreeComponent>(entity, XMLQualifiedNameRef("test-entity"));
     EXPECT_EQ(tree(entity).tagName(), "test-entity");
   }
 }
 
-}  // namespace donner::svg::components
+}  // namespace donner::components

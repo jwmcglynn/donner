@@ -9,7 +9,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 
-namespace donner::svg::components {
+namespace donner::components {
 
 /**
  * Stores XML attribute values.
@@ -141,4 +141,4 @@ private:
   std::set<XMLQualifiedName> attrNameStorage_;  ///< Storage for XMLQualifiedName.
 };
 
-}  // namespace donner::svg::components
+}  // namespace donner::components

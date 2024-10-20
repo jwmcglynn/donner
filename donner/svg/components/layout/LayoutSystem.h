@@ -4,11 +4,11 @@
 #include <optional>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

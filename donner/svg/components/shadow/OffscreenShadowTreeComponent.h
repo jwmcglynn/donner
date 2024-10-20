@@ -3,10 +3,10 @@
 
 #include <span>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/graph/Reference.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

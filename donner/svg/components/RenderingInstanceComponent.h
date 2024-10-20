@@ -4,13 +4,13 @@
 #include <optional>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipPathUnits.h"
 #include "donner/svg/core/MarkerUnits.h"
 #include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/properties/PaintServer.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

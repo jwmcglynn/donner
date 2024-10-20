@@ -2,7 +2,7 @@
 
 #include <concepts>
 
-#include "donner/svg/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
@@ -165,7 +165,7 @@ std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
   }
 
   // Iterate over all children and accumulate their bounds.
-  ForAllChildren(handle, [this, &overallBounds](EntityHandle child) {
+  donner::components::ForAllChildren(handle, [this, &overallBounds](EntityHandle child) {
     if (ComputedPathComponent* computedPath =
             createComputedPathIfShape(child, FontMetrics(), nullptr)) {
       const Boxd bounds =

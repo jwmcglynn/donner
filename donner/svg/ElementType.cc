@@ -1,4 +1,4 @@
-#include "donner/svg/registry/ElementType.h"
+#include "donner/svg/ElementType.h"
 
 #include "donner/base/Utils.h"
 

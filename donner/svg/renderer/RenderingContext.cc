@@ -2,10 +2,11 @@
 
 #include <optional>
 
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DocumentContext.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -121,7 +122,7 @@ public:
     instance.dataEntity = dataHandle.entity();
 
     if (verbose_) {
-      std::cout << "Instantiating " << dataHandle.get<TreeComponent>().type() << " ";
+      std::cout << "Instantiating " << dataHandle.get<ElementTypeComponent>().type() << " ";
 
       if (const auto* idComponent = dataHandle.try_get<IdComponent>()) {
         std::cout << "id=" << idComponent->id << " ";
@@ -236,9 +237,9 @@ public:
     lastRenderedEntity_ = styleEntity;
 
     if (traverseChildren) {
-      const TreeComponent& tree = registry_.get<TreeComponent>(treeEntity);
+      const auto& tree = registry_.get<donner::components::TreeComponent>(treeEntity);
       for (auto cur = tree.firstChild(); cur != entt::null;
-           cur = registry_.get<TreeComponent>(cur).nextSibling()) {
+           cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
         traverseTree(cur);
       }
     }

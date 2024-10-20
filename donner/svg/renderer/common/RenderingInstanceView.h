@@ -1,8 +1,8 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg {
 

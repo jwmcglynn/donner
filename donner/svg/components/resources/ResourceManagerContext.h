@@ -4,10 +4,10 @@
 #include <memory>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/parser/ParseError.h"
 #include "donner/svg/components/resources/ImageComponent.h"
-#include "donner/svg/registry/Registry.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::components {

@@ -26,12 +26,12 @@ cc_library(
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
+        "//donner/base",
         "//donner/svg/components:components_core",
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/shape:components",
         "//donner/svg/properties",
-        "//donner/svg/registry",
     ],
 )
 
@@ -48,11 +48,11 @@ cc_library(
     ],
     deps = [
         ":components",
+        "//donner/base",
         "//donner/svg/components:components_core",
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:style_system",
         "//donner/svg/properties",
-        "//donner/svg/registry",
     ],
 )

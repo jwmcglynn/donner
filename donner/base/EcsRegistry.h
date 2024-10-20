@@ -3,10 +3,10 @@
 
 #include <entt/entt.hpp>
 
-namespace donner::svg {
+namespace donner {
 
 /**
- * Entity type for the SVG \ref Registry, a \c std::uint32_t alias.
+ * Entity type for the \ref Registry, a \c std::uint32_t alias.
  *
  * This is a core type for the the ECS, and is used to identify entities in the \ref Registry.
  *
@@ -20,11 +20,6 @@ inline auto operator<=>(Entity lhs, Entity rhs) {
   return static_cast<std::uint32_t>(lhs) <=> static_cast<std::uint32_t>(rhs);
 }
 
-/// Ostream output operator, outputs `#<id>` where `<id>` is the numeric value of the \ref Entity.
-inline std::ostream& operator<<(std::ostream& os, const Entity& entity) {
-  return os << "#" << static_cast<std::uint32_t>(entity);
-}
-
 /**
  * Registry type for the SVG ECS, which is the entry point for storing all data.
  *
@@ -36,7 +31,7 @@ inline std::ostream& operator<<(std::ostream& os, const Entity& entity) {
  *
  * Attach or remove data classes to entities:
  * ```
- * registry.emplace<components::TreeComponent>(entity, ElementType::Unknown, "unknown");
+ * registry.emplace<components::TreeComponent>(entity, "unknown");
  * registry.remove<components::TreeComponent>(entity);
  * ```
  *
@@ -57,4 +52,12 @@ using Registry = entt::basic_registry<Entity, std::allocator<Entity>>;
  */
 using EntityHandle = entt::basic_handle<Registry>;
 
-}  // namespace donner::svg
+}  // namespace donner
+
+namespace entt {
+
+/// Ostream output operator, outputs `#<id>` where `<id>` is the numeric value of the \ref Entity.
+inline std::ostream& operator<<(std::ostream& os, const entity& entity) {
+  return os << "#" << static_cast<std::uint32_t>(entity);
+}
+}  // namespace entt

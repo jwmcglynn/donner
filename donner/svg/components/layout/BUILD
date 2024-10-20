@@ -28,13 +28,13 @@ cc_library(
     ],
     deps = [
         ":components",
+        "//donner/base",
         "//donner/svg/components:components_core",
         "//donner/svg/components/paint:components",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
         "//donner/svg/components/style:style_system",
-        "//donner/svg/registry",
     ],
 )
 

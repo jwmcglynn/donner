@@ -3,8 +3,8 @@
 
 #include <optional>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

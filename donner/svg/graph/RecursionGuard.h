@@ -4,7 +4,7 @@
 #include <cassert>
 #include <set>
 
-#include "donner/svg/registry/Registry.h"
+#include "donner/base/EcsRegistry.h"
 
 namespace donner::svg {
 

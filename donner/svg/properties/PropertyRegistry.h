@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"  // For EntityHandle
 #include "donner/base/parser/ParseResult.h"
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
@@ -15,7 +16,6 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"  // IWYU pragma: keep, used for parser::UnparsedProperty
-#include "donner/svg/registry/Registry.h"           // For EntityHandle
 
 namespace donner::svg {
 

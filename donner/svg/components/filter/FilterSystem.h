@@ -1,9 +1,9 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/parser/ParseError.h"
 #include "donner/svg/components/filter/FilterComponent.h"
-#include "donner/svg/registry/Registry.h"
 
 namespace donner::svg::components {
 

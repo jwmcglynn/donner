@@ -6,6 +6,7 @@ donner_cc_library(
     name = "base",
     hdrs = [
         "Box.h",
+        "EcsRegistry.h",
         "Length.h",
         "MathUtils.h",
         "OptionalRef.h",
@@ -20,6 +21,9 @@ donner_cc_library(
         "Vector2.h",
     ],
     visibility = donner_internal_visibility(),
+    deps = [
+        "@entt",
+    ],
 )
 
 donner_cc_library(

@@ -1,14 +1,15 @@
 #include "donner/svg/SVGElement.h"
 
 #include "donner/base/element/ElementTraversalGenerators.h"
+#include "donner/base/xml/components/AttributesComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/components/AttributesComponent.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/DocumentContext.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -52,11 +53,11 @@ SVGElement& SVGElement::operator=(SVGElement&& other) noexcept {
 }
 
 ElementType SVGElement::type() const {
-  return handle_.get<components::TreeComponent>().type();
+  return handle_.get<components::ElementTypeComponent>().type();
 }
 
 XMLQualifiedNameRef SVGElement::tagName() const {
-  return handle_.get<components::TreeComponent>().tagName();
+  return handle_.get<donner::components::TreeComponent>().tagName();
 }
 
 bool SVGElement::isKnownType() const {
@@ -83,8 +84,8 @@ void SVGElement::setId(std::string_view id) {
     handle_.emplace<components::IdComponent>(RcString(id));
   }
 
-  handle_.get_or_emplace<components::AttributesComponent>().setAttribute(XMLQualifiedName("id"),
-                                                                         RcString(id));
+  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      XMLQualifiedName("id"), RcString(id));
 }
 
 RcString SVGElement::className() const {
@@ -103,15 +104,15 @@ void SVGElement::setClassName(std::string_view name) {
     handle_.remove<components::ClassComponent>();
   }
 
-  handle_.get_or_emplace<components::AttributesComponent>().setAttribute(XMLQualifiedName("class"),
-                                                                         RcString(name));
+  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      XMLQualifiedName("class"), RcString(name));
 }
 
 void SVGElement::setStyle(std::string_view style) {
   handle_.get_or_emplace<components::StyleComponent>().setStyle(style);
 
-  handle_.get_or_emplace<components::AttributesComponent>().setAttribute(XMLQualifiedName("style"),
-                                                                         RcString(style));
+  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      XMLQualifiedName("style"), RcString(style));
 }
 
 parser::ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
@@ -134,7 +135,7 @@ parser::ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_vi
 
   if (trySetResult.hasResult() && trySetResult.result()) {
     // Set succeeded, so store the attribute value.
-    handle_.get_or_emplace<components::AttributesComponent>().setAttribute(
+    handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
         XMLQualifiedName(RcString(name)), RcString(value));
     return true;
   }
@@ -143,16 +144,17 @@ parser::ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_vi
 }
 
 bool SVGElement::hasAttribute(const XMLQualifiedNameRef& name) const {
-  return handle_.get_or_emplace<components::AttributesComponent>().hasAttribute(name);
+  return handle_.get_or_emplace<donner::components::AttributesComponent>().hasAttribute(name);
 }
 
 std::optional<RcString> SVGElement::getAttribute(const XMLQualifiedNameRef& name) const {
-  return handle_.get_or_emplace<components::AttributesComponent>().getAttribute(name);
+  return handle_.get_or_emplace<donner::components::AttributesComponent>().getAttribute(name);
 }
 
 SmallVector<XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
     const XMLQualifiedNameRef& matcher) const {
-  return handle_.get_or_emplace<components::AttributesComponent>().findMatchingAttributes(matcher);
+  return handle_.get_or_emplace<donner::components::AttributesComponent>().findMatchingAttributes(
+      matcher);
 }
 
 void SVGElement::setAttribute(const XMLQualifiedNameRef& name, std::string_view value) {
@@ -177,8 +179,8 @@ void SVGElement::setAttribute(const XMLQualifiedNameRef& name, std::string_view 
   }
 
   // Otherwise store as a generic attribute.
-  return handle_.get_or_emplace<components::AttributesComponent>().setAttribute(name,
-                                                                                RcString(value));
+  return handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      name, RcString(value));
 }
 
 void SVGElement::removeAttribute(const XMLQualifiedNameRef& name) {
@@ -201,7 +203,7 @@ void SVGElement::removeAttribute(const XMLQualifiedNameRef& name) {
   }
 
   // Remove any storage for this attribute.
-  handle_.get_or_emplace<components::AttributesComponent>().removeAttribute(name);
+  handle_.get_or_emplace<donner::components::AttributesComponent>().removeAttribute(name);
 }
 
 SVGDocument& SVGElement::ownerDocument() {
@@ -209,7 +211,7 @@ SVGDocument& SVGElement::ownerDocument() {
 }
 
 std::optional<SVGElement> SVGElement::parentElement() const {
-  const auto& tree = handle_.get<components::TreeComponent>();
+  const auto& tree = handle_.get<donner::components::TreeComponent>();
   return tree.parent() != entt::null ? std::make_optional(SVGElement(toHandle(tree.parent())))
                                      : std::nullopt;
 }
@@ -220,7 +222,7 @@ std::optional<SVGElement> SVGElement::firstChild() const {
     return std::nullopt;
   }
 
-  const auto& tree = handle_.get<components::TreeComponent>();
+  const auto& tree = handle_.get<donner::components::TreeComponent>();
   return tree.firstChild() != entt::null
              ? std::make_optional(SVGElement(toHandle(tree.firstChild())))
              : std::nullopt;
@@ -232,50 +234,50 @@ std::optional<SVGElement> SVGElement::lastChild() const {
     return std::nullopt;
   }
 
-  const auto& tree = handle_.get<components::TreeComponent>();
+  const auto& tree = handle_.get<donner::components::TreeComponent>();
   return tree.lastChild() != entt::null ? std::make_optional(SVGElement(toHandle(tree.lastChild())))
                                         : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
-  const auto& tree = handle_.get<components::TreeComponent>();
+  const auto& tree = handle_.get<donner::components::TreeComponent>();
   return tree.previousSibling() != entt::null
              ? std::make_optional(SVGElement(toHandle(tree.previousSibling())))
              : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
-  const auto& tree = handle_.get<components::TreeComponent>();
+  const auto& tree = handle_.get<donner::components::TreeComponent>();
   return tree.nextSibling() != entt::null
              ? std::make_optional(SVGElement(toHandle(tree.nextSibling())))
              : std::nullopt;
 }
 
 SVGElement SVGElement::insertBefore(SVGElement newNode, std::optional<SVGElement> referenceNode) {
-  handle_.get<components::TreeComponent>().insertBefore(
+  handle_.get<donner::components::TreeComponent>().insertBefore(
       registry(), newNode.handle_.entity(),
       referenceNode ? referenceNode->handle_.entity() : entt::null);
   return newNode;
 }
 
 SVGElement SVGElement::appendChild(SVGElement child) {
-  handle_.get<components::TreeComponent>().appendChild(registry(), child.handle_.entity());
+  handle_.get<donner::components::TreeComponent>().appendChild(registry(), child.handle_.entity());
   return child;
 }
 
 SVGElement SVGElement::replaceChild(SVGElement newChild, SVGElement oldChild) {
-  handle_.get<components::TreeComponent>().replaceChild(registry(), newChild.handle_.entity(),
-                                                        oldChild.handle_.entity());
+  handle_.get<donner::components::TreeComponent>().replaceChild(
+      registry(), newChild.handle_.entity(), oldChild.handle_.entity());
   return newChild;
 }
 
 SVGElement SVGElement::removeChild(SVGElement child) {
-  handle_.get<components::TreeComponent>().removeChild(registry(), child.entity());
+  handle_.get<donner::components::TreeComponent>().removeChild(registry(), child.entity());
   return child;
 }
 
 void SVGElement::remove() {
-  handle_.get<components::TreeComponent>().remove(registry());
+  handle_.get<donner::components::TreeComponent>().remove(registry());
 }
 
 std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
@@ -297,7 +299,8 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
 EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& tagName,
                                       ElementType type) {
   Entity entity = registry.create();
-  registry.emplace<components::TreeComponent>(entity, type, tagName);
+  registry.emplace<donner::components::TreeComponent>(entity, tagName);
+  registry.emplace<components::ElementTypeComponent>(entity, type);
   registry.emplace<components::TransformComponent>(entity);
   return EntityHandle(registry, entity);
 }

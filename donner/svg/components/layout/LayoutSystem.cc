@@ -3,10 +3,11 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/ElementType.h"
 #include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
-#include "donner/svg/components/TreeComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
@@ -23,7 +24,6 @@
 #include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 #include "donner/svg/properties/PropertyParsing.h"
-#include "donner/svg/registry/ElementType.h"
 
 namespace donner::svg::components {
 
@@ -211,7 +211,7 @@ Boxd LayoutSystem::getViewport(EntityHandle entity) {
 
   // Traverse up through the parent list until we find the root or a previously computed viewbox.
   for (Entity parent = entity; parent != entt::null;
-       parent = registry.get<TreeComponent>(parent).parent()) {
+       parent = registry.get<donner::components::TreeComponent>(parent).parent()) {
     if (const auto* computedViewbox = registry.try_get<ComputedViewboxComponent>(parent)) {
       parentViewbox = computedViewbox->viewbox;
       break;
@@ -324,7 +324,7 @@ Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
 
   // Traverse up through the parent list until we find the root or a previously computed viewbox.
   for (Entity parent = entity; parent != entt::null;
-       parent = registry.get<TreeComponent>(parent).parent()) {
+       parent = registry.get<donner::components::TreeComponent>(parent).parent()) {
     if (const auto* computedAbsoluteTransform =
             registry.try_get<ComputedAbsoluteTransformComponent>(parent)) {
       parentFromWorld = computedAbsoluteTransform->entityFromWorld;
@@ -424,8 +424,10 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
         GetViewboxInternal(registry, rootEntity, current.parentViewbox, current.entity);
     registry.emplace_or_replace<ComputedViewboxComponent>(current.entity, currentViewbox);
 
-    for (Entity child = registry.get<TreeComponent>(current.entity).firstChild();
-         child != entt::null; child = registry.get<TreeComponent>(child).nextSibling()) {
+    for (Entity child =
+             registry.get<donner::components::TreeComponent>(current.entity).firstChild();
+         child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
       stack.push_back(ElementContext{child, currentViewbox});
     }
   }
@@ -450,7 +452,7 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
     std::vector<parser::ParseError>* outWarnings) {
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
-  const Entity parent = entity.get<TreeComponent>().parent();
+  const Entity parent = entity.get<donner::components::TreeComponent>().parent();
   const Boxd viewport = parent != entt::null ? getViewport(EntityHandle(*entity.registry(), parent))
                                              : getViewport(entity);
 
