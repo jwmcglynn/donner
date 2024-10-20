@@ -4,7 +4,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 namespace donner::svg {
 
@@ -12,7 +12,7 @@ namespace donner::svg {
 /// instantiateSubtreeElement, or \ref instantiateSubtreeElementAs.
 static constexpr Vector2i kTestSvgDefaultSize = {16, 16};
 
-SVGDocument instantiateSubtree(std::string_view str, const parser::XMLParser::Options& options = {},
+SVGDocument instantiateSubtree(std::string_view str, const parser::SVGParser::Options& options = {},
                                const Vector2i& size = kTestSvgDefaultSize);
 
 template <typename ElementT = SVGElement>
@@ -25,12 +25,12 @@ struct ParsedFragment {
 };
 
 ParsedFragment<> instantiateSubtreeElement(std::string_view str,
-                                           const parser::XMLParser::Options& options = {},
+                                           const parser::SVGParser::Options& options = {},
                                            Vector2i size = kTestSvgDefaultSize);
 
 template <typename ElementT>
 ParsedFragment<ElementT> instantiateSubtreeElementAs(std::string_view str,
-                                                     const parser::XMLParser::Options& options = {},
+                                                     const parser::SVGParser::Options& options = {},
                                                      Vector2i size = kTestSvgDefaultSize) {
   auto result = instantiateSubtreeElement(str, options, size);
 

@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "donner/base/parser/ParseError.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 #include "donner/svg/xml/details/LineOffsets.h"
 
 namespace donner::svg::parser {
@@ -25,7 +25,7 @@ struct ParserOrigin {
 };
 
 /**
- * Stores the current state of \ref XMLParser during parsing. Used to add parse warnings and
+ * Stores the current state of \ref SVGParser during parsing. Used to add parse warnings and
  * store global state like the parsing options.
  */
 class XMLParserContext {
@@ -38,11 +38,11 @@ public:
    * @param options Options for parsing.
    */
   XMLParserContext(std::string_view input, std::vector<ParseError>* warningsStorage,
-                   const XMLParser::Options& options)
+                   const SVGParser::Options& options)
       : input_(input), lineOffsets_(input), warnings_(warningsStorage), options_(options) {}
 
   /// Get the parser options.
-  const XMLParser::Options& options() const { return options_; }
+  const SVGParser::Options& options() const { return options_; }
 
   /**
    * Set the XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".
@@ -141,7 +141,7 @@ private:
   std::vector<ParseError>* warnings_;
 
   /// Options for parsing.
-  XMLParser::Options options_;
+  SVGParser::Options options_;
 
   /// The XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".
   std::string_view namespacePrefix_;

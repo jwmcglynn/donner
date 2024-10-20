@@ -27,7 +27,7 @@ SVGSVGElement SVGSVGElement::Create(SVGDocument& document) {
 
     *:not(svg),
     *:not(foreignObject) > svg {
-      transform-origin: 0 0;
+      /* TODO: transform-origin: 0 0; */
     }
 
     *[xml|space=preserve] {

@@ -85,7 +85,7 @@ TEST(ElementStyleTests, AttributeMatchers) {
               Optional(PaintServer(PaintServer::None())));
 
   // It will work if user attributes are enabled.
-  parser::XMLParser::Options disableUserAttributesOptions;
+  parser::SVGParser::Options disableUserAttributesOptions;
   disableUserAttributesOptions.disableUserAttributes = false;
 
   EXPECT_THAT(instantiateSubtreeElement(R"(

@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 namespace parser {
-class XMLParser;  // Forward declaration, #include "donner/svg/xml/XMLParser.h"
+class SVGParser;  // Forward declaration, #include "donner/svg/xml/SVGParser.h"
 }  // namespace parser
 
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
@@ -43,7 +43,7 @@ public:
   /**
    * Constructor to create an empty SVGDocument.
    *
-   * To load a document from an SVG file, use \ref donner::svg::parser::XMLParser::ParseSVG.
+   * To load a document from an SVG file, use \ref donner::svg::parser::SVGParser::ParseSVG.
    *
    * @param settings Settings to configure the document.
    */

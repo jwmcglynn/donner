@@ -152,7 +152,7 @@ public:
    */
   static AsciiImage renderToAsciiImage(std::string_view svgFragment,
                                        Vector2i size = kTestSvgDefaultSize) {
-    SVGDocument document = instantiateSubtree(svgFragment, parser::XMLParser::Options(), size);
+    SVGDocument document = instantiateSubtree(svgFragment, parser::SVGParser::Options(), size);
 
     return renderToAsciiImage(document);
   }

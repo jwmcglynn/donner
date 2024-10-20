@@ -9,7 +9,9 @@ namespace donner::svg::components {
 ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(registry) {}
 
 void ResourceManagerContext::loadResources(std::vector<parser::ParseError>* outWarnings) {
-  if (!loader_) {
+  auto imageView = registry_.view<ImageComponent>();
+
+  if (!loader_ && !imageView.empty()) {
     if (outWarnings) {
       parser::ParseError err;
       err.reason = "Could not load external resources, no ResourceLoader provided";
@@ -19,7 +21,7 @@ void ResourceManagerContext::loadResources(std::vector<parser::ParseError>* outW
   }
 
   // Iterate over all ImageComponents and load them.
-  for (auto view = registry_.view<ImageComponent>(); auto entity : view) {
+  for (auto view = imageView; auto entity : view) {
     // For now, skip the entity if there is already a LoadedImageComponent.
     if (registry_.all_of<LoadedImageComponent>(entity)) {
       continue;

@@ -19,7 +19,7 @@ namespace donner::svg {
  * using the CSS default sizing algorithm, https://www.w3.org/TR/css-images-3/#default-sizing.
  *
  * To reference an external image, provide its name or URL. Note that Donner must have a valid
- * ResourceLoader provided to \ref parser::XMLParser::ParseSVG, such as \ref
+ * ResourceLoader provided to \ref parser::SVGParser::ParseSVG, such as \ref
  * SandboxedFileResourceLoader.
  * ```xml
  * <image href="image.png" x="10" y="10" width="100" height="100" />

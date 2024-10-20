@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
   //! [homepage_snippet]
   //! [svg_string]
   // This is the base SVG we are loading, a simple path containing a line
-  donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
+  donner::svg::parser::SVGParser::InputBuffer svgContents(R"(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
       <path d="M 1 1 L 4 5" stroke="blue" />
     </svg>
@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
   //! [svg_parse]
   // Call ParseSVG to load the SVG file
   ParseResult<donner::svg::SVGDocument> maybeResult =
-      donner::svg::parser::XMLParser::ParseSVG(svgContents);
+      donner::svg::parser::SVGParser::ParseSVG(svgContents);
   //! [svg_parse]
   //! [error_handling]
   if (maybeResult.hasError()) {

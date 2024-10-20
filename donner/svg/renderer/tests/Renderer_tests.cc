@@ -7,7 +7,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 // clang-format off
 /**
@@ -54,11 +54,11 @@ protected:
     const std::streamsize fileLength = file.tellg();
     file.seekg(0);
 
-    parser::XMLParser::InputBuffer fileData;
+    parser::SVGParser::InputBuffer fileData;
     fileData.resize(fileLength);
     file.read(fileData.data(), fileLength);
 
-    auto maybeResult = parser::XMLParser::ParseSVG(fileData);
+    auto maybeResult = parser::SVGParser::ParseSVG(fileData);
     EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
     if (maybeResult.hasError()) {
       return SVGDocument();

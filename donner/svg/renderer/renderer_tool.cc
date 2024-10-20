@@ -167,16 +167,16 @@ extern "C" int main(int argc, char* argv[]) {
     return 2;
   }
 
-  parser::XMLParser::InputBuffer fileData;
+  parser::SVGParser::InputBuffer fileData;
   fileData.loadFromStream(file);
 
   std::vector<parser::ParseError> warnings;
-  parser::XMLParser::Options xmlOptions;
+  parser::SVGParser::Options xmlOptions;
   auto resourceLoader =
       std::make_unique<SandboxedFileResourceLoader>(std::filesystem::current_path(), filename);
 
   Trace traceParse("Parse");
-  auto maybeResult = parser::XMLParser::ParseSVG(fileData, quiet ? nullptr : &warnings, xmlOptions,
+  auto maybeResult = parser::SVGParser::ParseSVG(fileData, quiet ? nullptr : &warnings, xmlOptions,
                                                  std::move(resourceLoader));
   traceParse.stop();
 

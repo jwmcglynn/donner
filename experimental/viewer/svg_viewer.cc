@@ -12,7 +12,7 @@ extern "C" {
 #include "absl/debugging/failure_signal_handler.h"
 #include "absl/debugging/symbolize.h"
 #include "donner/svg/DonnerController.h"
-#include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and XMLParser
+#include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and SVGParser
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/RendererSkia.h"
@@ -31,20 +31,20 @@ static void glfw_error_callback(int error, const char* description) {
   std::cerr << "Glfw Error " << error << ": " << description << std::endl;
 }
 
-XMLParser::InputBuffer loadFile(const char* filename) {
+SVGParser::InputBuffer loadFile(const char* filename) {
   std::ifstream file(filename);
   if (!file) {
     std::cerr << "Could not open file " << filename << std::endl;
     std::abort();
   }
 
-  XMLParser::InputBuffer fileData;
+  SVGParser::InputBuffer fileData;
   fileData.loadFromStream(file);
 
   return fileData;
 }
 
-std::string inputBufferToString(const XMLParser::InputBuffer& inputBuffer) {
+std::string inputBufferToString(const SVGParser::InputBuffer& inputBuffer) {
   std::string result;
   result.reserve(inputBuffer.size());
 
@@ -63,10 +63,10 @@ struct SVGState {
   std::optional<SVGRectElement> boundsShape;
   std::optional<SVGPathElement> selectedPathOutline;
 
-  void loadSVG(XMLParser::InputBuffer& inputBuffer) {
+  void loadSVG(SVGParser::InputBuffer& inputBuffer) {
     document = SVGDocument();
 
-    ParseResult<SVGDocument> maybeDocument = XMLParser::ParseSVG(inputBuffer);
+    ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(inputBuffer);
     if (maybeDocument.hasError()) {
       lastError = maybeDocument.error();
       valid = false;
@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   SVGState state;
-  XMLParser::InputBuffer inputBuffer = loadFile(argv[1]);
+  SVGParser::InputBuffer inputBuffer = loadFile(argv[1]);
   std::string svgString = inputBufferToString(inputBuffer);
 
   state.loadSVG(inputBuffer);
@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
 
   while (!glfwWindowShouldClose(window)) {
     if (svgChanged) {
-      inputBuffer = XMLParser::InputBuffer(svgString);
+      inputBuffer = SVGParser::InputBuffer(svgString);
       state.loadSVG(inputBuffer);
     }
 

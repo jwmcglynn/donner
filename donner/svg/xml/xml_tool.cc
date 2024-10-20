@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 namespace donner::svg {
 
@@ -41,12 +41,12 @@ extern "C" int main(int argc, char* argv[]) {
   const std::streamsize fileLength = file.tellg();
   file.seekg(0);
 
-  parser::XMLParser::InputBuffer fileData;
+  parser::SVGParser::InputBuffer fileData;
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
   std::vector<parser::ParseError> warnings;
-  auto maybeResult = parser::XMLParser::ParseSVG(fileData, &warnings);
+  auto maybeResult = parser::SVGParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e << "\n";

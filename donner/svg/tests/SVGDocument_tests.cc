@@ -5,7 +5,7 @@
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 using testing::Optional;
 
@@ -14,8 +14,8 @@ namespace donner::svg {
 namespace {
 
 SVGDocument ParseSVG(std::string_view input) {
-  parser::XMLParser::InputBuffer inputBuffer(input);
-  auto maybeResult = parser::XMLParser::ParseSVG(inputBuffer);
+  parser::SVGParser::InputBuffer inputBuffer(input);
+  auto maybeResult = parser::SVGParser::ParseSVG(inputBuffer);
   EXPECT_THAT(maybeResult, base::parser::NoParseError());
   return std::move(maybeResult).result();
 }

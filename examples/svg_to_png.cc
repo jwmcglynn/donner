@@ -43,7 +43,7 @@ int main(int argc, char* argv[]) {
     std::abort();
   }
 
-  XMLParser::InputBuffer fileData;
+  SVGParser::InputBuffer fileData;
   fileData.loadFromStream(file);
   //! [load_file]
 
@@ -51,13 +51,13 @@ int main(int argc, char* argv[]) {
   // SVGDocument, since it is referenced internally.
 
   //! [parse]
-  XMLParser::Options options;
+  SVGParser::Options options;
   // Allow data-name attributes without generating a warning.
   options.disableUserAttributes = false;
 
   std::vector<ParseError> warnings;
   // warnings and options are optional, call ParseSVG(fileData) to use defaults and ignore warnings.
-  ParseResult<SVGDocument> maybeDocument = XMLParser::ParseSVG(fileData, &warnings, options);
+  ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData, &warnings, options);
   //! [parse]
 
   //! [handle_errors]

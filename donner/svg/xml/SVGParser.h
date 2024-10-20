@@ -13,7 +13,7 @@ namespace donner::svg::parser {
 /**
  * Parse an SVG XML document.
  */
-class XMLParser {
+class SVGParser {
 public:
   /**
    * Options to modify the parsing behavior.
@@ -51,7 +51,7 @@ public:
 
   /**
    * Convert a string into a mutable vector<char> that is suitable for use with Donner's
-   * XMLParser.
+   * SVGParser.
    */
   struct InputBuffer : std::vector<char> {
     /// Default constructor, for use with \ref loadFromStream.
@@ -59,12 +59,12 @@ public:
 
     /**
      * Construct an input buffer from a string. Implicit so it enables passing a raw string into the
-     * \ref XMLParser::ParseSVG function.
+     * \ref SVGParser::ParseSVG function.
      *
      * Example:
      * ```
-     * XMLParser::InputBuffer svgSource("<svg>...</svg>");
-     * auto result = XMLParser::ParseSVG(svgSource);
+     * SVGParser::InputBuffer svgSource("<svg>...</svg>");
+     * auto result = SVGParser::ParseSVG(svgSource);
      * ```
      *
      * @param str String to read from.
@@ -103,7 +103,7 @@ public:
      *
      * Example:
      * ```
-     * XMLParser::InputBuffer svgSource;
+     * SVGParser::InputBuffer svgSource;
      * svgSource.loadFromStream(std::ifstream("example.svg"));
      * ```
      *

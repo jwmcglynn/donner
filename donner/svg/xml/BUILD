@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 ENABLE_EXCEPTIONS_OPTS = ["-fexceptions"]
@@ -8,7 +8,7 @@ ENABLE_EXCEPTIONS_OPTS = ["-fexceptions"]
 #
 donner_cc_library(
     name = "xml",
-    srcs = ["XMLParser.cc"],
+    srcs = ["SVGParser.cc"],
     copts = ENABLE_EXCEPTIONS_OPTS,
     linkopts = ENABLE_EXCEPTIONS_OPTS,
     visibility = ["//visibility:public"],
@@ -37,7 +37,7 @@ cc_binary(
 
 donner_cc_library(
     name = "xml_header",
-    hdrs = ["XMLParser.h"],
+    hdrs = ["SVGParser.h"],
     deps = [
         "//donner/svg:svg_core",
         "//donner/svg/parser",
@@ -57,12 +57,15 @@ donner_cc_library(
 )
 
 cc_test(
-    name = "xml_details_tests",
+    name = "xml_tests",
     srcs = [
         "details/tests/LineOffsets_tests.cc",
+        "tests/SVGParser_tests.cc",
     ],
     deps = [
-        ":xml_details",
+        ":xml",
+        "//donner/base/parser:parser_test_utils",
+        "//donner/svg/renderer:renderer_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

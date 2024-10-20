@@ -2,7 +2,7 @@
 
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 namespace donner::svg {
 
@@ -12,9 +12,9 @@ static constexpr std::string_view kSuffix("\n</svg>");
 
 }  // namespace
 
-SVGDocument instantiateSubtree(std::string_view str, const parser::XMLParser::Options& options,
+SVGDocument instantiateSubtree(std::string_view str, const parser::SVGParser::Options& options,
                                const Vector2i& size) {
-  parser::XMLParser::InputBuffer fileData;
+  parser::SVGParser::InputBuffer fileData;
   const std::string prefix = std::string(
                                  "<svg xmlns=\"http://www.w3.org/2000/svg\" "
                                  "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"") +
@@ -28,7 +28,7 @@ SVGDocument instantiateSubtree(std::string_view str, const parser::XMLParser::Op
   fileData.push_back('\0');
 
   std::vector<parser::ParseError> warnings;
-  auto maybeResult = parser::XMLParser::ParseSVG(fileData, &warnings, options);
+  auto maybeResult = parser::SVGParser::ParseSVG(fileData, &warnings, options);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e << "\n";
@@ -43,7 +43,7 @@ SVGDocument instantiateSubtree(std::string_view str, const parser::XMLParser::Op
 }
 
 ParsedFragment<> instantiateSubtreeElement(std::string_view str,
-                                           const parser::XMLParser::Options& options,
+                                           const parser::SVGParser::Options& options,
                                            Vector2i size) {
   SVGDocument document = instantiateSubtree(str, options, size);
 

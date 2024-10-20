@@ -9,7 +9,7 @@
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 // Skia
 #include "include/core/SkData.h"
@@ -59,17 +59,17 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
     return SVGDocument();
   }
 
-  parser::XMLParser::InputBuffer fileData;
+  parser::SVGParser::InputBuffer fileData;
   fileData.loadFromStream(file);
 
-  parser::XMLParser::Options options;
+  parser::SVGParser::Options options;
   std::unique_ptr<ResourceLoaderInterface> resourceLoader;
   if (resourceDir) {
     resourceLoader = std::make_unique<SandboxedFileResourceLoader>(*resourceDir,
                                                                    std::filesystem::path(filename));
   }
 
-  auto maybeResult = parser::XMLParser::ParseSVG(fileData, /*outWarnings=*/nullptr, options,
+  auto maybeResult = parser::SVGParser::ParseSVG(fileData, /*outWarnings=*/nullptr, options,
                                                  std::move(resourceLoader));
   EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
   if (maybeResult.hasError()) {

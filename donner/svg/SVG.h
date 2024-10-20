@@ -3,7 +3,7 @@
 
 #include "donner/svg/SVGDocument.h"    // IWYU pragma: export
 #include "donner/svg/SVGElement.h"     // IWYU pragma: export
-#include "donner/svg/xml/XMLParser.h"  // IWYU pragma: export
+#include "donner/svg/xml/SVGParser.h"  // IWYU pragma: export
 
 /**
  * Top-level Donner namespace, which is split into different sub-namespaces such as \ref donner::svg
@@ -14,12 +14,12 @@ namespace donner {
 /**
  * Donner SVG library, which can load, manipulate and render SVG files.
  *
- * Loading SVG files can be done using \ref donner::svg::parser::XMLParser
+ * Loading SVG files can be done using \ref donner::svg::parser::SVGParser
  * ```
- * XMLParser::InputBuffer svgSource("<svg>...</svg>");
+ * SVGParser::InputBuffer svgSource("<svg>...</svg>");
  *
  * std::vector<ParseError> warnings;
- * auto maybeResult = XMLParser::ParseSVG(svgSource, &warnings);
+ * auto maybeResult = SVGParser::ParseSVG(svgSource, &warnings);
  *
  * if (maybeResult.hasError()) {
  *   const auto& e = maybeResult.error();

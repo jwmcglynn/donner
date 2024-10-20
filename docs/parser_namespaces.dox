@@ -20,7 +20,7 @@
 /**
  * @namespace donner::svg::parser
  *
- * Parsers for the SVG XML format, \ref donner::svg::parser::XMLParser "XMLParser", as well as
+ * Parsers for the SVG XML format, \ref donner::svg::parser::SVGParser "SVGParser", as well as
  * individual parsers for SVG components, such as \ref donner::svg::parser::PathParser "PathParser"
  * and \ref donner::svg::parser::TransformParser "TransformParser".
  */

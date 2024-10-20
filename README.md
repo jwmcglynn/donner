@@ -39,7 +39,7 @@ How it works: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-
 
 ```cpp
 // This is the base SVG we are loading, a simple path containing a line
-donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
+donner::svg::parser::SVGParser::InputBuffer svgContents(R"(
   <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
     <path d="M 1 1 L 4 5" stroke="blue" />
   </svg>
@@ -47,7 +47,7 @@ donner::svg::parser::XMLParser::InputBuffer svgContents(R"(
 
 // Call ParseSVG to load the SVG file
 donner::base::parser::ParseResult<donner::svg::SVGDocument> maybeResult =
-    donner::svg::parser::XMLParser::ParseSVG(svgContents);
+    donner::svg::parser::SVGParser::ParseSVG(svgContents);
 
 if (maybeResult.hasError()) {
   std::cerr << "Parse Error " << maybeResult.error() << "\n";  // Includes line:column and reason
@@ -91,10 +91,10 @@ if (!file) {
   std::abort();
 }
 
-XMLParser::InputBuffer fileData;
+SVGParser::InputBuffer fileData;
 fileData.loadFromStream(file);
 
-ParseResult<SVGDocument> maybeDocument = XMLParser::ParseSVG(fileData);
+ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData);
 if (maybeDocument.hasError()) {
   std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
   std::abort();

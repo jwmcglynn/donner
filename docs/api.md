@@ -9,7 +9,7 @@ Donner provides several standalone APIs for core functionality which can be used
 - SVG Object Model (\ref donner::svg)
 - CSS Parsing and Cascading (\ref donner::css)
 - SVG Rendering (\ref donner::svg::RendererSkia)
-- SVG XML Parsing (\ref donner::svg::parser::XMLParser)
+- SVG XML Parsing (\ref donner::svg::parser::SVGParser)
 
 Each library has minimal dependencies and can be used in external projects. For example, the CSS API may be used to add CSS support to your project using an adapter that satisfies the \ref donner::ElementLike concept.
 
@@ -91,7 +91,7 @@ flowchart TD
 
 ### Parsing an SVG
 
-To parse an SVG document, use the `XMLParser` class:
+To parse an SVG document, use the `SVGParser` class:
 
 \snippet svg_tree_interaction.cc svg_parse
 
@@ -99,7 +99,7 @@ To parse an SVG document, use the `XMLParser` class:
 
 \snippet svg_tree_interaction.cc error_handling
 
-\ref donner::svg::parser::XMLParser::ParseSVG accepts either a string containing SVG data, or an `InputBuffer` which can be used to read from a file.
+\ref donner::svg::parser::SVGParser::ParseSVG accepts either a string containing SVG data, or an `InputBuffer` which can be used to read from a file.
 
 \snippet svg_to_png.cc load_file
 

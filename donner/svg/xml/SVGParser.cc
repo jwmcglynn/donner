@@ -1,4 +1,4 @@
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 #include <rapidxml_ns/rapidxml_ns.hpp>
 #include <string_view>
@@ -193,8 +193,8 @@ std::optional<ParseError> WalkChildren(XMLParserContext& context, SVGDocument& s
 }
 }  // namespace
 
-ParseResult<SVGDocument> XMLParser::ParseSVG(
-    InputBuffer& source, std::vector<ParseError>* outWarnings, XMLParser::Options options,
+ParseResult<SVGDocument> SVGParser::ParseSVG(
+    InputBuffer& source, std::vector<ParseError>* outWarnings, SVGParser::Options options,
     std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept {
   const int flags = rapidxml_ns::parse_full | rapidxml_ns::parse_trim_whitespace |
                     rapidxml_ns::parse_normalize_whitespace;

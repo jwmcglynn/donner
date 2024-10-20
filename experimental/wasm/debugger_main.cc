@@ -7,7 +7,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererWasmCanvas.h"
 #include "donner/svg/renderer/wasm_canvas/Canvas.h"
-#include "donner/svg/xml/XMLParser.h"
+#include "donner/svg/xml/SVGParser.h"
 
 using namespace donner::svg;
 
@@ -46,7 +46,7 @@ public:
     fileData_.assign(svg.begin(), svg.end());
 
     std::vector<donner::base::parser::ParseError> warnings;
-    auto maybeResult = parser::XMLParser::ParseSVG(fileData_, &warnings);
+    auto maybeResult = parser::SVGParser::ParseSVG(fileData_, &warnings);
 
     if (maybeResult.hasError()) {
       const auto& e = maybeResult.error();
@@ -75,7 +75,7 @@ public:
   }
 
 private:
-  parser::XMLParser::InputBuffer fileData_;
+  parser::SVGParser::InputBuffer fileData_;
 };
 
 EMSCRIPTEN_BINDINGS(Donner) {
