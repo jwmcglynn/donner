@@ -23,8 +23,8 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 # Build the binary to analyze, svg_parser_tool
-bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/svg:svg_parser_tool.stripped
-cp -f bazel-bin/donner/svg/xml/svg_parser_tool build-binary-size/svg_parser_tool
+bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/parser:svg_parser_tool.stripped
+cp -f bazel-bin/donner/svg/parser/svg_parser_tool build-binary-size/svg_parser_tool
 
 bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/renderer:renderer_tool.stripped
 cp -f bazel-bin/donner/svg/renderer/renderer_tool build-binary-size/renderer_tool
