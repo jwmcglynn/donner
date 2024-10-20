@@ -120,9 +120,6 @@ RendererWasmCanvas::RendererWasmCanvas(std::string_view canvasId, bool verbose)
 RendererWasmCanvas::~RendererWasmCanvas() = default;
 
 void RendererWasmCanvas::draw(SVGDocument& document) {
-  Registry& registry = document.registry();
-  const Entity rootEntity = document.rootEntity();
-
   // TODO: Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
@@ -130,7 +127,7 @@ void RendererWasmCanvas::draw(SVGDocument& document) {
 
   canvas_.setSize(renderingSize);
 
-  draw(registry, rootEntity);
+  draw(document.registry());
 }
 
 int RendererWasmCanvas::width() const {
@@ -141,7 +138,7 @@ int RendererWasmCanvas::height() const {
   return canvas_.size().y;
 }
 
-void RendererWasmCanvas::draw(Registry& registry, Entity root) {
+void RendererWasmCanvas::draw(Registry& registry) {
   Impl impl(*this, RenderingInstanceView{registry});
   impl.drawUntil(registry, entt::null);
 }

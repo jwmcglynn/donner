@@ -136,9 +136,8 @@ private:
    * Internal helper to draw the given entity.
    *
    * @param registry Registry to use for drawing.
-   * @param entity The entity to draw.
    */
-  void draw(Registry& registry, Entity entity);
+  void draw(Registry& registry);
 
   bool verbose_;  //!< If true, print verbose logging.
 

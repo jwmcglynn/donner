@@ -1164,9 +1164,6 @@ RendererSkia::RendererSkia(RendererSkia&&) noexcept = default;
 RendererSkia& RendererSkia::operator=(RendererSkia&&) noexcept = default;
 
 void RendererSkia::draw(SVGDocument& document) {
-  Registry& registry = document.registry();
-  const Entity rootEntity = document.rootEntity();
-
   // TODO(jwmcglynn): Plumb outWarnings.
   std::vector<parser::ParseError> warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, verbose_ ? &warnings : nullptr);
@@ -1185,15 +1182,12 @@ void RendererSkia::draw(SVGDocument& document) {
   rootCanvas_ = &canvas;
   currentCanvas_ = &canvas;
 
-  draw(registry, rootEntity);
+  draw(document.registry());
 
   rootCanvas_ = currentCanvas_ = nullptr;
 }
 
 std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
-  Registry& registry = document.registry();
-  const Entity rootEntity = document.rootEntity();
-
   // TODO(jwmcglynn): Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
 
@@ -1208,7 +1202,7 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   rootCanvas_ = &canvas;
   currentCanvas_ = &canvas;
 
-  draw(registry, rootEntity);
+  draw(document.registry());
 
   rootCanvas_ = currentCanvas_ = nullptr;
 
@@ -1239,7 +1233,6 @@ std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
 
 sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   Registry& registry = document.registry();
-  const Entity rootEntity = document.rootEntity();
 
   // TODO(jwmcglynn): Plumb outWarnings.
   RendererUtils::prepareDocumentForRendering(document, verbose_);
@@ -1251,7 +1244,7 @@ sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
   rootCanvas_ = recorder.beginRecording(toSkia(Boxd::WithSize(renderingSize)));
   currentCanvas_ = rootCanvas_;
 
-  draw(registry, rootEntity);
+  draw(registry);
 
   rootCanvas_ = currentCanvas_ = nullptr;
 
@@ -1269,7 +1262,7 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
                                   bitmap_.computeByteSize());
 }
 
-void RendererSkia::draw(Registry& registry, Entity root) {
+void RendererSkia::draw(Registry& registry) {
   Impl impl(*this, RenderingInstanceView{registry});
   impl.drawUntil(registry, entt::null);
 }

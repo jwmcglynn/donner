@@ -64,10 +64,6 @@ bool SVGElement::isKnownType() const {
   return type() != ElementType::Unknown;
 }
 
-Entity SVGElement::entity() const {
-  return handle_.entity();
-}
-
 RcString SVGElement::id() const {
   if (const auto* component = handle_.try_get<components::IdComponent>()) {
     return component->id;
@@ -261,18 +257,20 @@ SVGElement SVGElement::insertBefore(SVGElement newNode, std::optional<SVGElement
 }
 
 SVGElement SVGElement::appendChild(SVGElement child) {
-  handle_.get<donner::components::TreeComponent>().appendChild(registry(), child.handle_.entity());
+  handle_.get<donner::components::TreeComponent>().appendChild(registry(),
+                                                               child.entityHandle().entity());
   return child;
 }
 
 SVGElement SVGElement::replaceChild(SVGElement newChild, SVGElement oldChild) {
   handle_.get<donner::components::TreeComponent>().replaceChild(
-      registry(), newChild.handle_.entity(), oldChild.handle_.entity());
+      registry(), newChild.handle_.entity(), oldChild.entityHandle().entity());
   return newChild;
 }
 
 SVGElement SVGElement::removeChild(SVGElement child) {
-  handle_.get<donner::components::TreeComponent>().removeChild(registry(), child.entity());
+  handle_.get<donner::components::TreeComponent>().removeChild(registry(),
+                                                               child.entityHandle().entity());
   return child;
 }
 

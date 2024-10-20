@@ -27,7 +27,7 @@ TEST_F(LayoutSystemTest, ViewportRoot) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(EntityHandle(document.registry(), document.rootEntity())),
+  EXPECT_THAT(layoutSystem.getViewport(document.rootEntityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(200, 200)));
 }
 
@@ -38,7 +38,7 @@ TEST_F(LayoutSystemTest, ViewportRootWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(EntityHandle(document.registry(), document.rootEntity())),
+  EXPECT_THAT(layoutSystem.getViewport(document.rootEntityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(200, 200)));
 }
 
@@ -49,8 +49,7 @@ TEST_F(LayoutSystemTest, ViewportNestedSvg) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(
-                  EntityHandle(document.registry(), document.querySelector("#nested")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("#nested")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -62,8 +61,7 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(
-                  EntityHandle(document.registry(), document.querySelector("#nested")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("#nested")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -74,8 +72,7 @@ TEST_F(LayoutSystemTest, ViewportPattern) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(
-                  EntityHandle(document.registry(), document.querySelector("pattern")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("pattern")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -87,8 +84,7 @@ TEST_F(LayoutSystemTest, ViewportPatternWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(
-                  EntityHandle(document.registry(), document.querySelector("pattern")->entity())),
+  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("pattern")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -101,22 +97,20 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
     </svg>
   )-");
 
-  auto groupEntity = document.querySelector("#group1")->entity();
-  auto rectEntity = document.querySelector("#rect1")->entity();
+  auto groupEntityHandle = document.querySelector("#group1")->entityHandle();
+  auto rectEntityHandle = document.querySelector("#rect1")->entityHandle();
 
   // Test getting the transform for the group
-  Transformd groupTransform =
-      layoutSystem.getEntityFromParentTranform(EntityHandle(document.registry(), groupEntity));
+  const Transformd groupTransform = layoutSystem.getEntityFromParentTranform(groupEntityHandle);
   EXPECT_THAT(groupTransform, TransformEq(Transformd::Translate({10.0, 20.0})));
 
   // Test setting a new transform for the rectangle
-  Transformd newRectTransform = Transformd::Translate({30.0, 40.0});
-  layoutSystem.setEntityFromParentTransform(EntityHandle(document.registry(), rectEntity),
-                                            newRectTransform);
+  const Transformd newRectTransform = Transformd::Translate({30.0, 40.0});
+  layoutSystem.setEntityFromParentTransform(rectEntityHandle, newRectTransform);
 
   // Verify the new transform
-  Transformd updatedRectTransform =
-      layoutSystem.getEntityFromParentTranform(EntityHandle(document.registry(), rectEntity));
+  const Transformd updatedRectTransform =
+      layoutSystem.getEntityFromParentTranform(rectEntityHandle);
   EXPECT_THAT(updatedRectTransform, TransformEq(Transformd::Translate({30.0, 40.0})));
 }
 
@@ -129,17 +123,15 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransformWithScale) {
     </svg>
   )");
 
-  auto rectEntity = document.querySelector("#rect1")->entity();
+  auto rectEntityHandle = document.querySelector("#rect1")->entityHandle();
 
   // Set a transform with scale and translation
   const Transformd scaleTransform =
       Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0});
-  layoutSystem.setEntityFromParentTransform(EntityHandle(document.registry(), rectEntity),
-                                            scaleTransform);
+  layoutSystem.setEntityFromParentTransform(rectEntityHandle, scaleTransform);
 
   // Verify the new transform
-  const Transformd updatedTransform =
-      layoutSystem.getEntityFromParentTranform(EntityHandle(document.registry(), rectEntity));
+  const Transformd updatedTransform = layoutSystem.getEntityFromParentTranform(rectEntityHandle);
 
   EXPECT_THAT(updatedTransform,
               TransformEq(Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0})));
@@ -154,10 +146,9 @@ TEST_F(LayoutSystemTest, GetEntityContentTransform) {
     </svg>
   )");
 
-  auto innerSvgEntity = document.querySelector("#inner")->entity();
+  auto innerSvgEntity = document.querySelector("#inner")->entityHandle();
 
-  EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(
-                  EntityHandle(document.registry(), innerSvgEntity)),
+  EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(innerSvgEntity),
               TransformEq(Transformd::Scale({2.0, 2.0}) * Transformd::Translate({50.0, 50.0})));
 }
 
@@ -174,16 +165,16 @@ TEST_F(LayoutSystemTest, GetEntityFromWorldTransform) {
     </svg>
   )-");
 
-  auto rect1 = document.querySelector("#rect1")->entity();
-  auto rect2 = document.querySelector("#rect2")->entity();
-  auto rect3 = document.querySelector("#rect3")->entity();
+  auto rect1 = document.querySelector("#rect1")->entityHandle();
+  auto rect2 = document.querySelector("#rect2")->entityHandle();
+  auto rect3 = document.querySelector("#rect3")->entityHandle();
 
-  EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(EntityHandle(document.registry(), rect1)),
+  EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(rect1),
               TransformEq(Transformd::Translate({10.0, 20.0})));
-  EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(EntityHandle(document.registry(), rect2)),
+  EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(rect2),
               TransformEq(Transformd::Translate({10.0, 20.0}) * Transformd::Scale({5.0, 5.0})));
 
-  EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(EntityHandle(document.registry(), rect3)),
+  EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(rect3),
               TransformEq(Transformd::Translate({10.0, 20.0}) * Transformd::Scale({2.0, 2.0}) *
                           Transformd::Translate({50.0, 50.0})));
 }

@@ -54,7 +54,7 @@ public:
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   const Registry& registry() const { return *registry_; }
   /// Get the root ECS Entity of the document, for advanced use.
-  Entity rootEntity() const;
+  EntityHandle rootEntityHandle() const;
 
   /// Get the root \ref xml_svg element of the document.
   SVGSVGElement svgElement() const;

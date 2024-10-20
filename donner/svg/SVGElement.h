@@ -85,8 +85,9 @@ public:
   /// SVGUnknownElement.
   bool isKnownType() const;
 
-  /// Get the underlying \ref Entity, for advanced use-cases that require direct access to the ECS.
-  Entity entity() const;
+  /// Get the underlying \ref EntityHandle, for advanced use-cases that require direct access to the
+  /// ECS.
+  EntityHandle entityHandle() const { return handle_; }
 
   /// Get the element id, the value of the "id" attribute.
   RcString id() const;

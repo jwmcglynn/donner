@@ -28,7 +28,7 @@ MATCHER_P(ElementIdEq, id, "") {
 
 TEST(SVGDocument, Create) {
   SVGDocument document;
-  EXPECT_TRUE(document.rootEntity() != entt::null);
+  EXPECT_TRUE(document.rootEntityHandle());
   EXPECT_EQ(document.svgElement().ownerDocument(), document);
 }
 

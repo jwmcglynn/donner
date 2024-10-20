@@ -13,19 +13,19 @@ namespace donner::svg {
 SVGDocument::SVGDocument(Settings settings) : registry_(std::make_unique<Registry>()) {
   components::DocumentContext& ctx = registry_->ctx().emplace<components::DocumentContext>(
       components::DocumentContext::InternalCtorTag{}, *this, *registry_);
-  ctx.rootEntity = SVGSVGElement::Create(*this).entity();
+  ctx.rootEntity = SVGSVGElement::Create(*this).entityHandle().entity();
 
   components::ResourceManagerContext& resourceCtx =
       registry_->ctx().emplace<components::ResourceManagerContext>(*registry_);
   resourceCtx.setResourceLoader(std::move(settings.resourceLoader));
 }
 
-Entity SVGDocument::rootEntity() const {
-  return registry_->ctx().get<components::DocumentContext>().rootEntity;
+EntityHandle SVGDocument::rootEntityHandle() const {
+  return EntityHandle(*registry_, registry_->ctx().get<components::DocumentContext>().rootEntity);
 }
 
 SVGSVGElement SVGDocument::svgElement() const {
-  return SVGSVGElement(EntityHandle(*registry_, rootEntity()));
+  return SVGSVGElement(rootEntityHandle());
 }
 
 void SVGDocument::setCanvasSize(int width, int height) {

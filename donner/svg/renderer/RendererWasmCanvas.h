@@ -24,7 +24,7 @@ public:
 private:
   class Impl;
 
-  void draw(Registry& registry, Entity entity);
+  void draw(Registry& registry);
 
   bool verbose_;
   canvas::Canvas canvas_;
