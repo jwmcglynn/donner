@@ -4,12 +4,14 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 donner_cc_library(
     name = "parser",
     srcs = [
+        "IntegerParser.cc",
         "LengthParser.cc",
         "NumberParser.cc",
         "ParseError.cc",
         "details/ParserBase.cc",
     ],
     hdrs = [
+        "IntegerParser.h",
         "LengthParser.h",
         "NumberParser.h",
         "ParseError.h",
@@ -59,6 +61,7 @@ cc_library(
 cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/IntegerParser_tests.cc",
         "tests/LengthParser_tests.cc",
         "tests/NumberParser_tests.cc",
         "tests/ParseError_tests.cc",
