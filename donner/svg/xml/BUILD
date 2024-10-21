@@ -47,11 +47,11 @@ donner_cc_library(
 donner_cc_library(
     name = "xml_details",
     hdrs = [
-        "details/LineOffsets.h",
         "details/XMLParserContext.h",
     ],
     deps = [
         ":xml_header",
+        "//donner/base/parser:line_offsets",
         "//donner/svg/parser",
     ],
 )
@@ -59,7 +59,6 @@ donner_cc_library(
 cc_test(
     name = "xml_tests",
     srcs = [
-        "details/tests/LineOffsets_tests.cc",
         "tests/SVGParser_tests.cc",
     ],
     deps = [

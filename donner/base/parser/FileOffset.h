@@ -12,11 +12,28 @@ namespace donner::base::parser {
  */
 struct FileOffset {
   /**
+   * Represents line information within a file, including the line number and the character offset
+   * on that line.
+   */
+  struct LineInfo {
+    size_t line;          ///< Line number in the file, 1-based.
+    size_t offsetOnLine;  ///< Character offset on the line (i.e. column index), 0-based.
+
+    /// Ostream operator for printing the line information, prints `line:offset`.
+    friend std::ostream& operator<<(std::ostream& os, const LineInfo& value) {
+      return os << value.line << ":" << value.offsetOnLine;
+    }
+
+    /// Equality operator.
+    bool operator<=>(const LineInfo&) const = default;
+  };
+
+  /**
    * Create a FileOffset for a single-line string.
    *
    * @param offset Character offset of the error in the string.
    */
-  static FileOffset Offset(size_t offset) { return FileOffset{0, offset}; }
+  static FileOffset Offset(size_t offset) { return FileOffset{offset, std::nullopt}; }
 
   /**
    * Create a FileOffset for a multi-line string.
@@ -24,18 +41,20 @@ struct FileOffset {
    * @param line Line number of the error.
    * @param offset Character offset of the error in the string.
    */
-  static FileOffset LineAndOffset(size_t line, size_t offset) { return FileOffset{line, offset}; }
+  static FileOffset OffsetWithLineInfo(size_t offset, LineInfo lineInfo) {
+    return FileOffset{offset, lineInfo};
+  }
 
   /**
    * Indicates an error occurred at the end of the input string.
    */
-  static FileOffset EndOfString() { return FileOffset{0, std::nullopt}; }
+  static FileOffset EndOfString() { return FileOffset{std::nullopt, std::nullopt}; }
 
-  /// Line number of the error.
-  size_t line = 0;
+  /// Character offset of the error in the string, if known.
+  std::optional<size_t> offset;
 
-  /// Character offset of the error in the string.
-  std::optional<size_t> offset = 0;
+  /// Line information for multi-line strings, if known.
+  std::optional<LineInfo> lineInfo;
 
   /**
    * Return the actual offset of the error in the string, resolving the character offset to a
@@ -48,7 +67,7 @@ struct FileOffset {
    */
   FileOffset resolveOffset(std::string_view sourceString) const {
     if (!offset.has_value()) {
-      return FileOffset{line, sourceString.size()};
+      return FileOffset{sourceString.size(), std::nullopt};
     } else {
       return *this;
     }
@@ -64,39 +83,62 @@ struct FileOffset {
     assert(parentOffset.offset.has_value() && "Parent offset must be resolved.");
     assert(offset.has_value() && "Child offset must be resolved.");
 
-    return FileOffset{line + parentOffset.line, offset.value() + parentOffset.offset.value()};
+    std::optional<LineInfo> newLineInfo;
+    if (parentOffset.lineInfo.has_value()) {
+      if (lineInfo.has_value()) {
+        if (lineInfo->line == 1) {
+          newLineInfo = LineInfo{parentOffset.lineInfo->line,
+                                 parentOffset.lineInfo->offsetOnLine + lineInfo->offsetOnLine};
+        } else {
+          newLineInfo =
+              LineInfo{parentOffset.lineInfo->line + lineInfo->line - 1, lineInfo->offsetOnLine};
+        }
+      } else {
+        // Parent has line info, but child does not.
+        newLineInfo = LineInfo{parentOffset.lineInfo->line,
+                               parentOffset.lineInfo->offsetOnLine + offset.value()};
+      }
+    }
+
+    return FileOffset{parentOffset.offset.value() + offset.value(), newLineInfo};
   }
 
   /// Equality operator.
   bool operator==(const FileOffset& other) const {
-    return line == other.line && offset == other.offset;
+    return offset == other.offset && lineInfo == other.lineInfo;
   }
 
   /// Print the offset to an ostream.
   friend std::ostream& operator<<(std::ostream& os, const FileOffset& value) {
-    if (value.line != 0) {
-      os << "line " << value.line << ", column ";
+    os << "FileOffset[";
+    if (value.lineInfo) {
+      os << "line " << value.lineInfo.value();
     }
 
-    if (value.offset.has_value()) {
+    if (value.offset) {
+      if (value.lineInfo) {
+        os << " ";
+      }
+      os << "offset ";
       os << value.offset.value();
     } else {
       os << "<eos>";
     }
 
-    return os;
+    return os << "]";
   }
 
 private:
   /**
    * Internal constructor to create a FileOffset.
    *
-   * @param line Line number of the error, starting at 0. For errors that have not yet been mapped
-   * to lines, this may be 0 and \ref offset represents the byte offset in the source file.
    * @param offset Character offset of the error in the string, or std::nullopt to indicate the
    * error is at the end of the line.
+   * @param line Line-number-relative error location, or std::nullopt if that information is not
+   * available.
    */
-  FileOffset(size_t line, std::optional<size_t> offset) : line(line), offset(offset) {}
+  FileOffset(std::optional<size_t> offset, std::optional<LineInfo> lineInfo)
+      : offset(offset), lineInfo(lineInfo) {}
 };
 
 }  // namespace donner::base::parser

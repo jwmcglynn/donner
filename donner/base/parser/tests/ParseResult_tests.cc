@@ -141,7 +141,7 @@ TEST(ParseResultTestUtils, ErrorMatchers) {
   ParseResult<int> withError = []() -> ParseResult<int> {
     ParseError error;
     error.reason = "Test error please ignore";
-    error.location = FileOffset::LineAndOffset(1, 30);
+    error.location = FileOffset::OffsetWithLineInfo(31, FileOffset::LineInfo(1, 30));
     return error;
   }();
 

@@ -51,8 +51,10 @@ protected:
 
   /**
    * Return the location of the parser's cursor, in characters from the start of the screen.
+   *
+   * @param index Index of the offset relative to the cursor to return, default is 0.
    */
-  FileOffset currentOffset() const;
+  FileOffset currentOffset(int index = 0) const;
 
   /**
    * Returns the number of characters consumed by the parser.

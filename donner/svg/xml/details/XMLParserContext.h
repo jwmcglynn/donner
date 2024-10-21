@@ -2,9 +2,9 @@
 
 #include <vector>
 
+#include "donner/base/parser/LineOffsets.h"
 #include "donner/base/parser/ParseError.h"
 #include "donner/svg/xml/SVGParser.h"
-#include "donner/svg/xml/details/LineOffsets.h"
 
 namespace donner::svg::parser {
 
@@ -63,15 +63,13 @@ public:
    * @return ParseError Remapped error.
    */
   ParseError fromSubparser(ParseError&& error, ParserOrigin origin) {
-    const size_t line = lineOffsets_.offsetToLine(origin.startOffset);
+    const std::size_t offset = origin.startOffset + error.location.offset.value();
+    const size_t line = lineOffsets_.offsetToLine(offset);
+    const base::parser::FileOffset subparserOffset = base::parser::FileOffset::OffsetWithLineInfo(
+        offset, base::parser::FileOffset::LineInfo{line, offset - lineOffsets_.lineOffset(line)});
 
     ParseError newError = std::move(error);
-    if (newError.location.line == 0) {
-      assert(newError.location.offset.has_value() &&
-             "Location must be resolved and not have a nullopt offset");
-      newError.location.offset.value() += origin.startOffset - lineOffsets_.lineOffset(line);
-    }
-    newError.location.line += line;
+    newError.location = subparserOffset;
     return newError;
   }
 
@@ -135,7 +133,7 @@ private:
   std::string_view input_;
 
   /// Offsets of the start of each line in the input string.
-  LineOffsets lineOffsets_;
+  base::parser::LineOffsets lineOffsets_;
 
   /// Storage for warnings, may be \c nullptr to disable warnings.
   std::vector<ParseError>* warnings_;

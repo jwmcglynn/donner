@@ -73,22 +73,44 @@ MATCHER_P(ParseErrorIs, errorMessageMatcher, "") {
 /**
  * Given a ParseResult, matches if it contains an error at the given offset.
  *
- * @param line Line number of the error.
- * @param offset Column offset of the error.
+ * @param lineMatcher Line number of the error.
+ * @param offsetMatcher Column offset of the error.
  */
-MATCHER_P2(ParseErrorPos, line, offset, "") {
+MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
+  const auto matchFileOffset = [&](const FileOffset& location) {
+    if (location.lineInfo.has_value()) {
+      return testing::ExplainMatchResult(lineMatcher, location.lineInfo->line, result_listener) &&
+             testing::ExplainMatchResult(offsetMatcher, location.lineInfo->offsetOnLine,
+                                         result_listener);
+    } else {
+      if (!testing::ExplainMatchResult(lineMatcher, 0, result_listener)) {
+        *result_listener
+            << "Line 0 should only be used if the result doesn't contain line number information";
+        return false;
+      }
+
+      if (!location.offset) {
+        *result_listener << "Expected an offset, but the error doesn't contain one";
+        return false;
+      }
+
+      return testing::ExplainMatchResult(offsetMatcher, location.offset.value(), result_listener);
+    }
+  };
+
   if constexpr (std::is_same_v<ArgType, ParseError>) {
-    return testing::ExplainMatchResult(line, arg.location.line, result_listener) &&
-           testing::ExplainMatchResult(offset, arg.location.offset, result_listener);
+    return matchFileOffset(arg.location);
+  } else if constexpr (std::is_same_v<ArgType, FileOffset>) {
+    return matchFileOffset(arg);
   } else {
+    // ParseResult<>
     if (!arg.hasError()) {
       return false;
     }
 
-    return testing::ExplainMatchResult(line, arg.error().location.line, result_listener) &&
-           testing::ExplainMatchResult(offset, arg.error().location.offset, result_listener);
+    return matchFileOffset(arg.error().location);
   }
 }
 

@@ -30,7 +30,7 @@ TEST(ParseError, ResolveOffset) {
 TEST(ParseError, Output) {
   ParseError err;
   err.reason = "Test reason";
-  err.location = FileOffset::LineAndOffset(1, 2);
+  err.location = FileOffset::OffsetWithLineInfo(3, FileOffset::LineInfo(1, 2));
 
   EXPECT_EQ((std::ostringstream() << err).str(), "Parse error at 1:2: Test reason");
 }

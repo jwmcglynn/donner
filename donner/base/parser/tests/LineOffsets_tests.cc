@@ -1,4 +1,4 @@
-#include "donner/svg/xml/details/LineOffsets.h"
+#include "donner/base/parser/LineOffsets.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest-death-test.h>
@@ -6,7 +6,7 @@
 
 using testing::ElementsAre;
 
-namespace donner::svg {
+namespace donner::base::parser {
 
 TEST(LineOffsets, NoLines) {
   {
@@ -104,4 +104,4 @@ TEST(LineOffsets, LineOffsetErrors) {
   }
 }
 
-}  // namespace donner::svg
+}  // namespace donner::base::parser

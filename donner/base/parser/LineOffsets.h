@@ -1,13 +1,13 @@
 #pragma once
 
 #include <algorithm>
-#include <cassert>
 #include <string_view>
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/base/parser/FileOffset.h"
 
-namespace donner::svg {
+namespace donner::base::parser {
 
 /**
  * Helper class for finding newlines in a string, so that error messages can convert string-relative
@@ -22,7 +22,7 @@ public:
    *
    * @param input Input string.
    */
-  LineOffsets(std::string_view input) {
+  explicit LineOffsets(std::string_view input) {
     // Compute the offsets for the start of each line. The line isn't considered started until
     // *after* the line break characters.
     for (size_t i = 0; i < input.size(); ++i) {
@@ -77,9 +77,19 @@ public:
     }
   }
 
+  /**
+   * Returns the offset as a FileOffset with line information.
+   *
+   * @param offset Character index.
+   */
+  FileOffset fileOffset(size_t offset) const {
+    return FileOffset::OffsetWithLineInfo(
+        offset, {offsetToLine(offset), offset - lineOffset(offsetToLine(offset))});
+  }
+
 private:
   /// 0-indexed offsets of the start of each line.
   std::vector<size_t> offsets_;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::base::parser

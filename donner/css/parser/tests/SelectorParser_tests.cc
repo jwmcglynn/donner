@@ -156,9 +156,10 @@ TEST(SelectorParser, PseudoElementSelectorToString) {
 
   EXPECT_THAT(
       SelectorParser::Parse("::after(one two)"),
-      ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(PseudoElementSelector("
-                               "after args[Token { Ident(one) offset: 8 }, Token { Whitespace(' ', "
-                               "len=1) offset: 11 }, Token { Ident(two) offset: 12 }, ]))))")));
+      ParseResultIs(ToStringIs(
+          "Selector(ComplexSelector(CompoundSelector(PseudoElementSelector(after args[Token { "
+          "Ident(one) offset: FileOffset[offset 8] }, Token { Whitespace(' ', len=1) offset: "
+          "FileOffset[offset 11] }, Token { Ident(two) offset: FileOffset[offset 12] }, ]))))")));
 }
 
 TEST(SelectorParser, PseudoClassSelector) {
@@ -185,9 +186,10 @@ TEST(SelectorParser, PseudoClassSelectorToString) {
 
   EXPECT_THAT(
       SelectorParser::Parse(":after(one two)"),
-      ParseResultIs(ToStringIs("Selector(ComplexSelector(CompoundSelector(PseudoClassSelector("
-                               "after args[Token { Ident(one) offset: 7 }, Token { Whitespace(' ', "
-                               "len=1) offset: 10 }, Token { Ident(two) offset: 11 }, ]))))")));
+      ParseResultIs(ToStringIs(
+          "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(after args[Token { "
+          "Ident(one) offset: FileOffset[offset 7] }, Token { Whitespace(' ', len=1) offset: "
+          "FileOffset[offset 10] }, Token { Ident(two) offset: FileOffset[offset 11] }, ]))))")));
 }
 
 TEST(SelectorParser, AttributeSelector) {

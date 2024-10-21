@@ -32,6 +32,17 @@ donner_cc_library(
     visibility = ["//donner:__subpackages__"],
 )
 
+donner_cc_library(
+    name = "line_offsets",
+    hdrs = [
+        "LineOffsets.h",
+    ],
+    visibility = ["//donner:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
 cc_library(
     name = "parser_test_utils",
     testonly = 1,

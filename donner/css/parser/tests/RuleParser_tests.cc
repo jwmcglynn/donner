@@ -56,20 +56,20 @@ TEST(RuleParser, ParseRule) {
 
     EXPECT_THAT(maybeRule.value(), ToStringIs(
                                        R"(QualifiedRule {
-  Token { Ident(a) offset: 0 }
-  Token { Whitespace(' ', len=1) offset: 1 }
-  Token { Delim(>) offset: 2 }
-  Token { Whitespace(' ', len=1) offset: 3 }
-  Token { Ident(b) offset: 4 }
-  Token { Whitespace(' ', len=1) offset: 5 }
+  Token { Ident(a) offset: FileOffset[offset 0] }
+  Token { Whitespace(' ', len=1) offset: FileOffset[offset 1] }
+  Token { Delim(>) offset: FileOffset[offset 2] }
+  Token { Whitespace(' ', len=1) offset: FileOffset[offset 3] }
+  Token { Ident(b) offset: FileOffset[offset 4] }
+  Token { Whitespace(' ', len=1) offset: FileOffset[offset 5] }
   { SimpleBlock {
   token='{'
-  Token { Whitespace(' ', len=1) offset: 7 }
-  Token { Ident(color) offset: 8 }
-  Token { Colon offset: 13 }
-  Token { Whitespace(' ', len=1) offset: 14 }
-  Token { Ident(red) offset: 15 }
-  Token { Whitespace(' ', len=1) offset: 18 }
+  Token { Whitespace(' ', len=1) offset: FileOffset[offset 7] }
+  Token { Ident(color) offset: FileOffset[offset 8] }
+  Token { Colon offset: FileOffset[offset 13] }
+  Token { Whitespace(' ', len=1) offset: FileOffset[offset 14] }
+  Token { Ident(red) offset: FileOffset[offset 15] }
+  Token { Whitespace(' ', len=1) offset: FileOffset[offset 18] }
 } }
 })"));
   }

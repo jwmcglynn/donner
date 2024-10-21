@@ -12,8 +12,13 @@ using testing::AllOf;
 using testing::ElementsAre;
 
 MATCHER_P3(ParseWarningIs, line, offset, errorMessageMatcher, "") {
+  if (arg.location.lineInfo) {
+    return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener) &&
+           arg.location.lineInfo->offsetOnLine == offset && arg.location.lineInfo->line == line;
+  }
+
   return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener) &&
-         arg.location.line == line && arg.location.offset == offset;
+         line == 0 && arg.location.offset == offset;
 }
 
 // TODO: Add an ErrorHighlightsText matcher

@@ -4,15 +4,16 @@ namespace donner::base::parser {
 
 /// Ostream output operator for \ref ParseError, outputs the error message.
 std::ostream& operator<<(std::ostream& os, const ParseError& error) {
-  os << "Parse error at " << error.location.line << ":";
-  if (error.location.offset.has_value()) {
-    os << error.location.offset.value();
-    os << ": ";
+  os << "Parse error at ";
+  if (error.location.lineInfo) {
+    os << error.location.lineInfo.value();
+  } else if (error.location.offset) {
+    os << "0:" << error.location.offset.value();
   } else {
-    os << "<eol>: ";
+    os << "<eos>";
   }
 
-  return os << error.reason;
+  return os << ": " << error.reason;
 }
 
 }  // namespace donner::base::parser

@@ -4,6 +4,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "donner/base/parser/FileOffset.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/xml/AttributeParser.h"
@@ -216,7 +217,8 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(
 
     ParseError err;
     err.reason = e.what();
-    err.location = FileOffset::LineAndOffset(line, offset - context.lineOffset(line));
+    err.location = FileOffset::OffsetWithLineInfo(
+        offset, FileOffset::LineInfo{line, offset - context.lineOffset(line)});
     return err;
   }
 

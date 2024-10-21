@@ -34,14 +34,22 @@ void ParserBase::skipCommaWhitespace() {
 }
 
 bool ParserBase::isWhitespace(char ch) const {
-  // https://www.w3.org/TR/css-transforms-1/#svg-wsp
-  // Either a U+000A LINE FEED, U+000D CARRIAGE RETURN, U+0009 CHARACTER TABULATION, or U+0020
-  // SPACE.
+  // Whitespace is defined by multiple specs, but both match.
+  //
+  // - https://www.w3.org/TR/css-transforms-1/#svg-wsp
+  //   Either a U+000A LINE FEED, U+000D CARRIAGE RETURN, U+0009 CHARACTER TABULATION, or U+0020
+  //   SPACE.
+  //
+  // - https://www.w3.org/TR/xml/#NT-S
+  //   S (white space) consists of one or more space (#x20) characters, carriage returns, line
+  //   feeds, or tabs.
+  //   S ::= (#x20 | #x9 | #xD | #xA)+
+
   return ch == '\t' || ch == ' ' || ch == '\n' || ch == '\r';
 }
 
-FileOffset ParserBase::currentOffset() const {
-  return FileOffset::Offset(consumedChars());
+FileOffset ParserBase::currentOffset(int index) const {
+  return FileOffset::Offset(consumedChars() + index);
 }
 
 size_t ParserBase::consumedChars() const {
