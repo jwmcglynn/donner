@@ -127,6 +127,19 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "svg_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/parser/svg_parser_fuzzer",
+      "args": [
+        "./crash-da39a3ee5e6b4b0d3255bfef95601890afd80709",
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "css_parser_tests",
       "program": "${workspaceFolder}/bazel-bin/donner/css/parser/parser_tests",
       "args": [

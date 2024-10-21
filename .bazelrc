@@ -99,7 +99,8 @@ build:asan --config=latest_llvm
 build:asan --linkopt -ldl
 build:asan --copt -fsanitize=address,undefined
 build:asan --linkopt -fsanitize=address,undefined
-build:asan --copt -fno-omit-frame-pointer --copt -fsanitize-address-use-after-scope
+build:asan --copt -fno-omit-frame-pointer
+build:asan --copt -fsanitize-address-use-after-scope
 build:asan --test_env=ASAN_SYMBOLIZER_PATH
 # These require libubsan, which is not linked properly by bazel, so disable.
 # See https://github.com/google/oss-fuzz/issues/713

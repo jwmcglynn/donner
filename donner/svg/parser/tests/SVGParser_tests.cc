@@ -26,8 +26,7 @@ MATCHER_P3(ParseWarningIs, line, offset, errorMessageMatcher, "") {
 namespace donner::svg::parser {
 
 TEST(SVGParser, Simple) {
-  SVGParser::InputBuffer simpleXml =
-      std::string_view(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  const std::string_view simpleXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
           </svg>)");
 
   std::vector<ParseError> warnings;
@@ -37,8 +36,7 @@ TEST(SVGParser, Simple) {
 }
 
 TEST(SVGParser, Style) {
-  SVGParser::InputBuffer simpleXml =
-      std::string_view(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  const std::string_view simpleXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
            <rect x="5" y="5" width="90" height="90" stroke="red" />
            <rect x="10" y="10" width="80" height="80" fill="green" />
          </svg>)");
@@ -50,7 +48,7 @@ TEST(SVGParser, Style) {
 }
 
 TEST(SVGParser, Attributes) {
-  const SVGParser::InputBuffer kAttributeXml =
+  const std::string_view attributeXml =
       std::string_view(R"(<svg id="svg1" xmlns="http://www.w3.org/2000/svg">
            <rect stroke="red" user-attribute="value" />
          </svg>)");
@@ -58,9 +56,6 @@ TEST(SVGParser, Attributes) {
   SVGParser::Options options;
   {
     options.disableUserAttributes = false;
-
-    // Copy attributeXml before parsing since it will be modified.
-    SVGParser::InputBuffer attributeXml = kAttributeXml;
 
     std::vector<ParseError> warnings;
     auto documentResult = SVGParser::ParseSVG(attributeXml, &warnings, options);
@@ -80,9 +75,6 @@ TEST(SVGParser, Attributes) {
   {
     options.disableUserAttributes = true;
 
-    // Copy attributeXml before parsing since it will be modified.
-    SVGParser::InputBuffer attributeXml = kAttributeXml;
-
     std::vector<ParseError> warnings;
     auto documentResult = SVGParser::ParseSVG(attributeXml, &warnings, options);
     ASSERT_THAT(documentResult, NoParseError());
@@ -100,7 +92,7 @@ TEST(SVGParser, Attributes) {
 
 TEST(SVGParser, XmlParseErrors) {
   {
-    SVGParser::InputBuffer badXml = std::string_view(R"(<!)");
+    const std::string_view badXml = std::string_view(R"(<!)");
 
     std::vector<ParseError> warnings;
     EXPECT_THAT(SVGParser::ParseSVG(badXml, &warnings),
@@ -108,8 +100,7 @@ TEST(SVGParser, XmlParseErrors) {
   }
 
   {
-    SVGParser::InputBuffer badXml =
-        std::string_view(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+    const std::string_view badXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
              <path></invalid>
            </svg>)");
 
@@ -120,8 +111,7 @@ TEST(SVGParser, XmlParseErrors) {
 }
 
 TEST(SVGParser, Warning) {
-  SVGParser::InputBuffer simpleXml =
-      std::string_view(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  const std::string_view simpleXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
            <path d="M 100 100 h 2!" />
          </svg>)");
 
@@ -137,8 +127,7 @@ TEST(SVGParser, Warning) {
 }
 
 TEST(SVGParser, InvalidXmlns) {
-  SVGParser::InputBuffer simpleXml =
-      std::string_view(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="invalid">
+  const std::string_view simpleXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="invalid">
          </svg>)");
 
   std::vector<ParseError> warnings;
@@ -148,8 +137,7 @@ TEST(SVGParser, InvalidXmlns) {
 }
 
 TEST(SVGParser, PrefixedXmlns) {
-  SVGParser::InputBuffer xmlnsXml =
-      std::string_view(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+  const std::string_view xmlnsXml(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
            <svg:path d="M 100 100 h 2" />
          </svg:svg>)");
 
@@ -161,8 +149,7 @@ TEST(SVGParser, PrefixedXmlns) {
 
 TEST(SVGParser, MismatchedNamespace) {
   {
-    SVGParser::InputBuffer mismatchedSvgXmlnsXml =
-        std::string_view(R"(<svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+    const std::string_view mismatchedSvgXmlnsXml(R"(<svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
              <svg:path d="M 100 100 h 2" />
            </svg>)");
 
@@ -174,8 +161,7 @@ TEST(SVGParser, MismatchedNamespace) {
   }
 
   {
-    SVGParser::InputBuffer mismatchedXmlnsXml =
-        std::string_view(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+    const std::string_view mismatchedXmlnsXml(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
              <path d="M 100 100 h 2" />
            </svg:svg>)");
 
@@ -190,8 +176,7 @@ TEST(SVGParser, MismatchedNamespace) {
 
   // TODO: Detect invalid namespaces
   // {
-  //   SVGParser::InputBuffer invalidNsXml =
-  //       std::string_view(R"(<svg:svg viewBox="0 0 200 200"
+  //   const std::string_view invalidNsXml(R"(<svg:svg viewBox="0 0 200 200"
   //       xmlns:svg="http://www.w3.org/2000/svg">
   //            <other:path d="M 100 100 h 2" />
   //          </svg:svg>)");
@@ -202,8 +187,7 @@ TEST(SVGParser, MismatchedNamespace) {
   // }
 
   {
-    SVGParser::InputBuffer invalidAttributeNsXml =
-        std::string_view(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+    const std::string_view invalidAttributeNsXml(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
              <svg:path svg:d="M 100 100 h 2" />
            </svg:svg>)");
 

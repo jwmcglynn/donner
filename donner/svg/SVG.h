@@ -16,7 +16,7 @@ namespace donner {
  *
  * Loading SVG files can be done using \ref donner::svg::parser::SVGParser
  * ```
- * SVGParser::InputBuffer svgSource("<svg>...</svg>");
+ * std::string_view svgSource("<svg>...</svg>");
  *
  * std::vector<ParseError> warnings;
  * auto maybeResult = SVGParser::ParseSVG(svgSource, &warnings);

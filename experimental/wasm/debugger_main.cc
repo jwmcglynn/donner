@@ -43,11 +43,8 @@ public:
   DonnerBindings() = default;
 
   bool loadSVG(const std::string& canvasId, const std::string& svg) {
-    fileData_.resize(svg.size());
-    fileData_.assign(svg.begin(), svg.end());
-
     std::vector<donner::base::parser::ParseError> warnings;
-    auto maybeResult = parser::SVGParser::ParseSVG(fileData_, &warnings);
+    auto maybeResult = parser::SVGParser::ParseSVG(svg, &warnings);
 
     if (maybeResult.hasError()) {
       const auto& e = maybeResult.error();
@@ -74,9 +71,6 @@ public:
 
     return true;
   }
-
-private:
-  parser::SVGParser::InputBuffer fileData_;
 };
 
 EMSCRIPTEN_BINDINGS(Donner) {

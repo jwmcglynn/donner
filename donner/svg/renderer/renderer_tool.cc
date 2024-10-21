@@ -177,8 +177,13 @@ extern "C" int main(int argc, char* argv[]) {
     return 2;
   }
 
-  parser::SVGParser::InputBuffer fileData;
-  fileData.loadFromStream(file);
+  std::string fileData;
+  file.seekg(0, std::ios::end);
+  const std::streamsize fileLength = file.tellg();
+  file.seekg(0);
+
+  fileData.resize(fileLength);
+  file.read(fileData.data(), fileLength);
 
   std::vector<parser::ParseError> warnings;
   parser::SVGParser::Options xmlOptions;

@@ -125,7 +125,7 @@ public:
                          SVGDocument::Settings settings)
       : context_(context), registry_(std::move(registry)), settings_(std::move(settings)) {}
 
-  SVGDocument document() const { return document_.value(); }
+  std::optional<SVGDocument> document() const { return document_; }
 
   template <size_t I = 0, typename... Types>
   ParseResult<SVGElement> createElement(const XMLQualifiedNameRef& tagName, const XMLNode& node,
@@ -236,11 +236,9 @@ public:
 };
 
 ParseResult<SVGDocument> SVGParser::ParseSVG(
-    InputBuffer& source, std::vector<ParseError>* outWarnings, SVGParser::Options options,
+    std::string_view source, std::vector<ParseError>* outWarnings, SVGParser::Options options,
     std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept {
-  const std::string_view sourceStr(source.data(), source.size());
-
-  auto maybeDocument = xml::XMLParser::Parse(sourceStr);
+  auto maybeDocument = xml::XMLParser::Parse(source);
   if (maybeDocument.hasError()) {
     return std::move(maybeDocument.error());
   }
@@ -250,13 +248,20 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(
 
   xml::XMLDocument xmlDocument(maybeDocument.result());
 
-  SVGParserContext context(sourceStr, outWarnings, options);
+  SVGParserContext context(source, outWarnings, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
-  if (auto error = parser.walkChildren(std::nullopt, maybeDocument.result().root())) {
+  if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
     return std::move(error.value());
   }
 
-  return parser.document();
+  if (auto maybeDocument = parser.document()) {
+    return std::move(maybeDocument.value());
+  } else {
+    ParseError err;
+    err.reason = "No SVG element found in document";
+    err.location = FileOffset::Offset(0);
+    return err;
+  }
 }
 
 }  // namespace donner::svg::parser

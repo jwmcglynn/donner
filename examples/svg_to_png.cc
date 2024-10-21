@@ -43,8 +43,13 @@ int main(int argc, char* argv[]) {
     std::abort();
   }
 
-  SVGParser::InputBuffer fileData;
-  fileData.loadFromStream(file);
+  std::string fileData;
+  file.seekg(0, std::ios::end);
+  const size_t fileLength = file.tellg();
+  file.seekg(0);
+
+  fileData.resize(fileLength);
+  file.read(fileData.data(), static_cast<std::streamsize>(fileLength));
   //! [load_file]
 
   // Parse the SVG. Note that the lifetime of the vector must be longer than the returned

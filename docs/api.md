@@ -99,7 +99,7 @@ To parse an SVG document, use the `SVGParser` class:
 
 \snippet svg_tree_interaction.cc error_handling
 
-\ref donner::svg::parser::SVGParser::ParseSVG accepts either a string containing SVG data, or an `InputBuffer` which can be used to read from a file.
+\ref donner::svg::parser::SVGParser::ParseSVG accepts a string containing SVG data.
 
 \snippet svg_to_png.cc load_file
 

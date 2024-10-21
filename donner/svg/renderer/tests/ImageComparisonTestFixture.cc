@@ -59,8 +59,13 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
     return SVGDocument();
   }
 
-  parser::SVGParser::InputBuffer fileData;
-  fileData.loadFromStream(file);
+  std::string fileData;
+  file.seekg(0, std::ios::end);
+  const std::streamsize fileLength = file.tellg();
+  file.seekg(0);
+
+  fileData.resize(fileLength);
+  file.read(fileData.data(), fileLength);
 
   parser::SVGParser::Options options;
   std::unique_ptr<ResourceLoaderInterface> resourceLoader;

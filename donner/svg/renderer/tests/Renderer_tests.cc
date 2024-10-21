@@ -54,7 +54,7 @@ protected:
     const std::streamsize fileLength = file.tellg();
     file.seekg(0);
 
-    parser::SVGParser::InputBuffer fileData;
+    std::string fileData;
     fileData.resize(fileLength);
     file.read(fileData.data(), fileLength);
 

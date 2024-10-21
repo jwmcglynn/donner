@@ -50,90 +50,18 @@ public:
   };
 
   /**
-   * Convert a string into a mutable vector<char> that is suitable for use with Donner's
-   * SVGParser.
-   */
-  struct InputBuffer : std::vector<char> {
-    /// Default constructor, for use with \ref loadFromStream.
-    InputBuffer() = default;
-
-    /**
-     * Construct an input buffer from a string. Implicit so it enables passing a raw string into the
-     * \ref SVGParser::ParseSVG function.
-     *
-     * Example:
-     * ```
-     * SVGParser::InputBuffer svgSource("<svg>...</svg>");
-     * auto result = SVGParser::ParseSVG(svgSource);
-     * ```
-     *
-     * @param str String to read from.
-     */
-    /* implicit */ InputBuffer(std::string_view str) {
-      // Reserve enough space for the string, and an extra byte for the NUL ('\0') terminator if
-      // required.
-      const bool hasNul = str.ends_with('\0');
-      reserve(str.size() + (hasNul ? 0 : 1));
-      std::copy(str.begin(), str.end(), std::back_inserter(*this));
-      if (!hasNul) {
-        push_back('\0');
-      }
-    }
-
-    /**
-     * Append a string to the input buffer.
-     *
-     * @param str String to append.
-     */
-    void append(std::string_view str) {
-      // Remove the null terminator if one is set.
-      while (!empty() && back() == '\0') {
-        pop_back();
-      }
-
-      // Reserve enough space for the string.
-      reserve(size() + str.size());
-
-      // Append the string.
-      std::copy(str.begin(), str.end(), std::back_inserter(*this));
-    }
-
-    /**
-     * Load the contents of an STL stream into the input buffer.
-     *
-     * Example:
-     * ```
-     * SVGParser::InputBuffer svgSource;
-     * svgSource.loadFromStream(std::ifstream("example.svg"));
-     * ```
-     *
-     * @param stream Input stream to read from.
-     */
-    void loadFromStream(std::istream& stream) {
-      stream.seekg(0, std::ios::end);
-      const size_t fileLength = stream.tellg();
-      stream.seekg(0);
-
-      resize(fileLength + 1);
-      stream.read(data(), static_cast<std::streamsize>(fileLength));
-      data()[fileLength] = '\0';
-    }
-  };
-
-  /**
    * Parses an SVG XML document (typically the contents of a .svg file).
    *
-   * To reduce copying, the input buffer is modified to produce substrings, so it must be mutable
-   * and end with a '\0'.
+   * The input buffer does not need to be null-terminated, but if there are embedded null characters parsing will stop.
    *
-   * @param source Mutable input data buffer.
+   * @param source Input buffer containing the SVG XML document. Will not be modified.
    * @param[out] outWarnings If non-null, append warnings encountered to this vector.
    * @param options Options to modify the parsing behavior.
    * @param resourceLoader Resource loader to use for loading external resources.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
   static ParseResult<SVGDocument> ParseSVG(
-      InputBuffer& source, std::vector<ParseError>* outWarnings = nullptr, Options options = {},
+      std::string_view source, std::vector<ParseError>* outWarnings = nullptr, Options options = {},
       std::unique_ptr<ResourceLoaderInterface> resourceLoader = nullptr) noexcept;
 };
 
