@@ -11,7 +11,7 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",
-        "//donner/base/xml",
+        "//donner/base/xml:xml_qualified_name",
     ],
 )
 

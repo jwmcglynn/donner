@@ -63,9 +63,18 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGLineElement : public SVGGeometryElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGLineElement wrapper from an entity.
   explicit SVGLineElement(EntityHandle handle) : SVGGeometryElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGLineElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -80,7 +89,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGLineElement Create(SVGDocument& document);
+  static SVGLineElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Set the start X coordinate.

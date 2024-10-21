@@ -3,6 +3,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
+#include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/IdComponent.h"
 
@@ -10,6 +11,7 @@ namespace donner::svg {
 
 // Forward declarations
 class SVGDocument;
+class SVGElement;
 
 }  // namespace donner::svg
 
@@ -37,13 +39,14 @@ namespace donner::svg::components {
  *
  * Access the document context via the \c Registry::ctx API:
  * ```
- * DocumentContext& context = registry.ctx().get<DocumentContext>();
+ * SVGDocumentContext& context = registry.ctx().get<SVGDocumentContext>();
  * Entity foo = context.getEntityById("foo");
  * ```
  */
-class DocumentContext {
+class SVGDocumentContext {
 private:
   friend class ::donner::svg::SVGDocument;
+  friend class ::donner::svg::SVGElement;
 
   /// Tag to allow internal construction, used by \ref SVGDocument.
   struct InternalCtorTag {};
@@ -54,14 +57,13 @@ public:
    *
    * To use this class, access it via the \c Registry::ctx API.
    * ```
-   * DocumentContext& context = registry.ctx().get<DocumentContext>();
+   * SVGDocumentContext& context = registry.ctx().get<SVGDocumentContext>();
    * ```
    *
    * @param ctorTag Internal tag to allow construction.
-   * @param document The SVG document.
    * @param registry Underlying registry for the document.
    */
-  explicit DocumentContext(InternalCtorTag ctorTag, SVGDocument& document, Registry& registry);
+  explicit SVGDocumentContext(InternalCtorTag ctorTag, const std::shared_ptr<Registry>& registry);
 
   /// Current canvas size, if set. Equivalent to the window size, which controls how the SVG
   /// contents are rendered.
@@ -69,9 +71,6 @@ public:
 
   /// Root entity of the document, which contains the \ref xml_svg element.
   Entity rootEntity = entt::null;
-
-  /// Get the SVGDocument instance.
-  SVGDocument& document() const { return document_; }
 
   /**
    * Get the entity with the given ID, using the internal id-to-entity mapping.
@@ -86,21 +85,31 @@ public:
   }
 
 private:
+  /// Rehydrate the shared_ptr for the Registry. Asserts if the registry has already been destroyed,
+  /// which means that this object is likely invalid too.
+  std::shared_ptr<Registry> getSharedRegistry() const {
+    if (auto registry = registry_.lock()) {
+      return registry;
+    } else {
+      UTILS_RELEASE_ASSERT_MSG(false, "SVGDocument has already been destroyed");
+    }
+  }
+
   /// Called when an ID is added to an element.
   void onIdSet(Registry& registry, Entity entity) {
     auto& idComponent = registry.get<IdComponent>(entity);
-    idToEntity_.emplace(idComponent.id, entity);
+    idToEntity_.emplace(idComponent.id(), entity);
   }
 
   /// Called when an ID is removed from an element.
   void onIdDestroy(Registry& registry, Entity entity) {
     auto& idComponent = registry.get<IdComponent>(entity);
-    idToEntity_.erase(idComponent.id);
+    idToEntity_.erase(idComponent.id());
   }
 
-  /// Document reference. Note that this operates off of a forward declaration due to dependency
-  /// inversion. This class cannot use SVGDocument directly.
-  SVGDocument& document_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+  /// ECS registry reference, which is owned by SVGDocument. This is used to recreate an
+  /// SVGDocument when requested, and will fail if all references have been destroyed.
+  std::weak_ptr<Registry> registry_;
 
   /// Mapping from ID to entity.
   std::unordered_map<RcString, Entity> idToEntity_;

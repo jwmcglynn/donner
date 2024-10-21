@@ -7,10 +7,7 @@
 
 namespace donner::svg {
 
-namespace parser {
-class SVGParser;  // Forward declaration, #include "donner/svg/xml/SVGParser.h"
-}  // namespace parser
-
+class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
 
 /**
@@ -40,6 +37,26 @@ public:
     std::unique_ptr<ResourceLoaderInterface> resourceLoader;
   };
 
+private:
+  friend class SVGElement;
+  friend class parser::SVGParserImpl;
+
+  /// Internal constructor used by \ref SVGElement, to rehydrate a SVGDocument from the Registry.
+  explicit SVGDocument(std::shared_ptr<Registry> registry) : registry_(std::move(registry)) {}
+
+  /**
+   * Internal constructor used by the main SVGDocument constructor and \ref
+   * donner::svg::parser::SVGParser.
+   *
+   * @param registry Underlying registry for the document.
+   * @param settings Settings to configure the document.
+   * @param ontoEntityHandle Optional handle to an existing entity, used by SVGParser to create the
+   * SVG on an existing XML tree.
+   */
+  explicit SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
+                       EntityHandle ontoEntityHandle);
+
+public:
   /**
    * Constructor to create an empty SVGDocument.
    *
@@ -47,7 +64,7 @@ public:
    *
    * @param settings Settings to configure the document.
    */
-  SVGDocument(Settings settings = Settings());
+  explicit SVGDocument(Settings settings = Settings());
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() { return *registry_; }

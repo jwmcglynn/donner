@@ -20,15 +20,14 @@ cc_library(
     ],
 )
 
-
 cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
+    visibility = ["//donner/svg:__subpackages__"],
     deps = [
         "//donner/svg/components",
     ],
-    visibility = ["//donner/svg:__subpackages__"],
 )
 
 cc_library(
@@ -77,7 +76,7 @@ cc_binary(
     srcs = ["renderer_tool.cc"],
     deps = [
         ":renderer_skia",
-        "//donner/svg/xml",
+        "//donner/svg/parser",
         "@com_google_absl//absl/debugging:failure_signal_handler",
         "@com_google_absl//absl/debugging:symbolize",
     ],

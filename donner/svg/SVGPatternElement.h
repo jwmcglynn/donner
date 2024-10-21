@@ -100,9 +100,18 @@ namespace donner::svg {
  * | `href`   | (none)  | Reference to another pattern element to use as a template. |
  */
 class SVGPatternElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGPatternElement wrapper from an entity.
   explicit SVGPatternElement(EntityHandle handle) : SVGElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGPatternElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -115,7 +124,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGPatternElement Create(SVGDocument& document);
+  static SVGPatternElement Create(SVGDocument& document) {
+    return CreateOn(CreateEntity(document));
+  }
 
   /**
    * Get the parsed value of the `viewBox` attribute, if specified, which defines a rectangle in

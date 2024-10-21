@@ -5,7 +5,7 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/core/tests/PathSplineTestUtils.h"
-#include "donner/svg/tests/XMLTestUtils.h"
+#include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
 using testing::ElementsAre;

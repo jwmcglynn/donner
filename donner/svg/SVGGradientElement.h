@@ -24,6 +24,8 @@ namespace donner::svg {
  * | `href`    | (none)  | A URL reference to a template gradient element, which is then used as a template for this gradient. Example: `<linearGradient id="MyGradient" href="#MyGradient2" />` |
  */
 class SVGGradientElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /**
    * Constructor for SVGGradientElement, which must be constructed from a derived class.

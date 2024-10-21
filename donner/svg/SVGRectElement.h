@@ -113,9 +113,18 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGRectElement : public SVGGeometryElement {
+  friend class parser::SVGParserImpl;
+
 private:
   /// Create an SVGRectElement wrapper from an entity.
   explicit SVGRectElement(EntityHandle handle) : SVGGeometryElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGRectElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -130,7 +139,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGRectElement Create(SVGDocument& document);
+  static SVGRectElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Set the top-left X coordinate.

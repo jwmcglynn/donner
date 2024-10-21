@@ -3,10 +3,12 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner {
 
 using testing::Eq;
+using xml::XMLQualifiedNameRef;
 
 class FakeElementTest : public ::testing::Test {
 protected:

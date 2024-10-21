@@ -13,6 +13,8 @@ namespace donner::svg {
  * SVGRectElement, \ref SVGPathElement, etc.
  */
 class SVGGeometryElement : public SVGGraphicsElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /**
    * Internal constructor to create an SVGGeometryElement from an \ref EntityHandle.

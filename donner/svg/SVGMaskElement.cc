@@ -6,9 +6,8 @@
 
 namespace donner::svg {
 
-SVGMaskElement SVGMaskElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  EntityHandle handle = CreateEntity(registry, Tag, Type);
+SVGMaskElement SVGMaskElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::MaskComponent>();
   handle
       .emplace<components::RenderingBehaviorComponent>(

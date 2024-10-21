@@ -5,7 +5,7 @@
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/svg/xml/SVGParser.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg::components {
 

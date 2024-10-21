@@ -118,7 +118,7 @@ struct AttributeSelector {
       return !matcher || valueMatches(matcher.value(), maybeValue.value());
     } else {
       // Wildcard may return multiple matches.
-      const SmallVector<XMLQualifiedNameRef, 1> attributes =
+      const SmallVector<xml::XMLQualifiedNameRef, 1> attributes =
           element.findMatchingAttributes(name.name);
 
       for (const auto& attributeName : attributes) {

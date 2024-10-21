@@ -7,8 +7,8 @@
 
 namespace donner::svg {
 
-SVGPolygonElement SVGPolygonElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+SVGPolygonElement SVGPolygonElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   return SVGPolygonElement(handle);

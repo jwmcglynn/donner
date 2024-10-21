@@ -45,10 +45,19 @@ namespace donner::svg {
  * ```
  */
 class SVGFEGaussianBlurElement : public SVGFilterPrimitiveStandardAttributes {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGFEGaussianBlurElement wrapper from an entity.
   explicit SVGFEGaussianBlurElement(EntityHandle handle)
       : SVGFilterPrimitiveStandardAttributes(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGFEGaussianBlurElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -61,7 +70,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGFEGaussianBlurElement Create(SVGDocument& document);
+  static SVGFEGaussianBlurElement Create(SVGDocument& document) {
+    return CreateOn(CreateEntity(document));
+  }
 
   // TODO: Add attributes
   // - in

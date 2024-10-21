@@ -60,9 +60,18 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGCircleElement : public SVGGeometryElement {
+  friend class parser::SVGParserImpl;
+
 private:
   /// Create an SVGCircleElement wrapper from an entity.
   explicit SVGCircleElement(EntityHandle handle) : SVGGeometryElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGCircleElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -77,7 +86,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGCircleElement Create(SVGDocument& document);
+  static SVGCircleElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Set the center X coordinate.

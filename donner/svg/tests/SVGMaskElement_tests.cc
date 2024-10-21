@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
-#include "donner/svg/tests/XMLTestUtils.h"
+#include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
 
@@ -17,8 +17,8 @@ TEST(SVGMaskElementTests, Defaults) {
 }
 
 TEST(SVGMaskElementTests, SetMaskUnits) {
-  auto mask = instantiateSubtreeElementAs<SVGMaskElement>(
-      "<mask maskUnits=\"objectBoundingBox\" />");
+  auto mask =
+      instantiateSubtreeElementAs<SVGMaskElement>("<mask maskUnits=\"objectBoundingBox\" />");
   EXPECT_EQ(mask->maskUnits(), ClipPathUnits::ObjectBoundingBox);
 }
 

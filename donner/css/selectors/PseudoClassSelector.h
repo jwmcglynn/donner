@@ -223,7 +223,7 @@ private:
   }
 
   template <ElementLike T>
-  static bool isFirstOfType(const T& element, const XMLQualifiedNameRef& type) {
+  static bool isFirstOfType(const T& element, const xml::XMLQualifiedNameRef& type) {
     for (std::optional<T> child = element.previousSibling(); child;
          child = child.value().previousSibling()) {
       if (child.value().tagName() == type) {
@@ -235,7 +235,7 @@ private:
   }
 
   template <ElementLike T>
-  static bool isLastOfType(const T& element, const XMLQualifiedNameRef& type) {
+  static bool isLastOfType(const T& element, const xml::XMLQualifiedNameRef& type) {
     for (std::optional<T> child = element.nextSibling(); child;
          child = child.value().nextSibling()) {
       if (child.value().tagName() == type) {

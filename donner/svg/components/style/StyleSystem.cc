@@ -30,7 +30,10 @@ struct ShadowedElementAdapter {
   std::optional<ShadowedElementAdapter> parentElement() const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).parent();
-    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+
+    const bool isSVGElement =
+        (target != entt::null && registry_.get().all_of<ElementTypeComponent>(target));
+    return isSVGElement ? std::make_optional(create(target)) : std::nullopt;
   }
 
   std::optional<ShadowedElementAdapter> firstChild() const {
@@ -57,7 +60,7 @@ struct ShadowedElementAdapter {
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
-  XMLQualifiedNameRef tagName() const {
+  xml::XMLQualifiedNameRef tagName() const {
     return registry_.get().get<donner::components::TreeComponent>(treeEntity_).tagName();
   }
 
@@ -68,7 +71,7 @@ struct ShadowedElementAdapter {
 
   RcString id() const {
     if (const auto* component = registry_.get().try_get<IdComponent>(dataEntity_)) {
-      return component->id;
+      return component->id();
     } else {
       return "";
     }
@@ -82,7 +85,7 @@ struct ShadowedElementAdapter {
     }
   }
 
-  bool hasAttribute(const XMLQualifiedNameRef& name) const {
+  bool hasAttribute(const xml::XMLQualifiedNameRef& name) const {
     if (const auto* component =
             registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->hasAttribute(name);
@@ -91,7 +94,7 @@ struct ShadowedElementAdapter {
     }
   }
 
-  std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const {
+  std::optional<RcString> getAttribute(const xml::XMLQualifiedNameRef& name) const {
     if (const auto* component =
             registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->getAttribute(name);
@@ -100,8 +103,8 @@ struct ShadowedElementAdapter {
     }
   }
 
-  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
-      const XMLQualifiedNameRef& matcher) const {
+  SmallVector<xml::XMLQualifiedNameRef, 1> findMatchingAttributes(
+      const xml::XMLQualifiedNameRef& matcher) const {
     if (const auto* component =
             registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->findMatchingAttributes(matcher);

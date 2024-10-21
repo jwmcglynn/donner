@@ -13,10 +13,19 @@ namespace donner::svg {
  * @see https://www.w3.org/TR/filter-effects/#InterfaceSVGFilterPrimitiveStandardAttributes
  */
 class SVGFilterPrimitiveStandardAttributes : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Inheriting constructor to be called by derived classes. \ref
   /// SVGFilterPrimitiveStandardAttributes cannot be instantiated directly.
   explicit SVGFilterPrimitiveStandardAttributes(EntityHandle handle);
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGFilterPrimitiveStandardAttributes CreateOn(EntityHandle handle);
 
 public:
   /**

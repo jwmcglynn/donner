@@ -16,19 +16,22 @@ namespace donner {
  * `previousSibling()`, and type and class information to match against the respective selectors.
  */
 template <typename T>
-concept ElementLike = requires(const T t, const T otherT, const XMLQualifiedNameRef attribName) {
-  { t.operator==(otherT) } -> std::same_as<bool>;
-  { t.parentElement() } -> std::same_as<std::optional<T>>;
-  { t.firstChild() } -> std::same_as<std::optional<T>>;
-  { t.lastChild() } -> std::same_as<std::optional<T>>;
-  { t.previousSibling() } -> std::same_as<std::optional<T>>;
-  { t.nextSibling() } -> std::same_as<std::optional<T>>;
-  { t.tagName() } -> std::same_as<XMLQualifiedNameRef>;
-  { t.isKnownType() } -> std::same_as<bool>;
-  { t.id() } -> std::same_as<RcString>;
-  { t.className() } -> std::same_as<RcString>;
-  { t.getAttribute(attribName) } -> std::same_as<std::optional<RcString>>;
-  { t.findMatchingAttributes(attribName) } -> std::same_as<SmallVector<XMLQualifiedNameRef, 1>>;
-};
+concept ElementLike =
+    requires(const T t, const T otherT, const xml::XMLQualifiedNameRef attribName) {
+      { t.operator==(otherT) } -> std::same_as<bool>;
+      { t.parentElement() } -> std::same_as<std::optional<T>>;
+      { t.firstChild() } -> std::same_as<std::optional<T>>;
+      { t.lastChild() } -> std::same_as<std::optional<T>>;
+      { t.previousSibling() } -> std::same_as<std::optional<T>>;
+      { t.nextSibling() } -> std::same_as<std::optional<T>>;
+      { t.tagName() } -> std::same_as<xml::XMLQualifiedNameRef>;
+      { t.isKnownType() } -> std::same_as<bool>;
+      { t.id() } -> std::same_as<RcString>;
+      { t.className() } -> std::same_as<RcString>;
+      { t.getAttribute(attribName) } -> std::same_as<std::optional<RcString>>;
+      {
+        t.findMatchingAttributes(attribName)
+      } -> std::same_as<SmallVector<xml::XMLQualifiedNameRef, 1>>;
+    };
 
 }  // namespace donner

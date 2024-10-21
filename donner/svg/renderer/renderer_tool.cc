@@ -21,6 +21,7 @@
 
 #include "absl/debugging/failure_signal_handler.h"
 #include "absl/debugging/symbolize.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -101,8 +102,16 @@ void DumpTree(SVGElement element, int depth = 0) {
     std::cout << "  ";
   }
 
-  std::cout << element.type() << ", " << element.entityHandle().entity() << ", id: '"
-            << element.id() << "'";
+  auto maybeNode = xml::XMLNode::TryCast(element.entityHandle());
+  if (maybeNode) {
+    std::cout << "xml<" << maybeNode->type() << "> ";
+  } else {
+    std::cout << "xml<Unknown> ";
+  }
+
+  std::cout << "entity<" << element.entityHandle().entity() << "> ";
+
+  std::cout << element.type() << ", id: '" << element.id() << "'";
   if (element.type() == ElementType::SVG) {
     if (auto viewbox = element.cast<SVGSVGElement>().viewbox()) {
       std::cout << ", viewbox: " << *viewbox;

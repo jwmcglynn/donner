@@ -7,9 +7,8 @@
 
 namespace donner::svg {
 
-SVGStopElement SVGStopElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  EntityHandle handle = CreateEntity(registry, Tag, Type);
+SVGStopElement SVGStopElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::Nonrenderable);
   return SVGStopElement(handle);

@@ -4,7 +4,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/xml/SVGParser.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg {
 

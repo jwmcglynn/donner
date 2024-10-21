@@ -137,9 +137,18 @@ namespace donner::svg {
  * @see \ref SVGLinearGradientElement, \ref SVGStopElement
  */
 class SVGRadialGradientElement : public SVGGradientElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGRadialGradientElement wrapper from an entity.
   explicit SVGRadialGradientElement(EntityHandle handle) : SVGGradientElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGRadialGradientElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -152,7 +161,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGRadialGradientElement Create(SVGDocument& document);
+  static SVGRadialGradientElement Create(SVGDocument& document) {
+    return CreateOn(CreateEntity(document));
+  }
 
   /**
    * Set the center X coordinate, for the outer circle.

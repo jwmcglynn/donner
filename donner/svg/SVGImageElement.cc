@@ -8,8 +8,8 @@
 
 namespace donner::svg {
 
-SVGImageElement SVGImageElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+SVGImageElement SVGImageElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   handle.emplace<components::SizedElementComponent>();

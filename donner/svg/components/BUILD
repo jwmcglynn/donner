@@ -1,13 +1,13 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
-    name = "document_context",
+    name = "svg_document_context",
     srcs = [
-        "DocumentContext.cc",
+        "SVGDocumentContext.cc",
     ],
     hdrs = [
-        "DocumentContext.h",
         "IdComponent.h",
+        "SVGDocumentContext.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",
@@ -37,14 +37,14 @@ cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
-        ":document_context",
+        ":svg_document_context",
         "//donner/base",
         "//donner/base/xml",
         "//donner/base/xml/components",
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
-        "//donner/svg/parser",
+        "//donner/svg/parser:parser_core",
         "//donner/svg/properties",
     ],
 )

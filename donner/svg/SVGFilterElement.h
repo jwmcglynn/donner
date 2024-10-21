@@ -49,9 +49,18 @@ namespace donner::svg {
  * ```
  */
 class SVGFilterElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGFilterElement wrapper from an entity.
   explicit SVGFilterElement(EntityHandle handle) : SVGElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGFilterElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -64,7 +73,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGFilterElement Create(SVGDocument& document);
+  static SVGFilterElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Get the top-left X coordinate of the filter region, which defines a rectangular region on the

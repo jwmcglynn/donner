@@ -59,7 +59,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/element",
         "//donner/base/parser:file_offset",
-        "//donner/base/xml",
+        "//donner/base/xml:xml_qualified_name",
         "@frozen",
     ],
 )

@@ -60,9 +60,18 @@ namespace donner::svg {
  * used repeatedly along a path, such as arrowheads or other markers on paths.
  */
 class SVGMarkerElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 private:
   /// Create an SVGMarkerElement wrapper from an entity.
   explicit SVGMarkerElement(EntityHandle handle) : SVGElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGMarkerElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -75,7 +84,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGMarkerElement Create(SVGDocument& document);
+  static SVGMarkerElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Set the `viewBox` attribute, which defines a rectangle in userspace that should be mapped to

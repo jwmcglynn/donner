@@ -4,9 +4,9 @@
 
 namespace donner::svg {
 
-SVGGElement SVGGElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGGElement(CreateEntity(registry, Tag, Type));
+SVGGElement SVGGElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
+  return SVGGElement(handle);
 }
 
 }  // namespace donner::svg

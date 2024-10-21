@@ -85,9 +85,18 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGPolygonElement : public SVGGeometryElement {
+  friend class parser::SVGParserImpl;
+
 private:
   /// Create an SVGPolygonElement wrapper from an entity.
   explicit SVGPolygonElement(EntityHandle handle) : SVGGeometryElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGPolygonElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -102,7 +111,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGPolygonElement Create(SVGDocument& document);
+  static SVGPolygonElement Create(SVGDocument& document) {
+    return CreateOn(CreateEntity(document));
+  }
 
   /**
    * Set the polygon's points, which will be used to draw a closed polygon with straight lines

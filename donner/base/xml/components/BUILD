@@ -3,11 +3,15 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 cc_library(
     name = "components",
     srcs = [
+        "AttributesComponent.cc",
         "TreeComponent.cc",
     ],
     hdrs = [
         "AttributesComponent.h",
         "TreeComponent.h",
+        "XMLDocumentContext.h",
+        "XMLNamespaceContext.h",
+        "XMLValueComponent.h",
     ],
     visibility = [
         "//donner/base/xml:__subpackages__",
@@ -15,7 +19,7 @@ cc_library(
     ],
     deps = [
         "//donner/base",
-        "//donner/base/xml",
+        "//donner/base/xml:xml_qualified_name",
     ],
 )
 

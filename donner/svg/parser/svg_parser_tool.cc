@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/xml/SVGParser.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg {
 
@@ -27,7 +27,7 @@ void DumpTree(SVGElement element, int depth) {
 extern "C" int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::cerr << "Unexpected arg count.\n";
-    std::cerr << "USAGE: xml_tool <filename>\n";
+    std::cerr << "USAGE: svg_parser_tool <filename>\n";
     return 1;
   }
 

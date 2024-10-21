@@ -11,9 +11,18 @@ namespace donner::svg {
  * This is a placeholder for any SVG element that is not explicitly supported by Donner.
  */
 class SVGUnknownElement : public SVGGraphicsElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGUnknownElement wrapper from an entity.
   explicit SVGUnknownElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGUnknownElement CreateOn(EntityHandle handle, const xml::XMLQualifiedNameRef& tagName);
 
 public:
   /// Element type.
@@ -25,7 +34,9 @@ public:
    * @param document Containing document.
    * @param tagName XML type name.
    */
-  static SVGUnknownElement Create(SVGDocument& document, const XMLQualifiedNameRef& tagName);
+  static SVGUnknownElement Create(SVGDocument& document, const xml::XMLQualifiedNameRef& tagName) {
+    return CreateOn(CreateEntity(document), tagName);
+  }
 };
 
 }  // namespace donner::svg

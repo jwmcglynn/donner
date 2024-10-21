@@ -31,7 +31,7 @@ struct TypeSelector {
    * - \ref XMLQualifiedName::name The name matcher of the selector, or "*" if the selector is
    * a universal selector.
    */
-  XMLQualifiedName matcher;
+  xml::XMLQualifiedName matcher;
 
   /**
    * Create a TypeSelector with the given namespace and name.
@@ -39,7 +39,7 @@ struct TypeSelector {
    * @param matcher Selector matcher, which may be a wildcard. If the namespace is "*", it will
    * match every namespaces. If the name is "*", it will match every attribute in its namespace.
    */
-  TypeSelector(XMLQualifiedName&& matcher) : matcher(std::move(matcher)) {}
+  TypeSelector(xml::XMLQualifiedName&& matcher) : matcher(std::move(matcher)) {}
 
   /**
    * Create a TypeSelector with the given namespace and name.
@@ -47,7 +47,7 @@ struct TypeSelector {
    * @param matcher Selector matcher, which may be a wildcard. If the namespace is "*", it will
    * match every namespaces. If the name is "*", it will match every attribute in its namespace.
    */
-  TypeSelector(const XMLQualifiedNameRef& matcher)
+  TypeSelector(const xml::XMLQualifiedNameRef& matcher)
       : matcher(RcString(matcher.namespacePrefix), RcString(matcher.name)) {}
 
   /// Destructor.
@@ -79,7 +79,7 @@ struct TypeSelector {
    */
   template <ElementLike T>
   bool matches(const T& element) const {
-    const XMLQualifiedNameRef elementName = element.tagName();
+    const xml::XMLQualifiedNameRef elementName = element.tagName();
 
     // Match namespace.
     const bool namespaceMatched =
@@ -100,7 +100,7 @@ struct TypeSelector {
   /// Ostream output operator for \ref TypeSelector, outputs a debug string e.g.
   /// `TypeSelector(div)`.
   friend std::ostream& operator<<(std::ostream& os, const TypeSelector& obj) {
-    return os << "TypeSelector(" << obj.matcher << ")";
+    return os << "TypeSelector(" << obj.matcher.printCssSyntax() << ")";
   }
 };
 

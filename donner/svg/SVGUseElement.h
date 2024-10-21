@@ -71,9 +71,18 @@ namespace donner::svg {
  * | `href`    | (none)  | URI to the element to reuse. |
  */
 class SVGUseElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGUseElement object.
   explicit SVGUseElement(EntityHandle handle) : SVGElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGUseElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -86,7 +95,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGUseElement Create(SVGDocument& document);
+  static SVGUseElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Set the URI to the element to reuse.

@@ -4,10 +4,10 @@
 
 #include <fstream>
 
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
-#include "donner/svg/xml/SVGParser.h"
 
 // clang-format off
 /**

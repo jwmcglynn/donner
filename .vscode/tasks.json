@@ -29,7 +29,7 @@
       }
     },
     {
-      "label": "xml_tool",
+      "label": "svg_parser_tool",
       "type": "shell",
       "command": "bazel",
       "problemMatcher": [],
@@ -38,9 +38,9 @@
         "-c",
         "dbg",
         "--config=asan",
-        "//donner/svg/xml:xml_tool",
+        "//donner/svg/parser:svg_parser_tool",
         "--",
-        "${workspaceFolder}/donner/svg/xml/testdata/e-path-034.svg"
+        "${workspaceFolder}/donner/svg/parser/testdata/e-path-034.svg"
       ],
       "group": "test",
       "options": {
@@ -187,16 +187,9 @@
       "group": "build"
     },
     {
-      "label": "xml_tests",
+      "label": "svg parser_tests",
       "type": "shell",
-      "command": "bazel build //donner/svg/xml:xml_tests -c dbg",
-      "problemMatcher": [],
-      "group": "build"
-    },
-    {
-      "label": "xml_details_tests",
-      "type": "shell",
-      "command": "bazel build //donner/svg/xml:xml_details_tests -c dbg",
+      "command": "bazel build //donner/svg/parser:parser_tests -c dbg",
       "problemMatcher": [],
       "group": "build"
     },

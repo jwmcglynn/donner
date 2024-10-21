@@ -1,8 +1,7 @@
-#include "donner/svg/tests/XMLTestUtils.h"
+#include "donner/svg/tests/ParserTestUtils.h"
 
 #include "donner/svg/SVGSVGElement.h"
-#include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/xml/SVGParser.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg {
 

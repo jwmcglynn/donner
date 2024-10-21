@@ -27,10 +27,10 @@ public:
    *
    * @param tagName The XML tag name for this element.
    */
-  explicit FakeElement(const XMLQualifiedNameRef& tagName = "unknown")
+  explicit FakeElement(const xml::XMLQualifiedNameRef& tagName = "unknown")
       : data_(std::make_shared<ElementData>()) {
     // NOTE: This copies the string, but that's okay since this is a test helper.
-    data_->tagName = XMLQualifiedName(tagName.namespacePrefix, tagName.name);
+    data_->tagName = xml::XMLQualifiedName(tagName.namespacePrefix, tagName.name);
   }
 
   /// @name Core API that satisfies the \ref ElementLike concept
@@ -40,11 +40,11 @@ public:
   bool operator==(const FakeElement& other) const { return data_ == other.data_; }
 
   /// Get the XML tag name string for this element.
-  XMLQualifiedNameRef tagName() const { return data_->tagName; }
+  xml::XMLQualifiedNameRef tagName() const { return data_->tagName; }
 
   /// Returns true if this is a known element type. For FakeElement, returns false for "unknown"
   /// elements.
-  bool isKnownType() const { return tagName() != XMLQualifiedNameRef("unknown"); }
+  bool isKnownType() const { return tagName() != xml::XMLQualifiedNameRef("unknown"); }
 
   /// Gets the element id, the value of the "id" attribute.
   RcString id() const { return data_->id; }
@@ -58,8 +58,8 @@ public:
    * @param name Name of the attribute to get.
    * @return The value of the attribute, or \c std::nullopt if the attribute does not exist.
    */
-  std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const {
-    auto it = data_->attributes.find(XMLQualifiedName(name.namespacePrefix, name.name));
+  std::optional<RcString> getAttribute(const xml::XMLQualifiedNameRef& name) const {
+    auto it = data_->attributes.find(xml::XMLQualifiedName(name.namespacePrefix, name.name));
     if (it != data_->attributes.end()) {
       return it->second;
     }
@@ -73,10 +73,10 @@ public:
    * is "*", the matcher will match any namespace with the given attribute name.
    * @return A vector of attributes matching the given name matcher.
    */
-  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
-      const XMLQualifiedNameRef& matcher) const {
-    SmallVector<XMLQualifiedNameRef, 1> result;
-    const XMLQualifiedNameRef attributeNameOnly(matcher.name);
+  SmallVector<xml::XMLQualifiedNameRef, 1> findMatchingAttributes(
+      const xml::XMLQualifiedNameRef& matcher) const {
+    SmallVector<xml::XMLQualifiedNameRef, 1> result;
+    const xml::XMLQualifiedNameRef attributeNameOnly(matcher.name);
 
     for (const auto& [name, value] : data_->attributes) {
       if (matcher.namespacePrefix == "*") {
@@ -179,9 +179,9 @@ public:
   void setClassName(const RcString& className) { data_->className = className; }
 
   /// Sets the value of an attribute.
-  void setAttribute(const XMLQualifiedNameRef& name, const RcString& value) {
+  void setAttribute(const xml::XMLQualifiedNameRef& name, const RcString& value) {
     // NOTE: This copies the string, but that's okay since this is a test helper.
-    data_->attributes[XMLQualifiedName(name.namespacePrefix, name.name)] = value;
+    data_->attributes[xml::XMLQualifiedName(name.namespacePrefix, name.name)] = value;
   }
 
   /// Appends a new child to this element's child list.
@@ -260,9 +260,9 @@ private:
     /// Element class name, the value of the "class" attribute.
     RcString className;
     /// Element tag name, the value of the "tag" attribute.
-    XMLQualifiedName tagName;
+    xml::XMLQualifiedName tagName;
     /// Element attributes.
-    std::map<XMLQualifiedName, RcString> attributes;
+    std::map<xml::XMLQualifiedName, RcString> attributes;
     /// Element children.
     std::vector<FakeElement> children;
     /// Element parent.

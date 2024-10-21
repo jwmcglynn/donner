@@ -22,7 +22,7 @@ public:
    * @param tagName The qualified tag name of the element, which may include a namespace. (e.g.
    * "svg")
    */
-  explicit TreeComponent(const XMLQualifiedNameRef& tagName)
+  explicit TreeComponent(const xml::XMLQualifiedNameRef& tagName)
       : tagName_(RcString(tagName.namespacePrefix), RcString(tagName.name)) {}
 
   /**
@@ -79,7 +79,7 @@ public:
   void remove(Registry& registry);
 
   /// Get the qualified tag name of the element, e.g. "svg".
-  XMLQualifiedNameRef tagName() const { return tagName_; }
+  xml::XMLQualifiedNameRef tagName() const { return tagName_; }
 
   /// Get the parent of this node, if it has one. Returns \c entt::null if this is the root.
   Entity parent() const { return parent_; }
@@ -100,7 +100,7 @@ public:
   Entity nextSibling() const { return nextSibling_; }
 
 private:
-  XMLQualifiedName tagName_;  //!< Qualified tag name of the element, e.g. "svg"
+  xml::XMLQualifiedName tagName_;  //!< Qualified tag name of the element, e.g. "svg"
 
   Entity parent_{entt::null};      //!< Parent of this node, or \c entt::null if this is the root.
   Entity firstChild_{entt::null};  //!< First child of this node, or \c entt::null if this has no

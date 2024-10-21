@@ -6,8 +6,8 @@
 
 namespace donner::svg {
 
-SVGPathElement SVGPathElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+SVGPathElement SVGPathElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   handle.emplace<components::PathComponent>();

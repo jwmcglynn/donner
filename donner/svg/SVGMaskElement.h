@@ -57,9 +57,17 @@ namespace donner::svg {
  * elements.
  */
 class SVGMaskElement : public SVGElement {
-private:
+  friend class parser::SVGParserImpl;
+
 private:
   explicit SVGMaskElement(EntityHandle handle) : SVGElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGMaskElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -72,7 +80,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGMaskElement Create(SVGDocument& document);
+  static SVGMaskElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Get the value of the `maskUnits` attribute, which defines the coordinate system for the `x`,

@@ -19,14 +19,14 @@ namespace donner::css {
  */
 struct WqName {
   /// Name with optional namespace.
-  XMLQualifiedName name;
+  xml::XMLQualifiedName name;
 
   /**
    * Create a WqName with the given namespace and name.
    *
    * @param name The name with optional namespace
    */
-  WqName(XMLQualifiedName&& name) : name(std::move(name)) {}
+  WqName(xml::XMLQualifiedName&& name) : name(std::move(name)) {}
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const WqName& obj) { return os << obj.name; }

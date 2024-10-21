@@ -3,13 +3,14 @@
 #include <optional>
 
 #include "donner/base/xml/components/TreeComponent.h"
-#include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
@@ -82,6 +83,10 @@ public:
     std::optional<ContextPaintServers> savedContextPaintServers;
     const bool isShape = dataHandle.all_of<ComputedPathComponent>();
 
+    if (!dataHandle.all_of<ElementTypeComponent>()) {
+      return;
+    }
+
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable) {
         return;
@@ -125,7 +130,7 @@ public:
       std::cout << "Instantiating " << dataHandle.get<ElementTypeComponent>().type() << " ";
 
       if (const auto* idComponent = dataHandle.try_get<IdComponent>()) {
-        std::cout << "id=" << idComponent->id << " ";
+        std::cout << "id=" << idComponent->id() << " ";
       }
 
       std::cout << dataHandle.entity();
@@ -612,7 +617,7 @@ void RenderingContext::createComputedComponents(std::vector<parser::ParseError>*
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
   invalidateRenderTree();
 
-  const Entity rootEntity = registry_.ctx().get<DocumentContext>().rootEntity;
+  const Entity rootEntity = registry_.ctx().get<SVGDocumentContext>().rootEntity;
 
   RenderingContextImpl impl(registry_, verbose);
   impl.traverseTree(rootEntity);

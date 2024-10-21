@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/svg/core/tests/PathSplineTestUtils.h"
-#include "donner/svg/tests/XMLTestUtils.h"
+#include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::ElementsAre;
 

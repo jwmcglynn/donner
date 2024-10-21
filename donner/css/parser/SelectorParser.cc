@@ -482,7 +482,7 @@ private:
               prefixLength = 2;
             } else {
               advance();
-              return TypeSelector{XMLQualifiedName{"*"}};
+              return TypeSelector{xml::XMLQualifiedName{"*"}};
             }
             break;
           default: break;
@@ -496,7 +496,7 @@ private:
           auto maybeNsPrefix = handleNsPrefix();
           if (maybeNsPrefix.has_value()) {
             expectAndConsumeDelim('*');
-            return TypeSelector{XMLQualifiedName(maybeNsPrefix.value(), "*")};
+            return TypeSelector{xml::XMLQualifiedName(maybeNsPrefix.value(), "*")};
           }
         } else {
           // Just a <wq-name>.
@@ -706,7 +706,7 @@ private:
 
     if (const Token* secondToken = next<Token>(); secondToken && secondToken->is<Token::Ident>()) {
       advance();
-      return WqName{XMLQualifiedName(ns, secondToken->get<Token::Ident>().value)};
+      return WqName{xml::XMLQualifiedName(ns, secondToken->get<Token::Ident>().value)};
     }
 
     setError(ns.empty() ? "Expected ident when parsing name"

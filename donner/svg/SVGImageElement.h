@@ -58,9 +58,18 @@ namespace donner::svg {
  * Use the `href`, `x`, `y`, `width`, and `height` attributes to define the image.
  */
 class SVGImageElement : public SVGGraphicsElement {
+  friend class parser::SVGParserImpl;
+
 private:
   /// Create an SVGImageElement wrapper from an entity.
   explicit SVGImageElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGImageElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -73,7 +82,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGImageElement Create(SVGDocument& document);
+  static SVGImageElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Set the href attribute.

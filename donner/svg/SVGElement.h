@@ -26,6 +26,13 @@ class SVGDocument;
 // Forward declaration, #include "donner/svg/DonnerController.h"
 class DonnerController;
 
+namespace parser {
+
+// Forward declaration, for friend internal data access.
+class SVGParserImpl;
+
+}  // namespace parser
+
 /**
  * Represents an SVG entity belonging to an \ref SVGDocument.
  *
@@ -79,7 +86,7 @@ public:
   ElementType type() const;
 
   /// Get the XML tag name string for this element.
-  XMLQualifiedNameRef tagName() const;
+  xml::XMLQualifiedNameRef tagName() const;
 
   /// Returns true if this is a known element type, returns false if this is an \ref
   /// SVGUnknownElement.
@@ -138,7 +145,7 @@ public:
    * @param name Name of the attribute to check.
    * @return true if the attribute exists, false otherwise.
    */
-  bool hasAttribute(const XMLQualifiedNameRef& name) const;
+  bool hasAttribute(const xml::XMLQualifiedNameRef& name) const;
 
   /**
    * Get the value of an attribute, if it exists.
@@ -146,7 +153,7 @@ public:
    * @param name Name of the attribute to get.
    * @return The value of the attribute, or \c std::nullopt if the attribute does not exist.
    */
-  std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const;
+  std::optional<RcString> getAttribute(const xml::XMLQualifiedNameRef& name) const;
 
   /**
    * Find attributes matching the given name matcher.
@@ -155,8 +162,8 @@ public:
    * is "*", the matcher will match any namespace with the given attribute name.
    * @return A vector of attributes matching the given name matcher.
    */
-  SmallVector<XMLQualifiedNameRef, 1> findMatchingAttributes(
-      const XMLQualifiedNameRef& matcher) const;
+  SmallVector<xml::XMLQualifiedNameRef, 1> findMatchingAttributes(
+      const xml::XMLQualifiedNameRef& matcher) const;
 
   /**
    * Set the value of a generic XML attribute, which may be either a presentation attribute or
@@ -169,7 +176,7 @@ public:
    * @param name Name of the attribute to set.
    * @param value New value to set.
    */
-  void setAttribute(const XMLQualifiedNameRef& name, std::string_view value);
+  void setAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value);
 
   /**
    * Remove an attribute, which may be either a presentation attribute or custom user-provided
@@ -180,12 +187,12 @@ public:
    *
    * @param name Name of the attribute to remove.
    */
-  void removeAttribute(const XMLQualifiedNameRef& name);
+  void removeAttribute(const xml::XMLQualifiedNameRef& name);
 
   /**
-   * Get the \ref SVGDocument that holds this element.
+   * Get an owning reference to the \ref SVGDocument containing this element.
    */
-  SVGDocument& ownerDocument();
+  SVGDocument ownerDocument();
 
   /**
    * Get this element's parent, if it exists. If the parent is not set, this document is either the
@@ -235,7 +242,7 @@ public:
    * @param referenceNode A child of this node to insert \p newNode before, or \c std::nullopt. Must
    * be a child of the current node.
    */
-  SVGElement insertBefore(SVGElement newNode, std::optional<SVGElement> referenceNode);
+  void insertBefore(const SVGElement& newNode, std::optional<SVGElement> referenceNode);
 
   /**
    * Append \p child as a child of the current node.
@@ -245,7 +252,7 @@ public:
    *
    * @param child Node to append.
    */
-  SVGElement appendChild(SVGElement child);
+  void appendChild(const SVGElement& child);
 
   /**
    * Replace \p oldChild with \p newChild in the tree, removing \p oldChild and inserting \p
@@ -257,14 +264,14 @@ public:
    * @param newChild New child to insert.
    * @param oldChild Old child to remove, must be a child of the current node.
    */
-  SVGElement replaceChild(SVGElement newChild, SVGElement oldChild);
+  void replaceChild(const SVGElement& newChild, const SVGElement& oldChild);
 
   /**
    * Remove \p child from this node.
    *
    * @param child Child to remove, must be a child of the current node.
    */
-  SVGElement removeChild(SVGElement child);
+  void removeChild(const SVGElement& child);
 
   /**
    * Remove this node from its parent, if it has one. Has no effect if this has no parent.
@@ -386,14 +393,21 @@ public:
 
 protected:
   /**
-   * Create a new Entity of the given type.
+   * Create a new Entity within the document ECS, and return a handle to it.
    *
-   * @param registry Registry to create the entity in.
+   * @param document Containing document.
+   */
+  static EntityHandle CreateEntity(SVGDocument& document);
+
+  /**
+   * Create a new SVG element instance on a given \ref Entity.
+   *
+   * @param handle Entity to create the element on.
    * @param tagName XML element type, e.g. "svg" or "rect", which an optional namespace.
    * @param Type Type of the entity.
    */
-  static EntityHandle CreateEntity(Registry& registry, const XMLQualifiedNameRef& tagName,
-                                   ElementType Type);
+  static void CreateEntityOn(EntityHandle handle, const xml::XMLQualifiedNameRef& tagName,
+                             ElementType Type);
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() const { return *handle_.registry(); }

@@ -8,6 +8,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/element/tests/FakeElement.h"
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/css/tests/SelectorTestUtils.h"
@@ -18,6 +19,8 @@ using testing::ElementsAreArray;
 namespace donner::css::parser {
 
 using namespace base::parser;  // NOLINT: For tests
+using xml::XMLQualifiedName;
+using xml::XMLQualifiedNameRef;
 
 class SelectorTests : public testing::Test {
 protected:

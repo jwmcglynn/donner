@@ -10,6 +10,13 @@
 
 namespace donner::svg {
 
+namespace parser {
+
+// Forward declaration
+class SVGParser;
+
+}  // namespace parser
+
 /**
  * @page xml_svg "<svg>"
  * @ingroup elements_structural
@@ -61,10 +68,18 @@ namespace donner::svg {
  */
 class SVGSVGElement : public SVGGraphicsElement {
   friend class SVGDocument;
+  friend class parser::SVGParserImpl;
 
 protected:
   /// Create an SVGSVGElement wrapper from an entity.
   explicit SVGSVGElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
+
+  /**
+   * Create a new \ref xml_svg element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGSVGElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -77,7 +92,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGSVGElement Create(SVGDocument& document);
+  static SVGSVGElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Get the top-left X coordinate of the SVG viewport.

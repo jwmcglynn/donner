@@ -53,9 +53,18 @@ namespace donner::svg {
  * elements, via `clip-path`.
  */
 class SVGClipPathElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 private:
   /// Create an SVGClipPathElement wrapper from an entity.
   explicit SVGClipPathElement(EntityHandle handle) : SVGElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGClipPathElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -68,7 +77,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGClipPathElement Create(SVGDocument& document);
+  static SVGClipPathElement Create(SVGDocument& document) {
+    return CreateOn(CreateEntity(document));
+  }
 
   /**
    * Get the value of the `"clipPathUnits"` attribute.

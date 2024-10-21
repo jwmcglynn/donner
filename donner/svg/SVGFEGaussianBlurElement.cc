@@ -5,9 +5,8 @@
 
 namespace donner::svg {
 
-SVGFEGaussianBlurElement SVGFEGaussianBlurElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  EntityHandle handle = CreateEntity(registry, Tag, Type);
+SVGFEGaussianBlurElement SVGFEGaussianBlurElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::FEGaussianBlurComponent>();
   return SVGFEGaussianBlurElement(handle);
 }

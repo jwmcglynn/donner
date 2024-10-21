@@ -7,8 +7,8 @@
 
 namespace donner::svg {
 
-SVGLineElement SVGLineElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+SVGLineElement SVGLineElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   return SVGLineElement(handle);

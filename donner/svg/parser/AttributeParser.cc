@@ -1,4 +1,4 @@
-#include "donner/svg/xml/AttributeParser.h"
+#include "donner/svg/parser/AttributeParser.h"
 
 #include <entt/entt.hpp>
 #include <string_view>
@@ -21,9 +21,11 @@
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "donner/svg/parser/PreserveAspectRatioParser.h"
 #include "donner/svg/parser/ViewboxParser.h"
-#include "donner/svg/xml/details/XMLParserContext.h"
+#include "donner/svg/parser/details/SVGParserContext.h"
 
 namespace donner::svg::parser {
+
+using xml::XMLQualifiedNameRef;
 
 namespace {
 
@@ -50,7 +52,7 @@ std::optional<double> ParseNumberNoSuffix(std::string_view str) {
   }
 }
 
-std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context, std::string_view value) {
+std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::string_view value) {
   base::parser::LengthParser::Options options;
   options.unitOptional = true;
 
@@ -72,7 +74,7 @@ std::optional<Lengthd> ParseLengthAttribute(XMLParserContext& context, std::stri
   return maybeLengthResult.result().length;
 }
 
-std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view value) {
+std::optional<float> ParseStopOffset(SVGParserContext& context, std::string_view value) {
   // Since we want to both parse a number or percent, use a LengthParser and then filter the allowed
   // suffixes.
   base::parser::LengthParser::Options options;
@@ -116,7 +118,7 @@ std::optional<float> ParseStopOffset(XMLParserContext& context, std::string_view
  * @return True if the attribute was `x`, `y`, `width`, or `height`.
  */
 template <typename T>
-bool ParseXYWidthHeight(XMLParserContext& context, T element, const XMLQualifiedNameRef& name,
+bool ParseXYWidthHeight(SVGParserContext& context, T element, const XMLQualifiedNameRef& name,
                         std::string_view value) {
   if (name == XMLQualifiedNameRef("x")) {
     if (auto length = ParseLengthAttribute(context, value)) {
@@ -155,7 +157,7 @@ bool ParseXYWidthHeight(XMLParserContext& context, T element, const XMLQualified
  * @return True if the attribute was `viewBox` or `preserveAspectRatio`.
  */
 template <typename T>
-bool ParseViewBoxPreserveAspectRatio(XMLParserContext& context, T element,
+bool ParseViewBoxPreserveAspectRatio(SVGParserContext& context, T element,
                                      const XMLQualifiedNameRef& name, std::string_view value) {
   if (name == XMLQualifiedNameRef("viewBox")) {
     auto maybeViewbox = ViewboxParser::Parse(value);
@@ -179,7 +181,7 @@ bool ParseViewBoxPreserveAspectRatio(XMLParserContext& context, T element,
   return true;
 }
 
-std::optional<double> ParseAngleAttribute(XMLParserContext& context, std::string_view value) {
+std::optional<double> ParseAngleAttribute(SVGParserContext& context, std::string_view value) {
   // Use the ValueParser to parse the string into ComponentValues
   auto componentValues = css::parser::ValueParser::Parse(value);
 
@@ -212,7 +214,7 @@ std::optional<double> ParseAngleAttribute(XMLParserContext& context, std::string
   return parseResult.result();
 }
 
-void ParsePresentationAttribute(XMLParserContext& context, SVGElement& element,
+void ParsePresentationAttribute(SVGParserContext& context, SVGElement& element,
                                 const XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Move this logic into SVGElement::setAttribute.
 
@@ -226,7 +228,11 @@ void ParsePresentationAttribute(XMLParserContext& context, SVGElement& element,
       if (context.options().disableUserAttributes) {
         ParseError err;
         err.reason = "Unknown attribute '" + name.toString() + "' (disableUserAttributes: true)";
-        context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+        if (auto maybeLocation = context.getAttributeLocation(element, name)) {
+          err.location = maybeLocation.value();
+        }
+        context.addWarning(std::move(err));
+        element.removeAttribute(name);
         return;
       }
     }
@@ -235,7 +241,7 @@ void ParsePresentationAttribute(XMLParserContext& context, SVGElement& element,
   element.setAttribute(name, value);
 }
 
-void ParseUnconditionalCommonAttribute(XMLParserContext& context, SVGElement& element,
+void ParseUnconditionalCommonAttribute(SVGParserContext& context, SVGElement& element,
                                        const XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Support namespaces on presentation attributes.
   // For now, only parse attributes that are not in a namespace as presentation attributes.
@@ -247,7 +253,7 @@ void ParseUnconditionalCommonAttribute(XMLParserContext& context, SVGElement& el
 }
 
 template <typename T>
-std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, T& element,
+std::optional<ParseError> ParseCommonAttribute(SVGParserContext& context, T& element,
                                                const XMLQualifiedNameRef& name,
                                                std::string_view value) {
   if constexpr (HasPathLength<T>) {
@@ -269,7 +275,7 @@ std::optional<ParseError> ParseCommonAttribute(XMLParserContext& context, T& ele
   return std::nullopt;
 }
 
-std::optional<ParseError> ParseGradientCommonAttribute(XMLParserContext& context,
+std::optional<ParseError> ParseGradientCommonAttribute(SVGParserContext& context,
                                                        SVGGradientElement& element,
                                                        const XMLQualifiedNameRef& name,
                                                        std::string_view value) {
@@ -305,13 +311,13 @@ std::optional<ParseError> ParseGradientCommonAttribute(XMLParserContext& context
 }
 
 template <typename T>
-std::optional<ParseError> ParseAttribute(XMLParserContext& context, T element,
+std::optional<ParseError> ParseAttribute(SVGParserContext& context, T element,
                                          const XMLQualifiedNameRef& name, std::string_view value) {
   return ParseCommonAttribute(context, element, name, value);
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGClipPathElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGClipPathElement>(SVGParserContext& context,
                                                              SVGClipPathElement element,
                                                              const XMLQualifiedNameRef& name,
                                                              std::string_view value) {
@@ -333,7 +339,7 @@ std::optional<ParseError> ParseAttribute<SVGClipPathElement>(XMLParserContext& c
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGMaskElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGMaskElement>(SVGParserContext& context,
                                                          SVGMaskElement element,
                                                          const XMLQualifiedNameRef& name,
                                                          std::string_view value) {
@@ -368,7 +374,7 @@ std::optional<ParseError> ParseAttribute<SVGMaskElement>(XMLParserContext& conte
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFilterElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGFilterElement>(SVGParserContext& context,
                                                            SVGFilterElement element,
                                                            const XMLQualifiedNameRef& name,
                                                            std::string_view value) {
@@ -403,7 +409,7 @@ std::optional<ParseError> ParseAttribute<SVGFilterElement>(XMLParserContext& con
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserContext& context,
                                                                    SVGFEGaussianBlurElement element,
                                                                    const XMLQualifiedNameRef& name,
                                                                    std::string_view value) {
@@ -435,7 +441,7 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(XMLParserCont
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGImageElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGImageElement>(SVGParserContext& context,
                                                           SVGImageElement element,
                                                           const XMLQualifiedNameRef& name,
                                                           std::string_view value) {
@@ -457,7 +463,7 @@ std::optional<ParseError> ParseAttribute<SVGImageElement>(XMLParserContext& cont
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGLineElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGLineElement>(SVGParserContext& context,
                                                          SVGLineElement element,
                                                          const XMLQualifiedNameRef& name,
                                                          std::string_view value) {
@@ -485,7 +491,7 @@ std::optional<ParseError> ParseAttribute<SVGLineElement>(XMLParserContext& conte
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGLinearGradientElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGLinearGradientElement>(SVGParserContext& context,
                                                                    SVGLinearGradientElement element,
                                                                    const XMLQualifiedNameRef& name,
                                                                    std::string_view value) {
@@ -513,7 +519,7 @@ std::optional<ParseError> ParseAttribute<SVGLinearGradientElement>(XMLParserCont
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGPatternElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGPatternElement>(SVGParserContext& context,
                                                             SVGPatternElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -553,7 +559,7 @@ std::optional<ParseError> ParseAttribute<SVGPatternElement>(XMLParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGPolygonElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGPolygonElement>(SVGParserContext& context,
                                                             SVGPolygonElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -576,7 +582,7 @@ std::optional<ParseError> ParseAttribute<SVGPolygonElement>(XMLParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGPolylineElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGPolylineElement>(SVGParserContext& context,
                                                              SVGPolylineElement element,
                                                              const XMLQualifiedNameRef& name,
                                                              std::string_view value) {
@@ -599,7 +605,7 @@ std::optional<ParseError> ParseAttribute<SVGPolylineElement>(XMLParserContext& c
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGRadialGradientElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGRadialGradientElement>(SVGParserContext& context,
                                                                    SVGRadialGradientElement element,
                                                                    const XMLQualifiedNameRef& name,
                                                                    std::string_view value) {
@@ -635,7 +641,7 @@ std::optional<ParseError> ParseAttribute<SVGRadialGradientElement>(XMLParserCont
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGSVGElement>(SVGParserContext& context,
                                                         SVGSVGElement element,
                                                         const XMLQualifiedNameRef& name,
                                                         std::string_view value) {
@@ -652,7 +658,7 @@ std::optional<ParseError> ParseAttribute<SVGSVGElement>(XMLParserContext& contex
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGStopElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGStopElement>(SVGParserContext& context,
                                                          SVGStopElement element,
                                                          const XMLQualifiedNameRef& name,
                                                          std::string_view value) {
@@ -668,7 +674,7 @@ std::optional<ParseError> ParseAttribute<SVGStopElement>(XMLParserContext& conte
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGStyleElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGStyleElement>(SVGParserContext& context,
                                                           SVGStyleElement element,
                                                           const XMLQualifiedNameRef& name,
                                                           std::string_view value) {
@@ -691,7 +697,7 @@ std::optional<ParseError> ParseAttribute<SVGStyleElement>(XMLParserContext& cont
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGUseElement>(SVGParserContext& context,
                                                         SVGUseElement element,
                                                         const XMLQualifiedNameRef& name,
                                                         std::string_view value) {
@@ -708,7 +714,7 @@ std::optional<ParseError> ParseAttribute<SVGUseElement>(XMLParserContext& contex
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGMarkerElement>(XMLParserContext& context,
+std::optional<ParseError> ParseAttribute<SVGMarkerElement>(SVGParserContext& context,
                                                            SVGMarkerElement element,
                                                            const XMLQualifiedNameRef& name,
                                                            std::string_view value) {
@@ -778,7 +784,7 @@ std::optional<ParseError> ParseAttribute<SVGMarkerElement>(XMLParserContext& con
 }
 
 template <size_t I = 0, typename... Types>
-std::optional<ParseError> ParseAttributesForElement(XMLParserContext& context, SVGElement& element,
+std::optional<ParseError> ParseAttributesForElement(SVGParserContext& context, SVGElement& element,
                                                     const XMLQualifiedNameRef& name,
                                                     std::string_view value,
                                                     entt::type_list<Types...>) {
@@ -799,7 +805,7 @@ std::optional<ParseError> ParseAttributesForElement(XMLParserContext& context, S
 
 }  // namespace
 
-std::optional<ParseError> AttributeParser::ParseAndSetAttribute(XMLParserContext& context,
+std::optional<ParseError> AttributeParser::ParseAndSetAttribute(SVGParserContext& context,
                                                                 SVGElement& element,
                                                                 const XMLQualifiedNameRef& name,
                                                                 std::string_view value) noexcept {

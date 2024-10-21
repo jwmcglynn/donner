@@ -6,9 +6,8 @@
 
 namespace donner::svg {
 
-SVGClipPathElement SVGClipPathElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  EntityHandle handle = CreateEntity(registry, Tag, Type);
+SVGClipPathElement SVGClipPathElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::ClipPathComponent>();
   handle
       .emplace<components::RenderingBehaviorComponent>(components::RenderingBehavior::Nonrenderable)

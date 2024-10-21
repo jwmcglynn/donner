@@ -15,9 +15,8 @@ using Entity = entt::entity;
 An entity is created by calling `registry.create()` without any components. Here is how the `Entity` is created for SVG elements.
 
 ```cpp
-EntityHandle SVGElement::CreateEntity(Registry& registry, const XMLQualifiedNameRef& tagName,
-                                      ElementType type) {
-  Entity entity = registry.create();
+EntityHandle CreateEntity(SVGDocument& document, const XMLQualifiedNameRef& tagName, ElementType type) {
+  Entity entity = document.registry().create();
   registry.emplace<components::TreeComponent>(entity, tagName);
   registry.emplace<components::ElementTypeComponent>(entity, type);
   registry.emplace<components::TransformComponent>(entity);
@@ -61,7 +60,7 @@ The same system is used to implement the tree structure, where a \ref donner::sv
 
 ## Systems
 
-Systems are singletons within the `Registry`, and are used to hold global state and operate on the component-system. Donner calls these contexts, for example \ref donner::svg::components::DocumentContext "DocumentContext" and \ref donner::svg::components::RenderingContext "RenderingContext".
+Systems are singletons within the `Registry`, and are used to hold global state and operate on the component-system. Donner calls these contexts, for example \ref donner::svg::components::SVGDocumentContext "SVGDocumentContext" and \ref donner::svg::components::RenderingContext "RenderingContext".
 
 There are also systems that are stateless, such as \ref donner::svg::components::LayoutSystem "LayoutSystem", which is instantiated on-demand to manipulate the ECS state.
 
@@ -158,8 +157,8 @@ This list is then processed by \ref donner::svg::RendererSkia to produce the fin
 On top of the ECS model the user-facing API is implemented as a thin wrapper. For example, \ref donner::svg::SVGPathElement "SVGPathElement" proxies calls to the components layer with minimal logic:
 
 ```cpp
-SVGPathElement SVGPathElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+SVGPathElement SVGPathElement::Create(SVGDocument& document, EntityHandle handle) {
+  EntityHandle handle = CreateEntity(document, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   return SVGPathElement(handle);

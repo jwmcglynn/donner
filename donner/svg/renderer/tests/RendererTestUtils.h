@@ -8,7 +8,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererSkia.h"
-#include "donner/svg/tests/XMLTestUtils.h"
+#include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
 

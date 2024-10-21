@@ -11,8 +11,7 @@
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
-#include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/xml/SVGParser.h"
+#include "donner/svg/parser/SVGParser.h"
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
@@ -168,21 +167,21 @@ TEST_F(SVGElementTests, TreeOperations) {
   auto child2 = create();
   auto child3 = create();
 
-  EXPECT_EQ(child1, root.insertBefore(child1, std::nullopt));
+  root.insertBefore(child1, std::nullopt);
   EXPECT_THAT(children(root), ElementsAre(child1));
   EXPECT_THAT(child1.parentElement(), Optional(root));
 
-  EXPECT_EQ(child2, root.insertBefore(child2, child1));
+  root.insertBefore(child2, child1);
   EXPECT_THAT(children(root), ElementsAre(child2, child1));
 
-  EXPECT_EQ(child3, root.appendChild(child3));
+  root.appendChild(child3);
   EXPECT_THAT(children(root), ElementsAre(child2, child1, child3));
 
   auto child4 = create();
-  EXPECT_EQ(child4, root.replaceChild(child4, child3));
+  root.replaceChild(child4, child3);
   EXPECT_THAT(children(root), ElementsAre(child2, child1, child4));
 
-  EXPECT_EQ(child1, root.removeChild(child1));
+  root.removeChild(child1);
   EXPECT_THAT(children(root), ElementsAre(child2, child4));
 
   child2.remove();

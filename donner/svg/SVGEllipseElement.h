@@ -70,8 +70,17 @@ namespace donner::svg {
  */
 class SVGEllipseElement : public SVGGeometryElement {
 private:
+  friend class parser::SVGParserImpl;
+
   /// Create an SVGEllipseElement wrapper from an entity.
   explicit SVGEllipseElement(EntityHandle handle) : SVGGeometryElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGEllipseElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -86,7 +95,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGEllipseElement Create(SVGDocument& document);
+  static SVGEllipseElement Create(SVGDocument& document) {
+    return CreateOn(CreateEntity(document));
+  }
 
   /**
    * Set the center X coordinate.

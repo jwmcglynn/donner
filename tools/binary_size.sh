@@ -22,36 +22,36 @@ if [[ "$(uname)" == "Darwin" ]]; then
   BAZEL_CONFIGS="$BAZEL_CONFIGS --config=macos-binary-size"
 fi
 
-# Build the binary to analyze, xml_tool
-bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/xml:xml_tool.stripped
-cp -f bazel-bin/donner/svg/xml/xml_tool build-binary-size/xml_tool
+# Build the binary to analyze, svg_parser_tool
+bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/svg:svg_parser_tool.stripped
+cp -f bazel-bin/donner/svg/xml/svg_parser_tool build-binary-size/svg_parser_tool
 
 bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/renderer:renderer_tool.stripped
 cp -f bazel-bin/donner/svg/renderer/renderer_tool build-binary-size/renderer_tool
 
-# Print human-readable binary size of xml_tool.stripped and renderer_tool.stripped
+# Print human-readable binary size of svg_parser_tool.stripped and renderer_tool.stripped
 echo '```'
-echo "Total binary size of xml_tool"
-du -h build-binary-size/xml_tool
+echo "Total binary size of svg_parser_tool"
+du -h build-binary-size/svg_parser_tool
 echo ""
 echo "Total binary size of renderer_tool"
 du -h build-binary-size/renderer_tool
 echo '```'
 echo ""
 
-echo "### Detailed analysis of \`xml_tool\`"
+echo "### Detailed analysis of \`svg_parser_tool\`"
 echo ""
 
 # On macOS run dsymutil to generate debug symbols
 DEBUG_FILE_ARG=
 if [[ "$(uname)" == "Darwin" ]]; then
-  dsymutil build-binary-size/xml_tool
-  DEBUG_FILE_ARG="--debug-file=build-binary-size/xml_tool.dSYM/Contents/Resources/DWARF/xml_tool"
+  dsymutil build-binary-size/svg_parser_tool
+  DEBUG_FILE_ARG="--debug-file=build-binary-size/svg_parser_tool.dSYM/Contents/Resources/DWARF/svg_parser_tool"
 elif [[ "$(uname)" == "Linux" ]]; then
-  cp -f build-binary-size/xml_tool build-binary-size/xml_tool.debug
-  chmod +w build-binary-size/xml_tool
-  strip -g build-binary-size/xml_tool
-  DEBUG_FILE_ARG="--debug-file=build-binary-size/xml_tool.debug"
+  cp -f build-binary-size/svg_parser_tool build-binary-size/svg_parser_tool.debug
+  chmod +w build-binary-size/svg_parser_tool
+  strip -g build-binary-size/svg_parser_tool
+  DEBUG_FILE_ARG="--debug-file=build-binary-size/svg_parser_tool.debug"
 else
   echo "Unknown OS: $(uname)" >&2
   exit 1
@@ -62,20 +62,20 @@ fi
 # To see symbols only: -d donner_package,symbol
 
 # Output an <svg> with a bar chart of the binary size by directory
-bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty_compileunits.csv
-python3 tools/python/generate_size_barchart_svg.py build-binary-size/xml_tool.bloaty_compileunits.csv > build-binary-size/binary_size_bargraph.svg
+bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/svg_parser_tool > build-binary-size/svg_parser_tool.bloaty_compileunits.csv
+python3 tools/python/generate_size_barchart_svg.py build-binary-size/svg_parser_tool.bloaty_compileunits.csv > build-binary-size/binary_size_bargraph.svg
 
 echo ""
 
 # Create the binary_size_report webtreemap
-bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/xml_tool > build-binary-size/xml_tool.bloaty.csv
-python3 tools/binary_size_analysis.py build-binary-size/xml_tool.bloaty.csv build-binary-size/binary_size_report.html
+bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/svg_parser_tool > build-binary-size/svg_parser_tool.bloaty.csv
+python3 tools/binary_size_analysis.py build-binary-size/svg_parser_tool.bloaty.csv build-binary-size/binary_size_report.html
 
 # Output summary
 echo ""
 echo '`bloaty -d compileunits -n 20` output'
 echo '```'
 
-bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/xml_tool
+bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/svg_parser_tool
 
 echo '```'

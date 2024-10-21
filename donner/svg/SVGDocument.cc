@@ -1,27 +1,40 @@
 #include "donner/svg/SVGDocument.h"
 
 #include "donner/base/element/ElementTraversalGenerators.h"
+#include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGSVGElement.h"
-#include "donner/svg/components/DocumentContext.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 
-SVGDocument::SVGDocument(Settings settings) : registry_(std::make_unique<Registry>()) {
-  components::DocumentContext& ctx = registry_->ctx().emplace<components::DocumentContext>(
-      components::DocumentContext::InternalCtorTag{}, *this, *registry_);
-  ctx.rootEntity = SVGSVGElement::Create(*this).entityHandle().entity();
+SVGDocument::SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
+                         EntityHandle ontoEntityHandle)
+    : registry_(std::move(registry)) {
+  auto& ctx = registry_->ctx().emplace<components::SVGDocumentContext>(
+      components::SVGDocumentContext::InternalCtorTag{}, registry_);
+  if (ontoEntityHandle) {
+    ctx.rootEntity = SVGSVGElement::CreateOn(ontoEntityHandle).entityHandle().entity();
+  } else {
+    ctx.rootEntity = SVGSVGElement::Create(*this).entityHandle().entity();
+  }
 
   components::ResourceManagerContext& resourceCtx =
       registry_->ctx().emplace<components::ResourceManagerContext>(*registry_);
   resourceCtx.setResourceLoader(std::move(settings.resourceLoader));
+
+  registry_->ctx().emplace<xml::components::XMLNamespaceContext>(*registry_);
 }
 
+SVGDocument::SVGDocument(Settings settings)
+    : SVGDocument(std::make_shared<Registry>(), std::move(settings), EntityHandle()) {}
+
 EntityHandle SVGDocument::rootEntityHandle() const {
-  return EntityHandle(*registry_, registry_->ctx().get<components::DocumentContext>().rootEntity);
+  return EntityHandle(*registry_,
+                      registry_->ctx().get<components::SVGDocumentContext>().rootEntity);
 }
 
 SVGSVGElement SVGDocument::svgElement() const {
@@ -31,12 +44,12 @@ SVGSVGElement SVGDocument::svgElement() const {
 void SVGDocument::setCanvasSize(int width, int height) {
   assert(width > 0 && height > 0);
   components::RenderingContext(*registry_).invalidateRenderTree();
-  registry_->ctx().get<components::DocumentContext>().canvasSize = Vector2i(width, height);
+  registry_->ctx().get<components::SVGDocumentContext>().canvasSize = Vector2i(width, height);
 }
 
 void SVGDocument::useAutomaticCanvasSize() {
   components::RenderingContext(*registry_).invalidateRenderTree();
-  registry_->ctx().get<components::DocumentContext>().canvasSize = std::nullopt;
+  registry_->ctx().get<components::SVGDocumentContext>().canvasSize = std::nullopt;
 }
 
 Vector2i SVGDocument::canvasSize() {
@@ -45,8 +58,8 @@ Vector2i SVGDocument::canvasSize() {
 }
 
 bool SVGDocument::operator==(const SVGDocument& other) const {
-  return &registry_->ctx().get<const components::DocumentContext>() ==
-         &other.registry_->ctx().get<const components::DocumentContext>();
+  return &registry_->ctx().get<const components::SVGDocumentContext>() ==
+         &other.registry_->ctx().get<const components::SVGDocumentContext>();
 }
 
 std::optional<SVGElement> SVGDocument::querySelector(std::string_view str) {

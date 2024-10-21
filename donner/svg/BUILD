@@ -69,15 +69,15 @@ cc_library(
     ],
     visibility = [
         "//:__pkg__",
+        "//donner/svg/parser:__pkg__",
         "//donner/svg/properties/tests:__pkg__",
         "//donner/svg/renderer:__subpackages__",
         "//donner/svg/tests:__pkg__",
-        "//donner/svg/xml:__pkg__",
     ],
     deps = [
         "//donner/svg/components",
         "//donner/svg/core",
-        "//donner/svg/parser",
+        "//donner/svg/parser:parser_core",
         "//donner/svg/renderer:rendering_context",
         "//donner/svg/resources:sandboxed_file_resource_loader",
     ],
@@ -109,6 +109,6 @@ cc_library(
     ],
     deps = [
         ":svg_core",
-        "//donner/svg/xml",
+        "//donner/svg/parser",
     ],
 )

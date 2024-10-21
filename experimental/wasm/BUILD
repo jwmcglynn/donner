@@ -40,9 +40,9 @@ cc_binary(
     # headers etc. Therefore, we hide it from wildcards.
     tags = ["manual"],
     deps = [
+        "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer/wasm_canvas",
-        "//donner/svg/xml",
     ],
 )
 

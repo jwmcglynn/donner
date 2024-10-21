@@ -6,9 +6,8 @@
 
 namespace donner::svg {
 
-SVGRadialGradientElement SVGRadialGradientElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  EntityHandle handle = CreateEntity(registry, Tag, Type);
+SVGRadialGradientElement SVGRadialGradientElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::Nonrenderable);
   handle.emplace<components::RadialGradientComponent>();

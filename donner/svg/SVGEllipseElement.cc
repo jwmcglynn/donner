@@ -8,8 +8,8 @@
 
 namespace donner::svg {
 
-SVGEllipseElement SVGEllipseElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+SVGEllipseElement SVGEllipseElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::NoTraverseChildren);
   return SVGEllipseElement(handle);

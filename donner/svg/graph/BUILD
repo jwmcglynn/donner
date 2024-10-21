@@ -14,6 +14,6 @@ cc_library(
     ],
     deps = [
         "//donner/base",
-        "//donner/svg/components:document_context",
+        "//donner/svg/components:svg_document_context",
     ],
 )

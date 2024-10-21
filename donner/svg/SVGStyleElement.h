@@ -79,9 +79,18 @@ namespace donner::svg {
  * Note that `type` is defined to be a media type [[rfc2046](https://www.ietf.org/rfc/rfc2046.txt)].
  */
 class SVGStyleElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGStyleElement wrapper from an entity.
   explicit SVGStyleElement(EntityHandle handle) : SVGElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGStyleElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -94,7 +103,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGStyleElement Create(SVGDocument& document);
+  static SVGStyleElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Set the type of the stylesheet, currently only `text/css` is supported.

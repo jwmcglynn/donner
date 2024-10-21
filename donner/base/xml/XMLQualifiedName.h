@@ -10,10 +10,37 @@
 #include "donner/base/RcString.h"
 #include "donner/base/RcStringOrRef.h"
 
-namespace donner {
+namespace donner::xml {
 
 // Forward declaration, implemented later in the file.
 struct XMLQualifiedNameRef;
+
+/**
+ * Helper class which prints this qualified name in CSS syntax (e.g. "ns|name").
+ *
+ * Example usage:
+ * ```
+ * XMLQualifiedName element;
+ * std::cout << element.printAsCssSyntax() << "\n";
+ * ```
+ *
+ * Where \ref XMLQualifiedName::printAsCssSyntax returns a DeferredPrinter as its result.
+ */
+template <typename NameT>
+struct DeferredCssSyntaxPrinter {
+  /// The qualified name to print.
+  const NameT& name;  // NOLINT
+
+  /// Ostream output operator, which prints the element's and all children.
+  friend std::ostream& operator<<(std::ostream& os, const DeferredCssSyntaxPrinter& printer) {
+    if (!printer.name.namespacePrefix.empty()) {
+      os << printer.name.namespacePrefix << "|";
+    }
+
+    os << printer.name.name;
+    return os;
+  }
+};
 
 /**
  * Represents an XML attribute name with an optional namespace.
@@ -64,26 +91,40 @@ struct XMLQualifiedName {
   /// Equality operator for gtest.
   bool operator==(const XMLQualifiedName& other) const = default;
 
-  /// Ostream output operator.
+  /// Ostream output operator using XML syntax (e.g. "ns:name").
   friend std::ostream& operator<<(std::ostream& os, const XMLQualifiedName& obj) {
     if (!obj.namespacePrefix.empty()) {
-      os << obj.namespacePrefix << "|";
+      os << obj.namespacePrefix << ":";
     }
 
     os << obj.name;
     return os;
   }
 
-  /// Convert to string operator.
+  /// Convert to string operator using XML syntax (e.g. "ns:name").
   std::string toString() const {
     std::string str;
     if (!namespacePrefix.empty()) {
       str += namespacePrefix;
-      str += "|";
+      str += ":";
     }
 
     str += name;
     return str;
+  }
+
+  /**
+   * When used in an ostream output stream, prints the qualified name as a CSS selector (e.g.
+   * "ns|name").
+   *
+   * Example usage:
+   * ```
+   * XMLQualifiedName name;
+   * std::cout << name.printCssSyntax() << "\n";
+   * ```
+   */
+  DeferredCssSyntaxPrinter<XMLQualifiedName> printCssSyntax() const {
+    return DeferredCssSyntaxPrinter<XMLQualifiedName>{*this};
   }
 };
 
@@ -188,43 +229,57 @@ struct XMLQualifiedNameRef {
     return lhs.name == rhs.name && lhs.namespacePrefix == rhs.namespacePrefix;
   }
 
-  /// Ostream output operator.
+  /// Ostream output operator, using XML syntax (e.g. "ns:name").
   friend std::ostream& operator<<(std::ostream& os, const XMLQualifiedNameRef& obj) {
     if (!obj.namespacePrefix.empty()) {
-      os << obj.namespacePrefix << "|";
+      os << obj.namespacePrefix << ":";
     }
 
     os << obj.name;
     return os;
   }
 
-  /// Convert to string operator.
+  /// Convert to string operator, using XML syntax (e.g. "ns:name").
   std::string toString() const {
     std::string str;
     if (!namespacePrefix.empty()) {
       str += namespacePrefix;
-      str += "|";
+      str += ":";
     }
 
     str += name;
     return str;
   }
+
+  /**
+   * When used in an ostream output stream, prints the qualified name as a CSS selector (e.g.
+   * "ns|name").
+   *
+   * Example usage:
+   * ```
+   * XMLQualifiedNameRef name;
+   * std::cout << name.printCssSyntax() << "\n";
+   * ```
+   */
+  DeferredCssSyntaxPrinter<XMLQualifiedNameRef> printCssSyntax() const {
+    return DeferredCssSyntaxPrinter<XMLQualifiedNameRef>{*this};
+  }
 };
 
-}  // namespace donner
+}  // namespace donner::xml
 
 /**
- * Hash function for \ref donner::XMLQualifiedNameRef.
+ * Hash function for \ref donner::xml::XMLQualifiedNameRef.
  */
 template <>
-struct std::hash<donner::XMLQualifiedNameRef> {
+struct std::hash<donner::xml::XMLQualifiedNameRef> {
   /**
-   * Hash function for \ref donner::XMLQualifiedName.
+   * Hash function for \ref donner::xml::XMLQualifiedName.
    *
    * @param attr Input attribute.
    * @return std::size_t Output hash.
    */
-  std::size_t operator()(const donner::XMLQualifiedNameRef& attr) const {
+  std::size_t operator()(const donner::xml::XMLQualifiedNameRef& attr) const {
     std::size_t hash = 0;
     hash ^= std::hash<std::string_view>()(attr.namespacePrefix);
     hash ^= std::hash<std::string_view>()(attr.name);
@@ -233,17 +288,17 @@ struct std::hash<donner::XMLQualifiedNameRef> {
 };
 
 /**
- * Hash function for \ref donner::XMLQualifiedName.
+ * Hash function for \ref donner::xml::XMLQualifiedName.
  */
 template <>
-struct std::hash<donner::XMLQualifiedName> {
+struct std::hash<donner::xml::XMLQualifiedName> {
   /**
-   * Hash function for \ref donner::XMLQualifiedName.
+   * Hash function for \ref donner::xml::XMLQualifiedName.
    *
    * @param attr Input attribute.
    * @return std::size_t Output hash.
    */
-  std::size_t operator()(const donner::XMLQualifiedName& attr) const {
-    return std::hash<donner::XMLQualifiedNameRef>()(attr);
+  std::size_t operator()(const donner::xml::XMLQualifiedName& attr) const {
+    return std::hash<donner::xml::XMLQualifiedNameRef>()(attr);
   }
 };

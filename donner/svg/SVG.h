@@ -1,9 +1,9 @@
 #pragma once
 /// @file
 
-#include "donner/svg/SVGDocument.h"    // IWYU pragma: export
-#include "donner/svg/SVGElement.h"     // IWYU pragma: export
-#include "donner/svg/xml/SVGParser.h"  // IWYU pragma: export
+#include "donner/svg/SVGDocument.h"       // IWYU pragma: export
+#include "donner/svg/SVGElement.h"        // IWYU pragma: export
+#include "donner/svg/parser/SVGParser.h"  // IWYU pragma: export
 
 /**
  * Top-level Donner namespace, which is split into different sub-namespaces such as \ref donner::svg

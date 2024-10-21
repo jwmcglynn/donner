@@ -85,9 +85,18 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGPolylineElement : public SVGGeometryElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGPolylineElement wrapper from an entity.
   explicit SVGPolylineElement(EntityHandle handle) : SVGGeometryElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGPolylineElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -102,7 +111,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGPolylineElement Create(SVGDocument& document);
+  static SVGPolylineElement Create(SVGDocument& document) {
+    return CreateOn(CreateEntity(document));
+  }
 
   /**
    * Set the line points, which will be connected with straight line segments.

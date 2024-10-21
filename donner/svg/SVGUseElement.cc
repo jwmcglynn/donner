@@ -7,9 +7,9 @@
 
 namespace donner::svg {
 
-SVGUseElement SVGUseElement::Create(SVGDocument& document) {
-  Registry& registry = document.registry();
-  return SVGUseElement(CreateEntity(registry, Tag, Type));
+SVGUseElement SVGUseElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
+  return SVGUseElement(handle);
 }
 
 void SVGUseElement::setHref(const RcString& value) {

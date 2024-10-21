@@ -5,9 +5,9 @@
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
-#include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
@@ -224,7 +224,7 @@ Boxd LayoutSystem::getViewport(EntityHandle entity) {
 
   // Now the parents list has parents in order from nearest -> root
   // Iterate from the end of the list to the start and cascade the viewbox.
-  const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
+  const Entity rootEntity = registry.ctx().get<SVGDocumentContext>().rootEntity;
 
   while (!parents.empty()) {
     Entity currentEntity = parents[parents.size() - 1];
@@ -251,7 +251,7 @@ bool LayoutSystem::overridesViewport(EntityHandle entity) const {
 Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
                                                          InvalidSizeBehavior behavior) const {
   const Vector2d documentSize = calculateDocumentSize(registry);
-  const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
+  const auto& ctx = registry.ctx().get<SVGDocumentContext>();
 
   std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
   if (documentSize.x <= 0.0 || documentSize.y <= 0.0) {
@@ -323,7 +323,9 @@ Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
   Transformd parentFromWorld;
 
   // Traverse up through the parent list until we find the root or a previously computed viewbox.
-  for (Entity parent = entity; parent != entt::null;
+  for (Entity parent = entity;
+       parent != entt::null &&
+       registry.any_of<components::TransformComponent, components::ShadowEntityComponent>(parent);
        parent = registry.get<donner::components::TreeComponent>(parent).parent()) {
     if (const auto* computedAbsoluteTransform =
             registry.try_get<ComputedAbsoluteTransformComponent>(parent)) {
@@ -411,7 +413,7 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
     std::optional<Boxd> parentViewbox;
   };
 
-  const Entity rootEntity = registry.ctx().get<DocumentContext>().rootEntity;
+  const Entity rootEntity = registry.ctx().get<SVGDocumentContext>().rootEntity;
 
   SmallVector<ElementContext, 16> stack;
   stack.push_back(ElementContext{rootEntity, std::nullopt});
@@ -533,7 +535,7 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
       size = viewbox->viewbox->size();
     }
 
-    const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
+    const auto& ctx = registry.ctx().get<SVGDocumentContext>();
     if (ctx.rootEntity == entity.entity()) {
       // This is the root <svg> element.
       const Vector2i documentSize =
@@ -597,7 +599,7 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
 }
 
 Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
-  const DocumentContext& ctx = registry.ctx().get<DocumentContext>();
+  const auto& ctx = registry.ctx().get<SVGDocumentContext>();
   const EntityHandle root(registry, ctx.rootEntity);
   const SizedElementProperties& properties = root.get<SizedElementComponent>().properties;
 

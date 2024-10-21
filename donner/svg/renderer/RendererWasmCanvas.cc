@@ -42,7 +42,7 @@ public:
 
         if (const auto* idComponent =
                 registry.try_get<components::IdComponent>(instance.dataEntity)) {
-          std::cout << "id=" << idComponent->id << " ";
+          std::cout << "id=" << idComponent->id() << " ";
         }
 
         std::cout << instance.dataEntity;

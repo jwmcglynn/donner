@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/svg/xml/details/XMLParserContext.h"
+#include "donner/svg/parser/details/SVGParserContext.h"
 
 namespace donner::svg::parser {
 
@@ -19,9 +19,9 @@ public:
    * @param name The name of the attribute, as specified in the document's XML.
    * @param value The value of the attribute.
    */
-  static std::optional<ParseError> ParseAndSetAttribute(XMLParserContext& context,
+  static std::optional<ParseError> ParseAndSetAttribute(SVGParserContext& context,
                                                         SVGElement& element,
-                                                        const XMLQualifiedNameRef& name,
+                                                        const xml::XMLQualifiedNameRef& name,
                                                         std::string_view value) noexcept;
 };
 

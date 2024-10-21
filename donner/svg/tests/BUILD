@@ -11,14 +11,14 @@ cc_test(
         "SVGEllipseElement_tests.cc",
         "SVGFilterElement_tests.cc",
         "SVGLinearGradientElement_tests.cc",
+        "SVGMarkerElement_tests.cc",
         "SVGPathElement_tests.cc",
         "SVGPatternElement_tests.cc",
         "SVGRadialGradientElement_tests.cc",
         "SVGRectElement_tests.cc",
-        "SVGMarkerElement_tests.cc",
     ],
     deps = [
-        ":xml_test_utils",
+        ":parser_test_utils",
         "//donner/base:base_test_utils",
         "//donner/base/parser:parser_test_utils",
         "//donner/svg",
@@ -29,18 +29,18 @@ cc_test(
 )
 
 cc_library(
-    name = "xml_test_utils",
+    name = "parser_test_utils",
     testonly = 1,
     srcs = [
-        "XMLTestUtils.cc",
+        "ParserTestUtils.cc",
     ],
     hdrs = [
-        "XMLTestUtils.h",
+        "ParserTestUtils.h",
     ],
     visibility = ["//donner:__subpackages__"],
     deps = [
         "//donner/svg",
-        "//donner/svg/xml",
+        "//donner/svg/parser",
         "@com_google_gtest//:gtest",
     ],
 )

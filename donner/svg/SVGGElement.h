@@ -35,9 +35,18 @@ namespace donner::svg {
  * DOM object for a \ref xml_g element.
  */
 class SVGGElement : public SVGGraphicsElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Create an SVGGElement wrapper from an entity.
   explicit SVGGElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGGElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -51,7 +60,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGGElement Create(SVGDocument& document);
+  static SVGGElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 };
 
 }  // namespace donner::svg

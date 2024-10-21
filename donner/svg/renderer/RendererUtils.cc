@@ -1,7 +1,6 @@
 #include "donner/svg/renderer/RendererUtils.h"
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/svg/components/DocumentContext.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/renderer/RenderingContext.h"
 

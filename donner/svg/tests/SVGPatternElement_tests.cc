@@ -6,7 +6,7 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
-#include "donner/svg/tests/XMLTestUtils.h"
+#include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
 

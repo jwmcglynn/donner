@@ -8,8 +8,8 @@
 
 namespace donner::svg {
 
-SVGMarkerElement SVGMarkerElement::Create(SVGDocument& document) {
-  EntityHandle handle = CreateEntity(document.registry(), Tag, Type);
+SVGMarkerElement SVGMarkerElement::CreateOn(EntityHandle handle) {
+  CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::MarkerComponent>();
   handle
       .emplace<components::RenderingBehaviorComponent>(

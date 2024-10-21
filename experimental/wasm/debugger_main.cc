@@ -5,9 +5,9 @@
 #include <iostream>
 
 #include "donner/svg/SVG.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererWasmCanvas.h"
 #include "donner/svg/renderer/wasm_canvas/Canvas.h"
-#include "donner/svg/xml/SVGParser.h"
 
 using namespace donner::svg;
 

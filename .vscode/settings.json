@@ -195,18 +195,10 @@
       }
     },
     {
-      "pattern": "bazel-bin/donner/svg/xml/xml_tests",
+      "pattern": "bazel-bin/donner/svg/parser/parser_tests",
       "runTask": {
         "before": [
           "xml_tests"
-        ],
-      }
-    },
-    {
-      "pattern": "bazel-bin/donner/svg/xml/xml_details_tests",
-      "runTask": {
-        "before": [
-          "xml_details_tests"
         ],
       }
     },

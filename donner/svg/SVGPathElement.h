@@ -84,9 +84,18 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGPathElement : public SVGGeometryElement {
+  friend class parser::SVGParserImpl;
+
 private:
   /// Create an SVGPathElement wrapper from an entity.
   explicit SVGPathElement(EntityHandle handle) : SVGGeometryElement(handle) {}
+
+  /**
+   * Internal constructor to create the element on an existing \ref Entity.
+   *
+   * @param handle Entity handle.
+   */
+  static SVGPathElement CreateOn(EntityHandle handle);
 
 public:
   /// Element type.
@@ -101,7 +110,7 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGPathElement Create(SVGDocument& document);
+  static SVGPathElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
 
   /**
    * Get the path data string, see \ref path_data.

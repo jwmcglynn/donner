@@ -88,7 +88,8 @@
       "name": "resvg_test_suite",
       "program": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/resvg_test_suite",
       "args": [
-        "--gtest_break_on_failure"
+        "--gtest_break_on_failure",
+        "--gtest_filter=*a_overflow_005"
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -115,7 +116,8 @@
       "name": "svg_parser_tests",
       "program": "${workspaceFolder}/bazel-bin/donner/svg/parser/parser_tests",
       "args": [
-        "--gtest_break_on_failure"
+        "--gtest_break_on_failure",
+        "--gtest_filter=SVGParser.Attributes",
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
@@ -177,8 +179,46 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "xml_tool",
-      "program": "${workspaceFolder}/bazel-bin/donner/svg/xml/xml_tool",
+      "name": "xml_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/base/xml/xml_tests",
+      "args": [
+        "--gtest_break_on_failure",
+        "--gtest_filter=XMLParserTests.EntitiesNumericErrors",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      },
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "xml_parser_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/base/xml/xml_parser_fuzzer",
+      "args": [
+        "./timeout-4aa3d256b961b0941d9e0d6b5ea493c469521f7d",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      },
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "svg parser_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/parser/parser_tests",
+      "args": [
+        "--gtest_break_on_failure",
+        "--gtest_filter=SVGParser.Warning",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      },
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "svg_parser_tool",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/parser/svg_parser_tool",
       "args": [
         "${workspaceFolder}/svg/xml/testdata/e-path-034.svg"
       ],

@@ -15,7 +15,7 @@ class TreeComponentTests : public testing::Test {
 protected:
   Entity createEntity() {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, XMLQualifiedNameRef("unknown"));
+    registry_.emplace<TreeComponent>(entity, xml::XMLQualifiedNameRef("unknown"));
     return entity;
   }
 
@@ -302,7 +302,7 @@ TEST_F(TreeComponentTests, TypeString) {
 
   {
     auto entity = registry_.create();
-    registry_.emplace<TreeComponent>(entity, XMLQualifiedNameRef("test-entity"));
+    registry_.emplace<TreeComponent>(entity, xml::XMLQualifiedNameRef("test-entity"));
     EXPECT_EQ(tree(entity).tagName(), "test-entity");
   }
 }

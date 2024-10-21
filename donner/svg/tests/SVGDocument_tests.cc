@@ -4,8 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/parser/tests/ParseResultTestUtils.h"
-#include "donner/svg/components/DocumentContext.h"
-#include "donner/svg/xml/SVGParser.h"
+#include "donner/svg/parser/SVGParser.h"
 
 using testing::Optional;
 

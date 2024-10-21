@@ -15,6 +15,8 @@ namespace donner::svg {
  * Holds an transformation which defaults to identity.
  */
 class SVGGraphicsElement : public SVGElement {
+  friend class parser::SVGParserImpl;
+
 protected:
   /// Inheriting constructor to be called by derived classes. \ref SVGGraphicsElement cannot be
   /// instantiated directly.

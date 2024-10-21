@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-namespace donner::svg {
+namespace donner::xml {
 
 TEST(XMLQualifiedNameTest, Constructors) {
   // Constructor with only name
@@ -51,15 +51,6 @@ TEST(XMLQualifiedNameTest, CastOperators) {
   XMLQualifiedNameRef asRef = original;
   EXPECT_EQ(asRef.namespacePrefix, "testNamespace");
   EXPECT_EQ(asRef.name, "testName");
-
-  // Cast to string (via toString() method)
-  std::string asString = original.toString();
-  EXPECT_EQ(asString, "testNamespace|testName");
-
-  // Test with empty namespace
-  XMLQualifiedName noNamespace("testName");
-  std::string noNamespaceString = noNamespace.toString();
-  EXPECT_EQ(noNamespaceString, "testName");
 }
 
 TEST(XMLQualifiedNameTest, WorksInMap) {
@@ -141,6 +132,33 @@ TEST(XMLQualifiedNameTest, ComparisonOperatorsBetweenNamespacedAndNonNamespaced)
   EXPECT_FALSE(xlinkHref2 < href2);
   EXPECT_FALSE(xlinkHref2 < href);
   EXPECT_FALSE(xlinkHref < href2);
+}
+
+TEST(XMLQualifiedNameTest, OutputOperators) {
+  XMLQualifiedName withNamespace("testNamespace", "testName");
+  XMLQualifiedName noNamespace("", "testName");
+
+  // .toString()
+  EXPECT_EQ(withNamespace.toString(), "testNamespace:testName");
+  EXPECT_EQ(noNamespace.toString(), "testName");
+
+  // Test with std::ostream
+  std::ostringstream stream;
+  stream << withNamespace;
+  EXPECT_EQ(stream.str(), "testNamespace:testName");
+
+  stream.str("");
+  stream << noNamespace;
+  EXPECT_EQ(stream.str(), "testName");
+
+  // Test with printCssSyntax()
+  stream.str("");
+  stream << withNamespace.printCssSyntax();
+  EXPECT_EQ(stream.str(), "testNamespace|testName");
+
+  stream.str("");
+  stream << noNamespace.printCssSyntax();
+  EXPECT_EQ(stream.str(), "testName");
 }
 
 TEST(XMLQualifiedNameRefTest, Constructors) {
@@ -331,4 +349,31 @@ TEST(XMLQualifiedNameRefTest, ComparisonOperatorsBetweenNamespacedAndNonNamespac
   EXPECT_FALSE(xlinkHref < href2);
 }
 
-}  // namespace donner::svg
+TEST(XMLQualifiedNameRefTest, OutputOperators) {
+  XMLQualifiedNameRef withNamespace("testNamespace", "testName");
+  XMLQualifiedNameRef noNamespace("", "testName");
+
+  // .toString()
+  EXPECT_EQ(withNamespace.toString(), "testNamespace:testName");
+  EXPECT_EQ(noNamespace.toString(), "testName");
+
+  // Test with std::ostream
+  std::ostringstream stream;
+  stream << withNamespace;
+  EXPECT_EQ(stream.str(), "testNamespace:testName");
+
+  stream.str("");
+  stream << noNamespace;
+  EXPECT_EQ(stream.str(), "testName");
+
+  // Test with printCssSyntax()
+  stream.str("");
+  stream << withNamespace.printCssSyntax();
+  EXPECT_EQ(stream.str(), "testNamespace|testName");
+
+  stream.str("");
+  stream << noNamespace.printCssSyntax();
+  EXPECT_EQ(stream.str(), "testName");
+}
+
+}  // namespace donner::xml
