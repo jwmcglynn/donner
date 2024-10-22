@@ -31,28 +31,22 @@ static void glfw_error_callback(int error, const char* description) {
   std::cerr << "Glfw Error " << error << ": " << description << std::endl;
 }
 
-SVGParser::InputBuffer loadFile(const char* filename) {
+std::string loadFile(const char* filename) {
   std::ifstream file(filename);
   if (!file) {
     std::cerr << "Could not open file " << filename << std::endl;
     std::abort();
   }
 
-  SVGParser::InputBuffer fileData;
-  fileData.loadFromStream(file);
+  std::string fileData;
+  file.seekg(0, std::ios::end);
+  const std::streamsize fileLength = file.tellg();
+  file.seekg(0);
+
+  fileData.resize(fileLength);
+  file.read(fileData.data(), fileLength);
 
   return fileData;
-}
-
-std::string inputBufferToString(const SVGParser::InputBuffer& inputBuffer) {
-  std::string result;
-  result.reserve(inputBuffer.size());
-
-  for (size_t i = 0; i < inputBuffer.size(); i++) {
-    result += inputBuffer[i];
-  }
-
-  return result;
 }
 
 struct SVGState {
@@ -63,10 +57,10 @@ struct SVGState {
   std::optional<SVGRectElement> boundsShape;
   std::optional<SVGPathElement> selectedPathOutline;
 
-  void loadSVG(SVGParser::InputBuffer& inputBuffer) {
+  void loadSVG(const std::string& source) {
     document = SVGDocument();
 
-    ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(inputBuffer);
+    ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(source);
     if (maybeDocument.hasError()) {
       lastError = maybeDocument.error();
       valid = false;
@@ -164,18 +158,16 @@ int main(int argc, char** argv) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   SVGState state;
-  SVGParser::InputBuffer inputBuffer = loadFile(argv[1]);
-  std::string svgString = inputBufferToString(inputBuffer);
+  std::string svgString = loadFile(argv[1]);
 
-  state.loadSVG(inputBuffer);
+  state.loadSVG(svgString);
 
   RendererSkia renderer;
   bool svgChanged = false;
 
   while (!glfwWindowShouldClose(window)) {
     if (svgChanged) {
-      inputBuffer = SVGParser::InputBuffer(svgString);
-      state.loadSVG(inputBuffer);
+      state.loadSVG(svgString);
     }
 
     glfwPollEvents();

@@ -39,7 +39,7 @@ How it works: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-
 
 ```cpp
 // This is the base SVG we are loading, a simple path containing a line
-donner::svg::parser::SVGParser::InputBuffer svgContents(R"(
+std::string_view svgContents(R"(
   <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
     <path d="M 1 1 L 4 5" stroke="blue" />
   </svg>
@@ -91,8 +91,13 @@ if (!file) {
   std::abort();
 }
 
-SVGParser::InputBuffer fileData;
-fileData.loadFromStream(file);
+std::string fileData;
+file.seekg(0, std::ios::end);
+const std::streamsize fileLength = file.tellg();
+file.seekg(0);
+
+fileData.resize(fileLength);  
+file.read(fileData.data(), fileLength);
 
 ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData);
 if (maybeDocument.hasError()) {

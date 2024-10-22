@@ -14,7 +14,6 @@ The following subtrees have been added to the repo
 ```sh
 git subtree add https://github.com/serge-sans-paille/frozen --prefix third_party/frozen master --squash
 git subtree add https://github.com/jwmcglynn/css-parsing-tests --prefix third_party/css-parsing-tests master --squash
-git subtree add https://github.com/jwmcglynn/rapidxml_ns --prefix third_party/rapidxml_ns master --squash
 ```
 
 ## Updating

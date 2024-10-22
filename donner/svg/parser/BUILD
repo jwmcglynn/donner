@@ -130,7 +130,7 @@ donner_cc_fuzzer(
     ],
     corpus = "tests/path_parser_corpus",
     deps = [
-        ":parser",
+        ":parser_core",
     ],
 )
 
@@ -140,6 +140,17 @@ donner_cc_fuzzer(
         "tests/TransformParser_fuzzer.cc",
     ],
     corpus = "tests/transform_parser_corpus",
+    deps = [
+        ":parser_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "svg_parser_fuzzer",
+    srcs = [
+        "tests/SVGParser_fuzzer.cc",
+    ],
+    corpus = "tests/svg_parser_corpus",
     deps = [
         ":parser",
     ],

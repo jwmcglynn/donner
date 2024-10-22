@@ -81,7 +81,9 @@ struct FileOffset {
    */
   [[nodiscard]] FileOffset addParentOffset(FileOffset parentOffset) const {
     assert(parentOffset.offset.has_value() && "Parent offset must be resolved.");
-    assert(offset.has_value() && "Child offset must be resolved.");
+    // TODO: Change this to assert offset has a value, and update callers to call resolveOffset
+    // first.
+    const size_t selfOffset = offset.value_or(0);
 
     std::optional<LineInfo> newLineInfo;
     if (parentOffset.lineInfo.has_value()) {
@@ -95,12 +97,12 @@ struct FileOffset {
         }
       } else {
         // Parent has line info, but child does not.
-        newLineInfo = LineInfo{parentOffset.lineInfo->line,
-                               parentOffset.lineInfo->offsetOnLine + offset.value()};
+        newLineInfo =
+            LineInfo{parentOffset.lineInfo->line, parentOffset.lineInfo->offsetOnLine + selfOffset};
       }
     }
 
-    return FileOffset{parentOffset.offset.value() + offset.value(), newLineInfo};
+    return FileOffset{parentOffset.offset.value() + selfOffset, newLineInfo};
   }
 
   /// Equality operator.

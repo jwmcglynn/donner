@@ -96,19 +96,21 @@ test:coverage --nocache_test_results
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --config=latest_llvm
-build:asan --linkopt -ldl
-build:asan --copt -fsanitize=address,undefined
-build:asan --linkopt -fsanitize=address,undefined
-build:asan --copt -fno-omit-frame-pointer --copt -fsanitize-address-use-after-scope
+build:asan --linkopt=-ldl
+build:asan --copt=-fsanitize=address,undefined
+build:asan --linkopt=-fsanitize=address,undefined
+build:asan --copt=-fno-omit-frame-pointer
+build:asan --copt=-fsanitize-address-use-after-scope
 build:asan --test_env=ASAN_SYMBOLIZER_PATH
 # These require libubsan, which is not linked properly by bazel, so disable.
 # See https://github.com/google/oss-fuzz/issues/713
-build:asan --copt -fno-sanitize=vptr,function
-build:asan --linkopt -fno-sanitize=vptr,function
+build:asan --copt=-fno-sanitize=vptr,function
+build:asan --linkopt=-fno-sanitize=vptr,function
 build:asan --strip=never
 
 # Fuzzing builds
 build:asan-fuzzer --config=asan
+build:asan-fuzzer --copt=-fsanitize=fuzzer-no-link
 build:asan-fuzzer --define=FUZZING_ENGINE=libfuzzer
 build:asan-fuzzer --copt=-fno-omit-frame-pointer
 build:asan-fuzzer --copt=-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION

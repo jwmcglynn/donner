@@ -13,18 +13,15 @@ static constexpr std::string_view kSuffix("\n</svg>");
 
 SVGDocument instantiateSubtree(std::string_view str, const parser::SVGParser::Options& options,
                                const Vector2i& size) {
-  parser::SVGParser::InputBuffer fileData;
-  const std::string prefix = std::string(
+  std::string fileData = std::string(
                                  "<svg xmlns=\"http://www.w3.org/2000/svg\" "
                                  "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"") +
                              std::to_string(size.x) + "\" height=\"" + std::to_string(size.y) +
                              "\">\n  ";
 
-  fileData.reserve(prefix.size() + str.size() + kSuffix.size() + 1);
-  fileData.insert(fileData.end(), prefix.begin(), prefix.end());
+  fileData.reserve(fileData.size() + str.size() + kSuffix.size() + 1);
   fileData.insert(fileData.end(), str.begin(), str.end());
   fileData.insert(fileData.end(), kSuffix.begin(), kSuffix.end());
-  fileData.push_back('\0');
 
   std::vector<parser::ParseError> warnings;
   auto maybeResult = parser::SVGParser::ParseSVG(fileData, &warnings, options);

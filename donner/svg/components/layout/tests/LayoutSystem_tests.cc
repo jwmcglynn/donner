@@ -12,8 +12,7 @@ namespace donner::svg::components {
 class LayoutSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    parser::SVGParser::InputBuffer inputBuffer(input);
-    auto maybeResult = parser::SVGParser::ParseSVG(inputBuffer);
+    auto maybeResult = parser::SVGParser::ParseSVG(input);
     EXPECT_THAT(maybeResult, base::parser::NoParseError());
     return std::move(maybeResult).result();
   }
