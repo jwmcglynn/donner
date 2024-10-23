@@ -64,7 +64,7 @@ new_local_repository(
 ##
 bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.15.2", dev_dependency = True)
 
-bazel_dep(name = "nlohmann_json", version = "3.11.3", dev_dependency = True)
+bazel_dep(name = "nlohmann_json", version = "3.11.3.bcr.1", dev_dependency = True)
 
 bazel_dep(name = "pixelmatch-cpp17", version = "0.0.0", dev_dependency = True)
 git_override(
