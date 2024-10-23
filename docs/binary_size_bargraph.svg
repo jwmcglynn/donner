@@ -88,155 +88,155 @@
   <rect x="0" y="148" width="20" height="20" fill="#FF5733" />
   <text x="25" y="163" fill="black" font-size="12">Everything else - 375.89 KB</text>
   <rect x="0" y="168" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="183" fill="black" font-size="12">__str_find_first_not_of<char, unsigned long, std::__1::char_traits<char>, 18446744073709551615UL> - 118.84 KB</text>
+  <text x="25" y="183" fill="black" font-size="12">__str_find_first_not_of&lt;char, unsigned long, std::__1::char_traits&lt;char&gt;, 18446744073709551615UL&gt; - 118.84 KB</text>
   <rect x="0" y="188" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="203" fill="black" font-size="12">__constexpr_memchr<const char, char> - 79.64 KB</text>
+  <text x="25" y="203" fill="black" font-size="12">__constexpr_memchr&lt;const char, char&gt; - 79.64 KB</text>
   <rect x="0" y="208" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="223" fill="black" font-size="12">__destroy_at<donner::base::parser::ParseError, 0> - 61.13 KB</text>
+  <text x="25" y="223" fill="black" font-size="12">__destroy_at&lt;donner::base::parser::ParseError, 0&gt; - 61.13 KB</text>
   <rect x="0" y="228" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="243" fill="black" font-size="12">__construct_at<donner::svg::components::RectComponent *, donner::svg::components::RectComponent **> - 57.36 KB</text>
+  <text x="25" y="243" fill="black" font-size="12">__construct_at&lt;donner::svg::components::RectComponent *, donner::svg::components::RectComponent **&gt; - 57.36 KB</text>
   <rect x="0" y="248" width="20" height="20" fill="#33FFD7" />
-  <text x="25" y="263" fill="black" font-size="12">StartsWith<(donner::StringComparison)0, donner::RcString, std::__1::basic_string_view<char, std::__1::char_traits<char> > > - 55.54 KB</text>
+  <text x="25" y="263" fill="black" font-size="12">StartsWith&lt;(donner::StringComparison)0, donner::RcString, std::__1::basic_string_view&lt;char, std::__1::char_traits&lt;char&gt; &gt; &gt; - 55.54 KB</text>
   <rect x="0" y="268" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="283" fill="black" font-size="12">isa<donner::svg::SVGUseElement> - 45.35 KB</text>
+  <text x="25" y="283" fill="black" font-size="12">isa&lt;donner::svg::SVGUseElement&gt; - 45.35 KB</text>
   <rect x="0" y="288" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="303" fill="black" font-size="12">__destroy_at<donner::css::Rule, 0> - 37.44 KB</text>
+  <text x="25" y="303" fill="black" font-size="12">__destroy_at&lt;donner::css::Rule, 0&gt; - 37.44 KB</text>
   <rect x="0" y="308" width="20" height="20" fill="#33FF83" />
   <text x="25" y="323" fill="black" font-size="12">__set_size - 36.31 KB</text>
   <rect x="0" y="328" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="343" fill="black" font-size="12">uninitialized_construct_using_allocator<donner::svg::components::ClipPathComponent, std::__1::allocator<donner::svg::components::ClipPathComponent> > - 36.17 KB</text>
+  <text x="25" y="343" fill="black" font-size="12">uninitialized_construct_using_allocator&lt;donner::svg::components::ClipPathComponent, std::__1::allocator&lt;donner::svg::components::ClipPathComponent&gt; &gt; - 36.17 KB</text>
   <rect x="0" y="348" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="363" fill="black" font-size="12">basic_vtable<donner::xml::components::XMLDocumentContext> - 33.87 KB</text>
+  <text x="25" y="363" fill="black" font-size="12">basic_vtable&lt;donner::xml::components::XMLDocumentContext&gt; - 33.87 KB</text>
   <rect x="0" y="368" width="20" height="20" fill="#3381FF" />
-  <text x="25" y="383" fill="black" font-size="12">construct<donner::svg::components::ComputedShadowTreeComponent *, void, void> - 30.62 KB</text>
+  <text x="25" y="383" fill="black" font-size="12">construct&lt;donner::svg::components::ComputedShadowTreeComponent *, void, void&gt; - 30.62 KB</text>
   <rect x="0" y="388" width="20" height="20" fill="#FF33D7" />
-  <text x="25" y="403" fill="black" font-size="12">__construct_at<donner::xml::(anonymous namespace)::XMLNodeTypeComponent *, donner::xml::(anonymous namespace)::XMLNodeTypeComponent **> - 26.02 KB</text>
+  <text x="25" y="403" fill="black" font-size="12">__construct_at&lt;donner::xml::(anonymous namespace)::XMLNodeTypeComponent *, donner::xml::(anonymous namespace)::XMLNodeTypeComponent **&gt; - 26.02 KB</text>
   <rect x="0" y="408" width="20" height="20" fill="#FF5733" />
-  <text x="25" y="423" fill="black" font-size="12">apply<(lambda at external/_main~_repo_rules~entt/src/entt/container/../core - 24.64 KB</text>
+  <text x="25" y="423" fill="black" font-size="12">apply&lt;(lambda at external/_main~_repo_rules~entt/src/entt/container/../core - 24.64 KB</text>
   <rect x="0" y="428" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="443" fill="black" font-size="12">__construct_at<donner::svg::components::LinearGradientComponent *, donner::svg::components::LinearGradientComponent **> - 20.42 KB</text>
+  <text x="25" y="443" fill="black" font-size="12">__construct_at&lt;donner::svg::components::LinearGradientComponent *, donner::svg::components::LinearGradientComponent **&gt; - 20.42 KB</text>
   <rect x="0" y="448" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="463" fill="black" font-size="12">__construct_at<donner::svg::components::StylesheetComponent *, donner::svg::components::StylesheetComponent **> - 19.16 KB</text>
+  <text x="25" y="463" fill="black" font-size="12">__construct_at&lt;donner::svg::components::StylesheetComponent *, donner::svg::components::StylesheetComponent **&gt; - 19.16 KB</text>
   <rect x="0" y="468" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="483" fill="black" font-size="12">operator!=<donner::css::SelectorRule *, donner::css::SelectorRule *> - 18.85 KB</text>
+  <text x="25" y="483" fill="black" font-size="12">operator!=&lt;donner::css::SelectorRule *, donner::css::SelectorRule *&gt; - 18.85 KB</text>
   <rect x="0" y="488" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="503" fill="black" font-size="12">__construct_at<donner::svg::components::PathComponent *, donner::svg::components::PathComponent **> - 18.20 KB</text>
+  <text x="25" y="503" fill="black" font-size="12">__construct_at&lt;donner::svg::components::PathComponent *, donner::svg::components::PathComponent **&gt; - 18.20 KB</text>
   <rect x="0" y="508" width="20" height="20" fill="#33FFD7" />
   <text x="25" y="523" fill="black" font-size="12">equalsIgnoreCase - 12.67 KB</text>
   <rect x="0" y="528" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="543" fill="black" font-size="12">holds_alternative<donner::css::Token::CloseParenthesis, donner::css::Token::Ident, donner::css::Token::Function, donner::css::Token::AtKeyword, donner::css::Token::Hash, donner::css::Token::String, donner::css::Token::BadString, donner::css::Token::Url, donner::css::Token::BadUrl, donner::css::Token::Delim, donner::css::Token::Number, donner::css::Token::Percentage, donner::css::Token::Dimension, donner::css::Token::Whitespace, donner::css::Token::CDO, donner::css::Token::CDC, donner::css::Token::Colon, donner::css::Token::Semicolon, donner::css::Token::Comma, donner::css::Token::SquareBracket, donner::css::Token::Parenthesis, donner::css::Token::CurlyBracket, donner::css::Token::CloseSquareBracket, donner::css::Token::CloseParenthesis, donner::css::Token::CloseCurlyBracket, donner::css::Token::ErrorToken, donner::css::Token::EofToken> - 12.22 KB</text>
+  <text x="25" y="543" fill="black" font-size="12">holds_alternative&lt;donner::css::Token::CloseParenthesis, donner::css::Token::Ident, donner::css::Token::Function, donner::css::Token::AtKeyword, donner::css::Token::Hash, donner::css::Token::String, donner::css::Token::BadString, donner::css::Token::Url, donner::css::Token::BadUrl, donner::css::Token::Delim, donner::css::Token::Number, donner::css::Token::Percentage, donner::css::Token::Dimension, donner::css::Token::Whitespace, donner::css::Token::CDO, donner::css::Token::CDC, donner::css::Token::Colon, donner::css::Token::Semicolon, donner::css::Token::Comma, donner::css::Token::SquareBracket, donner::css::Token::Parenthesis, donner::css::Token::CurlyBracket, donner::css::Token::CloseSquareBracket, donner::css::Token::CloseParenthesis, donner::css::Token::CloseCurlyBracket, donner::css::Token::ErrorToken, donner::css::Token::EofToken&gt; - 12.22 KB</text>
   <rect x="0" y="548" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="563" fill="black" font-size="12">__construct_at<donner::svg::components::MaskComponent *, donner::svg::components::MaskComponent **> - 12.11 KB</text>
+  <text x="25" y="563" fill="black" font-size="12">__construct_at&lt;donner::svg::components::MaskComponent *, donner::svg::components::MaskComponent **&gt; - 12.11 KB</text>
   <rect x="0" y="568" width="20" height="20" fill="#33FF83" />
-  <text x="25" y="583" fill="black" font-size="12">__construct_at<donner::svg::components::FilterComponent *, donner::svg::components::FilterComponent **> - 11.99 KB</text>
+  <text x="25" y="583" fill="black" font-size="12">__construct_at&lt;donner::svg::components::FilterComponent *, donner::svg::components::FilterComponent **&gt; - 11.99 KB</text>
   <rect x="0" y="588" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="603" fill="black" font-size="12">__destroy_at<entt::basic_sigh_mixin<entt::basic_storage<donner::svg::components::DoNotInheritFillOrStrokeTag, entt::entity, std::__1::allocator<donner::svg::components::DoNotInheritFillOrStrokeTag>, void>, entt::basic_registry<entt::entity, std::__1::allocator<entt::entity> > >, 0> - 11.12 KB</text>
+  <text x="25" y="603" fill="black" font-size="12">__destroy_at&lt;entt::basic_sigh_mixin&lt;entt::basic_storage&lt;donner::svg::components::DoNotInheritFillOrStrokeTag, entt::entity, std::__1::allocator&lt;donner::svg::components::DoNotInheritFillOrStrokeTag&gt;, void&gt;, entt::basic_registry&lt;entt::entity, std::__1::allocator&lt;entt::entity&gt; &gt; &gt;, 0&gt; - 11.12 KB</text>
   <rect x="0" y="608" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="623" fill="black" font-size="12">uninitialized_construct_using_allocator<donner::svg::components::PolyComponent, std::__1::allocator<donner::svg::components::PolyComponent>, donner::svg::components::PolyComponent::Type> - 11.05 KB</text>
+  <text x="25" y="623" fill="black" font-size="12">uninitialized_construct_using_allocator&lt;donner::svg::components::PolyComponent, std::__1::allocator&lt;donner::svg::components::PolyComponent&gt;, donner::svg::components::PolyComponent::Type&gt; - 11.05 KB</text>
   <rect x="0" y="628" width="20" height="20" fill="#3381FF" />
-  <text x="25" y="643" fill="black" font-size="12">__construct_at<donner::svg::components::ViewboxComponent *, donner::svg::components::ViewboxComponent **> - 10.94 KB</text>
+  <text x="25" y="643" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ViewboxComponent *, donner::svg::components::ViewboxComponent **&gt; - 10.94 KB</text>
   <rect x="0" y="648" width="20" height="20" fill="#FF33D7" />
-  <text x="25" y="663" fill="black" font-size="12">construct<donner::svg::components::ShadowTreeComponent *, void, void> - 10.82 KB</text>
+  <text x="25" y="663" fill="black" font-size="12">construct&lt;donner::svg::components::ShadowTreeComponent *, void, void&gt; - 10.82 KB</text>
   <rect x="0" y="668" width="20" height="20" fill="#FF5733" />
-  <text x="25" y="683" fill="black" font-size="12">__construct_at<donner::svg::components::FEGaussianBlurComponent *, donner::svg::components::FEGaussianBlurComponent **> - 10.74 KB</text>
+  <text x="25" y="683" fill="black" font-size="12">__construct_at&lt;donner::svg::components::FEGaussianBlurComponent *, donner::svg::components::FEGaussianBlurComponent **&gt; - 10.74 KB</text>
   <rect x="0" y="688" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="703" fill="black" font-size="12">__construct_at<donner::svg::components::RadialGradientComponent *, donner::svg::components::RadialGradientComponent **> - 10.73 KB</text>
+  <text x="25" y="703" fill="black" font-size="12">__construct_at&lt;donner::svg::components::RadialGradientComponent *, donner::svg::components::RadialGradientComponent **&gt; - 10.73 KB</text>
   <rect x="0" y="708" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="723" fill="black" font-size="12">__construct_at<donner::svg::components::LineComponent *, donner::svg::components::LineComponent **> - 10.67 KB</text>
+  <text x="25" y="723" fill="black" font-size="12">__construct_at&lt;donner::svg::components::LineComponent *, donner::svg::components::LineComponent **&gt; - 10.67 KB</text>
   <rect x="0" y="728" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="743" fill="black" font-size="12">__construct_at<donner::svg::components::TransformComponent *, donner::svg::components::TransformComponent **> - 10.39 KB</text>
+  <text x="25" y="743" fill="black" font-size="12">__construct_at&lt;donner::svg::components::TransformComponent *, donner::svg::components::TransformComponent **&gt; - 10.39 KB</text>
   <rect x="0" y="748" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="763" fill="black" font-size="12">__construct_at<donner::svg::components::ImageComponent *, donner::svg::components::ImageComponent **> - 10.29 KB</text>
+  <text x="25" y="763" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ImageComponent *, donner::svg::components::ImageComponent **&gt; - 10.29 KB</text>
   <rect x="0" y="768" width="20" height="20" fill="#33FFD7" />
-  <text x="25" y="783" fill="black" font-size="12">__construct<const donner::RcString &> - 10.17 KB</text>
+  <text x="25" y="783" fill="black" font-size="12">__construct&lt;const donner::RcString &amp;&gt; - 10.17 KB</text>
   <rect x="0" y="788" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="803" fill="black" font-size="12">__construct_at<donner::svg::components::EllipseComponent *, donner::svg::components::EllipseComponent **> - 9.84 KB</text>
+  <text x="25" y="803" fill="black" font-size="12">__construct_at&lt;donner::svg::components::EllipseComponent *, donner::svg::components::EllipseComponent **&gt; - 9.84 KB</text>
   <rect x="0" y="808" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="823" fill="black" font-size="12">__construct_at<donner::svg::components::ComputedPathComponent *, donner::svg::components::ComputedPathComponent **> - 9.67 KB</text>
+  <text x="25" y="823" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ComputedPathComponent *, donner::svg::components::ComputedPathComponent **&gt; - 9.67 KB</text>
   <rect x="0" y="828" width="20" height="20" fill="#33FF83" />
-  <text x="25" y="843" fill="black" font-size="12">__assign_alt<1UL, donner::RcString, donner::RcString> - 9.10 KB</text>
+  <text x="25" y="843" fill="black" font-size="12">__assign_alt&lt;1UL, donner::RcString, donner::RcString&gt; - 9.10 KB</text>
   <rect x="0" y="848" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="863" fill="black" font-size="12">__union<11UL, donner::css::Token::Dimension> - 8.70 KB</text>
+  <text x="25" y="863" fill="black" font-size="12">__union&lt;11UL, donner::css::Token::Dimension&gt; - 8.70 KB</text>
   <rect x="0" y="868" width="20" height="20" fill="#FF8333" />
   <text x="25" y="883" fill="black" font-size="12">donner/svg/components/paint - 7.79 KB</text>
   <rect x="0" y="888" width="20" height="20" fill="#3381FF" />
-  <text x="25" y="903" fill="black" font-size="12">__invoke<(lambda at /PLACEHOLDER_DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/usr/include/c++/v1 - 7.76 KB</text>
+  <text x="25" y="903" fill="black" font-size="12">__invoke&lt;(lambda at /PLACEHOLDER_DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/usr/include/c++/v1 - 7.76 KB</text>
   <rect x="0" y="908" width="20" height="20" fill="#FF33D7" />
-  <text x="25" y="923" fill="black" font-size="12">__compressed_pair<donner::css::Selector *, std::__1::default_delete<donner::css::Selector> > - 7.48 KB</text>
+  <text x="25" y="923" fill="black" font-size="12">__compressed_pair&lt;donner::css::Selector *, std::__1::default_delete&lt;donner::css::Selector&gt; &gt; - 7.48 KB</text>
   <rect x="0" y="928" width="20" height="20" fill="#FF5733" />
   <text x="25" y="943" fill="black" font-size="12">ParseStyleAttribute - 7.09 KB</text>
   <rect x="0" y="948" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="963" fill="black" font-size="12">operator()<const std::__1::__variant_detail::__alt<2UL, donner::css::SimpleBlock> &> - 5.78 KB</text>
+  <text x="25" y="963" fill="black" font-size="12">operator()&lt;const std::__1::__variant_detail::__alt&lt;2UL, donner::css::SimpleBlock&gt; &amp;&gt; - 5.78 KB</text>
   <rect x="0" y="968" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="983" fill="black" font-size="12">ParsePresentationAttribute<(donner::svg::ElementType)6> - 5.33 KB</text>
+  <text x="25" y="983" fill="black" font-size="12">ParsePresentationAttribute&lt;(donner::svg::ElementType)6&gt; - 5.33 KB</text>
   <rect x="0" y="988" width="20" height="20" fill="#FF33A1" />
   <text x="25" y="1003" fill="black" font-size="12">e clang version 16.0.0 (clang-1600.0.26.3) - 5.08 KB</text>
   <rect x="0" y="1008" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="1023" fill="black" font-size="12">optional<donner::svg::PreserveAspectRatio, 0> - 4.05 KB</text>
+  <text x="25" y="1023" fill="black" font-size="12">optional&lt;donner::svg::PreserveAspectRatio, 0&gt; - 4.05 KB</text>
   <rect x="0" y="1028" width="20" height="20" fill="#33FFD7" />
-  <text x="25" y="1043" fill="black" font-size="12">ParsePresentationAttribute<(donner::svg::ElementType)19> - 3.53 KB</text>
+  <text x="25" y="1043" fill="black" font-size="12">ParsePresentationAttribute&lt;(donner::svg::ElementType)19&gt; - 3.53 KB</text>
   <rect x="0" y="1048" width="20" height="20" fill="#8333FF" />
   <text x="25" y="1063" fill="black" font-size="12">_ZNR6donner4base6parser11ParseResultINSt3__18optionalINS_6LengthIdEEEEE5errorEv.cold.1 - 3.53 KB</text>
   <rect x="0" y="1068" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="1083" fill="black" font-size="12">Compare<84, 84> - 3.48 KB</text>
+  <text x="25" y="1083" fill="black" font-size="12">Compare&lt;84, 84&gt; - 3.48 KB</text>
   <rect x="0" y="1088" width="20" height="20" fill="#33FF83" />
   <text x="25" y="1103" fill="black" font-size="12">consumedChars - 3.13 KB</text>
   <rect x="0" y="1108" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="1123" fill="black" font-size="12">Parse<donner::Length<double>, (donner::svg::PropertyCascade)0, (lambda at donner/svg/components/shape - 3.09 KB</text>
+  <text x="25" y="1123" fill="black" font-size="12">Parse&lt;donner::Length&lt;double&gt;, (donner::svg::PropertyCascade)0, (lambda at donner/svg/components/shape - 3.09 KB</text>
   <rect x="0" y="1128" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="1143" fill="black" font-size="12">construct<donner::css::ComplexSelector::Entry, donner::css::ComplexSelector::Entry &, void, void> - 3.06 KB</text>
+  <text x="25" y="1143" fill="black" font-size="12">construct&lt;donner::css::ComplexSelector::Entry, donner::css::ComplexSelector::Entry &amp;, void, void&gt; - 3.06 KB</text>
   <rect x="0" y="1148" width="20" height="20" fill="#3381FF" />
   <text x="25" y="1163" fill="black" font-size="12">MultiplyStep - 2.82 KB</text>
   <rect x="0" y="1168" width="20" height="20" fill="#FF33D7" />
   <text x="25" y="1183" fill="black" font-size="12">~ComponentValue - 2.53 KB</text>
   <rect x="0" y="1188" width="20" height="20" fill="#FF5733" />
-  <text x="25" y="1203" fill="black" font-size="12">__destroy_at<donner::css::ComplexSelector, 0> - 2.46 KB</text>
+  <text x="25" y="1203" fill="black" font-size="12">__destroy_at&lt;donner::css::ComplexSelector, 0&gt; - 2.46 KB</text>
   <rect x="0" y="1208" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="1223" fill="black" font-size="12">swap<donner::Vector2<double> *> - 2.25 KB</text>
+  <text x="25" y="1223" fill="black" font-size="12">swap&lt;donner::Vector2&lt;double&gt; *&gt; - 2.25 KB</text>
   <rect x="0" y="1228" width="20" height="20" fill="#3357FF" />
   <text x="25" y="1243" fill="black" font-size="12">_ZNR6donner4base6parser11ParseResultINS_3css5ColorEE5errorEv.cold.1 - 1.94 KB</text>
   <rect x="0" y="1248" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="1263" fill="black" font-size="12">optional<donner::base::parser::IntegerParser::Result, 0> - 1.72 KB</text>
+  <text x="25" y="1263" fill="black" font-size="12">optional&lt;donner::base::parser::IntegerParser::Result, 0&gt; - 1.72 KB</text>
   <rect x="0" y="1268" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="1283" fill="black" font-size="12">find<donner::xml::XMLQualifiedName> - 1.66 KB</text>
+  <text x="25" y="1283" fill="black" font-size="12">find&lt;donner::xml::XMLQualifiedName&gt; - 1.66 KB</text>
   <rect x="0" y="1288" width="20" height="20" fill="#33FFD7" />
   <text x="25" y="1303" fill="black" font-size="12">donner/base/parser - 1.62 KB</text>
   <rect x="0" y="1308" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="1323" fill="black" font-size="12">__construct_at<donner::svg::components::ComputedStopComponent *, donner::svg::components::ComputedStopComponent **> - 1.42 KB</text>
+  <text x="25" y="1323" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ComputedStopComponent *, donner::svg::components::ComputedStopComponent **&gt; - 1.42 KB</text>
   <rect x="0" y="1328" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="1343" fill="black" font-size="12">operator()<const std::__1::__variant_detail::__alt<4UL, donner::css::PseudoClassSelector> &> - 1.08 KB</text>
+  <text x="25" y="1343" fill="black" font-size="12">operator()&lt;const std::__1::__variant_detail::__alt&lt;4UL, donner::css::PseudoClassSelector&gt; &amp;&gt; - 1.08 KB</text>
   <rect x="0" y="1348" width="20" height="20" fill="#33FF83" />
-  <text x="25" y="1363" fill="black" font-size="12">__optional_destruct_base<donner::Box<double> > - 1.07 KB</text>
+  <text x="25" y="1363" fill="black" font-size="12">__optional_destruct_base&lt;donner::Box&lt;double&gt; &gt; - 1.07 KB</text>
   <rect x="0" y="1368" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="1383" fill="black" font-size="12">IsDigit<16> - 1.04 KB</text>
+  <text x="25" y="1383" fill="black" font-size="12">IsDigit&lt;16&gt; - 1.04 KB</text>
   <rect x="0" y="1388" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="1403" fill="black" font-size="12">__construct_one_at_end<donner::svg::CssTransform::Translate> - 973.00 B</text>
+  <text x="25" y="1403" fill="black" font-size="12">__construct_one_at_end&lt;donner::svg::CssTransform::Translate&gt; - 973.00 B</text>
   <rect x="0" y="1408" width="20" height="20" fill="#3381FF" />
   <text x="25" y="1423" fill="black" font-size="12">donner/svg/parser - 967.00 B</text>
   <rect x="0" y="1428" width="20" height="20" fill="#FF33D7" />
-  <text x="25" y="1443" fill="black" font-size="12">__emplace_back_slow_path<donner::svg::CssTransform::Translate> - 954.00 B</text>
+  <text x="25" y="1443" fill="black" font-size="12">__emplace_back_slow_path&lt;donner::svg::CssTransform::Translate&gt; - 954.00 B</text>
   <rect x="0" y="1448" width="20" height="20" fill="#FF5733" />
   <text x="25" y="1463" fill="black" font-size="12">_ZN6donner10components13TreeComponent11appendChildERN4entt14basic_registryINS2_6entityENSt3__19allocatorIS4_EEEES4_.cold.1 - 929.00 B</text>
   <rect x="0" y="1468" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="1483" fill="black" font-size="12">__union<10UL, donner::css::Token::Dimension> - 822.00 B</text>
+  <text x="25" y="1483" fill="black" font-size="12">__union&lt;10UL, donner::css::Token::Dimension&gt; - 822.00 B</text>
   <rect x="0" y="1488" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="1503" fill="black" font-size="12">__optional_destruct_base<const donner::LengthUnit &> - 805.00 B</text>
+  <text x="25" y="1503" fill="black" font-size="12">__optional_destruct_base&lt;const donner::LengthUnit &amp;&gt; - 805.00 B</text>
   <rect x="0" y="1508" width="20" height="20" fill="#FF33A1" />
   <text x="25" y="1523" fill="black" font-size="12">donner/svg/components/filter - 569.00 B</text>
   <rect x="0" y="1528" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="1543" fill="black" font-size="12">find_impl<const frozen::unordered_map<frozen::basic_string<char>, donner::css::Color, 149UL, frozen::elsa<frozen::basic_string<char> >, std::__1::equal_to<frozen::basic_string<char> > > &> - 557.00 B</text>
+  <text x="25" y="1543" fill="black" font-size="12">find_impl&lt;const frozen::unordered_map&lt;frozen::basic_string&lt;char&gt;, donner::css::Color, 149UL, frozen::elsa&lt;frozen::basic_string&lt;char&gt; &gt;, std::__1::equal_to&lt;frozen::basic_string&lt;char&gt; &gt; &gt; &amp;&gt; - 557.00 B</text>
   <rect x="0" y="1548" width="20" height="20" fill="#33FFD7" />
   <text x="25" y="1563" fill="black" font-size="12">_ZNR6donner4base6parser11ParseResultINSt3__117basic_string_viewIcNS3_11char_traitsIcEEEEE5errorEv.cold.1 - 532.00 B</text>
   <rect x="0" y="1568" width="20" height="20" fill="#8333FF" />
   <text x="25" y="1583" fill="black" font-size="12">donner/svg/components/resources - 525.00 B</text>
   <rect x="0" y="1588" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="1603" fill="black" font-size="12">isfinite<double, 0> - 473.00 B</text>
+  <text x="25" y="1603" fill="black" font-size="12">isfinite&lt;double, 0&gt; - 473.00 B</text>
   <rect x="0" y="1608" width="20" height="20" fill="#33FF83" />
-  <text x="25" y="1623" fill="black" font-size="12">__construct_at<std::__1::pair<const donner::RcString, donner::svg::parser::UnparsedProperty>, std::__1::pair<donner::RcString, donner::svg::parser::UnparsedProperty>, std::__1::pair<const donner::RcString, donner::svg::parser::UnparsedProperty> *> - 453.00 B</text>
+  <text x="25" y="1623" fill="black" font-size="12">__construct_at&lt;std::__1::pair&lt;const donner::RcString, donner::svg::parser::UnparsedProperty&gt;, std::__1::pair&lt;donner::RcString, donner::svg::parser::UnparsedProperty&gt;, std::__1::pair&lt;const donner::RcString, donner::svg::parser::UnparsedProperty&gt; *&gt; - 453.00 B</text>
   <rect x="0" y="1628" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="1643" fill="black" font-size="12">construct<std::__1::pair<const donner::RcString, donner::svg::parser::UnparsedProperty>, std::__1::pair<donner::RcString, donner::svg::parser::UnparsedProperty>, void, void> - 364.00 B</text>
+  <text x="25" y="1643" fill="black" font-size="12">construct&lt;std::__1::pair&lt;const donner::RcString, donner::svg::parser::UnparsedProperty&gt;, std::__1::pair&lt;donner::RcString, donner::svg::parser::UnparsedProperty&gt;, void, void&gt; - 364.00 B</text>
   <rect x="0" y="1648" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="1663" fill="black" font-size="12">operator()<std::__1::__variant_detail::__alt<4UL, donner::svg::PaintServer::ElementReference>, std::__1::__variant_detail::__alt<4UL, donner::svg::PaintServer::ElementReference> > - 320.00 B</text>
+  <text x="25" y="1663" fill="black" font-size="12">operator()&lt;std::__1::__variant_detail::__alt&lt;4UL, donner::svg::PaintServer::ElementReference&gt;, std::__1::__variant_detail::__alt&lt;4UL, donner::svg::PaintServer::ElementReference&gt; &gt; - 320.00 B</text>
   <rect x="0" y="1668" width="20" height="20" fill="#3381FF" />
   <text x="25" y="1683" fill="black" font-size="12">ClipPathComponent - 313.00 B</text>
   <rect x="0" y="1688" width="20" height="20" fill="#FF33D7" />
@@ -244,15 +244,15 @@
   <rect x="0" y="1708" width="20" height="20" fill="#FF5733" />
   <text x="25" y="1723" fill="black" font-size="12">donner/css - 281.00 B</text>
   <rect x="0" y="1728" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="1743" fill="black" font-size="12">__construct_at<donner::RcString, const donner::RcString &, donner::RcString *> - 274.00 B</text>
+  <text x="25" y="1743" fill="black" font-size="12">__construct_at&lt;donner::RcString, const donner::RcString &amp;, donner::RcString *&gt; - 274.00 B</text>
   <rect x="0" y="1748" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="1763" fill="black" font-size="12">optional<donner::svg::parser::Number2dParser::Result, 0> - 271.00 B</text>
+  <text x="25" y="1763" fill="black" font-size="12">optional&lt;donner::svg::parser::Number2dParser::Result, 0&gt; - 271.00 B</text>
   <rect x="0" y="1768" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="1783" fill="black" font-size="12">try_get<donner::svg::components::StylesheetComponent> - 255.00 B</text>
+  <text x="25" y="1783" fill="black" font-size="12">try_get&lt;donner::svg::components::StylesheetComponent&gt; - 255.00 B</text>
   <rect x="0" y="1788" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="1803" fill="black" font-size="12">__uninitialized_allocator_move_if_noexcept<std::__1::allocator<donner::css::SelectorRule>, std::__1::reverse_iterator<donner::css::SelectorRule *>, std::__1::reverse_iterator<donner::css::SelectorRule *>, std::__1::reverse_iterator<donner::css::SelectorRule *> > - 230.00 B</text>
+  <text x="25" y="1803" fill="black" font-size="12">__uninitialized_allocator_move_if_noexcept&lt;std::__1::allocator&lt;donner::css::SelectorRule&gt;, std::__1::reverse_iterator&lt;donner::css::SelectorRule *&gt;, std::__1::reverse_iterator&lt;donner::css::SelectorRule *&gt;, std::__1::reverse_iterator&lt;donner::css::SelectorRule *&gt; &gt; - 230.00 B</text>
   <rect x="0" y="1808" width="20" height="20" fill="#33FFD7" />
-  <text x="25" y="1823" fill="black" font-size="12">ConsumeDigits<16, unsigned long long> - 162.00 B</text>
+  <text x="25" y="1823" fill="black" font-size="12">ConsumeDigits&lt;16, unsigned long long&gt; - 162.00 B</text>
   <rect x="0" y="1828" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="1843" fill="black" font-size="12">__construct_at<donner::svg::components::ComputedShadowTreeComponent *, donner::svg::components::ComputedShadowTreeComponent **> - 158.00 B</text>
+  <text x="25" y="1843" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ComputedShadowTreeComponent *, donner::svg::components::ComputedShadowTreeComponent **&gt; - 158.00 B</text>
 </svg>

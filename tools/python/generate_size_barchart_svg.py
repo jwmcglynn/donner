@@ -1,7 +1,5 @@
-import csv
 import sys
-import json
-import os
+from html import escape
 from typing import Dict
 from webtreemap import read_bloaty_csv, Node, generate_webtreemap_html
 
@@ -82,6 +80,7 @@ def generate_color_bar(aggregated_sizes: Dict[str, int]) -> str:
 
     for directory, size in sorted_items.items():
         readable_size = to_human_readable(size)
+        sanitized_directory = escape(directory)
 
         bar_width = (size / total_size) * width
         color = colors[color_index % len(colors)]
@@ -92,7 +91,7 @@ def generate_color_bar(aggregated_sizes: Dict[str, int]) -> str:
             f'  <rect x="0" y="{key_y_offset}" width="20" height="20" fill="{color}" />\n'
         )
         key_elements.append(
-            f'  <text x="25" y="{key_y_offset + 15}" fill="black" font-size="12">{directory} - {readable_size}</text>\n'
+            f'  <text x="25" y="{key_y_offset + 15}" fill="black" font-size="12">{sanitized_directory} - {readable_size}</text>\n'
         )
         x_offset += bar_width
         color_index += 1
