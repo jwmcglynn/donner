@@ -50,7 +50,7 @@ header_based_configs = use_repo_rule("@skia//bazel:deps.bzl", "header_based_conf
 git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt",
-    tag = "v3.13.1",
+    tag = "v3.13.2",
 )
 
 new_local_repository(
@@ -102,25 +102,19 @@ use_repo(pip, "pip_deps")
 # Toolchain
 #
 
-bazel_dep(name = "toolchains_llvm", version = "1.0.0", dev_dependency = True)
+bazel_dep(name = "toolchains_llvm", version = "1.2.0", dev_dependency = True)
 
-# To use a local copy of the toolchains_llvm repository, uncomment the following and comment the
-# git_repository below.
+# To use a local copy of the toolchains_llvm repository, uncomment the following.
 # local_path_override(
 #     module_name = "toolchains_llvm",
 #     path = "../toolchains_llvm",
 # )
-git_override(
-    module_name = "toolchains_llvm",
-    remote = "https://github.com/jwmcglynn/toolchains_llvm",
-    commit = "179c4b21a8ef20c3651e404d52a8621d5b414a8f",
-)
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm", dev_dependency = True)
 
 llvm.toolchain(
     name = "llvm_toolchain",
-    llvm_version = "17.0.6",
+    llvm_version = "19.1.0",  # Note that this doesn't support aarch64 linux, for that use 18.1.8
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 
@@ -139,8 +133,8 @@ bazel_dep(name = "zstd", version = "1.5.6", dev_dependency = True)
 bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
 git_override(
     module_name = "hedron_compile_commands",
-    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
-    commit = "ceeb5dbdefb8839a1e29cc242bc1fe755a43609c",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor",
+    commit = "4f28899228fb3ad0126897876f147ca15026151e",
 )
 
 bazel_dep(name = "rules_proto", version = "6.0.2", dev_dependency = True)
