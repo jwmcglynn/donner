@@ -36,3 +36,6 @@ output.png
 
 # For experimental/viewer/svg_viewer.cc
 imgui.ini
+
+# Fuzz testing
+/fuzz-*.log

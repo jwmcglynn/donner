@@ -155,3 +155,14 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "svg_parser_structured_fuzzer",
+    srcs = [
+        "tests/SVGParser_structured_fuzzer.cc",
+    ],
+    corpus = "tests/svg_parser_structured_corpus",
+    deps = [
+        ":parser",
+    ],
+)

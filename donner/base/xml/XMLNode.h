@@ -167,8 +167,7 @@ public:
    * @param target Processing instruction target, such as "php".
    * @param value Processing instruction value, such as "echo 'Hello, world!';".
    */
-  static XMLNode CreateProcessingInstructionNode(XMLDocument& document,
-                                                 const XMLQualifiedNameRef& target,
+  static XMLNode CreateProcessingInstructionNode(XMLDocument& document, const RcStringOrRef& target,
                                                  const RcStringOrRef& value);
 
   /**

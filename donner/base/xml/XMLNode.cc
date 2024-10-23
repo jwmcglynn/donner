@@ -75,8 +75,7 @@ XMLNode XMLNode::CreateDocTypeNode(XMLDocument& document, const RcStringOrRef& v
   return XMLNode(EntityHandle(document.registry(), entity));
 }
 
-XMLNode XMLNode::CreateProcessingInstructionNode(XMLDocument& document,
-                                                 const XMLQualifiedNameRef& target,
+XMLNode XMLNode::CreateProcessingInstructionNode(XMLDocument& document, const RcStringOrRef& target,
                                                  const RcStringOrRef& value) {
   const Entity entity = CreateEntity(document.registry(), Type::ProcessingInstruction, target);
   auto& xmlValue = document.registry().emplace<components::XMLValueComponent>(entity);

@@ -328,6 +328,10 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
       }
     }
 
+    if (components.empty()) {
+      break;
+    }
+
     const css::ComponentValue& component = components.front();
     if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit) {
