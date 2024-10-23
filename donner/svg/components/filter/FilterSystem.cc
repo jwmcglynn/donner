@@ -15,7 +15,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
   const donner::components::TreeComponent& tree = handle.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
-    if (const auto* primitive = registry.try_get<FilterPrimitiveComponent>(cur)) {
+    if (registry.all_of<FilterPrimitiveComponent>(cur)) {
       // Determine which filter primitive we have.
       if (auto* blur = registry.try_get<FEGaussianBlurComponent>(cur)) {
         effectChain.emplace_back(FilterEffect::Blur{

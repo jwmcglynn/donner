@@ -288,7 +288,7 @@ Transformd LayoutSystem::getEntityFromParentTranform(EntityHandle entity) {
 }
 
 Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity) {
-  if (const auto* sizedElement = entity.try_get<SizedElementComponent>()) {
+  if (entity.all_of<SizedElementComponent>()) {
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, nullptr);
 
     const ComputedSizedElementComponent& computedSizedElement =
