@@ -1,29 +1,36 @@
-# Donner, a modern SVG rendering library in C++
+# Donner SVG, a modern SVG rendering library in C++
 
 [![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC) [![Code coverage %](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner) ![Product lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.svg) ![Test lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc-tests.svg)
 ![Comments %](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/comments.svg)
 
-Donner is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
+Donner SVG is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
+
+Donner is nearing a 0.1 release, which provides core static SVG functionality (without text or filter support). Text, filter, and animation support are on the roadmap.
 
 ![Donner splash image](donner_splash.svg)
 
-Currently, Donner includes:
+Why Donner?
+
+- Donner is security-first and extensively tested
+- Donner provides an extensive and well-documented SVG API surface, which enables inspecting and modifying the SVG in-memory
+- Donner implements the latest standards, SVG2 and CSS3 and aims for high-conformance
+
+Donner supports:
 
 - SVG2 core functionality, such as shapes, fills, strokes, and gradients
 - CSS3 parsing and cascading support, with a hand-rolled library
-- A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree
+- Detailed validation and diagnostics, errors point to the exact location
+- A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree, optimized for performance
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering
 
 Donner renders with Skia, which provides the same high-quality rendering used by Chromium.
 
-Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
-
 ## Supported Elements
 
 [`<circle>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_circle) [`<clipPath>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_clipPath) [`<defs>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_defs) [`<ellipse>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_ellipse) [`<g>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_g) [`<image>`](https://jwmcglynn.github.io/donner/group__xml__image.html) [`<line>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_line) [`<linearGradient>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_linearGradient) [`<marker>`](https://jwmcglynn.github.io/donner/group__xml__marker.html) [`<mask>`](https://jwmcglynn.github.io/donner/group__xml__mask.html) [`<path>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_path) [`<pattern>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_pattern) [`<polygon>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_polygon) [`<polyline>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_polyline) [`<radialGradient>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_radialGradient) [`<rect>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_rect) [`<stop>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_stop) [`<style>`](https://jwmcglynn.github.io/donner/group__xml__style.html) [`<svg>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_svg) [`<use>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_use)
 
-**Not yet supported:** `<a>` `<filter>` `<switch>` `<symbol>` `<text>` `<textPath>` `<tspan>`
+**Not yet supported:** `<a>` `<filter>` `<switch>` `<symbol>` `<text>` `<textPath>` `<tspan>` 
 
 ## Try it out: Render an SVG to PNG
 
