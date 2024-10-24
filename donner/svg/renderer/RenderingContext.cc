@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -27,6 +28,7 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/graph/RecursionGuard.h"
 
 namespace donner::svg::components {
 
@@ -155,6 +157,13 @@ public:
       if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.getRequired());
           resolved.valid()) {
         instance.clipPath = resolved;
+
+        // Get the paths and store them in a ComputedClipPaths component.
+        auto& clipPaths = registry_.emplace<ComputedClipPathsComponent>(styleEntity);
+
+        RecursionGuard guard;
+        guard.add(styleEntity);
+        collectClipPaths(resolved.reference.handle, clipPaths.clipPaths, guard);
       }
     }
 
@@ -260,6 +269,63 @@ public:
     if (lastRenderedEntityIfSubtree) {
       *lastRenderedEntityIfSubtree = lastRenderedEntity_;
     }
+  }
+
+  bool collectClipPaths(EntityHandle clipPathHandle,
+                        std::vector<ComputedClipPathsComponent::ClipPath>& clipPaths,
+                        RecursionGuard guard, int layer = 0) {
+    bool hasAnyChildren = false;
+
+    // Check for clip-path on the <clipPath> itself
+    if (const auto* computedStyle = clipPathHandle.try_get<components::ComputedStyleComponent>()) {
+      const auto& style = computedStyle->properties.value();
+      if (style.clipPath.get()) {
+        if (auto resolved = resolveClipPath(clipPathHandle, style.clipPath.getRequired());
+            resolved.valid()) {
+          if (!guard.hasRecursion(resolved.reference.handle)) {
+            if (!collectClipPaths(resolved.reference.handle, clipPaths,
+                                  guard.with(resolved.reference.handle), layer + 1)) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+
+    donner::components::ForAllChildren(clipPathHandle, [&](EntityHandle child) {
+      if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
+        if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
+          const auto& style = computedStyle->properties.value();
+          if (style.visibility.getRequired() != Visibility::Visible ||
+              style.display.getRequired() == Display::None) {
+            return;
+          }
+
+          // Check to see if this element has its own clip paths set.
+          if (style.clipPath.get()) {
+            if (auto resolved = resolveClipPath(child, style.clipPath.getRequired());
+                resolved.valid()) {
+              if (!guard.hasRecursion(resolved.reference.handle)) {
+                if (!collectClipPaths(resolved.reference.handle, clipPaths,
+                                      guard.with(resolved.reference.handle), layer + 1)) {
+                  // Invalid clip-path reference.
+                  return;
+                }
+              }
+            }
+          }
+
+          hasAnyChildren = true;
+
+          const Transformd entityFromParent = LayoutSystem().getEntityFromWorldTransform(child);
+
+          const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
+          clipPaths.emplace_back(clipPathData->spline, entityFromParent, clipRule, layer);
+        }
+      }
+    });
+
+    return hasAnyChildren;
   }
 
   std::optional<SubtreeInfo> instantiateOffscreenSubtree(EntityHandle shadowHostHandle,
@@ -506,6 +572,7 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
 
 void RenderingContext::invalidateRenderTree() {
   registry_.clear<RenderingInstanceComponent>();
+  registry_.clear<ComputedClipPathsComponent>();
 }
 
 // 1. Setup shadow trees

@@ -341,6 +341,10 @@ Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
     if (const auto* renderingBehavior = registry.try_get<RenderingBehaviorComponent>(lightEntity);
         renderingBehavior && !renderingBehavior->inheritsParentTransform) {
       parentFromWorld = Transformd();
+      if (renderingBehavior->appliesSelfTransform) {
+        parents.push_back(parent);
+      }
+
       break;
     }
 

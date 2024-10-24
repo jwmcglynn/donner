@@ -595,9 +595,13 @@ Vector2d PathSpline::currentPoint() const {
 }
 
 Boxd PathSpline::bounds() const {
+  return transformedBounds(Transformd());
+}
+
+Boxd PathSpline::transformedBounds(const Transformd& pathFromTarget) const {
   UTILS_RELEASE_ASSERT(!empty());
 
-  Boxd box = Boxd::CreateEmpty(points_.front());
+  Boxd box = Boxd::CreateEmpty(pathFromTarget.transformPosition(points_.front()));
   Vector2d currentPoint;
 
   for (size_t i = 0; i < commands_.size(); ++i) {
@@ -607,7 +611,7 @@ Boxd PathSpline::bounds() const {
       case CommandType::LineTo: [[fallthrough]];
       case CommandType::ClosePath: {
         currentPoint = points_[command.pointIndex];
-        box.addPoint(currentPoint);
+        box.addPoint(pathFromTarget.transformPosition(currentPoint));
         break;
       }
 
@@ -617,8 +621,8 @@ Boxd PathSpline::bounds() const {
         const Vector2d& controlPoint2 = points_[command.pointIndex + 1];
         const Vector2d& endPoint = points_[command.pointIndex + 2];
 
-        box.addPoint(startPoint);
-        box.addPoint(endPoint);
+        box.addPoint(pathFromTarget.transformPosition(startPoint));
+        box.addPoint(pathFromTarget.transformPosition(endPoint));
         currentPoint = endPoint;
 
         // Find coefficients.
@@ -642,7 +646,7 @@ Boxd PathSpline::bounds() const {
           if (!NearZero(b.x)) {
             const double t = -c.x / b.x;
             if (t >= 0.0 && t <= 1.0) {
-              box.addPoint(pointAt(i, t));
+              box.addPoint(pathFromTarget.transformPosition(pointAt(i, t)));
             }
           }
         } else {
@@ -651,11 +655,11 @@ Boxd PathSpline::bounds() const {
 
           if (res.hasSolution) {
             if (res.solution[0] >= 0.0 && res.solution[0] <= 1.0) {
-              box.addPoint(pointAt(i, res.solution[0]));
+              box.addPoint(pathFromTarget.transformPosition(pointAt(i, res.solution[0])));
             }
 
             if (res.solution[1] >= 0.0 && res.solution[1] <= 1.0) {
-              box.addPoint(pointAt(i, res.solution[1]));
+              box.addPoint(pathFromTarget.transformPosition(pointAt(i, res.solution[1])));
             }
           }
         }
@@ -665,7 +669,7 @@ Boxd PathSpline::bounds() const {
           if (!NearZero(b.y)) {
             const double t = -c.y / b.y;
             if (t >= 0.0 && t <= 1.0) {
-              box.addPoint(pointAt(i, t));
+              box.addPoint(pathFromTarget.transformPosition(pointAt(i, t)));
             }
           }
         } else {
@@ -674,18 +678,18 @@ Boxd PathSpline::bounds() const {
 
           if (res.hasSolution) {
             if (res.solution[0] >= 0.0 && res.solution[0] <= 1.0) {
-              box.addPoint(pointAt(i, res.solution[0]));
+              box.addPoint(pathFromTarget.transformPosition(pointAt(i, res.solution[0])));
             }
 
             if (res.solution[1] >= 0.0 && res.solution[1] <= 1.0) {
-              box.addPoint(pointAt(i, res.solution[1]));
+              box.addPoint(pathFromTarget.transformPosition(pointAt(i, res.solution[1])));
             }
           }
         }
 
         break;
       }
-      default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+      default: UTILS_RELEASE_ASSERT_MSG(false, "Unhandled command");
     }
   }
 

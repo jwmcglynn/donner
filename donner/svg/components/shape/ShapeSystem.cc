@@ -154,27 +154,15 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
   });
 }
 
+std::optional<Boxd> ShapeSystem::getShapeBounds(EntityHandle handle) {
+  const Transformd worldFromOuterEntityLocal =
+      LayoutSystem().getEntityFromWorldTransform(handle).inverse();
+
+  return getTransformedShapeBounds(handle, worldFromOuterEntityLocal);
+}
+
 std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
-  std::optional<Boxd> overallBounds;
-
-  if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
-    const Boxd bounds =
-        LayoutSystem().getEntityFromWorldTransform(handle).transformBox(computedPath->bounds());
-    overallBounds = bounds;
-  }
-
-  // Iterate over all children and accumulate their bounds.
-  donner::components::ForAllChildren(handle, [this, &overallBounds](EntityHandle child) {
-    if (ComputedPathComponent* computedPath =
-            createComputedPathIfShape(child, FontMetrics(), nullptr)) {
-      const Boxd bounds =
-          LayoutSystem().getEntityFromWorldTransform(child).transformBox(computedPath->bounds());
-      overallBounds = overallBounds ? Boxd::Union(overallBounds.value(), bounds) : bounds;
-    }
-  });
-
-  return overallBounds;
+  return getTransformedShapeBounds(handle, Transformd());
 }
 
 bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,
@@ -195,6 +183,42 @@ bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, const Vector2d& poin
   }
 
   return false;
+}
+
+std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
+                                                           const Transformd& worldFromTarget) {
+  std::optional<Boxd> overallBounds;
+
+  if (const ComputedStyleComponent* style = handle.try_get<ComputedStyleComponent>()) {
+    if (style->properties->display.getRequired() == Display::None) {
+      return std::nullopt;
+    }
+  }
+
+  if (ComputedPathComponent* computedPath =
+          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+    overallBounds = computedPath->transformedBounds(
+        LayoutSystem().getEntityFromWorldTransform(handle) * worldFromTarget);
+  }
+
+  // Iterate over all children and accumulate their bounds.
+  donner::components::ForAllChildrenRecursive(
+      handle, [this, &overallBounds, &worldFromTarget](EntityHandle child) {
+        if (const ComputedStyleComponent* style = child.try_get<ComputedStyleComponent>()) {
+          if (style->properties->display.getRequired() == Display::None) {
+            return;
+          }
+        }
+
+        if (ComputedPathComponent* computedPath =
+                createComputedPathIfShape(child, FontMetrics(), nullptr)) {
+          const Boxd bounds = computedPath->transformedBounds(
+              LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget);
+          overallBounds = overallBounds ? Boxd::Union(overallBounds.value(), bounds) : bounds;
+        }
+      });
+
+  return overallBounds;
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(

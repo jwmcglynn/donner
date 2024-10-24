@@ -18,18 +18,13 @@ struct ComputedPathComponent {
   /// PathSpline used for rendering the shape.
   PathSpline spline;
 
-  /// Cached box of the shape, if it was previously computed. If not, this can be calculated using
-  /// the \ref PathSpline::bounds() method.
-  std::optional<Boxd> cachedBounds;
-
-  /// Returns the bounds of the shape. May calculate the bounds on-demand if they have not been
-  /// previously computed.
-  Boxd bounds() {
-    if (!cachedBounds) {
-      cachedBounds = spline.bounds();
-    }
-
-    return cachedBounds.value();
+  /**
+   * Returns the tight bounds of the shape, transformed to the target coordinate system.
+   *
+   * @param pathFromTarget Transform to transform the path to the target coordinate system.
+   */
+  Boxd transformedBounds(const Transformd& pathFromTarget) {
+    return spline.transformedBounds(pathFromTarget);
   }
 };
 

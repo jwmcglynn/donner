@@ -115,14 +115,14 @@ private:
 
 // TODO(jwmcglynn): Find a better place for this helper
 /**
- * Iterate over all children of the given entity and call the given functor for each child.
- * Iterates in pre-order traversal order.
+ * Iterate over all children of the given entity recursively and call the given functor for each
+ * child. Iterates in pre-order traversal order.
  *
  * @param handle Entity handle to iterate over.
  * @param func Functor to call for each child.
  */
 template <typename Func>
-void ForAllChildren(EntityHandle handle, const Func& func) {
+void ForAllChildrenRecursive(EntityHandle handle, const Func& func) {
   assert(handle.valid());
   Registry& registry = *handle.registry();
 
@@ -142,6 +142,27 @@ void ForAllChildren(EntityHandle handle, const Func& func) {
          child = registry.get<components::TreeComponent>(child).previousSibling()) {
       stack.push_back(child);
     }
+  }
+}
+
+/**
+ * Iterate over all direct children of the given entity and call the given functor for each child.
+ * Iterates in pre-order traversal order.
+ *
+ * @param handle Entity handle to iterate over.
+ * @param func Functor to call for each child.
+ */
+template <typename Func>
+void ForAllChildren(EntityHandle handle, const Func& func) {
+  assert(handle.valid());
+  Registry& registry = *handle.registry();
+
+  // Add all children to the stack
+  auto& treeComponent = handle.get<components::TreeComponent>();
+  for (entt::entity child = treeComponent.firstChild(); child != entt::null;
+       child = registry.get<components::TreeComponent>(child).nextSibling()) {
+    // Call the functor for the current entity
+    func(EntityHandle(registry, child));
   }
 }
 

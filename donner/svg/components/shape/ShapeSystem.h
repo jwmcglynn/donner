@@ -77,7 +77,14 @@ public:
                                    std::vector<parser::ParseError>* outWarnings);
 
   /**
-   * Get the bounds for the given entity, if it has a shape component.
+   * Get the bounds for the given entity in the entity's local space, if it has a shape component.
+   *
+   * @param handle Entity handle to get the bounds for
+   */
+  std::optional<Boxd> getShapeBounds(EntityHandle handle);
+
+  /**
+   * Get the bounds for the given entity in world space, if it has a shape component.
    *
    * @param handle Entity handle to get the bounds for
    */
@@ -105,6 +112,17 @@ public:
 private:
   using AllShapes = entt::type_list<CircleComponent, EllipseComponent, LineComponent, PathComponent,
                                     PolyComponent, RectComponent>;
+
+  /**
+   * Get the tight bounds for the given entity in a specific coordinate space, if it has a shape
+   * component.
+   *
+   * @param handle Entity handle to get the bounds for
+   * @param worldFromTarget Transform to the world coordinate system from the target coordinate
+   * system
+   */
+  std::optional<Boxd> getTransformedShapeBounds(EntityHandle handle,
+                                                const Transformd& worldFromTarget);
 
   ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
                                                       const CircleComponent& circle,

@@ -387,6 +387,86 @@ TEST(PathSpline, BoundsEllipse) {
   EXPECT_THAT(spline.bounds(), Boxd(Vector2d(-1.0, 1.0), Vector2d(3.0, 3.0)));
 }
 
+TEST(PathSpline, TransformedBoundsIdentity) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2d(1.0, 0.0));
+  spline.lineTo(Vector2d(1.0, 1.0));
+  spline.lineTo(Vector2d(0.0, 1.0));
+  spline.closePath();
+
+  const Transformd identityTransform = Transformd();
+  EXPECT_EQ(spline.transformedBounds(identityTransform), spline.bounds());
+}
+
+TEST(PathSpline, TransformedBoundsTranslation) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.lineTo(Vector2d(2.0, 0.0));
+  spline.lineTo(Vector2d(2.0, 2.0));
+  spline.lineTo(Vector2d(0.0, 2.0));
+  spline.closePath();
+
+  const Transformd translationTransform = Transformd::Translate(3.0, 4.0);
+  const Boxd expectedBounds(Vector2d(3.0, 4.0), Vector2d(5.0, 6.0));
+
+  EXPECT_EQ(spline.transformedBounds(translationTransform), expectedBounds);
+}
+
+TEST(PathSpline, TransformedBoundsRotation) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(1.0, 1.0));
+  spline.lineTo(Vector2d(3.0, 1.0));
+  spline.lineTo(Vector2d(3.0, 3.0));
+  spline.lineTo(Vector2d(1.0, 3.0));
+  spline.closePath();
+
+  const Transformd rotationTransform = Transformd::Rotate(MathConstants<double>::kPi / 4);
+  const Boxd transformedBounds = spline.transformedBounds(rotationTransform);
+
+  // Expected bounds after rotation
+  const double sqrt2 = std::sqrt(2.0);
+  const Boxd expectedBounds(Vector2d(-sqrt2, sqrt2), Vector2d(sqrt2, 3 * sqrt2));
+
+  EXPECT_THAT(transformedBounds.topLeft, Vector2Near(-sqrt2, sqrt2));
+  EXPECT_THAT(transformedBounds.bottomRight, Vector2Near(sqrt2, 3 * sqrt2));
+}
+
+TEST(PathSpline, TransformedBoundsScaling) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(-1.0, -1.0));
+  spline.lineTo(Vector2d(1.0, -1.0));
+  spline.lineTo(Vector2d(1.0, 1.0));
+  spline.lineTo(Vector2d(-1.0, 1.0));
+  spline.closePath();
+
+  const Transformd scalingTransform = Transformd::Scale(2.0);
+  const Boxd expectedBounds(Vector2d(-2.0, -2.0), Vector2d(2.0, 2.0));
+
+  EXPECT_EQ(spline.transformedBounds(scalingTransform), expectedBounds);
+}
+
+TEST(PathSpline, TransformedBoundsComplexTransform) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  spline.curveTo(Vector2d(1.0, 2.0), Vector2d(3.0, 2.0), Vector2d(4.0, 0.0));
+
+  const Transformd complexTransform =
+      Transformd::Scale(0.5) *
+      Transformd::Rotate(MathConstants<double>::kHalfPi)  // Rotate by 90 degrees
+      * Transformd::Translate(2.0, -1.0);
+  const Boxd transformedBounds = spline.transformedBounds(complexTransform);
+
+  EXPECT_THAT(transformedBounds.topLeft, Vector2Near(1.25, -1));
+  EXPECT_THAT(transformedBounds.bottomRight, Vector2Near(2, 1));
+}
+
+TEST(PathSpline, TransformedBoundsEmptySpline) {
+  PathSpline spline;
+  const Transformd anyTransform = Transformd();
+  EXPECT_DEATH(spline.transformedBounds(anyTransform), "!empty()");
+}
+
 TEST(PathSpline, StrokeMiterBounds) {
   // Line segment with top making a 60 degree angle; to simplify the math the size is 100pt tall.
   //

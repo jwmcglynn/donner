@@ -14,10 +14,12 @@ namespace donner::svg {
 
 SVGPatternElement SVGPatternElement::CreateOn(EntityHandle handle) {
   CreateEntityOn(handle, Tag, Type);
-  handle
-      .emplace<components::RenderingBehaviorComponent>(
-          components::RenderingBehavior::ShadowOnlyChildren)
-      .inheritsParentTransform = false;
+
+  auto& renderingBehavior = handle.emplace<components::RenderingBehaviorComponent>(
+      components::RenderingBehavior::ShadowOnlyChildren);
+  renderingBehavior.inheritsParentTransform = false;
+  renderingBehavior.appliesSelfTransform = false;
+
   handle.emplace<components::PatternComponent>();
   handle.emplace<components::DoNotInheritFillOrStrokeTag>();
   handle.emplace<components::ViewboxComponent>();

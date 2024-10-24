@@ -24,6 +24,7 @@ cc_library(
     ],
     hdrs = [
         "ClassComponent.h",
+        "ComputedClipPathsComponent.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
         "PathLengthComponent.h",

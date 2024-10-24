@@ -16,6 +16,7 @@
 //
 #include "donner/base/xml/components/TreeComponent.h"  // ForAllChildren
 #include "donner/svg/SVGMarkerElement.h"
+#include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -232,20 +233,12 @@ public:
 
           Transformd userSpaceFromClipPathContent;
           if (ref.units == ClipPathUnits::ObjectBoundingBox) {
-            if (const auto* path =
-                    instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-              // TODO(jwmcglynn): Extend this to get the element bounds for all child elements by
-              // uing ShapeSystem::getShapeWorldBounds()
-              const Boxd bounds = path->spline.bounds();
+            if (auto maybeBounds =
+                    components::ShapeSystem().getShapeBounds(instance.dataHandle(registry))) {
+              const Boxd bounds = maybeBounds.value();
               userSpaceFromClipPathContent =
                   Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
             }
-          }
-
-          if (auto* computedTransform =
-                  ref.reference.handle.try_get<components::ComputedLocalTransformComponent>()) {
-            userSpaceFromClipPathContent =
-                userSpaceFromClipPathContent * computedTransform->entityFromParent;
           }
 
           renderer_.currentCanvas_->save();
@@ -253,26 +246,51 @@ public:
               toSkiaMatrix(userSpaceFromClipPathContent);
 
           SkPath fullPath;
+          SmallVector<SkPath, 5> layeredPaths;
 
           // Iterate over children and add any paths to the clip.
-          // TODO(jwmcglynn): Move path/clip-rule aggregation and to a Computed component
-          // pre-calculation?
-          donner::components::ForAllChildren(ref.reference.handle, [&](EntityHandle child) {
-            if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
-              SkPath path = toSkia(clipPathData->spline);
-              path.transform(skUserSpaceFromClipPathContent);
+          const auto& clipPaths =
+              instance.styleHandle(registry).get<components::ComputedClipPathsComponent>();
 
-              if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
-                const auto& style = computedStyle->properties.value();
-                const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
+          int currentLayer = 0;
+          for (const components::ComputedClipPathsComponent::ClipPath& clipPath :
+               clipPaths.clipPaths) {
+            SkPath path = toSkia(clipPath.path);
+            path.transform(toSkiaMatrix(clipPath.entityFromParent) *
+                           skUserSpaceFromClipPathContent);
 
-                path.setFillType(clipRule == ClipRule::NonZero ? SkPathFillType::kWinding
-                                                               : SkPathFillType::kEvenOdd);
+            path.setFillType(clipPath.clipRule == ClipRule::NonZero ? SkPathFillType::kWinding
+                                                                    : SkPathFillType::kEvenOdd);
+
+            if (clipPath.layer > currentLayer) {
+              layeredPaths.push_back(path);
+              currentLayer = clipPath.layer;
+              continue;
+            } else if (clipPath.layer < currentLayer) {
+              // Need to apply the last layer.
+              assert(!layeredPaths.empty());
+
+              SkPath layerPath = layeredPaths[layeredPaths.size() - 1];
+              layeredPaths.pop_back();
+
+              // Intersect the layer with the current path.
+              layerPath.transform(toSkiaMatrix(clipPath.entityFromParent) *
+                                  skUserSpaceFromClipPathContent);
+              Op(layerPath, path, kIntersect_SkPathOp, &path);
+
+              currentLayer = clipPath.layer;
+
+              if (currentLayer != 0) {
+                // Add this back to layeredPaths.
+                layeredPaths.push_back(path);
+                continue;
               }
-
-              Op(fullPath, path, kUnion_SkPathOp, &fullPath);
             }
-          });
+
+            SkPath& targetPath =
+                layeredPaths.empty() ? fullPath : layeredPaths[layeredPaths.size() - 1];
+            Op(targetPath, path, kUnion_SkPathOp, &targetPath);
+          }
 
           renderer_.currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
         }
@@ -614,10 +632,7 @@ public:
     const Lengthd width = maskComponent.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
     const Lengthd height = maskComponent.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
 
-    const std::optional<Boxd> shapeWorldBounds =
-        components::ShapeSystem().getShapeWorldBounds(target);
-    const Boxd shapeLocalBounds =
-        instance.entityFromWorldTransform.inverse().transformBox(shapeWorldBounds.value_or(Boxd()));
+    const Boxd shapeLocalBounds = components::ShapeSystem().getShapeBounds(target).value_or(Boxd());
 
     // Compute the reference bounds based on maskUnits
     Boxd maskUnitsBounds;

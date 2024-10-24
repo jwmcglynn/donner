@@ -9,10 +9,12 @@ namespace donner::svg {
 SVGMaskElement SVGMaskElement::CreateOn(EntityHandle handle) {
   CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::MaskComponent>();
-  handle
-      .emplace<components::RenderingBehaviorComponent>(
-          components::RenderingBehavior::ShadowOnlyChildren)
-      .inheritsParentTransform = false;
+
+  auto& renderingBehavior = handle.emplace<components::RenderingBehaviorComponent>(
+      components::RenderingBehavior::ShadowOnlyChildren);
+  renderingBehavior.inheritsParentTransform = false;
+  renderingBehavior.appliesSelfTransform = false;
+
   return SVGMaskElement(handle);
 }
 

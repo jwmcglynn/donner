@@ -27,6 +27,8 @@ struct RenderingBehaviorComponent {
   RenderingBehavior behavior = RenderingBehavior::Default;
   /// Whether or not this element inherits its parent's transform.
   bool inheritsParentTransform = true;
+  /// Whether or not this element applies its own transform to children.
+  bool appliesSelfTransform = true;
 
   /// Constructor.
   explicit RenderingBehaviorComponent(RenderingBehavior behavior) : behavior(behavior) {}

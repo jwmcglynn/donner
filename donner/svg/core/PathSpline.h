@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/core/FillRule.h"
 
@@ -242,9 +243,16 @@ public:
   Vector2d currentPoint() const;
 
   /**
-   * Returns the bounding box for this spline.
+   * Returns the bounding box for this spline in local space.
    */
   Boxd bounds() const;
+
+  /**
+   * Returns the tight bounding box for this spline transformed to a target coordinate system.
+   *
+   * @param pathFromTarget Transform to transform the path to the target coordinate system.
+   */
+  Boxd transformedBounds(const Transformd& pathFromTarget) const;
 
   /**
    * Get the bounds of critical points created by miter joints when applying a stroke to this
