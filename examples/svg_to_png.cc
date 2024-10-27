@@ -59,6 +59,8 @@ int main(int argc, char* argv[]) {
   SVGParser::Options options;
   // Allow data-name attributes without generating a warning.
   options.disableUserAttributes = false;
+  // Allow under-development features, such as <filter>
+  options.enableExperimental = true;
 
   std::vector<ParseError> warnings;
   // warnings and options are optional, call ParseSVG(fileData) to use defaults and ignore warnings.

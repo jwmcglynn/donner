@@ -7,10 +7,12 @@
  * warnings. Saves the output to `output.png`.
  *
  * ```
- * USAGE: renderer_tool <filename> [--quiet]
+ * USAGE: renderer_tool <filename> [--quiet] [--verbose] [--experimental]
  *
  *  filename: The SVG file to render.
  *  --quiet: Do not output the parsed tree or warnings.
+ *  --verbose: Enable verbose rendering output.
+ *  --experimental: Enable experimental features.
  * ```
  */
 #include <chrono>
@@ -146,6 +148,8 @@ extern "C" int main(int argc, char* argv[]) {
     std::cout << "\n";
     std::cout << "  filename: The SVG file to render.\n";
     std::cout << "  --quiet: Do not output the parsed tree or warnings.\n";
+    std::cout << "  --verbose: Enable verbose rendering output.\n";
+    std::cout << "  --experimental: Enable experimental features.\n";
     std::cout << "\n";
     std::cout << "This will output the parsed tree and render the SVG to a file named 'output.png' "
                  "in the working directory\n";
@@ -156,11 +160,14 @@ extern "C" int main(int argc, char* argv[]) {
   std::string filename;
   bool quiet = false;
   bool verbose = false;
+  bool experimental = false;
   for (int i = 1; i < argc; ++i) {
     if (argv[i] == std::string_view("--quiet")) {
       quiet = true;
     } else if (argv[i] == std::string_view("--verbose")) {
       verbose = true;
+    } else if (argv[i] == std::string_view("--experimental")) {
+      experimental = true;
     } else {
       filename = argv[i];
     }
@@ -186,12 +193,14 @@ extern "C" int main(int argc, char* argv[]) {
   file.read(fileData.data(), fileLength);
 
   std::vector<parser::ParseError> warnings;
-  parser::SVGParser::Options xmlOptions;
+  parser::SVGParser::Options svgOptions;
+  svgOptions.enableExperimental = experimental;
+
   auto resourceLoader =
       std::make_unique<SandboxedFileResourceLoader>(std::filesystem::current_path(), filename);
 
   Trace traceParse("Parse");
-  auto maybeResult = parser::SVGParser::ParseSVG(fileData, quiet ? nullptr : &warnings, xmlOptions,
+  auto maybeResult = parser::SVGParser::ParseSVG(fileData, quiet ? nullptr : &warnings, svgOptions,
                                                  std::move(resourceLoader));
   traceParse.stop();
 
