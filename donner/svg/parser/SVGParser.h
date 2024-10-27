@@ -48,6 +48,14 @@ public:
      * To support rendering documents that use user-defined attributes, set this to false.
      */
     bool disableUserAttributes = true;
+
+    /**
+     * Enable experimental or incomplete features. This gates features which are not yet fully
+     * implemented and do not meet the quality and stability bar of the rest of the project.
+     *
+     * This currently gates \ref xml_filter, which has very limited support.
+     */
+    bool enableExperimental = false;
   };
 
   /**

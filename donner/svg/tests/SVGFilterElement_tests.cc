@@ -36,8 +36,16 @@ MATCHER_P(FilterHas, matchers, "") {
 
 }  // namespace
 
+TEST(SVGFilterElementTests, FeatureDisabled) {
+  auto element = instantiateSubtreeElement("<filter />");
+  EXPECT_EQ(element->type(), ElementType::Unknown);
+}
+
 TEST(SVGFilterElementTests, Defaults) {
-  auto filter = instantiateSubtreeElementAs<SVGFilterElement>("<filter />");
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
+  auto filter = instantiateSubtreeElementAs<SVGFilterElement>("<filter />", options);
   EXPECT_THAT(filter, FilterHas(AllOf(XEq(-10.0, Lengthd::Unit::Percent),      //
                                       YEq(-10.0, Lengthd::Unit::Percent),      //
                                       WidthEq(120.0, Lengthd::Unit::Percent),  //
@@ -48,8 +56,11 @@ TEST(SVGFilterElementTests, Defaults) {
 }
 
 TEST(SVGFilterElementTests, SetRect) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
   auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
-      R"(<filter x="10" y="20" width="30" height="40" />)");
+      R"(<filter x="10" y="20" width="30" height="40" />)", options);
   EXPECT_THAT(filter, FilterHas(AllOf(XEq(10.0, Lengthd::Unit::None),      //
                                       YEq(20.0, Lengthd::Unit::None),      //
                                       WidthEq(30.0, Lengthd::Unit::None),  //
@@ -57,51 +68,65 @@ TEST(SVGFilterElementTests, SetRect) {
 }
 
 TEST(SVGFilterElementTests, FilterUnits) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
   {
-    auto filter =
-        instantiateSubtreeElementAs<SVGFilterElement>(R"(<filter filterUnits="userSpaceOnUse" />)");
+    auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
+        R"(<filter filterUnits="userSpaceOnUse" />)", options);
     EXPECT_THAT(filter->filterUnits(), testing::Eq(FilterUnits::UserSpaceOnUse));
   }
 
   {
     auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
-        R"(<filter filterUnits="objectBoundingBox" />)");
+        R"(<filter filterUnits="objectBoundingBox" />)", options);
     EXPECT_THAT(filter->filterUnits(), testing::Eq(FilterUnits::ObjectBoundingBox));
   }
 
   // An invalid option will go back to the default.
   {
-    auto filter =
-        instantiateSubtreeElementAs<SVGFilterElement>(R"(<filter filterUnits="invalid" />)");
+    auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
+        R"(<filter filterUnits="invalid" />)", options);
     EXPECT_THAT(filter->filterUnits(), testing::Eq(FilterUnits::Default));
   }
 }
 
 TEST(SVGFilterElementTests, PrimitiveUnits) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
   {
     auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
-        R"(<filter primitiveUnits="userSpaceOnUse" />)");
+        R"(<filter primitiveUnits="userSpaceOnUse" />)", options);
     EXPECT_THAT(filter->primitiveUnits(), testing::Eq(PrimitiveUnits::UserSpaceOnUse));
   }
 
   {
     auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
-        R"(<filter primitiveUnits="objectBoundingBox" />)");
+        R"(<filter primitiveUnits="objectBoundingBox" />)", options);
     EXPECT_THAT(filter->primitiveUnits(), testing::Eq(PrimitiveUnits::ObjectBoundingBox));
   }
 
   // An invalid option will go back to the default.
   {
-    auto filter =
-        instantiateSubtreeElementAs<SVGFilterElement>(R"(<filter primitiveUnits="invalid" />)");
+    auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
+        R"(<filter primitiveUnits="invalid" />)", options);
     EXPECT_THAT(filter->primitiveUnits(), testing::Eq(PrimitiveUnits::Default));
   }
 }
 
 // TODO: Move to another file
+TEST(SVGFEGaussianBlurElement, FeatureDisabled) {
+  auto element = instantiateSubtreeElement("<feGaussianBlur />");
+  EXPECT_EQ(element->type(), ElementType::Unknown);
+}
+
+// TODO: Move to another file
 TEST(SVGFEGaussianBlurElement, SetStdDeviation) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
   auto blur = instantiateSubtreeElementAs<SVGFEGaussianBlurElement>(
-      "<feGaussianBlur stdDeviation=\"3\" />");
+      "<feGaussianBlur stdDeviation=\"3\" />", options);
   EXPECT_EQ(blur->stdDeviationX(), 3.0);
   EXPECT_EQ(blur->stdDeviationY(), 3.0);
 }

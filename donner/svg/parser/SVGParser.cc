@@ -117,6 +117,15 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
   return std::move(element);
 }
 
+template <typename T>
+constexpr bool IsExperimental() {
+  if constexpr (requires { T::IsExperimental; }) {
+    return T::IsExperimental;
+  } else {
+    return false;
+  }
+}
+
 }  // namespace
 
 class SVGParserImpl {
@@ -137,12 +146,23 @@ public:
   ParseResult<SVGElement> createElement(const XMLQualifiedNameRef& tagName, const XMLNode& node,
                                         entt::type_list<Types...>) {
     if constexpr (I != sizeof...(Types)) {
+      using ElementT = std::tuple_element<I, std::tuple<Types...>>::type;
+
       // TODO: A faster way to lookup Uris
       if (node.getNamespaceUri(tagName.namespacePrefix) == "http://www.w3.org/2000/svg" &&
-          tagName.name == std::tuple_element<I, std::tuple<Types...>>::type::Tag) {
-        auto element =
-            std::tuple_element<I, std::tuple<Types...>>::type::CreateOn(node.entityHandle());
-        return ParseAttributes(context_, element, node);
+          tagName.name == ElementT::Tag) {
+        if constexpr (IsExperimental<ElementT>()) {
+          if (context_.options().enableExperimental) {
+            auto element = ElementT::CreateOn(node.entityHandle());
+            return ParseAttributes(context_, element, node);
+          } else {
+            auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
+            return ParseAttributes(context_, element, node);
+          }
+        } else {
+          auto element = ElementT::CreateOn(node.entityHandle());
+          return ParseAttributes(context_, element, node);
+        }
       }
 
       return createElement<I + 1>(tagName, node, entt::type_list<Types...>());

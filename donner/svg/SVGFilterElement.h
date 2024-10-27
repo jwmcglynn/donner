@@ -67,6 +67,8 @@ public:
   static constexpr ElementType Type = ElementType::Filter;
   /// XML tag name, \ref xml_filter.
   static constexpr std::string_view Tag{"filter"};
+  /// This is an experimental/incomplete feature.
+  static constexpr bool IsExperimental = true;
 
   /**
    * Create a new \ref xml_filter element.
