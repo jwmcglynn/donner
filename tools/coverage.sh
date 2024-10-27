@@ -37,6 +37,14 @@ if ! which genhtml > /dev/null; then
     exit 1
 fi
 
+# Error if java is not found
+if ! which java > /dev/null; then
+    echo "ERROR: Java not found. Please install a Java runtime environment (JRE)"
+    echo "On Ubuntu/Debian: sudo apt install default-jre"
+    echo "On macOS: brew install java"
+    exit 1
+fi
+
 JAVA_HOME=$(dirname $(dirname $(which java)))
 
 (

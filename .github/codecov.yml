@@ -7,3 +7,10 @@ coverage:
       default:
         only_pulls: true
         informational: true
+parsers:
+  gcov:
+    branch_detection:
+      conditional: no
+      loop: yes
+      method: no
+      macro: no
