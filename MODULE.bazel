@@ -114,7 +114,7 @@ llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm", 
 
 llvm.toolchain(
     name = "llvm_toolchain",
-    llvm_version = "19.1.0",  # Note that this doesn't support aarch64 linux, for that use 18.1.8
+    llvm_version = "18.1.8",  # Note that this doesn't support aarch64 linux, for that use 18.1.8
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 
