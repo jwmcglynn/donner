@@ -50,7 +50,7 @@ JAVA_HOME=$(dirname $(dirname $(which java)))
 (
   cd $(bazel info workspace)
 
-  GENHTML_OPTIONS="--highlight --legend --branch-coverage --output-directory coverage-report"
+  GENHTML_OPTIONS="--highlight --legend --branch-coverage --ignore-errors category --output-directory coverage-report"
 
   if [ "$QUIET" = true ]; then
     bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $TARGETS
