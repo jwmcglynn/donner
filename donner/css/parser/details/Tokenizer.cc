@@ -183,7 +183,7 @@ static std::tuple<char32_t, int> consumeEscapedCodepoint(std::string_view remain
     return {number, i};
   } else {
     if (remaining[0] != '\0') {
-      const auto [codepoint, bytesConsumed] = base::Utf8::NextCodepoint(remaining);
+      const auto [codepoint, bytesConsumed] = base::Utf8::NextCodepointLenient(remaining);
       return {base::Utf8::IsValidCodepoint(codepoint) ? codepoint
                                                       : base::Utf8::kUnicodeReplacementCharacter,
               bytesConsumed};

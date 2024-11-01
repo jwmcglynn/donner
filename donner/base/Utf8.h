@@ -12,7 +12,7 @@ public:
   /// U+FFFD REPLACEMENT CHARACTER (�)
   static constexpr char32_t kUnicodeReplacementCharacter = 0xFFFD;
 
-  /// The greatest codepoint defined by unicode, per
+  /// The greatest codepoint defined by Unicode, per
   /// https://www.w3.org/TR/css-syntax-3/#maximum-allowed-code-point
   static constexpr char32_t kUnicodeMaximumAllowedCodepoint = 0x10FFFF;
 
@@ -25,6 +25,9 @@ public:
     return (ch <= kUnicodeMaximumAllowedCodepoint && !IsSurrogateCodepoint(ch));
   }
 
+  /// Determines the length in bytes of a UTF-8 encoded character based on its leading byte.
+  /// @param leadingCh The leading byte of the UTF-8 character.
+  /// @return The number of bytes in the UTF-8 character, or 0 if invalid.
   static inline int SequenceLength(char leadingCh) {
     const uint8_t maskedCh = static_cast<uint8_t>(leadingCh);
     if (maskedCh < 0b10000000) {
@@ -40,36 +43,102 @@ public:
     }
   }
 
-  [[maybe_unused]] static inline std::tuple<char32_t, int> NextCodepoint(std::string_view str) {
+  /**
+   * Decodes the next UTF-8 codepoint from the input string, without validating if it is valid.
+   * If the string is empty or contains insufficient bytes, returns a replacement codepoint.
+   *
+   * @param str The input string_view from which to read the codepoint.
+   * @return A tuple containing the decoded Unicode codepoint and the number of bytes consumed.
+   */
+  [[maybe_unused]] static inline std::tuple<char32_t, int> NextCodepointLenient(
+      std::string_view str) {
+    if (str.empty()) {
+      return {kUnicodeReplacementCharacter, 0};
+    }
+
     const int codepointSize = SequenceLength(str[0]);
-    if (codepointSize > str.size()) {
-      return {kUnicodeReplacementCharacter, str.size()};
+    if (codepointSize == 0 || codepointSize > static_cast<int>(str.size())) {
+      return {kUnicodeReplacementCharacter, 1};
     }
 
-    const uint8_t* c = reinterpret_cast<const uint8_t*>(str.data());  // NOLINT: Intentional cast
-
+    char32_t codepoint = 0;
     switch (codepointSize) {
-      default:
-      case 0: return {kUnicodeReplacementCharacter, 1};
-      case 1: return {c[0], 1};
-      case 2:
-        return {((c[0] & 0b00011111) << 6)  //
-                    | (c[1] & 0b00111111),
-                2};
+      case 1: codepoint = str[0]; break;
+      case 2: codepoint = ((str[0] & 0b00011111) << 6) | (str[1] & 0b00111111); break;
       case 3:
-        return {((c[0] & 0b00001111) << 12)       //
-                    | ((c[1] & 0b00111111) << 6)  //
-                    | (c[2] & 0b00111111),
-                3};
+        codepoint =
+            ((str[0] & 0b00001111) << 12) | ((str[1] & 0b00111111) << 6) | (str[2] & 0b00111111);
+        break;
       case 4:
-        return {((c[0] & 0b00001111) << 17)        //
-                    | ((c[1] & 0b00111111) << 12)  //
-                    | ((c[2] & 0b00111111) << 6)   //
-                    | (c[3] & 0b00111111),
-                3};
+        codepoint = ((str[0] & 0b00000111) << 18) | ((str[1] & 0b00111111) << 12) |
+                    ((str[2] & 0b00111111) << 6) | (str[3] & 0b00111111);
+        break;
+      default: return {kUnicodeReplacementCharacter, 1};
     }
+
+    return {codepoint, codepointSize};
   }
 
+  /**
+   * Decodes the next UTF-8 codepoint from the input string, while strictly validating continuation
+   * bytes and sequence lengths. If an invalid codepoint is encountered, the function returns
+   * the Unicode replacement character (\xFFFD) and consumes the invalid codepoint.
+   *
+   * @param str The input string_view from which to read the codepoint.
+   * @return A tuple containing the decoded Unicode codepoint and the number of bytes consumed.
+   */
+  [[maybe_unused]] static inline std::tuple<char32_t, int> NextCodepoint(std::string_view str) {
+    if (str.empty()) {
+      return {kUnicodeReplacementCharacter, 0};
+    }
+
+    const int codepointSize = SequenceLength(str[0]);
+    if (codepointSize == 0 || codepointSize > static_cast<int>(str.size())) {
+      return {kUnicodeReplacementCharacter, 1};
+    }
+
+    // Validate continuation bytes
+    for (int i = 1; i < codepointSize; ++i) {
+      if ((str[i] & 0b11000000) != 0b10000000) {
+        return {kUnicodeReplacementCharacter, 1};
+      }
+    }
+
+    char32_t codepoint = 0;
+
+    switch (codepointSize) {
+      case 1: codepoint = str[0]; break;
+      case 2: codepoint = ((str[0] & 0b00011111) << 6) | (str[1] & 0b00111111); break;
+      case 3:
+        codepoint =
+            ((str[0] & 0b00001111) << 12) | ((str[1] & 0b00111111) << 6) | (str[2] & 0b00111111);
+        break;
+      case 4:
+        codepoint = ((str[0] & 0b00000111) << 18) | ((str[1] & 0b00111111) << 12) |
+                    ((str[2] & 0b00111111) << 6) | (str[3] & 0b00111111);
+        break;
+      default: return {kUnicodeReplacementCharacter, 1};
+    }
+
+    // Check for overlong sequences
+    if ((codepointSize == 2 && codepoint < 0x80) || (codepointSize == 3 && codepoint < 0x800) ||
+        (codepointSize == 4 && codepoint < 0x10000)) {
+      return {kUnicodeReplacementCharacter, 1};
+    }
+
+    // Check for invalid codepoints
+    if (!IsValidCodepoint(codepoint)) {
+      return {kUnicodeReplacementCharacter, 1};
+    }
+
+    return {codepoint, codepointSize};
+  }
+
+  /// Appends the UTF-8 encoding of the given Unicode codepoint to the output iterator.
+  /// @tparam OutputIterator An output iterator that accepts `char` elements.
+  /// @param ch The Unicode codepoint to encode and append.
+  /// @param it The output iterator to which the encoded bytes are appended.
+  /// @return An iterator pointing to the element past the last inserted element.
   template <std::output_iterator<char> OutputIterator>
   static inline OutputIterator Append(char32_t ch, OutputIterator it) {
     assert(IsValidCodepoint(ch));

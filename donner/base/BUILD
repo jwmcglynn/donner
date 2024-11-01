@@ -51,6 +51,7 @@ cc_test(
         "tests/SmallVector_tests.cc",
         "tests/StringUtils_tests.cc",
         "tests/Transform_tests.cc",
+        "tests/Utf8_tests.cc",
         "tests/Utils_tests.cc",
         "tests/Vector2_tests.cc",
     ],
