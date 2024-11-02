@@ -13,11 +13,11 @@ new file mode 100644
 index 00000000..80ef632a
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,52 @@
 +""" Builds imgui.
 +"""
 +
-+load("@rules_cc//cc:defs.bzl", "cc_library")
++load("@rules_cc//cc:defs.bzl", "cc_library", "cc_binary")
 +
 +package(default_visibility = ["//visibility:public"])
 +
@@ -51,12 +51,27 @@ index 00000000..80ef632a
 +        "@glfw",
 +    ],
 +)
++
++cc_binary(
++    name = "imgui_demo",
++    srcs = [
++        "imgui_demo.cpp",
++        "examples/example_glfw_opengl3/main.cpp",
++    ],
++    linkopts = ["-framework", "OpenGL", "-framework", "Cocoa", "-framework", "IOKit", "-framework", "CoreVideo"],
++    visibility = ["//visibility:public"],
++    deps = [
++        ":imgui",
++        "@donner//third_party/glad",
++        "@glfw",
++    ],
++)
 diff --git a/MODULE.bazel b/MODULE.bazel
 new file mode 100644
 index 00000000..4c85d76a
 --- /dev/null
 +++ b/MODULE.bazel
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,14 @@
 +module(
 +    name = "imgui",
 +    version = "0.0.0",
@@ -65,5 +80,11 @@ index 00000000..4c85d76a
 +bazel_dep(name = "rules_cc", version = "0.0.9")
 +bazel_dep(name = "platforms", version = "0.0.10")
 +bazel_dep(name = "glfw", version = "0.0.0")
++
++bazel_dep(name = "donner", version = "0.0.0")
++local_path_override(
++    module_name = "donner",
++    path = "..",
++)
 -- 
 2.39.3 (Apple Git-146)
