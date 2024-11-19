@@ -7,7 +7,7 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/element/tests/FakeElement.h"
-#include "donner/base/parser/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/parser/SelectorParser.h"

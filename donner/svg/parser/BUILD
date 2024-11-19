@@ -115,7 +115,6 @@ cc_test(
         ":parser",
         ":parser_core",
         "//donner/base:base_test_utils",
-        "//donner/base/parser:parser_test_utils",
         "//donner/css/parser",
         "//donner/svg/core/tests:core_test_utils",
         "//donner/svg/renderer:renderer_utils",

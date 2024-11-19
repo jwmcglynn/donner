@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/parser/ParseError.h"
+#include "donner/base/ParseError.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 
 namespace donner::svg::components {

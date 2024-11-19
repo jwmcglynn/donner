@@ -1,6 +1,6 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
-#include "donner/base/parser/ParseError.h"
+#include "donner/base/ParseError.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/resources/ImageLoader.h"
 

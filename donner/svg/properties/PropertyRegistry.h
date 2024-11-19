@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
-#include "donner/base/parser/ParseResult.h"
+#include "donner/base/ParseResult.h"
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
 #include "donner/svg/components/filter/FilterEffect.h"

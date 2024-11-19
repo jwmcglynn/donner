@@ -31,7 +31,6 @@ donner_cc_library(
         ":xml_qualified_name",
         "//donner/base",
         "//donner/base/parser",
-        "//donner/base/parser:file_offset",
         "//donner/base/parser:line_offsets",
         "//donner/base/xml/components",
     ],
@@ -55,7 +54,7 @@ cc_test(
     ],
     deps = [
         ":xml",
-        "//donner/base/parser:parser_test_utils",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

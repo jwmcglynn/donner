@@ -3,9 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "donner/base/RcString.h"
-#include "donner/base/parser/ParseResult.h"
-#include "donner/base/parser/tests/ParseResultTestUtils.h"
+#include "donner/base/ParseResult.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 

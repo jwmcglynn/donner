@@ -2,7 +2,7 @@
 
 #include <gmock/gmock.h>
 
-#include "donner/base/parser/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/css/Selector.h"
 #include "donner/css/parser/SelectorParser.h"

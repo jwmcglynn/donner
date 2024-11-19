@@ -5,12 +5,12 @@
 #include <cstdlib>  // For std::size_t
 #include <string_view>
 
+#include "donner/base/FileOffset.h"
+#include "donner/base/ParseError.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
-#include "donner/base/parser/FileOffset.h"
 #include "donner/base/parser/IntegerParser.h"
 #include "donner/base/parser/LineOffsets.h"
-#include "donner/base/parser/ParseError.h"
 #include "donner/base/parser/details/ParserBase.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"

@@ -3,7 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "donner/base/parser/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
@@ -26,7 +26,8 @@ MATCHER_P3(ParseWarningIs, line, offset, errorMessageMatcher, "") {
 namespace donner::svg::parser {
 
 TEST(SVGParser, Simple) {
-  const std::string_view simpleXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  const std::string_view simpleXml(
+      R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
           </svg>)");
 
   std::vector<ParseError> warnings;
@@ -36,7 +37,8 @@ TEST(SVGParser, Simple) {
 }
 
 TEST(SVGParser, Style) {
-  const std::string_view simpleXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  const std::string_view simpleXml(
+      R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
            <rect x="5" y="5" width="90" height="90" stroke="red" />
            <rect x="10" y="10" width="80" height="80" fill="green" />
          </svg>)");
@@ -100,7 +102,8 @@ TEST(SVGParser, XmlParseErrors) {
   }
 
   {
-    const std::string_view badXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+    const std::string_view badXml(
+        R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
              <path></invalid>
            </svg>)");
 
@@ -111,7 +114,8 @@ TEST(SVGParser, XmlParseErrors) {
 }
 
 TEST(SVGParser, Warning) {
-  const std::string_view simpleXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  const std::string_view simpleXml(
+      R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
            <path d="M 100 100 h 2!" />
          </svg>)");
 
@@ -137,7 +141,8 @@ TEST(SVGParser, InvalidXmlns) {
 }
 
 TEST(SVGParser, PrefixedXmlns) {
-  const std::string_view xmlnsXml(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+  const std::string_view xmlnsXml(
+      R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
            <svg:path d="M 100 100 h 2" />
          </svg:svg>)");
 
@@ -149,7 +154,8 @@ TEST(SVGParser, PrefixedXmlns) {
 
 TEST(SVGParser, MismatchedNamespace) {
   {
-    const std::string_view mismatchedSvgXmlnsXml(R"(<svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+    const std::string_view mismatchedSvgXmlnsXml(
+        R"(<svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
              <svg:path d="M 100 100 h 2" />
            </svg>)");
 
@@ -161,7 +167,8 @@ TEST(SVGParser, MismatchedNamespace) {
   }
 
   {
-    const std::string_view mismatchedXmlnsXml(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+    const std::string_view mismatchedXmlnsXml(
+        R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
              <path d="M 100 100 h 2" />
            </svg:svg>)");
 
@@ -187,7 +194,8 @@ TEST(SVGParser, MismatchedNamespace) {
   // }
 
   {
-    const std::string_view invalidAttributeNsXml(R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
+    const std::string_view invalidAttributeNsXml(
+        R"(<svg:svg viewBox="0 0 200 200" xmlns:svg="http://www.w3.org/2000/svg">
              <svg:path svg:d="M 100 100 h 2" />
            </svg:svg>)");
 

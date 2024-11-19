@@ -5,8 +5,8 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/FileOffset.h"
 #include "donner/base/RcString.h"
-#include "donner/base/parser/FileOffset.h"
 #include "donner/css/Token.h"
 
 namespace donner::css {

@@ -4,7 +4,7 @@
 #include <ostream>
 #include <string>
 
-#include "donner/base/parser/FileOffset.h"
+#include "donner/base/FileOffset.h"
 
 namespace donner::base::parser {
 

@@ -4,8 +4,8 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseError.h"
 #include "donner/base/Vector2.h"
-#include "donner/base/parser/ParseError.h"
 
 namespace donner::svg::components {
 

@@ -12,7 +12,7 @@
 
 namespace donner::base::parser {
 
-// Forward declaration, #include "donner/base/parser/ParseResult.h"
+// Forward declaration, #include "donner/base/ParseResult.h"
 template <typename T>
 class ParseResult;
 

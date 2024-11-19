@@ -4,12 +4,18 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
     name = "base",
+    srcs = [
+        "ParseError.cc",
+    ],
     hdrs = [
         "Box.h",
         "EcsRegistry.h",
+        "FileOffset.h",
         "Length.h",
         "MathUtils.h",
         "OptionalRef.h",
+        "ParseError.h",
+        "ParseResult.h",
         "RcString.h",
         "RcStringOrRef.h",
         "RelativeLengthMetrics.h",
@@ -31,6 +37,7 @@ donner_cc_library(
     testonly = 1,
     hdrs = [
         "tests/BaseTestUtils.h",
+        "tests/ParseResultTestUtils.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -46,6 +53,8 @@ cc_test(
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
         "tests/OptionalRef_tests.cc",
+        "tests/ParseError_tests.cc",
+        "tests/ParseResult_tests.cc",
         "tests/RcStringOrRef_tests.cc",
         "tests/RcString_tests.cc",
         "tests/SmallVector_tests.cc",
