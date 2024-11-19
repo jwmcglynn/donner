@@ -9,7 +9,7 @@
 embeddable SVG support into apps and games, enabling browser-level functionalit
  without the browser."""
 
-module(name = "donner")
+module(name = "donner", version = "0.1")
 
 local_repository = use_repo_rule("//third_party:bazel/local.bzl", "local_repository")
 new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local_repository")
