@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <istream>
 
-#include "donner/base/parser/ParseResult.h"
+#include "donner/base/ParseResult.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"

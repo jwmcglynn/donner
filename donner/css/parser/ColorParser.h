@@ -4,7 +4,7 @@
 #include <span>
 #include <string_view>
 
-#include "donner/base/parser/ParseResult.h"
+#include "donner/base/ParseResult.h"
 #include "donner/css/Color.h"
 #include "donner/css/ComponentValue.h"
 

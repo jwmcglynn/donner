@@ -2,8 +2,8 @@
 /// @file
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseError.h"
 #include "donner/base/RcString.h"
-#include "donner/base/parser/ParseError.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/graph/RecursionGuard.h"

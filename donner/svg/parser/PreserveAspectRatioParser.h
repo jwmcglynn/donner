@@ -3,7 +3,7 @@
 
 #include <string_view>
 
-#include "donner/base/parser/ParseResult.h"
+#include "donner/base/ParseResult.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg::parser {

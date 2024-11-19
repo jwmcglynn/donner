@@ -3,8 +3,8 @@
 
 #include <optional>
 
+#include "donner/base/ParseError.h"
 #include "donner/base/Utils.h"
-#include "donner/base/parser/ParseError.h"
 
 namespace donner::base::parser {
 

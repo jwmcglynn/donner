@@ -46,7 +46,6 @@ cc_test(
     deps = [
         ":layout_system",
         "//donner/base:base_test_utils",
-        "//donner/base/parser:parser_test_utils",
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
     ],

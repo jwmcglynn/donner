@@ -1,7 +1,7 @@
 #include "donner/svg/parser/CssTransformParser.h"
 
+#include "donner/base/FileOffset.h"
 #include "donner/base/MathUtils.h"
-#include "donner/base/parser/FileOffset.h"
 #include "donner/svg/parser/AngleParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 

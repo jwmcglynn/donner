@@ -1,6 +1,6 @@
 #include "donner/base/xml/XMLNode.h"
 
-#include "donner/base/parser/FileOffset.h"
+#include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"

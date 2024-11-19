@@ -2,9 +2,9 @@
 
 #include <vector>
 
-#include "donner/base/parser/FileOffset.h"
+#include "donner/base/FileOffset.h"
+#include "donner/base/ParseError.h"
 #include "donner/base/parser/LineOffsets.h"
-#include "donner/base/parser/ParseError.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/parser/SVGParser.h"

@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/parser/ParseResult.h"
+#include "donner/base/ParseResult.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/Specificity.h"
 #include "donner/svg/ElementType.h"

@@ -1,4 +1,4 @@
-#include "donner/base/parser/ParseError.h"
+#include "donner/base/ParseError.h"
 
 namespace donner::base::parser {
 

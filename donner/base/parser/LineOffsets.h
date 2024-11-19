@@ -4,8 +4,8 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/FileOffset.h"
 #include "donner/base/Utils.h"
-#include "donner/base/parser/FileOffset.h"
 
 namespace donner::base::parser {
 

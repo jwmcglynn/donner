@@ -8,7 +8,6 @@ cc_test(
     ],
     deps = [
         "//donner/base:base_test_utils",
-        "//donner/base/parser:parser_test_utils",
         "//donner/svg",
         "//donner/svg/properties",
         "@com_google_gtest//:gtest_main",

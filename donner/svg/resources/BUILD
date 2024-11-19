@@ -48,7 +48,7 @@ cc_test(
     srcs = ["tests/Base64_tests.cc"],
     deps = [
         ":image_loader",
-        "//donner/base/parser:parser_test_utils",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

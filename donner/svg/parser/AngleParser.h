@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/base/parser/ParseResult.h"
+#include "donner/base/ParseResult.h"
 #include "donner/css/ComponentValue.h"
 
 namespace donner::svg::parser {

@@ -3,10 +3,10 @@
 #include <entt/entt.hpp>
 #include <string_view>
 
+#include "donner/base/ParseError.h"
 #include "donner/base/RcString.h"
 #include "donner/base/parser/LengthParser.h"
 #include "donner/base/parser/NumberParser.h"
-#include "donner/base/parser/ParseError.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/css/parser/ValueParser.h"
 #include "donner/svg/AllSVGElements.h"  // IWYU pragma: keep

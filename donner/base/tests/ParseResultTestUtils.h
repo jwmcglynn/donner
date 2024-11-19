@@ -4,7 +4,7 @@
 
 #include <ostream>
 
-#include "donner/base/parser/ParseResult.h"
+#include "donner/base/ParseResult.h"
 
 namespace donner::base::parser {
 
