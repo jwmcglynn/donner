@@ -30,7 +30,7 @@ Donner renders with Skia, which provides the same high-quality rendering used by
 
 [`<circle>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_circle) [`<clipPath>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_clipPath) [`<defs>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_defs) [`<ellipse>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_ellipse) [`<g>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_g) [`<image>`](https://jwmcglynn.github.io/donner/group__xml__image.html) [`<line>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_line) [`<linearGradient>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_linearGradient) [`<marker>`](https://jwmcglynn.github.io/donner/group__xml__marker.html) [`<mask>`](https://jwmcglynn.github.io/donner/group__xml__mask.html) [`<path>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_path) [`<pattern>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_pattern) [`<polygon>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_polygon) [`<polyline>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_polyline) [`<radialGradient>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_radialGradient) [`<rect>`](https://jwmcglynn.github.io/donner/group__elements__basic__shapes.html#xml_rect) [`<stop>`](https://jwmcglynn.github.io/donner/group__elements__paint__servers.html#xml_stop) [`<style>`](https://jwmcglynn.github.io/donner/group__xml__style.html) [`<svg>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_svg) [`<use>`](https://jwmcglynn.github.io/donner/group__elements__structural.html#xml_use)
 
-**Not yet supported:** `<a>` `<filter>` `<switch>` `<symbol>` `<text>` `<textPath>` `<tspan>` 
+**Not yet supported:** `<a>` `<filter>` `<switch>` `<symbol>` `<text>` `<textPath>` `<tspan>`
 
 ## Try it out: Render an SVG to PNG
 
@@ -46,7 +46,7 @@ How it works: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-
 
 ```cpp
 // This is the base SVG we are loading, a simple path containing a line
-std::string_view svgContents(R"(
+const std::string_view svgContents(R"(
   <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
     <path d="M 1 1 L 4 5" stroke="blue" />
   </svg>
