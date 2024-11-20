@@ -6,7 +6,7 @@
 
 using testing::ElementsAre;
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 TEST(LineOffsets, NoLines) {
   {
@@ -104,4 +104,4 @@ TEST(LineOffsets, LineOffsetErrors) {
   }
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

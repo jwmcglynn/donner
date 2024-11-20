@@ -87,8 +87,7 @@ Detailed docs: [svg_tree_interaction.cc](https://jwmcglynn.github.io/donner/svg_
 ## API Demo 2: Rendering a SVG to PNG
 
 ```cpp
-using namespace donner::base;
-using namespace donner::base::parser;
+using namespace donner;
 using namespace donner::svg;
 using namespace donner::svg::parser;
 

@@ -6,7 +6,7 @@
 #include "donner/base/Length.h"
 #include "donner/base/ParseResult.h"
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 /**
  * Parser for CSS `<length-percentage>` strings, such as "10px", "30%", "10em", etc.
@@ -105,4 +105,4 @@ public:
   static std::optional<Lengthd::Unit> ParseUnit(std::string_view str);
 };
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

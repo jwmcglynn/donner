@@ -7,7 +7,7 @@
 
 using testing::HasSubstr;
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 using Result = IntegerParser::Result;
 
@@ -121,4 +121,4 @@ TEST(IntegerParser, HexNoPrefix) {
   EXPECT_THAT(IntegerParser::ParseHex("0X2"), ParseResultIs(Result{0, 1}));
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

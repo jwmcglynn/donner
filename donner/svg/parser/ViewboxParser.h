@@ -25,7 +25,7 @@ public:
    * <min-x>,? <min-y>,? <width>,? <height>
    * ```
    *
-   * Each parameter is a "<number>" type, as parsed by \ref donner::base::parser::NumberParser.
+   * Each parameter is a "<number>" type, as parsed by \ref donner::parser::NumberParser.
    * "<width>" and "<height>" must be positive, but the caller must ensure that they are non-zero;
    * a value of zero should disable rendering of the element.
    *

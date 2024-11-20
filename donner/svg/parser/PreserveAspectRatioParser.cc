@@ -4,7 +4,7 @@
 
 namespace donner::svg::parser {
 
-class PreserveAspectRatioParserImpl : public base::parser::ParserBase {
+class PreserveAspectRatioParserImpl : public donner::parser::ParserBase {
 public:
   PreserveAspectRatioParserImpl(std::string_view str) : ParserBase(str) {}
 

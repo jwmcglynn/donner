@@ -495,8 +495,8 @@ struct Token {
     RcString suffixString;  //!< Raw string of the unit suffix, e.g. 'px'.
     std::optional<Lengthd::Unit>
         suffixUnit;  //!< The parsed unit of the suffix, if known. If the input string has an
-                     //!< invalid suffix, and \ref donner::base::parser::LengthParser failed to
-                     //!< identify it, this will be \c std::nullopt.
+                     //!< invalid suffix, and \ref donner::parser::LengthParser failed to identify
+                     //!< it, this will be \c std::nullopt.
     RcString valueString;  ///< The original string of the \ref value number.
     NumberType type;       ///< The type of number, either integer or floating point.
   };

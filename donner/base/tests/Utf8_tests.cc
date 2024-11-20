@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-namespace donner::base {
+namespace donner {
 
 TEST(CommonUtf8, SequenceLength) {
   for (int i = 0; i < 0x80; ++i) {
@@ -32,4 +32,4 @@ TEST(CommonUtf8, SequenceLength) {
   }
 }
 
-}  // namespace donner::base
+}  // namespace donner

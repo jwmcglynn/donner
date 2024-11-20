@@ -31,14 +31,14 @@ Each component of Donner is designed to be used in isolation, with minimal depen
 
 The parser suite consists of parsers in three layers:
 
-| Namespace                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| \ref donner::base::parser | Parsers for shared data types such as \ref donner::base::parser::NumberParser "NumberParser" and \ref donner::base::parser::LengthParser "LengthParser"                                                                                                                                                                                                                                                                                     |
-| \ref donner::css::parser  | Parsers for various CSS data types, such as the top-level \ref donner::css::parser::StylesheetParser "StylesheetParser" and \ref donner::css::parser::SelectorParser "SelectorParser", as well as internal details such as \ref donner::css::parser::ColorParser "ColorParser".<br><br>These are wrapped in the \ref donner::css::CSS convenience API. Using these lower-level APIs allows for finer-grained control and error propagation. |
-| \ref donner::svg::parser  | Parsers for the SVG XML format, \ref donner::svg::parser::SVGParser "SVGParser", as well as individual parsers for SVG components, such as \ref donner::svg::parser::PathParser "PathParser" and \ref donner::svg::parser::TransformParser "TransformParser".                                                                                                                                                                               |
+| Namespace                | Description                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| \ref donner::parser      | Parsers for shared data types such as \ref donner::parser::NumberParser "NumberParser" and \ref donner::parser::LengthParser "LengthParser"                                                                                                                                                                                                                                                                                                 |
+| \ref donner::css::parser | Parsers for various CSS data types, such as the top-level \ref donner::css::parser::StylesheetParser "StylesheetParser" and \ref donner::css::parser::SelectorParser "SelectorParser", as well as internal details such as \ref donner::css::parser::ColorParser "ColorParser".<br><br>These are wrapped in the \ref donner::css::CSS convenience API. Using these lower-level APIs allows for finer-grained control and error propagation. |
+| \ref donner::svg::parser | Parsers for the SVG XML format, \ref donner::svg::parser::SVGParser "SVGParser", as well as individual parsers for SVG components, such as \ref donner::svg::parser::PathParser "PathParser" and \ref donner::svg::parser::TransformParser "TransformParser".                                                                                                                                                                               |
 
 - \ref donner::svg::parser::SVGParser "SVGParser" depends on [rapidxml_ns](https://github.com/svgpp/rapidxml_ns)
-- \ref donner::base::parser::NumberParser "NumberParser" uses [absl::from_chars](https://abseil.io/about/design/charconv) as `std::from_chars` is not fully implemented in libc++.
+- \ref donner::parser::NumberParser "NumberParser" uses [absl::from_chars](https://abseil.io/about/design/charconv) as `std::from_chars` is not fully implemented in libc++.
 
 ### CSS
 
@@ -112,7 +112,7 @@ The `//donner/base` library contains common utility code used by the other libra
 - \ref donner::Length "Length" - a simple class to represent a length with a specific unit, such as `10px` or `10cm`.
 - and more...
 
-This library also contains common parsers such as \ref donner::base::parser::NumberParser "NumberParser", which can parse a string into a number.
+This library also contains common parsers such as \ref donner::parser::NumberParser "NumberParser", which can parse a string into a number.
 
 The base library has minimal dependencies and the types within it may be suitable for other libraries, however the base library is not publicly exported.
 

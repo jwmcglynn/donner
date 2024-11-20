@@ -6,7 +6,7 @@ namespace donner::svg::parser {
 
 namespace {
 
-class TransformParserImpl : public base::parser::ParserBase {
+class TransformParserImpl : public donner::parser::ParserBase {
 public:
   TransformParserImpl(std::string_view str) : ParserBase(str) {}
 

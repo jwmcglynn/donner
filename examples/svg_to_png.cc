@@ -20,14 +20,14 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererSkia.h"
 
-using namespace donner;
-using namespace donner::svg;
-using namespace donner::svg::parser;
-
 /**
  * Main function, usage: svg_to_png <filename>
  */
 int main(int argc, char* argv[]) {
+  using namespace donner;
+  using namespace donner::svg;
+  using namespace donner::svg::parser;
+
   if (argc != 2) {
     std::cerr << "Unexpected arg count.\n";
     std::cerr << "USAGE: svg_to_png <filename>\n";

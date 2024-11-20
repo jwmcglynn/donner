@@ -3,7 +3,7 @@
 #include <array>
 #include <limits>
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 namespace {
 
@@ -115,4 +115,4 @@ ParseResult<IntegerParser::Result> IntegerParser::ParseHex(std::string_view str)
   return result;
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

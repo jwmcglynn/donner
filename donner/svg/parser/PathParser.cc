@@ -184,16 +184,18 @@ private:
   }
 
   ParseResult<double> readNumber() {
+    using donner::parser::NumberParser;
+
     skipWhitespace();
 
-    auto maybeResult = base::parser::NumberParser::Parse(remaining_);
+    auto maybeResult = NumberParser::Parse(remaining_);
     if (maybeResult.hasError()) {
       ParseError err = std::move(maybeResult.error());
       err.location = err.location.addParentOffset(currentOffset());
       return err;
     }
 
-    const base::parser::NumberParser::Result& result = maybeResult.result();
+    const NumberParser::Result& result = maybeResult.result();
     remaining_.remove_prefix(result.consumedChars);
     return result.number;
   }

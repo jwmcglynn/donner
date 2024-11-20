@@ -5,7 +5,7 @@
 
 #include "donner/base/ParseResult.h"
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 /**
  * Parser for positive integers, either decimal or hexadecimal.
@@ -42,4 +42,4 @@ public:
   static ParseResult<Result> ParseHex(std::string_view str);
 };
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

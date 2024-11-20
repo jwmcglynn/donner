@@ -11,7 +11,7 @@ using testing::Not;
 using testing::Optional;
 using testing::StartsWith;
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 TEST(ParseResult, Value) {
   ParseResult<int> result = []() -> ParseResult<int> { return 42; }();
@@ -188,4 +188,4 @@ TEST(ParseResultTestUtils, ResultAndErrorMatcher) {
   EXPECT_THAT(withError, Not(ParseResultAndError(_, _)));
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

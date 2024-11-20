@@ -9,7 +9,7 @@
 using testing::Eq;
 using testing::Optional;
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 MATCHER_P3(LengthResult, valueMatcher, unitMatcher, consumedChars, "") {
   return testing::ExplainMatchResult(valueMatcher, arg.length.value, result_listener) &&
@@ -162,4 +162,4 @@ TEST(LengthParser, ExtraCharacters) {
   EXPECT_THAT(LengthParser::Parse("8Pc,"), ParseResultIs(LengthResult(8, LengthUnit::Pc, 3)));
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

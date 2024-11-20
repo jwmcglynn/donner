@@ -5,7 +5,7 @@
 
 #include "donner/base/ParseResult.h"
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 /**
  * Base class for parsers, containing common functionality such as maintaining the current
@@ -81,4 +81,4 @@ protected:
   std::string_view remaining_;  // NOLINT: Protected visibility for inheriting parsers to use.
 };
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

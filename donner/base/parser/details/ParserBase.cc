@@ -2,7 +2,7 @@
 
 #include "donner/base/parser/NumberParser.h"
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 ParserBase::ParserBase(std::string_view str) : str_(str), remaining_(str) {}
 
@@ -86,4 +86,4 @@ std::optional<ParseError> ParserBase::readNumbers(std::span<double> resultStorag
   return std::nullopt;
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

@@ -152,7 +152,7 @@ private:
   std::string_view input_;
 
   /// Offsets of the start of each line in the input string.
-  base::parser::LineOffsets lineOffsets_;
+  donner::parser::LineOffsets lineOffsets_;
 
   /// Storage for warnings, may be \c nullptr to disable warnings.
   std::vector<ParseError>* warnings_;

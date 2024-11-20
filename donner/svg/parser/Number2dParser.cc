@@ -13,7 +13,7 @@ static bool isWhitespace(char ch) {
 }  // namespace
 
 ParseResult<Number2dParser::Result> Number2dParser::Parse(std::string_view str) {
-  using base::parser::NumberParser;
+  using donner::parser::NumberParser;
 
   NumberParser::Options options;
   options.forbidOutOfRange = false;
@@ -35,7 +35,7 @@ ParseResult<Number2dParser::Result> Number2dParser::Parse(std::string_view str) 
     return Number2dParser::Result{numberX, numberX, maybeResultX.result().consumedChars};
   }
 
-  const auto maybeResultY = base::parser::NumberParser::Parse(remainingStr, options);
+  const auto maybeResultY = NumberParser::Parse(remainingStr, options);
   if (maybeResultY.hasError()) {
     return ParseError(maybeResultY.error());
   }
