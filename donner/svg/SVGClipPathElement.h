@@ -8,7 +8,6 @@ namespace donner::svg {
 
 /**
  * @page xml_clipPath "<clipPath>"
- * @ingroup elements_structural
  *
  * Defines a clipping path, which is used to clip the rendering of other elements using paths and
  * shapes. The clipping path is defined by the child elements of this element. Compared to

@@ -8,7 +8,6 @@ namespace donner::svg {
 
 /**
  * @page xml_radialGradient "<radialGradient>"
- * @ingroup elements_paint_servers
  *
  * Defines the paint server for a radial gradients.
  *

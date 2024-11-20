@@ -19,7 +19,6 @@ class SVGParser;
 
 /**
  * @page xml_svg "<svg>"
- * @ingroup elements_structural
  *
  * The root element of an SVG document.
  *

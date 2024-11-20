@@ -9,7 +9,6 @@ namespace donner::svg {
 
 /**
  * @page xml_polygon "<polygon>"
- * @ingroup elements_basic_shapes
  *
  * Creates a closed polygon with straight lines between the points, using the `points` attribute.
  *

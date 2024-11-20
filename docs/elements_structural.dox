@@ -1,7 +1,18 @@
 /**
-@defgroup elements_structural Elements: Structural
+@page elements_structural Elements: Structural
 
-\details Defines the structure of the document, such as the root element, groups, and containers.
+\details Structural elements define the structure of the document, such as the root element, groups,
+and containers.
 
 - SVG2 spec: https://www.w3.org/TR/SVG2/struct.html
- */
+
+The following structural elements are supported:
+
+- \subpage xml_svg (\ref donner::svg::SVGSVGElement "SVGSVGElement")
+- \subpage xml_g (\ref donner::svg::SVGGElement "SVGGElement")
+- \subpage xml_defs (\ref donner::svg::SVGDefsElement "SVGDefsElement")
+- \subpage xml_use (\ref donner::svg::SVGUseElement "SVGUseElement")
+
+@todo SVGSymbolElement support
+
+*/

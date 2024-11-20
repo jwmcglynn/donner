@@ -9,7 +9,6 @@ namespace donner::svg {
 
 /**
  * @page xml_use "<use>"
- * @ingroup elements_structural
  *
  * Reuses an existing element by referencing it with a URI. This is useful for creating
  * repeating patterns or reusing complex shapes.
