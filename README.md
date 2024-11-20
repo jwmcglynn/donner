@@ -53,7 +53,7 @@ const std::string_view svgContents(R"(
 )");
 
 // Call ParseSVG to load the SVG file
-donner::base::parser::ParseResult<donner::svg::SVGDocument> maybeResult =
+donner::ParseResult<donner::svg::SVGDocument> maybeResult =
     donner::svg::parser::SVGParser::ParseSVG(svgContents);
 
 if (maybeResult.hasError()) {

@@ -13,7 +13,7 @@ namespace donner::svg {
 
 namespace {
 
-parser::ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
+ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* number = component.tryGetToken<css::Token::Number>()) {
@@ -21,14 +21,13 @@ parser::ParseResult<double> ParseNumber(std::span<const css::ComponentValue> com
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid number";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> components) {
+ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -68,14 +67,13 @@ parser::ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> c
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid display value";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
+ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -91,14 +89,13 @@ parser::ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentVa
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid display value";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue> components) {
+ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -116,16 +113,15 @@ parser::ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue>
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid overflow value";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
+ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
   if (components.empty()) {
-    parser::ParseError err;
+    ParseError err;
     err.reason = "Invalid paint server value";
     return err;
   }
@@ -148,7 +144,7 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
 
       if (result) {
         if (components.size() > 1) {
-          parser::ParseError err;
+          ParseError err;
           err.reason = "Unexpected tokens after paint server value";
           err.location = token.offset();
           err.location.offset.value() += name.size();
@@ -182,7 +178,7 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
           return PaintServer(PaintServer::ElementReference(url.value, colorResult.result()));
         } else {
           // Invalid paint.
-          parser::ParseError err;
+          ParseError err;
           err.reason = "Invalid paint server url, failed to parse fallback";
           err.location = components[i].sourceOffset();
           return err;
@@ -201,13 +197,13 @@ parser::ParseResult<PaintServer> ParsePaintServer(std::span<const css::Component
     return PaintServer(PaintServer::Solid(colorResult.result()));
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid paint server";
   err.location = firstComponent.sourceOffset();
   return err;
 }
 
-parser::ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> components) {
+ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -221,14 +217,13 @@ parser::ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue>
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid fill rule";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
+ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -242,15 +237,13 @@ parser::ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue>
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid clip-rule value";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<StrokeLinecap> ParseStrokeLinecap(
-    std::span<const css::ComponentValue> components) {
+ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -266,15 +259,13 @@ parser::ParseResult<StrokeLinecap> ParseStrokeLinecap(
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid linecap";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<StrokeLinejoin> ParseStrokeLinejoin(
-    std::span<const css::ComponentValue> components) {
+ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -294,14 +285,13 @@ parser::ParseResult<StrokeLinejoin> ParseStrokeLinejoin(
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid linejoin";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
+ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
     std::span<const css::ComponentValue> components) {
   // https://www.w3.org/TR/css-values-4/#mult-comma
   std::vector<Lengthd> result;
@@ -320,10 +310,10 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
           trySkipToken.template operator()<css::Token::Comma>() || components.empty()) {
         trySkipToken.template operator()<css::Token::Whitespace>();
       } else {
-        parser::ParseError err;
+        ParseError err;
         err.reason = "Unexpected tokens after dasharray value";
-        err.location = !components.empty() ? components.front().sourceOffset()
-                                           : parser::FileOffset::EndOfString();
+        err.location =
+            !components.empty() ? components.front().sourceOffset() : FileOffset::EndOfString();
         return err;
       }
     }
@@ -335,7 +325,7 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
     const css::ComponentValue& component = components.front();
     if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit) {
-        parser::ParseError err;
+        ParseError err;
         err.reason = "Invalid unit on length";
         err.location = component.sourceOffset();
         return err;
@@ -347,7 +337,7 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
     } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
       result.emplace_back(number->value, Lengthd::Unit::None);
     } else {
-      parser::ParseError err;
+      ParseError err;
       err.reason = "Unexpected token in dasharray";
       err.location = component.sourceOffset();
       return err;
@@ -359,10 +349,10 @@ parser::ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
   return result;
 }
 
-parser::ParseResult<Reference> ParseReference(std::string_view tag,
-                                              std::span<const css::ComponentValue> components) {
+ParseResult<Reference> ParseReference(std::string_view tag,
+                                      std::span<const css::ComponentValue> components) {
   if (components.empty()) {
-    parser::ParseError err;
+    ParseError err;
     err.reason = std::string("Empty ") + std::string(tag) + " value";
     return err;
   }
@@ -376,17 +366,17 @@ parser::ParseResult<Reference> ParseReference(std::string_view tag,
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid url reference";
   err.location = firstComponent.sourceOffset();
   return err;
 }
 
-parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
+ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
   // TODO(https://github.com/jwmcglynn/donner/issues/151): Handle parsing a list of filter effects
   // https://www.w3.org/TR/filter-effects/#FilterProperty
   if (components.empty()) {
-    parser::ParseError err;
+    ParseError err;
     err.reason = "Invalid filter value";
     return err;
   }
@@ -415,7 +405,7 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
         const auto& arg = function.values.front();
         if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
           if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
-            parser::ParseError err;
+            ParseError err;
             err.reason = "Invalid unit on length";
             err.location = arg.sourceOffset();
             return err;
@@ -424,7 +414,7 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
             return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
           }
         } else {
-          parser::ParseError err;
+          ParseError err;
           err.reason = "Invalid blur value";
           err.location = arg.sourceOffset();
           return err;
@@ -433,14 +423,13 @@ parser::ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValu
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid filter value";
   err.location = firstComponent.sourceOffset();
   return err;
 }
 
-parser::ParseResult<PointerEvents> ParsePointerEvents(
-    std::span<const css::ComponentValue> components) {
+ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
@@ -470,10 +459,9 @@ parser::ParseResult<PointerEvents> ParsePointerEvents(
     }
   }
 
-  parser::ParseError err;
+  ParseError err;
   err.reason = "Invalid pointer-events";
-  err.location =
-      !components.empty() ? components.front().sourceOffset() : parser::FileOffset::Offset(0);
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -551,8 +539,8 @@ static constexpr frozen::unordered_set<frozen::string, 70> kValidPresentationAtt
     "word-spacing",
     "writing-mode"};
 
-using PropertyParseFn = std::optional<parser::ParseError> (*)(
-    PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
+using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
+                                                      const parser::PropertyParseFnParams& params);
 
 static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 25> kProperties =
     {
@@ -788,7 +776,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 25> kPro
             }},  //
         {"marker",
          [](PropertyRegistry& registry,
-            const parser::PropertyParseFnParams& params) -> std::optional<parser::ParseError> {
+            const parser::PropertyParseFnParams& params) -> std::optional<ParseError> {
            // First, parse the shorthand value as a Reference
            const auto parseResult = ParseReference("marker", params.components());
            if (!parseResult.hasResult()) {
@@ -798,13 +786,13 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 25> kPro
            const Reference& markerValue = parseResult.result();
 
            // Now, set marker-start, marker-mid, and marker-end using the Parse function
-           std::optional<parser::ParseError> error;
+           std::optional<ParseError> error;
 
            // Set marker-start
            error = Parse(
                params,
                [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                   -> parser::ParseResult<Reference> { return markerValue; },
+                   -> ParseResult<Reference> { return markerValue; },
                &registry.markerStart);
            assert(!error && "Unexpected error parsing marker shorthand property");
 
@@ -812,7 +800,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 25> kPro
            error = Parse(
                params,
                [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                   -> parser::ParseResult<Reference> { return markerValue; },
+                   -> ParseResult<Reference> { return markerValue; },
                &registry.markerMid);
            assert(!error && "Unexpected error parsing marker shorthand property");
 
@@ -820,7 +808,7 @@ static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 25> kPro
            error = Parse(
                params,
                [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                   -> parser::ParseResult<Reference> { return markerValue; },
+                   -> ParseResult<Reference> { return markerValue; },
                &registry.markerEnd);
            assert(!error && "Unexpected error parsing marker shorthand property");
 
@@ -860,8 +848,8 @@ PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = def
   return result;
 }
 
-std::optional<parser::ParseError> PropertyRegistry::parseProperty(
-    const css::Declaration& declaration, css::Specificity specificity) {
+std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
+                                                          css::Specificity specificity) {
   const frozen::string frozenName(declaration.name);
   const auto it = kProperties.find(frozenName);
   if (it != kProperties.end()) {
@@ -875,7 +863,7 @@ std::optional<parser::ParseError> PropertyRegistry::parseProperty(
     unparsedProperties.emplace(
         std::make_pair(declaration.name, parser::UnparsedProperty{declaration, specificity}));
   } else {
-    parser::ParseError err;
+    ParseError err;
     err.reason = "Unknown property '" + declaration.name + "'";
     err.location = declaration.sourceOffset;
     return err;
@@ -891,9 +879,10 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-parser::ParseResult<bool> PropertyRegistry::parsePresentationAttribute(
-    std::string_view name, std::string_view value, std::optional<ElementType> type,
-    EntityHandle handle) {
+ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
+                                                               std::string_view value,
+                                                               std::optional<ElementType> type,
+                                                               EntityHandle handle) {
   /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not necessarily
    * the same. There may need to be a second mapping.
    */

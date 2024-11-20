@@ -13,8 +13,6 @@ using testing::HasSubstr;
 
 namespace donner::svg::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 using Command = PathSpline::Command;
 using CommandType = PathSpline::CommandType;
 

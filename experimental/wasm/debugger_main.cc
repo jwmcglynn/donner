@@ -43,7 +43,7 @@ public:
   DonnerBindings() = default;
 
   bool loadSVG(const std::string& canvasId, const std::string& svg) {
-    std::vector<donner::base::parser::ParseError> warnings;
+    std::vector<donner::ParseError> warnings;
     auto maybeResult = parser::SVGParser::ParseSVG(svg, &warnings);
 
     if (maybeResult.hasError()) {

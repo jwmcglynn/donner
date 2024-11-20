@@ -29,7 +29,7 @@ struct Function {
   std::vector<ComponentValue> values;
 
   /// Offset of the function name in the source string.
-  parser::FileOffset sourceOffset;
+  FileOffset sourceOffset;
 
   /**
    * Construct a new Function object with a name and an empty parameter list. To supply parameters,
@@ -38,7 +38,7 @@ struct Function {
    * @param name Function name.
    * @param sourceOffset Offset of the function name in the source string.
    */
-  Function(RcString name, const parser::FileOffset& sourceOffset);
+  Function(RcString name, const FileOffset& sourceOffset);
 
   /// Equality operator.
   bool operator==(const Function& other) const;
@@ -70,7 +70,7 @@ struct SimpleBlock {
   std::vector<ComponentValue> values;
 
   /// Offset of the opening token in the source string.
-  parser::FileOffset sourceOffset;
+  FileOffset sourceOffset;
 
   /**
    * Construct a new SimpleBlock object with an opening token and an empty list of component values.
@@ -79,7 +79,7 @@ struct SimpleBlock {
    * @param associatedToken The token that starts the simple block.
    * @param sourceOffset Offset of the opening token in the source string.
    */
-  explicit SimpleBlock(TokenIndex associatedToken, const parser::FileOffset& sourceOffset);
+  explicit SimpleBlock(TokenIndex associatedToken, const FileOffset& sourceOffset);
 
   /// Equality operator.
   bool operator==(const SimpleBlock& other) const;
@@ -247,9 +247,9 @@ struct ComponentValue {
    * Get the offset of this component value in the original source. For \ref Function and \ref
    * SimpleBlock, returns the offset of the group opening token.
    */
-  parser::FileOffset sourceOffset() const {
+  FileOffset sourceOffset() const {
     return std::visit(
-        [](auto&& v) -> parser::FileOffset {
+        [](auto&& v) -> FileOffset {
           using T = std::remove_cvref_t<decltype(v)>;
 
           if constexpr (std::is_same_v<Token, T>) {

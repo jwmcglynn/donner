@@ -29,7 +29,7 @@ bool IsWhitespace(char ch) {
 
 }  // namespace
 
-base::parser::ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String) {
+ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String) {
   std::vector<uint8_t> decodedData;
   decodedData.reserve(base64String.size() * 3 / 4);
 
@@ -47,9 +47,9 @@ base::parser::ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_vie
     // NOLINTNEXTLINE: Array index is guaranteed to be in bounds.
     const uint8_t base64Value = kBase64LookupTable[static_cast<uint8_t>(ch)];
     if (base64Value == kInvalidChar) {
-      base::parser::ParseError err;
+      ParseError err;
       err.reason = "Invalid base64 char '" + std::string(1, ch) + "'";
-      err.location = base::parser::FileOffset::Offset(i);
+      err.location = FileOffset::Offset(i);
       return err;
     }
 

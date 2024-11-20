@@ -1180,11 +1180,11 @@ RendererSkia& RendererSkia::operator=(RendererSkia&&) noexcept = default;
 
 void RendererSkia::draw(SVGDocument& document) {
   // TODO(jwmcglynn): Plumb outWarnings.
-  std::vector<parser::ParseError> warnings;
+  std::vector<ParseError> warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, verbose_ ? &warnings : nullptr);
 
   if (!warnings.empty()) {
-    for (const parser::ParseError& warning : warnings) {
+    for (const ParseError& warning : warnings) {
       std::cerr << warning << '\n';
     }
   }

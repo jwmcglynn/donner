@@ -20,8 +20,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererSkia.h"
 
-using namespace donner::base;
-using namespace donner::base::parser;
+using namespace donner;
 using namespace donner::svg;
 using namespace donner::svg::parser;
 

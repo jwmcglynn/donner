@@ -17,8 +17,8 @@
 #include "donner/svg/SVGCircleElement.h"
 #include "donner/svg/SVGPathElement.h"
 
-using donner::base::parser::ParseError;
-using donner::base::parser::ParseResult;
+using donner::ParseError;
+using donner::ParseResult;
 
 int main(int argc, char* argv[]) {
   //! [homepage_snippet]

@@ -45,7 +45,7 @@ extern "C" int main(int argc, char* argv[]) {
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
-  std::vector<parser::ParseError> warnings;
+  std::vector<ParseError> warnings;
   auto maybeResult = parser::SVGParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();

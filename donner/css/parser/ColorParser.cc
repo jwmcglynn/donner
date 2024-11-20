@@ -148,7 +148,7 @@ private:
   RcString functionName_;
   std::span<const css::ComponentValue> components_;
   std::optional<ParseResult<css::Token>> next_;
-  parser::FileOffset lastOffset_ = parser::FileOffset::Offset(0);
+  FileOffset lastOffset_ = FileOffset::Offset(0);
 };
 
 class ColorParserImpl {

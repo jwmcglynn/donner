@@ -20,7 +20,7 @@ enum class AngleParseOptions {
  *
  * @param component The CSS component value to parse.
  * @param options Options for parsing.
- * @return The angle in radians, or a \ref donner::base::parser::ParseError if parsing failed.
+ * @return The angle in radians, or a \ref ParseError if parsing failed.
  */
 ParseResult<double> ParseAngle(const css::ComponentValue& component,
                                AngleParseOptions options = AngleParseOptions::None);

@@ -33,7 +33,7 @@ inline Specificity computeSpecificity(std::string_view str) {
   SCOPED_TRACE(testing::Message() << "Parsing selector: " << str);
 
   auto maybeSelector = parser::SelectorParser::Parse(str);
-  EXPECT_THAT(maybeSelector, base::parser::NoParseError());
+  EXPECT_THAT(maybeSelector, NoParseError());
   if (maybeSelector.hasError()) {
     return Specificity();
   }

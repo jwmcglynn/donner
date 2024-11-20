@@ -8,8 +8,8 @@ namespace donner::svg::components {
 
 namespace {
 
-std::optional<parser::ParseError> ParseStopColor(StopProperties& properties,
-                                                 const parser::PropertyParseFnParams& params) {
+std::optional<ParseError> ParseStopColor(StopProperties& properties,
+                                         const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
       [](const parser::PropertyParseFnParams& params) {
@@ -18,8 +18,8 @@ std::optional<parser::ParseError> ParseStopColor(StopProperties& properties,
       &properties.stopColor);
 }
 
-std::optional<parser::ParseError> ParseStopOpacity(StopProperties& properties,
-                                                   const parser::PropertyParseFnParams& params) {
+std::optional<ParseError> ParseStopOpacity(StopProperties& properties,
+                                           const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
       [](const parser::PropertyParseFnParams& params) {
@@ -37,9 +37,9 @@ std::optional<parser::ParseError> ParseStopOpacity(StopProperties& properties,
  * @param properties Properties storage for the parsed result.
  * @return True if the property was found and parsed successfully.
  */
-parser::ParseResult<bool> ParseStopPresentationAttribute(
-    std::string_view name, const parser::PropertyParseFnParams& params,
-    StopProperties& properties) {
+ParseResult<bool> ParseStopPresentationAttribute(std::string_view name,
+                                                 const parser::PropertyParseFnParams& params,
+                                                 StopProperties& properties) {
   // TODO(jwmcglynn): Case insensitive?
   if (name == "stop-color") {
     if (auto maybeError = ParseStopColor(properties, params)) {
@@ -61,7 +61,7 @@ parser::ParseResult<bool> ParseStopPresentationAttribute(
 ComputedStopComponent::ComputedStopComponent(
     const StopProperties& inputProperties, const ComputedStyleComponent& style,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<parser::ParseError>* outWarnings)
+    std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
     const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(

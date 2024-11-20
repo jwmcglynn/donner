@@ -13,6 +13,6 @@ namespace donner::svg {
  *
  * @param base64String The base64-encoded string to decode.
  */
-base::parser::ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String);
+ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String);
 
 }  // namespace donner::svg

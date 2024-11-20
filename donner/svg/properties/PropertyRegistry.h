@@ -335,8 +335,8 @@ public:
    * @param specificity Specificity of the declaration.
    * @return Error if the declaration had errors parsing or the property is not supported.
    */
-  std::optional<parser::ParseError> parseProperty(const css::Declaration& declaration,
-                                                  css::Specificity specificity);
+  std::optional<ParseError> parseProperty(const css::Declaration& declaration,
+                                          css::Specificity specificity);
 
   /**
    * Parse a SVG style attribute, and set the parsed values on this PropertyRegistry. Does not
@@ -359,11 +359,11 @@ public:
    * @param type If set, parses additional presentation attributes for the given element type.
    * @param handle Entity handle to use for parsing additional attributes.
    * @return true if the element supports this attribute and it was parsed successfully, or a \ref
-   *   donner::base::parser::ParseError if parsing failed.
+   * ParseError if parsing failed.
    */
-  parser::ParseResult<bool> parsePresentationAttribute(
-      std::string_view name, std::string_view value, std::optional<ElementType> type = std::nullopt,
-      EntityHandle handle = EntityHandle());
+  ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
+                                               std::optional<ElementType> type = std::nullopt,
+                                               EntityHandle handle = EntityHandle());
 
   /**
    * Ostream output operator, for debugging which outputs a human-readable representation of all of

@@ -192,7 +192,7 @@ extern "C" int main(int argc, char* argv[]) {
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
-  std::vector<parser::ParseError> warnings;
+  std::vector<ParseError> warnings;
   parser::SVGParser::Options svgOptions;
   svgOptions.enableExperimental = experimental;
 

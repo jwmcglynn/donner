@@ -12,8 +12,6 @@ using testing::Optional;
 
 namespace donner::css::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 TEST(Color, ColorPrintTo) {
   using string_literals::operator""_rgb;
   using string_literals::operator""_rgba;

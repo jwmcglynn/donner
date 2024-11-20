@@ -22,8 +22,6 @@ extern "C" {
 #include "misc/cpp/imgui_stdlib.h"
 
 using namespace donner;
-using namespace donner::base;
-using namespace donner::base::parser;
 using namespace donner::svg;
 using namespace donner::svg::parser;
 

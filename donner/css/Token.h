@@ -773,7 +773,7 @@ struct Token {
   /**
    * Returns the offset within the source string where this token starts.
    */
-  parser::FileOffset offset() const { return parser::FileOffset::Offset(offset_); }
+  FileOffset offset() const { return FileOffset::Offset(offset_); }
 
   /**
    * Check if the token is of the given type.

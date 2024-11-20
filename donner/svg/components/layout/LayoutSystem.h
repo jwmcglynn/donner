@@ -138,8 +138,7 @@ public:
    * @param registry ECS registry.
    * @param outWarnings Output vector of parse errors, if any.
    */
-  void instantiateAllComputedComponents(Registry& registry,
-                                        std::vector<parser::ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
   /**
    * Evaluates SizedElementProperties and returns the resulting bounds, using precomputed style
@@ -156,7 +155,7 @@ public:
   Boxd computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
                              const Boxd& viewbox, FontMetrics fontMetrics,
-                             std::vector<parser::ParseError>* outWarnings);
+                             std::vector<ParseError>* outWarnings);
 
   /**
    * Creates a \ref ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -170,7 +169,7 @@ public:
    */
   const ComputedSizedElementComponent& createComputedSizedElementComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, FontMetrics fontMetrics,
-      std::vector<parser::ParseError>* outWarnings);
+      std::vector<ParseError>* outWarnings);
 
   /**
    * Creates a \ref ComputedLocalTransformComponent for the linked entity, using precomputed style
@@ -183,7 +182,7 @@ public:
    */
   const ComputedLocalTransformComponent& createComputedLocalTransformComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
-      std::vector<parser::ParseError>* outWarnings);
+      std::vector<ParseError>* outWarnings);
 
   /**
    * If this element establishes a clipping context, returns the clip rect in the parent's

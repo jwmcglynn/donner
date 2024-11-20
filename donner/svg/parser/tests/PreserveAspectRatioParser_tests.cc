@@ -7,8 +7,6 @@
 
 namespace donner::svg::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 using Align = PreserveAspectRatio::Align;
 using MeetOrSlice = PreserveAspectRatio::MeetOrSlice;
 

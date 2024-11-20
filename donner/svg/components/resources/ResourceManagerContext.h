@@ -26,7 +26,7 @@ public:
    *
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
-  void loadResources(std::vector<parser::ParseError>* outWarnings);
+  void loadResources(std::vector<ParseError>* outWarnings);
 
   /**
    * Set the user-supplied \ref ResourceLoaderInterface which handles loading URLs and returning

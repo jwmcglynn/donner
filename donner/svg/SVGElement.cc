@@ -111,8 +111,8 @@ void SVGElement::setStyle(std::string_view style) {
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 }
 
-parser::ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
-                                                                  std::string_view value) {
+ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
+                                                          std::string_view value) {
   std::string_view actualName = name;
 
   // gradientTransform and patternTransform are special, since they map to the

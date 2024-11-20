@@ -9,7 +9,7 @@
 namespace donner::svg::components {
 namespace {
 
-using RectPresentationAttributeParseFn = std::optional<parser::ParseError> (*)(
+using RectPresentationAttributeParseFn = std::optional<ParseError> (*)(
     RectProperties& properties, const parser::PropertyParseFnParams& params);
 
 static constexpr frozen::unordered_map<frozen::string, RectPresentationAttributeParseFn, 6>
@@ -77,7 +77,7 @@ static constexpr frozen::unordered_map<frozen::string, RectPresentationAttribute
 ComputedRectComponent::ComputedRectComponent(
     const RectProperties& inputProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<parser::ParseError>* outWarnings)
+    std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));

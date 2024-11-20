@@ -7,7 +7,6 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
-using namespace donner::base::parser;
 using testing::AllOf;
 using testing::ElementsAre;
 

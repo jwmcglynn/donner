@@ -18,8 +18,8 @@
 
 namespace donner::xml {
 
-using donner::base::parser::ParseError;
-using donner::base::parser::ParseResult;
+using donner::ParseError;
+using donner::ParseResult;
 
 namespace {
 
@@ -67,7 +67,7 @@ public:
         break;
       }
 
-      const base::parser::FileOffset startOffset = currentOffsetWithLineNumber();
+      const FileOffset startOffset = currentOffsetWithLineNumber();
 
       // Parse and append new child
       if (tryConsume("<")) {
@@ -104,7 +104,7 @@ public:
     skipWhitespace();
 
     while (true) {
-      const base::parser::FileOffset attributeStartOffset = currentOffsetWithLineNumber();
+      const FileOffset attributeStartOffset = currentOffsetWithLineNumber();
 
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
       if (maybeAttribute.hasError()) {
@@ -133,7 +133,7 @@ private:
     return lineOffsets_.value();
   }
 
-  base::parser::FileOffset currentOffsetWithLineNumber(int relativeOffset = 0) {
+  FileOffset currentOffsetWithLineNumber(int relativeOffset = 0) {
     const size_t offset = currentOffset(relativeOffset).offset.value();
     return lineOffsets().fileOffset(offset);
   }
@@ -233,11 +233,11 @@ private:
   template <std::output_iterator<char> OutputIterator>
   [[nodiscard]] std::optional<ParseError> insertUtf8(char32_t ch, OutputIterator it) {
     // Reject bad codepoints as defined by https://www.w3.org/TR/xml/#NT-Char
-    if (UTILS_PREDICT_FALSE(!base::Utf8::IsValidCodepoint(ch) || ch == 0xFFFE || ch == 0xFFFF)) {
+    if (UTILS_PREDICT_FALSE(!Utf8::IsValidCodepoint(ch) || ch == 0xFFFE || ch == 0xFFFF)) {
       return createParseError("Invalid numeric character entity");
     }
 
-    base::Utf8::Append(ch, it);
+    Utf8::Append(ch, it);
     return std::nullopt;
   }
 
@@ -397,7 +397,7 @@ private:
   }
 
   // Parse XML declaration (<?xml...)
-  ParseResult<XMLNode> parseXMLDeclaration(base::parser::FileOffset startOffset) {
+  ParseResult<XMLNode> parseXMLDeclaration(FileOffset startOffset) {
     // Create declaration
     XMLNode declaration = XMLNode::CreateXMLDeclarationNode(document_);
     declaration.setSourceStartOffset(startOffset);
@@ -420,7 +420,7 @@ private:
   }
 
   // Parse XML comment (<!--...)
-  ParseResult<std::optional<XMLNode>> parseComment(base::parser::FileOffset startOffset) {
+  ParseResult<std::optional<XMLNode>> parseComment(FileOffset startOffset) {
     const auto maybeComment = consumeContentsUntilEndString("-->");
     if (!maybeComment) {
       return createParseError("Comment node does not end with '-->'");
@@ -440,7 +440,7 @@ private:
   }
 
   // Parse DOCTYPE
-  ParseResult<std::optional<XMLNode>> parseDoctype(base::parser::FileOffset startOffset) {
+  ParseResult<std::optional<XMLNode>> parseDoctype(FileOffset startOffset) {
     // Process until '>'
     size_t i = 0;
     size_t len = remaining_.size();
@@ -501,8 +501,7 @@ private:
   }
 
   // Parse PI nodes, e.g. `<?php ... ?>`
-  ParseResult<std::optional<XMLNode>> parseProcessingInstructions(
-      base::parser::FileOffset startOffset) {
+  ParseResult<std::optional<XMLNode>> parseProcessingInstructions(FileOffset startOffset) {
     // Extract PI target name
     const std::string_view piName = consumeMatching<NamePredicate>();
     if (piName.empty()) {
@@ -556,7 +555,7 @@ private:
   }
 
   // Parse CDATA
-  ParseResult<XMLNode> parseCData(base::parser::FileOffset startOffset) {
+  ParseResult<XMLNode> parseCData(FileOffset startOffset) {
     auto maybeCData = consumeContentsUntilEndString("]]>");
     if (!maybeCData) {
       return createParseError("CDATA node does not end with ']]>'");
@@ -571,7 +570,7 @@ private:
   }
 
   // Parse element node
-  ParseResult<XMLNode> parseElement(base::parser::FileOffset startOffset) {
+  ParseResult<XMLNode> parseElement(FileOffset startOffset) {
     // Extract element name
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
@@ -610,7 +609,7 @@ private:
   }
 
   // Parse node
-  ParseResult<std::optional<XMLNode>> parseNode(base::parser::FileOffset startOffset) {
+  ParseResult<std::optional<XMLNode>> parseNode(FileOffset startOffset) {
     // Parse proper node type
     switch (peek().value_or('\0')) {
       default:
@@ -716,7 +715,7 @@ private:
 
           return std::nullopt;  // Node closed, finished parsing contents
         } else {
-          base::parser::FileOffset startOffset = currentOffsetWithLineNumber();
+          FileOffset startOffset = currentOffsetWithLineNumber();
 
           // Child node
           remaining_.remove_prefix(1);  // Skip '<'
@@ -842,8 +841,7 @@ ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const XMLParser:
 }
 
 std::optional<XMLParser::AttributeLocation> XMLParser::GetAttributeLocation(
-    std::string_view str, base::parser::FileOffset elementStartOffset,
-    const XMLQualifiedNameRef& attributeName) {
+    std::string_view str, FileOffset elementStartOffset, const XMLQualifiedNameRef& attributeName) {
   if (!elementStartOffset.offset) {
     return std::nullopt;
   }

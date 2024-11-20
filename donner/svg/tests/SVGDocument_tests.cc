@@ -14,7 +14,7 @@ namespace {
 
 SVGDocument ParseSVG(std::string_view input) {
   auto maybeResult = parser::SVGParser::ParseSVG(input);
-  EXPECT_THAT(maybeResult, base::parser::NoParseError());
+  EXPECT_THAT(maybeResult, NoParseError());
   return std::move(maybeResult).result();
 }
 
