@@ -12,8 +12,7 @@
 
 namespace donner::xml {
 
-// Forward declaration, implemented later in the file.
-struct XMLQualifiedNameRef;
+namespace details {
 
 /**
  * Helper class which prints this qualified name in CSS syntax (e.g. "ns|name").
@@ -41,6 +40,11 @@ struct DeferredCssSyntaxPrinter {
     return os;
   }
 };
+
+}  // namespace details
+
+// Forward declaration, implemented later in the file.
+struct XMLQualifiedNameRef;
 
 /**
  * Represents an XML attribute name with an optional namespace.
@@ -123,8 +127,8 @@ struct XMLQualifiedName {
    * std::cout << name.printCssSyntax() << "\n";
    * ```
    */
-  DeferredCssSyntaxPrinter<XMLQualifiedName> printCssSyntax() const {
-    return DeferredCssSyntaxPrinter<XMLQualifiedName>{*this};
+  details::DeferredCssSyntaxPrinter<XMLQualifiedName> printCssSyntax() const {
+    return details::DeferredCssSyntaxPrinter<XMLQualifiedName>{*this};
   }
 };
 
@@ -261,8 +265,8 @@ struct XMLQualifiedNameRef {
    * std::cout << name.printCssSyntax() << "\n";
    * ```
    */
-  DeferredCssSyntaxPrinter<XMLQualifiedNameRef> printCssSyntax() const {
-    return DeferredCssSyntaxPrinter<XMLQualifiedNameRef>{*this};
+  details::DeferredCssSyntaxPrinter<XMLQualifiedNameRef> printCssSyntax() const {
+    return details::DeferredCssSyntaxPrinter<XMLQualifiedNameRef>{*this};
   }
 };
 

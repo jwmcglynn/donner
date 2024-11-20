@@ -1,5 +1,5 @@
 /**
-@defgroup elements_basic_shapes Elements: Basic shapes
+@defgroup elements_basic_shapes Elements: Basic Shapes
 
 \details Basic shapes are defined by a combination of straight lines and curves, and may be
 stroked, filled, or used as a clipping path.

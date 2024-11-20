@@ -1,5 +1,5 @@
 /**
-@defgroup elements_paint_servers Elements: Paint servers
+@defgroup elements_paint_servers Elements: Paint Servers
 
 \details Paint servers are elements that define a color or a pattern that can be used to fill or
 stroke shapes. The following paint servers are supported:

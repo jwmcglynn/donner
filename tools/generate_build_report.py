@@ -76,7 +76,7 @@ def query_external_dependencies() -> typing.List[str]:
 def create_build_report(
     options: ReportOptions, save_svgs_to: typing.Optional[str] = None
 ):
-    report = "# Donner build report\n\n"
+    report = "# Donner Build Report\n\n"
 
     command_line = " ".join(sys.argv)
     report += f"Generated with: {command_line}\n\n"

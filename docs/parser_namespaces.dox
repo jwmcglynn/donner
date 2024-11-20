@@ -24,3 +24,10 @@
  * individual parsers for SVG components, such as \ref donner::svg::parser::PathParser "PathParser"
  * and \ref donner::svg::parser::TransformParser "TransformParser".
  */
+
+/**
+ * @namespace donner::xml
+ *
+ * XML parsing and document model support, top-level objects are \ref donner::xml::XMLParser and
+ * \ref donner::xml::XMLDocument.
+ */
