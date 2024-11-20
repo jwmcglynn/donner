@@ -9,7 +9,8 @@ Donner provides several standalone APIs for core functionality which can be used
 - SVG Object Model (\ref donner::svg)
 - CSS Parsing and Cascading (\ref donner::css)
 - SVG Rendering (\ref donner::svg::RendererSkia)
-- SVG XML Parsing (\ref donner::svg::parser::SVGParser)
+- SVG Parsing (\ref donner::svg::parser::SVGParser)
+- XML Parsing (\ref donner::xml::XMLParser)
 
 Each library has minimal dependencies and can be used in external projects. For example, the CSS API may be used to add CSS support to your project using an adapter that satisfies the \ref donner::ElementLike concept.
 
@@ -18,11 +19,13 @@ flowchart TD
   SVG(SVG)
   CSS(CSS)
   Rendering(SVG Rendering)
-  XML(SVG XML Parsing)
+  SVGParsing(SVG Parsing)
+  XML(XML Parsing)
 
   SVG --> CSS
   Rendering --> SVG
-  XML --> SVG
+  SVGParsing --> SVG
+  SVGParsing --> XML
 ```
 
 ## Principles
@@ -88,6 +91,7 @@ flowchart TD
     - \ref donner::css::parser - the CSS parser
   - \ref donner::svg - SVG parsing and rendering
     - \ref donner::svg::parser - the SVG parser
+  - \ref donner::xml - XML parsing
 
 ### Parsing an SVG
 
@@ -196,7 +200,7 @@ To render an SVG document, use the \ref donner::svg::RendererSkia class.
 
 The output size is determined by \ref donner::svg::SVGDocument, which can either be detected from the file itself or overridden with SVGDocument APIs:
 
-- \ref donner::svg::SVGDocument::setCanvasSize(int width, int height)
+- \ref donner::svg::SVGDocument::setCanvasSize()
 - \ref donner::svg::SVGDocument::useAutomaticCanvasSize()
 
 ### Using the CSS API

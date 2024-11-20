@@ -9,10 +9,9 @@
 namespace donner::svg::parser {
 
 /**
- * @page poly_points Polyline/polygon points list
- * @ingroup data_formats
+ * @page poly_points Polyline/Polygon Points List
  *
- * \details The `points` attribute is used to specify line paths for \ref xml_polyline and \ref
+ * The `points` attribute is used to specify line paths for \ref xml_polyline and \ref
  * xml_polygon.
  *
  * It specifies a list of numbers separated by whitespace or commas, for example: "10,20 30,40".
@@ -21,6 +20,8 @@ namespace donner::svg::parser {
  * of "e" or "E" and an integer".
  *
  * To parse a points list, use \ref PointsListParser::Parse.
+ *
+ * This is used by \ref xml_polyline and \ref xml_polygon.
  */
 
 /**

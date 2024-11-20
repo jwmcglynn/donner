@@ -1,4 +1,4 @@
-# Getting started {#GettingStarted}
+# Getting Started {#GettingStarted}
 
 \tableofcontents
 

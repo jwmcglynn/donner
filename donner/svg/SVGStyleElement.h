@@ -18,27 +18,39 @@ namespace donner::svg {
  * - DOM object: SVGStyleElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/styling.html#StyleElement
  *
- * ```xml
- * <style>
- *   .myRect { fill: red; stroke: black; stroke-width: 2px; }
- *   circle { fill: black }
- *   circle:nth-child(2n) { fill: green }
- * </style>
- * ```
- *
  * \htmlonly
- * <svg id="xml_style" width="300" height="300" style="background-color: white">
+ * <svg xmlns="http://www.w3.org/2000/svg" viewBox="20 20 750 290">
  *   <style>
- *     #xml_style .myRect { fill: red; stroke: black; stroke-width: 2px; }
- *     #xml_style circle { fill: black }
- *     #xml_style circle:nth-child(2n) { fill: green }
+ *     .code-box { fill: #f8f9fa; stroke: #dee2e6; stroke-width: 2; }
+ *     .code-text { font-family: monospace; font-size: 14px; fill: #212529; }
+ *     .rect { fill: crimson; stroke: darkred; stroke-width: 3; }
+ *     circle:nth-child(3n+1) { fill: red; }
+ *     circle:nth-child(3n+2) { fill: limegreen; }
+ *     circle:nth-child(3n+3) { fill: blue; }
  *   </style>
- *   <rect id="myRect" x="0" y="0" width="100" height="25" />
- *   <circle cx="50" cy="50" r="20"/>
- *   <circle cx="100" cy="50" r="20"/>
- *   <circle cx="150" cy="50" r="20"/>
- *   <circle cx="200" cy="50" r="20"/>
- *   <circle cx="250" cy="50" r="20"/>
+ *
+ *   <!-- Code Example Box -->
+ *   <rect x="40" y="40" width="430" height="250" class="code-box" rx="4"/>
+ *   <text x="60" y="70" class="code-text">&lt;style&gt;</text>
+ *   <text x="60" y="90" class="code-text">&#160;&#160;.rect { </text>
+ *   <text x="60" y="110" class="code-text">&#160;&#160;&#160;&#160;fill: crimson;</text>
+ *   <text x="60" y="130" class="code-text">&#160;&#160;&#160;&#160;stroke: darkred;</text>
+ *   <text x="60" y="150" class="code-text">&#160;&#160;}</text>
+ *   <text x="60" y="180" class="code-text">&#160;&#160;.circle:nth-child(3n+1) { fill: red; }</text>
+ *   <text x="60" y="210" class="code-text">&#160;&#160;.circle:nth-child(3n+2) { fill: limegreen; }</text>
+ *   <text x="60" y="240" class="code-text">&#160;&#160;.circle:nth-child(3n+3) { fill: blue; }</text>
+ *   <text x="60" y="270" class="code-text">&lt;/style&gt;</text>
+ *
+ *   <!-- Visual Demo -->
+ *   <rect x="490" y="40" width="260" height="250" class="code-box" rx="4"/>
+ *   <rect x="560" y="120" width="120" height="40" class="rect"/>
+ *   <g>
+ *     <circle cx="540" cy="200" r="15" />
+ *     <circle cx="580" cy="200" r="15" />
+ *     <circle cx="620" cy="200" r="15" />
+ *     <circle cx="660" cy="200" r="15" />
+ *     <circle cx="700" cy="200" r="15" />
+ *   </g>
  * </svg>
  * \endhtmlonly
  *
@@ -49,34 +61,62 @@ namespace donner::svg {
  * | `title`   | (empty)    | [unsupported] Specifies a title for the style sheet, which is used when selecting between alternate style sheets. |
  *
  * Note that `type` is defined to be a media type [[rfc2046](https://www.ietf.org/rfc/rfc2046.txt)].
+ *
+ * ## Children
+ *
+ * Either text or CDATA nodes are allowed as child nodes.
  */
 
 /**
  * DOM object for a \ref xml_style element, which contains a CSS stylesheet.
  *
  * \htmlonly
- * <svg id="xml_style" width="300" height="300" style="background-color: white">
+ * <svg xmlns="http://www.w3.org/2000/svg" viewBox="20 20 750 290">
  *   <style>
- *     #xml_style .myRect { fill: red; stroke: black; stroke-width: 2px; }
- *     #xml_style circle { fill: black }
- *     #xml_style circle:nth-child(2n) { fill: green }
+ *     .code-box { fill: #f8f9fa; stroke: #dee2e6; stroke-width: 2; }
+ *     .code-text { font-family: monospace; font-size: 14px; fill: #212529; }
+ *     .rect { fill: crimson; stroke: darkred; stroke-width: 3; }
+ *     circle:nth-child(3n+1) { fill: red; }
+ *     circle:nth-child(3n+2) { fill: limegreen; }
+ *     circle:nth-child(3n+3) { fill: blue; }
  *   </style>
- *   <rect id="myRect" x="0" y="0" width="100" height="25" />
- *   <circle cx="50" cy="50" r="20"/>
- *   <circle cx="100" cy="50" r="20"/>
- *   <circle cx="150" cy="50" r="20"/>
- *   <circle cx="200" cy="50" r="20"/>
- *   <circle cx="250" cy="50" r="20"/>
+ *
+ *   <!-- Code Example Box -->
+ *   <rect x="40" y="40" width="430" height="250" class="code-box" rx="4"/>
+ *   <text x="60" y="70" class="code-text">&lt;style&gt;</text>
+ *   <text x="60" y="90" class="code-text">&#160;&#160;.rect { </text>
+ *   <text x="60" y="110" class="code-text">&#160;&#160;&#160;&#160;fill: crimson;</text>
+ *   <text x="60" y="130" class="code-text">&#160;&#160;&#160;&#160;stroke: darkred;</text>
+ *   <text x="60" y="150" class="code-text">&#160;&#160;}</text>
+ *   <text x="60" y="180" class="code-text">&#160;&#160;.circle:nth-child(3n+1) { fill: red; }</text>
+ *   <text x="60" y="210" class="code-text">&#160;&#160;.circle:nth-child(3n+2) { fill: limegreen; }</text>
+ *   <text x="60" y="240" class="code-text">&#160;&#160;.circle:nth-child(3n+3) { fill: blue; }</text>
+ *   <text x="60" y="270" class="code-text">&lt;/style&gt;</text>
+ *
+ *   <!-- Visual Demo -->
+ *   <rect x="490" y="40" width="260" height="250" class="code-box" rx="4"/>
+ *   <rect x="560" y="120" width="120" height="40" class="rect"/>
+ *   <g>
+ *     <circle cx="540" cy="200" r="15" />
+ *     <circle cx="580" cy="200" r="15" />
+ *     <circle cx="620" cy="200" r="15" />
+ *     <circle cx="660" cy="200" r="15" />
+ *     <circle cx="700" cy="200" r="15" />
+ *   </g>
  * </svg>
  * \endhtmlonly
  *
  * | Attribute | Default    | Description  |
  * | --------: | :--------: | :----------- |
- * | `type`    | `text/css` | Type of the stylesheets contents, currently only `text/css` is supported. |
+ * | `type`    | `text/css` | Type of the stylesheets contents, currently only `text/css` is supported. Use \ref SVGStyleElement::isCssType() to check. |
  * | `media`   | (empty)    | [unsupported] Specifies a media query that must be matched for the style sheet to apply. |
  * | `title`   | (empty)    | [unsupported] Specifies a title for the style sheet, which is used when selecting between alternate style sheets. |
  *
  * Note that `type` is defined to be a media type [[rfc2046](https://www.ietf.org/rfc/rfc2046.txt)].
+ *
+ * ## Setting Style
+ *
+ * Use \ref SVGStyleElement::setContents and pass a CSS stylesheet string.
  */
 class SVGStyleElement : public SVGElement {
   friend class parser::SVGParserImpl;

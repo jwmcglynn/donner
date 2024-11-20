@@ -1,8 +1,8 @@
-# Developer docs {#DeveloperDocs}
+# Developer Docs {#DeveloperDocs}
 
 \tableofcontents
 
-## Table of contents
+## Table of Contents
 
 - \subpage SystemArchitecture
 - \subpage CodingStyle
@@ -12,3 +12,4 @@
 - \subpage Maintenance
 - \subpage Devtools
 - \subpage ReSvgTestSuite
+- \subpage DataFormats
