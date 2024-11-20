@@ -7,7 +7,7 @@ namespace donner::svg::parser {
 namespace {
 
 /// Implementation class for \ref ViewboxParser.
-class ViewboxParserImpl : public base::parser::ParserBase {
+class ViewboxParserImpl : public donner::parser::ParserBase {
 public:
   /// Construct with the string to parse.
   explicit ViewboxParserImpl(std::string_view str) : ParserBase(str) {}

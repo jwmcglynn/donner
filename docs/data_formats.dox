@@ -7,8 +7,8 @@ poly_points.
 Donner implements a collection of parsers for these micro-syntaxes:
 - \ref donner::svg::parser::PathParser
 - \ref donner::svg::parser::PointsListParser
-- \ref donner::base::parser::NumberParser
-- \ref donner::base::parser::LengthParser
+- \ref donner::parser::NumberParser
+- \ref donner::parser::LengthParser
 - \ref donner::svg::parser::ParseLengthPercentage
 - \ref donner::svg::parser::TransformParser
 - \ref donner::svg::parser::ViewboxParser

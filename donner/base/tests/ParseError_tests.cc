@@ -3,7 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 TEST(ParseError, ResolveOffset) {
   {
@@ -35,4 +35,4 @@ TEST(ParseError, Output) {
   EXPECT_EQ((std::ostringstream() << err).str(), "Parse error at 1:2: Test reason");
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

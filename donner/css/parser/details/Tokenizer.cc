@@ -444,7 +444,8 @@ Token Tokenizer::consumeQuotedString() {
 
 /// Consume a numeric token, per https://www.w3.org/TR/css-syntax-3/#consume-numeric-token
 Token Tokenizer::consumeNumericToken() {
-  using base::parser::NumberParser;
+  using donner::parser::LengthParser;
+  using donner::parser::NumberParser;
 
   NumberParser::Options options;
   options.forbidOutOfRange = false;
@@ -467,8 +468,7 @@ Token Tokenizer::consumeNumericToken() {
   if (isIdentifierStart(remainingAfterNumber)) {
     auto [name, nameConsumedChars] = consumeName(remainingAfterNumber);
     return token<Token::Dimension>(number.consumedChars + nameConsumedChars, number.number, name,
-                                   base::parser::LengthParser::ParseUnit(name),
-                                   std::move(numberString), type);
+                                   LengthParser::ParseUnit(name), std::move(numberString), type);
   } else if (remainingAfterNumber.starts_with("%")) {
     return token<Token::Percentage>(number.consumedChars + 1, number.number,
                                     std::move(numberString), type);

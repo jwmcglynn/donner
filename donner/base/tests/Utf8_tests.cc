@@ -2,12 +2,11 @@
 
 #include <gtest/gtest.h>
 
-#include <concepts>
 #include <sstream>
 #include <string>
 #include <vector>
 
-namespace donner::base {
+namespace donner {
 
 namespace {
 
@@ -196,4 +195,4 @@ TEST(Utf8Test, Append) {
 #endif
 }
 
-}  // namespace donner::base
+}  // namespace donner

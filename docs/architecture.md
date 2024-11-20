@@ -112,7 +112,7 @@ The `//donner/base` library contains common utility code used by the other libra
 - \ref donner::Length "Length" - a simple class to represent a length with a specific unit, such as `10px` or `10cm`.
 - and more...
 
-This library also contains common parsers such as \ref donner::base::parser::NumberParser "NumberParser", which can parse a string into a number.
+This library also contains common parsers such as \ref donner::parser::NumberParser "NumberParser", which can parse a string into a number.
 
 The base library has minimal dependencies and the types within it may be suitable for other libraries, however the base library is not publicly exported.
 

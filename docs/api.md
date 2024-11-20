@@ -86,7 +86,7 @@ flowchart TD
 ### Namespace hierarchy
 
 - \ref donner - top-level namespace
-  - \ref donner::base::parser - common parsing utilities used by both CSS and SVG
+  - \ref donner::parser - common parsing utilities used by both CSS and SVG
   - \ref donner::css - CSS parsing and cascading logic
     - \ref donner::css::parser - the CSS parser
   - \ref donner::svg - SVG parsing and rendering

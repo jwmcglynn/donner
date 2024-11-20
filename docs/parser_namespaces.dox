@@ -1,8 +1,8 @@
 /**
- * @namespace donner::base::parser
+ * @namespace donner::parser
  *
- * Parsers for shared data types such as \ref donner::base::parser::NumberParser "NumberParser" and
- * \ref donner::base::parser::LengthParser "LengthParser".
+ * Parsers for shared data types such as \ref donner::parser::NumberParser "NumberParser" and
+ * \ref donner::parser::LengthParser "LengthParser".
  */
 
 /**

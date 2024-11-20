@@ -9,7 +9,7 @@ namespace donner::svg::parser {
 namespace {
 
 /// Implementation of \ref PointsListParser.
-class PointsListParserImpl : public base::parser::ParserBase {
+class PointsListParserImpl : public donner::parser::ParserBase {
 public:
   /**
    * Construct a PointsListParserImpl.

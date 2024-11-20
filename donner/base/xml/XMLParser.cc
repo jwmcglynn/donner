@@ -39,15 +39,15 @@ constexpr std::array<unsigned char, 256> BuildLookupTable(Lambda lambda) {
 }
 // LCOV_EXCL_STOP
 
-class XMLParserImpl : public donner::base::parser::ParserBase {
+class XMLParserImpl : public parser::ParserBase {
 private:
   XMLDocument document_;
   XMLParser::Options options_;
-  std::optional<base::parser::LineOffsets> lineOffsets_;
+  std::optional<parser::LineOffsets> lineOffsets_;
 
 public:
   explicit XMLParserImpl(std::string_view text, const XMLParser::Options& options)
-      : donner::base::parser::ParserBase(text), options_(options) {}
+      : parser::ParserBase(text), options_(options) {}
 
   ParseResult<XMLDocument> parse() {
     if (str_.empty()) {
@@ -127,9 +127,9 @@ public:
   }
 
 private:
-  base::parser::LineOffsets lineOffsets() {
+  parser::LineOffsets lineOffsets() {
     if (!lineOffsets_) {
-      lineOffsets_ = base::parser::LineOffsets(str_);
+      lineOffsets_ = parser::LineOffsets(str_);
     }
 
     return lineOffsets_.value();
@@ -275,6 +275,8 @@ private:
   // &gt; &#...;)
   template <class MatchPredicate, class MatchPredicateNoEntity>
   ParseResult<RcStringOrRef> consumeAndExpandEntities() {
+    using donner::parser::IntegerParser;
+
     if (UTILS_PREDICT_FALSE(options_.disableEntityTranslation)) {
       return ParseResult<RcStringOrRef>(consumeMatching<MatchPredicate>());
     }
@@ -307,12 +309,12 @@ private:
           std::vector<char> result;
 
           if (peek() == 'x') {
-            auto maybeResult = base::parser::IntegerParser::ParseHex(remaining_.substr(1));
+            auto maybeResult = IntegerParser::ParseHex(remaining_.substr(1));
             if (maybeResult.hasError()) {
               return mapParseError(std::move(maybeResult.error()), /*relativeOffset=*/1);
             }
 
-            const base::parser::IntegerParser::Result integerResult = maybeResult.result();
+            const IntegerParser::Result integerResult = maybeResult.result();
             // Decodes and adds to output text.
             if (auto maybeError = insertUtf8(integerResult.number, std::back_inserter(dest))) {
               return std::move(maybeError.value());
@@ -320,12 +322,12 @@ private:
 
             remaining_.remove_prefix(integerResult.consumedChars + 1);
           } else {
-            auto maybeResult = base::parser::IntegerParser::Parse(remaining_);
+            auto maybeResult = IntegerParser::Parse(remaining_);
             if (maybeResult.hasError()) {
               return mapParseError(std::move(maybeResult.error()));
             }
 
-            const base::parser::IntegerParser::Result integerResult = maybeResult.result();
+            const IntegerParser::Result integerResult = maybeResult.result();
 
             // Decodes and adds to output text.
             if (auto maybeError = insertUtf8(integerResult.number, std::back_inserter(dest))) {

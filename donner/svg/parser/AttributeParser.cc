@@ -39,7 +39,7 @@ bool IsAlwaysGenericAttribute(const XMLQualifiedNameRef& name) {
 }
 
 std::optional<double> ParseNumberNoSuffix(std::string_view str) {
-  const auto maybeResult = base::parser::NumberParser::Parse(str);
+  const auto maybeResult = donner::parser::NumberParser::Parse(str);
   if (maybeResult.hasResult()) {
     if (maybeResult.result().consumedChars != str.size()) {
       // We had extra characters, treat as invalid.
@@ -53,10 +53,12 @@ std::optional<double> ParseNumberNoSuffix(std::string_view str) {
 }
 
 std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::string_view value) {
-  base::parser::LengthParser::Options options;
+  using donner::parser::LengthParser;
+
+  LengthParser::Options options;
   options.unitOptional = true;
 
-  auto maybeLengthResult = base::parser::LengthParser::Parse(value, options);
+  auto maybeLengthResult = LengthParser::Parse(value, options);
   if (maybeLengthResult.hasError()) {
     context.addSubparserWarning(std::move(maybeLengthResult.error()),
                                 context.parserOriginFrom(value));
@@ -75,13 +77,15 @@ std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::stri
 }
 
 std::optional<float> ParseStopOffset(SVGParserContext& context, std::string_view value) {
+  using donner::parser::LengthParser;
+
   // Since we want to both parse a number or percent, use a LengthParser and then filter the allowed
   // suffixes.
-  base::parser::LengthParser::Options options;
+  LengthParser::Options options;
   options.unitOptional = true;
   options.limitUnitToPercentage = true;
 
-  auto maybeLengthResult = base::parser::LengthParser::Parse(value, options);
+  auto maybeLengthResult = LengthParser::Parse(value, options);
   if (maybeLengthResult.hasError()) {
     context.addSubparserWarning(std::move(maybeLengthResult.error()),
                                 context.parserOriginFrom(value));

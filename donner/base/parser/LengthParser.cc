@@ -4,7 +4,7 @@
 
 #include "donner/base/parser/details/ParserBase.h"
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 namespace {
 
@@ -152,4 +152,4 @@ std::optional<Lengthd::Unit> LengthParser::ParseUnit(std::string_view str) {
   return std::nullopt;
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser

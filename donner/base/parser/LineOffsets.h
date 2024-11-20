@@ -7,7 +7,7 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/Utils.h"
 
-namespace donner::base::parser {
+namespace donner::parser {
 
 /**
  * Helper class for finding newlines in a string, so that error messages can convert string-relative
@@ -92,4 +92,4 @@ private:
   std::vector<size_t> offsets_;
 };
 
-}  // namespace donner::base::parser
+}  // namespace donner::parser
