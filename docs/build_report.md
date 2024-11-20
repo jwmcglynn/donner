@@ -1,17 +1,17 @@
-# Donner build report
+# Donner Build Report
 
 Generated with: tools/generate_build_report.py --all --save docs/build_report.md
 
-Git revision: [324aef88fc23004e1905dc824ad5c8320d353116](https://github.com/jwmcglynn/donner/commit/324aef88fc23004e1905dc824ad5c8320d353116)
+Git revision: [821e21964172fc2625f3f62175f82b1650d52cc9](https://github.com/jwmcglynn/donner/commit/821e21964172fc2625f3f62175f82b1650d52cc9)
 
 ## Lines of code
 ```
 $ tools/cloc.sh
-Lines of source code:       34.9k
-Lines of comments:          14.5k
+Lines of source code:       35.1k
+Lines of comments:          14.6k
 Comment percentage:         41.0%
-Product lines of code:      21.4k
-Test lines of code:         11.6k
+Product lines of code:      21.5k
+Test lines of code:         11.7k
 ```
 
 ## Binary size
@@ -33,26 +33,26 @@ Saved report to build-binary-size/binary_size_report.html
 ```
     FILE SIZE        VM SIZE    
  --------------  -------------- 
-  25.2%   350Ki  25.2%   350Ki    [76 Others]
-  19.6%   273Ki  19.7%   273Ki    [__LINKEDIT]
+  25.2%   350Ki  25.1%   349Ki    [77 Others]
+  19.7%   273Ki  19.9%   276Ki    [__LINKEDIT]
    8.5%   118Ki   8.5%   118Ki    __str_find_first_not_of<char, unsigned long, std::__1::char_traits<char>, 18446744073709551615UL>
    5.7%  79.6Ki   5.7%  79.6Ki    __constexpr_memchr<const char, char>
-   4.4%  61.1Ki   4.4%  61.1Ki    __destroy_at<donner::base::parser::ParseError, 0>
+   4.4%  61.0Ki   4.4%  61.0Ki    __destroy_at<donner::ParseError, 0>
    4.1%  57.4Ki   4.1%  57.4Ki    __construct_at<donner::svg::components::RectComponent *, donner::svg::components::RectComponent **>
-   4.0%  55.5Ki   4.0%  55.5Ki    StartsWith<(donner::StringComparison)0, donner::RcString, std::__1::basic_string_view<char, std::__1::char_traits<char> > >
-   3.3%  45.3Ki   3.3%  45.3Ki    isa<donner::svg::SVGUseElement>
-   2.7%  37.4Ki   2.7%  37.4Ki    __destroy_at<donner::css::Rule, 0>
-   2.6%  36.3Ki   2.6%  36.3Ki    __set_size
+   4.0%  55.2Ki   4.0%  55.2Ki    StartsWith<(donner::StringComparison)0, donner::RcString, std::__1::basic_string_view<char, std::__1::char_traits<char> > >
+   3.3%  45.2Ki   3.2%  45.2Ki    isa<donner::svg::SVGUseElement>
+   2.7%  37.3Ki   2.7%  37.3Ki    __destroy_at<donner::css::Rule, 0>
    2.6%  36.2Ki   2.6%  36.2Ki    uninitialized_construct_using_allocator<donner::svg::components::ClipPathComponent, std::__1::allocator<donner::svg::components::ClipPathComponent> >
-   2.4%  33.9Ki   2.4%  33.9Ki    basic_vtable<donner::xml::components::XMLDocumentContext>
+   2.6%  36.0Ki   2.6%  36.0Ki    __set_size
+   2.4%  33.8Ki   2.4%  33.8Ki    basic_vtable<donner::xml::components::XMLDocumentContext>
    2.2%  30.6Ki   2.2%  30.6Ki    construct<donner::svg::components::ComputedShadowTreeComponent *, void, void>
    2.1%  29.6Ki   2.1%  29.6Ki    [__DATA_CONST,__const]
-   1.9%  26.0Ki   1.9%  26.0Ki    __construct_at<donner::xml::(anonymous namespace)::XMLNodeTypeComponent *, donner::xml::(anonymous namespace)::XMLNodeTypeComponent **>
+   1.9%  25.7Ki   1.8%  25.7Ki    __construct_at<donner::xml::(anonymous namespace)::XMLNodeTypeComponent *, donner::xml::(anonymous namespace)::XMLNodeTypeComponent **>
    1.7%  24.1Ki   1.7%  24.1Ki    apply<(lambda at external/_main~_repo_rules~entt/src/entt/container/../core/memory.hpp:278:23), std::__1::tuple<donner::svg::components::PathLengthComponent &&> >
    1.5%  20.4Ki   1.5%  20.4Ki    __construct_at<donner::svg::components::LinearGradientComponent *, donner::svg::components::LinearGradientComponent **>
    1.4%  19.2Ki   1.4%  19.2Ki    __construct_at<donner::svg::components::StylesheetComponent *, donner::svg::components::StylesheetComponent **>
-   1.3%  18.8Ki   1.4%  18.9Ki    [__TEXT]
-   1.4%  18.9Ki   1.4%  18.9Ki    operator!=<donner::css::SelectorRule *, donner::css::SelectorRule *>
+   1.4%  18.8Ki   1.4%  18.8Ki    operator!=<donner::css::SelectorRule *, donner::css::SelectorRule *>
+   1.3%  18.7Ki   1.4%  18.8Ki    [__TEXT]
    1.3%  18.2Ki   1.3%  18.2Ki    __construct_at<donner::svg::components::PathComponent *, donner::svg::components::PathComponent **>
  100.0%  1.36Mi 100.0%  1.36Mi    TOTAL
 ```
@@ -64,9 +64,9 @@ Saved report to build-binary-size/binary_size_report.html
 $ tools/coverage.sh --quiet
 Analyzing coverage for: //donner/...
 Overall coverage rate:
-  lines......: 91.4% (24496 of 26790 lines)
-  functions......: 90.0% (4329 of 4808 functions)
-  branches......: 71.5% (6145 of 8598 branches)
+  lines......: 85.8% (13546 of 15782 lines)
+  functions......: 87.1% (3401 of 3903 functions)
+  branches......: 67.8% (5972 of 8814 branches)
 Coverage report saved to coverage-report/index.html
 ```
 
