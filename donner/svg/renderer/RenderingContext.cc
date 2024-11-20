@@ -476,8 +476,7 @@ private:
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
-                                const PaintServer& paint,
-                                std::vector<parser::ParseError>* outWarnings) {
+                                const PaintServer& paint, std::vector<ParseError>* outWarnings) {
   if (paint.is<PaintServer::ElementReference>()) {
     const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
 
@@ -491,7 +490,7 @@ void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchT
 }
 
 void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Reference& reference,
-                               std::vector<parser::ParseError>* outWarnings) {
+                               std::vector<ParseError>* outWarnings) {
   if (auto resolvedRef = reference.resolve(registry);
       resolvedRef && resolvedRef->handle.all_of<MaskComponent>()) {
     auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
@@ -500,8 +499,7 @@ void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Referenc
 }
 
 void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
-                                 const Reference& reference,
-                                 std::vector<parser::ParseError>* outWarnings) {
+                                 const Reference& reference, std::vector<ParseError>* outWarnings) {
   if (auto resolvedRef = reference.resolve(registry);
       resolvedRef && resolvedRef->handle.all_of<MarkerComponent>()) {
     auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
@@ -513,8 +511,7 @@ void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranch
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
 
-void RenderingContext::instantiateRenderTree(bool verbose,
-                                             std::vector<parser::ParseError>* outWarnings) {
+void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
   // TODO(jwmcglynn): Support partial invalidation, where we only recompute the subtree that has
   // changed.
   // Call ShadowTreeSystem::teardown() to destroy any existing shadow trees.
@@ -594,7 +591,7 @@ void RenderingContext::invalidateRenderTree() {
 // 6. Decompose shapes to paths
 // 7. Resolve fill and stroke references (paints)
 // 8. Resolve filter references
-void RenderingContext::createComputedComponents(std::vector<parser::ParseError>* outWarnings) {
+void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
   PaintSystem().createShadowTrees(registry_, outWarnings);
 
@@ -609,7 +606,7 @@ void RenderingContext::createComputedComponents(std::vector<parser::ParseError>*
 
     } else if (shadowTreeComponent.mainHref() && outWarnings) {
       // We had a main href but it failed to resolve.
-      parser::ParseError err;
+      ParseError err;
       err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
                    shadowTreeComponent.mainHref().value_or("") + "'";
       outWarnings->emplace_back(std::move(err));
@@ -674,7 +671,7 @@ void RenderingContext::createComputedComponents(std::vector<parser::ParseError>*
         }
       } else if (outWarnings) {
         // We had a href but it failed to resolve.
-        parser::ParseError err;
+        ParseError err;
         err.reason =
             std::string("Warning: Failed to resolve offscreen shadow tree target with href '") +
             ref.href + "'";

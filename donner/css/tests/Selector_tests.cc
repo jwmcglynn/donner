@@ -18,7 +18,6 @@ using testing::ElementsAreArray;
 
 namespace donner::css::parser {
 
-using namespace base::parser;  // NOLINT: For tests
 using xml::XMLQualifiedName;
 using xml::XMLQualifiedNameRef;
 

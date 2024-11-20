@@ -16,8 +16,6 @@ using testing::ElementsAre;
 
 namespace donner::css::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 namespace {
 
 std::vector<ComponentValue> TokenizeString(std::string_view str) {

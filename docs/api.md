@@ -39,7 +39,7 @@ flowchart TD
 
 - Donner does not use C++ exceptions.
 
-- `std::optional` and \ref donner::base::parser::ParseResult are used to return values from functions. This allows the caller to check for errors and handle them as needed. `ParseResult` behaves similarly to `std::expected` (new in C++23), and may be replaced with it in the future.
+- `std::optional` and \ref donner::ParseResult are used to return values from functions. This allows the caller to check for errors and handle them as needed. `ParseResult` behaves similarly to `std::expected` (new in C++23), and may be replaced with it in the future.
 
 - Callers can `if` init-statements to check for success:
 
@@ -95,7 +95,7 @@ To parse an SVG document, use the `SVGParser` class:
 
 \snippet svg_tree_interaction.cc svg_parse
 
-\ref donner::base::parser::ParseResult contains either the document or an error, which can be checked with `hasError()` and `error()`:
+\ref donner::ParseResult contains either the document or an error, which can be checked with `hasError()` and `error()`:
 
 \snippet svg_tree_interaction.cc error_handling
 

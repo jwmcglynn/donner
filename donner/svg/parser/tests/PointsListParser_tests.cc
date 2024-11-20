@@ -11,8 +11,6 @@ using testing::ElementsAre;
 
 namespace donner::svg::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 TEST(PointsListParser, Empty) {
   ParseResult<std::vector<Vector2d>> result = PointsListParser::Parse("");
   EXPECT_TRUE(result.hasResult());

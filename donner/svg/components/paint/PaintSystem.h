@@ -27,7 +27,7 @@ public:
    * @param outWarnings Containing any warnings found
    */
   const ComputedStopComponent& createComputedStop(EntityHandle handle, const StopComponent& stop,
-                                                  std::vector<parser::ParseError>* outWarnings);
+                                                  std::vector<ParseError>* outWarnings);
 
   /**
    * Create \ref ComputedGradientComponent for all entities in the registry that have a \ref
@@ -41,8 +41,7 @@ public:
    * @param registry Registry used to find all \ref GradientComponent
    * @param outWarnings Containing any warnings found
    */
-  void instantiateAllComputedComponents(Registry& registry,
-                                        std::vector<parser::ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
   /**
    * Create shadow trees for all gradient and pattern elements in the registry that have a valid
@@ -54,7 +53,7 @@ public:
    * components to compute shadow trees
    * @param outWarnings Containing any warnings found
    */
-  void createShadowTrees(Registry& registry, std::vector<parser::ParseError>* outWarnings);
+  void createShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings);
 
 private:
   /**
@@ -71,7 +70,7 @@ private:
    * @param outWarnings Containing any warnings found
    */
   void initializeComputedGradient(EntityHandle handle, ComputedGradientComponent& computedGradient,
-                                  std::vector<parser::ParseError>* outWarnings);
+                                  std::vector<ParseError>* outWarnings);
 
   /**
    * Initialize \ref computedPattern with the given entity handle. This method must be called after
@@ -86,7 +85,7 @@ private:
    * @param outWarnings Containing any warnings found
    */
   void initializeComputedPattern(EntityHandle handle, ComputedPatternComponent& computedPattern,
-                                 std::vector<parser::ParseError>* outWarnings);
+                                 std::vector<ParseError>* outWarnings);
 
   /**
    * Follow the href="" attributes of the given entity handle to find all entities in the
@@ -99,7 +98,7 @@ private:
    * @param outWarnings Containing any warnings found
    */
   std::vector<Entity> getInheritanceChain(EntityHandle handle,
-                                          std::vector<parser::ParseError>* outWarnings);
+                                          std::vector<ParseError>* outWarnings);
 
   /**
    * Create a \ref ComputedStopComponent for a given entity handle and its attached \ref
@@ -110,9 +109,10 @@ private:
    * @param style Computed style component for the entity, created from \ref StyleSystem
    * @param outWarnings Containing any warnings found
    */
-  const ComputedStopComponent& createComputedStopWithStyle(
-      EntityHandle handle, const StopComponent& stop, const ComputedStyleComponent& style,
-      std::vector<parser::ParseError>* outWarnings);
+  const ComputedStopComponent& createComputedStopWithStyle(EntityHandle handle,
+                                                           const StopComponent& stop,
+                                                           const ComputedStyleComponent& style,
+                                                           std::vector<ParseError>* outWarnings);
 
   /**
    * Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in
@@ -162,7 +162,7 @@ private:
    * @param registry Registry used to find all \ref GradientComponent to compute shadow trees
    * @param outWarnings Containing any warnings found
    */
-  void createGradientShadowTrees(Registry& registry, std::vector<parser::ParseError>* outWarnings);
+  void createGradientShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings);
 
   /**
    * Instantiate shadow trees for valid "href" attributes in pattern elements for all elements in
@@ -212,7 +212,7 @@ private:
    * @param registry Registry used to find all \ref PatternComponent to compute shadow trees
    * @param outWarnings Containing any warnings found
    */
-  void createPatternShadowTrees(Registry& registry, std::vector<parser::ParseError>* outWarnings);
+  void createPatternShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

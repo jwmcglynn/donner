@@ -39,7 +39,7 @@ struct ComputedCircleComponent {
    */
   ComputedCircleComponent(const CircleProperties& inputProperties,
                           const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                          std::vector<parser::ParseError>* outWarnings);
+                          std::vector<ParseError>* outWarnings);
 
   /// The computed properties for the circle.
   CircleProperties properties;

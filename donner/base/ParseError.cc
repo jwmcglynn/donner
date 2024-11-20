@@ -1,6 +1,6 @@
 #include "donner/base/ParseError.h"
 
-namespace donner::base::parser {
+namespace donner {
 
 /// Ostream output operator for \ref ParseError, outputs the error message.
 std::ostream& operator<<(std::ostream& os, const ParseError& error) {
@@ -16,4 +16,4 @@ std::ostream& operator<<(std::ostream& os, const ParseError& error) {
   return os << ": " << error.reason;
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner

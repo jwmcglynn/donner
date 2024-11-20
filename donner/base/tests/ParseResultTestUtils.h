@@ -6,7 +6,7 @@
 
 #include "donner/base/ParseResult.h"
 
-namespace donner::base::parser {
+namespace donner {
 
 namespace details {
 
@@ -161,4 +161,4 @@ MATCHER_P2(ParseResultAndError, resultMatcher, errorMessageMatcher, "") {
          testing::ExplainMatchResult(errorMessageMatcher, arg.error(), result_listener);
 }
 
-}  // namespace donner::base::parser
+}  // namespace donner

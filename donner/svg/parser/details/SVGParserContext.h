@@ -67,9 +67,8 @@ public:
    */
   ParseError fromSubparser(ParseError&& error, ParserOrigin origin) {
     const size_t line = lineOffsets_.offsetToLine(origin.startOffset);
-    const base::parser::FileOffset parentOffset = base::parser::FileOffset::OffsetWithLineInfo(
-        origin.startOffset,
-        base::parser::FileOffset::LineInfo{line, lineOffsets_.lineOffset(line)});
+    const FileOffset parentOffset = FileOffset::OffsetWithLineInfo(
+        origin.startOffset, FileOffset::LineInfo{line, lineOffsets_.lineOffset(line)});
 
     ParseError newError = std::move(error);
     newError.location = newError.location.addParentOffset(parentOffset);
@@ -105,7 +104,7 @@ public:
    * @param attributeName Name of the attribute.
    * @return std::optional<size_t> Offset of the element's attribute in the input string.
    */
-  std::optional<base::parser::FileOffsetRange> getAttributeLocation(
+  std::optional<FileOffsetRange> getAttributeLocation(
       const SVGElement& element, const xml::XMLQualifiedNameRef& attributeName) const {
     // Convert the SVGElement into an XMLNode.
     if (auto maybeNode = xml::XMLNode::TryCast(EntityHandle(element.entityHandle()))) {

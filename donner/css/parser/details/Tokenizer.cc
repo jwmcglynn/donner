@@ -156,7 +156,7 @@ static bool isNumberStart(std::string_view remaining) {
 static std::tuple<char32_t, int> consumeEscapedCodepoint(std::string_view remaining) {
   if (remaining.empty()) {
     // EOF: This is a parse error. Return U+FFFD REPLACEMENT CHARACTER (�).
-    return {base::Utf8::kUnicodeReplacementCharacter, 0};
+    return {Utf8::kUnicodeReplacementCharacter, 0};
   } else if (std::isxdigit(remaining[0])) {
     char32_t number = hexDigitToDecimal(remaining[0]);
     size_t i = 1;
@@ -175,22 +175,21 @@ static std::tuple<char32_t, int> consumeEscapedCodepoint(std::string_view remain
 
     // If this number is zero, or is for a surrogate, or is greater than the maximum allowed code
     // point, return U+FFFD REPLACEMENT CHARACTER (�).
-    if (number == 0 || !base::Utf8::IsValidCodepoint(number)) {
-      return {base::Utf8::kUnicodeReplacementCharacter, i};
+    if (number == 0 || !Utf8::IsValidCodepoint(number)) {
+      return {Utf8::kUnicodeReplacementCharacter, i};
     }
 
     // Otherwise, return the code point with that value.
     return {number, i};
   } else {
     if (remaining[0] != '\0') {
-      const auto [codepoint, bytesConsumed] = base::Utf8::NextCodepointLenient(remaining);
-      return {base::Utf8::IsValidCodepoint(codepoint) ? codepoint
-                                                      : base::Utf8::kUnicodeReplacementCharacter,
+      const auto [codepoint, bytesConsumed] = Utf8::NextCodepointLenient(remaining);
+      return {Utf8::IsValidCodepoint(codepoint) ? codepoint : Utf8::kUnicodeReplacementCharacter,
               bytesConsumed};
     } else {
       // Transform \0 to the unicode replacement character, since the proprocess step has been
       // skipped.
-      return {base::Utf8::kUnicodeReplacementCharacter, 1};
+      return {Utf8::kUnicodeReplacementCharacter, 1};
     }
   }
 }
@@ -211,14 +210,14 @@ static std::tuple<RcString, size_t> consumeName(std::string_view remaining) {
       if (ch != '\0') {
         str.push_back(ch);
       } else {
-        base::Utf8::Append(base::Utf8::kUnicodeReplacementCharacter, std::back_inserter(str));
+        Utf8::Append(Utf8::kUnicodeReplacementCharacter, std::back_inserter(str));
       }
       ++i;
     } else if (isValidEscape(remaining.substr(i))) {
       // the stream starts with a valid escape: Consume an escaped code point. Append the returned
       // code point to result.
       const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining.substr(i + 1));
-      base::Utf8::Append(codepoint, std::back_inserter(str));
+      Utf8::Append(codepoint, std::back_inserter(str));
       i += 1 + bytesConsumed;
     } else {
       // anything else: Reconsume the current input code point. Return result.
@@ -427,11 +426,11 @@ Token Tokenizer::consumeQuotedString() {
         // Otherwise, (the stream starts with a valid escape) consume an escaped code point and
         // append the returned code point to the <string-token>'s value.
         const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(remaining_.substr(i + 1));
-        base::Utf8::Append(codepoint, std::back_inserter(str));
+        Utf8::Append(codepoint, std::back_inserter(str));
         i += bytesConsumed;
       }
     } else if (ch == '\0') {
-      base::Utf8::Append(base::Utf8::kUnicodeReplacementCharacter, std::back_inserter(str));
+      Utf8::Append(Utf8::kUnicodeReplacementCharacter, std::back_inserter(str));
     } else {
       // anything else: Append the current input code point to the <string-token>'s value.
       str.push_back(ch);
@@ -545,7 +544,7 @@ Token Tokenizer::consumeUrlToken(const std::string_view afterUrl, size_t charsCo
         return consumeRemnantsOfBadUrl(afterUrl.substr(i), charsConsumedBefore + i);
       }
     } else if (ch == '\0') {
-      base::Utf8::Append(base::Utf8::kUnicodeReplacementCharacter, std::back_inserter(str));
+      Utf8::Append(Utf8::kUnicodeReplacementCharacter, std::back_inserter(str));
       ++i;
     } else if (isQuote(ch) || ch == '(' || isNonPrintableCodepoint(ch)) {
       // This is a parse error. Consume the remnants of a bad url, create a <bad-url-token>, and
@@ -555,7 +554,7 @@ Token Tokenizer::consumeUrlToken(const std::string_view afterUrl, size_t charsCo
       // U+005C REVERSE SOLIDUS (\): If the stream starts with a valid escape, consume an escaped
       // code point and append the returned code point to the <url-token>'s value.
       const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(afterUrl.substr(i + 1));
-      base::Utf8::Append(codepoint, std::back_inserter(str));
+      Utf8::Append(codepoint, std::back_inserter(str));
       i += bytesConsumed + 1;
     } else {
       // anything else: Append the current input code point to the <url-token>'s value.

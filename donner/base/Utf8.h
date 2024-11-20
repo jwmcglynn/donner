@@ -4,7 +4,7 @@
 #include <string_view>
 #include <tuple>
 
-namespace donner::base {
+namespace donner {
 
 /// Utility class for working with UTF-8 encoded strings.
 class Utf8 {
@@ -163,4 +163,4 @@ public:
   }
 };
 
-}  // namespace donner::base
+}  // namespace donner

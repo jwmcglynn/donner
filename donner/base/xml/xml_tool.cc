@@ -7,8 +7,6 @@
 
 namespace donner::xml {
 
-using donner::base::parser::ParseError;
-
 void DumpTree(const XMLNode& element, int depth) {
   for (int i = 0; i < depth; ++i) {
     std::cout << "  ";

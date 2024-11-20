@@ -123,8 +123,8 @@ void SVGElement::updateStyle(std::string_view style) {
   components::StyleSystem().invalidateComputed(handle_);
 }
 
-parser::ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
-                                                                  std::string_view value) {
+ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
+                                                          std::string_view value) {
   std::string_view actualName = name;
 
   // gradientTransform and patternTransform are special, since they map to the

@@ -6,7 +6,7 @@
 #include "donner/base/ParseError.h"
 #include "donner/base/Utils.h"
 
-namespace donner::base::parser {
+namespace donner {
 
 /**
  * A parser result, which may contain a result of type \a T, or an error, or both.
@@ -143,13 +143,4 @@ private:
   std::optional<ParseError> error_;
 };
 
-}  // namespace donner::base::parser
-
-// Re-export in svg and css namespaces for convenience.
-namespace donner::svg::parser {
-using donner::base::parser::ParseResult;
-}  // namespace donner::svg::parser
-
-namespace donner::css::parser {
-using donner::base::parser::ParseResult;
-}  // namespace donner::css::parser
+}  // namespace donner

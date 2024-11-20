@@ -10,13 +10,13 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
-namespace donner::base::parser {
+namespace donner {
 
 // Forward declaration, #include "donner/base/ParseResult.h"
 template <typename T>
 class ParseResult;
 
-}  // namespace donner::base::parser
+}  // namespace donner
 
 namespace donner::svg {
 
@@ -142,10 +142,9 @@ public:
    * @param name Name of the attribute to set.
    * @param value New value to set.
    * @return true if the attribute was set, false if the attribute is not a valid presentation
-   * attribute for this element, or a \ref donner::base::parser::ParseError if the value is invalid.
+   * attribute for this element, or a \ref ParseError if the value is invalid.
    */
-  base::parser::ParseResult<bool> trySetPresentationAttribute(std::string_view name,
-                                                              std::string_view value);
+  ParseResult<bool> trySetPresentationAttribute(std::string_view name, std::string_view value);
 
   /**
    * Returns true if the element has an attribute with the given name.

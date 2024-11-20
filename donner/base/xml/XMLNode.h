@@ -258,7 +258,7 @@ public:
    * @return Start and end offsets of the node in the input string, or \c std::nullptr if source
    * locations are not available.
    */
-  std::optional<base::parser::FileOffsetRange> getNodeLocation() const;
+  std::optional<FileOffsetRange> getNodeLocation() const;
 
   /**
    * Get the location of an attribute in the input string.
@@ -278,8 +278,8 @@ public:
    * @return Offset of the attribute in the input string, or \c std::nullopt if the attribute does
    * not exist.
    */
-  std::optional<base::parser::FileOffsetRange> getAttributeLocation(
-      std::string_view xmlInput, const XMLQualifiedNameRef& name) const;
+  std::optional<FileOffsetRange> getAttributeLocation(std::string_view xmlInput,
+                                                      const XMLQualifiedNameRef& name) const;
 
   /// Get the list of attributes for this element.
   SmallVector<XMLQualifiedNameRef, 10> attributes() const;
@@ -404,27 +404,27 @@ public:
    * Get the source offset of where this node starts in the XML document source (if this node was
    * instantiated by \ref XMLParser).
    */
-  std::optional<base::parser::FileOffset> sourceStartOffset() const;
+  std::optional<FileOffset> sourceStartOffset() const;
 
   /**
    * Set the source offset of where this node starts in the XML document source.
    *
    * @param offset Offset in the source document, in characters from the start.
    */
-  void setSourceStartOffset(base::parser::FileOffset offset);
+  void setSourceStartOffset(FileOffset offset);
 
   /**
    * Get the source offset of where this node ends in the XML document source (if this node was
    * instantiated by \ref XMLParser).
    */
-  std::optional<base::parser::FileOffset> sourceEndOffset() const;
+  std::optional<FileOffset> sourceEndOffset() const;
 
   /**
    * Set the source offset of where this node ends in the XML document source.
    *
    * @param offset Offset in the source document, in characters from the start.
    */
-  void setSourceEndOffset(base::parser::FileOffset offset);
+  void setSourceEndOffset(FileOffset offset);
 
   /**
    * Returns true if the two XMLNode handles reference the same underlying document.

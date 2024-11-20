@@ -10,7 +10,7 @@ namespace donner::svg::components {
 
 namespace {
 
-using EllipsePresentationAttributeParseFn = std::optional<parser::ParseError> (*)(
+using EllipsePresentationAttributeParseFn = std::optional<ParseError> (*)(
     EllipseProperties& properties, const parser::PropertyParseFnParams& params);
 
 static constexpr frozen::unordered_map<frozen::string, EllipsePresentationAttributeParseFn, 4>
@@ -61,7 +61,7 @@ static constexpr frozen::unordered_map<frozen::string, EllipsePresentationAttrib
 ComputedEllipseComponent::ComputedEllipseComponent(
     const EllipseProperties& inputProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<parser::ParseError>* outWarnings)
+    std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const auto it = kProperties.find(frozen::string(name));

@@ -8,8 +8,6 @@
 
 namespace donner::svg::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 TEST(TransformParser, Empty) {
   EXPECT_THAT(TransformParser::Parse(""), ParseResultIs(TransformIsIdentity()));
   EXPECT_THAT(TransformParser::Parse(" \t\r\n "), ParseResultIs(TransformIsIdentity()));

@@ -53,7 +53,7 @@ public:
   std::optional<size_t> populateInstance(EntityHandle entity, ComputedShadowTreeComponent& shadow,
                                          ShadowBranchType branchType, Entity lightTarget,
                                          const RcString& href,
-                                         std::vector<parser::ParseError>* outWarnings);
+                                         std::vector<ParseError>* outWarnings);
 
 private:
   Entity createShadowEntity(Registry& registry, ShadowBranchType branchType,
@@ -64,7 +64,7 @@ private:
                        ComputedShadowTreeComponent::BranchStorage& storage, RecursionGuard& guard,
                        Entity shadowParent, Entity lightTarget,
                        const std::set<Entity>& shadowHostParents,
-                       std::vector<parser::ParseError>* outWarnings);
+                       std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

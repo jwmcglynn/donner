@@ -12,8 +12,6 @@ using testing::Optional;
 
 namespace donner::css::parser {
 
-using namespace donner::base::parser;  // NOLINT: For tests
-
 namespace {
 
 std::vector<css::ComponentValue> toComponents(std::string_view str) {

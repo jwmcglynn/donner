@@ -8,8 +8,6 @@
 
 namespace donner::svg::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 TEST(ViewboxParser, Empty) {
   EXPECT_THAT(ViewboxParser::Parse(""),
               ParseErrorIs("Failed to parse number: Unexpected character"));

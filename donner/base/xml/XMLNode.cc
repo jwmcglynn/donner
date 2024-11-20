@@ -29,8 +29,8 @@ private:
 
 // TODO: Move to its own header
 struct SourceOffsetComponent {
-  std::optional<base::parser::FileOffset> startOffset;
-  std::optional<base::parser::FileOffset> endOffset;
+  std::optional<FileOffset> startOffset;
+  std::optional<FileOffset> endOffset;
 };
 
 }  // namespace
@@ -143,17 +143,17 @@ std::optional<RcString> XMLNode::getAttribute(const XMLQualifiedNameRef& name) c
   return handle_.get_or_emplace<AttributesComponent>().getAttribute(name);
 }
 
-std::optional<base::parser::FileOffsetRange> XMLNode::getNodeLocation() const {
+std::optional<FileOffsetRange> XMLNode::getNodeLocation() const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
     if (offset->startOffset && offset->endOffset) {
-      return base::parser::FileOffsetRange{*offset->startOffset, *offset->endOffset};
+      return FileOffsetRange{*offset->startOffset, *offset->endOffset};
     }
   }
 
   return std::nullopt;
 }
 
-std::optional<base::parser::FileOffsetRange> XMLNode::getAttributeLocation(
+std::optional<FileOffsetRange> XMLNode::getAttributeLocation(
     std::string_view xmlInput, const XMLQualifiedNameRef& name) const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
     if (offset->startOffset) {
@@ -240,7 +240,7 @@ void XMLNode::remove() {
   handle_.get<TreeComponent>().remove(registry());
 }
 
-std::optional<base::parser::FileOffset> XMLNode::sourceStartOffset() const {
+std::optional<FileOffset> XMLNode::sourceStartOffset() const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
     return offset->startOffset;
   } else {
@@ -248,11 +248,11 @@ std::optional<base::parser::FileOffset> XMLNode::sourceStartOffset() const {
   }
 }
 
-void XMLNode::setSourceStartOffset(base::parser::FileOffset offset) {
+void XMLNode::setSourceStartOffset(FileOffset offset) {
   handle_.get_or_emplace<SourceOffsetComponent>().startOffset = offset;
 }
 
-std::optional<base::parser::FileOffset> XMLNode::sourceEndOffset() const {
+std::optional<FileOffset> XMLNode::sourceEndOffset() const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
     return offset->endOffset;
   } else {
@@ -260,7 +260,7 @@ std::optional<base::parser::FileOffset> XMLNode::sourceEndOffset() const {
   }
 }
 
-void XMLNode::setSourceEndOffset(base::parser::FileOffset offset) {
+void XMLNode::setSourceEndOffset(FileOffset offset) {
   handle_.get_or_emplace<SourceOffsetComponent>().endOffset = offset;
 }
 

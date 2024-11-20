@@ -74,8 +74,7 @@ public:
    * @param options Options to modify the parsing behavior.
    * @return ParseResult containing the parsed XMLDocument, or an error if parsing failed.
    */
-  static base::parser::ParseResult<XMLDocument> Parse(std::string_view str,
-                                                      const Options& options = Options());
+  static ParseResult<XMLDocument> Parse(std::string_view str, const Options& options = Options());
 
   /**
    * Parse the XML attributes and get the source location of a specific attribute.
@@ -96,8 +95,8 @@ public:
    * @return std::optional<AttributeLocation> containing the start and end offsets of the attribute
    * in the input string, or std::nullopt if the attribute was not found.
    */
-  static std::optional<base::parser::FileOffsetRange> GetAttributeLocation(
-      std::string_view str, base::parser::FileOffset elementStartOffset,
+  static std::optional<FileOffsetRange> GetAttributeLocation(
+      std::string_view str, FileOffset elementStartOffset,
       const XMLQualifiedNameRef& attributeName);
 };
 

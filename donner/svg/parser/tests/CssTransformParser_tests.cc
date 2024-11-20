@@ -9,8 +9,6 @@
 
 namespace donner::svg::parser {
 
-using namespace base::parser;  // NOLINT: For tests
-
 namespace {
 
 ParseResult<Transformd> parseAsCss(std::string_view str) {

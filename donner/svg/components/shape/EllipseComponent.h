@@ -67,7 +67,7 @@ struct ComputedEllipseComponent {
    */
   ComputedEllipseComponent(const EllipseProperties& inputProperties,
                            const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                           std::vector<parser::ParseError>* outWarnings);
+                           std::vector<ParseError>* outWarnings);
 
   /// The computed properties for the ellipse.
   EllipseProperties properties;

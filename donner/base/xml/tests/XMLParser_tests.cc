@@ -8,7 +8,6 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 
-using namespace donner::base::parser;
 using testing::AllOf;
 using testing::ElementsAre;
 using testing::Eq;
@@ -532,7 +531,7 @@ TEST_F(XMLParserTests, GetAttributeLocation_Basic) {
 
   // Hardcode the offset of '<child' in this sample string.
   // For quick determination, count characters or use a parser that returns element offsets.
-  const auto kChildOffset = base::parser::FileOffset::Offset(6);
+  const auto kChildOffset = FileOffset::Offset(6);
 
   // Call the function under test.
   auto location =
@@ -553,7 +552,7 @@ TEST_F(XMLParserTests, GetAttributeLocation_NoSuchAttribute) {
   std::string_view xml = R"(<root><child attr="Hello, world!"></child></root>)";
 
   // Offset for <child>.
-  const auto kChildOffset = base::parser::FileOffset::Offset(6);
+  const auto kChildOffset = FileOffset::Offset(6);
 
   // Ask for a non-existent attribute.
   auto location =
@@ -566,7 +565,7 @@ TEST_F(XMLParserTests, GetAttributeLocation_WithNamespace) {
   std::string_view xml = R"(<root><child ns:attr="namespaced value" another="value"/></root>)";
 
   // Offset for <child>.
-  const auto kChildOffset = base::parser::FileOffset::Offset(6);
+  const auto kChildOffset = FileOffset::Offset(6);
 
   // Attempt retrieval with the namespace prefix "ns".
   auto location =

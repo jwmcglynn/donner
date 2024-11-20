@@ -8,7 +8,6 @@
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 
-using namespace donner::base::parser;
 using testing::AllOf;
 using testing::ElementsAre;
 using testing::Eq;

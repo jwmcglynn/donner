@@ -53,9 +53,8 @@ private:
 
 // Forward declarations.
 template <TokenizerLike<Token> T>
-Function consumeFunction(T& tokenizer, Token::Function&& functionToken,
-                         const parser::FileOffset& offset, ParseMode mode,
-                         ComponentValueParsingContext& parsingContext);
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken, const FileOffset& offset,
+                         ParseMode mode, ComponentValueParsingContext& parsingContext);
 template <TokenizerLike<Token> T>
 SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode,
                                ComponentValueParsingContext& parsingContext);
@@ -143,9 +142,8 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode,
 
 /// Consume a function, per https://www.w3.org/TR/css-syntax-3/#consume-function
 template <TokenizerLike<Token> T>
-Function consumeFunction(T& tokenizer, Token::Function&& functionToken,
-                         const parser::FileOffset& offset, ParseMode mode,
-                         ComponentValueParsingContext& parsingContext) {
+Function consumeFunction(T& tokenizer, Token::Function&& functionToken, const FileOffset& offset,
+                         ParseMode mode, ComponentValueParsingContext& parsingContext) {
   Function result(std::move(functionToken.name), offset);
 
   while (!tokenizer.isEOF()) {

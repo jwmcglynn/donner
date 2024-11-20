@@ -7,8 +7,6 @@
 
 namespace donner::svg {
 
-using donner::base::parser::ParseErrorIs;
-using donner::base::parser::ParseResultIs;
 using testing::HasSubstr;
 
 TEST(Base64, EmptyString) {

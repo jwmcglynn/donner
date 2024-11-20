@@ -6,7 +6,7 @@
 namespace donner::svg::components {
 
 void FilterSystem::createComputedFilter(EntityHandle handle, const FilterComponent& component,
-                                        std::vector<parser::ParseError>* outWarnings) {
+                                        std::vector<ParseError>* outWarnings) {
   const Registry& registry = *handle.registry();
 
   std::vector<FilterEffect> effectChain;
@@ -35,7 +35,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
 }
 
 void FilterSystem::instantiateAllComputedComponents(Registry& registry,
-                                                    std::vector<parser::ParseError>* outWarnings) {
+                                                    std::vector<ParseError>* outWarnings) {
   for (auto entity : registry.view<FilterComponent>()) {
     createComputedFilter(EntityHandle(registry, entity), registry.get<FilterComponent>(entity),
                          outWarnings);

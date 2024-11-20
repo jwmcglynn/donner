@@ -22,7 +22,7 @@ public:
    * @returns Computed style component for the entity
    */
   const ComputedStyleComponent& computeStyle(EntityHandle handle,
-                                             std::vector<parser::ParseError>* outWarnings);
+                                             std::vector<ParseError>* outWarnings);
 
   /**
    * Computes the style for all entities in the registry.
@@ -30,7 +30,7 @@ public:
    * @param registry Registry to compute the styles, used to query for all entities in the tree.
    * @param outWarnings Containing any warnings found
    */
-  void computeAllStyles(Registry& registry, std::vector<parser::ParseError>* outWarnings);
+  void computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings);
 
   /**
    * Computes the style for the given entities in the registry.
@@ -40,7 +40,7 @@ public:
    * @param outWarnings Containing any warnings found
    */
   void computeStylesFor(Registry& registry, std::span<const Entity> entities,
-                        std::vector<parser::ParseError>* outWarnings);
+                        std::vector<ParseError>* outWarnings);
 
   /**
    * Invalidate the computed style for a given entity.
@@ -58,7 +58,7 @@ public:
 
 private:
   void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                             std::vector<parser::ParseError>* outWarnings);
+                             std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

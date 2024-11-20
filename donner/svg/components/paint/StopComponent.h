@@ -44,7 +44,7 @@ struct ComputedStopComponent {
    */
   ComputedStopComponent(const StopProperties& inputProperties, const ComputedStyleComponent& style,
                         const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                        std::vector<parser::ParseError>* outWarnings);
+                        std::vector<ParseError>* outWarnings);
 
   /// Computed properties of the \ref xml_stop element.
   StopProperties properties;

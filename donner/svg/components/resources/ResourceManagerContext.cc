@@ -8,12 +8,12 @@ namespace donner::svg::components {
 
 ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(registry) {}
 
-void ResourceManagerContext::loadResources(std::vector<parser::ParseError>* outWarnings) {
+void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings) {
   auto imageView = registry_.view<ImageComponent>();
 
   if (!loader_ && !imageView.empty()) {
     if (outWarnings) {
-      parser::ParseError err;
+      ParseError err;
       err.reason = "Could not load external resources, no ResourceLoader provided";
       outWarnings->emplace_back(std::move(err));
     }
@@ -34,7 +34,7 @@ void ResourceManagerContext::loadResources(std::vector<parser::ParseError>* outW
     auto maybeImageData = imageLoader.fromUri(image.href);
     if (std::holds_alternative<ImageLoaderError>(maybeImageData)) {
       if (outWarnings) {
-        parser::ParseError err;
+        ParseError err;
         err.reason = std::string(ToString(std::get<ImageLoaderError>(maybeImageData)));
 
         outWarnings->emplace_back(std::move(err));

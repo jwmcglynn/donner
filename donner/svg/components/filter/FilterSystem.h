@@ -25,7 +25,7 @@ public:
    * @param outWarnings Warnings generated during parsing.
    */
   void createComputedFilter(EntityHandle handle, const FilterComponent& component,
-                            std::vector<parser::ParseError>* outWarnings);
+                            std::vector<ParseError>* outWarnings);
 
   /**
    * Create all \ref ComputedFilterComponent in the tree.
@@ -33,8 +33,7 @@ public:
    * @param registry Registry to operate on.
    * @param outWarnings Warnings generated during parsing.
    */
-  void instantiateAllComputedComponents(Registry& registry,
-                                        std::vector<parser::ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

@@ -55,8 +55,8 @@ struct StyleComponent {
    * @param value The value of the attribute.
    * @return \c true if the attribute was set, \c false if the attribute was not recognized.
    */
-  parser::ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                        std::string_view value) {
+  ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                std::string_view value) {
     return properties.parsePresentationAttribute(name, value,
                                                  handle.get<ElementTypeComponent>().type(), handle);
   }

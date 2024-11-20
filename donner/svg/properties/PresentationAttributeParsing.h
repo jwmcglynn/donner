@@ -18,7 +18,7 @@ namespace donner::svg::parser {
  * @param params Parameters for parsing the attribute, which includes the value to parse,
  * specificity, and parser options.
  * @return true if the element supports this attribute and it was parsed successfully, or a \ref
- * donner::base::parser::ParseError if parsing failed.
+ * ParseError if parsing failed.
  */
 template <ElementType Type>
 ParseResult<bool> ParsePresentationAttribute(EntityHandle handle, std::string_view name,
