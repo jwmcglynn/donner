@@ -188,7 +188,7 @@ struct Box {
     return *this;
   }
 
-  /// @addtogroup Comparison
+  /// @name Comparison
   /// @{
 
   /// Equality operator.
@@ -208,6 +208,6 @@ struct Box {
 };
 
 /// Shorthand for \ref Box<double>.
-typedef Box<double> Boxd;
+using Boxd = Box<double>;
 
 }  // namespace donner

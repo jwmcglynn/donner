@@ -299,14 +299,14 @@ struct Transform {
   }
 };
 
-/// @addtogroup Typedefs
+/// @name Typedefs
 /// @{
 
 /// Shorthand for \c Transform<float>
-typedef Transform<float> Transformf;
+using Transformf = Transform<float>;
 
 /// Shorthand for \c Transform<double>
-typedef Transform<double> Transformd;
+using Transformd = Transform<double>;
 
 /// @}
 

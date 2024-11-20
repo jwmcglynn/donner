@@ -127,7 +127,7 @@ public:
     return std::visit([](auto&& value) { return RcString(value); }, value_);
   }
 
-  /// @addtogroup Comparison
+  /// @name Comparison
   /// @{
 
   /// Spaceship equality operator to another \ref RcStringOrRef.
@@ -180,7 +180,7 @@ public:
     return os << std::string_view(self);
   }
 
-  /// @addtogroup Concatenation
+  /// @name Concatenation
   /// @{
 
   /// Concatenation operator with another \ref RcStringOrRef.

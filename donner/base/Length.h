@@ -14,12 +14,8 @@ namespace donner {
 enum class LengthUnit {
   None,     ///< Unitless.
   Percent,  ///< Percentage, using the '\%' symbol.
-  /**
-   * @addtogroup _ABSOLUTE
-   * Absolute lengths, https://www.w3.org/TR/css-values-3/#absolute-lengths.
-   *
-   * @{
-   */
+
+  // Absolute lengths, https://www.w3.org/TR/css-values-3/#absolute-lengths
   Cm,  ///< Centimeters, 1cm = 96px/2.54.
   Mm,  ///< Millimeters, 1mm = 1/10th of 1cm.
   Q,   ///< Quarter-millimeters, 1Q = 1/40th of 1cm.
@@ -27,13 +23,8 @@ enum class LengthUnit {
   Pc,  ///< Picas, 1pc = 1/6th of 1in
   Pt,  ///< Points, 1pt = 1/72nd of 1in.
   Px,  ///< Pixels, 1px = 1/96th of 1in.
-  /// @}
-  /**
-   * @addtogroup _RELATIVE
-   * Relative lengths, https://www.w3.org/TR/css-values-3/#relative-lengths.
-   *
-   * @{
-   */
+
+  // Relative lengths, https://www.w3.org/TR/css-values-3/#relative-lengths
   Em,    ///< Font size, 1em = current font size.
   Ex,    ///< x-height of the current font, 1ex = x-height of current font.
   Ch,    ///< Width of the glyph '0' in the current font, 1ch = width of '0' in current font.
@@ -44,7 +35,6 @@ enum class LengthUnit {
          ///< height.
   Vmax,  ///< Larger of viewport width and height, 1vmax = 1% of larger of viewport width and
          ///< height.
-  /// @}
 };
 
 /// OStream output operator, writes the enum value as a stream, e.g. `Percent` or `Px`.
@@ -219,6 +209,6 @@ private:
 
 // Helper typedefs.
 /// Shorthand for \ref Length<double>.
-typedef Length<double> Lengthd;
+using Lengthd = Length<double>;
 
 }  // namespace donner

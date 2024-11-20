@@ -176,7 +176,7 @@ struct Vector2 {
     }
   }
 
-  /// @addtogroup Operators
+  /// @name Operators
   /// @{
 
   /// Unary negation.
@@ -384,17 +384,17 @@ struct Vector2 {
   }
 };
 
-/// @addtogroup Typedefs
+/// @name Typedefs
 /// @{
 
 /// Shorthand for \c Vector2<float>
-typedef Vector2<float> Vector2f;
+using Vector2f = Vector2<float>;
 
 /// Shorthand for \c Vector2<double>
-typedef Vector2<double> Vector2d;
+using Vector2d = Vector2<double>;
 
 /// Shorthand for \c Vector2<int>
-typedef Vector2<int> Vector2i;
+using Vector2i = Vector2<int>;
 
 /// @}
 

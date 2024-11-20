@@ -133,7 +133,7 @@ public:
    */
   PathSpline() = default;
 
-  /// @addtogroup Modification
+  /// @name Modification
   /// @{
 
   /**

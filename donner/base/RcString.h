@@ -109,7 +109,7 @@ public:
     return data_.isLong() ? data_.long_.view() : data_.short_.view();
   }
 
-  /// @addtogroup Comparison
+  /// @name Comparison
   /// @{
 
   /// Spaceship equality operator to another \ref RcString.
@@ -177,7 +177,7 @@ public:
     return os << std::string_view(self);
   }
 
-  /// @addtogroup Concatenation
+  /// @name Concatenation
   /// @{
 
   /// Concatenation operator with another \ref RcString.
