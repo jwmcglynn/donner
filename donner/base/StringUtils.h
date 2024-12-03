@@ -261,6 +261,40 @@ public:
   }
 
   /**
+   * Returns the position of \p otherStr within \p str, or npos if not found.
+   *
+   * ```
+   * StringUtils::Find("Hello world", "world"); // returns 6
+   * StringUtils::Find<StringComparison::IgnoreCase>("Hello world", "WORLD"); // returns 6
+   * StringUtils::Find("Hello world", "xyz"); // returns npos
+   * ```
+   *
+   * @param str The string to search within.
+   * @param otherStr The substring to find.
+   * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
+   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * methods).
+   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * methods).
+   * @return The position of the substring if found, or npos if not found.
+   */
+  template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
+  static size_t Find(const T& str, const U& otherStr) {
+    if (str.size() < otherStr.size()) {
+      return std::string_view::npos;
+    }
+
+    using StringViewType = std::basic_string_view<
+        char, std::conditional_t<Comparison == StringComparison::Default, std::char_traits<char>,
+                                 CaseInsensitiveCharTraits>>;
+
+    const StringViewType strView(str.data(), str.size());
+    const StringViewType otherStrView(otherStr.data(), otherStr.size());
+
+    return strView.find(otherStrView);
+  }
+
+  /**
    * Splits a string by a given character, returning a range of the split strings as a
    * `std::string_view`.
    *
