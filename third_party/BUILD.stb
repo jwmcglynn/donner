@@ -1,0 +1,161 @@
+load("@donner//third_party:stb.bzl", "stb_library")
+
+STB_COPTS = [
+    "-Wno-unused-function",
+    "-Wno-self-assign",
+]
+
+stb_library(
+    name = "c_lexer",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_C_LEXER_IMPLEMENTATION",
+)
+
+#
+# Note that this needs to be instantiated by following the instructions in stb_connected_components.h
+#
+# In one source file, create the implementation by doing something like this:
+#
+#   #define STBCC_GRID_COUNT_X_LOG2    10
+#   #define STBCC_GRID_COUNT_Y_LOG2    10
+#   #define STB_CONNECTED_COMPONENTS_IMPLEMENTATION
+#   #include "stb_connected_components.h"
+#
+stb_library(
+    name = "connected_components",
+    copts = STB_COPTS,
+)
+
+stb_library(
+    name = "divide",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_DIVIDE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "ds",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_DS_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "dxt",
+    copts = STB_COPTS,
+    definition_includes = ["memory.h"],
+    emit_definition_macro = "STB_DXT_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "easy_font",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_EASY_FONT_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "herringbone_wang_tile",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_HERRINGBONE_WANG_TILE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "hexwave",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_HEXWAVE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "image",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_IMAGE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "image_resize2",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_IMAGE_RESIZE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "image_write",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_IMAGE_WRITE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "include",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_INCLUDE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "leakcheck",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_LEAKCHECK_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "perlin",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_PERLIN_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "rect_pack",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_RECT_PACK_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "sprintf",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_SPRINTF_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "textedit",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_TRUETYPE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "tilemap_editor",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_TRUETYPE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "truetype",
+    copts = STB_COPTS,
+    emit_definition_macro = "STB_TRUETYPE_IMPLEMENTATION",
+)
+
+stb_library(
+    name = "stretchy_buffer",
+    stb_prefix = False,
+)
+
+# stb_vorbis has a reversed mechanism
+genrule(
+    name = "vorbis_definition",
+    outs = ["stb_vorbis.cpp"],
+    cmd = 'echo "#include <stb/{0}>" > $(@D)/{1}'.format(
+        "stb_vorbis.c",
+        "stb_vorbis.cpp",
+    ),
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "vorbis-private",
+    srcs = ["stb_vorbis.c"],
+    copts = STB_COPTS + ["-Wno-unused-value"],
+    include_prefix = "stb",
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "vorbis",
+    defines = ["STB_VORBIS_HEADER_ONLY"],
+    visibility = ["//visibility:public"],
+    deps = ["//:vorbis-private"],
+)

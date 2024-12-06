@@ -73,11 +73,10 @@ git_override(
     commit = "53dbe503c86668887e7f86b7ad1307dd685133f4",
 )
 
-bazel_dep(name = "stb", version = "0.0.0")
-git_override(
-    module_name = "stb",
-    remote = "https://github.com/jwmcglynn/rules_stb",
-    commit = "075e5a470e31e46a7318cc308c79dba205a6b2eb",
+new_local_repository(
+    name = "stb",
+    build_file = "//third_party:BUILD.stb",
+    path = "third_party/stb",
 )
 
 # Skia dependencies
