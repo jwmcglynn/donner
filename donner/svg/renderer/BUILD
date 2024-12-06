@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library_perf_sensitive")
 
 cc_library(
     name = "renderer_image_io",
@@ -30,6 +31,14 @@ cc_library(
     ],
 )
 
+donner_cc_library_perf_sensitive(
+    name = "skia_deps",
+    deps = [
+        "@skia//:core",
+        "@skia//:pathops",
+    ],
+)
+
 cc_library(
     name = "renderer_skia",
     srcs = ["RendererSkia.cc"],
@@ -37,11 +46,10 @@ cc_library(
     deps = [
         ":renderer_image_io",
         ":renderer_utils",
+        ":skia_deps",
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",
-        "@skia//:core",
-        "@skia//:pathops",
     ],
 )
 

@@ -3,6 +3,7 @@ Helper rules, such as for building fuzzers.
 """
 
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 
 def fuzzer_compatible_with():
     """
@@ -110,3 +111,84 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         tags = ["fuzz_target"],
         **kwargs
     )
+
+def _force_opt_transition_impl(_settings, _attr):
+    return {
+        "//command_line_option:compilation_mode": "opt",
+    }
+
+_force_opt_transition = transition(
+    implementation = _force_opt_transition_impl,
+    inputs = [],
+    outputs = ["//command_line_option:compilation_mode"],
+)
+
+def _is_compilation_outputs_empty(compilation_outputs):
+    return (len(compilation_outputs.pic_objects) == 0 and
+            len(compilation_outputs.objects) == 0)
+
+def _donner_cc_library_perf_sensitive_impl(ctx):
+    cc_toolchain = find_cpp_toolchain(ctx)
+
+    feature_configuration = cc_common.configure_features(
+        ctx = ctx,
+        cc_toolchain = cc_toolchain,
+        requested_features = ctx.features,
+        unsupported_features = ctx.disabled_features,
+    )
+
+    compilation_contexts = [dep[CcInfo].compilation_context for dep in ctx.attr.deps]
+    compilation_context, compilation_outputs = cc_common.compile(
+        name = ctx.label.name,
+        actions = ctx.actions,
+        feature_configuration = feature_configuration,
+        cc_toolchain = cc_toolchain,
+        srcs = ctx.attr.srcs,
+        includes = ctx.attr.includes,
+        defines = ctx.attr.defines,
+        local_defines = ctx.attr.local_defines,
+        public_hdrs = ctx.attr.hdrs,
+        compilation_contexts = compilation_contexts,
+    )
+
+    linking_contexts = [dep[CcInfo].linking_context for dep in ctx.attr.deps]
+
+    # Only create linking context if there are compiled artifacts
+    if not _is_compilation_outputs_empty(compilation_outputs):
+        linking_context, linking_outputs = cc_common.create_linking_context_from_compilation_outputs(
+            actions = ctx.actions,
+            feature_configuration = feature_configuration,
+            cc_toolchain = cc_toolchain,
+            compilation_outputs = compilation_outputs,
+            user_link_flags = ctx.attr.linkopts,
+            name = ctx.label.name,
+            language = "c++",
+        )
+
+        if linking_outputs.library_to_link != None:
+            linking_contexts.append(linking_context)
+
+    cc_info = CcInfo(
+        compilation_context = compilation_context,
+        linking_context = cc_common.merge_linking_contexts(
+            linking_contexts = linking_contexts,
+        ),
+    )
+
+    return [cc_info]
+
+donner_cc_library_perf_sensitive = rule(
+    implementation = _donner_cc_library_perf_sensitive_impl,
+    toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
+    attrs = {
+        "srcs": attr.label_list(allow_files = [".c", ".cc", ".cpp", ".h"]),
+        "hdrs": attr.label_list(allow_files = [".h"]),
+        "deps": attr.label_list(cfg = _force_opt_transition),
+        "includes": attr.string_list(default = []),  # Optional includes
+        "defines": attr.string_list(default = []),  # Optional defines
+        "local_defines": attr.string_list(default = []),  # Optional defines
+        "copts": attr.string_list(default = []),  # Optional compile options
+        "linkopts": attr.string_list(default = []),  # Optional link options
+    },
+    fragments = ["cpp"],
+)
