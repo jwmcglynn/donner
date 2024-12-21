@@ -43,7 +43,6 @@ filegroup(
     srcs = glob([
         "docs/**/*.md",
         "docs/**/*.svg",
-        "docs/**/*.png",
     ]),
     visibility = ["//tools:__pkg__"],
 )

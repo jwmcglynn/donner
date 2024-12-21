@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("@pip_deps//:requirements.bzl", "requirement")
+load("@donner_tools_py_deps//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_binary")
 
 cc_library(

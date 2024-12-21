@@ -90,12 +90,12 @@ pip = use_extension(
 )
 
 pip.parse(
-    hub_name = "pip_deps",
+    hub_name = "donner_tools_py_deps",
     python_version = "3.11",
     requirements_lock = "//tools/python:requirements.txt",
 )
 
-use_repo(pip, "pip_deps")
+use_repo(pip, "donner_tools_py_deps")
 
 #
 # Toolchain

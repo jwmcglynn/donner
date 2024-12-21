@@ -1,5 +1,5 @@
 load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
-load("@pip_deps//:requirements.bzl", "requirement")
+load("@donner_tools_py_deps//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_binary")
 
 py_binary(
