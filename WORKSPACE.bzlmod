@@ -32,9 +32,3 @@ emsdk_emscripten_deps(emscripten_version = "3.1.47")
 load("@emsdk//:toolchains.bzl", "register_emscripten_toolchains")
 
 register_emscripten_toolchains()
-
-# scip-clang for Sourcegraph
-
-load("//third_party/scip-clang:defs.bzl", "gen_scip_clang")
-
-gen_scip_clang()
