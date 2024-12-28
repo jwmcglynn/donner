@@ -81,6 +81,13 @@ public:
   Transformd getEntityFromParentTranform(EntityHandle entity);
 
   /**
+   * Get the scale transform from the canvas to the SVG document.
+   *
+   * @param registry ECS registry
+   */
+  Transformd getDocumentFromCanvasTransform(Registry& registry);
+
+  /**
    * Get the transform for entityContent-from-entity, which is an additional transform for specific
    * elements that define their own coordinate system, such as nested \ref xml_svg and \ref xml_use
    * elements.
@@ -109,6 +116,15 @@ public:
    * @param entityFromParent New transform.
    */
   void setEntityFromParentTransform(EntityHandle entity, const Transformd& entityFromParent);
+
+  /**
+   * Get the computed absolute transform for the current entity. This is the same as \ref
+   * getEntityFromWorldTransform except it returns the component containing additional flags as
+   * well.
+   *
+   * @param entity Current entity.
+   */
+  const ComputedAbsoluteTransformComponent& getAbsoluteTransformComponent(EntityHandle entity);
 
   /**
    * Get the entity-from-world transform for the current entity, representing the entity position

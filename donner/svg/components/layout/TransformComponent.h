@@ -36,6 +36,8 @@ struct ComputedLocalTransformComponent {
  */
 struct ComputedAbsoluteTransformComponent {
   Transformd entityFromWorld;  //!< Transform from the entity from the world.
+  bool worldIsCanvas =
+      true;  //<!< Set to false if this entity rebases the coordinate system and is not relative to the canvas.
 };
 
 }  // namespace donner::svg::components

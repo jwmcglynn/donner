@@ -96,6 +96,11 @@ public:
   Vector2i canvasSize();
 
   /**
+   * Get the scale transform from the canvas to the SVG document.
+   */
+  Transformd documentFromCanvasTransform() const;
+
+  /**
    * Returns true if the two SVGDocument handles reference the same underlying document.
    */
   bool operator==(const SVGDocument& other) const;

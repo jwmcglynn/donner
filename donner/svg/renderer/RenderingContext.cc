@@ -62,7 +62,9 @@ bool IsValidMarker(EntityHandle handle) {
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose)
-      : registry_(registry), verbose_(verbose) {}
+      : registry_(registry), verbose_(verbose) {
+    documentWorldFromCanvasTransform_ = LayoutSystem().getDocumentFromCanvasTransform(registry);
+  }
 
   /**
    * Traverse a tree, instantiating each entity in the tree.
@@ -123,8 +125,14 @@ public:
     RenderingInstanceComponent& instance =
         registry_.emplace<RenderingInstanceComponent>(styleEntity);
     instance.drawOrder = drawOrder_++;
+
+    const auto& absoluteTransformComponent =
+        LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry_, treeEntity));
     instance.entityFromWorldTransform =
-        LayoutSystem().getEntityFromWorldTransform(EntityHandle(registry_, treeEntity));
+        absoluteTransformComponent.entityFromWorld * (absoluteTransformComponent.worldIsCanvas
+                                                          ? documentWorldFromCanvasTransform_
+                                                          : Transformd());
+
     instance.clipRect = clipRect;
     instance.dataEntity = dataHandle.entity();
 
@@ -462,6 +470,9 @@ private:
   /// Holds the current paint servers for resolving the `context-fill` and `context-stroke` paint
   /// values.
   ContextPaintServers contextPaintServers_;
+
+  /// Transform from the canvas to the SVG document root, for the current canvas scale.
+  Transformd documentWorldFromCanvasTransform_;
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,

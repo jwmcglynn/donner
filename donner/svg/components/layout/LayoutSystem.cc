@@ -287,8 +287,23 @@ Transformd LayoutSystem::getEntityFromParentTranform(EntityHandle entity) {
   return computedTransform.entityFromParent;
 }
 
+Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
+  EntityHandle rootEntity(registry, registry.ctx().get<SVGDocumentContext>().rootEntity);
+  if (rootEntity.all_of<SizedElementComponent>()) {
+    const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(rootEntity, nullptr);
+
+    const ComputedSizedElementComponent& computedSizedElement =
+        LayoutSystem().createComputedSizedElementComponentWithStyle(rootEntity, computedStyle,
+                                                                    FontMetrics(), nullptr);
+    return LayoutSystem().computeSizedElementTransform(rootEntity, computedSizedElement);
+  } else {
+    return Transformd();
+  }
+}
+
 Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity) {
-  if (entity.all_of<SizedElementComponent>()) {
+  if (entity.all_of<SizedElementComponent>() &&
+      entity.registry()->ctx().get<SVGDocumentContext>().rootEntity != entity.entity()) {
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, nullptr);
 
     const ComputedSizedElementComponent& computedSizedElement =
@@ -311,16 +326,18 @@ void LayoutSystem::setEntityFromParentTransform(EntityHandle entity,
   invalidate(entity);
 }
 
-Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
+const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComponent(
+    EntityHandle entity) {
   if (const auto* computedAbsoluteTransform =
           entity.try_get<ComputedAbsoluteTransformComponent>()) {
-    return computedAbsoluteTransform->entityFromWorld;
+    return *computedAbsoluteTransform;
   }
 
   Registry& registry = *entity.registry();
   SmallVector<Entity, 8> parents;
 
   Transformd parentFromWorld;
+  bool worldIsCanvas = true;
 
   // Traverse up through the parent list until we find the root or a previously computed viewbox.
   for (Entity parent = entity;
@@ -330,6 +347,7 @@ Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
     if (const auto* computedAbsoluteTransform =
             registry.try_get<ComputedAbsoluteTransformComponent>(parent)) {
       parentFromWorld = computedAbsoluteTransform->entityFromWorld;
+      worldIsCanvas = computedAbsoluteTransform->worldIsCanvas;
       break;
     }
 
@@ -341,6 +359,7 @@ Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
     if (const auto* renderingBehavior = registry.try_get<RenderingBehaviorComponent>(lightEntity);
         renderingBehavior && !renderingBehavior->inheritsParentTransform) {
       parentFromWorld = Transformd();
+      worldIsCanvas = false;
       if (renderingBehavior->appliesSelfTransform) {
         parents.push_back(parent);
       }
@@ -349,6 +368,10 @@ Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
     }
 
     parents.push_back(parent);
+  }
+
+  if (parents.empty()) {
+    return entity.emplace<ComputedAbsoluteTransformComponent>(parentFromWorld, worldIsCanvas);
   }
 
   // Now the parents list has parents in order from nearest -> root
@@ -360,12 +383,16 @@ Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
 
     const Transformd entityFromWorld = getEntityContentFromEntityTransform(currentHandle) *
                                        getEntityFromParentTranform(currentHandle) * parentFromWorld;
-    currentHandle.emplace<ComputedAbsoluteTransformComponent>(entityFromWorld);
+    currentHandle.emplace<ComputedAbsoluteTransformComponent>(entityFromWorld, worldIsCanvas);
 
     parentFromWorld = entityFromWorld;
   }
 
-  return parentFromWorld;
+  return entity.get<ComputedAbsoluteTransformComponent>();
+}
+
+Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
+  return getAbsoluteTransformComponent(entity).entityFromWorld;
 }
 
 void LayoutSystem::invalidate(EntityHandle entity) {

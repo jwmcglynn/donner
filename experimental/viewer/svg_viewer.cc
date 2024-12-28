@@ -101,6 +101,16 @@ struct SVGState {
     }
   }
 
+  void setOverlayScale(float scale) {
+    if (boundsShape) {
+      boundsShape->setStyle("stroke-width: " + std::to_string(scale) + "px;");
+    }
+
+    if (selectedPathOutline) {
+      selectedPathOutline->setStyle("stroke-width: " + std::to_string(scale) + "px;");
+    }
+  }
+
   void selectElement(const SVGElement& element) {
     selectedElement = element;
 
@@ -309,9 +319,11 @@ int main(int argc, char** argv) {
                 ImGui::GetIO().Framerate);
 
     const ImVec2 regionSize = ImGui::GetContentRegionAvail();
-    // state.document.setCanvasSize(regionSize.x, regionSize.y);
-    const float scale =
-        std::min(regionSize.x / (float)renderer.width(), regionSize.y / (float)renderer.height());
+    if (regionSize.x > 0 && regionSize.y > 0) {
+      state.document.setCanvasSize(regionSize.x, regionSize.y);
+    }
+    const float scale = state.document.documentFromCanvasTransform().data[0];
+    state.setOverlayScale(1.0f / scale);
 
     ImVec2 mousePositionAbsolute = ImGui::GetMousePos();
     ImVec2 screenPositionAbsolute = ImGui::GetWindowPos();
@@ -332,8 +344,7 @@ int main(int argc, char** argv) {
                    GL_UNSIGNED_BYTE, bitmap.getPixels());
     }
 
-    ImGui::Image(static_cast<ImTextureID>(texture),
-                 ImVec2(scale * renderer.width(), scale * renderer.height()));
+    ImGui::Image(static_cast<ImTextureID>(texture), ImVec2(renderer.width(), renderer.height()));
 
     ImGui::End();  // End of Drawing Window
     ImGui::End();  // End of MainWindow
