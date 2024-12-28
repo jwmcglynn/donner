@@ -16,9 +16,6 @@
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
 build --enable_platform_specific_config
 
-# Temporarily enable the WORKSPACE folder in Bazel 8 (deprecated; will be removed in Bazel 9)
-build --enable_workspace
-
 ##
 ## Build config
 ##

@@ -47,18 +47,6 @@ To include experimental code as well, run:
 bazel test //...
 ```
 
-## Other build types
-
-### WASM Builds (experimental)
-
-WASM, or WebAssembly, enables running Donner on the web using the browser's Canvas API as the rendering backend.
-
-To try the wasm demo:
-
-```sh
-bazel run //experimental/wasm:serve_http
-```
-
 ## Build reports
 
 See the latest [Build report](./build_report.md).

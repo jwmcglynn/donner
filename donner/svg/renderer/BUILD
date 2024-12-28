@@ -46,29 +46,9 @@ cc_library(
 )
 
 cc_library(
-    name = "renderer_wasm_canvas",
-    srcs = ["RendererWasmCanvas.cc"],
-    hdrs = ["RendererWasmCanvas.h"],
-    # This target won't build successfully on its own because of missing emscripten
-    # headers etc. Therefore, we hide it from wildcards.
-    tags = ["manual"],
-    deps = [
-        ":renderer_utils",
-        "//donner/svg",
-        "//donner/svg/core",
-        "//donner/svg/renderer/common",
-        "//donner/svg/renderer/wasm_canvas",
-    ],
-)
-
-cc_library(
     name = "renderer",
     visibility = ["//visibility:public"],
-    deps = select({
-        "@platforms//cpu:wasm32": [":renderer_wasm_canvas"],
-        "@platforms//cpu:wasm64": [":renderer_wasm_canvas"],
-        "//conditions:default": [":renderer_skia"],
-    }),
+    deps = [":renderer_skia"],
 )
 
 cc_binary(
