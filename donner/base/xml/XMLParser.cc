@@ -88,7 +88,7 @@ public:
     return document_;
   }
 
-  std::optional<XMLParser::AttributeLocation> getElementAttributeLocation(
+  std::optional<base::parser::FileOffsetRange> getElementAttributeLocation(
       const XMLQualifiedNameRef& name) {
     if (!tryConsume("<")) {
       UTILS_RELEASE_ASSERT_MSG(false, "Expected element to start with '<'");
@@ -111,13 +111,16 @@ public:
         UTILS_RELEASE_ASSERT_MSG(false, "Expected element to have previously parsed correctly");
       }
 
+      const base::parser::FileOffset attributeEndOffset = currentOffsetWithLineNumber();
+      skipWhitespace();
+
       if (!maybeAttribute.result().has_value()) {
         break;
       }
 
       const ParsedAttribute& attribute = maybeAttribute.result().value();
       if (attribute.name == name) {
-        return XMLParser::AttributeLocation{attributeStartOffset, currentOffsetWithLineNumber()};
+        return base::parser::FileOffsetRange{attributeStartOffset, attributeEndOffset};
       }
     }
 
@@ -806,10 +809,6 @@ private:
     }
 
     ParsedAttribute result{name, maybeValue.result()};
-
-    // Skip whitespace after attribute value
-    skipWhitespace();
-
     return std::make_optional(result);
   }
 
@@ -822,6 +821,8 @@ private:
         return std::move(maybeAttribute.error());
       }
 
+      skipWhitespace();
+
       if (maybeAttribute.result().has_value()) {
         const ParsedAttribute& attribute = maybeAttribute.result().value();
         node.setAttribute(attribute.name, attribute.value);
@@ -829,6 +830,9 @@ private:
         break;
       }
     }
+
+    // Skip whitespace after attributes.
+    skipWhitespace();
 
     return std::nullopt;
   }
@@ -841,7 +845,7 @@ ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const XMLParser:
   return parser.parse();
 }
 
-std::optional<XMLParser::AttributeLocation> XMLParser::GetAttributeLocation(
+std::optional<base::parser::FileOffsetRange> XMLParser::GetAttributeLocation(
     std::string_view str, base::parser::FileOffset elementStartOffset,
     const XMLQualifiedNameRef& attributeName) {
   if (!elementStartOffset.offset) {
@@ -855,9 +859,9 @@ std::optional<XMLParser::AttributeLocation> XMLParser::GetAttributeLocation(
   const std::string_view elementToEnd = str.substr(elementStartOffset.offset.value());
   XMLParserImpl parser(elementToEnd, reparseOptions);
   if (auto attributeLocationInElement = parser.getElementAttributeLocation(attributeName)) {
-    AttributeLocation result{
-        attributeLocationInElement->startOffset.addParentOffset(elementStartOffset),
-        attributeLocationInElement->endOffset.addParentOffset(elementStartOffset)};
+    base::parser::FileOffsetRange result{
+        attributeLocationInElement->start.addParentOffset(elementStartOffset),
+        attributeLocationInElement->end.addParentOffset(elementStartOffset)};
     return result;
   }
 

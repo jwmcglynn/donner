@@ -143,6 +143,14 @@ private:
       : offset(offset), lineInfo(lineInfo) {}
 };
 
+/**
+ * Holds a selection range for a region in the source text.
+ */
+struct FileOffsetRange {
+  base::parser::FileOffset start;  ///< Start offset.
+  base::parser::FileOffset end;    ///< End offset.
+};
+
 }  // namespace donner::base::parser
 
 // Re-export in svg and css namespaces for convenience.

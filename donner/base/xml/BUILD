@@ -49,6 +49,7 @@ cc_binary(
 cc_test(
     name = "xml_tests",
     srcs = [
+        "tests/XMLNode_tests.cc",
         "tests/XMLParser_tests.cc",
         "tests/XMLQualifiedName_tests.cc",
     ],

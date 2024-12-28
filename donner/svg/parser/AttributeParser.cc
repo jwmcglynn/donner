@@ -229,7 +229,7 @@ void ParsePresentationAttribute(SVGParserContext& context, SVGElement& element,
         ParseError err;
         err.reason = "Unknown attribute '" + name.toString() + "' (disableUserAttributes: true)";
         if (auto maybeLocation = context.getAttributeLocation(element, name)) {
-          err.location = maybeLocation.value();
+          err.location = maybeLocation->start;
         }
         context.addWarning(std::move(err));
         element.removeAttribute(name);

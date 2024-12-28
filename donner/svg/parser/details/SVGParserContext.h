@@ -105,7 +105,7 @@ public:
    * @param attributeName Name of the attribute.
    * @return std::optional<size_t> Offset of the element's attribute in the input string.
    */
-  std::optional<base::parser::FileOffset> getAttributeLocation(
+  std::optional<base::parser::FileOffsetRange> getAttributeLocation(
       const SVGElement& element, const xml::XMLQualifiedNameRef& attributeName) const {
     // Convert the SVGElement into an XMLNode.
     if (auto maybeNode = xml::XMLNode::TryCast(EntityHandle(element.entityHandle()))) {

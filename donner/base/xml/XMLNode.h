@@ -243,14 +243,42 @@ public:
   std::optional<RcString> getAttribute(const XMLQualifiedNameRef& name) const;
 
   /**
+   * Get the location of this node in the input string.
+   *
+   * For example, for the following XML:
+   * ```xml
+   * <root>
+   *   <child>Hello, world!</child>
+   * </root>
+   * ```
+   *
+   * The FileOffsetRange for the `child` element should contain the substring
+   * `<child>Hello, world!</child>`
+   *
+   * @return Start and end offsets of the node in the input string, or \c std::nullptr if source
+   * locations are not available.
+   */
+  std::optional<base::parser::FileOffsetRange> getNodeLocation() const;
+
+  /**
    * Get the location of an attribute in the input string.
+   *
+   * For example, for the following XML:
+   * ```xml
+   * <root>
+   *   <child attr="Hello, world!">
+   * </root>
+   * ```
+   *
+   * The FileOffsetRange for the `attr` attribute should contain the substring `attr="Hello,
+   * world!"`
    *
    * @param xmlInput Input string to get the attribute location in.
    * @param name Name of the attribute to get the location for.
    * @return Offset of the attribute in the input string, or \c std::nullopt if the attribute does
    * not exist.
    */
-  std::optional<base::parser::FileOffset> getAttributeLocation(
+  std::optional<base::parser::FileOffsetRange> getAttributeLocation(
       std::string_view xmlInput, const XMLQualifiedNameRef& name) const;
 
   /// Get the list of attributes for this element.

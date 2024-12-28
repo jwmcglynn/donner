@@ -526,4 +526,57 @@ TEST_F(XMLParserTests, ParseQualifiedNameErrors) {
                     ParseErrorPos(1, 13)));
 }
 
+TEST_F(XMLParserTests, GetAttributeLocation_Basic) {
+  // Setup test XML.
+  std::string_view xml = R"(<root><child attr="Hello, world!"></child></root>)";
+
+  // Hardcode the offset of '<child' in this sample string.
+  // For quick determination, count characters or use a parser that returns element offsets.
+  const auto kChildOffset = base::parser::FileOffset::Offset(6);
+
+  // Call the function under test.
+  auto location =
+      XMLParser::GetAttributeLocation(xml, kChildOffset, XMLQualifiedNameRef("", "attr"));
+  ASSERT_TRUE(location.has_value());
+
+  // Extract substring from the returned offsets.
+  const size_t start = location->start.offset.value();
+  const size_t end = location->end.offset.value();
+  EXPECT_LT(start, end);
+  std::string_view foundAttribute = xml.substr(start, end - start);
+
+  // Verify correctness.
+  EXPECT_THAT(foundAttribute, testing::Eq(R"(attr="Hello, world!")"));
+}
+
+TEST_F(XMLParserTests, GetAttributeLocation_NoSuchAttribute) {
+  std::string_view xml = R"(<root><child attr="Hello, world!"></child></root>)";
+
+  // Offset for <child>.
+  const auto kChildOffset = base::parser::FileOffset::Offset(6);
+
+  // Ask for a non-existent attribute.
+  auto location =
+      XMLParser::GetAttributeLocation(xml, kChildOffset, XMLQualifiedNameRef("", "missing"));
+  EXPECT_FALSE(location.has_value());
+}
+
+TEST_F(XMLParserTests, GetAttributeLocation_WithNamespace) {
+  // Example with namespace usage.
+  std::string_view xml = R"(<root><child ns:attr="namespaced value" another="value"/></root>)";
+
+  // Offset for <child>.
+  const auto kChildOffset = base::parser::FileOffset::Offset(6);
+
+  // Attempt retrieval with the namespace prefix "ns".
+  auto location =
+      XMLParser::GetAttributeLocation(xml, kChildOffset, XMLQualifiedNameRef("ns", "attr"));
+  ASSERT_TRUE(location.has_value());
+
+  const size_t start = location->start.offset.value();
+  const size_t end = location->end.offset.value();
+  std::string_view foundAttribute = xml.substr(start, end - start);
+  EXPECT_THAT(foundAttribute, testing::Eq(R"(ns:attr="namespaced value")"));
+}
+
 }  // namespace donner::xml

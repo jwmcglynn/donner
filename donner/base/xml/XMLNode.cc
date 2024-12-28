@@ -143,13 +143,23 @@ std::optional<RcString> XMLNode::getAttribute(const XMLQualifiedNameRef& name) c
   return handle_.get_or_emplace<AttributesComponent>().getAttribute(name);
 }
 
-std::optional<base::parser::FileOffset> XMLNode::getAttributeLocation(
+std::optional<base::parser::FileOffsetRange> XMLNode::getNodeLocation() const {
+  if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
+    if (offset->startOffset && offset->endOffset) {
+      return base::parser::FileOffsetRange{*offset->startOffset, *offset->endOffset};
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<base::parser::FileOffsetRange> XMLNode::getAttributeLocation(
     std::string_view xmlInput, const XMLQualifiedNameRef& name) const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
     if (offset->startOffset) {
       if (auto maybeLocation =
               XMLParser::GetAttributeLocation(xmlInput, offset->startOffset.value(), name)) {
-        return maybeLocation->startOffset;
+        return maybeLocation;
       }
     }
   }

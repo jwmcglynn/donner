@@ -77,16 +77,18 @@ public:
   static base::parser::ParseResult<XMLDocument> Parse(std::string_view str,
                                                       const Options& options = Options());
 
-  /// Source location of an XML attribute in the source tree.
-  struct AttributeLocation {
-    /// Start offset of the attribute value, in characters from the beginning of the input string.
-    base::parser::FileOffset startOffset;
-    /// End offset of the attribute value, in characters from the beginning of the input string.
-    base::parser::FileOffset endOffset;
-  };
-
   /**
    * Parse the XML attributes and get the source location of a specific attribute.
+   *
+   * For example, for the following XML:
+   * ```xml
+   * <root>
+   *   <child attr="Hello, world!">
+   * </root>
+   * ```
+   *
+   * The FileOffsetRange for the `attr` attribute should contain the substring `attr="Hello,
+   * world!"`
    *
    * @param str XML data to parse. Will not be modified.
    * @param elementStartOffset Start offset of the element in the input string.
@@ -94,7 +96,7 @@ public:
    * @return std::optional<AttributeLocation> containing the start and end offsets of the attribute
    * in the input string, or std::nullopt if the attribute was not found.
    */
-  static std::optional<AttributeLocation> GetAttributeLocation(
+  static std::optional<base::parser::FileOffsetRange> GetAttributeLocation(
       std::string_view str, base::parser::FileOffset elementStartOffset,
       const XMLQualifiedNameRef& attributeName);
 };
