@@ -14,6 +14,7 @@ module(name = "donner")
 local_repository = use_repo_rule("//third_party:bazel/local.bzl", "local_repository")
 new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local_repository")
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
 # Build dependencies
 bazel_dep(name = "apple_support", version = "1.17.1", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
@@ -59,6 +60,12 @@ new_local_repository(
     path = "third_party/frozen",
 )
 
+new_local_repository(
+    name = "stb",
+    build_file = "//third_party:BUILD.stb",
+    path = "third_party/stb",
+)
+
 ##
 ## Test dependencies
 ##
@@ -74,9 +81,16 @@ git_override(
 )
 
 new_local_repository(
-    name = "stb",
-    build_file = "//third_party:BUILD.stb",
-    path = "third_party/stb",
+    name = "css-parsing-tests",
+    build_file = "//third_party:BUILD.css-parsing-tests",
+    path = "third_party/css-parsing-tests",
+)
+
+new_git_repository(
+    name = "resvg-test-suite",
+    build_file = "@//third_party:BUILD.resvg-test-suite",
+    commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
+    remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
 )
 
 # Skia dependencies
@@ -134,6 +148,12 @@ git_override(
     module_name = "hedron_compile_commands",
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor",
     commit = "4f28899228fb3ad0126897876f147ca15026151e",
+)
+
+git_repository(
+    name = "bazel_clang_tidy",
+    commit = "674fac7640ae0469b7a58017018cb1497c26e2bf",
+    remote = "https://github.com/erenon/bazel_clang_tidy.git",
 )
 
 bazel_dep(name = "rules_proto", version = "7.0.2", dev_dependency = True)

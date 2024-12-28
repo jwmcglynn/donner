@@ -10,9 +10,10 @@ using Params = ImageComparisonParams;
 
 namespace {
 
-static const std::filesystem::path kResourceSandboxDir = "external/resvg-test-suite/";
-static const std::filesystem::path kSvgDir = "external/resvg-test-suite/svg/";
-static const std::filesystem::path kGoldenDir = "external/resvg-test-suite/png/";
+static const std::filesystem::path kResourceSandboxDir =
+    "external/_main~_repo_rules~resvg-test-suite/";
+static const std::filesystem::path kSvgDir = "external/_main~_repo_rules~resvg-test-suite/svg/";
+static const std::filesystem::path kGoldenDir = "external/_main~_repo_rules~resvg-test-suite/png/";
 
 std::vector<ImageComparisonTestcase> getTestsWithPrefix(
     const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {},

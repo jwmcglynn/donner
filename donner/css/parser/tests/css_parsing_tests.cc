@@ -16,7 +16,7 @@ using details::Tokenizer;
 
 namespace {
 
-const std::filesystem::path kTestDataDirectory = "external/css-parsing-tests/";
+const std::filesystem::path kTestDataDirectory = "external/_main~_repo_rules~css-parsing-tests/";
 
 nlohmann::json loadJson(const std::filesystem::path& file) {
   std::ifstream in(file);

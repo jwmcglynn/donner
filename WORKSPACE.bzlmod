@@ -11,29 +11,6 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 ## Development and test dependencies
 ##
 
-new_local_repository(
-    name = "css-parsing-tests",
-    build_file = "//third_party:BUILD.css-parsing-tests",
-    path = "third_party/css-parsing-tests",
-)
-
-## Developer tools
-
-git_repository(
-    name = "bazel_clang_tidy",
-    commit = "674fac7640ae0469b7a58017018cb1497c26e2bf",
-    remote = "https://github.com/erenon/bazel_clang_tidy.git",
-)
-
-# resvg test suite
-
-new_git_repository(
-    name = "resvg-test-suite",
-    build_file = "@//third_party:BUILD.resvg-test-suite",
-    commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
-    remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
-)
-
 # wasm build (emscripten)
 
 http_archive(
