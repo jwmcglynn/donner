@@ -1,104 +1,105 @@
-<svg width="512" height="1828" xmlns="http://www.w3.org/2000/svg">
-  <rect x="0" y="0" width="512" height="1828" fill="white" />
-  <rect x="0" y="0" width="138.29097523185052" height="128" fill="#FF5733" />
-  <rect x="138.29097523185052" y="0" width="43.72056677070936" height="128" fill="#33FF57" />
-  <rect x="182.01154200255988" y="0" width="29.299261222015136" height="128" fill="#3357FF" />
-  <rect x="211.310803224575" y="0" width="22.491545595401163" height="128" fill="#FF33A1" />
-  <rect x="233.80234881997617" y="0" width="21.102193878696696" height="128" fill="#FF8633" />
-  <rect x="254.90454269867286" y="0" width="20.43212898300137" height="128" fill="#33FFD7" />
-  <rect x="275.3366716816742" y="0" width="16.683717692497698" height="128" fill="#8333FF" />
-  <rect x="292.0203893741719" y="0" width="13.775312689466238" height="128" fill="#FF3381" />
-  <rect x="305.79570206363815" y="0" width="13.35782453461478" height="128" fill="#33FF83" />
-  <rect x="319.15352659825294" y="0" width="13.306446904542698" height="128" fill="#A133FF" />
-  <rect x="332.45997350279566" y="0" width="12.460692071048436" height="128" fill="#FF8333" />
-  <rect x="344.9206655738441" y="0" width="11.266072350840949" height="128" fill="#3381FF" />
-  <rect x="356.186737924685" y="0" width="9.574203399726047" height="128" fill="#FF33D7" />
-  <rect x="365.7609413244111" y="0" width="9.063660656142636" height="128" fill="#FF5733" />
-  <rect x="374.8246019805537" y="0" width="7.512631082567983" height="128" fill="#33FF57" />
-  <rect x="382.3372330631217" y="0" width="7.049513843666494" height="128" fill="#3357FF" />
-  <rect x="389.3867469067882" y="0" width="6.935980059730986" height="128" fill="#FF33A1" />
-  <rect x="396.32272696651916" y="0" width="6.694900410931219" height="128" fill="#FF8633" />
-  <rect x="403.01762737745037" y="0" width="4.660274403251521" height="128" fill="#33FFD7" />
-  <rect x="407.6779017807019" y="0" width="4.496440841623066" height="128" fill="#8333FF" />
-  <rect x="412.17434262232496" y="0" width="4.45404531471044" height="128" fill="#FF3381" />
-  <rect x="416.62838793703537" y="0" width="4.4105719354186785" height="128" fill="#33FF83" />
-  <rect x="421.03895987245403" y="0" width="4.092964767700357" height="128" fill="#A133FF" />
-  <rect x="425.1319246401544" y="0" width="4.06458132171648" height="128" fill="#FF8333" />
-  <rect x="429.1965059618709" y="0" width="4.023263647182988" height="128" fill="#3381FF" />
-  <rect x="433.2197696090539" y="0" width="3.9790716996384705" height="128" fill="#FF33D7" />
-  <rect x="437.1988413086924" y="0" width="3.950328969528215" height="128" fill="#FF5733" />
-  <rect x="441.1491702782206" y="0" width="3.9470954123908113" height="128" fill="#33FF57" />
-  <rect x="445.0962656906114" y="0" width="3.924101228302607" height="128" fill="#3357FF" />
-  <rect x="449.020366918914" y="0" width="3.822783104663957" height="128" fill="#FF33A1" />
-  <rect x="452.843150023578" y="0" width="3.7843397031414905" height="128" fill="#FF8633" />
-  <rect x="456.6274897267195" y="0" width="3.742303460355242" height="128" fill="#33FFD7" />
-  <rect x="460.3697931870747" y="0" width="3.6190690050075225" height="128" fill="#8333FF" />
-  <rect x="463.98886219208225" y="0" width="3.556194282891339" height="128" fill="#FF3381" />
-  <rect x="467.5450564749736" y="0" width="3.3463723530864753" height="128" fill="#33FF83" />
-  <rect x="470.89142882806004" y="0" width="3.2022994184088205" height="128" fill="#A133FF" />
-  <rect x="474.09372824646886" y="0" width="2.867805896750724" height="128" fill="#FF8333" />
-  <rect x="476.9615341432196" y="0" width="2.856308804706622" height="128" fill="#3381FF" />
-  <rect x="479.8178429479262" y="0" width="2.752475692183325" height="128" fill="#FF33D7" />
-  <rect x="482.5703186401095" y="0" width="2.6076841892529137" height="128" fill="#FF5733" />
-  <rect x="485.1780028293624" y="0" width="2.1269620281588932" height="128" fill="#33FF57" />
-  <rect x="487.3049648575213" y="0" width="1.9627691824040598" height="128" fill="#3357FF" />
-  <rect x="489.2677340399254" y="0" width="1.8679181730402175" height="128" fill="#FF33A1" />
-  <rect x="491.1356522129656" y="0" width="1.4903105562167382" height="128" fill="#FF8633" />
-  <rect x="492.62596276918237" y="0" width="1.3002492533626748" height="128" fill="#33FFD7" />
-  <rect x="493.92621202254503" y="0" width="1.2998899692362966" height="128" fill="#8333FF" />
-  <rect x="495.2261019917813" y="0" width="1.2794107740327398" height="128" fill="#FF3381" />
-  <rect x="496.50551276581405" y="0" width="1.15222419329486" height="128" fill="#33FF83" />
-  <rect x="497.6577369591089" y="0" width="1.1382121123661104" height="128" fill="#A133FF" />
-  <rect x="498.795949071475" y="0" width="1.1249185996901174" height="128" fill="#FF8333" />
-  <rect x="499.92086767116507" y="0" width="1.0361754204747042" height="128" fill="#3381FF" />
-  <rect x="500.9570430916398" y="0" width="0.9291087508140031" height="128" fill="#FF33D7" />
-  <rect x="501.8861518424538" y="0" width="0.9050367143466642" height="128" fill="#FF5733" />
-  <rect x="502.7911885568004" y="0" width="0.8263534906698403" height="128" fill="#33FF57" />
-  <rect x="503.61754204747024" y="0" width="0.7153346956189792" height="128" fill="#3357FF" />
-  <rect x="504.33287674308923" y="0" width="0.6337771989311297" height="128" fill="#FF33A1" />
-  <rect x="504.96665394202034" y="0" width="0.6104237307165473" height="128" fill="#FF8633" />
-  <rect x="505.5770776727369" y="0" width="0.5971302180405542" height="128" fill="#33FFD7" />
-  <rect x="506.17420789077744" y="0" width="0.521680551501134" height="128" fill="#8333FF" />
-  <rect x="506.69588844227854" y="0" width="0.3991646644061707" height="128" fill="#FF3381" />
-  <rect x="507.0950531066847" y="0" width="0.394134686636876" height="128" fill="#33FF83" />
-  <rect x="507.4891877933216" y="0" width="0.3822783104663957" height="128" fill="#A133FF" />
-  <rect x="507.871466103788" y="0" width="0.3495834549659803" height="128" fill="#FF8333" />
-  <rect x="508.221049558754" y="0" width="0.34742775020771116" height="128" fill="#3381FF" />
-  <rect x="508.5684773089617" y="0" width="0.34275705656479466" height="128" fill="#FF33D7" />
-  <rect x="508.91123436552647" y="0" width="0.33377495340533986" height="128" fill="#FF5733" />
-  <rect x="509.2450093189318" y="0" width="0.29533155188287336" height="128" fill="#33FF57" />
-  <rect x="509.5403408708147" y="0" width="0.2892237217344441" height="128" fill="#3357FF" />
-  <rect x="509.82956459254916" y="0" width="0.20443266790919093" height="128" fill="#FF33A1" />
-  <rect x="510.03399726045836" y="0" width="0.20012125839265263" height="128" fill="#FF8633" />
-  <rect x="510.234118518851" y="0" width="0.19113915523319785" height="128" fill="#33FFD7" />
-  <rect x="510.4252576740842" y="0" width="0.1886241663485505" height="128" fill="#8333FF" />
-  <rect x="510.6138818404328" y="0" width="0.16994139177688455" height="128" fill="#FF3381" />
-  <rect x="510.78382323220967" y="0" width="0.16275570924932073" height="128" fill="#33FF83" />
-  <rect x="510.946578941459" y="0" width="0.13077942200166168" height="128" fill="#A133FF" />
-  <rect x="511.07735836346063" y="0" width="0.11497092044102127" height="128" fill="#FF8333" />
-  <rect x="511.19232928390164" y="0" width="0.11245593155637393" height="128" fill="#3381FF" />
-  <rect x="511.304785215458" y="0" width="0.1092223744189702" height="128" fill="#FF33D7" />
-  <rect x="511.414007589877" y="0" width="0.1009588395122718" height="128" fill="#FF5733" />
-  <rect x="511.51496642938923" y="0" width="0.09844385062762445" height="128" fill="#33FF57" />
-  <rect x="511.61341028001686" y="0" width="0.09736599824848989" height="128" fill="#3357FF" />
-  <rect x="511.71077627826537" y="0" width="0.09161745222643881" height="128" fill="#FF33A1" />
-  <rect x="511.8023937304918" y="0" width="0.08263534906698404" height="128" fill="#FF8633" />
-  <rect x="511.8850290795588" y="0" width="0.058204028473267014" height="128" fill="#33FFD7" />
-  <rect x="511.9432331080321" y="0" width="0.05676689196775425" height="128" fill="#8333FF" />
+<svg width="512" height="1848" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="512" height="1848" fill="white" />
+  <rect x="0" y="0" width="137.1942335351373" height="128" fill="#FF5733" />
+  <rect x="137.1942335351373" y="0" width="43.41590572075236" height="128" fill="#33FF57" />
+  <rect x="180.61013925588966" y="0" width="29.099374519182525" height="128" fill="#3357FF" />
+  <rect x="209.7095137750722" y="0" width="22.480739427590283" height="128" fill="#FF33A1" />
+  <rect x="232.1902532026625" y="0" width="20.955146001271032" height="128" fill="#FF8633" />
+  <rect x="253.14539920393352" y="0" width="20.289750365142545" height="128" fill="#33FFD7" />
+  <rect x="273.4351495690761" y="0" width="16.508947386025355" height="128" fill="#8333FF" />
+  <rect x="289.94409695510143" y="0" width="13.679321225095048" height="128" fill="#FF3381" />
+  <rect x="303.6234181801965" y="0" width="13.264742281834298" height="128" fill="#33FF83" />
+  <rect x="316.8881604620308" y="0" width="13.21372267005608" height="128" fill="#A133FF" />
+  <rect x="330.10188313208687" y="0" width="12.362444392413954" height="128" fill="#FF8333" />
+  <rect x="342.46432752450085" y="0" width="11.187566199507197" height="128" fill="#3381FF" />
+  <rect x="353.65189372400806" y="0" width="9.51747666989999" height="128" fill="#FF33D7" />
+  <rect x="363.169370393908" y="0" width="9.00050172258086" height="128" fill="#FF5733" />
+  <rect x="372.1698721164889" y="0" width="7.480616784292739" height="128" fill="#33FF57" />
+  <rect x="379.6504889007816" y="0" width="7.460280295681841" height="128" fill="#3357FF" />
+  <rect x="387.1107691964635" y="0" width="7.000390228674003" height="128" fill="#FF33A1" />
+  <rect x="394.1111594251375" y="0" width="6.884793346043638" height="128" fill="#FF8633" />
+  <rect x="400.9959527711811" y="0" width="6.648247873253727" height="128" fill="#33FFD7" />
+  <rect x="407.6442006444349" y="0" width="4.627799890735972" height="128" fill="#8333FF" />
+  <rect x="412.27200053517083" y="0" width="4.465107981848792" height="128" fill="#FF3381" />
+  <rect x="416.73710851701964" y="0" width="4.423007882619215" height="128" fill="#33FF83" />
+  <rect x="421.16011639963887" y="0" width="4.379837441883801" height="128" fill="#A133FF" />
+  <rect x="425.5399538415227" y="0" width="4.064443478163918" height="128" fill="#FF8333" />
+  <rect x="429.6043973196866" y="0" width="4.036257818510219" height="128" fill="#3381FF" />
+  <rect x="433.6406551381968" y="0" width="3.995228060786478" height="128" fill="#FF33D7" />
+  <rect x="437.63588319898327" y="0" width="3.9228016188915276" height="128" fill="#FF5733" />
+  <rect x="441.5586848178748" y="0" width="3.9195905943740175" height="128" fill="#33FF57" />
+  <rect x="445.4782754122488" y="0" width="3.896756642249501" height="128" fill="#3357FF" />
+  <rect x="449.3750320544983" y="0" width="3.7961445407008507" height="128" fill="#FF33A1" />
+  <rect x="453.17117659519914" y="0" width="3.757969026992675" height="128" fill="#FF8633" />
+  <rect x="456.9291456221918" y="0" width="3.716225708265043" height="128" fill="#33FFD7" />
+  <rect x="460.64537133045684" y="0" width="3.5938499960977133" height="128" fill="#8333FF" />
+  <rect x="464.23922132655457" y="0" width="3.531413408257239" height="128" fill="#FF3381" />
+  <rect x="467.77063473481184" y="0" width="3.3230535951210265" height="128" fill="#33FF83" />
+  <rect x="471.0936883299329" y="0" width="3.1799846138408534" height="128" fill="#A133FF" />
+  <rect x="474.27367294377376" y="0" width="2.847821966529529" height="128" fill="#FF8333" />
+  <rect x="477.1214949103033" y="0" width="2.836404990467271" height="128" fill="#3381FF" />
+  <rect x="479.95789990077054" y="0" width="2.7332954254050015" height="128" fill="#FF33D7" />
+  <rect x="482.69119532617555" y="0" width="2.5895128831209373" height="128" fill="#FF5733" />
+  <rect x="485.2807082092965" y="0" width="2.1121405715177666" height="128" fill="#33FF57" />
+  <rect x="487.3928487808143" y="0" width="1.9490918821286416" height="128" fill="#3357FF" />
+  <rect x="489.34194066294293" y="0" width="1.8549018296150115" height="128" fill="#FF33A1" />
+  <rect x="491.19684249255795" y="0" width="1.4799255220702188" height="128" fill="#FF8633" />
+  <rect x="492.6767680146282" y="0" width="1.291188636541013" height="128" fill="#33FFD7" />
+  <rect x="493.9679566511692" y="0" width="1.2908318560390675" height="128" fill="#8333FF" />
+  <rect x="495.25878850720824" y="0" width="1.27049536742817" height="128" fill="#FF3381" />
+  <rect x="496.5292838746364" y="0" width="1.1441950697394387" height="128" fill="#33FF83" />
+  <rect x="497.67347894437586" y="0" width="1.1359891181946906" height="128" fill="#A133FF" />
+  <rect x="498.80946806257055" y="0" width="1.1170797515915756" height="128" fill="#FF8333" />
+  <rect x="499.9265478141621" y="0" width="1.0289549676110201" height="128" fill="#3381FF" />
+  <rect x="500.95550278177313" y="0" width="0.9226343780312406" height="128" fill="#FF33D7" />
+  <rect x="501.8781371598044" y="0" width="0.8987300844008875" height="128" fill="#FF5733" />
+  <rect x="502.7768672442053" y="0" width="0.8205951544748079" height="128" fill="#33FF57" />
+  <rect x="503.5974623986801" y="0" width="0.7103499793736272" height="128" fill="#3357FF" />
+  <rect x="504.3078123780537" y="0" width="0.6293608054319831" height="128" fill="#FF33A1" />
+  <rect x="504.9371731834857" y="0" width="0.6061700728055212" height="128" fill="#FF8633" />
+  <rect x="505.5433432562912" y="0" width="0.5929691942335351" height="128" fill="#33FFD7" />
+  <rect x="506.13631245052477" y="0" width="0.5180452888249657" height="128" fill="#8333FF" />
+  <rect x="506.65435773934973" y="0" width="0.3963831376615268" height="128" fill="#FF3381" />
+  <rect x="507.05074087701126" y="0" width="0.39138821063428886" height="128" fill="#33FF83" />
+  <rect x="507.4421290876455" y="0" width="0.3796144540700851" height="128" fill="#A133FF" />
+  <rect x="507.8217435417156" y="0" width="0.3471474283930383" height="128" fill="#FF8333" />
+  <rect x="508.16889097010863" y="0" width="0.3450067453813649" height="128" fill="#3381FF" />
+  <rect x="508.51389771549" y="0" width="0.3403685988560725" height="128" fill="#FF33D7" />
+  <rect x="508.85426631434603" y="0" width="0.3314490863074333" height="128" fill="#FF5733" />
+  <rect x="509.18571540065346" y="0" width="0.29327357259925746" height="128" fill="#33FF57" />
+  <rect x="509.47898897325274" y="0" width="0.2872083040661828" height="128" fill="#3357FF" />
+  <rect x="509.7661972773189" y="0" width="0.2030081056070286" height="128" fill="#FF33A1" />
+  <rect x="509.9692053829259" y="0" width="0.19872673958368176" height="128" fill="#FF8633" />
+  <rect x="510.16793212250957" y="0" width="0.18980722703504255" height="128" fill="#33FFD7" />
+  <rect x="510.3577393495446" y="0" width="0.18730976352142356" height="128" fill="#8333FF" />
+  <rect x="510.545049113066" y="0" width="0.16875717742025398" height="128" fill="#FF3381" />
+  <rect x="510.7138062904863" y="0" width="0.16162156738134262" height="128" fill="#33FF83" />
+  <rect x="510.87542785786763" y="0" width="0.129868102708187" height="128" fill="#A133FF" />
+  <rect x="511.00529596057584" y="0" width="0.11416976062258198" height="128" fill="#FF8333" />
+  <rect x="511.1194657211984" y="0" width="0.111672297108963" height="128" fill="#3381FF" />
+  <rect x="511.2311380183074" y="0" width="0.10846127259145287" height="128" fill="#FF33D7" />
+  <rect x="511.33959929089883" y="0" width="0.1002553210467048" height="128" fill="#FF5733" />
+  <rect x="511.4398546119455" y="0" width="0.09775785753308582" height="128" fill="#33FF57" />
+  <rect x="511.53761246947863" y="0" width="0.0966875160272491" height="128" fill="#3357FF" />
+  <rect x="511.6342999855059" y="0" width="0.09097902799612001" height="128" fill="#FF33A1" />
+  <rect x="511.725279013502" y="0" width="0.0820595154474808" height="128" fill="#FF8633" />
+  <rect x="511.8073385289495" y="0" width="0.07849171042802511" height="128" fill="#33FFD7" />
+  <rect x="511.8858302393775" y="0" width="0.05779844131518212" height="128" fill="#8333FF" />
+  <rect x="511.9436286806927" y="0" width="0.05637131930739985" height="128" fill="#FF3381" />
   <rect x="0" y="148" width="20" height="20" fill="#FF5733" />
-  <text x="25" y="163" fill="black" font-size="12">Everything else - 375.89 KB</text>
+  <text x="25" y="163" fill="black" font-size="12">Everything else - 375.52 KB</text>
   <rect x="0" y="168" width="20" height="20" fill="#33FF57" />
   <text x="25" y="183" fill="black" font-size="12">__str_find_first_not_of&lt;char, unsigned long, std::__1::char_traits&lt;char&gt;, 18446744073709551615UL&gt; - 118.84 KB</text>
   <rect x="0" y="188" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="203" fill="black" font-size="12">__constexpr_memchr&lt;const char, char&gt; - 79.64 KB</text>
+  <text x="25" y="203" fill="black" font-size="12">__constexpr_memchr&lt;const char, char&gt; - 79.65 KB</text>
   <rect x="0" y="208" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="223" fill="black" font-size="12">__destroy_at&lt;donner::base::parser::ParseError, 0&gt; - 61.13 KB</text>
+  <text x="25" y="223" fill="black" font-size="12">__destroy_at&lt;donner::base::parser::ParseError, 0&gt; - 61.53 KB</text>
   <rect x="0" y="228" width="20" height="20" fill="#FF8633" />
   <text x="25" y="243" fill="black" font-size="12">__construct_at&lt;donner::svg::components::RectComponent *, donner::svg::components::RectComponent **&gt; - 57.36 KB</text>
   <rect x="0" y="248" width="20" height="20" fill="#33FFD7" />
   <text x="25" y="263" fill="black" font-size="12">StartsWith&lt;(donner::StringComparison)0, donner::RcString, std::__1::basic_string_view&lt;char, std::__1::char_traits&lt;char&gt; &gt; &gt; - 55.54 KB</text>
   <rect x="0" y="268" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="283" fill="black" font-size="12">isa&lt;donner::svg::SVGUseElement&gt; - 45.35 KB</text>
+  <text x="25" y="283" fill="black" font-size="12">isa&lt;donner::svg::SVGUseElement&gt; - 45.19 KB</text>
   <rect x="0" y="288" width="20" height="20" fill="#FF3381" />
   <text x="25" y="303" fill="black" font-size="12">__destroy_at&lt;donner::css::Rule, 0&gt; - 37.44 KB</text>
   <rect x="0" y="308" width="20" height="20" fill="#33FF83" />
@@ -106,37 +107,37 @@
   <rect x="0" y="328" width="20" height="20" fill="#A133FF" />
   <text x="25" y="343" fill="black" font-size="12">uninitialized_construct_using_allocator&lt;donner::svg::components::ClipPathComponent, std::__1::allocator&lt;donner::svg::components::ClipPathComponent&gt; &gt; - 36.17 KB</text>
   <rect x="0" y="348" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="363" fill="black" font-size="12">basic_vtable&lt;donner::xml::components::XMLDocumentContext&gt; - 33.87 KB</text>
+  <text x="25" y="363" fill="black" font-size="12">basic_vtable&lt;donner::xml::components::XMLDocumentContext&gt; - 33.84 KB</text>
   <rect x="0" y="368" width="20" height="20" fill="#3381FF" />
   <text x="25" y="383" fill="black" font-size="12">construct&lt;donner::svg::components::ComputedShadowTreeComponent *, void, void&gt; - 30.62 KB</text>
   <rect x="0" y="388" width="20" height="20" fill="#FF33D7" />
-  <text x="25" y="403" fill="black" font-size="12">__construct_at&lt;donner::xml::(anonymous namespace)::XMLNodeTypeComponent *, donner::xml::(anonymous namespace)::XMLNodeTypeComponent **&gt; - 26.02 KB</text>
+  <text x="25" y="403" fill="black" font-size="12">__construct_at&lt;donner::xml::(anonymous namespace)::XMLNodeTypeComponent *, donner::xml::(anonymous namespace)::XMLNodeTypeComponent **&gt; - 26.05 KB</text>
   <rect x="0" y="408" width="20" height="20" fill="#FF5733" />
   <text x="25" y="423" fill="black" font-size="12">apply&lt;(lambda at external/_main~_repo_rules~entt/src/entt/container/../core - 24.64 KB</text>
   <rect x="0" y="428" width="20" height="20" fill="#33FF57" />
-  <text x="25" y="443" fill="black" font-size="12">__construct_at&lt;donner::svg::components::LinearGradientComponent *, donner::svg::components::LinearGradientComponent **&gt; - 20.42 KB</text>
+  <text x="25" y="443" fill="black" font-size="12">construct&lt;donner::svg::components::ShadowTreeComponent *, void, void&gt; - 20.48 KB</text>
   <rect x="0" y="448" width="20" height="20" fill="#3357FF" />
-  <text x="25" y="463" fill="black" font-size="12">__construct_at&lt;donner::svg::components::StylesheetComponent *, donner::svg::components::StylesheetComponent **&gt; - 19.16 KB</text>
+  <text x="25" y="463" fill="black" font-size="12">__construct_at&lt;donner::svg::components::LinearGradientComponent *, donner::svg::components::LinearGradientComponent **&gt; - 20.42 KB</text>
   <rect x="0" y="468" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="483" fill="black" font-size="12">operator!=&lt;donner::css::SelectorRule *, donner::css::SelectorRule *&gt; - 18.85 KB</text>
+  <text x="25" y="483" fill="black" font-size="12">__construct_at&lt;donner::svg::components::StylesheetComponent *, donner::svg::components::StylesheetComponent **&gt; - 19.16 KB</text>
   <rect x="0" y="488" width="20" height="20" fill="#FF8633" />
-  <text x="25" y="503" fill="black" font-size="12">__construct_at&lt;donner::svg::components::PathComponent *, donner::svg::components::PathComponent **&gt; - 18.20 KB</text>
+  <text x="25" y="503" fill="black" font-size="12">operator!=&lt;donner::css::SelectorRule *, donner::css::SelectorRule *&gt; - 18.84 KB</text>
   <rect x="0" y="508" width="20" height="20" fill="#33FFD7" />
-  <text x="25" y="523" fill="black" font-size="12">equalsIgnoreCase - 12.67 KB</text>
+  <text x="25" y="523" fill="black" font-size="12">__construct_at&lt;donner::svg::components::PathComponent *, donner::svg::components::PathComponent **&gt; - 18.20 KB</text>
   <rect x="0" y="528" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="543" fill="black" font-size="12">holds_alternative&lt;donner::css::Token::CloseParenthesis, donner::css::Token::Ident, donner::css::Token::Function, donner::css::Token::AtKeyword, donner::css::Token::Hash, donner::css::Token::String, donner::css::Token::BadString, donner::css::Token::Url, donner::css::Token::BadUrl, donner::css::Token::Delim, donner::css::Token::Number, donner::css::Token::Percentage, donner::css::Token::Dimension, donner::css::Token::Whitespace, donner::css::Token::CDO, donner::css::Token::CDC, donner::css::Token::Colon, donner::css::Token::Semicolon, donner::css::Token::Comma, donner::css::Token::SquareBracket, donner::css::Token::Parenthesis, donner::css::Token::CurlyBracket, donner::css::Token::CloseSquareBracket, donner::css::Token::CloseParenthesis, donner::css::Token::CloseCurlyBracket, donner::css::Token::ErrorToken, donner::css::Token::EofToken&gt; - 12.22 KB</text>
+  <text x="25" y="543" fill="black" font-size="12">equalsIgnoreCase - 12.67 KB</text>
   <rect x="0" y="548" width="20" height="20" fill="#FF3381" />
-  <text x="25" y="563" fill="black" font-size="12">__construct_at&lt;donner::svg::components::MaskComponent *, donner::svg::components::MaskComponent **&gt; - 12.11 KB</text>
+  <text x="25" y="563" fill="black" font-size="12">holds_alternative&lt;donner::css::Token::CloseParenthesis, donner::css::Token::Ident, donner::css::Token::Function, donner::css::Token::AtKeyword, donner::css::Token::Hash, donner::css::Token::String, donner::css::Token::BadString, donner::css::Token::Url, donner::css::Token::BadUrl, donner::css::Token::Delim, donner::css::Token::Number, donner::css::Token::Percentage, donner::css::Token::Dimension, donner::css::Token::Whitespace, donner::css::Token::CDO, donner::css::Token::CDC, donner::css::Token::Colon, donner::css::Token::Semicolon, donner::css::Token::Comma, donner::css::Token::SquareBracket, donner::css::Token::Parenthesis, donner::css::Token::CurlyBracket, donner::css::Token::CloseSquareBracket, donner::css::Token::CloseParenthesis, donner::css::Token::CloseCurlyBracket, donner::css::Token::ErrorToken, donner::css::Token::EofToken&gt; - 12.22 KB</text>
   <rect x="0" y="568" width="20" height="20" fill="#33FF83" />
-  <text x="25" y="583" fill="black" font-size="12">__construct_at&lt;donner::svg::components::FilterComponent *, donner::svg::components::FilterComponent **&gt; - 11.99 KB</text>
+  <text x="25" y="583" fill="black" font-size="12">__construct_at&lt;donner::svg::components::MaskComponent *, donner::svg::components::MaskComponent **&gt; - 12.11 KB</text>
   <rect x="0" y="588" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="603" fill="black" font-size="12">__destroy_at&lt;entt::basic_sigh_mixin&lt;entt::basic_storage&lt;donner::svg::components::DoNotInheritFillOrStrokeTag, entt::entity, std::__1::allocator&lt;donner::svg::components::DoNotInheritFillOrStrokeTag&gt;, void&gt;, entt::basic_registry&lt;entt::entity, std::__1::allocator&lt;entt::entity&gt; &gt; &gt;, 0&gt; - 11.12 KB</text>
+  <text x="25" y="603" fill="black" font-size="12">__construct_at&lt;donner::svg::components::FilterComponent *, donner::svg::components::FilterComponent **&gt; - 11.99 KB</text>
   <rect x="0" y="608" width="20" height="20" fill="#FF8333" />
-  <text x="25" y="623" fill="black" font-size="12">uninitialized_construct_using_allocator&lt;donner::svg::components::PolyComponent, std::__1::allocator&lt;donner::svg::components::PolyComponent&gt;, donner::svg::components::PolyComponent::Type&gt; - 11.05 KB</text>
+  <text x="25" y="623" fill="black" font-size="12">__destroy_at&lt;entt::basic_sigh_mixin&lt;entt::basic_storage&lt;donner::svg::components::DoNotInheritFillOrStrokeTag, entt::entity, std::__1::allocator&lt;donner::svg::components::DoNotInheritFillOrStrokeTag&gt;, void&gt;, entt::basic_registry&lt;entt::entity, std::__1::allocator&lt;entt::entity&gt; &gt; &gt;, 0&gt; - 11.12 KB</text>
   <rect x="0" y="628" width="20" height="20" fill="#3381FF" />
-  <text x="25" y="643" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ViewboxComponent *, donner::svg::components::ViewboxComponent **&gt; - 10.94 KB</text>
+  <text x="25" y="643" fill="black" font-size="12">uninitialized_construct_using_allocator&lt;donner::svg::components::PolyComponent, std::__1::allocator&lt;donner::svg::components::PolyComponent&gt;, donner::svg::components::PolyComponent::Type&gt; - 11.05 KB</text>
   <rect x="0" y="648" width="20" height="20" fill="#FF33D7" />
-  <text x="25" y="663" fill="black" font-size="12">construct&lt;donner::svg::components::ShadowTreeComponent *, void, void&gt; - 10.82 KB</text>
+  <text x="25" y="663" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ViewboxComponent *, donner::svg::components::ViewboxComponent **&gt; - 10.94 KB</text>
   <rect x="0" y="668" width="20" height="20" fill="#FF5733" />
   <text x="25" y="683" fill="black" font-size="12">__construct_at&lt;donner::svg::components::FEGaussianBlurComponent *, donner::svg::components::FEGaussianBlurComponent **&gt; - 10.74 KB</text>
   <rect x="0" y="688" width="20" height="20" fill="#33FF57" />
@@ -160,7 +161,7 @@
   <rect x="0" y="868" width="20" height="20" fill="#FF8333" />
   <text x="25" y="883" fill="black" font-size="12">donner/svg/components/paint - 7.79 KB</text>
   <rect x="0" y="888" width="20" height="20" fill="#3381FF" />
-  <text x="25" y="903" fill="black" font-size="12">__invoke&lt;(lambda at /PLACEHOLDER_DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/usr/include/c++/v1 - 7.76 KB</text>
+  <text x="25" y="903" fill="black" font-size="12">__invoke&lt;(lambda at /PLACEHOLDER_DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/include/c++/v1 - 7.76 KB</text>
   <rect x="0" y="908" width="20" height="20" fill="#FF33D7" />
   <text x="25" y="923" fill="black" font-size="12">__compressed_pair&lt;donner::css::Selector *, std::__1::default_delete&lt;donner::css::Selector&gt; &gt; - 7.48 KB</text>
   <rect x="0" y="928" width="20" height="20" fill="#FF5733" />
@@ -170,7 +171,7 @@
   <rect x="0" y="968" width="20" height="20" fill="#3357FF" />
   <text x="25" y="983" fill="black" font-size="12">ParsePresentationAttribute&lt;(donner::svg::ElementType)6&gt; - 5.33 KB</text>
   <rect x="0" y="988" width="20" height="20" fill="#FF33A1" />
-  <text x="25" y="1003" fill="black" font-size="12">e clang version 16.0.0 (clang-1600.0.26.3) - 5.08 KB</text>
+  <text x="25" y="1003" fill="black" font-size="12">e clang version 16.0.0 (clang-1600.0.26.6) - 5.08 KB</text>
   <rect x="0" y="1008" width="20" height="20" fill="#FF8633" />
   <text x="25" y="1023" fill="black" font-size="12">optional&lt;donner::svg::PreserveAspectRatio, 0&gt; - 4.05 KB</text>
   <rect x="0" y="1028" width="20" height="20" fill="#33FFD7" />
@@ -182,7 +183,7 @@
   <rect x="0" y="1088" width="20" height="20" fill="#33FF83" />
   <text x="25" y="1103" fill="black" font-size="12">consumedChars - 3.13 KB</text>
   <rect x="0" y="1108" width="20" height="20" fill="#A133FF" />
-  <text x="25" y="1123" fill="black" font-size="12">Parse&lt;donner::Length&lt;double&gt;, (donner::svg::PropertyCascade)0, (lambda at donner/svg/components/shape - 3.09 KB</text>
+  <text x="25" y="1123" fill="black" font-size="12">Parse&lt;donner::Length&lt;double&gt;, (donner::svg::PropertyCascade)0, (lambda at donner/svg/components/shape - 3.11 KB</text>
   <rect x="0" y="1128" width="20" height="20" fill="#FF8333" />
   <text x="25" y="1143" fill="black" font-size="12">construct&lt;donner::css::ComplexSelector::Entry, donner::css::ComplexSelector::Entry &amp;, void, void&gt; - 3.06 KB</text>
   <rect x="0" y="1148" width="20" height="20" fill="#3381FF" />
@@ -228,7 +229,7 @@
   <rect x="0" y="1548" width="20" height="20" fill="#33FFD7" />
   <text x="25" y="1563" fill="black" font-size="12">_ZNR6donner4base6parser11ParseResultINSt3__117basic_string_viewIcNS3_11char_traitsIcEEEEE5errorEv.cold.1 - 532.00 B</text>
   <rect x="0" y="1568" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="1583" fill="black" font-size="12">donner/svg/components/resources - 525.00 B</text>
+  <text x="25" y="1583" fill="black" font-size="12">invalidateComputed - 525.00 B</text>
   <rect x="0" y="1588" width="20" height="20" fill="#FF3381" />
   <text x="25" y="1603" fill="black" font-size="12">isfinite&lt;double, 0&gt; - 473.00 B</text>
   <rect x="0" y="1608" width="20" height="20" fill="#33FF83" />
@@ -252,7 +253,9 @@
   <rect x="0" y="1788" width="20" height="20" fill="#FF8633" />
   <text x="25" y="1803" fill="black" font-size="12">__uninitialized_allocator_move_if_noexcept&lt;std::__1::allocator&lt;donner::css::SelectorRule&gt;, std::__1::reverse_iterator&lt;donner::css::SelectorRule *&gt;, std::__1::reverse_iterator&lt;donner::css::SelectorRule *&gt;, std::__1::reverse_iterator&lt;donner::css::SelectorRule *&gt; &gt; - 230.00 B</text>
   <rect x="0" y="1808" width="20" height="20" fill="#33FFD7" />
-  <text x="25" y="1823" fill="black" font-size="12">ConsumeDigits&lt;16, unsigned long long&gt; - 162.00 B</text>
+  <text x="25" y="1823" fill="black" font-size="12">donner/svg/components/resources - 220.00 B</text>
   <rect x="0" y="1828" width="20" height="20" fill="#8333FF" />
-  <text x="25" y="1843" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ComputedShadowTreeComponent *, donner::svg::components::ComputedShadowTreeComponent **&gt; - 158.00 B</text>
+  <text x="25" y="1843" fill="black" font-size="12">ConsumeDigits&lt;16, unsigned long long&gt; - 162.00 B</text>
+  <rect x="0" y="1848" width="20" height="20" fill="#FF3381" />
+  <text x="25" y="1863" fill="black" font-size="12">__construct_at&lt;donner::svg::components::ComputedShadowTreeComponent *, donner::svg::components::ComputedShadowTreeComponent **&gt; - 158.00 B</text>
 </svg>
