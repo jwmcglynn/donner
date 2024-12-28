@@ -1,7 +1,14 @@
 /**
-@page elements_paint_servers Elements: Paint Servers
+@page elements_painting Elements: Painting
 
-\details Paint servers are elements that define a color or a pattern that can be used to fill or
+\details Painting can be controlled by creating paint servers or using elements such as
+\ref xml_marker to control how strokes and fills are rendered.
+
+- SVG2 spec: https://www.w3.org/TR/SVG2/painting.html
+
+# Paint Servers
+
+Paint servers are elements that define a color or a pattern that can be used to fill or
 stroke shapes.
 
 - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html
@@ -16,4 +23,11 @@ The following paint servers are supported:
 
 Additionally \subpage xml_stop (\ref donner::svg::SVGStopElement "SVGStopElement") is used to define
 gradients.
+
+# Markers
+
+Markers allow placing an element on strokes to create effects such as arrowheads.
+
+- \subpage xml_marker (\ref donner::svg::SVGMarkerElement "SVGMarkerElement")
+
 */

@@ -26,7 +26,7 @@ class SVGParser;
  * - SVG2 spec: https://www.w3.org/TR/SVG2/struct.html#SVGElement
  *
  * The `<svg>` element is the root element of an SVG document. It can contain any number of child
- * elements, such as \ref elements_basic_shapes, \ref elements_paint_servers, and \ref
+ * elements, such as \ref elements_basic_shapes, \ref elements_painting, and \ref
  * elements_structural.
  *
  * ```xml

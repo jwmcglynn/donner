@@ -1,0 +1,12 @@
+/**
+@page elements_masking_clipping Elements: Masking and Clipping
+
+\details Content can be masked or clipped using either \ref xml_mask for raster image masking
+or \ref xml_clipPath for vector-based clipping.
+
+- CSS Masking spec: https://drafts.fxtf.org/css-masking-1/
+
+- \subpage xml_mask (\ref donner::svg::SVGMaskElement "SVGMaskElement")
+- \subpage xml_clipPath (\ref donner::svg::SVGClipPathElement "SVGClipPathElement")
+
+*/

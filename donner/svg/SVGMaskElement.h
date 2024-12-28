@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_mask "<mask>"
+ * @page xml_mask "<mask>"
  *
  * Defines a mask, which is used to apply image-based visibility to graphical elements. Compared to
  * \ref xml_clipPath, which requires the contents to be paths, "<mask>" masking is performed based
