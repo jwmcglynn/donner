@@ -122,12 +122,12 @@ Detailed docs: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc
 ## API Demo 3: Interactive SVG Viewer using ImGui
 
 ```sh
-bazel run --run_under="cd $PWD &&" //examples:svg_viewer -- <filename>
+bazel run --run_under="cd $PWD &&" //experimental/viewer:svg_viewer -- <filename>
 ```
 
 This example demonstrates how to create an interactive SVG viewer using ImGui. The viewer allows you to load and display SVG files, and interact with SVG elements using ImGui.
 
-Detailed docs: [svg_viewer.cc](https://jwmcglynn.github.io/donner/svg_viewer_8cc-example.html)
+See the source at: [experimental/viewer/svg_viewer.cc](./experimental/viewer/svg_viewer.cc)
 
 ## Documentation
 
