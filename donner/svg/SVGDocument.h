@@ -93,7 +93,21 @@ public:
    * Get the current canvas size, or the default size (512x512) if the canvas size has not been
    * explicitly set.
    */
-  Vector2i canvasSize();
+  Vector2i canvasSize() const;
+
+  /**
+   * Get the width of the SVG document, in pixels.
+   *
+   * This is the width of the canvas, which may be different from the width of the SVG content.
+   */
+  int width() const { return canvasSize().x; }
+
+  /**
+   * Get the height of the SVG document, in pixels.
+   *
+   * This is the height of the canvas, which may be different from the height of the SVG content.
+   */
+  int height() const { return canvasSize().y; }
 
   /**
    * Get the scale transform from the canvas to the SVG document.

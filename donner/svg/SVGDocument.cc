@@ -56,7 +56,7 @@ void SVGDocument::useAutomaticCanvasSize() {
   registry_->ctx().get<components::SVGDocumentContext>().canvasSize = std::nullopt;
 }
 
-Vector2i SVGDocument::canvasSize() {
+Vector2i SVGDocument::canvasSize() const {
   return components::LayoutSystem().calculateCanvasScaledDocumentSize(
       *registry_, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 }

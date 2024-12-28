@@ -153,11 +153,23 @@ public:
   void setHeight(std::optional<Lengthd> value);
 
   /**
-   * Set the rectangle in userspace that the SVG viewport is mapped to.
+   * Set the viewbox rectangle in userspace that the SVG viewport is mapped to.
    *
    * @param viewbox Rectangle in userspace.
    */
   void setViewbox(std::optional<Boxd> viewbox);
+
+  /**
+   * Set the viewbox rectangle in userspace that the SVG viewport is mapped to.
+   *
+   * @param x Top-left X coordinate.
+   * @param y Top-left Y coordinate.
+   * @param width Width.
+   * @param height Height.
+   */
+  void setViewbox(double x, double y, double width, double height) {
+    setViewbox(Boxd::FromXYWH(x, y, width, height));
+  }
 
   /**
    * Set how to scale the SVG viewport to fit the SVG content.
