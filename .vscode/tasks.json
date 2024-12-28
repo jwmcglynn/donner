@@ -155,7 +155,7 @@
     {
       "label": "core_tests",
       "type": "shell",
-      "command": "bazel build //donner/svg/core:core_tests -c dbg",
+      "command": "bazel build //donner/svg/core/tests:core_tests -c dbg",
       "problemMatcher": []
     },
     {

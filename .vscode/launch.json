@@ -47,7 +47,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "core_tests",
-      "program": "${workspaceFolder}/bazel-bin/donner/svg/core/core_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/core/tests/core_tests",
       "args": [
         "--gtest_break_on_failure"
       ],

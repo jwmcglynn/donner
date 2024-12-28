@@ -155,7 +155,7 @@
       }
     },
     {
-      "pattern": "bazel-bin/donner/svg/core/core_tests",
+      "pattern": "bazel-bin/donner/svg/core/tests/core_tests",
       "runTask": {
         "before": [
           "core_tests"

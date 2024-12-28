@@ -22,7 +22,7 @@ cc_test(
         "//donner/base:base_test_utils",
         "//donner/base/parser:parser_test_utils",
         "//donner/svg",
-        "//donner/svg/core:core_test_utils",
+        "//donner/svg/core/tests:core_test_utils",
         "//donner/svg/renderer/tests:renderer_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
