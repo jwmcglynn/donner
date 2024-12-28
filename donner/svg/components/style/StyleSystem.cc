@@ -208,15 +208,24 @@ void StyleSystem::computeAllStyles(Registry& registry,
 
   // Compute the styles for all elements.
   for (auto entity : view) {
-    StyleSystem().computeStyle(EntityHandle(registry, entity), outWarnings);
+    computeStyle(EntityHandle(registry, entity), outWarnings);
   }
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
                                    std::vector<parser::ParseError>* outWarnings) {
   for (Entity entity : entities) {
-    StyleSystem().computeStyle(EntityHandle(registry, entity), outWarnings);
+    computeStyle(EntityHandle(registry, entity), outWarnings);
   }
+}
+
+void StyleSystem::invalidateComputed(EntityHandle handle) {
+  handle.remove<ComputedStyleComponent>();
+}
+
+void StyleSystem::invalidateAll(EntityHandle handle) {
+  invalidateComputed(handle);
+  // TODO: Reparse attributes.
 }
 
 }  // namespace donner::svg::components

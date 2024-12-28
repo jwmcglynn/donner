@@ -109,6 +109,18 @@ void SVGElement::setStyle(std::string_view style) {
 
   handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
+
+  components::StyleSystem().invalidateAll(handle_);
+}
+
+void SVGElement::updateStyle(std::string_view style) {
+  handle_.get_or_emplace<components::StyleComponent>().updateStyle(style);
+
+  // TODO: Update the style attribute too
+  // handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
+
+  components::StyleSystem().invalidateComputed(handle_);
 }
 
 parser::ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,

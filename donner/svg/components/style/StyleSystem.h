@@ -42,6 +42,20 @@ public:
   void computeStylesFor(Registry& registry, std::span<const Entity> entities,
                         std::vector<parser::ParseError>* outWarnings);
 
+  /**
+   * Invalidate the computed style for a given entity.
+   *
+   * @param handle Entity handle to invalidate
+   */
+  void invalidateComputed(EntityHandle handle);
+
+  /**
+   * Invalidate the full style and reparse attributes.
+   *
+   * @param handle Entity handle to invalidate
+   */
+  void invalidateAll(EntityHandle handle);
+
 private:
   void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
                              std::vector<parser::ParseError>* outWarnings);

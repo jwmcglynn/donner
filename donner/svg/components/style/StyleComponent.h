@@ -24,7 +24,27 @@ struct StyleComponent {
    *
    * @param style The value of the `style` attribute.
    */
-  void setStyle(std::string_view style) { properties.parseStyle(style); }
+
+  void setStyle(std::string_view style) {
+    // UPDATE docs after fixing this
+    /**
+     * Sets the properties from the value of the element's `style=""` attribute. Note that this
+     * first invalidates the previous `style=""` values and replaces them.
+     *
+     * @param style The value of the `style` attribute.
+     */
+    // properties.clearStyle();
+    properties.parseStyle(style);
+  }
+
+  /**
+   * Updates the properties from the value of the element's `style=""` attribute, adding new
+   * properties or updating existing ones. Does not remove existing `style=""` attribute
+   * information.
+   *
+   * @param style The update style to apply, as a CSS style string (e.g. "fill:red;").
+   */
+  void updateStyle(std::string_view style) { properties.parseStyle(style); }
 
   /**
    * Tries to set a presentation attribute on the given entity. This is used during the CSS cascade

@@ -124,6 +124,14 @@ public:
   void setStyle(std::string_view style);
 
   /**
+   * Update the element style, adding new attributes or overridding existing ones (without removing
+   * them).
+   *
+   * @param style Style updates to apply, as a CSS style string (e.g. "fill:red;").
+   */
+  void updateStyle(std::string_view style);
+
+  /**
    * Set the value of a presentation attribute, such as "fill" or "stroke". Note that this accepts
    * the CSS value, not the XML attribute value.
    *

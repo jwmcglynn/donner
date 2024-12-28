@@ -1,5 +1,6 @@
 #include <fstream>
 #include <iostream>
+#include <sstream>
 
 #include "donner/base/Box.h"
 #include "glad/glad.h"
@@ -11,10 +12,9 @@ extern "C" {
 
 #include "absl/debugging/failure_signal_handler.h"
 #include "absl/debugging/symbolize.h"
+#include "donner/svg/AllSVGElements.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and SVGParser
-#include "donner/svg/SVGPathElement.h"
-#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -58,6 +58,8 @@ struct SVGState {
   std::optional<SVGRectElement> boundsShape;
   std::optional<SVGPathElement> selectedPathOutline;
 
+  std::optional<SVGElement> selectedElement;
+
   void loadSVG(const std::string& source) {
     document = SVGDocument();
 
@@ -71,22 +73,27 @@ struct SVGState {
     document = std::move(maybeDocument.result());
     controller = DonnerController(document);
 
+    auto editorOnlyContainer = SVGUnknownElement::Create(document, "editor-only");
+    document.svgElement().appendChild(editorOnlyContainer);
+
     boundsShape = SVGRectElement::Create(document);
-    document.svgElement().appendChild(boundsShape.value());
+    editorOnlyContainer.appendChild(boundsShape.value());
     boundsShape->setStyle(
-        "fill: none; stroke: deepskyblue; stroke-width: 1px; pointer-events: none");
+        "display: none; fill: none; stroke: deepskyblue; stroke-width: 1px; pointer-events: none");
 
     selectedPathOutline = SVGPathElement::Create(document);
-    document.svgElement().appendChild(selectedPathOutline.value());
+    editorOnlyContainer.appendChild(selectedPathOutline.value());
     selectedPathOutline->setStyle(
-        "fill: none; stroke: deepskyblue; stroke-width: 1px; pointer-events: none");
+        "display: none; fill: none; stroke: deepskyblue; stroke-width: 1px; pointer-events: none");
 
+    selectedElement = std::nullopt;
     lastError = std::nullopt;
     valid = true;
   }
 
   void setBounds(const donner::Boxd& box) {
     if (boundsShape) {
+      boundsShape->setStyle("display: inline");
       boundsShape->setX(donner::Lengthd(box.topLeft.x));
       boundsShape->setY(donner::Lengthd(box.topLeft.y));
       boundsShape->setWidth(donner::Lengthd(box.width()));
@@ -94,19 +101,39 @@ struct SVGState {
     }
   }
 
-  void selectShape(const SVGGeometryElement& element) {
-    if (selectedPathOutline) {
-      if (auto computedSpline = element.computedSpline()) {
-        selectedPathOutline->setSpline(computedSpline.value());
-        selectedPathOutline->setTransform(element.elementFromWorld());
-        setBounds(element.worldBounds().value());
+  void selectElement(const SVGElement& element) {
+    selectedElement = element;
+
+    if (element.isa<SVGGeometryElement>()) {
+      auto geomElement = element.cast<SVGGeometryElement>();
+
+      if (selectedPathOutline) {
+        selectedPathOutline->setStyle("display: inline");
+        if (auto computedSpline = geomElement.computedSpline()) {
+          selectedPathOutline->setSpline(computedSpline.value());
+          selectedPathOutline->setTransform(geomElement.elementFromWorld());
+          setBounds(geomElement.worldBounds().value());
+        }
       }
+    }
+  }
+
+  void selectNone() {
+    selectedElement = std::nullopt;
+    if (selectedPathOutline) {
+      selectedPathOutline->setStyle("display: none");
+    }
+
+    if (boundsShape) {
+      boundsShape->setStyle("display: none");
     }
   }
 
   void handleClick(double x, double y) {
     if (auto maybeElm = controller->findIntersecting(Vector2d(x, y))) {
-      selectShape(*maybeElm);
+      selectElement(*maybeElm);
+    } else {
+      selectNone();
     }
   }
 };
@@ -146,6 +173,7 @@ int main(int argc, char** argv) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
+  io.IniFilename = nullptr;
 
   // Enable Docking and Viewports
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
@@ -178,11 +206,31 @@ int main(int argc, char** argv) {
   state.loadSVG(svgString);
 
   RendererSkia renderer;
+
   bool svgChanged = false;
+
+  // Variables for window visibility
+  static bool dockspaceInitialized = false;
+
+  static int lastWindowWidth = 0;
+  static int lastWindowHeight = 0;
 
   while (!glfwWindowShouldClose(window)) {
     if (svgChanged) {
       state.loadSVG(svgString);
+    }
+
+    // Get current window size
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+
+    // Check if the window size has changed
+    if (windowWidth != lastWindowWidth || windowHeight != lastWindowHeight) {
+      lastWindowWidth = windowWidth;
+      lastWindowHeight = windowHeight;
+
+      // Rebuild the dock layout
+      dockspaceInitialized = false;
     }
 
     glfwPollEvents();
@@ -192,43 +240,34 @@ int main(int argc, char** argv) {
     ImGui::NewFrame();
 
     // Begin DockSpace
-    static bool optFullscreenPersistent = true;
-    bool optFullscreen = optFullscreenPersistent;
-    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
+    static ImGuiDockNodeFlags dockspaceFlags = ImGuiDockNodeFlags_None;
 
-    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-    if (optFullscreen) {
-      ImGuiViewport* viewport = ImGui::GetMainViewport();
-      ImGui::SetNextWindowPos(viewport->Pos);
-      ImGui::SetNextWindowSize(viewport->Size);
-      ImGui::SetNextWindowViewport(viewport->ID);
-      ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-      ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-      windowFlags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-      windowFlags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-    } else {
-      // Not fullscreen, so we don't set additional window flags
-    }
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
-    ImGui::Begin("MainWindow", nullptr, windowFlags);
+    const ImGuiWindowFlags mainWindowFlags =
+        ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
 
-    if (optFullscreen) {
-      ImGui::PopStyleVar(2);
-    }
+    ImGui::Begin("MainWindow", nullptr, mainWindowFlags);
+
+    ImGui::PopStyleVar(2);
 
     // DockSpace
-    ImGuiIO& io = ImGui::GetIO();
-    ImGuiID dockspaceId = ImGui::GetID("MyDockSpace");
-    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), dockspace_flags);
+    ImGuiID dockspaceId = ImGui::GetID("EditorDockspace");
+    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), dockspaceFlags);
 
     // Set up initial docking layout
-    static bool dockspaceInitialized = false;
     if (!dockspaceInitialized) {
       dockspaceInitialized = true;
 
       ImGui::DockBuilderRemoveNode(dockspaceId);  // clear any previous layout
-      ImGui::DockBuilderAddNode(dockspaceId, dockspace_flags | ImGuiDockNodeFlags_DockSpace);
+      ImGui::DockBuilderAddNode(dockspaceId, dockspaceFlags | ImGuiDockNodeFlags_DockSpace);
       ImGui::DockBuilderSetNodeSize(dockspaceId, io.DisplaySize);
 
       ImGuiID dockIdLeft = dockspaceId;
@@ -236,14 +275,20 @@ int main(int argc, char** argv) {
 
       ImGui::DockBuilderSplitNode(dockIdLeft, ImGuiDir_Right, 0.5f, &dockIdRight, &dockIdLeft);
 
-      ImGui::DockBuilderDockWindow("Text", dockIdLeft);
-      ImGui::DockBuilderDockWindow("SVG Viewer", dockIdRight);
+      ImGui::DockBuilderDockWindow("Code", dockIdLeft);
+      ImGui::DockBuilderDockWindow("Drawing", dockIdRight);
 
       ImGui::DockBuilderFinish(dockspaceId);
     }
 
     // Text Editor Window
-    ImGui::Begin("Text");
+    ImGuiWindowClass windowClassNoUndocking;
+    windowClassNoUndocking.DockNodeFlagsOverrideSet =
+        ImGuiDockNodeFlags_NoUndocking | ImGuiDockNodeFlags_NoTabBar;
+
+    ImGui::SetNextWindowClass(&windowClassNoUndocking);
+    ImGui::Begin("Code", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar);
+
     {
       static ImGuiInputTextFlags flags = 0;
       svgChanged =
@@ -254,15 +299,17 @@ int main(int argc, char** argv) {
       ImGui::Text("Error: %s", state.lastError->reason.c_str());
     }
 
-    ImGui::End();  // End of Text Window
+    ImGui::End();  // End of Code Window
 
     // SVG Viewer Window
-    ImGui::Begin("SVG Viewer");
+    ImGui::SetNextWindowClass(&windowClassNoUndocking);
+    ImGui::Begin("Drawing");
 
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate,
                 ImGui::GetIO().Framerate);
 
     const ImVec2 regionSize = ImGui::GetContentRegionAvail();
+    // state.document.setCanvasSize(regionSize.x, regionSize.y);
     const float scale =
         std::min(regionSize.x / (float)renderer.width(), regionSize.y / (float)renderer.height());
 
@@ -274,7 +321,7 @@ int main(int argc, char** argv) {
         ImVec2((mousePositionAbsolute.x - screenPositionAbsolute.x) / scale,
                (mousePositionAbsolute.y - screenPositionAbsolute.y) / scale);
 
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsWindowHovered()) {
       state.handleClick(mousePositionRelative.x, mousePositionRelative.y);
     }
 
@@ -288,7 +335,7 @@ int main(int argc, char** argv) {
     ImGui::Image(static_cast<ImTextureID>(texture),
                  ImVec2(scale * renderer.width(), scale * renderer.height()));
 
-    ImGui::End();  // End of SVG Viewer
+    ImGui::End();  // End of Drawing Window
     ImGui::End();  // End of MainWindow
 
     // Rendering
