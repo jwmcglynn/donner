@@ -20,7 +20,7 @@ donner_cc_library(
         "Utils.h",
         "Vector2.h",
     ],
-    visibility = donner_internal_visibility(),
+    visibility = ["//visibility:public"],
     deps = [
         "@entt",
     ],
