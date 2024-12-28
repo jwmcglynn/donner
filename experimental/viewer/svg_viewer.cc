@@ -19,6 +19,7 @@ extern "C" {
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
 
 using namespace donner;
@@ -145,8 +146,22 @@ int main(int argc, char** argv) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
-  (void)io;
+
+  // Enable Docking and Viewports
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;      // Enable Docking
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;    // Enable Multi-Viewport / Platform Windows
+
+  // Setup Dear ImGui style
   ImGui::StyleColorsDark();
+
+  // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look
+  // identical to regular ones.
+  ImGuiStyle& style = ImGui::GetStyle();
+  if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+    style.WindowRounding = 0.0f;
+    style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+  }
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
@@ -176,6 +191,72 @@ int main(int argc, char** argv) {
 
     ImGui::NewFrame();
 
+    // Begin DockSpace
+    static bool optFullscreenPersistent = true;
+    bool optFullscreen = optFullscreenPersistent;
+    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
+
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+    if (optFullscreen) {
+      ImGuiViewport* viewport = ImGui::GetMainViewport();
+      ImGui::SetNextWindowPos(viewport->Pos);
+      ImGui::SetNextWindowSize(viewport->Size);
+      ImGui::SetNextWindowViewport(viewport->ID);
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+      windowFlags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+      windowFlags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    } else {
+      // Not fullscreen, so we don't set additional window flags
+    }
+
+    ImGui::Begin("MainWindow", nullptr, windowFlags);
+
+    if (optFullscreen) {
+      ImGui::PopStyleVar(2);
+    }
+
+    // DockSpace
+    ImGuiIO& io = ImGui::GetIO();
+    ImGuiID dockspaceId = ImGui::GetID("MyDockSpace");
+    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), dockspace_flags);
+
+    // Set up initial docking layout
+    static bool dockspaceInitialized = false;
+    if (!dockspaceInitialized) {
+      dockspaceInitialized = true;
+
+      ImGui::DockBuilderRemoveNode(dockspaceId);  // clear any previous layout
+      ImGui::DockBuilderAddNode(dockspaceId, dockspace_flags | ImGuiDockNodeFlags_DockSpace);
+      ImGui::DockBuilderSetNodeSize(dockspaceId, io.DisplaySize);
+
+      ImGuiID dockIdLeft = dockspaceId;
+      ImGuiID dockIdRight;
+
+      ImGui::DockBuilderSplitNode(dockIdLeft, ImGuiDir_Right, 0.5f, &dockIdRight, &dockIdLeft);
+
+      ImGui::DockBuilderDockWindow("Text", dockIdLeft);
+      ImGui::DockBuilderDockWindow("SVG Viewer", dockIdRight);
+
+      ImGui::DockBuilderFinish(dockspaceId);
+    }
+
+    // Text Editor Window
+    ImGui::Begin("Text");
+    {
+      static ImGuiInputTextFlags flags = 0;
+      svgChanged =
+          ImGui::InputTextMultiline("##source", &svgString, ImVec2(-FLT_MIN, -FLT_MIN), flags);
+    }
+
+    if (state.lastError) {
+      ImGui::Text("Error: %s", state.lastError->reason.c_str());
+    }
+
+    ImGui::End();  // End of Text Window
+
+    // SVG Viewer Window
     ImGui::Begin("SVG Viewer");
 
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate,
@@ -204,27 +285,13 @@ int main(int argc, char** argv) {
                    GL_UNSIGNED_BYTE, bitmap.getPixels());
     }
 
-    ImGui::Image((void*)(intptr_t)texture,
+    ImGui::Image(static_cast<ImTextureID>(texture),
                  ImVec2(scale * renderer.width(), scale * renderer.height()));
 
-    ImGui::End();
+    ImGui::End();  // End of SVG Viewer
+    ImGui::End();  // End of MainWindow
 
-    ImGui::Begin("Text");
-    ImGui::Text("Position: %f, %f", mousePositionRelative.x, mousePositionRelative.y);
-    ImGui::Text("Mouse clicked: %s", ImGui::IsMouseDown(ImGuiMouseButton_Left) ? "Yes" : "No");
-
-    {
-      static ImGuiInputTextFlags flags = 0;
-      svgChanged = ImGui::InputTextMultiline(
-          "##source", &svgString, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 16), flags);
-    }
-
-    if (state.lastError) {
-      ImGui::Text("Error: %s", state.lastError->reason.c_str());
-    }
-
-    ImGui::End();
-
+    // Rendering
     ImGui::Render();
     int display_w, display_h;
     glfwGetFramebufferSize(window, &display_w, &display_h);
@@ -233,6 +300,14 @@ int main(int argc, char** argv) {
     glClear(GL_COLOR_BUFFER_BIT);
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    // Update and Render additional Platform Windows
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+      GLFWwindow* backup_current_context = glfwGetCurrentContext();
+      ImGui::UpdatePlatformWindows();
+      ImGui::RenderPlatformWindowsDefault();
+      glfwMakeContextCurrent(backup_current_context);
+    }
 
     glfwSwapBuffers(window);
   }
