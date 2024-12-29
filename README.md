@@ -5,7 +5,7 @@
 
 Donner SVG is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
 
-Donner's v0.1.0 release provides core static SVG functionality (without text or filter support). Text, filter, and animation support are on the roadmap.
+Donner's v0.1.0 release provides core static SVG functionality (without text or filter support). Text, filter, and animation support are on the roadmap. [Try it out online!](https://jwmcglynn.github.io/donner-editor/)
 
 ![Donner splash image](donner_splash.svg)
 
