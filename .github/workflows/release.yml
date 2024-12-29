@@ -1,0 +1,66 @@
+name: Release
+
+# Trigger on when a release is created.
+on:
+  release:
+    types:
+      - created
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Clang dependencies
+        run: |
+          sudo apt-get install -y libncurses5
+
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'WORKSPACE', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-
+
+      - name: Build Binaries
+        run: |
+          mkdir release
+          bazelisk build -c opt //examples:svg_to_png
+          cp bazel-bin/examples/svg_to_png release/svg_to_png-linux-x86_64
+
+      - name: Upload the Binaries
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}
+          file: ./release/svg_to_png-linux-x86_64
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'WORKSPACE', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-
+
+      - name: Build Binaries
+        run: |
+          mkdir release
+          bazelisk build -c opt //examples:svg_to_png
+          cp bazel-bin/examples/svg_to_png release/svg_to_png-darwin-arm64
+
+      - name: Upload the Binaries
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}
+          file: ./release/svg_to_png-darwin-arm64
