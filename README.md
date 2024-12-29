@@ -5,13 +5,29 @@
 
 Donner SVG is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
 
-Donner is nearing a 0.1 release, which provides core static SVG functionality (without text or filter support). Text, filter, and animation support are on the roadmap.
+Donner's v0.1.0 release provides core static SVG functionality (without text or filter support). Text, filter, and animation support are on the roadmap.
 
 ![Donner splash image](donner_splash.svg)
 
-Why Donner?
+```cpp
+ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(
+    loadFile("donner_splash.svg"));
 
-- Donner is security-first and extensively tested
+if (maybeDocument.hasError()) {
+  std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
+  std::abort();
+}
+
+RendererSkia renderer;
+renderer.draw(maybeDocument.result());
+
+const bool success = renderer.save("output.png");
+```
+
+## Why Donner?
+
+- It's designed to be embeddable, and provides an exception-free API surface
+- For malformed files, it produces detailed parse errors, which includes file/line information
 - Donner provides an extensive and well-documented SVG API surface, which enables inspecting and modifying the SVG in-memory
 - Donner implements the latest standards, SVG2 and CSS3 and aims for high-conformance
 
@@ -25,6 +41,11 @@ Donner supports:
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering
 
 Donner renders with Skia, which provides the same high-quality rendering used by Chromium.
+
+### Limitations
+
+- Donner currently requires bazel to build, so it is only suitable for bazel-based projects. CMake support is planned.
+- `<text>` support is not yet implemented
 
 ## Supported Elements
 
@@ -122,7 +143,7 @@ Detailed docs: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc
 ## API Demo 3: Interactive SVG Viewer using ImGui
 
 ```sh
-bazel run --run_under="cd $PWD &&" //experimental/viewer:svg_viewer -- <filename>
+bazel run --run_under="cd $PWD &&" //experimental/viewer:svg_viewer -- donner_icon.svg
 ```
 
 This example demonstrates how to create an interactive SVG viewer using ImGui. The viewer allows you to load and display SVG files, and interact with SVG elements using ImGui.
