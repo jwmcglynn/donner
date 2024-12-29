@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
   std::ifstream file(argv[1]);
   if (!file) {
     std::cerr << "Could not open file " << argv[1] << "\n";
-    std::abort();
+    return 1;  // Return an error code from main.
   }
 
   std::string fileData;
@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
   // ParseResult either contains an SVGDocument or an error.
   if (maybeDocument.hasError()) {
     std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
-    std::abort();
+    return 1;  // Return an error code from main.
   }
 
   std::cout << "Parsed successfully.\n";
