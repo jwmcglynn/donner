@@ -1,10 +1,9 @@
 name: Release
 
-# Trigger on when a release is created.
+# Trigger on when a release is created or changed.
 on:
   release:
-    types:
-      - created
+    types: [published, edited]
 
 jobs:
   linux:
@@ -29,14 +28,14 @@ jobs:
         run: |
           mkdir release
           bazelisk build -c opt //examples:svg_to_png
-          cp bazel-bin/examples/svg_to_png release/svg_to_png-linux-x86_64
+          cp bazel-bin/examples/svg_to_png release/svg_to_png_linux_x86_64
 
       - name: Upload the Binaries
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
-          file: ./release/svg_to_png-linux-x86_64
+          file: ./release/svg_to_png_linux_x86_64
 
   macos:
     runs-on: macos-15
@@ -56,11 +55,11 @@ jobs:
         run: |
           mkdir release
           bazelisk build -c opt //examples:svg_to_png
-          cp bazel-bin/examples/svg_to_png release/svg_to_png-darwin-arm64
+          cp bazel-bin/examples/svg_to_png release/svg_to_png_darwin_arm64
 
       - name: Upload the Binaries
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
-          file: ./release/svg_to_png-darwin-arm64
+          file: ./release/svg_to_png_darwin_arm64
