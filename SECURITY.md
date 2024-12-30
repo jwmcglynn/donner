@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-Donner is currently under-development and is not ready for production use. The first release, [v0.1](https://github.com/jwmcglynn/donner/milestone/1)
-will be the first one to be supported from a security standpoint.
+Donner v0.1 is supported with security updates.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| < 0.1   | :x:                |
+| Version  | Supported          |
+| -------- | ------------------ |
+| v0.1.x   | :white_check_mark: |
+| < v0.1   | :x:                |
 
 ## Reporting a Vulnerability
 
