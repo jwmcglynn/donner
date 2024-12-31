@@ -5,6 +5,7 @@ Donner is intended as a hobby project with the latest C++ spec, so it is likely 
 ## Requirements
 
 - Bazel
+- On macOS: A working Xcode installation
 
 ### Installing Bazel
 
@@ -61,4 +62,32 @@ To regenerate the checked-in build report at `docs/build_report.md`:
 
 ```sh
 python3 tools/generate_build_report.py --all --save docs/build_report.md
+```
+
+## Frequently Asked Questions (FAQ)
+
+### On macOS: bazel crashed due to an internal error
+
+That indicates that xcode is not installed, the bad error message is a known bazel issue: https://github.com/bazelbuild/bazel/issues/23111
+
+Validate that xcode is installed with:
+```sh
+xcodebuild -version
+```
+
+If it is not installed, install it from the App Store. Once this is complete clean bazel state and retry:
+```sh
+bazel clean --expunge
+```
+
+### What's with the build times?
+
+Donner builds everything from source, and particularly the skia dependency is large and slow to build. The first build is slow, but incremental builds are fast due to bazel's caching.
+
+### How do I build the editor?
+
+The Editor is an early prototype and hasn't made it to the tree. The Editor is built on the same foundation as the experimental svg_viewer in the tree.  Run it with an opt build for the best experience:
+
+```sh
+bazel run -c opt --run_under="cd $PWD &&" //experimental/viewer:svg_viewer -- donner_icon.svg
 ```
