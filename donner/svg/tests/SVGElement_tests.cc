@@ -95,6 +95,109 @@ TEST_F(SVGElementTests, Assign) {
   EXPECT_NE(element2, element3);  // element2 should be invalid.
 }
 
+TEST_F(SVGElementTests, CastRect) {
+  // Parse a simple SVG with a single rect
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="myRect" x="10" y="10" width="100" height="100" />
+    </svg>
+  )");
+
+  // Ensure we have a result
+  auto maybeRect = doc.querySelector("#myRect");
+  ASSERT_TRUE(maybeRect.has_value());
+
+  auto element = maybeRect.value();
+
+  // Check isa<> for multiple types
+  EXPECT_TRUE(element.isa<SVGElement>());
+  EXPECT_TRUE(element.isa<SVGRectElement>());
+  EXPECT_FALSE(element.isa<SVGGElement>());
+  EXPECT_FALSE(element.isa<SVGUnknownElement>());
+
+  // tryCast<>() should succeed for SVGRectElement
+  {
+    auto rectOptional = element.tryCast<SVGRectElement>();
+    EXPECT_TRUE(rectOptional.has_value());
+  }
+
+  // tryCast<>() should fail for SVGGElement
+  {
+    auto gOptional = element.tryCast<SVGGElement>();
+    EXPECT_FALSE(gOptional.has_value());
+  }
+
+  // cast<>() should succeed for SVGRectElement
+  {
+    // If the cast is not correct, an assertion will fail in debug builds.
+    [[maybe_unused]] auto rectElement = element.cast<SVGRectElement>();
+  }
+}
+
+TEST_F(SVGElementTests, CastGroup) {
+  // Parse a simple SVG with a single group
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="myGroup"></g>
+    </svg>
+  )");
+
+  // Ensure we have a result
+  auto maybeGroup = doc.querySelector("#myGroup");
+  ASSERT_TRUE(maybeGroup.has_value());
+
+  auto element = maybeGroup.value();
+
+  // Check isa<> for multiple types
+  EXPECT_TRUE(element.isa<SVGElement>());
+  EXPECT_TRUE(element.isa<SVGGElement>());
+  EXPECT_FALSE(element.isa<SVGRectElement>());
+  EXPECT_FALSE(element.isa<SVGUnknownElement>());
+
+  // tryCast<>() should succeed for SVGGElement
+  {
+    auto gOptional = element.tryCast<SVGGElement>();
+    EXPECT_TRUE(gOptional.has_value());
+  }
+
+  // tryCast<>() should fail for SVGRectElement
+  {
+    auto rectOptional = element.tryCast<SVGRectElement>();
+    EXPECT_FALSE(rectOptional.has_value());
+  }
+
+  // cast<>() should succeed for SVGGElement
+  [[maybe_unused]] auto groupElement = element.cast<SVGGElement>();
+}
+
+TEST_F(SVGElementTests, CastUnknown) {
+  // create() returns an SVGUnknownElement::Create(document_, "unknown")
+  auto element = create();
+  EXPECT_EQ(element.type(), ElementType::Unknown);
+
+  // This is definitely an SVGElement
+  EXPECT_TRUE(element.isa<SVGElement>());
+
+  // Should be recognized as an unknown
+  EXPECT_TRUE(element.isa<SVGUnknownElement>());
+
+  // A direct cast to unknown should succeed
+  {
+    auto unknownOpt = element.tryCast<SVGUnknownElement>();
+    EXPECT_TRUE(unknownOpt.has_value());
+    // Or do the hard cast
+    [[maybe_unused]] auto unknownElem = element.cast<SVGUnknownElement>();
+  }
+
+  // But it's not a rect or group
+  {
+    auto rectOpt = element.tryCast<SVGRectElement>();
+    EXPECT_FALSE(rectOpt.has_value());
+    auto groupOpt = element.tryCast<SVGGElement>();
+    EXPECT_FALSE(groupOpt.has_value());
+  }
+}
+
 TEST_F(SVGElementTests, Id) {
   auto element = create();
   EXPECT_EQ(element.id(), "");
@@ -143,8 +246,6 @@ TEST_F(SVGElementTests, Style) {
   EXPECT_THAT(element.getAttribute("style"), testing::Optional(RcString("color: red")));
 }
 
-// TODO: trySetPresentationAttribute test
-
 TEST_F(SVGElementTests, Attributes) {
   auto element = create();
   EXPECT_THAT(element.getAttribute("foo"), testing::Eq(std::nullopt));
@@ -157,6 +258,40 @@ TEST_F(SVGElementTests, Attributes) {
   element.removeAttribute("foo");
   EXPECT_THAT(element.getAttribute("foo"), testing::Eq(std::nullopt));
   EXPECT_FALSE(element.hasAttribute("foo"));
+}
+
+TEST_F(SVGElementTests, TrySetPresentationAttribute) {
+  // Create a fresh element (SVGUnknownElement by default in create()).
+  auto element = create();
+
+  // 1) Test a known/valid presentation attribute that parses successfully.
+  {
+    auto result = element.trySetPresentationAttribute("fill", "red");
+    EXPECT_THAT(result, ParseResultIs(true));
+
+    // Now confirm that the attribute is indeed set.
+    EXPECT_THAT(element.getAttribute("fill"), testing::Optional(RcString("red")));
+  }
+
+  // 2) Test a known presentation attribute that fails to parse (e.g. invalid color).
+  {
+    auto result = element.trySetPresentationAttribute("fill", "this-is-not-a-valid-color");
+    EXPECT_THAT(result, ParseErrorIs("Invalid paint server"));
+
+    // Because it failed, it should not be stored and the previous 'fill' value remains.
+    EXPECT_THAT(element.getAttribute("fill"), testing::Optional(RcString("red")));
+  }
+
+  // 3) Test an attribute name that is not recognized as a presentation attribute.
+  {
+    auto result = element.trySetPresentationAttribute("fancyNonExistentAttr", "1px");
+    // Expect no parse error, but the returned bool is false indicating
+    // "not a valid presentation attribute for this element."
+    EXPECT_THAT(result, ParseResultIs(false));
+
+    // This means it's not stored as a presentation attribute.
+    EXPECT_THAT(element.getAttribute("fancyNonExistentAttr"), testing::Eq(std::nullopt));
+  }
 }
 
 // Basic tests for each function, extensive coverage exists in tree_component_tests.cc
