@@ -28,6 +28,8 @@ public:
   /// Element type.
   static constexpr ElementType Type = ElementType::Unknown;
 
+  static_assert(SVGGraphicsElement::IsBaseOf(Type));
+
   /**
    * Create a new unknown SVG element.
    *

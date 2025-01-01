@@ -303,12 +303,19 @@ public:
    */
   template <typename Derived>
   bool isa() const {
-    // If there is a Derived::IsBaseOf(ElementType) method, we're casting to a base class. Call it
-    // to ensure we can.
-    if constexpr (requires { Derived::IsBaseOf(ElementType{}); }) {
+    if constexpr (std::is_same_v<Derived, SVGElement>) {
+      return true;
+    } else if constexpr (requires { Derived::Type; }) {
+      static_assert(std::is_same_v<std::remove_cvref_t<decltype(Derived::Type)>, ElementType>,
+                    "Derived::Type must be an ElementType");
+      return Derived::Type == type();
+
+      // If there is a Derived::IsBaseOf(ElementType) method, we're casting to a base class. Call it
+      // to ensure we can.
+    } else if constexpr (requires { Derived::IsBaseOf(ElementType{}); }) {
       return Derived::IsBaseOf(type());
     } else {
-      return Derived::Type == type();
+      static_assert(false, "isa<>() called on a type that is not a valid SVGElement");
     }
   }
 
@@ -351,7 +358,6 @@ public:
    */
   template <typename Derived>
   std::optional<Derived> tryCast() {
-    UTILS_RELEASE_ASSERT(isa<Derived>());
     if (isa<Derived>()) {
       return cast<Derived>();
     }
@@ -368,7 +374,6 @@ public:
    */
   template <typename Derived>
   std::optional<const Derived> tryCast() const {
-    UTILS_RELEASE_ASSERT(isa<Derived>());
     if (isa<Derived>()) {
       return cast<Derived>();
     }

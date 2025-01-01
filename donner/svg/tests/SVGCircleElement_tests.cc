@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/SVGEllipseElement.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
@@ -44,6 +45,14 @@ TEST(SVGCircleElementTests, Simple) {
               CircleHas(AllOf(CxEq(50.0, Lengthd::Unit::None),  //
                               CyEq(50.0, Lengthd::Unit::None),  //
                               REq(40.0, Lengthd::Unit::None))));
+}
+
+TEST(SVGCircleElementTests, Cast) {
+  auto circle = instantiateSubtreeElementAs<SVGCircleElement>(R"(<circle />)");
+  EXPECT_THAT(circle.element.tryCast<SVGElement>(), testing::Ne(std::nullopt));
+  EXPECT_THAT(circle.element.tryCast<SVGGeometryElement>(), testing::Ne(std::nullopt));
+  EXPECT_THAT(circle.element.tryCast<SVGCircleElement>(), testing::Ne(std::nullopt));
+  EXPECT_THAT(circle.element.tryCast<SVGEllipseElement>(), testing::Eq(std::nullopt));
 }
 
 TEST(SVGCircleElementTests, Units) {

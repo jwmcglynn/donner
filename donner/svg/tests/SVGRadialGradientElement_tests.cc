@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/SVGLinearGradientElement.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -24,6 +25,14 @@ TEST(SVGRadialGradientElementTests, Defaults) {
   EXPECT_THAT(gradient->gradientUnits(), testing::Eq(GradientUnits::ObjectBoundingBox));
   EXPECT_THAT(gradient->gradientTransform(), TransformEq(Transformd()));
   EXPECT_THAT(gradient->spreadMethod(), testing::Eq(GradientSpreadMethod::Pad));
+}
+
+TEST(SVGRadialGradientElementTests, Cast) {
+  auto gradient = instantiateSubtreeElementAs<SVGRadialGradientElement>("<radialGradient />");
+  EXPECT_THAT(gradient->tryCast<SVGElement>(), testing::Ne(std::nullopt));
+  EXPECT_THAT(gradient->tryCast<SVGGradientElement>(), testing::Ne(std::nullopt));
+  EXPECT_THAT(gradient->tryCast<SVGRadialGradientElement>(), testing::Ne(std::nullopt));
+  EXPECT_THAT(gradient->tryCast<SVGLinearGradientElement>(), testing::Eq(std::nullopt));
 }
 
 TEST(SVGRadialGradientElementTests, RenderingDefaults) {

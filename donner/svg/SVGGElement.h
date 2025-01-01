@@ -50,9 +50,10 @@ protected:
 public:
   /// Element type.
   static constexpr ElementType Type = ElementType::G;
-
   /// XML tag name, \ref xml_g.
   static constexpr std::string_view Tag{"g"};
+
+  static_assert(SVGGraphicsElement::IsBaseOf(Type));
 
   /**
    * Create a new \ref xml_g element.

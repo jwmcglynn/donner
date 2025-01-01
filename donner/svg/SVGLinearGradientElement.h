@@ -145,6 +145,8 @@ public:
   /// XML tag name, \ref xml_linearGradient.
   static constexpr std::string_view Tag{"linearGradient"};
 
+  static_assert(SVGGradientElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_linearGradient element.
    *

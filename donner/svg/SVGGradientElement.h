@@ -35,6 +35,11 @@ protected:
   explicit SVGGradientElement(EntityHandle handle);
 
 public:
+  /// Returns true if the given element type can be cast to \ref SVGGradientElement.
+  static constexpr bool IsBaseOf(ElementType type) {
+    return type == ElementType::LinearGradient || type == ElementType::RadialGradient;
+  }
+
   /**
    * `href` attribute to allow inheriting attributes from another gradient.
    *

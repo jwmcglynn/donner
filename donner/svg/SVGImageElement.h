@@ -77,6 +77,8 @@ public:
   /// XML tag name, \ref xml_image.
   static constexpr std::string_view Tag{"image"};
 
+  static_assert(SVGGraphicsElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_image element.
    *

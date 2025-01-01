@@ -47,6 +47,8 @@ public:
   /// XML tag name, \ref xml_defs.
   static constexpr std::string_view Tag{"defs"};
 
+  static_assert(SVGGraphicsElement::IsBaseOf(Type));
+
   /**
    * Create a new \ref xml_defs element.
    *
