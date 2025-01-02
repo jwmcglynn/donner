@@ -62,6 +62,8 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& c
 }
 
 void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
+  bool hasEmptyNamespacePrefix = false;
+
   for (const auto& attributeName : node.attributes()) {
     if (attributeName == "xmlns" || attributeName.namespacePrefix == "xmlns") {
       // We need to handle the namespacePrefix special for handling for xmlns,
@@ -70,16 +72,21 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
       std::optional<RcString> value = node.getAttribute(attributeName);
       assert(value.has_value());
 
-      if (value != "http://www.w3.org/2000/svg") {
+      if (value == "http://www.w3.org/2000/svg") {
+        if (!hasEmptyNamespacePrefix && attributeName.namespacePrefix == "xmlns") {
+          context.setNamespacePrefix(attributeName.name);
+        } else if (attributeName == "xmlns") {
+          hasEmptyNamespacePrefix = true;
+          context.setNamespacePrefix("");
+        }
+      } else if (value == "http://www.w3.org/1999/xlink") {
+        // Allow xlink.
+      } else {
         ParseError err;
         err.reason = "Unexpected namespace '" + value.value() + "'";
         // TODO: Offset for attributes?
         context.addSubparserWarning(std::move(err), ParserOrigin(0));
-      } else if (attributeName.namespacePrefix == "xmlns") {
-        context.setNamespacePrefix(attributeName.name);
       }
-
-      break;
     }
   }
 }
@@ -90,7 +97,8 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
     const RcString value = node.getAttribute(attributeName).value();
 
     if (!attributeName.namespacePrefix.empty() && attributeName.namespacePrefix != "xmlns" &&
-        attributeName.namespacePrefix != "xlink") {
+        attributeName.namespacePrefix != "xlink" &&
+        node.getNamespaceUri(attributeName.namespacePrefix) != "http://www.w3.org/2000/svg") {
       ParseError err;
       std::ostringstream ss;
       ss << "Ignored attribute '" << attributeName << "' with an unsupported namespace";
@@ -192,7 +200,8 @@ public:
         assert(document_.has_value());
 
         // TODO: Create an SVGUnknownElement if the namespace doesn't match?
-        if (name.namespacePrefix != context_.namespacePrefix()) {
+        std::optional<RcString> maybeUri = child->getNamespaceUri(name.namespacePrefix);
+        if (maybeUri != "http://www.w3.org/2000/svg") {
           ParseError err;
           std::ostringstream ss;
           ss << "Ignored element <" << name << "> with an unsupported namespace. "
@@ -224,17 +233,28 @@ public:
         if (name.name == "svg" && !foundRootSvg) {
           ParseXmlNsAttribute(context_, *child);
 
-          if (name.namespacePrefix != context_.namespacePrefix()) {
-            ParseError err;
-            std::ostringstream ss;
-            ss << "<" << name << "> has a mismatched namespace prefix. "
-               << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix
-               << "'";
-            err.reason = ss.str();
-            if (auto sourceOffset = child->sourceStartOffset()) {
-              err.location = sourceOffset.value();
+          // Check if this is in the right namespace.
+          std::optional<RcString> maybeUri = child->getNamespaceUri(name.namespacePrefix);
+          if (maybeUri != "http://www.w3.org/2000/svg") {
+            if (context_.options().parseAsInlineSVG && !maybeUri.has_value()) {
+              // Inline SVGs don't require the namespace to be set, default to SVG.
+              child->setAttribute("xmlns", "http://www.w3.org/2000/svg");
+            } else {
+              ParseError err;
+              std::ostringstream ss;
+              ss << "<" << name << "> has an ";
+              if (maybeUri) {
+                ss << "unexpected namespace URI '" << maybeUri.value() << "'. ";
+              } else {
+                ss << "empty namespace URI. ";
+              }
+              ss << "Expected 'http://www.w3.org/2000/svg'";
+              err.reason = ss.str();
+              if (auto sourceOffset = child->sourceStartOffset()) {
+                err.location = sourceOffset.value();
+              }
+              return err;
             }
-            return err;
           }
 
           document_ = SVGDocument(registry_, std::move(settings_), child->entityHandle());

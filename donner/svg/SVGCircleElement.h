@@ -86,7 +86,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGCircleElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGCircleElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the center X coordinate.

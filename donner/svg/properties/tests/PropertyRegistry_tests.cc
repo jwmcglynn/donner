@@ -19,6 +19,21 @@ using testing::Eq;
 using testing::Ne;
 using testing::Optional;
 
+TEST(PropertyRegistry, Set) {
+  PropertyRegistry registry;
+  EXPECT_GE(registry.numProperties(), 0);
+  EXPECT_EQ(registry.numPropertiesSet(), 0);
+
+  registry.color.set(Color(RGBA(0xFF, 0, 0, 0xFF)), Specificity::FromABC(0, 0, 1));
+  EXPECT_EQ(registry.numPropertiesSet(), 1);
+
+  // Test printing to string.
+  EXPECT_THAT(registry, ToStringIs(R"(PropertyRegistry {
+  color: Color(rgba(255, 0, 0, 255)) (set) @ Specificity(0, 0, 1)
+}
+)"));
+}
+
 TEST(PropertyRegistry, ParseDeclaration) {
   css::Declaration declaration("color", {ComponentValue(Token(Token::Ident("lime"), 0))});
 

@@ -80,7 +80,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGMaskElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGMaskElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Get the value of the `maskUnits` attribute, which defines the coordinate system for the `x`,

@@ -54,7 +54,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGDefsElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGDefsElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 };
 
 }  // namespace donner::svg

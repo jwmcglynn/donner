@@ -828,6 +828,19 @@ PropertyRegistry::PropertyRegistry(PropertyRegistry&&) noexcept = default;
 PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default;
 PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
 
+size_t PropertyRegistry::numPropertiesSet() const {
+  const auto selfProperties = allProperties();
+
+  size_t result = 0;
+  forEachProperty<0, numProperties()>([&selfProperties, &result](auto i) {
+    if (std::get<i.value>(selfProperties).hasValue()) {
+      ++result;
+    }
+  });
+
+  return result;
+}
+
 [[nodiscard]] PropertyRegistry PropertyRegistry::inheritFrom(const PropertyRegistry& parent,
                                                              PropertyInheritOptions options) const {
   PropertyRegistry result;

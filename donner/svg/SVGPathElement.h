@@ -110,7 +110,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGPathElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGPathElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Get the path data string, see \ref path_data.

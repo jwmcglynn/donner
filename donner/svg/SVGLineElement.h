@@ -89,7 +89,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGLineElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGLineElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the start X coordinate.

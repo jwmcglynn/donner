@@ -35,6 +35,9 @@ protected:
     return result;
   }
 
+  /// Create an SVGRectElement.
+  SVGRectElement createRect() { return SVGRectElement::Create(document_); }
+
   std::vector<SVGElement> children(const SVGElement& element) {
     std::vector<SVGElement> result;
     for (auto cur = element.firstChild(); cur; cur = cur->nextSibling()) {
@@ -57,7 +60,10 @@ protected:
   }
 
   SVGDocument parseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    parser::SVGParser::Options options;
+    options.parseAsInlineSVG = true;
+
+    auto maybeResult = parser::SVGParser::ParseSVG(input, nullptr, options);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
@@ -222,6 +228,10 @@ TEST_F(SVGElementTests, Type) {
   auto element = create();
   EXPECT_EQ(element.type(), ElementType::Unknown);
   EXPECT_EQ(element.tagName().toString(), "unknown");
+
+  auto rectElement = createRect();
+  EXPECT_EQ(rectElement.type(), ElementType::Rect);
+  EXPECT_EQ(rectElement.tagName().toString(), "rect");
 }
 
 TEST_F(SVGElementTests, ClassName) {
@@ -386,13 +396,138 @@ TEST_F(SVGElementTests, QuerySelector) {
     auto svgElement = document.svgElement();
     auto gElement = svgElement.querySelector("g");
     ASSERT_THAT(gElement, testing::Ne(std::nullopt));
+    EXPECT_EQ(gElement->type(), ElementType::G);
 
     auto gScopeResult = gElement->querySelector(":scope > rect");
     EXPECT_THAT(gScopeResult, Optional(ElementIdEq("rect3")));
+    EXPECT_THAT(gScopeResult->type(), ElementType::Rect);
 
     auto svgScopeResult = svgElement.querySelector(":scope > rect");
     EXPECT_THAT(svgScopeResult, Optional(ElementIdEq("rect1")));
+    EXPECT_THAT(svgScopeResult->type(), ElementType::Rect);
   }
+}
+
+TEST_F(SVGElementTests, IsKnownType) {
+  auto unknown = create();  // by default "unknown" from create()
+  EXPECT_FALSE(unknown.isKnownType());
+  EXPECT_EQ(unknown.type(), ElementType::Unknown);
+
+  auto rect = createRect();
+  EXPECT_TRUE(rect.isKnownType());
+  EXPECT_EQ(rect.type(), ElementType::Rect);
+}
+
+TEST_F(SVGElementTests, IsKnownTypeWhenParsed) {
+  auto rectDocument = parseSVG(R"(<svg><rect id="myRect" /></svg>)");
+
+  auto maybeRectFromTree = rectDocument.svgElement().firstChild();
+  ASSERT_TRUE(maybeRectFromTree.has_value());
+  EXPECT_TRUE(maybeRectFromTree->isKnownType());  // <rect> is recognized as known
+  EXPECT_EQ(maybeRectFromTree->type(), ElementType::Rect);
+
+  auto maybeRectQuery = rectDocument.querySelector("#myRect");
+  ASSERT_TRUE(maybeRectQuery.has_value());
+  EXPECT_TRUE(maybeRectQuery->isKnownType());  // <rect> is recognized as known
+  EXPECT_EQ(maybeRectQuery->type(), ElementType::Rect);
+
+  EXPECT_EQ(maybeRectFromTree, maybeRectQuery);
+}
+
+TEST_F(SVGElementTests, EntityHandle) {
+  // Test that entityHandle() returns a valid ECS handle
+  auto element = create();
+  auto handle = element.entityHandle();
+  // Just basic checks: handle should not be null and should be the same when retrieved again
+  EXPECT_TRUE(handle.valid());
+
+  auto handle2 = element.entityHandle();
+  EXPECT_EQ(handle, handle2);
+}
+
+#if 0
+// TODO: This needs support for updating the style attribute
+TEST_F(SVGElementTests, UpdateStyle) {
+  // This tests setting an initial style, then updating only part of it.
+  auto element = create();
+  // Start with multiple style attributes
+  element.setStyle("fill: red; stroke: blue; opacity: 0.8");
+
+  // updateStyle(...) merges in new or updated properties
+  element.updateStyle("stroke: green; visibility: hidden");
+  // Expect final style to have fill=red, stroke=green, opacity=0.8, visibility=hidden
+  // The exact location of the stored style depends on your implementation. If your code
+  // moves them to presentation attributes, you might check getAttribute("stroke") etc.
+  // Here, we assume you can see them in getAttribute("style"):
+  auto maybeStyle = element.getAttribute("style");
+  ASSERT_TRUE(maybeStyle.has_value());
+
+  // The order of properties might differ, so check logically rather than string matching:
+  RcString styleString = maybeStyle.value();
+  EXPECT_THAT(styleString, testing::HasSubstr("fill: red"));
+  EXPECT_THAT(styleString, testing::HasSubstr("stroke: green"));
+  EXPECT_THAT(styleString, testing::HasSubstr("opacity: 0.8"));
+  EXPECT_THAT(styleString, testing::HasSubstr("visibility: hidden"));
+}
+#endif
+
+TEST_F(SVGElementTests, FindMatchingAttributes) {
+  // create() is an Unknown element, but that’s fine for testing generic XML attributes
+  auto element = create();
+  element.setAttribute("foo", "valueFoo");
+  element.setAttribute({"namespace", "bar"}, "valueBar");
+  element.setAttribute({"anotherNS", "bar"}, "valueBar2");
+  // So we have:
+  //   foo="valueFoo"
+  //   namespace:bar="valueBar"
+  //   anotherNS:bar="valueBar2"
+
+  // 1) findMatchingAttributes("foo") -> [ "foo" ]
+  {
+    auto matches = element.findMatchingAttributes("foo");
+    EXPECT_EQ(matches.size(), 1u);
+    EXPECT_EQ(matches[0].name, "foo");
+    EXPECT_TRUE(matches[0].namespacePrefix.empty());
+  }
+
+  // 2) findMatchingAttributes({"namespace", "bar"}) -> exactly [ "namespace:bar" ]
+  {
+    auto matches = element.findMatchingAttributes({"namespace", "bar"});
+    EXPECT_EQ(matches.size(), 1u);
+    EXPECT_EQ(matches[0].name, "bar");
+    EXPECT_EQ(matches[0].namespacePrefix, "namespace");
+  }
+
+  // 3) Using a wildcard on the namespace, findMatchingAttributes({ "*", "bar" })
+  //    Expect matches from both "namespace:bar" and "anotherNS:bar"
+  {
+    auto matches = element.findMatchingAttributes({"*", "bar"});
+    ASSERT_EQ(matches.size(), 2u);
+    // Because the order of attributes might not be guaranteed, verify via a set or multiple checks.
+    // For simplicity, just do:
+    EXPECT_THAT(matches,
+                testing::UnorderedElementsAre(xml::XMLQualifiedNameRef("namespace", "bar"),
+                                              xml::XMLQualifiedNameRef("anotherNS", "bar")));
+  }
+}
+
+TEST_F(SVGElementTests, GetComputedStyleBasic) {
+  // This is a minimal test verifying getComputedStyle() after setting a property.
+  // For more robust style tests, see your existing style test suite (ElementStyleTests).
+
+  // Let’s parse a rectangle with an inline style and a presentation attribute:
+  auto doc = parseSVG(R"(
+    <svg>
+      <rect id="myRect" style="stroke: green" fill="red" />
+    </svg>
+  )");
+
+  auto maybeRect = doc.querySelector("#myRect");
+  ASSERT_TRUE(maybeRect.has_value());
+
+  const auto& computedStyle = maybeRect->getComputedStyle();
+
+  EXPECT_EQ(computedStyle.numPropertiesSet(), 2);
 }
 
 }  // namespace donner::svg

@@ -72,7 +72,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGStopElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGStopElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the offset of the gradient stop, within the range of `[0, 1]`.

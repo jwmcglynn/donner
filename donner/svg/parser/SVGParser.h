@@ -56,6 +56,23 @@ public:
      * This currently gates \ref xml_filter, which has very limited support.
      */
     bool enableExperimental = false;
+
+    /**
+     * Parse as inlined SVG content. This will treat the input as a fragment of SVG content, rather
+     * than a full SVG document. This is useful for parsing SVG content embedded in HTML or other
+     * XML documents.
+     *
+     * This enables the following shorthand without the `xmlns` attribute:
+     * ```xml
+     * <svg><rect /></svg>
+     * ```
+     *
+     * Instead of the full document:
+     * ```xml
+     * <svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>
+     * ```
+     */
+    bool parseAsInlineSVG = false;
   };
 
   /**

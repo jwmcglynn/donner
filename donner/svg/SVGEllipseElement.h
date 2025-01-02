@@ -96,7 +96,7 @@ public:
    * @param document Containing document.
    */
   static SVGEllipseElement Create(SVGDocument& document) {
-    return CreateOn(CreateEntity(document));
+    return CreateOn(CreateEmptyEntity(document));
   }
 
   /**

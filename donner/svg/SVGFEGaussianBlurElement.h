@@ -73,7 +73,7 @@ public:
    * @param document Containing document.
    */
   static SVGFEGaussianBlurElement Create(SVGDocument& document) {
-    return CreateOn(CreateEntity(document));
+    return CreateOn(CreateEmptyEntity(document));
   }
 
   // TODO: Add attributes

@@ -139,7 +139,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGRectElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGRectElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the top-left X coordinate.

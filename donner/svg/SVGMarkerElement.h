@@ -84,7 +84,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGMarkerElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGMarkerElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the `viewBox` attribute, which defines a rectangle in userspace that should be mapped to

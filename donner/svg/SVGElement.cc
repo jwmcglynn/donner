@@ -309,7 +309,7 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
   return computedStyle.properties.value();
 }
 
-EntityHandle SVGElement::CreateEntity(SVGDocument& document) {
+EntityHandle SVGElement::CreateEmptyEntity(SVGDocument& document) {
   Registry& registry = document.registry();
   Entity entity = document.registry().create();
 

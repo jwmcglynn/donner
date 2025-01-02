@@ -94,7 +94,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGUseElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGUseElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the URI to the element to reuse.

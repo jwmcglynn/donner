@@ -112,7 +112,7 @@ public:
    * @param document Containing document.
    */
   static SVGPolygonElement Create(SVGDocument& document) {
-    return CreateOn(CreateEntity(document));
+    return CreateOn(CreateEmptyEntity(document));
   }
 
   /**

@@ -163,7 +163,7 @@ public:
    * @param document Containing document.
    */
   static SVGRadialGradientElement Create(SVGDocument& document) {
-    return CreateOn(CreateEntity(document));
+    return CreateOn(CreateEmptyEntity(document));
   }
 
   /**

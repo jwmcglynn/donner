@@ -84,7 +84,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGImageElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGImageElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the href attribute.

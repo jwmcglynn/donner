@@ -143,7 +143,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGStyleElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGStyleElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Set the type of the stylesheet, currently only `text/css` is supported.

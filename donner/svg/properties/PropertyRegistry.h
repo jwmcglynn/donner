@@ -293,6 +293,11 @@ public:
   }
 
   /**
+   * Return the number of properties set within the PropertyRegistry.
+   */
+  size_t numPropertiesSet() const;
+
+  /**
    * Calls a compile time functor for each property in the registry.
    *
    * Example:

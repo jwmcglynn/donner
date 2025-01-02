@@ -75,7 +75,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGFilterElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGFilterElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Get the top-left X coordinate of the filter region, which defines a rectangular region on the

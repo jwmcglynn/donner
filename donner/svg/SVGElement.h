@@ -409,7 +409,7 @@ protected:
    *
    * @param document Containing document.
    */
-  static EntityHandle CreateEntity(SVGDocument& document);
+  static EntityHandle CreateEmptyEntity(SVGDocument& document);
 
   /**
    * Create a new SVG element instance on a given \ref Entity.

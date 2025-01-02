@@ -77,7 +77,7 @@ public:
    * @param document Containing document.
    */
   static SVGClipPathElement Create(SVGDocument& document) {
-    return CreateOn(CreateEntity(document));
+    return CreateOn(CreateEmptyEntity(document));
   }
 
   /**

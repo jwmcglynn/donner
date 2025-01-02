@@ -93,7 +93,9 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGSVGElement Create(SVGDocument& document) { return CreateOn(CreateEntity(document)); }
+  static SVGSVGElement Create(SVGDocument& document) {
+    return CreateOn(CreateEmptyEntity(document));
+  }
 
   /**
    * Get the top-left X coordinate of the SVG viewport.
