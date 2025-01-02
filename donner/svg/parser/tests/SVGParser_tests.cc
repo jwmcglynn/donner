@@ -162,7 +162,8 @@ TEST(SVGParser, InvalidXmlns) {
               ParseErrorIs("<svg> has an unexpected namespace URI 'invalid'. "
                            "Expected 'http://www.w3.org/2000/svg'"));
 
-  EXPECT_THAT(warnings, ElementsAre(ParseErrorIs("Unexpected namespace 'invalid'")));
+  EXPECT_THAT(warnings, ElementsAre(AllOf(ParseErrorIs("Unexpected namespace 'invalid'"),
+                                          ParseErrorPos(1, 37))));
 }
 
 TEST(SVGParser, DoubleXmlNs) {
@@ -264,10 +265,9 @@ TEST(SVGParser, MismatchedNamespace) {
     std::vector<ParseError> warnings;
     EXPECT_THAT(SVGParser::ParseSVG(invalidAttributeNsXml, &warnings), NoParseError());
 
-    // TODO: Update this to point to the specific attribute
     EXPECT_THAT(warnings,
                 ElementsAre(AllOf(
-                    ParseErrorPos(2, 13),
+                    ParseErrorPos(2, 23),
                     ParseErrorIs("Ignored attribute 'invalid:d' with an unsupported namespace"))));
   }
 }

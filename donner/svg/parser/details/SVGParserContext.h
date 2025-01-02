@@ -98,7 +98,19 @@ public:
   }
 
   /**
-   * Get the location of an element's attribute in the input string.
+   * Get the location of an element's attribute in the input string, from an XMLNode.
+   *
+   * @param node Node containing the attribute.
+   * @param attributeName Name of the attribute.
+   * @return std::optional<size_t> Offset of the element's attribute in the input string.
+   */
+  std::optional<FileOffsetRange> getAttributeLocation(
+      const xml::XMLNode& node, const xml::XMLQualifiedNameRef& attributeName) const {
+    return node.getAttributeLocation(input_, attributeName);
+  }
+
+  /**
+   * Get the location of an element's attribute in the input string, from an SVGElement.
    *
    * @param element Element containing the attribute.
    * @param attributeName Name of the attribute.

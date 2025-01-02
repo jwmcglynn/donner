@@ -84,8 +84,11 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
       } else {
         ParseError err;
         err.reason = "Unexpected namespace '" + value.value() + "'";
-        // TODO: Offset for attributes?
-        context.addSubparserWarning(std::move(err), ParserOrigin(0));
+        if (auto maybeRange = context.getAttributeLocation(node, attributeName)) {
+          err.location = maybeRange->start;
+        }
+
+        context.addWarning(std::move(err));
       }
     }
   }
@@ -103,11 +106,10 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
       std::ostringstream ss;
       ss << "Ignored attribute '" << attributeName << "' with an unsupported namespace";
       err.reason = ss.str();
-      if (auto sourceOffset = node.sourceStartOffset()) {
-        err.location = sourceOffset.value();
+      if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
+        err.location = maybeRange->start;
       }
 
-      // TODO: Offset for attributes?
       context.addWarning(std::move(err));
       continue;
     }
