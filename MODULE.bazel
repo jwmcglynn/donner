@@ -160,7 +160,7 @@ git_repository(
     remote = "https://github.com/erenon/bazel_clang_tidy.git",
 )
 
-bazel_dep(name = "rules_proto", version = "7.0.2", dev_dependency = True)
+bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
 
 bazel_dep(name = "bloaty", version = "0.0.0", dev_dependency = True)
 
