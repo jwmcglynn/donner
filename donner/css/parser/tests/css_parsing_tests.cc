@@ -5,6 +5,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "donner/base/tests/Runfiles.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/css/parser/RuleParser.h"
 #include "donner/css/parser/details/Subparsers.h"
@@ -15,8 +16,6 @@ namespace donner::css::parser {
 using details::Tokenizer;
 
 namespace {
-
-const std::filesystem::path kTestDataDirectory = "external/_main~_repo_rules~css-parsing-tests/";
 
 nlohmann::json loadJson(const std::filesystem::path& file) {
   std::ifstream in(file);
@@ -277,7 +276,8 @@ nlohmann::json testParseDeclarationJson(std::string_view css) {
 }  // namespace
 
 TEST(CssParsingTests, ComponentValue) {
-  auto json = loadJson(kTestDataDirectory / "one_component_value.json");
+  auto json = loadJson(
+      Runfiles::instance().RlocationExternal("css-parsing-tests", "one_component_value.json"));
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
@@ -291,7 +291,8 @@ TEST(CssParsingTests, ComponentValue) {
 }
 
 TEST(CssParsingTests, ComponentValueList) {
-  auto json = loadJson(kTestDataDirectory / "component_value_list.json");
+  auto json = loadJson(
+      Runfiles::instance().RlocationExternal("css-parsing-tests", "component_value_list.json"));
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
@@ -315,7 +316,8 @@ TEST(CssParsingTests, ComponentValueList) {
 }
 
 TEST(CssParsingTests, DeclarationList) {
-  auto json = loadJson(kTestDataDirectory / "declaration_list.json");
+  auto json = loadJson(
+      Runfiles::instance().RlocationExternal("css-parsing-tests", "declaration_list.json"));
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
@@ -339,7 +341,8 @@ TEST(CssParsingTests, DeclarationList) {
 }
 
 TEST(CssParsingTests, OneDeclaration) {
-  auto json = loadJson(kTestDataDirectory / "one_declaration.json");
+  auto json =
+      loadJson(Runfiles::instance().RlocationExternal("css-parsing-tests", "one_declaration.json"));
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
@@ -353,7 +356,8 @@ TEST(CssParsingTests, OneDeclaration) {
 }
 
 TEST(CssParsingTests, OneRule) {
-  auto json = loadJson(kTestDataDirectory / "one_rule.json");
+  auto json =
+      loadJson(Runfiles::instance().RlocationExternal("css-parsing-tests", "one_rule.json"));
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
@@ -371,7 +375,8 @@ TEST(CssParsingTests, OneRule) {
 }
 
 TEST(CssParsingTests, RuleList) {
-  auto json = loadJson(kTestDataDirectory / "rule_list.json");
+  auto json =
+      loadJson(Runfiles::instance().RlocationExternal("css-parsing-tests", "rule_list.json"));
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;
@@ -395,7 +400,8 @@ TEST(CssParsingTests, RuleList) {
 }
 
 TEST(CssParsingTests, Stylesheet) {
-  auto json = loadJson(kTestDataDirectory / "stylesheet.json");
+  auto json =
+      loadJson(Runfiles::instance().RlocationExternal("css-parsing-tests", "stylesheet.json"));
 
   for (auto it = json.begin(); it != json.end(); ++it) {
     const std::string css = *it++;

@@ -70,6 +70,7 @@ cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -74,6 +74,7 @@ cc_test(
     ],
     deps = [
         ":parser",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
         "@nlohmann_json//:json",
     ],

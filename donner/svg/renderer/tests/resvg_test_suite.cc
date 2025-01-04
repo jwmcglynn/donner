@@ -1,5 +1,6 @@
 #include <gmock/gmock.h>
 
+#include "donner/base/tests/Runfiles.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
 using testing::ValuesIn;
@@ -10,14 +11,11 @@ using Params = ImageComparisonParams;
 
 namespace {
 
-static const std::filesystem::path kResourceSandboxDir =
-    "external/_main~_repo_rules~resvg-test-suite/";
-static const std::filesystem::path kSvgDir = "external/_main~_repo_rules~resvg-test-suite/svg/";
-static const std::filesystem::path kGoldenDir = "external/_main~_repo_rules~resvg-test-suite/png/";
-
 std::vector<ImageComparisonTestcase> getTestsWithPrefix(
     const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {},
     ImageComparisonParams defaultParams = {}) {
+  const std::string kSvgDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "svg");
+
   // Copy into a vector and sort the tests.
   std::vector<ImageComparisonTestcase> testPlan;
   for (const auto& entry : std::filesystem::directory_iterator(kSvgDir)) {
@@ -44,6 +42,7 @@ std::vector<ImageComparisonTestcase> getTestsWithPrefix(
 
 TEST_P(ImageComparisonTestFixture, ResvgTest) {
   const ImageComparisonTestcase& testcase = GetParam();
+  const std::string kGoldenDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "png");
 
   std::filesystem::path goldenFilename;
   if (testcase.params.overrideGoldenFilename.empty()) {
@@ -52,7 +51,8 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
     goldenFilename = testcase.params.overrideGoldenFilename;
   }
 
-  SVGDocument document = loadSVG(testcase.svgFilename.string().c_str(), kResourceSandboxDir);
+  SVGDocument document = loadSVG(testcase.svgFilename.string().c_str(),
+                                 Runfiles::instance().RlocationExternal("resvg-test-suite", ""));
   renderAndCompare(document, testcase.svgFilename, goldenFilename.string().c_str());
 }
 

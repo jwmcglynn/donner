@@ -38,10 +38,19 @@ donner_cc_library(
     hdrs = [
         "tests/BaseTestUtils.h",
         "tests/ParseResultTestUtils.h",
+        "tests/Runfiles.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
         "@com_google_gtest//:gtest",
+        "@rules_cc//cc/runfiles",
+    ],
+)
+
+filegroup(
+    name = "base_tests_testdata",
+    srcs = [
+        "tests/testdata/test.txt",
     ],
 )
 
@@ -57,12 +66,17 @@ cc_test(
         "tests/ParseResult_tests.cc",
         "tests/RcStringOrRef_tests.cc",
         "tests/RcString_tests.cc",
+        "tests/Runfiles_tests.cc",
         "tests/SmallVector_tests.cc",
         "tests/StringUtils_tests.cc",
         "tests/Transform_tests.cc",
         "tests/Utf8_tests.cc",
         "tests/Utils_tests.cc",
         "tests/Vector2_tests.cc",
+    ],
+    data = [
+        ":base_tests_testdata",
+        "@css-parsing-tests//:one_component_value.json",
     ],
     deps = [
         ":base",
