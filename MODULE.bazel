@@ -94,7 +94,7 @@ new_git_repository(
 )
 
 # Skia dependencies
-bazel_dep(name = "rules_go", version = "0.50.1")
+bazel_dep(name = "rules_go", version = "0.51.0")
 bazel_dep(name = "rules_python", version = "0.38.0", dev_dependency = True)
 
 pip = use_extension(
