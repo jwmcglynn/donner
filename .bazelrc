@@ -10,7 +10,7 @@
 ##   --config=coverage          - Build with code coverage instrumentation.
 ##   --config=asan              - Build with address sanitizer.
 ##   --config=asan-fuzzer       - Build with address sanitizer and fuzzing engine.
-##   --config=clang             - Build with clang-tidy checks.
+##   --config=clang-tidy        - Build with clang-tidy checks.
 ##
 
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
@@ -37,8 +37,7 @@ build --incompatible_enable_cc_toolchain_resolution
 common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
 common:latest_llvm --//build_defs:llvm_latest=1
 
-# Build with the latest llvm toolchain by default on Linux. Do not set on mac since it cannot be used to build objc
-# and the imgui viewer requires it
+# Build with clang on Linux
 build:linux --config=latest_llvm
 
 # Clang with libc++
@@ -56,7 +55,6 @@ build:linux --config=host_libstdc++ --copt=-fno-modules
 
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
-
 
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size

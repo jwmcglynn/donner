@@ -11,7 +11,7 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
 
       - name: Install Clang dependencies
         run: |
-          sudo apt-get install -y libncurses5
+          sudo apt-get install -y libncurses-dev
 
       - name: Generate coverage
         run: |

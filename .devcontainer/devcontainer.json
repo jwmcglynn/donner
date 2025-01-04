@@ -2,9 +2,9 @@
   "name": "Ubuntu",
   "build": {
     "dockerfile": "Dockerfile",
-    // Update 'VARIANT' to pick an Ubuntu version: focal, bionic, jammy
+    // Update 'VARIANT' to pick an Ubuntu version: focal, bionic, jammy, numbat
     "args": {
-      "VARIANT": "jammy"
+      "VARIANT": "numbat"
     }
   },
   "hostRequirements": {
