@@ -1,7 +1,4 @@
-import csv
 import sys
-import json
-import os
 from typing import Dict
 from python.webtreemap import generate_webtreemap_html
 
