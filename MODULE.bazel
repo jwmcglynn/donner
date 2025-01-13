@@ -1,15 +1,8 @@
-###############################################################################
-# Bazel now uses Bzlmod by default to manage external dependencies.
-# Please consider migrating your external dependencies from WORKSPACE to MODULE.bazel.
-#
-# For more details, please check https://github.com/bazelbuild/bazel/issues/18958
-###############################################################################
-
 """Donner is a modern C++20 SVG rendering library which intends to provide easily
 embeddable SVG support into apps and games, enabling browser-level functionalit
  without the browser."""
 
-module(name = "donner", version = "0.1.0")
+module(name = "donner", version = "0.1.1")
 
 local_repository = use_repo_rule("//third_party:bazel/local.bzl", "local_repository")
 new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local_repository")
