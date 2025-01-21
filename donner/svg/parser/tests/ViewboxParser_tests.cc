@@ -10,7 +10,7 @@ namespace donner::svg::parser {
 
 TEST(ViewboxParser, Empty) {
   EXPECT_THAT(ViewboxParser::Parse(""),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(ViewboxParser, Valid) {

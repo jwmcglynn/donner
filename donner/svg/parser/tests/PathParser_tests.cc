@@ -365,7 +365,7 @@ TEST(PathParser, HorizontalLineToParseError) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 
   {
@@ -407,7 +407,7 @@ TEST(PathParser, VerticalLineTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 
   {
@@ -482,7 +482,7 @@ TEST(PathParser, CurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 
   {
@@ -490,7 +490,7 @@ TEST(PathParser, CurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 }
 
@@ -515,7 +515,7 @@ TEST(PathParser, QuadCurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 
   {
@@ -523,7 +523,7 @@ TEST(PathParser, QuadCurveTo) {
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 }
 

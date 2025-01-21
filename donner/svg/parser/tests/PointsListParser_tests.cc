@@ -46,9 +46,9 @@ TEST(PointsListParser, ParseErrors) {
   // Comma before a command is a parse error.
   {
     ParseResult<std::vector<Vector2d>> result = PointsListParser::Parse("0,0,");
-    EXPECT_THAT(result,
-                ParseResultAndError(ElementsAre(Vector2d::Zero()),
-                                    ParseErrorIs("Failed to parse number: Unexpected character")));
+    EXPECT_THAT(result, ParseResultAndError(
+                            ElementsAre(Vector2d::Zero()),
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 
   {
@@ -60,9 +60,10 @@ TEST(PointsListParser, ParseErrors) {
 
   {
     ParseResult<std::vector<Vector2d>> result = PointsListParser::Parse("1 2,4,5,3e3");
-    EXPECT_THAT(result,
-                ParseResultAndError(ElementsAre(Vector2d(1, 2), Vector2d(4, 5)),
-                                    ParseErrorIs("Failed to parse number: Unexpected character")));
+    EXPECT_THAT(result, ParseResultAndError(
+                            ElementsAre(Vector2d(1, 2), Vector2d(4, 5)),
+                            // TODO: This doesn't seem like the best parse error
+                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
   }
 
   // Unexpected tokens.

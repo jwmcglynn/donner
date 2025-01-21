@@ -57,6 +57,13 @@ size_t ParserBase::consumedChars() const {
 }
 
 ParseResult<double> ParserBase::readNumber() {
+  if (remaining_.empty()) {
+    ParseError err;
+    err.reason = "Failed to parse number: Unexpected end of string";
+    err.location = currentOffset();
+    return err;
+  }
+
   auto maybeResult = NumberParser::Parse(remaining_);
   if (maybeResult.hasError()) {
     ParseError err = std::move(maybeResult.error());

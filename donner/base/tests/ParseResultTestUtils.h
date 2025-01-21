@@ -40,7 +40,13 @@ MATCHER(NoParseError, "") {
 }
 
 /**
- * Given a ParseResult, matches if it contains an error with the given message.
+ * Given a ParseResult, matches if it contains an error whose reason
+ * matches the given errorMessageMatcher (string or matcher).
+ *
+ * Outputs a readable message on mismatch, e.g.:
+ *   Expected: parse error is (starts with "Unexpected")
+ *   Actual: parse error reason is "Failed to parse number: not finite"
+ *
  *
  * Usage:
  * @code
@@ -48,26 +54,44 @@ MATCHER(NoParseError, "") {
  * EXPECT_THAT(error, ParseErrorIs(StartsWith("Err")));
  * @endcode
  *
- * @param errorMessageMatcher Message to match with, either a string or a gmock matcher.
+ * @param errorMessageMatcher Matcher to match the error message against, either a string or gmock
+ * matcher.
  */
-MATCHER_P(ParseErrorIs, errorMessageMatcher, "") {
+MATCHER_P(ParseErrorIs, errorMessageMatcher,
+          std::string("parse error is (") + testing::PrintToString(errorMessageMatcher) + ")") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
+  // Extract the actual error reason from arg, if present.
+  std::string actualReason;
+  bool hasError = false;
+
+  // Case 1: arg is already a ParseError.
   if constexpr (std::is_same_v<ArgType, ParseError>) {
-    return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener);
-  } else if constexpr (details::IsOptionalLike<ArgType>) {
-    if (!arg.has_value()) {
-      return false;
-    }
-
-    return testing::ExplainMatchResult(errorMessageMatcher, arg.value().reason, result_listener);
-  } else {
-    if (!arg.hasError()) {
-      return false;
-    }
-
-    return testing::ExplainMatchResult(errorMessageMatcher, arg.error().reason, result_listener);
+    actualReason = arg.reason;
+    hasError = true;
   }
+  // Case 2: arg is an optional-like container of ParseError.
+  else if constexpr (details::IsOptionalLike<ArgType>) {
+    if (arg.has_value()) {
+      actualReason = arg.value().reason;
+      hasError = true;
+    }
+  }
+  // Case 3: arg is a custom "ParseResult" or similar, with .hasError() / .error().
+  else {
+    if (arg.hasError()) {
+      actualReason = arg.error().reason;
+      hasError = true;
+    }
+  }
+
+  // If we found no error, fail immediately.
+  if (!hasError) {
+    *result_listener << "which has no error at all";
+    return false;
+  }
+
+  return testing::ExplainMatchResult(errorMessageMatcher, actualReason, result_listener);
 }
 
 /**

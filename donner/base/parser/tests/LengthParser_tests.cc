@@ -75,7 +75,7 @@ TEST(LengthParser, TestHelpers) {
 
 TEST(LengthParser, Empty) {
   EXPECT_THAT(LengthParser::Parse(""),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(LengthParser, Zero) {

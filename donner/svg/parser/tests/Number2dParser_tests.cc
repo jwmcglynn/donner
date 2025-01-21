@@ -22,7 +22,7 @@ MATCHER_P2(Number2dIs, x, y, "") {
 TEST(Number2dParser, Empty) {
   ParseResult<Number2dParser::Result> result = Number2dParser::Parse("");
   EXPECT_FALSE(result.hasResult());
-  EXPECT_THAT(result, ParseErrorIs("Failed to parse number: Unexpected character"));
+  EXPECT_THAT(result, ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(Number2dParser, OneNumber) {

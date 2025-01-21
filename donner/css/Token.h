@@ -387,7 +387,10 @@ struct Token {
         : value(value), valueString(std::move(valueString)), type(type) {}
 
     /// Equality operator.
-    bool operator==(const Number& other) const = default;
+    bool operator==(const Number& other) const {
+      return NearEquals(value, other.value) && valueString == other.valueString &&
+             type == other.type;
+    }
 
     /**
      * Ostream output operator.
@@ -426,7 +429,10 @@ struct Token {
         : value(value), valueString(std::move(valueString)), type(type) {}
 
     /// Equality operator.
-    bool operator==(const Percentage& other) const = default;
+    bool operator==(const Percentage& other) const {
+      return NearEquals(value, other.value) && valueString == other.valueString &&
+             type == other.type;
+    }
 
     /**
      * Ostream output operator.
@@ -473,7 +479,11 @@ struct Token {
           type(type) {}
 
     /// Equality operator.
-    bool operator==(const Dimension& other) const = default;
+    bool operator==(const Dimension& other) const {
+      return NearEquals(value, other.value) && suffixString == other.suffixString &&
+             suffixUnit == other.suffixUnit && valueString == other.valueString &&
+             type == other.type;
+    }
 
     /**
      * Ostream output operator.

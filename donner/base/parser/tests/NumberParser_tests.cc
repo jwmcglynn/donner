@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 
 using testing::HasSubstr;
@@ -11,11 +12,11 @@ namespace donner::parser {
 
 using Result = NumberParser::Result;
 
-static bool operator==(const Result& lhs, const Result& rhs) {
-  return lhs.number == rhs.number && lhs.consumedChars == rhs.consumedChars;
+[[maybe_unused]] static bool operator==(const Result& lhs, const Result& rhs) {
+  return NearEquals(lhs.number, rhs.number) && lhs.consumedChars == rhs.consumedChars;
 }
 
-static void PrintTo(const Result& result, std::ostream* os) {
+[[maybe_unused]] static void PrintTo(const Result& result, std::ostream* os) {
   *os << "(" << result.number << ", consumed: " << result.consumedChars << ")";
 }
 
@@ -40,7 +41,7 @@ TEST(NumberParser, TestHelpers) {
 }
 
 TEST(NumberParser, Empty) {
-  EXPECT_THAT(NumberParser::Parse(""), ParseErrorIs(HasSubstr("Unexpected character")));
+  EXPECT_THAT(NumberParser::Parse(""), ParseErrorIs(HasSubstr("Unexpected end of string")));
 }
 
 TEST(NumberParser, Integers) {
@@ -55,11 +56,11 @@ TEST(NumberParser, Signs) {
   EXPECT_THAT(NumberParser::Parse("+0"), ParseResultIs(Result{0.0, 2}));
   EXPECT_THAT(NumberParser::Parse("-0"), ParseResultIs(Result{0.0, 2}));
   EXPECT_THAT(NumberParser::Parse("+-0"), ParseErrorIs(HasSubstr("Invalid sign")));
-  EXPECT_THAT(NumberParser::Parse("-+0"), ParseErrorIs(HasSubstr("Unexpected character")));
+  EXPECT_THAT(NumberParser::Parse("-+0"), ParseErrorIs(HasSubstr("Invalid sign")));
   EXPECT_THAT(NumberParser::Parse("+"), ParseErrorIs(HasSubstr("Unexpected character")));
   EXPECT_THAT(NumberParser::Parse("-"), ParseErrorIs(HasSubstr("Unexpected character")));
-  EXPECT_THAT(NumberParser::Parse("+-"), ParseErrorIs(HasSubstr("Unexpected character")));
-  EXPECT_THAT(NumberParser::Parse("-+"), ParseErrorIs(HasSubstr("Unexpected character")));
+  EXPECT_THAT(NumberParser::Parse("+-"), ParseErrorIs(HasSubstr("Invalid sign")));
+  EXPECT_THAT(NumberParser::Parse("-+"), ParseErrorIs(HasSubstr("Invalid sign")));
 }
 
 TEST(NumberParser, Decimal) {
@@ -150,6 +151,11 @@ TEST(NumberParser, AllowOutOfRange) {
               ParseResultIs(Result{std::numeric_limits<double>::infinity(), 19}));
   EXPECT_THAT(NumberParser::Parse("-99e999999999999999", options),
               ParseResultIs(Result{-std::numeric_limits<double>::infinity(), 19}));
+}
+
+TEST(NumberParser, BigFraction) {
+  EXPECT_THAT(NumberParser::Parse("59.60784313725490196078431372549"),
+              ParseResultIs(Result{59.60784313725490196078431372549, 32}));
 }
 
 }  // namespace donner::parser

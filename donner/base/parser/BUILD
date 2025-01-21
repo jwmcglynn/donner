@@ -18,7 +18,6 @@ donner_cc_library(
     visibility = ["//donner:__subpackages__"],
     deps = [
         "//donner/base",
-        "@com_google_absl//absl/strings",
     ],
 )
 

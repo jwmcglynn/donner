@@ -403,4 +403,16 @@ TEST(ColorParser, LchErrors) {
               ParseErrorIs("Unexpected alpha value"));
 }
 
+TEST(ColorParser, LargeFractionPercentage) {
+  // “rgb(59.60784313725490196078431372549%,98.431372549019607843137254901961%,59.60784313725490196078431372549%)”
+  // should parse to ~#98FB98 (152, 251, 152).
+  // Make sure the parser doesn’t truncate incorrectly or overflow
+  // and ends up black (0,0,0). We expect “PaleGreen”.
+
+  EXPECT_THAT(ColorParser::ParseString("rgb(59.60784313725490196078431372549%,"
+                                       "98.431372549019607843137254901961%,"
+                                       "59.60784313725490196078431372549%)"),
+              ParseResultIs(Color(RGBA(152, 251, 152, 255))));
+}
+
 }  // namespace donner::css::parser

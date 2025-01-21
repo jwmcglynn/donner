@@ -61,7 +61,7 @@ TEST(TransformParser, Matrix_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("matrix 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("matrix("),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(TransformParser, Translate) {
@@ -99,7 +99,7 @@ TEST(TransformParser, Translate_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("translate 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("translate("),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(TransformParser, Scale) {
@@ -138,7 +138,7 @@ TEST(TransformParser, Scale_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("scale 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("scale("),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(TransformParser, Rotate_OneParameter) {
@@ -203,7 +203,7 @@ TEST(TransformParser, Rotate_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("rotate 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("rotate("),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(TransformParser, SkewX) {
@@ -253,7 +253,7 @@ TEST(TransformParser, SkewX_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("skewX 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("skewX("),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(TransformParser, SkewY) {
@@ -303,7 +303,7 @@ TEST(TransformParser, SkewY_ParseErrors) {
   EXPECT_THAT(TransformParser::Parse("skewY 1 2"),
               ParseErrorIs("Expected '(' after function name"));
   EXPECT_THAT(TransformParser::Parse("skewY("),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+              ParseErrorIs("Failed to parse number: Unexpected end of string"));
 }
 
 TEST(TransformParser, MultiplicationOrder) {
