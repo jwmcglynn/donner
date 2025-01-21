@@ -47,16 +47,21 @@ fi
 
 JAVA_HOME=$(dirname $(dirname $(which java)))
 
+BAZEL_TEST_ENV=""
+if [[ "$(uname)" == "Darwin" ]]; then
+  BAZEL_TEST_ENV="--test_env=DYLD_LIBRARY_PATH=$(bazel info workspace)"
+fi
+
 (
   cd $(bazel info workspace)
 
-  GENHTML_OPTIONS="--highlight --legend --branch-coverage --ignore-errors category --output-directory coverage-report"
+  GENHTML_OPTIONS="--legend --branch-coverage --ignore-errors category --ignore-errors inconsistent --output-directory coverage-report"
 
   if [ "$QUIET" = true ]; then
-    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $TARGETS
+    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $BAZEL_TEST_ENV $TARGETS
     genhtml --quiet $(bazel info output_path)/_coverage/_coverage_report.dat $GENHTML_OPTIONS
   else
-    bazel coverage --config=latest_llvm $TARGETS
+    bazel coverage --config=latest_llvm $BAZEL_TEST_ENV $TARGETS
     genhtml $(bazel info output_path)/_coverage/_coverage_report.dat $GENHTML_OPTIONS
   fi
 )
