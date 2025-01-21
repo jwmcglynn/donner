@@ -52,11 +52,17 @@ bazel test //...
 
 See the latest [Build report](./build_report.md).
 
-To generate a build report locally, run:
+To generate a build report locally:
 
-```sh
-python3 tools/generate_build_report.py --all
-```
+1. Install prerequisites. On macOS:
+   ```sh
+   brew install lcov genhtml
+   ```
+
+2. Run the command:
+   ```sh
+   python3 tools/generate_build_report.py --all
+   ```
 
 To regenerate the checked-in build report at `docs/build_report.md`:
 
