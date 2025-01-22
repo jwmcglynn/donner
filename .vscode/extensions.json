@@ -1,7 +1,6 @@
 {
   "recommendations": [
     "bazelbuild.vscode-bazel",
-    "cschlosser.doxdocgen",
     "github.copilot",
     "hbenl.vscode-test-explorer",
     "matepek.vscode-catch2-test-adapter",
