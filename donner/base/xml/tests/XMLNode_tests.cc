@@ -14,7 +14,7 @@ using testing::Eq;
 using testing::Ne;
 using testing::Optional;
 
-// TODO: Add an ErrorHighlightsText matcher
+// TODO(jwmcglynn): Add an ErrorHighlightsText matcher
 
 namespace donner::xml {
 

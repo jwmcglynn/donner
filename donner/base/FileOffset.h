@@ -81,8 +81,8 @@ struct FileOffset {
    */
   [[nodiscard]] FileOffset addParentOffset(FileOffset parentOffset) const {
     assert(parentOffset.offset.has_value() && "Parent offset must be resolved.");
-    // TODO: Change this to assert offset has a value, and update callers to call resolveOffset
-    // first.
+    // TODO(jwmcglynn): Change this to assert offset has a value, and update callers to call
+    // resolveOffset first.
     const size_t selfOffset = offset.value_or(0);
 
     std::optional<LineInfo> newLineInfo;

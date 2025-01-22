@@ -31,8 +31,9 @@ template <typename T>
 struct Transform {
   /// Tag type for constructing an uninitialized transform.
   struct UninitializedTag {};
+
   /// Tag value for constructing an uninitialized transform.
-  static constexpr UninitializedTag uninitialized = UninitializedTag();
+  static constexpr const UninitializedTag uninitialized = UninitializedTag();
 
   /**
    * Storage for a 3x2 matrix, in column-major order.

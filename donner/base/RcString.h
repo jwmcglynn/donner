@@ -374,7 +374,8 @@ private:
     const size_t rhsSize = rhs.size();
     const size_t sharedSize = std::min(lhsSize, rhsSize);
 
-    const int retval = std::char_traits<char>::compare(lhs.data(), rhs.data(), sharedSize);
+    const int retval = std::char_traits<char>::compare(
+        lhs.data(), rhs.data(), sharedSize);  // NOLINT(bugprone-suspicious-stringview-data-usage)
     if (retval == 0) {
       // The shared region matched, return a result based on which string is longer.
       if (lhsSize == rhsSize) {

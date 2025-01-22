@@ -14,7 +14,7 @@ struct AnbToken {
    * The type of the An+B token, from
    * https://www.w3.org/TR/css-syntax-3/#the-anb-type.
    */
-  enum class Type {
+  enum class Type : uint8_t {
     /// The ident 'odd'
     Odd,
 

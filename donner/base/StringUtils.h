@@ -32,7 +32,7 @@ concept StringLike = requires(T t, size_t i) {
 };
 
 /// String comparison options, e.g. case sensitivity.
-enum class StringComparison {
+enum class StringComparison : uint8_t {
   Default,     ///< The default case-sensitive string comparison.
   IgnoreCase,  ///< Case-insensitive string comparison.
 };
@@ -170,7 +170,8 @@ public:
       return false;
     }
 
-    return CharArraysEqual<Comparison>(lhs.data(), rhs.data(), lhs.size());
+    return CharArraysEqual<Comparison>(
+        lhs.data(), rhs.data(), lhs.size());  // NOLINT(bugprone-suspicious-stringview-data-usage)
   }
 
   /**

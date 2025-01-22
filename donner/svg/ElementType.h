@@ -9,7 +9,7 @@ namespace donner::svg {
  * SVG element types, corresponds to each XML element name, such as \ref xml_circle, \ref xml_svg,
  * \ref xml_rect, etc.
  */
-enum class ElementType {
+enum class ElementType : uint8_t {
   Circle,          //!< \ref xml_circle
   ClipPath,        //!< \ref xml_clipPath
   Defs,            //!< \ref xml_defs

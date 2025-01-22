@@ -54,7 +54,7 @@ protected:
 public:
   /// Node type, use \ref type() to query the value. To create nodes of different types, use the
   /// relevant static method constructor, such as \ref CreateElementNode and \ref CreateCommentNode.
-  enum class Type {
+  enum class Type : uint8_t {
     /// Document node, which is the root of the document tree. This is created automatically by \ref
     /// XMLDocument. \ref tagName() and \ref value() are empty.
     Document,
