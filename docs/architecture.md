@@ -38,8 +38,6 @@ The parser suite consists of parsers in three layers:
 | \ref donner::svg::parser | Parsers for the SVG XML format, \ref donner::svg::parser::SVGParser "SVGParser", as well as individual parsers for SVG components, such as \ref donner::svg::parser::PathParser "PathParser" and \ref donner::svg::parser::TransformParser "TransformParser".                                                                                                                                                                               |
 | \ref donner::xml         | \ref donner::xml::XMLParser "XMLParser" and an XML document tree represented by \ref donner::xml::XMLDocument "XMLDocument" and \ref donner::xml::XMLNode "XMLNode".                                                                                                                                                                                                                                                                        |
 
-- \ref donner::parser::NumberParser "NumberParser" uses [absl::from_chars](https://abseil.io/about/design/charconv) as `std::from_chars` is not fully implemented in libc++.
-
 ### CSS
 
 Provides a fully-featured CSS3 toolkit, which can be used to parse CSS stylesheets, style strings, or selectors, and match those selectors against a document tree.

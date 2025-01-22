@@ -310,6 +310,7 @@ while (timeoutRemainingMs > 0) {
 
 - Use `struct` for data classes and `class` for classes with logic.
 - Implement comparison operators using `= default` when possible.
+- Single-argument constructors should be marked `explicit` by default.
 - Use `/* implicit */` to indicate intentional implicit constructors.
 - Provide `operator<<` for data classes to streamline debugging.
 

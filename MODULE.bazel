@@ -20,9 +20,6 @@ bazel_dep(name = "platforms", version = "0.0.10")
 ## Third-party dependencies
 ##
 
-# Core dependencies
-bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240722.0.bcr.2")  # Used for number parsing
-
 # Skia dependencies
 bazel_dep(name = "rules_license", version = "1.0.0")
 
@@ -58,6 +55,9 @@ new_local_repository(
     build_file = "//third_party:BUILD.stb",
     path = "third_party/stb",
 )
+
+# Used for stacktraces and failure signal handler in apps
+bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240722.0.bcr.2")
 
 ##
 ## Test dependencies
