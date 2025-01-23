@@ -323,6 +323,8 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     }
   }
 
+  // Adjust exponent for the number of digits consumed
+  exponentVal += static_cast<int64_t>(digitsResult.consumedChars - digitsResult.valueNumDigits);
   exponentVal -= static_cast<int64_t>(fracDigits);
 
   // For extremely large exponentVal (e.g. 1e999999999999999999), we'd normally do

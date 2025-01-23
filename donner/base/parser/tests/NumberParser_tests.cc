@@ -158,4 +158,35 @@ TEST(NumberParser, BigFraction) {
               ParseResultIs(Result{59.60784313725490196078431372549, 32}));
 }
 
+TEST(NumberParser, Exponents) {
+  for (int i = std::numeric_limits<double>::min_exponent10;
+       i < std::numeric_limits<double>::max_exponent10; i++) {
+    std::string number = "1e" + std::to_string(i);
+    SCOPED_TRACE(testing::Message() << "Parsing: " << number);
+
+    ASSERT_THAT(NumberParser::Parse(number), ParseResultIs(Result{std::pow(10, i), number.size()}));
+  }
+}
+
+TEST(NumberParser, OverflowedDigits) {
+  for (int i = 0; i < std::numeric_limits<double>::max_exponent10; i++) {
+    std::string number = "1";
+    for (int j = 0; j < i; j++) {
+      number += "0";
+    }
+
+    const double expected = std::pow(10, i);
+
+    SCOPED_TRACE(testing::Message() << "Parsing: " << number);
+    auto maybeResult = NumberParser::Parse(number);
+    ASSERT_THAT(maybeResult, NoParseError());
+
+    // Validate the result with the DoubleEq matcher which has a more forgiving error margin, as
+    // std::pow can be imprecise for large numbers.
+    const Result result = maybeResult.result();
+    ASSERT_THAT(result.number, testing::DoubleEq(expected));
+    ASSERT_EQ(result.consumedChars, number.size());
+  }
+}
+
 }  // namespace donner::parser
