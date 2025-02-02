@@ -57,7 +57,7 @@ new_local_repository(
 )
 
 # Used for stacktraces and failure signal handler in apps
-bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240722.0.bcr.2")
+bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "20240722.1")
 
 ##
 ## Test dependencies
