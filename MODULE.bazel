@@ -112,7 +112,7 @@ bazel_dep(name = "toolchains_llvm", version = "1.2.0", dev_dependency = True)
 git_override(
     module_name = "toolchains_llvm",
     remote = "https://github.com/bazel-contrib/toolchains_llvm",
-    commit = "b3c96d2dbc698eab752366bbe747e2a7df7fa504",
+    commit = "69d39965f82061209e4c7cd29399ab9179625dad",
 )
 
 # To use a local copy of the toolchains_llvm repository, uncomment the following.
