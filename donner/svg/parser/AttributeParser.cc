@@ -765,7 +765,7 @@ std::optional<ParseError> ParseAttribute<SVGMarkerElement>(SVGParserContext& con
     } else {
       auto maybeAngleRadians = ParseAngleAttribute(context, value);
       if (maybeAngleRadians) {
-        element.setOrient(MarkerOrient::Angle(maybeAngleRadians.value()));
+        element.setOrient(MarkerOrient::AngleRadians(maybeAngleRadians.value()));
       } else {
         // Error already reported in ParseAngleAttribute
       }

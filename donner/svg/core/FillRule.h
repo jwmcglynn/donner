@@ -14,7 +14,7 @@ namespace donner::svg {
  * The parsed result of the 'fill-rule' property, see:
  * https://www.w3.org/TR/SVG2/painting.html#FillRuleProperty
  */
-enum class FillRule {
+enum class FillRule : uint8_t {
   NonZero,  ///< [DEFAULT] Determines "insideness" of a point by counting crossings of a ray drawn
             ///< from that point to infinity and path segments. If crossings is non-zero, the point
             ///< is inside, else outside.

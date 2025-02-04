@@ -278,7 +278,7 @@ Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
   return RoundSize(transform.transformPosition(documentSize));
 }
 
-Transformd LayoutSystem::getEntityFromParentTranform(EntityHandle entity) {
+Transformd LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
   const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, nullptr);
 
   const ComputedLocalTransformComponent& computedTransform =
@@ -295,7 +295,7 @@ Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
     const ComputedSizedElementComponent& computedSizedElement =
         LayoutSystem().createComputedSizedElementComponentWithStyle(rootEntity, computedStyle,
                                                                     FontMetrics(), nullptr);
-    return LayoutSystem().computeSizedElementTransform(rootEntity, computedSizedElement);
+    return LayoutSystem().elementContentFromViewBoxTransform(rootEntity, computedSizedElement);
   } else {
     return Transformd();
   }
@@ -309,7 +309,7 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
     const ComputedSizedElementComponent& computedSizedElement =
         LayoutSystem().createComputedSizedElementComponentWithStyle(entity, computedStyle,
                                                                     FontMetrics(), nullptr);
-    return LayoutSystem().computeSizedElementTransform(entity, computedSizedElement);
+    return LayoutSystem().elementContentFromViewBoxTransform(entity, computedSizedElement);
   } else if (const auto* shadowEntity = entity.try_get<ShadowEntityComponent>()) {
     return getEntityContentFromEntityTransform(
         EntityHandle(*entity.registry(), shadowEntity->lightEntity));
@@ -382,7 +382,8 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
     parents.pop_back();
 
     const Transformd entityFromWorld = getEntityContentFromEntityTransform(currentHandle) *
-                                       getEntityFromParentTranform(currentHandle) * parentFromWorld;
+                                       getEntityFromParentTransform(currentHandle) *
+                                       parentFromWorld;
     currentHandle.emplace<ComputedAbsoluteTransformComponent>(entityFromWorld, worldIsCanvas);
 
     parentFromWorld = entityFromWorld;
@@ -402,22 +403,22 @@ void LayoutSystem::invalidate(EntityHandle entity) {
   entity.remove<components::ComputedViewboxComponent>();
 }
 
-Transformd LayoutSystem::computeSizedElementTransform(
-    EntityHandle handle, const ComputedSizedElementComponent& computedSizedElement) const {
-  const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(handle);
-
-  // If this entity also has a viewbox, this SizedElementComponent is used to define a viewport.
-  if (const auto* viewbox = handle.try_get<ViewboxComponent>()) {
-    return preserveAspectRatio.computeTransform(computedSizedElement.bounds, viewbox->viewbox);
-  } else if (handle.all_of<ImageComponent>()) {
-    // Images compute their transform based on the image's intrinsic size, not the viewbox.
+Transformd LayoutSystem::elementContentFromViewBoxTransform(
+    EntityHandle entity, const ComputedSizedElementComponent& computedSizedElement) const {
+  const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(entity);
+  // If this entity also has a viewBox, it defines a viewport.
+  if (const auto* viewbox = entity.try_get<ViewboxComponent>()) {
+    return preserveAspectRatio.elementContentFromViewBoxTransform(computedSizedElement.bounds,
+                                                                  viewbox->viewbox);
+  } else if (entity.all_of<ImageComponent>()) {
+    // Images compute their transform based on the image's intrinsic size, not the viewBox.
     // TODO: This should be based on the image's intrinsic size, move this transform computation
     // here from RendererSkia.
     return Transformd();
   } else {
     // This branch is hit for <use> elements.
-    return preserveAspectRatio.computeTransform(computedSizedElement.bounds,
-                                                computedSizedElement.inheritedViewbox);
+    return preserveAspectRatio.elementContentFromViewBoxTransform(
+        computedSizedElement.bounds, computedSizedElement.inheritedViewbox);
   }
 }
 
@@ -705,8 +706,8 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   const Vector2d canvasSize(maybeCanvasSize.value());
 
   // Scale the original viewbox to the canvas size.
-  const Transformd transform =
-      preserveAspectRatio.computeTransform(Boxd(Vector2d(), canvasSize), viewbox.viewbox);
+  const Transformd transform = preserveAspectRatio.elementContentFromViewBoxTransform(
+      Boxd(Vector2d(), canvasSize), viewbox.viewbox);
 
   return transform.transformPosition(viewboxSize);
 }

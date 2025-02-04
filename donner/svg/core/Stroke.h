@@ -18,7 +18,7 @@ namespace donner::svg {
  * The parsed result of the 'stroke-linecap' property, see:
  * https://www.w3.org/TR/SVG2/painting.html#StrokeLinecapProperty
  */
-enum class StrokeLinecap {
+enum class StrokeLinecap : uint8_t {
   Butt,   ///< [DEFAULT] The stroke is squared off at the endpoint of the path.
   Round,  ///< The stroke is rounded at the endpoint of the path.
   Square  ///< The stroke extends beyond the endpoint of the path by half of the stroke width and
@@ -42,7 +42,7 @@ inline std::ostream& operator<<(std::ostream& os, StrokeLinecap value) {
  * The parsed result of the 'stroke-linejoin' property, see:
  * https://www.w3.org/TR/SVG2/painting.html#StrokeLinejoinProperty
  */
-enum class StrokeLinejoin {
+enum class StrokeLinejoin : uint8_t {
   Miter,      ///< [DEFAULT] The outer edges of the strokes for the two segments are extended until
               ///< they meet at an angle, creating a sharp point.
   MiterClip,  ///< Same as miter except the stroke will be clipped if the miter limit is exceeded.

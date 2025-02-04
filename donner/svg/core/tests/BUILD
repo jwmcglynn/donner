@@ -1,5 +1,5 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("@donner_tools_py_deps//:requirements.bzl", "requirement")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("@rules_python//python:defs.bzl", "py_binary")
 
 cc_library(
@@ -19,6 +19,10 @@ cc_library(
 cc_test(
     name = "core_tests",
     srcs = [
+        "ClipPathUnits_tests.cc",
+        "ClipRule_tests.cc",
+        "Display_tests.cc",
+        "MarkerOrient_tests.cc",
         "PathSpline_tests.cc",
         "PreserveAspectRatio_tests.cc",
     ],

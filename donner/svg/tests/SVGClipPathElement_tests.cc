@@ -19,6 +19,20 @@ TEST(SVGClipPathElementTests, SetClipPathUnits) {
   auto clipPath = instantiateSubtreeElementAs<SVGClipPathElement>(
       "<clipPath clipPathUnits=\"objectBoundingBox\" />");
   EXPECT_EQ(clipPath->clipPathUnits(), ClipPathUnits::ObjectBoundingBox);
+
+  clipPath->setClipPathUnits(ClipPathUnits::UserSpaceOnUse);
+  EXPECT_EQ(clipPath->clipPathUnits(), ClipPathUnits::UserSpaceOnUse);
+}
+
+/**
+ * If an invalid value is provided for clipPathUnits, the parser should fall back to the default.
+ */
+TEST(SVGClipPathElementTests, InvalidClipPathUnits) {
+  auto clipPath =
+      instantiateSubtreeElementAs<SVGClipPathElement>("<clipPath clipPathUnits=\"invalid\" />");
+
+  // Assuming that an invalid value falls back to UserSpaceOnUse.
+  EXPECT_EQ(clipPath->clipPathUnits(), ClipPathUnits::UserSpaceOnUse);
 }
 
 TEST(SVGClipPathElementTests, RenderingDefaults) {
@@ -77,6 +91,40 @@ TEST(SVGClipPathElementTests, RenderingObjectBoundingBox) {
         ...:*%@@@@%*:...
         )"));
 }
+
+/**
+ * If a clipPath element is empty, then nothing should be rendered (i.e. the clipping region is
+ * empty).
+ */
+TEST(SVGClipPathElementTests, RenderingEmptyClipPath) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <clipPath id="emptyClip" />
+        <rect width="16" height="16" clip-path="url(#emptyClip)" fill="white" />
+        )-");
+  // Expect that the rendered rectangle is fully clipped, resulting in an empty (blank) image.
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        ................
+        )"));
+}
+
+/**
+ * Verify that clip-rule "nonzero" is correctly applied when rendering.
+ */
 TEST(SVGClipPathElementTests, ClipRuleNonzero) {
   const AsciiImage nonzeroResult = RendererTestUtils::renderToAsciiImage(R"-(
         <defs>
@@ -108,6 +156,9 @@ TEST(SVGClipPathElementTests, ClipRuleNonzero) {
   )"));
 }
 
+/**
+ * Verify that clip-rule "evenodd" is correctly applied when rendering.
+ */
 TEST(SVGClipPathElementTests, ClipRuleEvenodd) {
   const AsciiImage evenoddResult = RendererTestUtils::renderToAsciiImage(R"-(
         <defs>
@@ -139,6 +190,10 @@ TEST(SVGClipPathElementTests, ClipRuleEvenodd) {
   )"));
 }
 
+/**
+ * Verify that a clipPath element containing multiple paths with different clip rules
+ * (specified on each child) is applied correctly when rendering.
+ */
 TEST(SVGClipPathElementTests, MultiplePathsWithDifferentClipRulesSideBySide) {
   const AsciiImage result = RendererTestUtils::renderToAsciiImage(R"-(
         <defs>
@@ -169,6 +224,71 @@ TEST(SVGClipPathElementTests, MultiplePathsWithDifferentClipRulesSideBySide) {
   ................
   ................
   )"));
+}
+
+/**
+ * Verify that transforms on elements within a clipPath are applied correctly.
+ */
+TEST(SVGClipPathElementTests, RenderingTransform) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <clipPath id="clipTransform">
+          <circle cx="8" cy="8" r="8" transform="translate(2 2)" />
+        </clipPath>
+        <rect width="16" height="16" clip-path="url(#clipTransform)" fill="white" />
+        )-");
+
+  // Expected output assumes that the translated circle defines a shifted clipping region.
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        ................
+        ......,=#@@#+,..
+        .....*@@@@@@@@*.
+        ...,%@@@@@@@@@@*
+        ...*@@@@@@@@@@@@
+        ..,@@@@@@@@@@@@@
+        ..+@@@@@@@@@@@@@
+        ..%@@@@@@@@@@@@@
+        ..@@@@@@@@@@@@@@
+        ..@@@@@@@@@@@@@@
+        ..%@@@@@@@@@@@@@
+        ..+@@@@@@@@@@@@@
+        ..,@@@@@@@@@@@@@
+        ...+@@@@@@@@@@@@
+        ....#@@@@@@@@@@*
+        )"));
+}
+
+/**
+ * Verify that a clipPath with multiple child elements—each potentially having their own transforms—
+ * is correctly applied when rendering.
+ */
+TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <clipPath id="clipMultiTrans">
+          <circle cx="4" cy="4" r="4" transform="translate(4,0)" />
+          <rect x="0" y="4" width="8" height="4" />
+        </clipPath>
+        <rect width="16" height="16" clip-path="url(#clipMultiTrans)" fill="white" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+      ......#@@#......
+      .....@@@@@@.....
+      ....*@@@@@@*....
+      ....@@@@@@@@....
+      @@@@@@@@@@@@....
+      @@@@@@@@@@@*....
+      @@@@@@@@@@@.....
+      @@@@@@@@@#......
+      ................
+      ................
+      ................
+      ................
+      ................
+      ................
+      ................
+      ................
+      )"));
 }
 
 }  // namespace donner::svg

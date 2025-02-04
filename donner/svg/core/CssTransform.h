@@ -39,7 +39,7 @@ public:
    *
    * @param transform Initial transform.
    */
-  explicit CssTransform(const Transformd& transform) { addTransform(transform); }
+  explicit CssTransform(const Transformd& transform) { appendTransform(transform); }
 
   /**
    * Stores a precomputed transform.
@@ -85,9 +85,9 @@ public:
   /**
    * Append a transform to the transform chain.
    *
-   * @param transform Transform to add.
+   * @param transform Transform to append.
    */
-  void addTransform(const Transformd& transform) {
+  void appendTransform(const Transformd& transform) {
     if (!elements_.empty()) {
       if (Simple* s = std::get_if<Simple>(&elements_.back())) {
         s->transform = s->transform * transform;
@@ -104,7 +104,7 @@ public:
    * @param x X offset.
    * @param y Y offset.
    */
-  void addTranslate(Lengthd x, Lengthd y) { elements_.emplace_back(Translate{x, y}); }
+  void appendTranslate(Lengthd x, Lengthd y) { elements_.emplace_back(Translate{x, y}); }
 
 private:
   std::vector<Element> elements_;

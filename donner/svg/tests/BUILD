@@ -6,6 +6,7 @@ cc_test(
         "ElementStyle_tests.cc",
         "SVGCircleElement_tests.cc",
         "SVGClipPathElement_tests.cc",
+        "SVGDefsElement_tests.cc",
         "SVGDocument_tests.cc",
         "SVGElement_tests.cc",
         "SVGEllipseElement_tests.cc",

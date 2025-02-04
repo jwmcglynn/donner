@@ -17,12 +17,12 @@ namespace donner::svg::parser {
 class TransformParser {
 public:
   /**
-   * Parse an SVG transform attribute.
+   * Parse an SVG `transform="..."` attribute.
    *
    * @see https://www.w3.org/TR/css-transforms-1/#svg-transform
    *
-   * Compared to the CSS transform attribute, this parser does not support units on numbers, and the
-   * default units are pixels and degrees.
+   * Compared to the CSS transform attribute, \ref CssTransformParser, this parser does not support
+   * units on numbers, and the default units are pixels and degrees.
    *
    * - `translate(100 100)` - translates by `(100, 100)` pixels.
    * - `rotate(45)` - rotates by 45 degrees.

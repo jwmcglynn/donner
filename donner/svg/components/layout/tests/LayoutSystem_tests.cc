@@ -100,7 +100,7 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
   auto rectEntityHandle = document.querySelector("#rect1")->entityHandle();
 
   // Test getting the transform for the group
-  const Transformd groupTransform = layoutSystem.getEntityFromParentTranform(groupEntityHandle);
+  const Transformd groupTransform = layoutSystem.getEntityFromParentTransform(groupEntityHandle);
   EXPECT_THAT(groupTransform, TransformEq(Transformd::Translate({10.0, 20.0})));
 
   // Test setting a new transform for the rectangle
@@ -109,7 +109,7 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
 
   // Verify the new transform
   const Transformd updatedRectTransform =
-      layoutSystem.getEntityFromParentTranform(rectEntityHandle);
+      layoutSystem.getEntityFromParentTransform(rectEntityHandle);
   EXPECT_THAT(updatedRectTransform, TransformEq(Transformd::Translate({30.0, 40.0})));
 }
 
@@ -130,7 +130,7 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransformWithScale) {
   layoutSystem.setEntityFromParentTransform(rectEntityHandle, scaleTransform);
 
   // Verify the new transform
-  const Transformd updatedTransform = layoutSystem.getEntityFromParentTranform(rectEntityHandle);
+  const Transformd updatedTransform = layoutSystem.getEntityFromParentTransform(rectEntityHandle);
 
   EXPECT_THAT(updatedTransform,
               TransformEq(Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0})));

@@ -4,8 +4,8 @@
 
 namespace donner::svg {
 
-Transformd PreserveAspectRatio::computeTransform(const Boxd& size,
-                                                 std::optional<Boxd> viewbox) const {
+Transformd PreserveAspectRatio::elementContentFromViewBoxTransform(
+    const Boxd& size, std::optional<Boxd> viewbox) const {
   if (!viewbox) {
     return Transformd::Translate(size.topLeft);
   }
@@ -21,8 +21,8 @@ Transformd PreserveAspectRatio::computeTransform(const Boxd& size,
 
   Vector2d translation = size.topLeft - (viewbox->topLeft * scale);
   const Vector2d alignMaxOffset = size.size() - viewbox->size() * scale;
-
   const Vector2d alignMultiplier(alignMultiplierX(), alignMultiplierY());
+
   return Transformd::Scale(scale) *
          Transformd::Translate(translation + alignMaxOffset * alignMultiplier);
 }

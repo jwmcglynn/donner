@@ -1,7 +1,6 @@
 #include "donner/svg/parser/CssTransformParser.h"
 
 #include "donner/base/FileOffset.h"
-#include "donner/base/MathUtils.h"
 #include "donner/svg/parser/AngleParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 
@@ -173,64 +172,63 @@ public:
       const RcString& name = function->name;
       ComponentValueParser subparser(function->values);
 
-      // TODO(jwmcglynn): Should this be case-insensitive?
-      if (name == "matrix") {
+      if (name.equalsLowercase("matrix")) {
         return parseMatrix(subparser);
-      } else if (name == "translate") {
+      } else if (name.equalsLowercase("translate")) {
         return parseTranslate(subparser);
-      } else if (name == "translateX") {
+      } else if (name.equalsLowercase("translatex")) {
         auto result = parseSingleLengthPercentage(subparser);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.addTranslate(result.result(), Lengthd(0, Lengthd::Unit::None));
-      } else if (name == "translateY") {
+        transform_.appendTranslate(result.result(), Lengthd(0, Lengthd::Unit::None));
+      } else if (name.equalsLowercase("translatey")) {
         auto result = parseSingleLengthPercentage(subparser);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.addTranslate(Lengthd(0, Lengthd::Unit::None), result.result());
-      } else if (name == "scale") {
+        transform_.appendTranslate(Lengthd(0, Lengthd::Unit::None), result.result());
+      } else if (name.equalsLowercase("scale")) {
         return parseScale(subparser);
-      } else if (name == "scaleX") {
+      } else if (name.equalsLowercase("scalex")) {
         auto result = parseSingleNumber(subparser);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.addTransform(Transformd::Scale(Vector2d(result.result(), 1.0)));
-      } else if (name == "scaleY") {
+        transform_.appendTransform(Transformd::Scale(Vector2d(result.result(), 1.0)));
+      } else if (name.equalsLowercase("scaley")) {
         auto result = parseSingleNumber(subparser);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.addTransform(Transformd::Scale(Vector2d(1.0, result.result())));
-      } else if (name == "rotate") {
+        transform_.appendTransform(Transformd::Scale(Vector2d(1.0, result.result())));
+      } else if (name.equalsLowercase("rotate")) {
         auto result = parseSingleAngle(subparser, AngleParseOptions::AllowBareZero);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.addTransform(Transformd::Rotate(result.result()));
-      } else if (name == "skew") {
+        transform_.appendTransform(Transformd::Rotate(result.result()));
+      } else if (name.equalsLowercase("skew")) {
         return parseSkew(subparser);
-      } else if (name == "skewX") {
+      } else if (name.equalsLowercase("skewx")) {
         auto result = parseSingleAngle(subparser, AngleParseOptions::AllowBareZero);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.addTransform(Transformd::SkewX(result.result()));
-      } else if (name == "skewY") {
+        transform_.appendTransform(Transformd::SkewX(result.result()));
+      } else if (name.equalsLowercase("skewy")) {
         auto result = parseSingleAngle(subparser, AngleParseOptions::AllowBareZero);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.addTransform(Transformd::SkewY(result.result()));
+        transform_.appendTransform(Transformd::SkewY(result.result()));
       } else {
         ParseError err;
         err.reason = "Unexpected function '" + name + "'";
@@ -313,7 +311,7 @@ public:
       return err;
     }
 
-    transform_.addTransform(t);
+    transform_.appendTransform(t);
     return std::nullopt;
   }
 
@@ -328,7 +326,7 @@ public:
 
     if (subparser.isEOF()) {
       // Only one parameter provided, use zero for Ty.
-      transform_.addTranslate(maybeTx.result(), Lengthd(0.0, Lengthd::Unit::None));
+      transform_.appendTranslate(maybeTx.result(), Lengthd(0.0, Lengthd::Unit::None));
     } else {
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
@@ -344,7 +342,7 @@ public:
         return std::move(maybeTy.error());
       }
 
-      transform_.addTranslate(maybeTx.result(), maybeTy.result());
+      transform_.appendTranslate(maybeTx.result(), maybeTy.result());
     }
 
     subparser.skipWhitespace();
@@ -370,7 +368,7 @@ public:
 
     if (subparser.isEOF()) {
       // Only one parameter provided, use Sx for both x and y.
-      transform_.addTransform(Transformd::Scale(Vector2d(maybeSx.result(), maybeSx.result())));
+      transform_.appendTransform(Transformd::Scale(Vector2d(maybeSx.result(), maybeSx.result())));
     } else {
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
@@ -386,7 +384,7 @@ public:
         return std::move(maybeSy.error());
       }
 
-      transform_.addTransform(Transformd::Scale(Vector2d(maybeSx.result(), maybeSy.result())));
+      transform_.appendTransform(Transformd::Scale(Vector2d(maybeSx.result(), maybeSy.result())));
     }
 
     subparser.skipWhitespace();
@@ -412,7 +410,7 @@ public:
 
     if (subparser.isEOF()) {
       // Only one parameter provided, use zero for theta.
-      transform_.addTransform(Skew(maybeAlpha.result(), 0.0));
+      transform_.appendTransform(Skew(maybeAlpha.result(), 0.0));
     } else {
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
@@ -428,7 +426,7 @@ public:
         return std::move(maybeTheta.error());
       }
 
-      transform_.addTransform(Skew(maybeAlpha.result(), maybeTheta.result()));
+      transform_.appendTransform(Skew(maybeAlpha.result(), maybeTheta.result()));
     }
 
     subparser.skipWhitespace();

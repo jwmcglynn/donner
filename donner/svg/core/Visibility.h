@@ -18,7 +18,7 @@ namespace donner::svg {
  *
  * This determines whether the element is visible or hidden, and whether it affects layout.
  */
-enum class Visibility {
+enum class Visibility : uint8_t {
   Visible,   ///< [DEFAULT] Visible is the default value.
   Hidden,    ///< Hidden elements are invisible, but still affect layout.
   Collapse,  ///< Collapsed elements are invisible, and do not affect layout.

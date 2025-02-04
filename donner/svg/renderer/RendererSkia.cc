@@ -752,8 +752,9 @@ public:
     }
 
     if (computedPattern.viewbox) {
-      patternContentFromPatternTile = computedPattern.preserveAspectRatio.computeTransform(
-          rect.toOrigin(), computedPattern.viewbox);
+      patternContentFromPatternTile =
+          computedPattern.preserveAspectRatio.elementContentFromViewBoxTransform(
+              rect.toOrigin(), computedPattern.viewbox);
     } else if (patternContentObjectBoundingBox) {
       patternContentFromPatternTile = Transformd::Scale(pathBounds.size());
     }
@@ -967,7 +968,7 @@ public:
     const Boxd intrinsicSize = Boxd::WithSize(Vector2d(image.image->width, image.image->height));
 
     const Transformd imageFromLocal =
-        preserveAspectRatio.computeTransform(sizedElement.bounds, intrinsicSize);
+        preserveAspectRatio.elementContentFromViewBoxTransform(sizedElement.bounds, intrinsicSize);
 
     renderer_.currentCanvas_->save();
     renderer_.currentCanvas_->clipRect(toSkia(sizedElement.bounds));
@@ -1030,16 +1031,16 @@ public:
         if (i == 0) {
           if (hasMarkerStart) {
             drawMarker(dataHandle, instance, instance.markerStart.value(), vertex.point,
-                       vertex.orientation, /*isMarkerStart*/ true, viewbox, fontMetrics);
+                       vertex.orientation, MarkerOrient::MarkerType::Start, viewbox, fontMetrics);
           }
         } else if (i == vertices.size() - 1) {
           if (hasMarkerEnd) {
             drawMarker(dataHandle, instance, instance.markerEnd.value(), vertex.point,
-                       vertex.orientation, /*isMarkerStart*/ false, viewbox, fontMetrics);
+                       vertex.orientation, MarkerOrient::MarkerType::Default, viewbox, fontMetrics);
           }
         } else if (hasMarkerMid) {
           drawMarker(dataHandle, instance, instance.markerMid.value(), vertex.point,
-                     vertex.orientation, /*isMarkerStart*/ false, viewbox, fontMetrics);
+                     vertex.orientation, MarkerOrient::MarkerType::Default, viewbox, fontMetrics);
         }
 
         view_.restore(viewSnapshot);
@@ -1061,8 +1062,8 @@ public:
 
   void drawMarker(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
                   const components::ResolvedMarker& marker, const Vector2d& vertexPosition,
-                  const Vector2d& direction, bool isMarkerStart, const Boxd& viewbox,
-                  const FontMetrics& fontMetrics) {
+                  const Vector2d& direction, MarkerOrient::MarkerType markerOrientType,
+                  const Boxd& viewbox, const FontMetrics& fontMetrics) {
     Registry& registry = *dataHandle.registry();
 
     const EntityHandle markerHandle = marker.reference.handle;
@@ -1093,7 +1094,7 @@ public:
 
     // Compute the rotation angle according to the orient attribute
     const double angleRadians =
-        markerComponent.orient.computeAngleRadians(direction, isMarkerStart);
+        markerComponent.orient.computeAngleRadians(direction, markerOrientType);
 
     // Compute scale according to markerUnits
     double markerScale = 1.0;
@@ -1105,12 +1106,12 @@ public:
       markerScale = strokeWidth;
     }
 
-    const Transformd markerUnitsFromViewbox =
-        preserveAspectRatio.computeTransform(markerSize, markerViewBox);
+    const Transformd markerUnitsFromViewBox =
+        preserveAspectRatio.elementContentFromViewBoxTransform(markerSize, markerViewBox);
 
     const Transformd markerOffsetFromVertex =
-        Transformd::Translate(-markerComponent.refX * markerUnitsFromViewbox.data[0],
-                              -markerComponent.refY * markerUnitsFromViewbox.data[3]);
+        Transformd::Translate(-markerComponent.refX * markerUnitsFromViewBox.data[0],
+                              -markerComponent.refY * markerUnitsFromViewBox.data[3]);
 
     const Transformd vertexFromEntity = Transformd::Scale(markerScale) *
                                         Transformd::Rotate(angleRadians) *
@@ -1120,7 +1121,7 @@ public:
         vertexFromEntity * layerBaseTransform_ * instance.entityFromWorldTransform;
 
     const Transformd markerUserSpaceFromWorld =
-        Transformd::Scale(markerUnitsFromViewbox.data[0], markerUnitsFromViewbox.data[3]) *
+        Transformd::Scale(markerUnitsFromViewBox.data[0], markerUnitsFromViewBox.data[3]) *
         markerOffsetFromVertex * vertexFromWorld;
 
     // Now, render the marker's content with the computed transform

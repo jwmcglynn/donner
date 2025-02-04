@@ -14,7 +14,7 @@ namespace donner::svg {
 class PreserveAspectRatio {
 public:
   /// Alignment options for preserveAspectRatio.
-  enum class Align {
+  enum class Align : uint8_t {
     None,      ///< No forced uniform scaling
     XMinYMin,  ///< Left-top alignment
     XMidYMin,  ///< Center-top alignment
@@ -28,7 +28,7 @@ public:
   };
 
   /// Scaling methods for preserveAspectRatio.
-  enum class MeetOrSlice {
+  enum class MeetOrSlice : uint8_t {
     Meet,  ///< Scale to fit within viewport
     Slice  ///< Scale to cover entire viewport, clipping the content if necessary
   };
@@ -78,16 +78,22 @@ public:
   }
 
   /**
-   * Computes the transform for the given viewbox.
-   * Implements the algorithm from the SVG spec for viewport transform calculation.
+   * Computes the transformation in destinationFromSource notation that maps coordinates from the
+   * viewBox coordinate system (source) to the element's content coordinate system (destination).
+   *
+   * The `size` parameter represents the destination rectangle for the element's content, while the
+   * optional `viewbox` parameter defines the source coordinate system. If no viewbox is provided,
+   * the transformation is a simple translation to the top‐left of `size`.
    *
    * @see https://www.w3.org/TR/SVG2/coords.html#ComputingAViewportsTransform.
    *
-   * @param size Element's position and size
-   * @param viewbox Element's viewbox (if any)
-   * @return Computed transform
+   * @param size The destination rectangle for the element's content.
+   * @param viewbox The source viewBox rectangle, if any.
+   * @return The computed transformation mapping points from the viewBox (source) to the element's
+   * content (destination).
    */
-  Transformd computeTransform(const Boxd& size, std::optional<Boxd> viewbox) const;
+  Transformd elementContentFromViewBoxTransform(const Boxd& size,
+                                                std::optional<Boxd> viewbox) const;
 
   /// Equality operator.
   bool operator==(const PreserveAspectRatio& other) const {

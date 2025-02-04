@@ -62,7 +62,7 @@ PatternContentUnits SVGPatternElement::patternContentUnits() const {
 }
 
 Transformd SVGPatternElement::patternTransform() const {
-  return components::LayoutSystem().getEntityFromParentTranform(handle_);
+  return components::LayoutSystem().getEntityFromParentTransform(handle_);
 }
 
 std::optional<RcString> SVGPatternElement::href() const {

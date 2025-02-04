@@ -14,7 +14,7 @@ namespace donner::svg {
  * The parsed result of the `clip-rule` property, see:
  * https://drafts.fxtf.org/css-masking-1/#propdef-clip-rule
  */
-enum class ClipRule {
+enum class ClipRule : uint8_t {
   NonZero,  ///< [DEFAULT] Determines "insideness" of a point by counting crossings of a ray drawn
             ///< from that point to infinity and path segments. If crossings is non-zero, the point
             ///< is inside, else outside.

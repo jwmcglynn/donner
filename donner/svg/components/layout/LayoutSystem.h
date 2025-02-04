@@ -74,11 +74,12 @@ public:
                                              InvalidSizeBehavior behavior) const;
 
   /**
-   * Get the entity-from-parent transform for the current entity.
+   * Returns the transformation in destinationFromSource notation that converts coordinates from the
+   * parent coordinate system (source) to the entity's coordinate system (destination).
    *
    * @param entity Current entity.
    */
-  Transformd getEntityFromParentTranform(EntityHandle entity);
+  Transformd getEntityFromParentTransform(EntityHandle entity);
 
   /**
    * Get the scale transform from the canvas to the SVG document.
@@ -211,15 +212,15 @@ public:
   std::optional<Boxd> clipRect(EntityHandle handle) const;
 
   /**
-   * Computes the transformation from the parent's coordinate system into the coordinate system
-   * established by this sized element.
+   * Computes the elementContent-from-viewBox transform (using dest-from-source notation), from the
+   * from the parent's coordinate system (resized to the viewBox of this element) to the element's
+   * coordinate system for children (content).
    *
    * @param handle Entity handle.
    * @param computedSizedElement Precomputed sized element information.
-   * @return Transformd Transformation from the parent's coordinate system into the sized element's
-   * coordinate system.
+   * @return Transformd Transformation from viewBox (source) to element content (destination).
    */
-  Transformd computeSizedElementTransform(
+  Transformd elementContentFromViewBoxTransform(
       EntityHandle handle, const ComputedSizedElementComponent& computedSizedElement) const;
 
   /// @}

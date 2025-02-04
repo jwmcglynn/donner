@@ -22,7 +22,7 @@ namespace donner::svg {
  * > Elements that have any other display value than none are rendered as normal.
  *
  */
-enum class Display {
+enum class Display : uint8_t {
   Inline,       ///< [DEFAULT] "inline": Causes an element to generate one or more inline boxes.
   Block,        ///< "block": Causes an element to generate a block box.
   ListItem,     ///< "list-item": Causes an element to act as a list item.

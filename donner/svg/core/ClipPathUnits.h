@@ -14,7 +14,7 @@ namespace donner::svg {
  * This is used on the \ref xml_clipPath element, and defines the coordinate system for the contents
  * of the clip path.
  */
-enum class ClipPathUnits {
+enum class ClipPathUnits : uint8_t {
   /**
    * The clip path is defined in user space, which is the coordinate system of the element that
    * references the clip path.
@@ -36,8 +36,8 @@ enum class ClipPathUnits {
 /// `ClipPathUnits::UserSpaceOnUse`.
 inline std::ostream& operator<<(std::ostream& os, ClipPathUnits units) {
   switch (units) {
-    case ClipPathUnits::UserSpaceOnUse: return os << "ClipPathUnits::UserSpaceOnUse";
-    case ClipPathUnits::ObjectBoundingBox: return os << "ClipPathUnits::ObjectBoundingBox";
+    case ClipPathUnits::UserSpaceOnUse: return os << "userSpaceOnUse";
+    case ClipPathUnits::ObjectBoundingBox: return os << "objectBoundingBox";
   }
 
   UTILS_UNREACHABLE();

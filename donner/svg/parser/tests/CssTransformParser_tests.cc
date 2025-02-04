@@ -11,6 +11,8 @@ namespace donner::svg::parser {
 
 namespace {
 
+constexpr double kInvSqrt2 = MathConstants<double>::kInvSqrt2;
+
 ParseResult<Transformd> parseAsCss(std::string_view str) {
   const std::vector<css::ComponentValue> components = css::parser::ValueParser::Parse(str);
   auto cssTransformResult = parser::CssTransformParser::Parse(components);
@@ -44,7 +46,7 @@ TEST(TransformParserCss, ParseErrors) {
 TEST(TransformParserCss, Matrix) {
   EXPECT_THAT(parseAsCss("matrix(1, 2, 3, 4, 5, 6)"), ParseResultIs(TransformIs(1, 2, 3, 4, 5, 6)));
 
-  EXPECT_THAT(parseAsCss("matrix(1, 2, 3, 4, 5, 6)"), ParseResultIs(TransformIs(1, 2, 3, 4, 5, 6)))
+  EXPECT_THAT(parseAsCss("matrix(1, 2, 3, 4, 5, 6"), ParseResultIs(TransformIs(1, 2, 3, 4, 5, 6)))
       << "Function without ')' is permitted";
 
   EXPECT_THAT(parseAsCss("  matrix( 1 , 2 , 3,4, 5 ,6 ) "),
@@ -54,7 +56,14 @@ TEST(TransformParserCss, Matrix) {
               ParseResultIs(TransformIs(-1, -2, -3, -4, -5, -6)));
 }
 
-TEST(TransformParserCss, Matrix_ParseErrors) {
+TEST(TransformParserCss, MatrixCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("mAtRiX(1, 2, 3, 4, 5, 6)"), ParseResultIs(TransformIs(1, 2, 3, 4, 5, 6)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("Matrix(1, 2, 3, 4, 5, 6)"), ParseResultIs(TransformIs(1, 2, 3, 4, 5, 6)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, MatrixParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("matrix()"), ParseErrorIs("Not enough parameters"));
 
@@ -95,7 +104,14 @@ TEST(TransformParserCss, Translate) {
   EXPECT_THAT(parseAsCss("translate(-1px,-2px)"), ParseResultIs(TransformIs(1, 0, 0, 1, -1, -2)));
 }
 
-TEST(TransformParserCss, Translate_Units) {
+TEST(TransformParserCss, TranslateCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("tRaNsLaTe(2px)"), ParseResultIs(TransformIs(1, 0, 0, 1, 2, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("Translate(2px)"), ParseResultIs(TransformIs(1, 0, 0, 1, 2, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, TranslateUnits) {
   EXPECT_THAT(parseAsCss("translate(2em)"), ParseResultIs(TransformIs(1, 0, 0, 1, 32, 0)));
 
   EXPECT_THAT(parseAsCss("translate(50%, 75%)"), ParseResultIs(TransformIs(1, 0, 0, 1, 400, 450)));
@@ -104,7 +120,7 @@ TEST(TransformParserCss, Translate_Units) {
               ParseResultIs(TransformIs(1, 0, 0, 1, 96, 100)));
 }
 
-TEST(TransformParserCss, Translate_ParseErrors) {
+TEST(TransformParserCss, TranslateParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("translate()"), ParseErrorIs("Not enough parameters"));
 
@@ -143,7 +159,14 @@ TEST(TransformParserCss, TranslateX) {
       << "Function without ')' is permitted";
 }
 
-TEST(TransformParserCss, TranslateX_ParseErrors) {
+TEST(TransformParserCss, TranslateXCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("tRaNsLaTeX(2px)"), ParseResultIs(TransformIs(1, 0, 0, 1, 2, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("TranslateX(2px)"), ParseResultIs(TransformIs(1, 0, 0, 1, 2, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, TranslateXParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("translateX()"), ParseErrorIs("Not enough parameters"));
 
@@ -178,7 +201,14 @@ TEST(TransformParserCss, TranslateY) {
       << "Function without ')' is permitted";
 }
 
-TEST(TransformParserCss, TranslateY_ParseErrors) {
+TEST(TransformParserCss, TranslateYCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("tRaNsLaTeY(2px)"), ParseResultIs(TransformIs(1, 0, 0, 1, 0, 2)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("TranslateY(2px)"), ParseResultIs(TransformIs(1, 0, 0, 1, 0, 2)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, TranslateYParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("translateY()"), ParseErrorIs("Not enough parameters"));
 
@@ -219,7 +249,14 @@ TEST(TransformParserCss, Scale) {
   EXPECT_THAT(parseAsCss("scale(-1,-2)"), ParseResultIs(TransformIs(-1, 0, 0, -2, 0, 0)));
 }
 
-TEST(TransformParserCss, Scale_ParseErrors) {
+TEST(TransformParserCss, ScaleCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("sCaLe(2)"), ParseResultIs(TransformIs(2, 0, 0, 2, 0, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("Scale(2)"), ParseResultIs(TransformIs(2, 0, 0, 2, 0, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, ScaleParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("scale()"), ParseErrorIs("Not enough parameters"));
   EXPECT_THAT(parseAsCss("scale(,)"), ParseErrorIs("Expected a number"));
@@ -257,7 +294,14 @@ TEST(TransformParserCss, ScaleX) {
       << "Function without ')' is permitted";
 }
 
-TEST(TransformParserCss, ScaleX_ParseErrors) {
+TEST(TransformParserCss, ScaleXCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("sCaLeX(2)"), ParseResultIs(TransformIs(2, 0, 0, 1, 0, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("ScaleX(2)"), ParseResultIs(TransformIs(2, 0, 0, 1, 0, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, ScaleXParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("scaleX()"), ParseErrorIs("Not enough parameters"));
   EXPECT_THAT(parseAsCss("scaleX(,)"), ParseErrorIs("Expected a number"));
@@ -287,7 +331,14 @@ TEST(TransformParserCss, ScaleY) {
       << "Function without ')' is permitted";
 }
 
-TEST(TransformParserCss, ScaleY_ParseErrors) {
+TEST(TransformParserCss, ScaleYCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("sCaLeY(2)"), ParseResultIs(TransformIs(1, 0, 0, 2, 0, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("ScaleY(2)"), ParseResultIs(TransformIs(1, 0, 0, 2, 0, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, ScaleYParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("scaleY()"), ParseErrorIs("Not enough parameters"));
   EXPECT_THAT(parseAsCss("scaleY(,)"), ParseErrorIs("Expected a number"));
@@ -310,8 +361,6 @@ TEST(TransformParserCss, ScaleY_ParseErrors) {
 }
 
 TEST(TransformParserCss, Rotate) {
-  constexpr double kInvSqrt2 = MathConstants<double>::kInvSqrt2;
-
   EXPECT_THAT(parseAsCss("rotate(0)"), ParseResultIs(TransformIsIdentity()));
   EXPECT_THAT(parseAsCss("rotate(45deg)"),
               ParseResultIs(TransformIs(kInvSqrt2, kInvSqrt2, -kInvSqrt2, kInvSqrt2, 0, 0)));
@@ -323,14 +372,23 @@ TEST(TransformParserCss, Rotate) {
   EXPECT_THAT(parseAsCss("rotate( \t -90deg ) "), ParseResultIs(TransformIs(0, -1, 1, 0, 0, 0)));
 }
 
-TEST(TransformParserCss, Rotate_Units) {
+TEST(TransformParserCss, RotateCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("rOtAtE(45deg)"),
+              ParseResultIs(TransformIs(kInvSqrt2, kInvSqrt2, -kInvSqrt2, kInvSqrt2, 0, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("Rotate(45deg)"),
+              ParseResultIs(TransformIs(kInvSqrt2, kInvSqrt2, -kInvSqrt2, kInvSqrt2, 0, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, RotateUnits) {
   EXPECT_THAT(parseAsCss("rotate(0.5turn)"), ParseResultIs(TransformIs(-1, 0, 0, -1, 0, 0)));
   EXPECT_THAT(parseAsCss("rotate(3.14159265359rad)"),
               ParseResultIs(TransformIs(-1, 0, 0, -1, 0, 0)));
   EXPECT_THAT(parseAsCss("rotate(200grad)"), ParseResultIs(TransformIs(-1, 0, 0, -1, 0, 0)));
 }
 
-TEST(TransformParserCss, Rotate_ParseErrors) {
+TEST(TransformParserCss, RotateParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("rotate()"), ParseErrorIs("Not enough parameters"));
 
@@ -372,7 +430,14 @@ TEST(TransformParserCss, Skew) {
               ParseResultIs(TransformIs(1, -0.0349208, -0.0174551, 1, 0, 0)));
 }
 
-TEST(TransformParserCss, Skew_ParseErrors) {
+TEST(TransformParserCss, SkewCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("sKeW(45deg)"), ParseResultIs(TransformIs(1, 0, 1, 1, 0, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("Skew(45deg)"), ParseResultIs(TransformIs(1, 0, 1, 1, 0, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, SkewParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("skew()"), ParseErrorIs("Not enough parameters"));
   EXPECT_THAT(parseAsCss("skew(,)"), ParseErrorIs("Invalid angle"));
@@ -438,7 +503,14 @@ TEST(TransformParserCss, SkewX) {
   }
 }
 
-TEST(TransformParserCss, SkewX_ParseErrors) {
+TEST(TransformParserCss, SkewXCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("sKeWx(45deg)"), ParseResultIs(TransformIs(1, 0, 1, 1, 0, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("SkewX(45deg)"), ParseResultIs(TransformIs(1, 0, 1, 1, 0, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, SkewXParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("skewX()"), ParseErrorIs("Not enough parameters"));
 
@@ -492,7 +564,14 @@ TEST(TransformParserCss, SkewY) {
   }
 }
 
-TEST(TransformParserCss, SkewY_ParseErrors) {
+TEST(TransformParserCss, SkewYCaseInsensitive) {
+  EXPECT_THAT(parseAsCss("sKeWy(45deg)"), ParseResultIs(TransformIs(1, 1, 0, 1, 0, 0)))
+      << "Function name is case-insensitive";
+  EXPECT_THAT(parseAsCss("SkewY(45deg)"), ParseResultIs(TransformIs(1, 1, 0, 1, 0, 0)))
+      << "Function name is case-insensitive";
+}
+
+TEST(TransformParserCss, SkewYParseErrors) {
   // No parameters.
   EXPECT_THAT(parseAsCss("skewY()"), ParseErrorIs("Not enough parameters"));
 
@@ -528,6 +607,16 @@ TEST(TransformParserCss, MultiplicationOrder) {
     EXPECT_THAT(parseAsCss("translate(80px, 80px) scale(1.5, 1.5) \n rotate(45deg) "),
                 ParseResultIs(TransformEq(t)));
   }
+}
+
+TEST(TransformParserCss, CompositeCaseSensitivity) {
+  EXPECT_THAT(
+      parseAsCss("ScAlE(2) TrAnSlAtE(2px) RoTaTe(45deg)"),
+      ParseResultIs(TransformIs(2 * kInvSqrt2, 2 * kInvSqrt2, -2 * kInvSqrt2, 2 * kInvSqrt2, 4, 0)))
+      << "Function names are case-insensitive";
+  EXPECT_THAT(parseAsCss("sKeW(45deg) sKeWx(45deg) sKeWy(45deg)"),
+              ParseResultIs(TransformIs(1, 1, 2, 3, 0, 0)))
+      << "Function names are case-insensitive";
 }
 
 }  // namespace donner::svg::parser
