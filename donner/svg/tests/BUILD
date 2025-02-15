@@ -17,6 +17,7 @@ cc_test(
         "SVGPatternElement_tests.cc",
         "SVGRadialGradientElement_tests.cc",
         "SVGRectElement_tests.cc",
+        "SVGSymbolElement_tests.cc",
     ],
     deps = [
         ":parser_test_utils",

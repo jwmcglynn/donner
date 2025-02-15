@@ -31,6 +31,7 @@ enum class ElementType : uint8_t {
   Stop,            //!< \ref xml_stop, for gradient stops.
   Style,           //!< \ref xml_style
   SVG,             //!< \ref xml_svg, SVG root element.
+  Symbol,          //!< \ref xml_symbol
   Unknown,         //!< For unknown elements.
   Use,             //!< \ref xml_use
 };
@@ -104,6 +105,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Stop: return fn(std::integral_constant<ElementType, ElementType::Stop>());
     case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
     case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());
+    case ElementType::Symbol: return fn(std::integral_constant<ElementType, ElementType::Symbol>());
     case ElementType::Unknown:
       return fn(std::integral_constant<ElementType, ElementType::Unknown>());
     case ElementType::Use: return fn(std::integral_constant<ElementType, ElementType::Use>());

@@ -11,6 +11,7 @@ cc_library(
         "PatternComponent.cc",
         "RadialGradientComponent.cc",
         "StopComponent.cc",
+        "SymbolComponent.cc",
     ],
     hdrs = [
         "ClipPathComponent.h",
@@ -21,6 +22,7 @@ cc_library(
         "PatternComponent.h",
         "RadialGradientComponent.h",
         "StopComponent.h",
+        "SymbolComponent.h",
     ],
     visibility = [
         "//donner/svg/components:__subpackages__",

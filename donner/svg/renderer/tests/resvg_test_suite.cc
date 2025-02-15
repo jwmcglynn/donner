@@ -446,7 +446,10 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 
 // TODO: e-switch
-// TODO: e-symbol
+
+INSTANTIATE_TEST_SUITE_P(SymbolElement, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-symbol", {})), TestNameFromFilename);
+
 // TODO(text): e-text-
 // TODO(text): e-textPath
 // TODO(text): e-tspan

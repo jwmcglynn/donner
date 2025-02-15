@@ -787,6 +787,40 @@ std::optional<ParseError> ParseAttribute<SVGMarkerElement>(SVGParserContext& con
   return std::nullopt;
 }
 
+template <>
+std::optional<ParseError> ParseAttribute<SVGSymbolElement>(SVGParserContext& context,
+                                                           SVGSymbolElement element,
+                                                           const XMLQualifiedNameRef& name,
+                                                           std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
+  } else if (ParseViewBoxPreserveAspectRatio(context, element, name, value)) {
+    // Warning already added if there was an error.
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("refX")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setRefX(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid refX value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("refY")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setRefY(maybeNumber.value());
+    } else {
+      ParseError err;
+      err.reason = "Invalid refY value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
 template <size_t I = 0, typename... Types>
 std::optional<ParseError> ParseAttributesForElement(SVGParserContext& context, SVGElement& element,
                                                     const XMLQualifiedNameRef& name,

@@ -18,8 +18,6 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::LinearGradient: return os << "LinearGradient";
     case ElementType::Marker: return os << "Marker";
     case ElementType::Mask: return os << "Mask";
-    case ElementType::Use: return os << "Use";
-    case ElementType::SVG: return os << "SVG";
     case ElementType::Path: return os << "Path";
     case ElementType::Pattern: return os << "Pattern";
     case ElementType::Polygon: return os << "Polygon";
@@ -28,7 +26,10 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::Rect: return os << "Rect";
     case ElementType::Stop: return os << "Stop";
     case ElementType::Style: return os << "Style";
+    case ElementType::SVG: return os << "SVG";
+    case ElementType::Symbol: return os << "Symbol";
     case ElementType::Unknown: return os << "Unknown";
+    case ElementType::Use: return os << "Use";
   }
 
   UTILS_UNREACHABLE();
