@@ -29,7 +29,7 @@ public:
    * Note that these may not map 1:1 to the SVG path commands, as the commands are decomposed into
    * simpler curves.
    */
-  enum class CommandType {
+  enum class CommandType : uint8_t {
     /**
      * Move the starting point of the spline to a new point, creating a new subpath.
      *
@@ -226,11 +226,6 @@ public:
    * Returns the commands in the spline.
    */
   const std::vector<Command>& commands() const { return commands_; }
-
-  /**
-   * Returns the number of commands in the spline.
-   */
-  size_t size() const { return commands_.size(); }
 
   /**
    * Returns the length of the spline.

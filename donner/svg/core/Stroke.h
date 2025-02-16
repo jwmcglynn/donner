@@ -66,26 +66,68 @@ inline std::ostream& operator<<(std::ostream& os, StrokeLinejoin value) {
     case StrokeLinejoin::Arcs: return os << "arcs";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 /**
  * The parsed result of the 'stroke-dasharray' property, see:
  * https://www.w3.org/TR/SVG2/painting.html#StrokeDasharrayProperty
+ *
+ * This is a vector of lengths, where each length represents the length of a dash or gap in the
+ * stroke. The first length is the length of the first dash in the stroke, the second length is the
+ * length of the first gap, the third length is the length of the second dash, and so on.
+ *
+ * If the number of lengths is odd, the list of lengths is repeated to yield an even number of
+ * lengths.
  */
-using StrokeDasharray = std::vector<Lengthd>;
+class StrokeDasharray : private std::vector<Lengthd> {
+public:
+  // Use private inheritance and re-export the necessary methods to avoid inheriting the
+  // `operator<<`, so we can define our own ostream operator.
 
-/**
- * Ostream output operator for \ref StrokeDasharray enum, outputs the CSS value.
- */
-inline std::ostream& operator<<(std::ostream& os, const StrokeDasharray& value) {
-  for (size_t i = 0; i < value.size(); ++i) {
-    if (i > 0) {
-      os << ",";
+  using std::vector<Lengthd>::vector;
+
+  // Iterator methods.
+  using std::vector<Lengthd>::iterator;
+  using std::vector<Lengthd>::const_iterator;
+
+  using std::vector<Lengthd>::cbegin;
+  using std::vector<Lengthd>::cend;
+  using std::vector<Lengthd>::begin;
+  using std::vector<Lengthd>::end;
+
+  // Accessor methods.
+  using std::vector<Lengthd>::at;
+  using std::vector<Lengthd>::front;
+  using std::vector<Lengthd>::back;
+
+  using std::vector<Lengthd>::data;
+  using std::vector<Lengthd>::size;
+  using std::vector<Lengthd>::capacity;
+  using std::vector<Lengthd>::operator[];
+  using std::vector<Lengthd>::empty;
+
+  // Mutator methods.
+  using std::vector<Lengthd>::push_back;
+  using std::vector<Lengthd>::emplace_back;
+  using std::vector<Lengthd>::insert;
+  using std::vector<Lengthd>::erase;
+  using std::vector<Lengthd>::clear;
+  using std::vector<Lengthd>::reserve;
+  using std::vector<Lengthd>::resize;
+
+  /**
+   * Ostream output operator for \ref StrokeDasharray enum, outputs the CSS value.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const StrokeDasharray& value) {
+    for (size_t i = 0; i < value.size(); ++i) {
+      if (i > 0) {
+        os << ",";
+      }
+      os << value[i];
     }
-    os << value[i];
+    return os;
   }
-  return os;
-}
+};
 
 }  // namespace donner::svg

@@ -36,7 +36,7 @@ inline std::ostream& operator<<(std::ostream& os, const ClipRule& clipRule) {
     case ClipRule::EvenOdd: return os << "evenodd"; break;
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

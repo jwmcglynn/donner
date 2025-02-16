@@ -34,7 +34,7 @@ inline std::ostream& operator<<(std::ostream& os, Visibility value) {
     case Visibility::Collapse: return os << "collapse";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

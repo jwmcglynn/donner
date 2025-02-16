@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/css/Color.h"
+#include <cstdint>
 
 namespace donner::svg {
 
@@ -73,7 +73,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  */
-enum class PatternUnits {
+enum class PatternUnits : uint8_t {
   /// The pattern's x/y/width/height attributes are specified in the current user space where the
   /// pattern is referenced.
   UserSpaceOnUse,
@@ -154,7 +154,7 @@ enum class PatternUnits {
  * </svg>
  * \endhtmlonly
  */
-enum class PatternContentUnits {
+enum class PatternContentUnits : uint8_t {
   /// The children of the pattern are specified in the current user space where the pattern is
   /// referenced.
   UserSpaceOnUse,

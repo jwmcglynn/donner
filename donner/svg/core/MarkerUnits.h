@@ -14,7 +14,7 @@ namespace donner::svg {
  * This is used on the \ref xml_marker element, and defines the coordinate system for `markerWidth`,
  * `markerHeight`, and the contents of the marker.
  */
-enum class MarkerUnits {
+enum class MarkerUnits : uint8_t {
   /**
    * Marker scales to the stroke width. Defines a coordinate system where 1.0 is scaled to the
    * stroke-width of the shape.
@@ -39,7 +39,7 @@ inline std::ostream& operator<<(std::ostream& os, MarkerUnits units) {
     case MarkerUnits::UserSpaceOnUse: return os << "MarkerUnits::UserSpaceOnUse";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

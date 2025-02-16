@@ -15,7 +15,7 @@ namespace donner::svg {
  *
  * @see https://www.w3.org/TR/SVG2/interact.html#PointerEventsProp
  */
-enum class PointerEvents {
+enum class PointerEvents : uint8_t {
   None,            //!< Do not respond to pointer events.
   BoundingBox,     //!< The element's bounding box is used instead of the path.
   VisiblePainted,  //!< Responds to pointer events only if the element is visible and the pointer is
@@ -52,7 +52,7 @@ inline std::ostream& operator<<(std::ostream& os, PointerEvents value) {
     case PointerEvents::All: return os << "all";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

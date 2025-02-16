@@ -23,6 +23,7 @@ TEST(PreserveAspectRatio, AlignToString) {
   EXPECT_EQ("Align::XMidYMax", testing::PrintToString(PreserveAspectRatio::Align::XMidYMax));
   EXPECT_EQ("Align::XMaxYMax", testing::PrintToString(PreserveAspectRatio::Align::XMaxYMax));
 }
+
 TEST(PreserveAspectRatio, MeetOrSliceToString) {
   EXPECT_EQ(testing::PrintToString(PreserveAspectRatio::MeetOrSlice::Meet), "MeetOrSlice::Meet");
   EXPECT_EQ(testing::PrintToString(PreserveAspectRatio::MeetOrSlice::Slice), "MeetOrSlice::Slice");
@@ -272,6 +273,47 @@ TEST(PreserveAspectRatio, MinMaxSlice) {
     EXPECT_THAT(transformMax,
                 TransformEq(Transformd::Scale({0.5, 0.5}) * Transformd::Translate({0, -25})));
   }
+}
+
+TEST(PreserveAspectRatio, EqualityOperator) {
+  // Same align and meetOrSlice => should be equal.
+  const PreserveAspectRatio par1{PreserveAspectRatio::Align::XMidYMid,
+                                 PreserveAspectRatio::MeetOrSlice::Meet};
+  const PreserveAspectRatio par2{PreserveAspectRatio::Align::XMidYMid,
+                                 PreserveAspectRatio::MeetOrSlice::Meet};
+  EXPECT_EQ(par1, par2);
+
+  // Different align => not equal.
+  const PreserveAspectRatio par3{PreserveAspectRatio::Align::XMaxYMid,
+                                 PreserveAspectRatio::MeetOrSlice::Meet};
+  EXPECT_NE(par1, par3);
+
+  // Different meetOrSlice => not equal.
+  const PreserveAspectRatio par4{PreserveAspectRatio::Align::XMidYMid,
+                                 PreserveAspectRatio::MeetOrSlice::Slice};
+  EXPECT_NE(par1, par4);
+
+  // “None()” vs. explicit “none” => should be equal.
+  auto none1 = PreserveAspectRatio::None();
+  PreserveAspectRatio none2{PreserveAspectRatio::Align::None,
+                            PreserveAspectRatio::MeetOrSlice::Meet};
+  EXPECT_EQ(none1, none2);
+}
+
+TEST(PreserveAspectRatio, NoViewboxNonEmptySize) {
+  // If no viewBox is given, the doc says we apply a simple translation to the top-left of `size`.
+  // Let's pick a non-zero origin and a non-empty size to confirm that code path.
+  const Boxd size({10, 20}, {200, 100});
+  const PreserveAspectRatio par;  // default: XMidYMid + Meet
+
+  const auto transform = par.elementContentFromViewBoxTransform(size, std::nullopt);
+  // We expect the transform to be a pure translation to the new origin.
+  // That is, a matrix [1 0 Tx; 0 1 Ty].
+  EXPECT_THAT(transform, TransformEq(Transformd::Translate({10, 20})));
+
+  // Points should map exactly by adding the translation.
+  EXPECT_THAT(transform.transformPosition({0, 0}), Vector2Near(10, 20));
+  EXPECT_THAT(transform.transformPosition({100, 50}), Vector2Near(110, 70));
 }
 
 }  // namespace donner::svg

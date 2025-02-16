@@ -40,7 +40,7 @@ inline std::ostream& operator<<(std::ostream& os, ClipPathUnits units) {
     case ClipPathUnits::ObjectBoundingBox: return os << "objectBoundingBox";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

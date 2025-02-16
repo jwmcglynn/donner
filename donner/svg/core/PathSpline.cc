@@ -18,7 +18,7 @@ namespace {
 constexpr double kTolerance = 0.001;
 
 /// Maximum recursion depth to prevent infinite recursion in some algorithms.
-constexpr int kMaxRecursionDepth = 20;
+constexpr int kMaxRecursionDepth = 10;
 
 /// Used as a sentinel value for the moveToPointIndex_ when no MoveTo command has been issued.
 constexpr size_t kNPos = ~size_t(0);
@@ -378,15 +378,15 @@ Vector2d InterpolateTangents(const Vector2d& prevTangent, const Vector2d& nextTa
 
 }  // namespace
 
-// TODO: Move these later in the file
 std::ostream& operator<<(std::ostream& os, PathSpline::CommandType type) {
   switch (type) {
     case PathSpline::CommandType::MoveTo: os << "MoveTo"; break;
     case PathSpline::CommandType::LineTo: os << "LineTo"; break;
     case PathSpline::CommandType::CurveTo: os << "CurveTo"; break;
     case PathSpline::CommandType::ClosePath: os << "ClosePath"; break;
-    default: UTILS_RELEASE_ASSERT(false && "Invalid command");
+    default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
   }
+
   return os;
 }
 
@@ -394,43 +394,15 @@ std::ostream& operator<<(std::ostream& os, const PathSpline::Command& command) {
   return os << "Command {" << command.type << ", " << command.pointIndex << "}";
 }
 
-std::ostream& operator<<(std::ostream& os, const PathSpline& spline) {
-  os << "[\n";
-
-  // Iterate through the commands and output a summary
-  for (size_t i = 0; i < spline.commands().size(); ++i) {
-    const PathSpline::Command& cmd = spline.commands()[i];
-
-    os << "  " << i << ": " << spline.commands()[i].type << " ";
-    if (cmd.type == PathSpline::CommandType::MoveTo) {
-      os << spline.points()[cmd.pointIndex];
-    } else if (cmd.type == PathSpline::CommandType::LineTo) {
-      os << spline.points()[cmd.pointIndex];
-    } else if (cmd.type == PathSpline::CommandType::CurveTo) {
-      os << spline.points()[cmd.pointIndex] << ", " << spline.points()[cmd.pointIndex + 1] << ", "
-         << spline.points()[cmd.pointIndex + 2];
-    }
-    os << ",\n";
-  }
-
-  return os << "]\n";
-}
-
 void PathSpline::moveTo(const Vector2d& point) {
   // As an optimization, if the last command was a MoveTo replace it with the new point.
   if (!commands_.empty() && commands_.back().type == CommandType::MoveTo) {
     Command& lastCommand = commands_.back();
 
-    // If this is MoveTo has a unique point, overwrite it, otherwise insert a new point.
-    if (lastCommand.pointIndex + 1 == points_.size()) {
-      points_[lastCommand.pointIndex] = point;
-    } else {
-      const size_t pointIndex = points_.size();
-      points_.push_back(point);
-      lastCommand.pointIndex = pointIndex;
+    // The last moveTo should be a unique point, so we can safely replace it.
+    assert(lastCommand.pointIndex + 1 == points_.size());
 
-      moveToPointIndex_ = pointIndex;
-    }
+    points_[lastCommand.pointIndex] = point;
   } else {
     const size_t pointIndex = points_.size();
     const size_t commandIndex = commands_.size();
@@ -445,7 +417,7 @@ void PathSpline::moveTo(const Vector2d& point) {
 }
 
 void PathSpline::lineTo(const Vector2d& point) {
-  UTILS_RELEASE_ASSERT(moveToPointIndex_ != kNPos && "lineTo without calling moveTo first");
+  UTILS_RELEASE_ASSERT_MSG(moveToPointIndex_ != kNPos, "lineTo without calling moveTo first");
 
   maybeAutoReopen();
 
@@ -457,7 +429,7 @@ void PathSpline::lineTo(const Vector2d& point) {
 
 void PathSpline::curveTo(const Vector2d& control1, const Vector2d& control2,
                          const Vector2d& endPoint) {
-  UTILS_RELEASE_ASSERT(moveToPointIndex_ != kNPos && "curveTo without calling moveTo first");
+  UTILS_RELEASE_ASSERT_MSG(moveToPointIndex_ != kNPos, "curveTo without calling moveTo first");
 
   maybeAutoReopen();
 
@@ -470,7 +442,7 @@ void PathSpline::curveTo(const Vector2d& control1, const Vector2d& control2,
 
 void PathSpline::arcTo(const Vector2d& radius, double rotationRadians, bool largeArcFlag,
                        bool sweepFlag, const Vector2d& endPoint) {
-  UTILS_RELEASE_ASSERT(moveToPointIndex_ != kNPos && "arcTo without calling MoveTo first");
+  UTILS_RELEASE_ASSERT_MSG(moveToPointIndex_ != kNPos, "arcTo without calling MoveTo first");
 
   if (auto maybePath = DecomposeArcIntoCubic(currentPoint(), endPoint, radius, rotationRadians,
                                              largeArcFlag, sweepFlag)) {
@@ -479,12 +451,10 @@ void PathSpline::arcTo(const Vector2d& radius, double rotationRadians, bool larg
 }
 
 void PathSpline::closePath() {
-  UTILS_RELEASE_ASSERT((moveToPointIndex_ != kNPos || !commands_.empty()) &&
-                       "ClosePath without an open path");
-  if (currentSegmentStartCommandIndex_ == kNPos) {
-    // The path was already closed.
-    return;
-  }
+  UTILS_RELEASE_ASSERT_MSG(moveToPointIndex_ != kNPos || !commands_.empty(),
+                           "ClosePath without an open path");
+
+  assert(currentSegmentStartCommandIndex_ != kNPos);
 
   // Close the path, which will draw a line back to the start.
   const size_t commandIndex = commands_.size();
@@ -565,6 +535,7 @@ double PathSpline::pathLength() const {
         startPoint = points_[command.pointIndex];
         break;
       }
+      case CommandType::ClosePath: [[fallthrough]];
       case CommandType::LineTo: {
         const Vector2d& endPoint = points_[command.pointIndex];
         totalLength += startPoint.distance(endPoint);
@@ -579,9 +550,7 @@ double PathSpline::pathLength() const {
         startPoint = points_[command.pointIndex + 2];
         break;
       }
-      case CommandType::ClosePath:
-        // Optional: handle ClosePath if necessary
-        break;
+      default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
     }
   }
 
@@ -689,7 +658,7 @@ Boxd PathSpline::transformedBounds(const Transformd& pathFromTarget) const {
 
         break;
       }
-      default: UTILS_RELEASE_ASSERT_MSG(false, "Unhandled command");
+      default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
     }
   }
 
@@ -763,7 +732,7 @@ Boxd PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const 
         break;
       }
 
-      default: lastIndex = kNPos; break;
+      default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
     }
   }
 
@@ -777,10 +746,7 @@ Vector2d PathSpline::pointAt(size_t index, double t) const {
   const Command& command = commands_.at(index);
 
   switch (command.type) {
-    case CommandType::MoveTo: {
-      return points_[command.pointIndex];
-    }
-
+    case CommandType::MoveTo: return startPoint(index);
     case CommandType::LineTo: [[fallthrough]];
     case CommandType::ClosePath: {
       const Vector2d start = startPoint(index);
@@ -799,7 +765,7 @@ Vector2d PathSpline::pointAt(size_t index, double t) const {
              + 3.0 * t * t * rev_t * points_[command.pointIndex + 1]  // + 3 t^2 (1 - t) * p_2
              + t * t * t * points_[command.pointIndex + 2];           // + t^3 * p_3
     }
-    default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+    default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
   }
 }
 
@@ -858,7 +824,7 @@ Vector2d PathSpline::tangentAt(size_t index, double t) const {
         return derivative;
       }
     }
-    default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+    default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
   }
 }
 
@@ -967,7 +933,7 @@ std::vector<PathSpline::Vertex> PathSpline::vertices() const {
   // This is an open path, place the final vertex.
   if (openPathCommand && commands_.size() > 1) {
     const Vector2d point = pointAt(commands_.size() - 1, 1.0);
-    const Vector2d orientation = tangentAt(commands_.size() - 1, 1.0);
+    const Vector2d orientation = tangentAt(commands_.size() - 1, 1.0).normalize();
     vertices.push_back(Vertex{point, orientation});
   }
 
@@ -1023,7 +989,7 @@ bool PathSpline::isInside(const Vector2d& point, FillRule fillRule) const {
     return (windingNumber % 2) != 0;
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 bool PathSpline::isOnPath(const Vector2d& point, double strokeWidth) const {
@@ -1055,11 +1021,33 @@ bool PathSpline::isOnPath(const Vector2d& point, double strokeWidth) const {
         break;
       }
 
-      default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+      default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
     }
   }
 
   return false;
+}
+
+std::ostream& operator<<(std::ostream& os, const PathSpline& spline) {
+  os << "[\n";
+
+  // Iterate through the commands and output a summary
+  for (size_t i = 0; i < spline.commands().size(); ++i) {
+    const PathSpline::Command& cmd = spline.commands()[i];
+
+    os << "  " << i << ": " << spline.commands()[i].type << " ";
+    if (cmd.type == PathSpline::CommandType::MoveTo) {
+      os << spline.points()[cmd.pointIndex];
+    } else if (cmd.type == PathSpline::CommandType::LineTo) {
+      os << spline.points()[cmd.pointIndex];
+    } else if (cmd.type == PathSpline::CommandType::CurveTo) {
+      os << spline.points()[cmd.pointIndex] << ", " << spline.points()[cmd.pointIndex + 1] << ", "
+         << spline.points()[cmd.pointIndex + 2];
+    }
+    os << ",\n";
+  }
+
+  return os << "]\n";
 }
 
 Vector2d PathSpline::startPoint(size_t index) const {
@@ -1081,7 +1069,7 @@ Vector2d PathSpline::startPoint(size_t index) const {
       case CommandType::CurveTo: {
         return points_[prevCommand.pointIndex + 2];
       }
-      default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+      default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
     }
   }
 }
@@ -1099,7 +1087,7 @@ Vector2d PathSpline::endPoint(size_t index) const {
     case CommandType::CurveTo: {
       return points_[currentCommand.pointIndex + 2];
     }
-    default: UTILS_RELEASE_ASSERT(false && "Unhandled command");
+    default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
   }
 }
 

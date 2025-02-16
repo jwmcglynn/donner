@@ -22,55 +22,55 @@ TEST(LengthParser, TestHelpers) {
   result.consumedChars = 1;
   result.length.value = 2.0;
   result.length.unit = Lengthd::Unit::None;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 None, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Percent;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Percent, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2%, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Cm;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Cm, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2cm, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Mm;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Mm, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2mm, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Q;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Q, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2q, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::In;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 In, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2in, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Pc;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Pc, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2pc, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Pt;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Pt, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2pt, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Px;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Px, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2px, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Em;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Em, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2em, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Ex;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Ex, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2ex, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Ch;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Ch, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2ch, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Rem;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Rem, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2rem, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vw;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Vw, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2vw, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vh;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Vh, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2vh, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vmin;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Vmin, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2vmin, consumedChars: 1}");
 
   result.length.unit = Lengthd::Unit::Vmax;
-  EXPECT_EQ(testing::PrintToString(result), "Result {2 Vmax, consumedChars: 1}");
+  EXPECT_EQ(testing::PrintToString(result), "Result {2vmax, consumedChars: 1}");
 }
 
 TEST(LengthParser, Empty) {

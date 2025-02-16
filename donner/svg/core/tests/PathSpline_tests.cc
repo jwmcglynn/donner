@@ -31,6 +31,27 @@ constexpr Vector2d kVec4(1819.0, -2021.22);
 
 }  // namespace
 
+TEST(PathSpline, CommandTypeOstreamOutput) {
+  EXPECT_THAT(CommandType::MoveTo, ToStringIs("MoveTo"));
+  EXPECT_THAT(CommandType::LineTo, ToStringIs("LineTo"));
+  EXPECT_THAT(CommandType::CurveTo, ToStringIs("CurveTo"));
+  EXPECT_THAT(CommandType::ClosePath, ToStringIs("ClosePath"));
+}
+
+TEST(PathSpline, CommandOstreamOutput) {
+  EXPECT_THAT(Command(CommandType::MoveTo, 0), ToStringIs("Command {MoveTo, 0}"));
+  EXPECT_THAT(Command(CommandType::LineTo, 1), ToStringIs("Command {LineTo, 1}"));
+  EXPECT_THAT(Command(CommandType::CurveTo, 2), ToStringIs("Command {CurveTo, 2}"));
+  EXPECT_THAT(Command(CommandType::ClosePath, 3), ToStringIs("Command {ClosePath, 3}"));
+}
+
+TEST(PathSpline, DefaultConstruction) {
+  PathSpline spline;
+  EXPECT_TRUE(spline.empty());
+  EXPECT_THAT(spline.points(), SizeIs(0));
+  EXPECT_THAT(spline.commands(), SizeIs(0));
+}
+
 TEST(PathSpline, MoveTo) {
   PathSpline spline;
   spline.moveTo(kVec1);
@@ -72,6 +93,34 @@ TEST(PathSpline, MoveToUnused) {
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                           Command{CommandType::MoveTo, 2}));
+}
+
+/// @test that after closing a path, a subsequent lineTo auto‑reopens the subpath.
+TEST(PathSpline, AutoReopenOnLineTo) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.lineTo(Vector2d(10, 0));
+  spline.closePath();
+  // Without an explicit moveTo, lineTo should trigger an auto-reopen.
+  spline.lineTo(Vector2d(20, 0));
+
+  // Expected sequence:
+  //  - MoveTo (index 0, point (0,0))
+  //  - LineTo (index 1, point (10,0))
+  //  - ClosePath (using the original moveTo index)
+  //  - Auto-inserted MoveTo (with same point as original moveTo)
+  //  - LineTo (new point (20,0))
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command(CommandType::MoveTo, 0), Command(CommandType::LineTo, 1),
+                          Command(CommandType::ClosePath, 0), Command(CommandType::MoveTo, 0),
+                          Command(CommandType::LineTo, 2)));
+
+  // The points vector should not duplicate the auto-reopened moveTo point.
+  EXPECT_THAT(
+      spline.points(),
+      ElementsAre(Vector2d(0, 0), Vector2d(10, 0),  // From the initial segment
+                  Vector2d(20, 0)  // The next point should be the lineTo, not the auto moveTo.
+                  ));
 }
 
 TEST(PathSpline, LineTo) {
@@ -136,6 +185,7 @@ TEST(PathSpline, CurveToFailsWithoutStart) {
   EXPECT_DEATH(spline.curveTo(kVec1, kVec2, kVec3), "without calling moveTo");
 }
 
+/// @test simple usage of arcTo.
 TEST(PathSpline, ArcTo) {
   PathSpline spline;
   spline.moveTo(Vector2d(1.0, 0.0));
@@ -147,6 +197,7 @@ TEST(PathSpline, ArcTo) {
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1}));
 }
 
+/// @test arcTo with a the large arc flag, validating that it sweeps the larger arc.
 TEST(PathSpline, ArcToLargeArc) {
   PathSpline spline;
   spline.moveTo(Vector2d(1.0, 0.0));
@@ -157,6 +208,29 @@ TEST(PathSpline, ArcToLargeArc) {
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
                           Command{CommandType::CurveTo, 4}, Command{CommandType::CurveTo, 7}));
+}
+
+/// @test that calling arcTo with identical start and end points does nothing.
+TEST(PathSpline, ArcToDegenerate) {
+  PathSpline spline;
+  Vector2d pt(1, 1);
+  spline.moveTo(pt);
+  // With start == end the arc should not be decomposed into curves.
+  spline.arcTo(Vector2d(10, 10), 0.0, false, false, pt);
+  EXPECT_THAT(spline.points(), ElementsAre(pt));
+  EXPECT_THAT(spline.commands(), ElementsAre(Command(CommandType::MoveTo, 0)));
+}
+
+TEST(PathSpline, ArcToZeroRadius) {
+  // When the radius is zero, arcTo should fall back to a line segment.
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.arcTo(Vector2d(0, 0), 0.0, false, false, Vector2d(10, 0));
+
+  // Expect a simple line: one MoveTo and one LineTo command.
+  EXPECT_THAT(spline.points(), ElementsAre(Vector2d(0, 0), Vector2d(10, 0)));
+  EXPECT_THAT(spline.commands(), ElementsAre(Command(PathSpline::CommandType::MoveTo, 0),
+                                             Command(PathSpline::CommandType::LineTo, 1)));
 }
 
 TEST(PathSpline, ClosePath) {
@@ -171,7 +245,7 @@ TEST(PathSpline, ClosePath) {
                           Command{CommandType::ClosePath, 0}));
 }
 
-TEST(PathSpline, ClosePathNeedsModeToReopen) {
+TEST(PathSpline, ClosePathNeedsMoveToReopen) {
   PathSpline spline;
   spline.moveTo(kVec1);
   spline.lineTo(kVec2);
@@ -357,6 +431,39 @@ TEST(PathSpline, PathLengthCollinearControlPoints) {
   EXPECT_DOUBLE_EQ(spline.pathLength(), expectedLength);
 }
 
+TEST(PathSpline, PathLengthClosedPath) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.lineTo(Vector2d(1, 0));
+  spline.lineTo(Vector2d(1, 1));
+  spline.lineTo(Vector2d(0, 1));
+  spline.closePath();
+
+  // Calculate the expected length of the closed path
+  const double expectedLength = 4.0;
+  EXPECT_DOUBLE_EQ(spline.pathLength(), expectedLength);
+}
+
+TEST(PathSpline, PathLengthSubdivideExceedsMaxRecursion) {
+  PathSpline spline;
+  // Start at (0,0)
+  spline.moveTo(Vector2d(0.0, 0.0));
+  // Create an extremely “curvy” cubic Bezier curve:
+  //   p0 = (0,0)
+  //   p1 = (0,10000)  — a huge jump upward
+  //   p2 = (0,-10000) — a huge jump downward
+  //   p3 = (1,0)
+  //
+  // The chord from p0 to p3 is length 1.0. However, the control polygon has
+  // a very large length. This forces the recursion to never satisfy the flatness
+  // criterion, so eventually the function will hit the branch that returns the
+  // chord length.
+  spline.curveTo(Vector2d(0.0, 10000.0), Vector2d(0.0, -10000.0), Vector2d(1.0, 0.0));
+
+  // Because the maximum recursion depth is exceeded, a slightly inprecise value is returned.
+  EXPECT_NEAR(spline.pathLength(), 11547.003595164915, 1e-6);
+}
+
 TEST(PathSpline, BoundsEmptyFails) {
   PathSpline spline;
   EXPECT_DEATH(spline.bounds(), "!empty()");
@@ -465,6 +572,61 @@ TEST(PathSpline, TransformedBoundsEmptySpline) {
   PathSpline spline;
   const Transformd anyTransform = Transformd();
   EXPECT_DEATH(spline.transformedBounds(anyTransform), "!empty()");
+}
+
+/**
+ * @test that the bounds of a path with a degenerate x-extrema are correctly transformed.
+ */
+TEST(PathSpline, TransformedBoundsDegenerateXExtrema) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  // A cubic curve with a degenerate x-extrema at t=0.5.
+  // Using:
+  //   start = (0,0)
+  //   controlPoint1 = (1,1)
+  //   controlPoint2 = (1,2)
+  //   end = (0,0)
+  // yields:
+  //   a.x = 3 * (-0 + 3*1 - 3*1 + 0) = 0,
+  //   b.x = 6 * (0 + 1 - 2*1) = -6 (non-zero),
+  //   c.x = 3 * ( -0 + 1 ) = 3, so t = -c.x/b.x = 0.5.
+  spline.curveTo(Vector2d(1.0, 0.0), Vector2d(1.0, 0.0), Vector2d(0.0, 0.0));
+
+  // In the original coordinate space the curve reaches a maximum point at t=0.5
+  EXPECT_THAT(spline.pointAt(1, 0.5), Vector2Near(0.75, 0.0));
+
+  // Apply a 90-degree rotation about the origin.
+  const Transformd rotation90 = Transformd::Rotate(MathConstants<double>::kHalfPi);
+  const Boxd bounds = spline.transformedBounds(rotation90);
+  EXPECT_THAT(bounds, BoxEq(Vector2Near(0.0, 0.0), Vector2d(0.0, 0.75)));
+}
+
+/**
+ * @test that the bounds of a path with a degenerate y-extrema are correctly transformed.
+ */
+TEST(PathSpline, TransformedBoundsDegenerateYExtrema) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.0, 0.0));
+  // Create a cubic curve with a degenerate y-extrema.
+  // Using:
+  //   start = (0,0)
+  //   controlPoint1 = (1,1)
+  //   controlPoint2 = (2,1)
+  //   end = (0,0)
+  // yields:
+  //   a.y = 3 * (-0 + 3*1 - 3*1 + 0) = 0,
+  //   b.y = 6 * (0 + 1 - 2*1) = -6 (non-zero),
+  //   c.y = 3 * ( -0 + 1 ) = 3, so t = -c.y/b.y = 0.5.
+  spline.curveTo(Vector2d(0.0, 1.0), Vector2d(0.0, 1.0), Vector2d(0.0, 0.0));
+
+  // In the original coordinate space the curve reaches a maximum point at t=0.5
+  EXPECT_THAT(spline.pointAt(1, 0.5), Vector2Near(0.0, 0.75));
+
+  // Apply a 90-degree rotation about the origin (rotation: (x,y) -> (-y,x)).
+  const Transformd rotation90 = Transformd::Rotate(MathConstants<double>::kHalfPi);
+  const Boxd bounds = spline.transformedBounds(rotation90);
+
+  EXPECT_THAT(bounds, BoxEq(Vector2d(-0.75, 0.0), Vector2Near(0.0, 0.0)));
 }
 
 TEST(PathSpline, StrokeMiterBounds) {
@@ -776,6 +938,34 @@ TEST(PathSpline, TangentAt) {
   EXPECT_EQ(spline.tangentAt(9, 1.0), Vector2(0.0, 0.0));
 }
 
+/// @test that a degenerate cubic curve (with control points equal to the start)
+/// triggers the branch that adjusts the t value when the derivative is near zero.
+TEST(PathSpline, TangentAtDegenerateCurve) {
+  PathSpline spline;
+  const Vector2d start(0, 0), degenerate(0, 0), end(1, 0);
+  spline.moveTo(start);
+  spline.curveTo(degenerate, degenerate, end);
+
+  // Command index 1 is the CurveTo.
+  // For t = 0, the derivative is zero so the code adjusts to t = 0.01.
+  const Vector2d tangent0 = spline.tangentAt(1, 0.0);
+  const Vector2d tangentAdjusted = spline.tangentAt(1, 0.01);
+  EXPECT_THAT(tangent0.x, DoubleNear(tangentAdjusted.x, 1e-6));
+  EXPECT_THAT(tangent0.y, DoubleNear(tangentAdjusted.y, 1e-6));
+
+  // For this degenerate curve, the expected derivative at t=0.01 is approximately
+  // 3 * (0.01^2) * (end - degenerate) = (0.0003, 0).
+  EXPECT_NEAR(tangent0.x, 0.0003, 1e-6);
+  EXPECT_NEAR(tangent0.y, 0.0, 1e-6);
+}
+
+/// @test that calling tangentAt on a spline with only a MoveTo returns zero.
+TEST(PathSpline, TangentAtSingleMoveTo) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(5, 5));
+  EXPECT_EQ(spline.tangentAt(0, 0.0), Vector2d::Zero());
+}
+
 TEST(PathSpline, NormalAt) {
   //     (1, 2)
   //       /\           .-"""-.
@@ -977,7 +1167,7 @@ TEST(PathSpline, IsInsideMultipleSubpaths) {
   EXPECT_FALSE(spline.isInside(Vector2d(8.0, 8.0), FillRule::EvenOdd));
 }
 
-// Test for the 'appendJoin' method
+/// @test appendJoin with two simple paths, one ending at the start of the other.
 TEST(PathSpline, AppendJoin) {
   PathSpline spline1;
   spline1.moveTo(kVec1);
@@ -995,8 +1185,8 @@ TEST(PathSpline, AppendJoin) {
                           Command{CommandType::LineTo, 2}));
 }
 
-// appendJoin should remove the first moveTo, so if the start/stop points don't match there is a
-// change
+/// @test that appendJoin removes the first moveTo, so if the start/stop points don't match the path
+/// is still continuous.
 TEST(PathSpline, AppendJoinWithJump) {
   PathSpline spline1;
   spline1.moveTo(kVec1);
@@ -1014,6 +1204,41 @@ TEST(PathSpline, AppendJoinWithJump) {
                           Command{CommandType::LineTo, 2}));
 }
 
+/// @test that appending an empty spline leaves the original spline unchanged.
+TEST(PathSpline, AppendJoinEmpty) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+
+  PathSpline emptySpline;
+  spline.appendJoin(emptySpline);
+
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command(CommandType::MoveTo, 0), Command(CommandType::LineTo, 1)));
+}
+
+/// @test appendJoin with a second path that has multiple MoveTo commands.
+TEST(PathSpline, AppendJoinWithMultipleMoveTo) {
+  PathSpline spline1;
+  spline1.moveTo(kVec1);
+  spline1.lineTo(kVec2);
+
+  PathSpline spline2;
+  spline2.moveTo(kVec2);  // Should match end of spline1
+  spline2.lineTo(kVec3);
+  spline2.moveTo(kVec4);  // Second MoveTo creates new subpath
+  spline2.lineTo(kVec1);
+
+  spline1.appendJoin(spline2);
+
+  EXPECT_THAT(spline1.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4, kVec1));
+  EXPECT_THAT(spline1.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::LineTo, 2}, Command{CommandType::MoveTo, 3},
+                          Command{CommandType::LineTo, 4}));
+}
+
 TEST(PathSpline, VerticesSimple) {
   PathSpline spline;
   spline.moveTo(kVec1);
@@ -1022,6 +1247,15 @@ TEST(PathSpline, VerticesSimple) {
   spline.lineTo(kVec4);
 
   EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec3, kVec4));
+}
+
+TEST(PathSpline, VerticesOstreamOutput) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.lineTo(Vector2d(3.0, 4.0));
+
+  EXPECT_THAT(spline.vertices(), ToStringIs("{ Vertex(point=(0, 0), orientation=(0.6, 0.8)), "
+                                            "Vertex(point=(3, 4), orientation=(0.6, 0.8)) }"));
 }
 
 TEST(PathSpline, VerticesWithJump) {
@@ -1069,6 +1303,86 @@ TEST(PathSpline, VerticesArc) {
                Vector2d(5.0, 0.0));
 
   EXPECT_THAT(spline.vertices(), VertexPointsAre(Vector2d(0.0, 0.0), Vector2Near(5.0, 0.0)));
+}
+
+/// @test that isOnPath works for a simple line segment.
+TEST(PathSpline, IsOnPathLine) {
+  // Create a simple horizontal line from (0,0) to (10,0)
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.lineTo(Vector2d(10, 0));
+
+  // Exactly on the line.
+  EXPECT_TRUE(spline.isOnPath(Vector2d(5, 0), 0.001));
+
+  // Within stroke tolerance.
+  EXPECT_TRUE(spline.isOnPath(Vector2d(5, 0.05), 0.1));
+
+  // Outside the stroke tolerance.
+  EXPECT_FALSE(spline.isOnPath(Vector2d(5, 0.2), 0.1));
+}
+
+/// @test that isOnPath works for a cubic Bezier curve.
+TEST(PathSpline, IsOnPathCurve) {
+  // Create a cubic Bezier curve:
+  // p0 = (0,0), p1 = (5,0), p2 = (5,10), p3 = (0,10)
+  // The midpoint of this curve can be computed (for t=0.5) as:
+  // B(0.5) = (3.75, 5.0)
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.curveTo(Vector2d(5, 0), Vector2d(5, 10), Vector2d(0, 10));
+
+  // Test a point exactly on the curve (at t=0.5).
+  EXPECT_TRUE(spline.isOnPath(Vector2d(3.75, 5.0), 0.1));
+
+  // Test a point that is near—but not on—the curve.
+  EXPECT_FALSE(spline.isOnPath(Vector2d(3.9, 5.0), 0.1));
+}
+
+/// @test isOnPath for multiple line segments.
+TEST(PathSpline, IsOnPathMultiSegment) {
+  // Create a triangle:
+  //   (0,0) -> (5,0) -> (2.5,5) -> back to (0,0)
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.lineTo(Vector2d(5, 0));
+  spline.lineTo(Vector2d(2.5, 5));
+  spline.closePath();
+
+  // Test a point on the base edge.
+  EXPECT_TRUE(spline.isOnPath(Vector2d(2.5, 0), 0.001));
+
+  // Test a point on the edge from (5,0) to (2.5,5) – linear interpolation yields (3.75,2.5) at
+  // t=0.5.
+  EXPECT_TRUE(spline.isOnPath(Vector2d(3.75, 2.5), 0.001));
+
+  // Test a point on the closePath edge.
+  // Test a point on the edge from (2.5,5) back to (0,0) – linear interpolation yields (1.25,2.5) at
+  // t=0.5.
+  EXPECT_TRUE(spline.isOnPath(Vector2d(1.25, 2.5), 0.001));
+
+  // A point not on any edge.
+  EXPECT_FALSE(spline.isOnPath(Vector2d(2.5, 2), 0.001));
+}
+
+/// @test isOnPath if the path only has a moveTo command.
+TEST(PathSpline, IsOnPathMoveToOnly) {
+  // When the path contains only a MoveTo, there is no segment to be on.
+  PathSpline spline;
+  spline.moveTo(Vector2d(1, 1));
+  EXPECT_FALSE(spline.isOnPath(Vector2d(1, 1), 0.1));
+}
+
+/// @test isOnPath with no stroke width.
+TEST(PathSpline, IsOnPathZeroStrokeWidth) {
+  // With a strokeWidth of zero, only a point exactly on the segment qualifies.
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.lineTo(Vector2d(10, 0));
+
+  EXPECT_TRUE(spline.isOnPath(Vector2d(5, 0), 0.0));
+  // Even a very small deviation should fail.
+  EXPECT_FALSE(spline.isOnPath(Vector2d(5, 0.0001), 0.0));
 }
 
 }  // namespace donner::svg

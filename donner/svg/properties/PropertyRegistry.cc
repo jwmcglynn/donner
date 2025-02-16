@@ -6,6 +6,7 @@
 
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/svg/core/Stroke.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
@@ -291,10 +292,9 @@ ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentVa
   return err;
 }
 
-ParseResult<std::vector<Lengthd>> ParseStrokeDasharray(
-    std::span<const css::ComponentValue> components) {
+ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::ComponentValue> components) {
   // https://www.w3.org/TR/css-values-4/#mult-comma
-  std::vector<Lengthd> result;
+  StrokeDasharray result;
 
   auto trySkipToken = [&components]<typename T>() -> bool {
     if (!components.empty() && components.front().isToken<T>()) {

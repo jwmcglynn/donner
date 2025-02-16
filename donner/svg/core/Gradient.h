@@ -17,7 +17,7 @@ namespace donner::svg {
  * - For radial gradients, this defines the coordinate system for attributes `cx`, `cy`, `r`, `fx`,
  *   `fy`, and `fr`.
  */
-enum class GradientUnits {
+enum class GradientUnits : uint8_t {
   /**
    * The gradient is defined in user space, which is the coordinate system of the element that
    * references the gradient.
@@ -69,7 +69,7 @@ enum class GradientUnits {
  * </svg>
  * \endhtmlonly
  */
-enum class GradientSpreadMethod {
+enum class GradientSpreadMethod : uint8_t {
   Pad,            ///< The gradient is filled with the start or end color.
   Reflect,        ///< The gradient is reflected at the start or end.
   Repeat,         ///< The gradient is repeated at the start or end.

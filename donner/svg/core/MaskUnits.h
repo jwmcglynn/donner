@@ -14,7 +14,7 @@ namespace donner::svg {
  * This is used on the \ref xml_mask element, and defines the coordinate system for the `x`, `y`,
  * `width`, and `height` attributes of the mask.
  */
-enum class MaskUnits {
+enum class MaskUnits : uint8_t {
   /**
    * The attributes are defined in user space, which is the coordinate system of the element that
    * references the mask.
@@ -39,7 +39,7 @@ inline std::ostream& operator<<(std::ostream& os, MaskUnits units) {
     case MaskUnits::ObjectBoundingBox: return os << "MaskUnits::ObjectBoundingBox";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 /**
@@ -49,7 +49,7 @@ inline std::ostream& operator<<(std::ostream& os, MaskUnits units) {
  * This is used on the \ref xml_mask element, and defines the coordinate system for the contents of
  * the mask.
  */
-enum class MaskContentUnits {
+enum class MaskContentUnits : uint8_t {
   /**
    * The mask contents are defined in user space, which is the coordinate system of the element that
    * references the mask.
@@ -75,7 +75,7 @@ inline std::ostream& operator<<(std::ostream& os, MaskContentUnits units) {
     case MaskContentUnits::ObjectBoundingBox: return os << "MaskContentUnits::ObjectBoundingBox";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

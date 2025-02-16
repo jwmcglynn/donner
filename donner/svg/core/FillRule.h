@@ -32,7 +32,7 @@ inline std::ostream& operator<<(std::ostream& os, FillRule value) {
     case FillRule::EvenOdd: return os << "evenodd";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

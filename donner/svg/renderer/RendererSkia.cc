@@ -877,7 +877,7 @@ public:
       }
 
       // Use getRequiredRef to avoid copying the vector on access.
-      const std::vector<Lengthd>& dashes = style.strokeDasharray.getRequiredRef();
+      const StrokeDasharray& dashes = style.strokeDasharray.getRequiredRef();
 
       // We need to repeat if there are an odd number of values, Skia requires an even number
       // of dash lengths.
@@ -894,7 +894,7 @@ public:
       }
 
       skPaint.setPathEffect(SkDashPathEffect::Make(
-          skiaDashes.data(), skiaDashes.size(),
+          skiaDashes.data(), static_cast<int>(skiaDashes.size()),
           static_cast<SkScalar>(
               style.strokeDashoffset.get().value().toPixels(viewbox, fontMetrics) *
               dashUnitsScale)));

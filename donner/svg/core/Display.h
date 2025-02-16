@@ -69,7 +69,7 @@ inline std::ostream& operator<<(std::ostream& os, Display value) {
     case Display::None: return os << "none";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

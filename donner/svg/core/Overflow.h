@@ -23,7 +23,7 @@ namespace donner::svg {
  * In SVG, the 'overflow' property applies to container elements and determines how to handle
  * content that exceeds the bounds of the viewport.
  */
-enum class Overflow {
+enum class Overflow : uint8_t {
   Visible,  ///< [DEFAULT] "visible": Content is not clipped, and may render outside the box.
   Hidden,   ///< "hidden": Content is clipped, and no scrollbars are provided.
   Scroll,   ///< "scroll": Content is clipped, but scrollbars are provided to scroll the content.
@@ -42,7 +42,7 @@ inline std::ostream& operator<<(std::ostream& os, Overflow value) {
     case Overflow::Auto: return os << "auto";
   }
 
-  UTILS_UNREACHABLE();
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 }  // namespace donner::svg

@@ -17,7 +17,17 @@ namespace donner {
  * @param expected Expected string representation.
  */
 MATCHER_P(ToStringIs, expected, "") {
-  const std::string argString = testing::PrintToString(arg);
+  // If the object has an ostream operator, use it to convert to a string. Otherwise callback to
+  // `testing::PrintToString`.
+  std::string argString;
+  if constexpr (requires(std::ostream& os, const decltype(arg)& a) { os << a; }) {
+    std::ostringstream ss;
+    ss << arg;
+    argString = ss.str();
+  } else {
+    argString = testing::PrintToString(arg);
+  }
+
   const std::string expectedString = expected;
 
   const bool result = argString == expected;

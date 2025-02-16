@@ -11,7 +11,7 @@ namespace donner {
  * The unit identifier for a length, corresponding to CSS unit identifiers.
  * See https://www.w3.org/TR/css-values-3/#lengths for definitions.
  */
-enum class LengthUnit {
+enum class LengthUnit : uint8_t {
   None,     ///< Unitless.
   Percent,  ///< Percentage, using the '\%' symbol.
 
@@ -37,26 +37,26 @@ enum class LengthUnit {
          ///< height.
 };
 
-/// OStream output operator, writes the enum value as a stream, e.g. `Percent` or `Px`.
+/// OStream output operator, writes the CSS unit identifier to the stream, e.g. `%` or `px`.
 inline std::ostream& operator<<(std::ostream& os, LengthUnit unit) {
   switch (unit) {
-    case LengthUnit::None: return os << "None";
-    case LengthUnit::Percent: return os << "Percent";
-    case LengthUnit::Cm: return os << "Cm";
-    case LengthUnit::Mm: return os << "Mm";
-    case LengthUnit::Q: return os << "Q";
-    case LengthUnit::In: return os << "In";
-    case LengthUnit::Pc: return os << "Pc";
-    case LengthUnit::Pt: return os << "Pt";
-    case LengthUnit::Px: return os << "Px";
-    case LengthUnit::Em: return os << "Em";
-    case LengthUnit::Ex: return os << "Ex";
-    case LengthUnit::Ch: return os << "Ch";
-    case LengthUnit::Rem: return os << "Rem";
-    case LengthUnit::Vw: return os << "Vw";
-    case LengthUnit::Vh: return os << "Vh";
-    case LengthUnit::Vmin: return os << "Vmin";
-    case LengthUnit::Vmax: return os << "Vmax";
+    case LengthUnit::None: return os << "";
+    case LengthUnit::Percent: return os << "%";
+    case LengthUnit::Cm: return os << "cm";
+    case LengthUnit::Mm: return os << "mm";
+    case LengthUnit::Q: return os << "q";
+    case LengthUnit::In: return os << "in";
+    case LengthUnit::Pc: return os << "pc";
+    case LengthUnit::Pt: return os << "pt";
+    case LengthUnit::Px: return os << "px";
+    case LengthUnit::Em: return os << "em";
+    case LengthUnit::Ex: return os << "ex";
+    case LengthUnit::Ch: return os << "ch";
+    case LengthUnit::Rem: return os << "rem";
+    case LengthUnit::Vw: return os << "vw";
+    case LengthUnit::Vh: return os << "vh";
+    case LengthUnit::Vmin: return os << "vmin";
+    case LengthUnit::Vmax: return os << "vmax";
   }
 
   UTILS_UNREACHABLE();
@@ -137,7 +137,7 @@ struct Length {
    * Selects which extent of the viewbox to use for percentage and viewbox-relative length
    * conversions, see \ref toPixels().
    */
-  enum class Extent {
+  enum class Extent : uint8_t {
     X,     ///< Use X component of viewbox for percentage calculations.
     Y,     ///< Use Y component of viewbox for percentage calculations.
     Mixed  ///< Use diagonal extent of viewbox.
@@ -194,7 +194,7 @@ struct Length {
    * @return The ostream that was written to, for chaining.
    */
   friend std::ostream& operator<<(std::ostream& os, const Length<T>& length) {
-    return os << length.value << " " << length.unit;
+    return os << length.value << length.unit;
   }
 
 private:
