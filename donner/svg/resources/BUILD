@@ -24,18 +24,18 @@ cc_library(
 )
 
 cc_library(
-    name = "image_loader",
+    name = "url_loader",
     srcs = [
         "Base64.cc",
-        "ImageLoader.cc",
+        "UrlDecode.cc",
+        "UrlLoader.cc",
     ],
     hdrs = [
         "Base64.h",
-        "ImageLoader.h",
+        "UrlDecode.h",
+        "UrlLoader.h",
     ],
-    visibility = ["//donner/svg:__subpackages__"],
     deps = [
-        ":image_resource",
         ":resource_loader_interface",
         "//donner/base",
         "//donner/base/parser",
@@ -43,11 +43,33 @@ cc_library(
     ],
 )
 
-cc_test(
-    name = "base64_tests",
-    srcs = ["tests/Base64_tests.cc"],
+cc_library(
+    name = "image_loader",
+    srcs = [
+        "ImageLoader.cc",
+    ],
+    hdrs = [
+        "ImageLoader.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
     deps = [
-        ":image_loader",
+        ":image_resource",
+        ":url_loader",
+        "//donner/base",
+        "//donner/base/parser",
+        "@stb//:image",
+    ],
+)
+
+cc_test(
+    name = "url_loader_tests",
+    srcs = [
+        "tests/Base64_tests.cc",
+        "tests/UrlDecode_tests.cc",
+        "tests/UrlLoader_tests.cc",
+    ],
+    deps = [
+        ":url_loader",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],

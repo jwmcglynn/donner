@@ -32,10 +32,10 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
     ImageLoader imageLoader(*loader_);
 
     auto maybeImageData = imageLoader.fromUri(image.href);
-    if (std::holds_alternative<ImageLoaderError>(maybeImageData)) {
+    if (std::holds_alternative<UrlLoaderError>(maybeImageData)) {
       if (outWarnings) {
         ParseError err;
-        err.reason = std::string(ToString(std::get<ImageLoaderError>(maybeImageData)));
+        err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeImageData)));
 
         outWarnings->emplace_back(std::move(err));
       }
@@ -71,7 +71,7 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
   ImageLoader imageLoader(*loader_);
 
   auto maybeImageData = imageLoader.fromUri(image->href);
-  if (std::holds_alternative<ImageLoaderError>(maybeImageData)) {
+  if (std::holds_alternative<UrlLoaderError>(maybeImageData)) {
     // TODO: Plumb loading error out.
     // Until a warning is plumbed, avoid creating an empty LoadedImageComponent (like in
     // loadResources). This will avoid silent failures as this will be reattempted in loadResources,

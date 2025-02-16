@@ -56,7 +56,7 @@ ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String
     accumulator = (accumulator << 6) + base64Value;
     bitCount += 6;
     if (bitCount >= 0) {
-      decodedData.push_back((accumulator >> bitCount) & 0xFF);
+      decodedData.push_back(static_cast<uint8_t>((accumulator >> bitCount) & 0xFF));
       bitCount -= 8;
     }
   }

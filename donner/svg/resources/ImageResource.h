@@ -5,6 +5,7 @@
 
 namespace donner::svg {
 
+/// Contains a decoded image resource in RGBA format.
 struct ImageResource {
   /// Pixel data in RGBA format.
   std::vector<uint8_t> data;

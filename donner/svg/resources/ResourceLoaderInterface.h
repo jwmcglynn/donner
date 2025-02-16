@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -8,7 +9,7 @@
 namespace donner::svg {
 
 /// Error codes for resource loading.
-enum class ResourceLoaderError {
+enum class ResourceLoaderError : uint8_t {
   NotFound,          //!< File not found.
   SandboxViolation,  //!< File access violation, such as attempting to access a file outside the
                      //!< sandbox.

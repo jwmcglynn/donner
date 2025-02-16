@@ -1,33 +1,10 @@
 #pragma once
 /// @file
 
-#include "donner/base/Utils.h"
 #include "donner/svg/resources/ImageResource.h"
-#include "donner/svg/resources/ResourceLoaderInterface.h"
+#include "donner/svg/resources/UrlLoader.h"
 
 namespace donner::svg {
-
-/**
- * Enum of possible errors that can occur when loading an image.
- */
-enum class ImageLoaderError {
-  NotFound,           ///< The file was not found.
-  UnsupportedFormat,  ///< The image format is not supported (mime type must be either "image/png"
-                      ///< or "image/jpeg").
-  InvalidDataUrl,     ///< The data URL is invalid.
-  ImageCorrupt,       ///< The image data is corrupt.
-};
-
-inline std::string_view ToString(ImageLoaderError err) {
-  switch (err) {
-    case ImageLoaderError::NotFound: return "File not found";
-    case ImageLoaderError::UnsupportedFormat: return "Unsupported format";
-    case ImageLoaderError::InvalidDataUrl: return "Invalid data URL";
-    case ImageLoaderError::ImageCorrupt: return "Image corrupted";
-  }
-
-  UTILS_UNREACHABLE();
-}
 
 /**
  * Utility class for loading images from a URI.
@@ -39,7 +16,7 @@ public:
    *
    * @param resourceLoader Resource loader to use for fetching external resources.
    */
-  explicit ImageLoader(ResourceLoaderInterface& resourceLoader) : resourceLoader_(resourceLoader) {}
+  explicit ImageLoader(ResourceLoaderInterface& resourceLoader) : urlLoader_(resourceLoader) {}
 
   /// Destructor.
   ~ImageLoader() = default;
@@ -55,12 +32,13 @@ public:
    * "data:image/png;base64,...").
    *
    * @param uri URI of the image, or data URL containing a base64 embedded image.
+   * @return A variant containing either the loaded ImageResource or an UrlLoaderError.
    */
-  std::variant<ImageResource, ImageLoaderError> fromUri(std::string_view uri);
+  std::variant<ImageResource, UrlLoaderError> fromUri(std::string_view uri);
 
 private:
-  /// Resource loader to use for fetching external resources.
-  ResourceLoaderInterface& resourceLoader_;  // NOLINT
+  /// Loader used for decoding the data URL or fetching the external resources.
+  UrlLoader urlLoader_;
 };
 
 }  // namespace donner::svg

@@ -38,6 +38,12 @@ TEST_F(SandboxedFileResourceLoaderTests, LoadFileFromRoot) {
   EXPECT_THAT(data, testing::VariantWith<std::vector<uint8_t>>(testing::ElementsAreArray("test")));
 }
 
+TEST_F(SandboxedFileResourceLoaderTests, RootDoesNotExit) {
+  EXPECT_DEATH(
+      { SandboxedFileResourceLoader loader(root_ / "doesnotexist", root_ / "doc.svg"); },
+      "Root directory does not exist");
+}
+
 TEST_F(SandboxedFileResourceLoaderTests, LoadFileFromSubdirectory) {
   std::filesystem::create_directories(root_ / "subdir");
   createTestFileUnder(root_ / "subdir", "test.txt");
