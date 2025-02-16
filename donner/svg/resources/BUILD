@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer")
 
 cc_library(
     name = "sandboxed_file_resource_loader",
@@ -81,5 +82,16 @@ cc_test(
     deps = [
         ":sandboxed_file_resource_loader",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "url_loader_fuzzer",
+    srcs = [
+        "tests/UrlLoader_fuzzer.cc",
+    ],
+    corpus = "tests/url_loader_corpus",
+    deps = [
+        ":url_loader",
     ],
 )
