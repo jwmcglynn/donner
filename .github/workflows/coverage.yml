@@ -42,11 +42,15 @@ jobs:
             --nocache_test_results \
             //donner/...
 
+      - name: Filter coverage
+        run: |
+          python3 tools/filter_coverage.py --input $(bazelisk info output_path)/_coverage/_coverage_report.dat --output ./filtered_report.dat
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./bazel-out/_coverage/_coverage_report.dat
+          files: ./filtered_report.dat
           flags: unittests
           fail_ci_if_error: true
           verbose: true
