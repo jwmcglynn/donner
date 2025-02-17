@@ -3,16 +3,17 @@
 Script to filter out LCOV exclusion ranges from an LCOV file based on LCOV annotations in source files.
 Only LCOV_EXCL_START and LCOV_EXCL_STOP annotations are supported.
 Now also updates summary counters so that excluded lines are marked as non‑executable.
+Also filters out multiline C++ comment lines.
 """
 
 import argparse
 import os
 import re
 import sys
-from typing import List
+from typing import List, Tuple
 
 def is_empty_line(line: str) -> bool:
-    """Check if a line is empty, such as a comment-only line."""
+    """Check if a line is empty, or is a single-line comment starting with //."""
     line = line.strip()
     return len(line) == 0 or line.startswith("//")
 
@@ -27,11 +28,12 @@ class LineRange:
         self.end = end
 
 class SourceFilter:
-    """Filters source file lines based on LCOV exclusion annotations.
+    """Filters source file lines based on LCOV exclusion annotations and comment-only lines.
 
     This class parses a source file to determine the line ranges that are marked for exclusion
     using LCOV_EXCL_START and LCOV_EXCL_STOP annotations. It also handles single line exclusions
-    marked with LCOV_EXCL_LINE, UTILS_UNREACHABLE(), or empty lines.
+    marked with LCOV_EXCL_LINE, UTILS_UNREACHABLE(), empty lines, and lines that are solely part of
+    a multiline C++ comment.
 
     Args:
         source_path (str): Path to the source file to be parsed
@@ -45,12 +47,46 @@ class SourceFilter:
         - LCOV_EXCL_START marks the beginning of a multi-line exclusion block
         - LCOV_EXCL_STOP marks the end of a multi-line exclusion block
         - LCOV_EXCL_LINE marks a single line for exclusion
-        - Empty lines are automatically excluded
+        - Empty lines and lines that are entirely a comment (including multiline comments) are excluded
     """
     def __init__(self, source_path: str, verbose: bool = False) -> None:
         self._no_cov_ranges: List[LineRange] = []
         self._verbose = verbose
         self._parse_source(source_path)
+
+    @staticmethod
+    def _check_multiline_comment(source_line: str, in_multiline: bool) -> Tuple[bool, bool]:
+        """
+        Check whether the given source line is entirely part of a multiline C++ comment.
+
+        Returns a tuple (is_comment, new_in_multiline) where:
+         - is_comment is True if the entire line should be considered comment-only.
+         - new_in_multiline reflects the updated state after processing this line.
+        """
+        stripped = source_line.strip()
+        if in_multiline:
+            # Already inside a multiline comment.
+            if "*/" in stripped:
+                # End of comment block found.
+                idx = stripped.find("*/")
+                after = stripped[idx+2:].strip()
+                # If nothing follows the closing marker, treat the whole line as comment.
+                return (after == "", False)
+            else:
+                return (True, True)
+        else:
+            # Not in a multiline comment.
+            if stripped.startswith("/*"):
+                if "*/" in stripped:
+                    # Single-line multiline comment.
+                    idx = stripped.find("*/")
+                    after = stripped[idx+2:].strip()
+                    return (after == "", False)
+                else:
+                    # Multiline comment begins here.
+                    return (True, True)
+            else:
+                return (False, False)
 
     def _parse_source(self, source_path: str) -> None:
         """Parse the source file and build a list of exclusion ranges."""
@@ -64,23 +100,29 @@ class SourceFilter:
             print(f"Processing source file: {source_path}")
 
         in_exclusion = False
+        in_multiline_comment = False
         start_line = 0
         for line_number, source_line in enumerate(source_lines, start=1):
             if "LCOV_EXCL_START" in source_line:
                 start_line = line_number
                 in_exclusion = True
             elif "LCOV_EXCL_STOP" in source_line:
-                # Add the range from start (inclusive) to stop (exclusive)
                 if in_exclusion:
+                    # Add the range from start (inclusive) to stop (exclusive)
                     self._no_cov_ranges.append(LineRange(start_line, line_number))
-
                     if self._verbose:
                         print(f"Exclusion range {source_path}: {start_line} - {line_number}")
                     in_exclusion = False
-            elif "LCOV_EXCL_LINE" in source_line or "UTILS_UNREACHABLE()" in source_line or is_empty_line(source_line):
-                # Add a single line exclusion if not in an exclusion block
-                if not in_exclusion:
-                    self._no_cov_ranges.append(LineRange(line_number, line_number + 1))
+            else:
+                # Check for single line exclusions: explicit markers, unreachable code, or empty lines.
+                if "LCOV_EXCL_LINE" in source_line or "UTILS_UNREACHABLE()" in source_line or is_empty_line(source_line):
+                    if not in_exclusion:
+                        self._no_cov_ranges.append(LineRange(line_number, line_number + 1))
+                else:
+                    # Check for lines that are entirely within a multiline comment.
+                    comment_exclusion, in_multiline_comment = SourceFilter._check_multiline_comment(source_line, in_multiline_comment)
+                    if comment_exclusion and not in_exclusion:
+                        self._no_cov_ranges.append(LineRange(line_number, line_number + 1))
 
     def is_no_cov(self, line_number: int) -> bool:
         """Determine whether a given line number is within an exclusion range.
