@@ -63,7 +63,7 @@ fi
     genhtml --quiet coverage-report/filtered_report.dat $GENHTML_OPTIONS
   else
     bazel coverage --config=latest_llvm $BAZEL_TEST_ENV $TARGETS
-    python3 tools/filter_coverage.py --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
+    python3 tools/filter_coverage.py --verbose --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
     genhtml coverage-report/filtered_report.dat $GENHTML_OPTIONS
   fi
 )

@@ -30,10 +30,26 @@ class SourceFilter:
     """Filters source file lines based on LCOV exclusion annotations.
 
     This class parses a source file to determine the line ranges that are marked for exclusion
-    using LCOV_EXCL_START and LCOV_EXCL_STOP annotations.
+    using LCOV_EXCL_START and LCOV_EXCL_STOP annotations. It also handles single line exclusions
+    marked with LCOV_EXCL_LINE, UTILS_UNREACHABLE(), or empty lines.
+
+    Args:
+        source_path (str): Path to the source file to be parsed
+        verbose (bool, optional): If True, print debug information. Defaults to False.
+
+    Examples:
+        >>> filter = SourceFilter("path/to/source.cpp")
+        >>> filter.is_no_cov(10)  # Returns True if line 10 is excluded from coverage
+
+    Notes:
+        - LCOV_EXCL_START marks the beginning of a multi-line exclusion block
+        - LCOV_EXCL_STOP marks the end of a multi-line exclusion block
+        - LCOV_EXCL_LINE marks a single line for exclusion
+        - Empty lines are automatically excluded
     """
-    def __init__(self, source_path: str) -> None:
+    def __init__(self, source_path: str, verbose: bool = False) -> None:
         self._no_cov_ranges: List[LineRange] = []
+        self._verbose = verbose
         self._parse_source(source_path)
 
     def _parse_source(self, source_path: str) -> None:
@@ -44,7 +60,8 @@ class SourceFilter:
         except Exception as e:
             raise Exception(f"Error reading source file {source_path}: {e}")
 
-        print(f"Processing source file: {source_path}")
+        if self._verbose:
+            print(f"Processing source file: {source_path}")
 
         in_exclusion = False
         start_line = 0
@@ -56,7 +73,9 @@ class SourceFilter:
                 # Add the range from start (inclusive) to stop (exclusive)
                 if in_exclusion:
                     self._no_cov_ranges.append(LineRange(start_line, line_number))
-                    print(f"Exclusion range {source_path}: {start_line} - {line_number}")
+
+                    if self._verbose:
+                        print(f"Exclusion range {source_path}: {start_line} - {line_number}")
                     in_exclusion = False
             elif "LCOV_EXCL_LINE" in source_line or "UTILS_UNREACHABLE()" in source_line or is_empty_line(source_line):
                 # Add a single line exclusion if not in an exclusion block
@@ -83,10 +102,15 @@ class SourceFilter:
 
         return False
 
-def process_record(record_lines: List[str], source_filter: SourceFilter) -> List[str]:
+def process_record(record_lines: List[str], source_filter: SourceFilter, verbose: bool = False) -> List[str]:
     """
     Process one LCOV record (from "SF:" until "end_of_record").
     Removes DA and BRDA lines for excluded source lines and recalculates summary counters.
+
+    Args:
+        record_lines (List[str]): List of lines in the record
+        source_filter (SourceFilter): Source filter object for the source file
+        verbose (bool, optional): If True, print debug information. Defaults to False.
     """
     # Separate out the body from the record terminator.
     record_body = []
@@ -112,7 +136,8 @@ def process_record(record_lines: List[str], source_filter: SourceFilter) -> List
                 line_number = int(m.group(2))
                 # If the line is excluded, skip it.
                 if source_filter and source_filter.is_no_cov(line_number):
-                    print(f"Excluding line: {line.strip()}")
+                    if verbose:
+                        print(f"Excluding line: {line.strip()}")
                     continue
                 else:
                     processed_body.append(line)
@@ -177,10 +202,12 @@ def main() -> None:
     )
     parser.add_argument("--input", help="Path to the LCOV file", required=True)
     parser.add_argument("--output", help="Path to the output LCOV file", required=True)
+    parser.add_argument("--verbose", action="store_true", help="Print debug information")
     args = parser.parse_args()
 
     input_file = args.input
     output_file = args.output
+    verbose = args.verbose
 
     try:
         with open(input_file, 'r') as lcov_file:
@@ -197,12 +224,12 @@ def main() -> None:
                 if line.startswith("SF:"):
                     source_path = line[3:].strip()
                     try:
-                        current_source_filter = SourceFilter(source_path)
+                        current_source_filter = SourceFilter(source_path, verbose)
                     except Exception as e:
                         sys.exit(f"Error reading source file {source_path}: {e}")
                 # LCOV records are terminated by the line "end_of_record"
                 if line.strip() == "end_of_record":
-                    processed_record = process_record(record_lines, current_source_filter)
+                    processed_record = process_record(record_lines, current_source_filter, verbose)
                     for processed_line in processed_record:
                         lcov_out_file.write(processed_line)
                     # Reset for the next record.
