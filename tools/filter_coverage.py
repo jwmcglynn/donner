@@ -2,6 +2,7 @@
 """
 Script to filter out LCOV exclusion ranges from an LCOV file based on LCOV annotations in source files.
 Only LCOV_EXCL_START and LCOV_EXCL_STOP annotations are supported.
+Now also updates summary counters so that excluded lines are marked as non‑executable.
 """
 
 import argparse
@@ -9,7 +10,6 @@ import os
 import re
 import sys
 from typing import List
-
 
 def is_empty_line(line: str) -> bool:
     """Check if a line is empty, such as a comment-only line."""
@@ -25,7 +25,6 @@ class LineRange:
     def __init__(self, start: int = 0, end: int = 0) -> None:
         self.start = start
         self.end = end
-
 
 class SourceFilter:
     """Filters source file lines based on LCOV exclusion annotations.
@@ -45,6 +44,8 @@ class SourceFilter:
         except Exception as e:
             raise Exception(f"Error reading source file {source_path}: {e}")
 
+        print(f"Processing source file: {source_path}")
+
         in_exclusion = False
         start_line = 0
         for line_number, source_line in enumerate(source_lines, start=1):
@@ -52,14 +53,15 @@ class SourceFilter:
                 start_line = line_number
                 in_exclusion = True
             elif "LCOV_EXCL_STOP" in source_line:
-                # Add the range from start (exclusive) to stop (exclusive)
+                # Add the range from start (inclusive) to stop (exclusive)
                 if in_exclusion:
-                  self._no_cov_ranges.append(LineRange(start_line, line_number))
-                  in_exclusion = False
+                    self._no_cov_ranges.append(LineRange(start_line, line_number))
+                    print(f"Exclusion range {source_path}: {start_line} - {line_number}")
+                    in_exclusion = False
             elif "LCOV_EXCL_LINE" in source_line or "UTILS_UNREACHABLE()" in source_line or is_empty_line(source_line):
-                # Add a single line exclusion
+                # Add a single line exclusion if not in an exclusion block
                 if not in_exclusion:
-                  self._no_cov_ranges.append(LineRange(line_number, line_number + 1))
+                    self._no_cov_ranges.append(LineRange(line_number, line_number + 1))
 
     def is_no_cov(self, line_number: int) -> bool:
         """Determine whether a given line number is within an exclusion range.
@@ -81,14 +83,100 @@ class SourceFilter:
 
         return False
 
+def process_record(record_lines: List[str], source_filter: SourceFilter) -> List[str]:
+    """
+    Process one LCOV record (from "SF:" until "end_of_record").
+    Removes DA and BRDA lines for excluded source lines and recalculates summary counters.
+    """
+    # Separate out the body from the record terminator.
+    record_body = []
+    end_record_line = None
+    for line in record_lines:
+        if line.strip() == "end_of_record":
+            end_record_line = line
+        else:
+            record_body.append(line)
+
+    processed_body = []
+    # For recalculating summary counters.
+    da_lines = []    # stores DA lines (e.g. "DA:<line>,<hits>")
+    brda_lines = []  # stores BRDA lines (e.g. "BRDA:<line>,...,<hits>")
+
+    # Process each line in the record body.
+    for line in record_body:
+        if line.startswith("DA:") or line.startswith("BRDA:"):
+            # Extract the line number.
+            m = re.match(r'^(BRDA|DA):(\d+),(.*)', line)
+            if m:
+                prefix = m.group(1)
+                line_number = int(m.group(2))
+                # If the line is excluded, skip it.
+                if source_filter and source_filter.is_no_cov(line_number):
+                    print(f"Excluding line: {line.strip()}")
+                    continue
+                else:
+                    processed_body.append(line)
+                    if prefix == "DA":
+                        da_lines.append(line)
+                    else:
+                        brda_lines.append(line)
+            else:
+                processed_body.append(line)
+        elif (line.startswith("LF:") or line.startswith("LH:") or 
+              line.startswith("BRF:") or line.startswith("BRH:")):
+            # Skip existing summary lines; we'll recalc them.
+            continue
+        else:
+            processed_body.append(line)
+
+    # Recalculate summary for DA lines.
+    lf = len(da_lines)
+    lh = 0
+    for da in da_lines:
+        try:
+            # Expected format: DA:<line>,<hits>
+            parts = da.strip().split(',')
+            count = int(parts[1].strip())
+            if count > 0:
+                lh += 1
+        except (IndexError, ValueError):
+            pass
+
+    # Recalculate summary for branch lines if any.
+    brf = len(brda_lines)
+    brh = 0
+    for brda in brda_lines:
+        try:
+            # Expected format: BRDA:<line>,<block>,<branch>,<hits>
+            parts = brda.strip().split(',')
+            hits = int(parts[3].strip())
+            if hits > 0:
+                brh += 1
+        except (IndexError, ValueError):
+            pass
+
+    # Append the new summary lines.
+    processed_body.append(f"LF:{lf}\n")
+    processed_body.append(f"LH:{lh}\n")
+    if brda_lines:
+        processed_body.append(f"BRF:{brf}\n")
+        processed_body.append(f"BRH:{brh}\n")
+
+    # Append the record terminator if it existed.
+    if end_record_line:
+        processed_body.append(end_record_line)
+    return processed_body
 
 def main() -> None:
-    """Main function to filter LCOV files based on LCOV exclusion annotations in source files."""
+    """
+    Main function to filter LCOV files based on LCOV exclusion annotations in source files.
+    Processes records and recalculates summary counters so that excluded lines are marked as non-executable.
+    """
     parser = argparse.ArgumentParser(
         description="Filter LCOV file based on LCOV_EXCL_START and LCOV_EXCL_STOP annotations in source files."
     )
-    parser.add_argument("--input", help="Path to the LCOV file")
-    parser.add_argument("--output", help="Path to the output LCOV file")
+    parser.add_argument("--input", help="Path to the LCOV file", required=True)
+    parser.add_argument("--output", help="Path to the output LCOV file", required=True)
     args = parser.parse_args()
 
     input_file = args.input
@@ -102,28 +190,26 @@ def main() -> None:
 
     try:
         with open(output_file, 'w') as lcov_out_file:
-            source_filter: SourceFilter = None
+            record_lines: List[str] = []
+            current_source_filter = None
             for line in lcov_lines:
-                filter_out = False
-
-                # When encountering a new source file, update the source filter.
+                record_lines.append(line)
                 if line.startswith("SF:"):
                     source_path = line[3:].strip()
-                    source_filter = SourceFilter(source_path)
-                else:
-                    # Process DA lines reporting execution counts.
-                    match = re.search(r'^(BR)?DA:(\d+),', line)
-                    if match:
-                        line_number = int(match.group(2))
-                        if source_filter is None:
-                            raise Exception("Source filter not initialized for line: " + line)
-                        filter_out = source_filter.is_no_cov(line_number)
-
-                if not filter_out:
-                    lcov_out_file.write(line)
+                    try:
+                        current_source_filter = SourceFilter(source_path)
+                    except Exception as e:
+                        sys.exit(f"Error reading source file {source_path}: {e}")
+                # LCOV records are terminated by the line "end_of_record"
+                if line.strip() == "end_of_record":
+                    processed_record = process_record(record_lines, current_source_filter)
+                    for processed_line in processed_record:
+                        lcov_out_file.write(processed_line)
+                    # Reset for the next record.
+                    record_lines = []
+                    current_source_filter = None
     except Exception as e:
         sys.exit(f"Error processing LCOV file: {e}")
-
 
 if __name__ == "__main__":
     main()
