@@ -6,6 +6,7 @@ namespace {
 
 constexpr uint8_t kInvalidChar = 255;
 
+// LCOV_EXCL_START: Compile-time only
 constexpr std::array<uint8_t, 256> CreateBase64LookupTable() {
   constexpr std::string_view base64Chars =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -20,6 +21,7 @@ constexpr std::array<uint8_t, 256> CreateBase64LookupTable() {
 
   return lookupTable;
 }
+// LCOV_EXCL_STOP
 
 constexpr std::array<uint8_t, 256> kBase64LookupTable = CreateBase64LookupTable();
 

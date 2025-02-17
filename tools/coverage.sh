@@ -59,10 +59,12 @@ fi
 
   if [ "$QUIET" = true ]; then
     bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $BAZEL_TEST_ENV $TARGETS
-    genhtml --quiet $(bazel info output_path)/_coverage/_coverage_report.dat $GENHTML_OPTIONS
+    python3 tools/filter_coverage.py --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
+    genhtml --quiet coverage-report/filtered_report.dat $GENHTML_OPTIONS
   else
     bazel coverage --config=latest_llvm $BAZEL_TEST_ENV $TARGETS
-    genhtml $(bazel info output_path)/_coverage/_coverage_report.dat $GENHTML_OPTIONS
+    python3 tools/filter_coverage.py --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
+    genhtml coverage-report/filtered_report.dat $GENHTML_OPTIONS
   fi
 )
 
