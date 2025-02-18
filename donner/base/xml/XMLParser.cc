@@ -89,15 +89,12 @@ public:
   }
 
   std::optional<FileOffsetRange> getElementAttributeLocation(const XMLQualifiedNameRef& name) {
-    if (!tryConsume("<")) {
-      UTILS_RELEASE_ASSERT_MSG(false, "Expected element to start with '<'");
-    }
+    UTILS_RELEASE_ASSERT_MSG(tryConsume("<"), "Expected element to start with '<'");
 
     // Extract element name
     auto maybeName = consumeQualifiedName();
-    if (maybeName.hasError()) {
-      UTILS_RELEASE_ASSERT_MSG(false, "Expected element to have previously parsed correctly");
-    }
+    UTILS_RELEASE_ASSERT_MSG(!maybeName.hasError(),
+                             "Expected element to have previously parsed correctly");
 
     // Skip whitespace between element name and attributes
     skipWhitespace();
@@ -106,9 +103,8 @@ public:
       const FileOffset attributeStartOffset = currentOffsetWithLineNumber();
 
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
-      if (maybeAttribute.hasError()) {
-        UTILS_RELEASE_ASSERT_MSG(false, "Expected element to have previously parsed correctly");
-      }
+      UTILS_RELEASE_ASSERT_MSG(!maybeAttribute.hasError(),
+                               "Expected element to have previously parsed correctly");
 
       const FileOffset attributeEndOffset = currentOffsetWithLineNumber();
       skipWhitespace();

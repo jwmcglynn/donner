@@ -26,11 +26,6 @@ namespace donner::xml {
  * @see \ref EcsArchitecture
  */
 class XMLDocument {
-  friend class XMLNode;
-
-  /// Internal constructor used by \ref XMLNode, to rehydrate a XMLDocument from the Registry.
-  explicit XMLDocument(std::shared_ptr<Registry> registry) : registry_(std::move(registry)) {}
-
 public:
   /**
    * Constructor to create an empty XMLDocument.
@@ -44,9 +39,6 @@ public:
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() { return *registry_; }
 
-  /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
-  const Registry& registry() const { return *registry_; }
-
   /// Gets the registry as a shared pointer, for advanced use.
   std::shared_ptr<Registry> sharedRegistry() const { return registry_; }
 
@@ -55,11 +47,6 @@ public:
 
   /// Get the root ECS Entity of the document, for advanced use.
   EntityHandle rootEntityHandle() const;
-
-  /**
-   * Returns true if the two XMLDocument handles reference the same underlying document.
-   */
-  bool operator==(const XMLDocument& other) const;
 
 private:
   /// Owned reference to the registry, which contains all information about the loaded document.

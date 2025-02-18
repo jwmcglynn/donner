@@ -9,8 +9,7 @@ using components::XMLDocumentContext;
 using components::XMLNamespaceContext;
 
 XMLDocument::XMLDocument() : registry_(std::make_shared<Registry>()) {
-  auto& ctx = registry_->ctx().emplace<XMLDocumentContext>(XMLDocumentContext::InternalCtorTag{},
-                                                           registry_);
+  auto& ctx = registry_->ctx().emplace<XMLDocumentContext>(XMLDocumentContext::InternalCtorTag{});
   ctx.rootEntity = XMLNode::CreateDocumentNode(*this).entityHandle().entity();
 
   registry_->ctx().emplace<XMLNamespaceContext>(*registry_);
@@ -24,8 +23,4 @@ EntityHandle XMLDocument::rootEntityHandle() const {
   return EntityHandle(*registry_, registry_->ctx().get<XMLDocumentContext>().rootEntity);
 }
 
-bool XMLDocument::operator==(const XMLDocument& other) const {
-  return &registry_->ctx().get<const XMLDocumentContext>() ==
-         &other.registry_->ctx().get<const XMLDocumentContext>();
-}
 }  // namespace donner::xml

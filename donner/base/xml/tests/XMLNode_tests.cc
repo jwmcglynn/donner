@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/ParseResult.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -54,6 +55,17 @@ private:
   XMLDocument document_;
 };
 
+TEST_F(XMLNodeTests, TypeOstreamOutput) {
+  EXPECT_THAT(XMLNode::Type::Document, ToStringIs("Document"));
+  EXPECT_THAT(XMLNode::Type::Element, ToStringIs("Element"));
+  EXPECT_THAT(XMLNode::Type::Data, ToStringIs("Data"));
+  EXPECT_THAT(XMLNode::Type::CData, ToStringIs("CData"));
+  EXPECT_THAT(XMLNode::Type::Comment, ToStringIs("Comment"));
+  EXPECT_THAT(XMLNode::Type::DocType, ToStringIs("DocType"));
+  EXPECT_THAT(XMLNode::Type::ProcessingInstruction, ToStringIs("ProcessingInstruction"));
+  EXPECT_THAT(XMLNode::Type::XMLDeclaration, ToStringIs("XMLDeclaration"));
+}
+
 TEST_F(XMLNodeTests, CreateElementNode) {
   XMLDocument doc;
   XMLNode element = XMLNode::CreateElementNode(doc, "test");
@@ -71,6 +83,44 @@ TEST_F(XMLNodeTests, CreateDataNode) {
   EXPECT_EQ(node.type(), XMLNode::Type::Data);
   EXPECT_THAT(node.tagName(), Eq(""));
   EXPECT_THAT(node.value(), Optional(Eq(testValue)));
+}
+
+TEST_F(XMLNodeTests, TryCast) {
+  XMLDocument doc;
+  XMLNode node = XMLNode::CreateElementNode(doc, "test");
+
+  EntityHandle handle = node.entityHandle();
+  EXPECT_THAT(XMLNode::TryCast(handle), Optional(Eq(node)));
+
+  // Create an unrelated entity and try to cast.
+  EntityHandle unrelatedHandle(doc.registry(), doc.registry().create());
+  EXPECT_THAT(XMLNode::TryCast(unrelatedHandle), Eq(std::nullopt));
+}
+
+TEST_F(XMLNodeTests, CopyAndMove) {
+  XMLDocument doc;
+  XMLNode node = XMLNode::CreateElementNode(doc, "test");
+  XMLNode node2 = XMLNode::CreateElementNode(doc, "test2");
+
+  // Test copy constructor
+  XMLNode copy(node);
+  EXPECT_EQ(copy, node);
+
+  // Test move constructor
+  XMLNode move(std::move(copy));
+  EXPECT_EQ(move, node);
+
+  // Test copy assignment
+  XMLNode copyAssign = node;
+  EXPECT_EQ(copyAssign, node);
+  copyAssign = node2;
+  EXPECT_EQ(copyAssign, node2);
+
+  // Test move assignment
+  XMLNode moveAssign = std::move(copyAssign);
+  EXPECT_EQ(moveAssign, node2);
+  moveAssign = node;
+  EXPECT_EQ(moveAssign, node);
 }
 
 TEST_F(XMLNodeTests, TreeManipulation) {
@@ -97,6 +147,12 @@ TEST_F(XMLNodeTests, TreeManipulation) {
   EXPECT_THAT(child1.nextSibling(), Optional(Eq(child3)));
   EXPECT_THAT(child3.nextSibling(), Optional(Eq(child2)));
 
+  // With an empty referenceNode
+  XMLNode child4 = XMLNode::CreateElementNode(doc, "child4");
+  parent.insertBefore(child4, std::nullopt);
+
+  EXPECT_THAT(parent.lastChild(), Optional(Eq(child4)));
+
   // Test removeChild
   parent.removeChild(child3);
   EXPECT_THAT(child1.nextSibling(), Optional(Eq(child2)));
@@ -108,6 +164,17 @@ TEST_F(XMLNodeTests, TreeManipulation) {
 
   EXPECT_THAT(parent.firstChild(), Optional(Eq(replacement)));
   EXPECT_THAT(child1.parentElement(), Eq(std::nullopt));
+}
+
+TEST_F(XMLNodeTests, TreeTraversalEmpty) {
+  XMLDocument doc;
+  XMLNode node = XMLNode::CreateElementNode(doc, "test");
+
+  EXPECT_THAT(node.parentElement(), Eq(std::nullopt));
+  EXPECT_THAT(node.firstChild(), Eq(std::nullopt));
+  EXPECT_THAT(node.lastChild(), Eq(std::nullopt));
+  EXPECT_THAT(node.previousSibling(), Eq(std::nullopt));
+  EXPECT_THAT(node.nextSibling(), Eq(std::nullopt));
 }
 
 TEST_F(XMLNodeTests, AttributeHandling) {
@@ -174,6 +241,14 @@ TEST_F(XMLNodeTests, SourceOffsets) {
   EXPECT_THAT(element.sourceEndOffset(), Optional(Eq(end)));
 }
 
+TEST_F(XMLNodeTests, SourceOffsetsNotSet) {
+  XMLDocument doc;
+  XMLNode element = XMLNode::CreateElementNode(doc, "test");
+
+  EXPECT_THAT(element.sourceStartOffset(), Eq(std::nullopt));
+  EXPECT_THAT(element.sourceEndOffset(), Eq(std::nullopt));
+}
+
 TEST_F(XMLNodeTests, NodeEquality) {
   XMLDocument doc;
   XMLNode node1 = XMLNode::CreateElementNode(doc, "test");
@@ -226,6 +301,12 @@ TEST_F(XMLNodeTests, GetNodeLocation) {
   }
 }
 
+TEST_F(XMLNodeTests, GetNodeLocationInvalid) {
+  XMLDocument doc;
+  XMLNode node = XMLNode::CreateElementNode(doc, "child");
+  EXPECT_THAT(node.getNodeLocation(), Eq(std::nullopt));
+}
+
 TEST_F(XMLNodeTests, GetAttributeLocation) {
   std::string_view xml = R"(<child attr="Hello, world!"></child>)";
 
@@ -242,6 +323,24 @@ TEST_F(XMLNodeTests, GetAttributeLocation) {
   std::string_view foundAttribute = xml.substr(start, end - start);
 
   EXPECT_THAT(foundAttribute, Eq(R"(attr="Hello, world!")"));
+
+  // Test attribute not found
+  auto missingLocation = child.getAttributeLocation(xml, "missing");
+  EXPECT_THAT(missingLocation, Eq(std::nullopt));
+}
+
+TEST_F(XMLNodeTests, GetAttributeLocationInvalid) {
+  std::string_view mismatchedXml = R"(<child attr="Hello, world!"></child>)";
+
+  XMLDocument doc;
+  XMLNode node = XMLNode::CreateElementNode(doc, "child");
+
+  auto location = node.getAttributeLocation(mismatchedXml, "attr");
+  EXPECT_THAT(location, Eq(std::nullopt));
+
+  // Try with a source offset set
+  node.setSourceEndOffset(FileOffset::Offset(42));
+  EXPECT_THAT(node.getAttributeLocation(mismatchedXml, "attr"), Eq(std::nullopt));
 }
 
 }  // namespace donner::xml

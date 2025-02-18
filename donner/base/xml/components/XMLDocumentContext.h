@@ -42,28 +42,11 @@ public:
    * ```
    *
    * @param ctorTag Internal tag to allow construction.
-   * @param registry Underlying registry for the document.
    */
-  explicit XMLDocumentContext(InternalCtorTag ctorTag, const std::shared_ptr<Registry>& registry)
-      : registry_(registry) {}
+  explicit XMLDocumentContext(InternalCtorTag ctorTag) {}
 
   /// Root entity of the document.
   Entity rootEntity = entt::null;
-
-private:
-  /// Rehydrate the shared_ptr for the Registry. Asserts if the registry has already been destroyed,
-  /// which means that this object is likely invalid too.
-  std::shared_ptr<Registry> getSharedRegistry() const {
-    if (auto registry = registry_.lock()) {
-      return registry;
-    } else {
-      UTILS_RELEASE_ASSERT_MSG(false, "XMLDocument has already been destroyed");
-    }
-  }
-
-  /// ECS registry reference, which is owned by XMLDocument. This is used to recreate an
-  /// XMLDocument when requested, and will fail if all references have been destroyed.
-  std::weak_ptr<Registry> registry_;
 };
 
 }  // namespace donner::xml::components

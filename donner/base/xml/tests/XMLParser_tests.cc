@@ -77,6 +77,26 @@ TEST_F(XMLParserTests, Simple) {
   EXPECT_THAT(result, NoParseError());
 }
 
+TEST_F(XMLParserTests, WithOptions) {
+  auto result = XMLParser::Parse(
+      R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+      </svg>)",
+      XMLParser::Options::ParseAll());
+
+  EXPECT_THAT(result, NoParseError());
+}
+
+TEST_F(XMLParserTests, Empty) {
+  auto maybeDocument = XMLParser::Parse("");
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode root = document.root();
+  EXPECT_EQ(root.type(), XMLNode::Type::Document);
+  EXPECT_THAT(root.nextSibling(), Eq(std::nullopt));
+  EXPECT_THAT(root.firstChild(), Eq(std::nullopt));
+}
+
 TEST_F(XMLParserTests, InvalidNode) {
   EXPECT_THAT(XMLParser::Parse("abc"),
               AllOf(ParseErrorIs("Expected '<' to start a node"), ParseErrorPos(1, 0)));
@@ -92,20 +112,18 @@ TEST_F(XMLParserTests, Namespace) {
         R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"></svg>)");
     ASSERT_THAT(maybeDocument, NoParseError());
 
-    if (maybeDocument.hasResult()) {
-      XMLDocument document = std::move(maybeDocument.result());
-      XMLNode root = document.root();
-      EXPECT_EQ(root.type(), XMLNode::Type::Document);
-      EXPECT_THAT(root.nextSibling(), Eq(std::nullopt))
-          << "XML must contain only a single element, such as <node></node>";
+    XMLDocument document = std::move(maybeDocument.result());
+    XMLNode root = document.root();
+    EXPECT_EQ(root.type(), XMLNode::Type::Document);
+    EXPECT_THAT(root.nextSibling(), Eq(std::nullopt))
+        << "XML must contain only a single element, such as <node></node>";
 
-      std::optional<XMLNode> node = root.firstChild();
-      ASSERT_TRUE(node.has_value()) << "XML must contain a single element, such as <node></node>";
+    std::optional<XMLNode> node = root.firstChild();
+    ASSERT_TRUE(node.has_value()) << "XML must contain a single element, such as <node></node>";
 
-      EXPECT_EQ(node->getNamespaceUri(""), "http://www.w3.org/2000/svg");
-      EXPECT_EQ(node->getNamespaceUri("xlink"), "http://www.w3.org/1999/xlink");
-      EXPECT_THAT(node->getNamespaceUri("unknown"), Eq(std::nullopt));
-    }
+    EXPECT_EQ(node->getNamespaceUri(""), "http://www.w3.org/2000/svg");
+    EXPECT_EQ(node->getNamespaceUri("xlink"), "http://www.w3.org/1999/xlink");
+    EXPECT_THAT(node->getNamespaceUri("unknown"), Eq(std::nullopt));
   }
 }
 
@@ -245,6 +263,13 @@ TEST_F(XMLParserTests, ParseCDataErrors) {
 TEST_F(XMLParserTests, ParseNodeErrors) {
   EXPECT_THAT(XMLParser::Parse(R"(<!INVALID>)"),
               ParseErrorIs("Unrecognized node starting with '<!'"));
+
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<=badname>)"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+
+  EXPECT_THAT(XMLParser::Parse(R"(<node>contents have eof)"),
+              AllOf(ParseErrorIs("Unexpected end of data parsing node contents")));
 }
 
 TEST_F(XMLParserTests, ParseComment) {
@@ -418,6 +443,10 @@ TEST_F(XMLParserTests, EntitiesBuiltin) {
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&gt;</node>)"), ParseResultIs(RcString(">")));
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&gt;</node>)", optionsDisableEntity),
               ParseResultIs(RcString("&gt;")));
+
+  // Invalid entities are not parsed.
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&invalid;</node>)"),
+              ParseResultIs(RcString("&invalid;")));
 }
 
 TEST_F(XMLParserTests, EntitiesNumeric) {
@@ -525,7 +554,7 @@ TEST_F(XMLParserTests, ParseQualifiedNameErrors) {
                     ParseErrorPos(1, 13)));
 }
 
-TEST_F(XMLParserTests, GetAttributeLocation_Basic) {
+TEST_F(XMLParserTests, GetAttributeLocationBasic) {
   // Setup test XML.
   std::string_view xml = R"(<root><child attr="Hello, world!"></child></root>)";
 
@@ -548,19 +577,19 @@ TEST_F(XMLParserTests, GetAttributeLocation_Basic) {
   EXPECT_THAT(foundAttribute, testing::Eq(R"(attr="Hello, world!")"));
 }
 
-TEST_F(XMLParserTests, GetAttributeLocation_NoSuchAttribute) {
+TEST_F(XMLParserTests, GetAttributeLocationNoSuchAttribute) {
   std::string_view xml = R"(<root><child attr="Hello, world!"></child></root>)";
 
   // Offset for <child>.
   const auto kChildOffset = FileOffset::Offset(6);
 
   // Ask for a non-existent attribute.
-  auto location =
-      XMLParser::GetAttributeLocation(xml, kChildOffset, XMLQualifiedNameRef("", "missing"));
-  EXPECT_FALSE(location.has_value());
+  EXPECT_THAT(
+      XMLParser::GetAttributeLocation(xml, kChildOffset, XMLQualifiedNameRef("", "missing")),
+      testing::Eq(std::nullopt));
 }
 
-TEST_F(XMLParserTests, GetAttributeLocation_WithNamespace) {
+TEST_F(XMLParserTests, GetAttributeLocationWithNamespace) {
   // Example with namespace usage.
   std::string_view xml = R"(<root><child ns:attr="namespaced value" another="value"/></root>)";
 
@@ -574,8 +603,18 @@ TEST_F(XMLParserTests, GetAttributeLocation_WithNamespace) {
 
   const size_t start = location->start.offset.value();
   const size_t end = location->end.offset.value();
-  std::string_view foundAttribute = xml.substr(start, end - start);
+  const std::string_view foundAttribute = xml.substr(start, end - start);
   EXPECT_THAT(foundAttribute, testing::Eq(R"(ns:attr="namespaced value")"));
+}
+
+TEST_F(XMLParserTests, GetAttributeLocationInvalidOffset) {
+  std::string_view xml = R"(<root><child attr="Hello, world!"></child></root>)";
+
+  // Offset for <child>.
+  const auto kChildOffset = FileOffset::EndOfString();
+
+  EXPECT_THAT(XMLParser::GetAttributeLocation(xml, kChildOffset, "attr"),
+              testing::Eq(std::nullopt));
 }
 
 }  // namespace donner::xml

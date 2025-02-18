@@ -89,8 +89,7 @@ XMLNode XMLNode::CreateXMLDeclarationNode(XMLDocument& document) {
 }
 
 std::optional<XMLNode> XMLNode::TryCast(EntityHandle handle) {
-  // TODO: Also check for XMLNodeTypeComponent one the trees are merged
-  if (handle.all_of<TreeComponent>()) {
+  if (handle.all_of<TreeComponent, XMLNodeTypeComponent>()) {
     return std::make_optional(XMLNode(handle));
   } else {
     return std::nullopt;
@@ -110,13 +109,7 @@ XMLNode& XMLNode::operator=(XMLNode&& other) noexcept {
 }
 
 XMLNode::Type XMLNode::type() const {
-  // TODO: Remove this once the trees are merged
-  if (const auto* typeComponent = handle_.try_get<XMLNodeTypeComponent>()) {
-    return typeComponent->type();
-  } else {
-    // TODO: Return a better value
-    return XMLNode::Type::Element;
-  }
+  return handle_.get<XMLNodeTypeComponent>().type();
 }
 
 XMLQualifiedNameRef XMLNode::tagName() const {
