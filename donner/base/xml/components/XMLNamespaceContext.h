@@ -34,7 +34,8 @@ public:
    * @param registry Underlying registry for the document.
    */
   explicit XMLNamespaceContext(Registry& registry) {
-    registry.on_destroy<Entity>().connect<&XMLNamespaceContext::onEntityDestroy>(*this);
+    registry.on_destroy<donner::components::AttributesComponent>()
+        .connect<&XMLNamespaceContext::onEntityDestroy>(*this);
   }
 
   /**
@@ -42,25 +43,24 @@ public:
    * again with the same name but different URI.
    *
    * @param entity Entity to add the namespace override for.
-   * @param prefix Namespace prefix to override.
+   * @param name Namespace attribute to override.
    * @param uri Namespace URI to use for the prefix.
    */
   void addNamespaceOverride(Entity entity, const XMLQualifiedName& name, const RcString& uri) {
     // Map the name to a prefix (either xmlns for prefix="" or xmlns:prefix)
-    RcString prefix;
+    std::optional<RcString> prefix;
     if (name.namespacePrefix.empty() && name.name == "xmlns") {
       // Default namespace declaration
       prefix = "";
     } else if (name.namespacePrefix == "xmlns") {
       // Namespace declaration with prefix
       prefix = name.name;
-    } else {
-      assert(false && "Not a namespace declaration attribute");
-      return;
     }
 
+    assert(prefix.has_value() && "Not a namespace declaration attribute");
+
     // Remove existing entries with this entity and prefix
-    auto range = namespaceEntries_.equal_range(prefix);
+    auto range = namespaceEntries_.equal_range(prefix.value());
     for (auto it = range.first; it != range.second;) {
       if (it->second.entity == entity) {
         it = namespaceEntries_.erase(it);
@@ -69,31 +69,30 @@ public:
       }
     }
 
-    namespaceEntries_.emplace(prefix, NamespaceEntry{entity, uri});
+    namespaceEntries_.emplace(prefix.value(), NamespaceEntry{entity, uri});
   }
 
   /**
    * Removes a namespace override for the given entity.
    *
    * @param entity Entity to remove the namespace override for.
-   * @param prefix Namespace prefix to remove.
+   * @param name Namespace attribute to remove.
    */
   void removeNamespaceOverride(Entity entity, const XMLQualifiedName& name) {
     // Map the name to a prefix (either xmlns by itself, or xmlns:prefix)
-    RcString prefix;
+    std::optional<RcString> prefix;
     if (name.namespacePrefix.empty() && name.name == "xmlns") {
       // Default namespace declaration
       prefix = "";
     } else if (name.namespacePrefix == "xmlns") {
       // Namespace declaration with prefix
       prefix = name.name;
-    } else {
-      assert(false && "Not a namespace declaration attribute");
-      return;
     }
 
+    assert(prefix.has_value() && "Not a namespace declaration attribute");
+
     // Remove existing entries with this entity and prefix
-    auto range = namespaceEntries_.equal_range(prefix);
+    auto range = namespaceEntries_.equal_range(prefix.value());
     for (auto it = range.first; it != range.second;) {
       if (it->second.entity == entity) {
         it = namespaceEntries_.erase(it);
@@ -155,8 +154,8 @@ private:
 
   /// Called when an entity is destroyed.
   void onEntityDestroy(Registry& registry, Entity entity) {
-    if (const auto* attributes = registry.try_get<donner::components::AttributesComponent>(entity);
-        attributes && attributes->hasNamespaceOverrides()) {
+    const auto& attributes = registry.get<donner::components::AttributesComponent>(entity);
+    if (attributes.hasNamespaceOverrides()) {
       // Remove all entries with this entity.
       for (auto it = namespaceEntries_.begin(); it != namespaceEntries_.end();) {
         if (it->second.entity == entity) {
@@ -168,9 +167,10 @@ private:
     }
   }
 
+  /// Entry storing the entity and URI for a given namespace override.
   struct NamespaceEntry {
-    Entity entity;
-    RcString uri;
+    Entity entity;  ///< Entity that has the namespace override.
+    RcString uri;   ///< URI for the namespace.
   };
 
   /// Mapping from ID to entity.

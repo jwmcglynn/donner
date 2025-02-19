@@ -36,14 +36,14 @@ void AttributesComponent::setAttribute(Registry& registry, const xml::XMLQualifi
   auto [attrIt, newAttrInserted] = attributes_.emplace(attrRef, Storage(nameAllocated, value));
   if (!newAttrInserted) {
     attrIt->second.value = value;
-  } else {
-    if (isNamespaceOverride(nameAllocated)) {
-      ++numNamespaceOverrides_;
+  }
 
-      const Entity self = entt::to_entity(registry.storage<AttributesComponent>(), *this);
-      registry.ctx().get<xml::components::XMLNamespaceContext>().addNamespaceOverride(
-          self, nameAllocated, value);
-    }
+  if (isNamespaceOverride(nameAllocated)) {
+    ++numNamespaceOverrides_;
+
+    const Entity self = entt::to_entity(registry.storage<AttributesComponent>(), *this);
+    registry.ctx().get<xml::components::XMLNamespaceContext>().addNamespaceOverride(
+        self, nameAllocated, value);
   }
 }
 
