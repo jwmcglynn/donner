@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
 
 donner_cc_library(
     name = "parser",
@@ -43,5 +43,16 @@ cc_test(
         ":parser",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "number_parser_fuzzer",
+    srcs = [
+        "tests/NumberParser_fuzzer.cc",
+    ],
+    corpus = "tests/number_parser_corpus",
+    deps = [
+        ":parser",
     ],
 )

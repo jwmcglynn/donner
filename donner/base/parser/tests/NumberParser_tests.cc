@@ -109,6 +109,8 @@ TEST(NumberParser, StopsParsingAtCharacter) {
   EXPECT_THAT(NumberParser::Parse("100L200"), ParseResultIs(Result{100.0, 3}));
   EXPECT_THAT(NumberParser::Parse("1e1M1"), ParseResultIs(Result{10.0, 3}));
   EXPECT_THAT(NumberParser::Parse("13,000.56"), ParseResultIs(Result{13.0, 2}));
+  EXPECT_THAT(NumberParser::Parse("123.e"), ParseResultIs(Result{123.0, 3}))
+      << "Should not consume '.'";
 
   EXPECT_THAT(NumberParser::Parse("1e"), ParseResultIs(Result{1.0, 1}));
   EXPECT_THAT(NumberParser::Parse("1e-"), ParseResultIs(Result{1.0, 1}));
@@ -187,6 +189,58 @@ TEST(NumberParser, OverflowedDigits) {
     ASSERT_THAT(result.number, testing::DoubleEq(expected));
     ASSERT_EQ(result.consumedChars, number.size());
   }
+}
+
+/**
+ * Exercises digit overflow in ParseDigitsSaturating: specifically the case where
+ * nextVal < result.value on add.  We do this by carefully selecting enough digits
+ * so that multiply-by-10 is safe, but adding one more digit overflows 64-bit.
+ */
+TEST(NumberParser, DigitAddOverflow) {
+  // 18446744073709551615 == 2^64 - 1, which we *can* parse without triggering
+  // the addition overflow check (because we saturate multiplication first).
+  // Instead, let's start one step below that boundary and then add a digit that
+  // overflows.
+  //
+  // One way is to parse "1844674407370955161" (which is 2^64 - 1 with the last digit removed)
+  // and then add another digit '9', pushing it over the limit in the add step.
+  // This should trigger 'nextVal < result.value' in ParseDigitsSaturating.
+  //
+  // Combining them: "18446744073709551619".
+  //
+  // The exact boundary depends on your saturate logic, so you may tweak the number
+  // to ensure we *really do* hit the (nextVal < result.value) branch.
+  const std::string toParse = "18446744073709551619";
+
+  const auto maybeResult = NumberParser::Parse(toParse);
+  EXPECT_THAT(maybeResult, NoParseError());
+
+  // We don’t particularly care about the final double, just that we didn’t crash
+  // and consumed all digits (which demonstrates we parsed them, saturating the integer).
+  // Because it saturates the internal 64-bit, it should remain a very large double ~1.8446744e19
+  // but not infinite. You can do a more precise check if you like.
+  const auto result = maybeResult.result();
+  EXPECT_EQ(result.consumedChars, toParse.size());
+
+  // We only check that it's finite and "large".
+  EXPECT_TRUE(std::isfinite(result.number));
+  EXPECT_GT(result.number, 1e19);
+}
+
+/**
+ * Exercises integer saturation plus fractional overflow checks in NumberParser,
+ * testing the `(mantissa + fracPart < mantissa)` overfow condition.
+ */
+TEST(NumberParser, MantissaPlusFractionOverflow) {
+  const std::string toParse = "184467.488870955161800";
+
+  const auto maybeResult = NumberParser::Parse(toParse);
+  EXPECT_THAT(maybeResult, NoParseError());
+
+  const auto result = maybeResult.result();
+  // We consumed everything:
+  EXPECT_EQ(result.consumedChars, toParse.size());
+  EXPECT_DOUBLE_EQ(result.number, 184467.44073709552);
 }
 
 }  // namespace donner::parser

@@ -106,6 +106,19 @@ TEST(LengthParser, UnitOptional) {
               ParseResultIs(LengthResult(1, LengthUnit::None, 1)));
 }
 
+TEST(LengthParser, LimitToPercentage) {
+  LengthParser::Options options;
+  options.limitUnitToPercentage = true;
+
+  EXPECT_THAT(LengthParser::Parse("1%", options),
+              ParseResultIs(LengthResult(1, LengthUnit::Percent, 2)));
+  EXPECT_THAT(LengthParser::Parse("1", options), ParseErrorIs("Unit expected"));
+  EXPECT_THAT(LengthParser::Parse("1px", options),
+              ParseErrorIs("Unexpected unit, expected percentage"));
+  EXPECT_THAT(LengthParser::Parse("1cm", options),
+              ParseErrorIs("Unexpected unit, expected percentage"));
+}
+
 TEST(LengthParser, Units) {
   EXPECT_THAT(LengthParser::ParseUnit("%"), Optional(LengthUnit::Percent));
   EXPECT_THAT(LengthParser::ParseUnit("cm"), Optional(LengthUnit::Cm));

@@ -232,13 +232,8 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
 
       fracPart = fracResult.value;
 
-      if (fracResult.consumedChars > 0) {
-        anyDigits = true;
-      } else {
-        // Revert the '.' consumption if no fraction digits
-        str = std::string_view(str.data() - 1, str.size() + 1);
-        totalConsumed--;
-      }
+      assert(fracResult.consumedChars > 0 && "Fraction parse should consume at least 1 digit");
+      anyDigits = true;
     } else {
       // Partial parse => don't consume '.'
     }
@@ -343,13 +338,7 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
   const double finalVal =
       ConvertMantissaAndExponent(mantissa, static_cast<int>(exponentVal), negative);
 
-  // If finalVal is NaN => "Not finite"
-  if (std::isnan(finalVal)) {
-    ParseError err;
-    err.reason = "Failed to parse number: Not finite";
-    err.location = FileOffset::Offset(static_cast<int64_t>(totalConsumed));
-    return err;
-  }
+  assert(!std::isnan(finalVal) && "Final value should not be NaN");
 
   // If infinite => "Out of range"
   if (!std::isfinite(finalVal)) {
