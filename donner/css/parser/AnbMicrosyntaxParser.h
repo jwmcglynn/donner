@@ -22,8 +22,8 @@ public:
 
     /// Ostream operator.
     friend std::ostream& operator<<(std::ostream& out, const Result& result) {
-      return out << "Result{An+B value: " << result.value << ", "
-                 << result.remainingComponents.size() << " remaining components}";
+      return out << result.value << ", " << result.remainingComponents.size()
+                 << " remaining components";
     }
   };
 

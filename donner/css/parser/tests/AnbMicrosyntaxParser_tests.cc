@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/parser/details/ComponentValueParser.h"
 
@@ -48,6 +49,16 @@ TEST(AnbMicrosyntaxParser, Simple) {
               ParseResultIs(AllOf(AnbValueIs(2, 0), NoComponentsRemaining())));
   EXPECT_THAT(AnbMicrosyntaxParser::Parse(toComponents("odd")),
               ParseResultIs(AllOf(AnbValueIs(2, 1), NoComponentsRemaining())));
+}
+
+/// @test Ostream output \c operator<< for all \ref AnbMicrosyntaxParser::Result values.
+TEST(AnbMicrosyntaxParser, ResultOstreamOutput) {
+  EXPECT_THAT(AnbMicrosyntaxParser::Result(AnbValue{1, 2}, {}),
+              ToStringIs("AnbValue{ 1n+2 }, 0 remaining components"));
+
+  std::vector<css::ComponentValue> components = toComponents("of .my-selector");
+  EXPECT_THAT(AnbMicrosyntaxParser::Result(AnbValue{-1, 3}, components),
+              ToStringIs("AnbValue{ -1n+3 }, 4 remaining components"));
 }
 
 /**
