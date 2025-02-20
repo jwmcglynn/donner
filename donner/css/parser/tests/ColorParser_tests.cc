@@ -313,10 +313,32 @@ TEST(ColorParser, Hwb) {
               ParseErrorIs("Missing delimiter for alpha when parsing function 'hwb'"));
 }
 
+TEST(ColorParser, HwbErrors) {
+  // Invalid hues
+  EXPECT_THAT(ColorParser::ParseString("hwb(120invalidunit)"),
+              ParseErrorIs("Angle has unexpected dimension 'invalidunit'"));
+  EXPECT_THAT(ColorParser::ParseString("hwb(120%)"),
+              ParseErrorIs("Unexpected token when parsing angle"));
+
+  // Invalid whiteness
+  EXPECT_THAT(ColorParser::ParseString("hwb(120 0deg)"),
+              ParseErrorIs("Unexpected token when parsing function 'hwb'"));
+
+  // Invalid blackness
+  EXPECT_THAT(ColorParser::ParseString("hwb(120 0% 0deg)"),
+              ParseErrorIs("Unexpected token when parsing function 'hwb'"));
+
+  // Inconsistent commas
+  EXPECT_THAT(ColorParser::ParseString("hwb(120, 0% 0% 0%)"),
+              ParseErrorIs("Missing comma when parsing function 'hwb'"));
+}
+
 TEST(ColorParser, Lab) {
   // Valid lab() parsing
   // Mid gray (L=50%, a=0, b=0)
   EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lab(50 0 0)"),
               ParseResultIs(Color(RGBA(119, 119, 119, 255))));
   // White (L=100%)
   EXPECT_THAT(ColorParser::ParseString("lab(100% 0 0)"),
@@ -336,21 +358,41 @@ TEST(ColorParser, Lab) {
               ParseResultIs(Color(RGBA(122, 106, 205, 255))));
   // Clamping L below 0%
   EXPECT_THAT(ColorParser::ParseString("lab(-10% 0 0)"), ParseResultIs(Color(RGBA(0, 0, 0, 255))));
+  // Clamping L below 0%
+  EXPECT_THAT(ColorParser::ParseString("lab(-10 0 0)"), ParseResultIs(Color(RGBA(0, 0, 0, 255))));
   // Clamping L above 100%
   EXPECT_THAT(ColorParser::ParseString("lab(110% 0 0)"),
+              ParseResultIs(Color(RGBA(255, 255, 255, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lab(110 0 0)"),
               ParseResultIs(Color(RGBA(255, 255, 255, 255))));
 }
 
 TEST(ColorParser, LabErrors) {
-  // Missing components
-  EXPECT_THAT(ColorParser::ParseString("lab(50% 0)"),
+  // Unexpected eof when parsing L.
+  EXPECT_THAT(ColorParser::ParseString("lab()"),
               ParseErrorIs("Unexpected EOF when parsing function 'lab'"));
-  // Extra components
-  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 0)"),
-              ParseErrorIs("Missing delimiter for alpha when parsing function 'lab'"));
-  // Invalid tokens
-  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 invalid)"),
-              ParseErrorIs("Missing delimiter for alpha when parsing function 'lab'"));
+
+  // Invalid L token: not a Number or Percentage.
+  EXPECT_THAT(ColorParser::ParseString("lab(foo 10 20)"),
+              ParseErrorIs("Unexpected token when parsing function 'lab'"));
+
+  // Invalid A token.
+  EXPECT_THAT(ColorParser::ParseString("lab(50% foo 20)"),
+              ParseErrorIs("Unexpected token when parsing function 'lab'"));
+  // Unexpected eof when parsing A.
+  EXPECT_THAT(ColorParser::ParseString("lab(50%)"),
+              ParseErrorIs("Unexpected EOF when parsing function 'lab'"));
+
+  // Invalid B token.
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 10 foo)"),
+              ParseErrorIs("Unexpected token when parsing function 'lab'"));
+  // Unexpected eof when parsing B.
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 10)"),
+              ParseErrorIs("Unexpected EOF when parsing function 'lab'"));
+
+  // Extra tokens after the optional alpha.
+  EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 / 0.5 extra)"),
+              ParseErrorIs("Additional tokens when parsing function 'lab'"));
   // Missing slash before alpha
   EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 0.5)"),
               ParseErrorIs("Missing delimiter for alpha when parsing function 'lab'"));
@@ -364,6 +406,8 @@ TEST(ColorParser, Lch) {
   // Mid gray (L=50%, C=0)
   EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0)"),
               ParseResultIs(Color(RGBA(119, 119, 119, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lch(50 0 0)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 255))));
   // Red color
   EXPECT_THAT(ColorParser::ParseString("lch(54.29% 106.84 40.86)"),
               ParseResultIs(Color(RGBA(255, 0, 0, 255))));
@@ -374,8 +418,11 @@ TEST(ColorParser, Lch) {
               ParseResultIs(Color(RGBA(119, 119, 119, 127))));
   // Clamping L below 0%
   EXPECT_THAT(ColorParser::ParseString("lch(-10% 0 0)"), ParseResultIs(Color(RGBA(0, 0, 0, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lch(-10 0 0)"), ParseResultIs(Color(RGBA(0, 0, 0, 255))));
   // Clamping L above 100%
   EXPECT_THAT(ColorParser::ParseString("lch(110% 0 0)"),
+              ParseResultIs(Color(RGBA(255, 255, 255, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lch(110 0 0)"),
               ParseResultIs(Color(RGBA(255, 255, 255, 255))));
   // Negative chroma clamped to 0
   EXPECT_THAT(ColorParser::ParseString("lch(50% -10 30)"),
@@ -383,18 +430,47 @@ TEST(ColorParser, Lch) {
   // Hue angle normalization
   EXPECT_THAT(ColorParser::ParseString("lch(50% 50 -30deg)"),
               ParseResultIs(Color(RGBA(173, 87, 163, 255))));
+
+  // Chroma as a percentage
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 50% 30)"),
+              ParseResultIs(Color(RGBA(219, 50, 60, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 100% 30)"),
+              ParseResultIs(Color(RGBA(255, 0, 17, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0% 30)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 255))));
+
+  // Clamping chroms percentages
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 110% 30)"),
+              ParseResultIs(Color(RGBA(255, 0, 17, 255))));
+  EXPECT_THAT(ColorParser::ParseString("lch(50% -10% 30)"),
+              ParseResultIs(Color(RGBA(119, 119, 119, 255))));
 }
 
 TEST(ColorParser, LchErrors) {
-  // Missing components
-  EXPECT_THAT(ColorParser::ParseString("lch(50% 0)"),
+  // Unexpected eof when parsing L.
+  EXPECT_THAT(ColorParser::ParseString("lch()"),
               ParseErrorIs("Unexpected EOF when parsing function 'lch'"));
-  // Extra components
-  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 0)"),
-              ParseErrorIs("Missing delimiter for alpha when parsing function 'lch'"));
-  // Invalid tokens
-  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 invalid)"),
-              ParseErrorIs("Missing delimiter for alpha when parsing function 'lch'"));
+  // Invalid L token: not a Number or Percentage.
+  EXPECT_THAT(ColorParser::ParseString("lch(foo 10 20)"),
+              ParseErrorIs("Unexpected token when parsing function 'lch'"));
+
+  // Invalid C token.
+  EXPECT_THAT(ColorParser::ParseString("lch(50% foo 20)"),
+              ParseErrorIs("Unexpected token when parsing function 'lch'"));
+  // Unexpected eof when parsing C.
+  EXPECT_THAT(ColorParser::ParseString("lch(50%)"),
+              ParseErrorIs("Unexpected EOF when parsing function 'lch'"));
+
+  // Invalid H token.
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 10 foo)"),
+              ParseErrorIs("Unexpected token when parsing angle"));
+  // Unexpected eof when parsing H.
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 10)"),
+              ParseErrorIs("Unexpected EOF when parsing function 'lch'"));
+
+  // Extra tokens after the optional alpha.
+  EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 / 0.5 extra)"),
+              ParseErrorIs("Additional tokens when parsing function 'lch'"));
   // Missing slash before alpha
   EXPECT_THAT(ColorParser::ParseString("lch(50% 0 0 0.5)"),
               ParseErrorIs("Missing delimiter for alpha when parsing function 'lch'"));

@@ -32,8 +32,6 @@ public:
     advance();
   }
 
-  const RcString& functionName() const { return functionName_; }
-
   ParseResult<css::Token> next() {
     if (next_) {
       auto result = std::move(next_.value());
@@ -487,7 +485,7 @@ public:
       return unexpectedTokenError(functionName, LResult.result());
     }
 
-    // Parse a component
+    // Parse A component
     auto aResult = labParams.next();
     if (aResult.hasError()) {
       return std::move(aResult.error());
@@ -503,7 +501,7 @@ public:
       return unexpectedTokenError(functionName, aResult.result());
     }
 
-    // Parse b component
+    // Parse B component
     auto bResult = labParams.next();
     if (bResult.hasError()) {
       return std::move(bResult.error());
