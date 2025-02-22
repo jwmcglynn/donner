@@ -241,10 +241,6 @@ std::string RGBA::toHexString() const {
   return result;
 }
 
-bool Color::operator==(const Color& other) const {
-  return value == other.value;
-}
-
 std::optional<Color> Color::ByName(std::string_view name) {
   const auto it = kColors.find(name);
   if (it == kColors.end()) {
@@ -276,9 +272,8 @@ RGBA Color::resolve(RGBA currentColor, float opacity) const {
 }
 
 std::ostream& operator<<(std::ostream& os, const Color& color) {
-  os << "Color(";
   std::visit([&os](auto&& element) { os << element; }, color.value);
-  return os << ")";
+  return os;
 }
 
 }  // namespace donner::css

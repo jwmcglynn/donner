@@ -17,7 +17,7 @@ TEST(ElementStyleTests, Attributes) {
     )")
                   ->getComputedStyle(),
               ToStringIs(R"(PropertyRegistry {
-  fill: PaintServer(solid Color(rgba(255, 0, 0, 255))) (set) @ Specificity(0, 0, 0)
+  fill: PaintServer(solid rgba(255, 0, 0, 255)) (set) @ Specificity(0, 0, 0)
 }
 )"));
 

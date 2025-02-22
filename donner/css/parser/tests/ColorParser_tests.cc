@@ -16,17 +16,16 @@ TEST(Color, ColorPrintTo) {
   using string_literals::operator""_rgb;
   using string_literals::operator""_rgba;
 
-  EXPECT_EQ(testing::PrintToString(Color(RGBA(0x11, 0x22, 0x33, 0x44))),
-            "Color(rgba(17, 34, 51, 68))");
-  EXPECT_EQ(testing::PrintToString(Color(Color::CurrentColor())), "Color(currentColor)");
+  EXPECT_EQ(testing::PrintToString(Color(RGBA(0x11, 0x22, 0x33, 0x44))), "rgba(17, 34, 51, 68)");
+  EXPECT_EQ(testing::PrintToString(Color(Color::CurrentColor())), "currentColor");
 
-  EXPECT_EQ(testing::PrintToString(0xFFFFFF_rgb), "Color(rgba(255, 255, 255, 255))");
-  EXPECT_EQ(testing::PrintToString(0x000000_rgb), "Color(rgba(0, 0, 0, 255))");
-  EXPECT_EQ(testing::PrintToString(0x123456_rgb), "Color(rgba(18, 52, 86, 255))");
+  EXPECT_EQ(testing::PrintToString(0xFFFFFF_rgb), "rgba(255, 255, 255, 255)");
+  EXPECT_EQ(testing::PrintToString(0x000000_rgb), "rgba(0, 0, 0, 255)");
+  EXPECT_EQ(testing::PrintToString(0x123456_rgb), "rgba(18, 52, 86, 255)");
 
-  EXPECT_EQ(testing::PrintToString(0xFFFFFF00_rgba), "Color(rgba(255, 255, 255, 0))");
-  EXPECT_EQ(testing::PrintToString(0x000000CC_rgba), "Color(rgba(0, 0, 0, 204))");
-  EXPECT_EQ(testing::PrintToString(0x12345678_rgba), "Color(rgba(18, 52, 86, 120))");
+  EXPECT_EQ(testing::PrintToString(0xFFFFFF00_rgba), "rgba(255, 255, 255, 0)");
+  EXPECT_EQ(testing::PrintToString(0x000000CC_rgba), "rgba(0, 0, 0, 204)");
+  EXPECT_EQ(testing::PrintToString(0x12345678_rgba), "rgba(18, 52, 86, 120)");
 }
 
 TEST(ColorParser, Empty) {

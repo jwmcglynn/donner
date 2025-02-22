@@ -29,7 +29,7 @@ TEST(PropertyRegistry, Set) {
 
   // Test printing to string.
   EXPECT_THAT(registry, ToStringIs(R"(PropertyRegistry {
-  color: Color(rgba(255, 0, 0, 255)) (set) @ Specificity(0, 0, 1)
+  color: rgba(255, 0, 0, 255) (set) @ Specificity(0, 0, 1)
 }
 )"));
 }
@@ -43,7 +43,7 @@ TEST(PropertyRegistry, ParseDeclaration) {
 
   // Test printing to string.
   EXPECT_THAT(registry, ToStringIs(R"(PropertyRegistry {
-  color: Color(rgba(0, 255, 0, 255)) (set) @ Specificity(0, 0, 0)
+  color: rgba(0, 255, 0, 255) (set) @ Specificity(0, 0, 0)
 }
 )"));
 }

@@ -140,7 +140,22 @@ struct Color {
   /* implicit */ constexpr Color(Type value) : value(value) {}
 
   /// Equality operator.
-  bool operator==(const Color& other) const;
+  bool operator==(const Color& other) const { return value == other.value; }
+
+  /// Equality operator for Color == RGBA.
+  bool operator==(const RGBA& other) const {
+    return std::holds_alternative<RGBA>(value) && std::get<RGBA>(value) == other;
+  }
+
+  /// Equality operator RGBA == Color.
+  friend bool operator==(const RGBA& lhs, const Color& rhs) { return rhs == lhs; }
+
+  bool operator==(const HSLA& other) const {
+    return std::holds_alternative<HSLA>(value) && std::get<HSLA>(value) == other;
+  }
+  bool operator==(const CurrentColor& other) const {
+    return std::holds_alternative<CurrentColor>(value);
+  }
 
   /**
    * Parse a named color, such as `red` or `steelblue`.
