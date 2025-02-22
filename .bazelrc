@@ -79,7 +79,7 @@ test --test_env="GTEST_INSTALL_FAILURE_SIGNAL_HANDLER=1"
 # Coverage builds
 coverage --config=coverage
 coverage --combined_report=lcov
-coverage --instrumentation_filter="//donner[:/]"
+coverage --instrumentation_filter="-test_utils$,//donner[:/]"
 coverage --test_tag_filters=-fuzz_target
 
 coverage:macos --test_env=COVERAGE_GCOV_PATH=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata
