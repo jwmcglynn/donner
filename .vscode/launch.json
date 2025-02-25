@@ -89,11 +89,15 @@
       "program": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/resvg_test_suite",
       "args": [
         "--gtest_break_on_failure",
+        "--gtest_filter=*e_symbol_003",
       ],
       "cwd": "${workspaceFolder}",
       "sourceMap": {
         ".": "${workspaceFolder}"
-      }
+      },
+      "env": {
+        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/resvg_test_suite.runfiles",
+      },
     },
     {
       "type": "lldb",

@@ -4,8 +4,8 @@
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
-#include "donner/svg/components/paint/SymbolComponent.h"
 
 namespace donner::svg {
 
@@ -15,7 +15,7 @@ SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
   handle
       .emplace<components::RenderingBehaviorComponent>(
           components::RenderingBehavior::ShadowOnlyChildren)
-      .inheritsParentTransform = true;  // TODO: false?
+      .inheritsParentTransform = false;
   handle.emplace<components::ViewboxComponent>();
   handle.emplace<components::PreserveAspectRatioComponent>();
   handle.emplace<components::SymbolComponent>();

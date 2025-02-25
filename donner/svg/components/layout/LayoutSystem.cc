@@ -9,6 +9,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewboxComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
@@ -293,9 +294,9 @@ Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(rootEntity, nullptr);
 
     const ComputedSizedElementComponent& computedSizedElement =
-        LayoutSystem().createComputedSizedElementComponentWithStyle(rootEntity, computedStyle,
-                                                                    FontMetrics(), nullptr);
-    return LayoutSystem().elementContentFromViewBoxTransform(rootEntity, computedSizedElement);
+        createComputedSizedElementComponentWithStyle(rootEntity, computedStyle, FontMetrics(),
+                                                     nullptr);
+    return elementContentFromViewBoxTransform(rootEntity, computedSizedElement);
   } else {
     return Transformd();
   }
@@ -307,9 +308,18 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, nullptr);
 
     const ComputedSizedElementComponent& computedSizedElement =
-        LayoutSystem().createComputedSizedElementComponentWithStyle(entity, computedStyle,
-                                                                    FontMetrics(), nullptr);
-    return LayoutSystem().elementContentFromViewBoxTransform(entity, computedSizedElement);
+        createComputedSizedElementComponentWithStyle(entity, computedStyle, FontMetrics(), nullptr);
+    return elementContentFromViewBoxTransform(entity, computedSizedElement);
+  } else if (entity.all_of<ComputedSymbolComponent>()) {
+    // const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, nullptr);
+
+    // const ComputedSizedElementComponent& computedSizedElement =
+    //     createComputedSizedElementComponentWithStyle(entity, computedStyle, FontMetrics(),
+    //     nullptr);
+
+    const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(entity);
+    return preserveAspectRatio.elementContentFromViewBoxTransform(
+        entity.get<ComputedSymbolComponent>().bounds, entity.get<ViewboxComponent>().viewbox);
   } else if (const auto* shadowEntity = entity.try_get<ShadowEntityComponent>()) {
     return getEntityContentFromEntityTransform(
         EntityHandle(*entity.registry(), shadowEntity->lightEntity));
@@ -431,6 +441,18 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
                                                  FontMetrics(), outWarnings);
   }
 
+  // Instantiate ComputedSymbolComponent.
+  for (auto view = registry.view<SymbolComponent, ComputedStyleComponent>(); auto entity : view) {
+    auto [symbol, style] = view.get(entity);
+    EntityHandle handle(registry, entity);
+
+    const Boxd bounds =
+        computeSizeProperties(handle, symbol.properties, style.properties->unparsedProperties,
+                              getViewport(handle), FontMetrics(), outWarnings);
+
+    std::ignore = registry.emplace_or_replace<ComputedSymbolComponent>(entity, bounds);
+  }
+
   for (auto view = registry.view<TransformComponent, ComputedStyleComponent>();
        auto entity : view) {
     auto [transform, style] = view.get(entity);
@@ -475,8 +497,7 @@ Boxd LayoutSystem::computeSizeProperties(
   SizedElementProperties mutableSizeProperties = sizeProperties;
 
   ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, outWarnings);
-  return LayoutSystem().calculateSizedElementBounds(entity, mutableSizeProperties, viewbox,
-                                                    fontMetrics);
+  return calculateSizedElementBounds(entity, mutableSizeProperties, viewbox, fontMetrics);
 }
 
 // Creates a ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -735,6 +756,14 @@ template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Image>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return components::ParseSizedElementPresentationAttribute(handle, name, params);
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::Symbol>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  // In SVG2, <symbol> still has normal attributes, not presentation attributes that can be
+  // specified in CSS.
+  return false;
 }
 
 }  // namespace donner::svg::parser

@@ -19,4 +19,11 @@ struct SymbolComponent {
   SizedElementProperties properties;
 };
 
+/**
+ * Stores the computed size of \ref SymbolComponent.
+ */
+struct ComputedSymbolComponent {
+  Boxd bounds;  ///< The computed rect of the symbol element.
+};
+
 }  // namespace donner::svg::components
