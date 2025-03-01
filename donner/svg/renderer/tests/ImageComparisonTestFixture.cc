@@ -142,6 +142,17 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
+    // Output the SVG content for easier debugging
+    std::cout << "SVG Content for " << svgFilename.filename().string() << ":\n---\n";
+    std::ifstream svgFile(svgFilename);
+    if (svgFile) {
+      std::string svgContent((std::istreambuf_iterator<char>(svgFile)),
+                             std::istreambuf_iterator<char>());
+      std::cout << svgContent << "\n---\n";
+    } else {
+      std::cout << "Could not read SVG file: " << svgFilename << "\n---\n";
+    }
+
     if (params.saveDebugSkpOnFailure) {
       std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
 
