@@ -10,7 +10,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
 # Build dependencies
-bazel_dep(name = "apple_support", version = "1.17.1", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
+bazel_dep(name = "apple_support", version = "1.19.0", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
 
 bazel_dep(name = "rules_cc", version = "0.1.1")
 bazel_dep(name = "bazel_skylib", version = "1.7.1")
