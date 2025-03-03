@@ -60,6 +60,13 @@ public:
      * such as `&amp;` and `&lt;` will not be translated to their respective characters.
      */
     bool disableEntityTranslation = false;
+    
+    /**
+     * Disable external entity resolution during parsing. If this flag is set to true, external
+     * entities declared in the DOCTYPE will not be resolved. This is a security measure to prevent
+     * XXE attacks.
+     */
+    bool disableExternalEntities = true;
   };
 
   /**

@@ -3,6 +3,7 @@
 #include <cassert>  // For assert
 #include <cstddef>
 #include <cstdlib>  // For std::size_t
+#include <iostream>
 #include <string_view>
 
 #include "donner/base/FileOffset.h"
@@ -15,6 +16,7 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/components/XMLNamespaceContext.h"
 
 namespace donner::xml {
 
@@ -28,16 +30,297 @@ template <typename Lambda>
 constexpr std::array<unsigned char, 256> BuildLookupTable(Lambda lambda) {
   std::array<unsigned char, 256> table = {};
   for (int i = 0; i < 256; ++i) {
-    if (lambda(static_cast<char>(i))) {
-      table[i] = 1;
-    } else {
-      table[i] = 0;
-    }
+    table[i] = lambda(static_cast<char>(i)) ? 1 : 0;
   }
-
   return table;
 }
 // LCOV_EXCL_STOP
+
+struct ParsedAttribute {
+  XMLQualifiedNameRef name;
+  RcStringOrRef value;
+};
+
+/// Detects qualified name characters, e.g. element or attribute names, which may contain a colon
+/// if they have a namespace prefix
+struct NamePredicate {
+  /// Valid names (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0`)
+  static constexpr std::array<unsigned char, 256> kLookupName = BuildLookupTable([](char ch) {
+    return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
+             ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0');
+  });
+
+  static unsigned char test(char ch) { return kLookupName[static_cast<unsigned char>(ch)]; }
+};
+
+/// Detects attribute name characters without ':', which may be a namespace prefix or local name
+struct NameNoColonPredicate {
+  /// Name without colon (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0`
+  /// `:`)
+  static constexpr std::array<unsigned char, 256> kLookupNameNoColon =
+      BuildLookupTable([](char ch) {
+        return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
+                 ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0' || ch == ':');
+      });
+
+  static unsigned char test(char ch) { return kLookupNameNoColon[static_cast<unsigned char>(ch)]; }
+};
+
+/// Detects text data between nodes, e.g. between <tag> and </tag>, including entities (anything
+/// but `<` `\0`)
+struct TextPredicate {
+  /// Text (i.e. PCDATA) (anything but `<` `\0`)
+  static constexpr std::array<unsigned char, 256> kLookupText =
+      BuildLookupTable([](char ch) { return ch != '<' && ch != '\0'; });
+
+  static bool test(char ch) { return kLookupText[static_cast<unsigned char>(ch)] != 0; }
+};
+
+/// Detects text data within nodes, e.g. between <tag> and </tag> which does not require
+/// reprocessing (anything but `<` `\0` `&`)
+struct TextNoEntityPredicate {
+  /// Text (i.e. PCDATA) that does not require reprocessing (anything but `<` `\0` `&`)
+  static constexpr std::array<unsigned char, 256> kLookupTextNoEntity =
+      BuildLookupTable([](char ch) { return ch != '<' && ch != '\0' && ch != '&'; });
+
+  static bool test(char ch) { return kLookupTextNoEntity[static_cast<unsigned char>(ch)] != 0; }
+};
+
+/// Matches quoted attribute value characters (any character except `\0` or the closing quote)
+template <char Quote>
+struct QuotedStringPredicate {
+  /// Quoted string contents (anything but the quote and `\0`)
+  static constexpr std::array<unsigned char, 256> kLookupStringData =
+      BuildLookupTable([](char ch) { return ch != Quote && ch != '\0'; });
+
+  static bool test(char ch) { return kLookupStringData[static_cast<unsigned char>(ch)] != 0; }
+};
+
+/// Matches quoted attribute value characters except entity references (e.g. `&amp;`), any
+/// character except `&`, `\0`, or the closing quote.
+template <char Quote>
+struct QuotedStringNoEntityPredicate {
+  /// Quoted string contents which does not require processing (anything but the quote and `\0`
+  /// `&`)
+  static constexpr std::array<unsigned char, 256> kLookupStringDataNoEntity =
+      BuildLookupTable([](char ch) { return ch != Quote && ch != '\0' && ch != '&'; });
+
+  static bool test(char ch) {
+    return kLookupStringDataNoEntity[static_cast<unsigned char>(ch)] != 0;
+  }
+};
+
+/// Helper function defined inline since it does not need instance members.
+/// Note that we take a reference to a vector to hold our allocated strings.
+std::optional<ParseError> AppendUnicodeCharToNewString(char32_t codepoint,
+                                                       SmallVector<RcStringOrRef, 5>& pieces,
+                                                       size_t offset) {
+  // Validate the codepoint per XML specs.
+  if (!Utf8::IsValidCodepoint(codepoint) || codepoint == 0xFFFE || codepoint == 0xFFFF) {
+    ParseError err;
+    err.reason = "Invalid numeric character entity";
+    err.location = FileOffset::Offset(offset);
+    return err;
+  }
+
+  // Allocate a new string, append UTF-8, and record its view.
+  std::vector<char> str;
+  Utf8::Append(codepoint, std::back_inserter(str));
+  pieces.push_back(RcStringOrRef(RcString::fromVector(std::move(str))));
+  return std::nullopt;
+}
+
+/// Helper to push literal unknown entity text, e.g. "&foo;", into our pieces.
+void PushLiteralUnknownEntity(std::string_view entityName, SmallVector<RcStringOrRef, 5>& pieces) {
+  std::vector<char> literal;
+
+  literal.reserve(entityName.size() + 2);
+  literal.push_back('&');
+  literal.insert(literal.end(), entityName.begin(), entityName.end());
+  literal.push_back(';');
+  pieces.push_back(RcStringOrRef(RcString::fromVector(std::move(literal))));
+}
+
+/**
+ * A helper class to encapsulate entity expansion.
+ * It takes a starting std::string_view and then parses built-in and numeric entities.
+ * Custom entity lookups could be added via additional callbacks if needed.
+ */
+class EntityExpander {
+public:
+  EntityExpander(std::string_view input, components::EntityDeclarationsContext& context,
+                 int depth = 0)
+      : input_(input), originalInput_(input), context_(context), entityDepth_(depth) {}
+
+  /**
+   * Expand the input text, returning a SmallVector of string_view pieces.
+   */
+  ParseResult<SmallVector<RcStringOrRef, 5>> expand() {
+    using parser::IntegerParser;
+
+    SmallVector<RcStringOrRef, 5> pieces;
+
+    // Process the rest of the input.
+    while (!input_.empty() && TextPredicate::test(peek().value_or('\0'))) {
+      if (peek() != '&') {
+        // Consume a chunk of characters that don't need further processing.
+        std::string_view chunk = consumeMatching<TextNoEntityPredicate>();
+        if (!chunk.empty()) {
+          std::cout << "chunk initial: " << chunk << std::endl;
+          pieces.push_back(RcStringOrRef(chunk));
+        }
+      } else {
+        // Process an entity.
+        if (tryConsume("&amp;")) {
+          pieces.push_back("&");
+        } else if (tryConsume("&apos;")) {
+          pieces.push_back("'");
+        } else if (tryConsume("&quot;")) {
+          pieces.push_back("\"");
+        } else if (tryConsume("&lt;")) {
+          pieces.push_back("<");
+        } else if (tryConsume("&gt;")) {
+          pieces.push_back(">");
+        } else if (tryConsume("&#")) {
+          const size_t entityOffset = originalInput_.size() - input_.size();
+
+          // Numeric entity: hex or decimal.
+          if (peek() == 'x') {
+            // Hexadecimal.
+            auto maybeHex = IntegerParser::ParseHex(input_.substr(1));
+            if (maybeHex.hasError()) {
+              ParseError err = maybeHex.error();
+              err.location = err.location.addParentOffset(FileOffset::Offset(entityOffset + 1));
+              return err;
+            }
+
+            const IntegerParser::Result result = maybeHex.result();
+            input_.remove_prefix(result.consumedChars + 1);
+
+            if (auto err = AppendUnicodeCharToNewString(result.number, pieces, entityOffset + 1)) {
+              err->location = err->location.addParentOffset(FileOffset::Offset(entityOffset));
+              return err.value();
+            }
+          } else {
+            // Decimal.
+            auto maybeDec = IntegerParser::Parse(input_);
+            if (maybeDec.hasError()) {
+              ParseError err = maybeDec.error();
+              err.location = err.location.addParentOffset(FileOffset::Offset(entityOffset));
+              return err;
+            }
+
+            const IntegerParser::Result result = maybeDec.result();
+            input_.remove_prefix(result.consumedChars);
+
+            if (auto err = AppendUnicodeCharToNewString(result.number, pieces, entityOffset)) {
+              err->location = err->location.addParentOffset(FileOffset::Offset(entityOffset));
+              return err.value();
+            }
+          }
+
+          if (!tryConsume(";")) {
+            return ParseError{"Numeric character entity missing closing ';'"};
+          }
+        } else {
+          // Custom entity
+          std::string_view inputFromEntityStart = input_;
+          input_.remove_prefix(1);  // skip '&'
+          size_t namePos = 0;
+          while (namePos < input_.size() && NameNoColonPredicate::test(input_[namePos]) &&
+                 input_[namePos] != ';') {
+            ++namePos;
+          }
+
+          if (namePos == 0 || namePos >= input_.size()) {
+            pieces.push_back("&");
+            continue;
+          }
+
+          if (input_[namePos] == ';') {
+            std::string_view entityName = input_.substr(0, namePos);
+            input_.remove_prefix(namePos + 1);
+
+            if (auto entityDecl = context_.getEntityDeclaration(entityName)) {
+              if (entityDecl->second) {
+                std::cout << "chunk ext: " << inputFromEntityStart.substr(0, namePos + 2)
+                          << std::endl;
+
+                // External entities are not yet supported
+                // TODO: Implement external entity resolution.
+                pieces.push_back(RcStringOrRef(inputFromEntityStart.substr(0, namePos + 2)));
+                continue;
+              } else {
+                // Recursive entity expansion.
+                const size_t entityOffset = originalInput_.size() - inputFromEntityStart.size();
+                if (entityDepth_ >= kMaxEntityDepth) {
+                  std::cout << "chunk inf: " << inputFromEntityStart.substr(0, namePos + 2)
+                            << std::endl;
+                  // Prevent infinite recursion by using the literal entity text.
+                  pieces.push_back(RcStringOrRef(inputFromEntityStart.substr(0, namePos + 2)));
+                  continue;
+                }
+
+                std::cout << "entityDecl->first: " << entityDecl->first << std::endl;
+                EntityExpander recursiveExpander(entityDecl->first, context_, entityDepth_ + 1);
+                auto recursiveResult = recursiveExpander.expand();
+                if (recursiveResult.hasError()) {
+                  return recursiveResult.error();
+                }
+
+                for (const auto& piece : recursiveResult.result()) {
+                  std::cout << "chunk recur: " << piece << std::endl;
+                  pieces.push_back(piece);
+                }
+              }
+            } else {
+              PushLiteralUnknownEntity(entityName, pieces);
+            }
+          } else {
+            pieces.push_back("&");
+          }
+        }
+      }
+    }
+    return pieces;
+  }
+
+private:
+  inline std::optional<char> peek() const {
+    if (input_.empty()) {
+      return std::nullopt;
+    }
+    return input_[0];
+  }
+
+  inline bool tryConsume(std::string_view token) {
+    if (input_.starts_with(token)) {
+      input_.remove_prefix(token.size());
+      return true;
+    }
+    return false;
+  }
+
+  template <class Predicate>
+  inline std::string_view consumeMatching() {
+    size_t i = 0;
+    while (i < input_.size() && Predicate::test(input_[i])) {
+      ++i;
+    }
+    std::string_view result = input_.substr(0, i);
+    input_.remove_prefix(i);
+    return result;
+  }
+
+  std::string_view input_;
+  std::string_view originalInput_;
+
+  components::EntityDeclarationsContext& context_;
+
+  // Recursion tracking to avoid infinite entity expansions.
+  static constexpr int kMaxEntityDepth = 10;
+  int entityDepth_;
+};
 
 class XMLParserImpl : public parser::ParserBase {
 private:
@@ -59,24 +342,19 @@ public:
     // Detect and skip the BOM, if it exists
     parseBOM();
 
-    // Parse children
+    // Parse top-level nodes
     while (true) {
-      // Skip whitespace before node
       skipWhitespace();
       if (remaining_.empty() || peek() == '\0') {
         break;
       }
 
       const FileOffset startOffset = currentOffsetWithLineNumber();
-
-      // Parse and append new child
       if (tryConsume("<")) {
         auto maybeNode = parseNode(startOffset);
-
         if (maybeNode.hasError()) {
           return std::move(maybeNode.error());
         }
-
         if (maybeNode.result().has_value()) {
           document_.root().appendChild(maybeNode.result().value());
         }
@@ -88,7 +366,12 @@ public:
     return document_;
   }
 
+  /**
+   * Used by GetAttributeLocation to re-parse just the attributes of a single element
+   * starting at `<element`.
+   */
   std::optional<FileOffsetRange> getElementAttributeLocation(const XMLQualifiedNameRef& name) {
+    // We assume the caller has already consumed "<", so do it here.
     UTILS_RELEASE_ASSERT_MSG(tryConsume("<"), "Expected element to start with '<'");
 
     // Extract element name
@@ -99,6 +382,7 @@ public:
     // Skip whitespace between element name and attributes
     skipWhitespace();
 
+    // Now parse attributes until we reach `>` or `/>` or we run out
     while (true) {
       const FileOffset attributeStartOffset = currentOffsetWithLineNumber();
 
@@ -125,7 +409,7 @@ public:
 private:
   parser::LineOffsets lineOffsets() {
     if (!lineOffsets_) {
-      lineOffsets_ = parser::LineOffsets(str_);
+      lineOffsets_.emplace(str_);
     }
 
     return lineOffsets_.value();
@@ -148,77 +432,6 @@ private:
     result.location = result.location.addParentOffset(currentOffsetWithLineNumber(relativeOffset));
     return result;
   }
-
-  // Detects qualified name characters, e.g. element or attribute names, which may contain a colon
-  // if they have a namespace prefix
-  struct NamePredicate {
-    /// Valid names (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0`)
-    static constexpr std::array<unsigned char, 256> kLookupName = BuildLookupTable([](char ch) {
-      return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
-               ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0');
-    });
-
-    static unsigned char test(char ch) { return kLookupName[static_cast<unsigned char>(ch)]; }
-  };
-
-  // Detects attribute name characters without ':', which may be a namespace prefix or local name
-  struct NameNoColonPredicate {
-    /// Name without colon (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0`
-    /// `:`)
-    static constexpr std::array<unsigned char, 256> kLookupNameNoColon =
-        BuildLookupTable([](char ch) {
-          return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
-                   ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0' || ch == ':');
-        });
-
-    static unsigned char test(char ch) {
-      return kLookupNameNoColon[static_cast<unsigned char>(ch)];
-    }
-  };
-
-  /// Detects text data between nodes, e.g. between <tag> and </tag>, including entities (anything
-  /// but `<` `\0`)
-  struct TextPredicate {
-    /// Text (i.e. PCDATA) (anything but `<` `\0`)
-    static constexpr std::array<unsigned char, 256> kLookupText =
-        BuildLookupTable([](char ch) { return ch != '<' && ch != '\0'; });
-
-    static bool test(char ch) { return kLookupText[static_cast<unsigned char>(ch)] != 0; }
-  };
-
-  /// Detects text data within nodes, e.g. between <tag> and </tag> which does not require
-  /// reprocessing (anything but `<` `\0` `&`)
-  struct TextNoEntityPredicate {
-    /// Text (i.e. PCDATA) that does not require reprocessing (anything but `<` `\0` `&`)
-    static constexpr std::array<unsigned char, 256> kLookupTextNoEntity =
-        BuildLookupTable([](char ch) { return ch != '<' && ch != '\0' && ch != '&'; });
-
-    static bool test(char ch) { return kLookupTextNoEntity[static_cast<unsigned char>(ch)] != 0; }
-  };
-
-  /// Matches quoted attribute value characters (any character except `\0` or the closing quote)
-  template <char Quote>
-  struct QuotedStringPredicate {
-    /// Quoted string contents (anything but the quote and `\0`)
-    static constexpr std::array<unsigned char, 256> kLookupStringData =
-        BuildLookupTable([](char ch) { return ch != Quote && ch != '\0'; });
-
-    static bool test(char ch) { return kLookupStringData[static_cast<unsigned char>(ch)] != 0; }
-  };
-
-  /// Matches quoted attribute value characters except entity references (e.g. `&amp;`), any
-  /// character except `&`, `\0`, or the closing quote.
-  template <char Quote>
-  struct QuotedStringNoEntityPredicate {
-    /// Quoted string contents which does not require processing (anything but the quote and `\0`
-    /// `&`)
-    static constexpr std::array<unsigned char, 256> kLookupStringDataNoEntity =
-        BuildLookupTable([](char ch) { return ch != Quote && ch != '\0' && ch != '&'; });
-
-    static bool test(char ch) {
-      return kLookupStringDataNoEntity[static_cast<unsigned char>(ch)] != 0;
-    }
-  };
 
   /**
    * Insert a decoded unicode character, an integer in the range [0, 0x10FFFF], and inserts Utf8
@@ -251,7 +464,7 @@ private:
     remaining_.remove_prefix(skipCount);
   }
 
-  // Consume and return a substring while a predicate evaluates to true
+  /// Consume and return a substring while a predicate evaluates to true
   template <class MatchPredicate>
   std::string_view consumeMatching() {
     size_t i = 0;
@@ -266,18 +479,17 @@ private:
     return result;
   }
 
-  // Skip characters until predicate evaluates to true while doing the following:
-  // - replacing XML character entity references with proper characters (&apos; &amp; &quot; &lt;
-  // &gt; &#...;)
+  /// The main expansion routine for text / attribute values. Handles built-ins (`&amp;` etc.),
+  /// numeric references (`&#x12;`), and custom entities from `<!ENTITY>` declarations.
   template <class MatchPredicate, class MatchPredicateNoEntity>
   ParseResult<RcStringOrRef> consumeAndExpandEntities() {
-    using donner::parser::IntegerParser;
-
+    // Fast path if translation is disabled.
     if (UTILS_PREDICT_FALSE(options_.disableEntityTranslation)) {
-      return ParseResult<RcStringOrRef>(consumeMatching<MatchPredicate>());
+      // Just read raw text until the first disallowed character
+      return RcStringOrRef(consumeMatching<MatchPredicate>());
     }
 
-    // Consumes until the first modification is detected.
+    // First pass: read raw text that doesn't need reprocessing
     const std::string_view unmodifiedContents = consumeMatching<MatchPredicateNoEntity>();
 
     // If the entire string was unmodified, return it. Otherwise we need to do entity conversion.
@@ -285,70 +497,59 @@ private:
       return RcStringOrRef(unmodifiedContents);
     }
 
-    std::vector<char> dest(unmodifiedContents.begin(), unmodifiedContents.end());
-
-    // Use translation skip
-    while (MatchPredicate::test(peek().value_or('\0'))) {
-      // TODO: Switch to compile-time trie
-      if (peek() == '&') {
-        if (tryConsume("&amp;")) {
-          dest.push_back('&');
-        } else if (tryConsume("&apos;")) {
-          dest.push_back('\'');
-        } else if (tryConsume("&quot;")) {
-          dest.push_back('\"');
-        } else if (tryConsume("&lt;")) {
-          dest.push_back('<');
-        } else if (tryConsume("&gt;")) {
-          dest.push_back('>');
-        } else if (tryConsume("&#")) {
-          std::vector<char> result;
-
-          if (peek() == 'x') {
-            auto maybeResult = IntegerParser::ParseHex(remaining_.substr(1));
-            if (maybeResult.hasError()) {
-              return mapParseError(std::move(maybeResult.error()), /*relativeOffset=*/1);
-            }
-
-            const IntegerParser::Result integerResult = maybeResult.result();
-            // Decodes and adds to output text.
-            if (auto maybeError = insertUtf8(integerResult.number, std::back_inserter(dest))) {
-              return std::move(maybeError.value());
-            }
-
-            remaining_.remove_prefix(integerResult.consumedChars + 1);
-          } else {
-            auto maybeResult = IntegerParser::Parse(remaining_);
-            if (maybeResult.hasError()) {
-              return mapParseError(std::move(maybeResult.error()));
-            }
-
-            const IntegerParser::Result integerResult = maybeResult.result();
-
-            // Decodes and adds to output text.
-            if (auto maybeError = insertUtf8(integerResult.number, std::back_inserter(dest))) {
-              return std::move(maybeError.value());
-            }
-
-            remaining_.remove_prefix(integerResult.consumedChars);
-          }
-
-          if (!tryConsume(";")) {
-            return createParseError("Numeric character entity missing closing ';'");
-          }
-        } else {
-          // No matches, copy '&' directly
-          dest.push_back('&');
-          remaining_.remove_prefix(1);
-        }
-      } else {
-        // Regular character, copy
-        dest.push_back(remaining_[0]);
-        remaining_.remove_prefix(1);
-      }
+    SmallVector<RcStringOrRef, 5> pieces;
+    if (!unmodifiedContents.empty()) {
+      pieces.push_back(RcStringOrRef(unmodifiedContents));
     }
 
-    return RcStringOrRef(RcString::fromVector(std::move(dest)));
+    // Read the rest of the input.
+    std::string_view entityContainingContents;
+    const FileOffset entityStartLocation = currentOffsetWithLineNumber();
+    {
+      size_t matchingLength = 0;
+      while (matchingLength < remaining_.size() &&
+             MatchPredicate::test(remaining_[matchingLength])) {
+        ++matchingLength;
+      }
+
+      entityContainingContents = remaining_.substr(0, matchingLength);
+      remaining_.remove_prefix(matchingLength);
+    }
+
+    // Instantiate the expander with the current remaining text.
+    EntityExpander expander(
+        entityContainingContents,
+        document_.registry().ctx().get<components::EntityDeclarationsContext>());
+    auto maybePieces = expander.expand();
+    if (maybePieces.hasError()) {
+      ParseError outerError;
+      outerError.reason = maybePieces.error().reason;
+      outerError.location = maybePieces.error().location.addParentOffset(entityStartLocation);
+      return outerError;
+    }
+
+    for (auto& piece : maybePieces.result()) {
+      pieces.push_back(std::move(piece));
+    }
+
+    if (pieces.size() == 1) {
+      // Make sure its allocated.
+      return RcStringOrRef(RcString(pieces[0]));
+    }
+
+    // Flatten all the pieces.
+    size_t totalLen = 0;
+    for (const auto& sv : pieces) {
+      totalLen += sv.size();
+    }
+
+    std::vector<char> buffer;
+    buffer.reserve(totalLen);
+    for (const auto& sv : pieces) {
+      buffer.insert(buffer.end(), sv.begin(), sv.end());
+    }
+
+    return RcStringOrRef(RcString::fromVector(std::move(buffer)));
   }
 
   bool tryConsume(std::string_view token) {
@@ -396,7 +597,7 @@ private:
     return result;
   }
 
-  // Parse XML declaration (<?xml...)
+  /// Parse XML declaration (<?xml...)
   ParseResult<XMLNode> parseXMLDeclaration(FileOffset startOffset) {
     // Create declaration
     XMLNode declaration = XMLNode::CreateXMLDeclarationNode(document_);
@@ -439,62 +640,72 @@ private:
     }
   }
 
-  // Parse DOCTYPE
+  /**
+   * Parse DOCTYPE, e.g. `<!DOCTYPE root [ ... ]>`
+   *
+   * We store the entire doctype text in the node’s value(), but also
+   * detect `<!ENTITY>` declarations in the internal subset and record them.
+   */
   ParseResult<std::optional<XMLNode>> parseDoctype(FileOffset startOffset) {
-    // Process until '>'
+    // We read until the first '>' at nesting level 0, while also handling the internal subset `[
+    // ]`
+    int bracketLevel = 0;
+    bool foundEnd = false;
+    bool inInternalSubset = false;
+
     size_t i = 0;
-    size_t len = remaining_.size();
-    bool stop = false;
-
-    while (i < len && !stop) {
-      switch (remaining_[i]) {
-        case '>': {
-          // End of doctype node.
-          stop = true;
-          break;
-        }
-        case '[': {
-          ++i;  // Skip '['
-
-          int depth = 1;
-          while (depth > 0) {
-            if (i >= len) {
-              return createParseError("Doctype node missing closing ']'");
-            }
-
-            switch (remaining_[i]) {
-              case '[': ++depth; break;
-              case ']': --depth; break;
-              default: break;
-            }
-
-            ++i;
-          }
-          break;
-        }
-        case '\0': {
-          return createParseError("Unexpected end of data, found embedded null character");
-        }
-        default: {
-          ++i;
-          break;
-        }
+    while (i < remaining_.size()) {
+      char c = remaining_[i];
+      if (c == '\0') {
+        return createParseError("Unexpected end of data, found embedded null character");
       }
+      if (c == '[') {
+        bracketLevel++;
+        inInternalSubset = true;
+      } else if (c == ']') {
+        bracketLevel--;
+        if (bracketLevel < 0) {
+          bracketLevel = 0;  // Malformed but we won't crash
+        }
+        if (bracketLevel == 0) {
+          inInternalSubset = false;
+        }
+      } else if (c == '>' && bracketLevel == 0) {
+        // Doctype ends here
+        foundEnd = true;
+        break;
+      } else if (inInternalSubset && i + 8 < remaining_.size() &&
+                 remaining_.substr(i, 8) == "<!ENTITY") {
+        // Parse entity declaration, find the '>' that ends this !ENTITY
+        size_t closePos = remaining_.find('>', i + 8);
+        if (closePos == std::string_view::npos) {
+          return createParseError("Unterminated <!ENTITY declaration in DOCTYPE");
+        }
+        // Substring for the entity decl
+        std::string_view entityDecl = remaining_.substr(i, closePos - i + 1);
+        // Store it
+        if (auto maybeErr = parseEntityDeclInDoctype(entityDecl)) {
+          return maybeErr.value();
+        }
+        // Skip over
+        i = closePos;  // The for loop will i++ after
+      }
+      i++;
     }
 
-    if (!stop) {
+    if (!foundEnd) {
       return createParseError("Doctype node missing closing '>'");
     }
 
-    const std::string_view doctypeStr = remaining_.substr(0, i);
-    remaining_.remove_prefix(i + 1);  // Remove contents plus '>'
+    // The substring includes everything up to `i`
+    std::string_view doctypeStr = remaining_.substr(0, i);
+    remaining_.remove_prefix(i + 1);  // consume the '>' as well
 
     if (options_.parseDoctype) {
-      // Create a new doctype node
-      XMLNode doctype = XMLNode::CreateDocTypeNode(document_, doctypeStr);
-      doctype.setSourceStartOffset(startOffset);
-      doctype.setSourceEndOffset(currentOffsetWithLineNumber());
-      return std::make_optional(doctype);
+      XMLNode docNode = XMLNode::CreateDocTypeNode(document_, doctypeStr);
+      docNode.setSourceStartOffset(startOffset);
+      docNode.setSourceEndOffset(currentOffsetWithLineNumber());
+      return std::optional<XMLNode>(docNode);
     } else {
       return std::optional<XMLNode>(std::nullopt);
     }
@@ -529,7 +740,9 @@ private:
     }
   }
 
-  // Parse and append data
+  /**
+   * Read raw text (PCDATA) until `<` or `\0`
+   */
   std::optional<ParseError> parseAndAppendData(XMLNode& node) {
     // Skip until end of data
     auto maybeData = consumeAndExpandEntities<TextPredicate, TextNoEntityPredicate>();
@@ -554,7 +767,9 @@ private:
     return std::nullopt;
   }
 
-  // Parse CDATA
+  /**
+   * parseCData: e.g. `<![CDATA[ ... ]]>`
+   */
   ParseResult<XMLNode> parseCData(FileOffset startOffset) {
     auto maybeCData = consumeContentsUntilEndString("]]>");
     if (!maybeCData) {
@@ -569,7 +784,124 @@ private:
     return cdata;
   }
 
-  // Parse element node
+  /**
+   * parseEntityDeclInDoctype: given a snippet like `<!ENTITY name "value">`
+   * or `<!ENTITY % name "value">` or with SYSTEM, store it in the entity registry.
+   *
+   * We do not fully expand parameter entities inside the entity value except for
+   * what your test suite already covers. If you need more advanced expansions, you
+   * can unify this with a more thorough parser approach.
+   */
+  std::optional<ParseError> parseEntityDeclInDoctype(std::string_view decl) {
+    // quick sanity check
+    // The string starts with `<!ENTITY` ... ends with '>'
+    // strip that off
+    static constexpr std::string_view kPrefix = "<!ENTITY";
+    if (!decl.starts_with(kPrefix)) {
+      return createParseError("Expected <!ENTITY in parseEntityDeclInDoctype");
+    }
+    // remove `<!ENTITY`
+    decl.remove_prefix(kPrefix.size());
+
+    // remove trailing '>'
+    if (!decl.ends_with(">")) {
+      return createParseError("Missing '>' in entity declaration");
+    }
+    decl.remove_suffix(1);
+
+    // skip whitespace
+    size_t pos = 0;
+    while (pos < decl.size() && isWhitespace(decl[pos])) {
+      pos++;
+    }
+
+    bool isParameterEntity = false;
+    if (pos < decl.size() && decl[pos] == '%') {
+      // parameter entity
+      isParameterEntity = true;
+      pos++;
+      while (pos < decl.size() && isWhitespace(decl[pos])) {
+        pos++;
+      }
+    }
+
+    // parse entity name
+    size_t nameStart = pos;
+    while (pos < decl.size() && NameNoColonPredicate::test(decl[pos])) {
+      pos++;
+    }
+    if (pos == nameStart) {
+      return createParseError("Expected entity name");
+    }
+    RcString entityName(decl.substr(nameStart, pos - nameStart));
+
+    // skip whitespace
+    while (pos < decl.size() && isWhitespace(decl[pos])) {
+      pos++;
+    }
+    if (pos >= decl.size()) {
+      return createParseError("Entity declaration truncated");
+    }
+
+    bool isExternal = false;
+    RcString entityValue;
+    // Check if "SYSTEM" or "PUBLIC"
+    if ((pos + 6 <= decl.size()) &&
+        (decl.compare(pos, 6, "SYSTEM") == 0 || decl.compare(pos, 6, "PUBLIC") == 0)) {
+      // external
+      isExternal = true;
+      pos += 6;
+      while (pos < decl.size() && isWhitespace(decl[pos])) {
+        pos++;
+      }
+      if (pos >= decl.size()) {
+        return createParseError("Truncated external entity decl");
+      }
+      if (decl[pos] == '"' || decl[pos] == '\'') {
+        // parse system identifier
+        char quote = decl[pos++];
+        size_t valStart = pos;
+        while (pos < decl.size() && decl[pos] != quote) {
+          pos++;
+        }
+        if (pos >= decl.size()) {
+          return createParseError("Unterminated external entity system identifier");
+        }
+        entityValue = RcString(decl.substr(valStart, pos - valStart));
+        pos++;  // skip closing quote
+      } else {
+        return createParseError("Expected quoted system identifier in entity decl");
+      }
+    } else {
+      // internal entity => must be quoted
+      if (decl[pos] != '"' && decl[pos] != '\'') {
+        return createParseError("Expected quoted entity value or SYSTEM/PUBLIC");
+      }
+      char quote = decl[pos++];
+      size_t valStart = pos;
+      while (pos < decl.size() && decl[pos] != quote) {
+        pos++;
+      }
+      if (pos >= decl.size()) {
+        return createParseError("Unterminated entity value");
+      }
+      entityValue = RcString(decl.substr(valStart, pos - valStart));
+      pos++;  // skip closing quote
+    }
+
+    // store in the entity declarations
+    auto& entityCtx = document_.registry().ctx().get<components::EntityDeclarationsContext>();
+    if (isParameterEntity) {
+      entityCtx.addParameterEntityDeclaration(entityName, entityValue, isExternal);
+    } else {
+      entityCtx.addEntityDeclaration(entityName, entityValue, isExternal);
+    }
+    return std::nullopt;
+  }
+
+  /**
+   * Parsing an element of form `<tag ...>` or `<tag .../>`.
+   */
   ParseResult<XMLNode> parseElement(FileOffset startOffset) {
     // Extract element name
     auto maybeName = consumeQualifiedName();
@@ -608,7 +940,9 @@ private:
     return element;
   }
 
-  // Parse node
+  /**
+   * Parse a node, dispatch on what comes after `<`
+   */
   ParseResult<std::optional<XMLNode>> parseNode(FileOffset startOffset) {
     // Parse proper node type
     switch (peek().value_or('\0')) {
@@ -677,7 +1011,9 @@ private:
     }
   }
 
-  // Parse contents of the node
+  /**
+   * Parse contents of the node, gather child nodes or text until `</tag>`
+   */
   [[nodiscard]] std::optional<ParseError> parseNodeContents(XMLNode& node) {
     // For all children and text
     while (true) {
@@ -740,11 +1076,11 @@ private:
     }
   }
 
-  struct ParsedAttribute {
-    XMLQualifiedNameRef name;
-    RcStringOrRef value;
-  };
-
+  /**
+   * Attempt to parse a single attr `name="value"`
+   *
+   * @returns nullopt if none found.
+   */
   ParseResult<std::optional<ParsedAttribute>> parseNextAttribute() {
     if (!NameNoColonPredicate::test(peek().value_or('\0'))) {
       // No more attributes to parse.
@@ -808,7 +1144,9 @@ private:
     return std::make_optional(result);
   }
 
-  // Parse XML attributes of the node
+  /**
+   * Parse XML attributes of the node, gather all attributes until `>` or `/>`
+   */
   [[nodiscard]] std::optional<ParseError> parseNodeAttributes(XMLNode& node) {
     // For all attributes
     while (true) {
@@ -836,7 +1174,7 @@ private:
 
 }  // namespace
 
-ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const XMLParser::Options& options) {
+ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const Options& options) {
   XMLParserImpl parser(str, options);
   return parser.parse();
 }
@@ -847,7 +1185,7 @@ std::optional<FileOffsetRange> XMLParser::GetAttributeLocation(
     return std::nullopt;
   }
 
-  XMLParser::Options reparseOptions;
+  Options reparseOptions;
   // To avoid unnecessary conversion when we're going to discard the values anyway.
   reparseOptions.disableEntityTranslation = true;
 

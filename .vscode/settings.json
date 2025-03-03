@@ -136,6 +136,7 @@
   "lldb.launch.initCommands": [
     "command source ${workspaceRoot}/.lldbinit"
   ],
+  "lldb.loadLLDBInit": true,
   // Tests
   "testMate.cpp.test.advancedExecutables": [
     {

@@ -207,10 +207,14 @@
       "program": "${workspaceFolder}/bazel-bin/donner/base/xml/xml_tests",
       "args": [
         "--gtest_break_on_failure",
+        "--gtest_filter=*EntitiesCustom*",
       ],
       "sourceMap": {
         ".": "${workspaceFolder}"
       },
+      "initCommands": [
+        "command source ${workspaceFolder}/.lldbinit"
+      ]
     },
     {
       "type": "lldb",

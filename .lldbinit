@@ -1,1 +1,19 @@
-command script import ./donner/base/lldb_formatters
+# LLDB initialization script for Donner project
+# Load custom formatters for better debug visualization
+
+# Add the project directory to Python path
+script import os, sys
+script project_path = os.getcwd()
+script sys.path.append(project_path)
+
+# Import the formatters directly - use absolute path for maximum reliability
+script formatter_path = os.path.join(project_path, "donner/base/lldb_formatters")
+script sys.path.append(formatter_path)
+
+# Import the formatters module directly
+command script import donner.base.lldb_formatters
+
+# Debug commands - uncomment these to see formatter loading details
+script print("Current Python path:", sys.path)
+type summary list
+log enable --python
