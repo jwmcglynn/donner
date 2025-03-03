@@ -7,14 +7,12 @@ namespace donner::xml {
 
 using components::XMLDocumentContext;
 using components::XMLNamespaceContext;
-using components::EntityDeclarationsContext;
 
 XMLDocument::XMLDocument() : registry_(std::make_shared<Registry>()) {
   auto& ctx = registry_->ctx().emplace<XMLDocumentContext>(XMLDocumentContext::InternalCtorTag{});
   ctx.rootEntity = XMLNode::CreateDocumentNode(*this).entityHandle().entity();
 
   registry_->ctx().emplace<XMLNamespaceContext>(*registry_);
-  registry_->ctx().emplace<EntityDeclarationsContext>();
 }
 
 XMLNode XMLDocument::root() const {

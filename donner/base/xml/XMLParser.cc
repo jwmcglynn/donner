@@ -16,6 +16,7 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/components/EntityDeclarationsContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 
 namespace donner::xml {
@@ -86,6 +87,16 @@ struct TextNoEntityPredicate {
   static bool test(char ch) { return kLookupTextNoEntity[static_cast<unsigned char>(ch)] != 0; }
 };
 
+/// Detects text data within nodes, e.g. between <tag> and </tag> which does not require
+/// reprocessing (anything but `<` `\0` `%`)
+struct TextNoParameterEntityPredicate {
+  /// Text (i.e. PCDATA) that does not require reprocessing (anything but `<` `\0` `%`)
+  static constexpr std::array<unsigned char, 256> kLookupTextNoEntity =
+      BuildLookupTable([](char ch) { return ch != '<' && ch != '\0' && ch != '%'; });
+
+  static bool test(char ch) { return kLookupTextNoEntity[static_cast<unsigned char>(ch)] != 0; }
+};
+
 /// Matches quoted attribute value characters (any character except `\0` or the closing quote)
 template <char Quote>
 struct QuotedStringPredicate {
@@ -110,8 +121,7 @@ struct QuotedStringNoEntityPredicate {
   }
 };
 
-/// Helper function defined inline since it does not need instance members.
-/// Note that we take a reference to a vector to hold our allocated strings.
+/// Append a codepoint as a new string to the pieces vector.
 std::optional<ParseError> AppendUnicodeCharToNewString(char32_t codepoint,
                                                        SmallVector<RcStringOrRef, 5>& pieces,
                                                        size_t offset) {
@@ -130,17 +140,6 @@ std::optional<ParseError> AppendUnicodeCharToNewString(char32_t codepoint,
   return std::nullopt;
 }
 
-/// Helper to push literal unknown entity text, e.g. "&foo;", into our pieces.
-void PushLiteralUnknownEntity(std::string_view entityName, SmallVector<RcStringOrRef, 5>& pieces) {
-  std::vector<char> literal;
-
-  literal.reserve(entityName.size() + 2);
-  literal.push_back('&');
-  literal.insert(literal.end(), entityName.begin(), entityName.end());
-  literal.push_back(';');
-  pieces.push_back(RcStringOrRef(RcString::fromVector(std::move(literal))));
-}
-
 /**
  * A helper class to encapsulate entity expansion.
  * It takes a starting std::string_view and then parses built-in and numeric entities.
@@ -148,9 +147,14 @@ void PushLiteralUnknownEntity(std::string_view entityName, SmallVector<RcStringO
  */
 class EntityExpander {
 public:
-  EntityExpander(std::string_view input, components::EntityDeclarationsContext& context,
+  enum class Type {
+    General,    ///< General entity expansion, e.g. '&amp;'
+    Parameter,  ///< Parameter entity expansion, e.g. '%foo;', for use in the DTD.
+  };
+
+  EntityExpander(Type type, std::string_view input, components::EntityDeclarationsContext& context,
                  int depth = 0)
-      : input_(input), originalInput_(input), context_(context), entityDepth_(depth) {}
+      : type_(type), input_(input), originalInput_(input), context_(context), entityDepth_(depth) {}
 
   /**
    * Expand the input text, returning a SmallVector of string_view pieces.
@@ -159,14 +163,21 @@ public:
     using parser::IntegerParser;
 
     SmallVector<RcStringOrRef, 5> pieces;
+    const std::string_view symbol = type_ == Type::General ? "&" : "%";
 
     // Process the rest of the input.
     while (!input_.empty() && TextPredicate::test(peek().value_or('\0'))) {
-      if (peek() != '&') {
+      if (peek() != symbol[0]) {
         // Consume a chunk of characters that don't need further processing.
-        std::string_view chunk = consumeMatching<TextNoEntityPredicate>();
+        std::string_view chunk;
+
+        if (type_ == Type::General) {
+          chunk = consumeMatching<TextNoEntityPredicate>();
+        } else {
+          chunk = consumeMatching<TextNoParameterEntityPredicate>();
+        }
+
         if (!chunk.empty()) {
-          std::cout << "chunk initial: " << chunk << std::endl;
           pieces.push_back(RcStringOrRef(chunk));
         }
       } else {
@@ -225,7 +236,7 @@ public:
         } else {
           // Custom entity
           std::string_view inputFromEntityStart = input_;
-          input_.remove_prefix(1);  // skip '&'
+          input_.remove_prefix(1);  // skip '&' or '%'
           size_t namePos = 0;
           while (namePos < input_.size() && NameNoColonPredicate::test(input_[namePos]) &&
                  input_[namePos] != ';') {
@@ -233,7 +244,7 @@ public:
           }
 
           if (namePos == 0 || namePos >= input_.size()) {
-            pieces.push_back("&");
+            pieces.push_back(symbol);
             continue;
           }
 
@@ -241,7 +252,9 @@ public:
             std::string_view entityName = input_.substr(0, namePos);
             input_.remove_prefix(namePos + 1);
 
-            if (auto entityDecl = context_.getEntityDeclaration(entityName)) {
+            if (auto entityDecl =
+                    (type_ == Type::General ? context_.getEntityDeclaration(entityName)
+                                            : context_.getParameterEntityDeclaration(entityName))) {
               if (entityDecl->second) {
                 std::cout << "chunk ext: " << inputFromEntityStart.substr(0, namePos + 2)
                           << std::endl;
@@ -252,36 +265,35 @@ public:
                 continue;
               } else {
                 // Recursive entity expansion.
-                const size_t entityOffset = originalInput_.size() - inputFromEntityStart.size();
                 if (entityDepth_ >= kMaxEntityDepth) {
-                  std::cout << "chunk inf: " << inputFromEntityStart.substr(0, namePos + 2)
-                            << std::endl;
                   // Prevent infinite recursion by using the literal entity text.
                   pieces.push_back(RcStringOrRef(inputFromEntityStart.substr(0, namePos + 2)));
                   continue;
                 }
 
-                std::cout << "entityDecl->first: " << entityDecl->first << std::endl;
-                EntityExpander recursiveExpander(entityDecl->first, context_, entityDepth_ + 1);
+                EntityExpander recursiveExpander(EntityExpander::Type::General, entityDecl->first,
+                                                 context_, entityDepth_ + 1);
                 auto recursiveResult = recursiveExpander.expand();
                 if (recursiveResult.hasError()) {
                   return recursiveResult.error();
                 }
 
                 for (const auto& piece : recursiveResult.result()) {
-                  std::cout << "chunk recur: " << piece << std::endl;
-                  pieces.push_back(piece);
+                  // Ensure we save by-value into an allocated RcString, as the string returned by
+                  // getEntityDeclaration may be on the stack.
+                  pieces.push_back(RcStringOrRef(RcString(piece)));
                 }
               }
             } else {
-              PushLiteralUnknownEntity(entityName, pieces);
+              pieces.push_back(inputFromEntityStart.substr(0, namePos + 2));
             }
           } else {
-            pieces.push_back("&");
+            pieces.push_back(symbol);
           }
         }
       }
     }
+
     return pieces;
   }
 
@@ -312,6 +324,8 @@ private:
     return result;
   }
 
+  Type type_;
+
   std::string_view input_;
   std::string_view originalInput_;
 
@@ -330,7 +344,9 @@ private:
 
 public:
   explicit XMLParserImpl(std::string_view text, const XMLParser::Options& options)
-      : parser::ParserBase(text), options_(options) {}
+      : parser::ParserBase(text), options_(options) {
+    document_.registry().ctx().emplace<components::EntityDeclarationsContext>();
+  }
 
   ParseResult<XMLDocument> parse() {
     if (str_.empty()) {
@@ -518,7 +534,7 @@ private:
 
     // Instantiate the expander with the current remaining text.
     EntityExpander expander(
-        entityContainingContents,
+        EntityExpander::Type::General, entityContainingContents,
         document_.registry().ctx().get<components::EntityDeclarationsContext>());
     auto maybePieces = expander.expand();
     if (maybePieces.hasError()) {
@@ -845,6 +861,7 @@ private:
 
     bool isExternal = false;
     RcString entityValue;
+
     // Check if "SYSTEM" or "PUBLIC"
     if ((pos + 6 <= decl.size()) &&
         (decl.compare(pos, 6, "SYSTEM") == 0 || decl.compare(pos, 6, "PUBLIC") == 0)) {
@@ -889,12 +906,37 @@ private:
       pos++;  // skip closing quote
     }
 
+    // Resolve parameter entity references
+    EntityExpander expander(
+        EntityExpander::Type::Parameter, entityValue,
+        document_.registry().ctx().get<components::EntityDeclarationsContext>());
+    auto maybePieces = expander.expand();
+    if (maybePieces.hasError()) {
+      return maybePieces.error();
+    }
+
+    // Reassemble the entity value
+    const SmallVector<RcStringOrRef, 5>& pieces = maybePieces.result();
+
+    RcString expandedEntityValue;
+    if (pieces.size() == 1) {
+      // If there's only one piece, we can just use it directly.
+      expandedEntityValue = RcString(pieces[0]);
+    } else {
+      std::vector<char> entityValueBuffer;
+      for (const auto& piece : maybePieces.result()) {
+        entityValueBuffer.insert(entityValueBuffer.end(), piece.begin(), piece.end());
+      }
+
+      expandedEntityValue = RcString::fromVector(std::move(entityValueBuffer));
+    }
+
     // store in the entity declarations
     auto& entityCtx = document_.registry().ctx().get<components::EntityDeclarationsContext>();
     if (isParameterEntity) {
-      entityCtx.addParameterEntityDeclaration(entityName, entityValue, isExternal);
+      entityCtx.addParameterEntityDeclaration(entityName, expandedEntityValue, isExternal);
     } else {
-      entityCtx.addEntityDeclaration(entityName, entityValue, isExternal);
+      entityCtx.addEntityDeclaration(entityName, expandedEntityValue, isExternal);
     }
     return std::nullopt;
   }

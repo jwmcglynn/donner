@@ -8,6 +8,7 @@ cc_library(
     ],
     hdrs = [
         "AttributesComponent.h",
+        "EntityDeclarationsContext.h",
         "TreeComponent.h",
         "XMLDocumentContext.h",
         "XMLNamespaceContext.h",

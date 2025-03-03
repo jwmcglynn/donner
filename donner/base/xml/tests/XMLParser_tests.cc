@@ -7,7 +7,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/base/xml/components/XMLNamespaceContext.h"
+#include "donner/base/xml/components/EntityDeclarationsContext.h"
 
 using testing::AllOf;
 using testing::ElementsAre;
@@ -736,10 +736,10 @@ TEST_F(XMLParserTests, EntitiesComposition) {
   auto dataNode = elementNode->firstChild();
   ASSERT_TRUE(dataNode.has_value());
 
-  EXPECT_EQ(dataNode->value(), "Hello, world!");
+  EXPECT_EQ(dataNode->value(), "Hello, World!");
 }
 
-TEST_F(XMLParserTests, DISABLED_ParameterEntities) {
+TEST_F(XMLParserTests, ParameterEntities) {
   XMLParser::Options options;
   options.parseDoctype = true;
 
@@ -763,8 +763,7 @@ TEST_F(XMLParserTests, DISABLED_ParameterEntities) {
   ASSERT_TRUE(dataNode.has_value());
   ASSERT_TRUE(dataNode->value().has_value());
 
-  // For now, just accept current behavior until we fix the entity resolution
-  EXPECT_EQ(dataNode->value().value(), "&doc;");
+  EXPECT_EQ(dataNode->value().value(), "Document is Complete");
 
   // Parameter entities should only be usable within DTD
   auto result2 = XMLParser::Parse(R"(
@@ -866,6 +865,43 @@ TEST_F(XMLParserTests, GetAttributeLocationInvalidOffset) {
 
   EXPECT_THAT(XMLParser::GetAttributeLocation(xml, kChildOffset, "attr"),
               testing::Eq(std::nullopt));
+}
+
+TEST_F(XMLParserTests, ParameterEntitiesRecursionLimits) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY % recursive "%recursive;">
+      <!ENTITY doc "Document is %recursive;">
+    ]>
+    <node>&doc;</node>
+  )",
+                                 options);
+
+  // Ensure that the parser did not crash and no parse error occurred.
+  ASSERT_THAT(result, NoParseError())
+      << "Parsing should succeed without crashing for recursive parameter entities";
+
+  XMLDocument doc = std::move(result.result());
+
+  // The first child should be the DOCTYPE node.
+  std::optional<XMLNode> dtdNode = doc.root().firstChild();
+  ASSERT_TRUE(dtdNode.has_value());
+  EXPECT_EQ(dtdNode->type(), XMLNode::Type::DocType);
+
+  // The next sibling should be the element node.
+  std::optional<XMLNode> elementNode = dtdNode->nextSibling();
+  ASSERT_TRUE(elementNode.has_value());
+  EXPECT_EQ(elementNode->type(), XMLNode::Type::Element);
+
+  // The recursive parameter entity (%recursive;) should not be expanded.
+  // Therefore, the general entity "doc" remains with the literal "%recursive;" in its value.
+  std::optional<XMLNode> dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+  ASSERT_TRUE(dataNode->value().has_value());
+  EXPECT_EQ(dataNode->value().value(), "Document is %recursive;");
 }
 
 }  // namespace donner::xml
