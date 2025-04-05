@@ -30,7 +30,7 @@ local_repository(
 
 git_repository(
     name = "skia",
-    commit = "71bfee57acfed25eb67b45c94f9cd8511c65e399",
+    commit = "6169a5537c1c97d2d9faa39eb19ce01b01a4ce71",
     remote = "https://github.com/google/skia",
 )
 
