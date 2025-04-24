@@ -1,16 +1,23 @@
-# __init__.py
-
 from .base_formatters import *
 
 
 def __lldb_init_module(debugger, internal_dict):
     """
-    This function is called by LLDB when the module is imported.
-    It initializes all formatters.
+    LLDB calls this automatically when you 'command script import …'.
+    We hook the summaries into a private category so we don’t pollute 'default'.
     """
-    from .base_formatters import __lldb_init_module as init_base
+    cat = 'DonnerFormatters'
+    debugger.HandleCommand(f'type category define {cat}')
+    debugger.HandleCommand(f'type summary add -w {cat} -F donner.base.lldb_formatters.summarize_RcString -x "^donner::RcString$"')
+    debugger.HandleCommand(f'type summary add -w {cat} -F donner.base.lldb_formatters.summarize_RcStringOrRef -x "^donner::RcStringOrRef$"')
 
-    init_base(debugger, internal_dict)
+    debugger.HandleCommand(
+        f'type summary add -w {cat} -F donner.base.lldb_formatters.summarize_SmallVector -x "^donner::SmallVector<.*>$"')
+    debugger.HandleCommand(
+        f'type synthetic add -w {cat} -x "^donner::SmallVector<.*>$"'
+        f' -l donner.base.lldb_formatters.SmallVectorSynthProvider')
+    
+    debugger.HandleCommand(f'type category enable {cat}')
 
 
 # You can add any package-level constants or utility functions here if needed
