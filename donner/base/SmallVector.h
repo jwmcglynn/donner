@@ -169,6 +169,40 @@ public:
       }
     }
   }
+  
+  /**
+   * Inserts an element at the specified position.
+   * 
+   * @param pos Iterator to the position where the element will be inserted.
+   * @param value The value to insert.
+   * @return Iterator to the inserted element.
+   */
+  iterator insert(const_iterator pos, const T& value) {
+    size_t index = pos - begin();
+    if (index > size_) {
+      index = size_;
+    }
+    
+    // Ensure we have capacity for one more element
+    ensureCapacity(size_ + 1);
+    
+    // If we're not inserting at the end, shift elements to make room
+    if (index < size_) {
+      // Move existing elements forward by one position
+      for (size_t i = size_; i > index; --i) {
+        new (data() + i) T(std::move(data()[i - 1]));
+        if constexpr (!std::is_trivially_destructible_v<T>) {
+          data()[i - 1].~T();
+        }
+      }
+    }
+    
+    // Place the new element
+    new (data() + index) T(value);
+    ++size_;
+    
+    return begin() + index;
+  }
 
   /**
    * Clears the contents of the vector.

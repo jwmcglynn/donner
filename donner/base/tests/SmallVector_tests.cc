@@ -310,4 +310,105 @@ TEST(SmallVector, ElementsAreMatcherNonTrivialType) {
   EXPECT_THAT(vec, ElementsAre());
 }
 
+/**
+ * Tests the insert method of SmallVector.
+ */
+TEST(SmallVector, Insert) {
+  // Test inserting at the beginning
+  {
+    SmallVector<int, 5> vec;
+    vec.push_back(2);
+    vec.push_back(3);
+    
+    auto it = vec.insert(vec.begin(), 1);
+    EXPECT_EQ(*it, 1);
+    EXPECT_EQ(vec.size(), 3);
+    EXPECT_EQ(vec[0], 1);
+    EXPECT_EQ(vec[1], 2);
+    EXPECT_EQ(vec[2], 3);
+  }
+  
+  // Test inserting in the middle
+  {
+    SmallVector<int, 5> vec;
+    vec.push_back(1);
+    vec.push_back(3);
+    
+    auto it = vec.insert(vec.begin() + 1, 2);
+    EXPECT_EQ(*it, 2);
+    EXPECT_EQ(vec.size(), 3);
+    EXPECT_EQ(vec[0], 1);
+    EXPECT_EQ(vec[1], 2);
+    EXPECT_EQ(vec[2], 3);
+  }
+  
+  // Test inserting at the end
+  {
+    SmallVector<int, 5> vec;
+    vec.push_back(1);
+    vec.push_back(2);
+    
+    auto it = vec.insert(vec.end(), 3);
+    EXPECT_EQ(*it, 3);
+    EXPECT_EQ(vec.size(), 3);
+    EXPECT_EQ(vec[0], 1);
+    EXPECT_EQ(vec[1], 2);
+    EXPECT_EQ(vec[2], 3);
+  }
+  
+  // Test inserting in an empty vector
+  {
+    SmallVector<int, 5> vec;
+    
+    auto it = vec.insert(vec.begin(), 1);
+    EXPECT_EQ(*it, 1);
+    EXPECT_EQ(vec.size(), 1);
+    EXPECT_EQ(vec[0], 1);
+  }
+  
+  // Test inserting with invalid position (beyond end)
+  {
+    SmallVector<int, 5> vec;
+    vec.push_back(1);
+    
+    // Should insert at the end
+    auto it = vec.insert(vec.begin() + 5, 2);
+    EXPECT_EQ(*it, 2);
+    EXPECT_EQ(vec.size(), 2);
+    EXPECT_EQ(vec[0], 1);
+    EXPECT_EQ(vec[1], 2);
+  }
+  
+  // Test inserting with data growth beyond small size
+  {
+    SmallVector<int, 4> vec;
+    for (int i = 0; i < 4; ++i) {
+      vec.push_back(i + 1);
+    }
+    
+    // This will trigger reallocation
+    auto it = vec.insert(vec.begin(), 0);
+    EXPECT_EQ(*it, 0);
+    EXPECT_EQ(vec.size(), 5);
+    
+    for (int i = 0; i < 5; ++i) {
+      EXPECT_EQ(vec[i], i);
+    }
+  }
+  
+  // Test with non-trivial type (std::string)
+  {
+    SmallVector<std::string, 3> vec;
+    vec.push_back("apple");
+    vec.push_back("cherry");
+    
+    auto it = vec.insert(vec.begin() + 1, "banana");
+    EXPECT_EQ(*it, "banana");
+    EXPECT_EQ(vec.size(), 3);
+    EXPECT_EQ(vec[0], "apple");
+    EXPECT_EQ(vec[1], "banana");
+    EXPECT_EQ(vec[2], "cherry");
+  }
+}
+
 }  // namespace donner

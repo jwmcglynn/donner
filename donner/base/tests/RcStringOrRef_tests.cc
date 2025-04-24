@@ -342,4 +342,74 @@ TEST(RcStringOrRef, HashMap) {
   EXPECT_EQ(map.count("invalid"), 0);
 }
 
+TEST(RcStringOrRef, Substr) {
+  // Test substring extraction for string_view variant
+  {
+    RcStringOrRef str("hello world");
+    RcStringOrRef substr = str.substr(0, 5);
+    EXPECT_EQ(substr, "hello");
+
+    // Partial substring from middle
+    substr = str.substr(6, 5);
+    EXPECT_EQ(substr, "world");
+
+    // Full string with pos=0, len=npos
+    substr = str.substr(0);
+    EXPECT_EQ(substr, "hello world");
+
+    // Start from non-zero position to end
+    substr = str.substr(6);
+    EXPECT_EQ(substr, "world");
+
+    // Out-of-bounds handling (should trigger fatal failure)
+    EXPECT_DEATH(str.substr(20), "");
+
+    // Partial out-of-bounds (should truncate)
+    substr = str.substr(6, 10);
+    EXPECT_EQ(substr, "world");
+  }
+
+  // Test substring extraction for RcString variant
+  {
+    RcStringOrRef str(RcString("test STRING that is longer than 30 characters"));
+
+    // Start of string
+    RcStringOrRef substr = str.substr(0, 4);
+    EXPECT_EQ(substr, "test");
+
+    // Middle of string
+    substr = str.substr(5, 6);
+    EXPECT_EQ(substr, "STRING");
+
+    // Full string
+    substr = str.substr(0);
+    EXPECT_EQ(substr, "test STRING that is longer than 30 characters");
+
+    // From non-zero to end
+    substr = str.substr(5);
+    EXPECT_EQ(substr, "STRING that is longer than 30 characters");
+
+    // Empty substring from middle
+    substr = str.substr(5, 0);
+    EXPECT_EQ(substr, "");
+
+    // Out-of-bounds
+    EXPECT_DEATH(str.substr(100), "");
+
+    // Partial out-of-bounds
+    substr = str.substr(35, 10);
+    EXPECT_EQ(substr, "characters");
+  }
+
+  // Test with strings containing null characters
+  {
+    RcStringOrRef str("hello\0world", 11);
+    RcStringOrRef substr = str.substr(0, 6);  // Include the null
+    EXPECT_EQ(substr, std::string_view("hello\0", 6));
+
+    substr = str.substr(6);  // Start after the null
+    EXPECT_EQ(substr, "world");
+  }
+}
+
 }  // namespace donner

@@ -9,6 +9,7 @@ donner_cc_library(
     ],
     hdrs = [
         "Box.h",
+        "ChunkedString.h",
         "EcsRegistry.h",
         "FileOffset.h",
         "Length.h",
@@ -59,6 +60,7 @@ cc_test(
     srcs = [
         "tests/BaseTestUtils_tests.cc",
         "tests/Box_tests.cc",
+        "tests/ChunkedString_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
         "tests/OptionalRef_tests.cc",

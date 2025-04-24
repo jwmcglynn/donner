@@ -234,6 +234,19 @@ public:
    */
   std::string str() const { return std::string(data(), size()); }
 
+  /**
+   * Returns a substring of the string.
+   *
+   * @param pos The position to start the substring.
+   * @param len The length of the substring, or `RcStringOrRef::npos` to return the whole string.
+   * @return An RcStringOrRef containing the substring.
+   */
+  RcStringOrRef substr(size_t pos, size_t len = npos) const {
+    return std::visit(
+        [pos, len](auto&& value) -> RcStringOrRef { return RcStringOrRef(value.substr(pos, len)); },
+        value_);
+  }
+
   // Iterators.
   /// Begin iterator.
   constexpr const_iterator begin() const noexcept { return cbegin(); }
