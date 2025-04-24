@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -54,7 +55,15 @@ private:
   // Create an initialize a new Runfiles instance.
   Runfiles() {
     std::string error;
-    runfiles_ = rules_cc::cc::runfiles::Runfiles::CreateForTest(&error);
+    if (const char* srcdir = std::getenv("RUNFILES_DIR")) {
+      // When debugging with VSCode, we need to use the RUNFILES_DIR environment variable
+      // which should be set to the runfiles directory (usually bazel-bin/path/to/test.runfiles).
+      runfiles_ = rules_cc::cc::runfiles::Runfiles::Create(srcdir, &error);
+    } else {
+      // Normal case when running under Bazel
+      runfiles_ = rules_cc::cc::runfiles::Runfiles::CreateForTest(&error);
+    }
+
     UTILS_RELEASE_ASSERT_MSG(runfiles_,
                              (std::string("Failed to create runfiles: ") + error).c_str());
   }

@@ -30,7 +30,6 @@ public:
     static Options ParseAll() {
       Options options;
       options.parseComments = true;
-      options.parseDoctype = true;
       options.parseProcessingInstructions = true;
       return options;
     }
@@ -46,7 +45,7 @@ public:
      * true, the doctype node will be parsed as a \ref XMLNode::Type::Doctype node added to the
      * document tree.
      */
-    bool parseDoctype = false;
+    bool parseDoctype = true;
 
     /**
      * Parse processing instructions in the XML document, e.g. `<?php ...>`. If this flag is set to

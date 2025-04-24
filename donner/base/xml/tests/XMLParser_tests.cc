@@ -3,10 +3,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string_view>
+
 #include "donner/base/ParseResult.h"
 #include "donner/base/RcString.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/components/EntityDeclarationsContext.h"
 
 using testing::AllOf;
 using testing::ElementsAre;
@@ -104,6 +107,8 @@ TEST_F(XMLParserTests, InvalidNode) {
               AllOf(ParseErrorIs("Expected '<' to start a node"), ParseErrorPos(1, 8)));
   EXPECT_THAT(XMLParser::Parse("<node></node>\nabc"),
               AllOf(ParseErrorIs("Expected '<' to start a node"), ParseErrorPos(2, 0)));
+  EXPECT_THAT(XMLParser::Parse("<node><!BADNODE></node>"),
+              AllOf(ParseErrorIs("Unrecognized node starting with '<!'"), ParseErrorPos(1, 7)));
 }
 
 TEST_F(XMLParserTests, Namespace) {
@@ -300,16 +305,16 @@ TEST_F(XMLParserTests, ParseCommentInvalid) {
 }
 
 TEST_F(XMLParserTests, ParseDoctype) {
-  // By default doctype parsing is disabled
+  // Check behavior when doctype parsing is disabled
   {
-    auto maybeModeDefault = parseAndGetFirstNode(R"(<!DOCTYPE html>)");
+    XMLParser::Options options;
+    options.parseDoctype = false;
+
+    auto maybeModeDefault = parseAndGetFirstNode(R"(<!DOCTYPE html>)", options);
     EXPECT_THAT(maybeModeDefault, Eq(std::nullopt));
   }
 
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
-  auto maybeNode = parseAndGetFirstNode(R"(<!DOCTYPE html>)", options);
+  auto maybeNode = parseAndGetFirstNode(R"(<!DOCTYPE html>)");
   ASSERT_TRUE(maybeNode.has_value());
 
   XMLNode node = std::move(maybeNode.value());
@@ -346,8 +351,11 @@ TEST_F(XMLParserTests, ParseDoctypeDecls) {
         <!ELEMENT title (#PCDATA)>
         <!ELEMENT body (p)>
         <!ELEMENT p (#PCDATA)>
-      ]>)",
+      ]>
+      <root></root>
+      )",
                                         options);
+
   ASSERT_TRUE(maybeNode.has_value());
 
   XMLNode node = std::move(maybeNode.value());
@@ -356,16 +364,33 @@ TEST_F(XMLParserTests, ParseDoctypeDecls) {
   EXPECT_THAT(node.tagName(), Eq(""));
   EXPECT_THAT(node.value(), testing::Optional(testing::StartsWith("html [")));
   EXPECT_THAT(node.value(), testing::Optional(testing::EndsWith("]")));
+
+  // Verify the next sibling is the root element
+  auto nextNode = node.nextSibling();
+  ASSERT_TRUE(nextNode.has_value());
+  EXPECT_EQ(nextNode->type(), XMLNode::Type::Element);
+  EXPECT_THAT(nextNode->tagName(), Eq("root"));
 }
 
+/// @test Doctype parsing errors
 TEST_F(XMLParserTests, ParseDoctypeErrors) {
+  using std::string_view_literals::operator""sv;
+
   EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE>)"),
               ParseErrorIs("Expected whitespace after '<!DOCTYPE'"));
   EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE )"), ParseErrorIs("Doctype node missing closing '>'"));
   EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE html [>)"),
               ParseErrorIs("Doctype node missing closing ']'"));
-  EXPECT_THAT(XMLParser::Parse(std::string_view("<!DOCTYPE html \0>", 18)),
+
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE html \0>"sv),
               ParseErrorIs("Unexpected end of data, found embedded null character"));
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test [\0]><root></root>"sv),
+              ParseErrorIs("Unexpected end of data, found embedded null character"));
+}
+
+/// @test Invalid doctype declarations that don't generate errors
+TEST_F(XMLParserTests, ParseDoctypeMalformed) {
+  EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE html []]>)"), NoParseError());
 }
 
 TEST_F(XMLParserTests, ParseProcessingInstructions) {
@@ -476,10 +501,25 @@ TEST_F(XMLParserTests, EntitiesNumericErrors) {
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#abc;</node>)", optionsDisableEntity),
               ParseResultIs(RcString("&#abc;")));
 
-  EXPECT_THAT(XMLParser::Parse(R"(<node>&#xhello;</node>)"),
-              AllOf(ParseErrorIs("Unexpected character parsing hex integer"), ParseErrorPos(1, 9)));
+  EXPECT_THAT(XMLParser::Parse("&#xfffe;"), ParseErrorIs("Invalid numeric character entity"));
+
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<node>&#xhello;</node>)"),
+      AllOf(ParseErrorIs("Invalid numeric entity syntax (missing digits)"), ParseErrorPos(1, 6)));
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#xhello;</node>)", optionsDisableEntity),
               ParseResultIs(RcString("&#xhello;")));
+
+  EXPECT_THAT(XMLParser::Parse(R"(<node>&#a;</node>)"),
+              AllOf(ParseErrorIs("Unexpected character parsing integer"), ParseErrorPos(1, 8)));
+
+  // Note that line number information for this error is not available
+  EXPECT_THAT(XMLParser::Parse(R"(
+      <!DOCTYPE test [
+        <!ENTITY num "&#a;">
+      ]>
+      <node>&num;</node>
+    )"),
+              ParseErrorIs("Unexpected character parsing integer"));
 
   // Missing semicolon
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#x20</node>)"),
@@ -535,6 +575,226 @@ TEST_F(XMLParserTests, EntitiesNumericErrors) {
               ParseErrorIs("Invalid numeric character entity"));
   EXPECT_THAT(XMLParser::Parse(R"(<node attrib="&#xfffe;" />)", optionsDisableEntity),
               NoParseError());
+}
+
+TEST_F(XMLParserTests, EntitiesCustom) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(
+      R"(<!DOCTYPE test [<!ENTITY custom "replacement text">]><node>&custom;</node>)", options);
+  ASSERT_THAT(result, NoParseError());
+  XMLDocument doc = std::move(result.result());
+
+  // Check if the entity declaration was properly stored
+  const auto& entityCtx = doc.registry().ctx().get<components::EntityDeclarationsContext>();
+  auto maybeEntity =
+      entityCtx.getEntityDeclaration(components::EntityType::General, RcString("custom"));
+  ASSERT_TRUE(maybeEntity.has_value()) << "Entity 'custom' not found in entity declarations";
+  EXPECT_EQ(maybeEntity->first, "replacement text") << "Entity value doesn't match expected";
+
+  // Get the document node
+  XMLNode root = doc.root();
+  EXPECT_EQ(root.type(), XMLNode::Type::Document);
+
+  // Get DOCTYPE node
+  auto firstChild = root.firstChild();
+  ASSERT_TRUE(firstChild.has_value());
+  EXPECT_EQ(firstChild->type(), XMLNode::Type::DocType);
+
+  // Get element node
+  auto elementNode = firstChild->nextSibling();
+  ASSERT_TRUE(elementNode.has_value());
+  EXPECT_EQ(elementNode->type(), XMLNode::Type::Element);
+
+  // Check data node content
+  auto dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+  EXPECT_EQ(dataNode->type(), XMLNode::Type::Data);
+
+  EXPECT_EQ(dataNode->value(), "replacement text");
+}
+
+TEST_F(XMLParserTests, EntitiesCustomErrors) {
+  using std::string_view_literals::operator""sv;
+
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]"),
+              ParseErrorIs("Unterminated <!ENTITY declaration in DOCTYPE"));
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]>"),
+              ParseErrorIs("Expected quoted string in entity decl"));
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY\0]"sv),
+              ParseErrorIs("Unterminated <!ENTITY declaration in DOCTYPE"));
+
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY>]>"), ParseErrorIs("Expected entity name"));
+
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext SYSTEM]>)", XMLParser::Options::ParseAll()),
+      ParseErrorIs("Expected quoted string in entity decl"));
+
+  EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext SYSTEM "]>)",
+                               XMLParser::Options::ParseAll()),
+              ParseErrorIs("Unterminated <!ENTITY declaration in DOCTYPE"));
+
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext    ]>)", XMLParser::Options::ParseAll()),
+      ParseErrorIs("Expected quoted string in entity decl"));
+
+  EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext  PUBLIC  ]>)",
+                               XMLParser::Options::ParseAll()),
+              ParseErrorIs("Expected quoted string in entity decl"));
+
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext OTHER]>)", XMLParser::Options::ParseAll()),
+      ParseErrorIs("Expected quoted string in entity decl"));
+}
+
+TEST_F(XMLParserTests, EntitiesExternalSecurity) {
+  // Using the same approach as the EntitiesCustom test
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  // By default, external entities should not be resolved
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY external SYSTEM "http://example.com/entity.txt">
+    ]>
+    <node>&external;</node>
+  )",
+                                 options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLDocument doc = std::move(result.result());
+
+  // Get the document node
+  XMLNode root = doc.root();
+  auto firstChild = root.firstChild();
+  auto elementNode = firstChild->nextSibling();
+  auto dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+  ASSERT_TRUE(dataNode->value().has_value());
+
+  // With external entities disabled (default), it should not be expanded
+  EXPECT_EQ(dataNode->value(), "&external;");
+
+  {
+    // Single quotes are also valid
+
+    auto result = XMLParser::Parse(R"(
+      <!DOCTYPE test [
+        <!ENTITY external SYSTEM 'http://example.com/entity.txt'>
+      ]>
+      <node>&external;</node>
+    )",
+                                   options);
+
+    ASSERT_THAT(result, NoParseError());
+  }
+}
+
+TEST_F(XMLParserTests, EntitiesRecursionLimits) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  // Test recursive entity definition - should be caught and limited
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY recursive "&recursive;">
+    ]>
+    <node>&recursive;</node>
+  )",
+                                 options);
+
+  // The parse should succeed, but when we try to access the content with the recursive entity,
+  // we should get an error
+  if (result.hasError()) {
+    FAIL() << "Parsing should succeed, but entity resolution should fail when accessed";
+  } else {
+    XMLDocument doc = std::move(result.result());
+    std::optional<XMLNode> dtdNode = doc.root().firstChild();
+    ASSERT_TRUE(dtdNode.has_value());
+    EXPECT_EQ(dtdNode->type(), XMLNode::Type::DocType);
+
+    std::optional<XMLNode> elementNode = dtdNode->nextSibling();
+    ASSERT_TRUE(elementNode.has_value());
+    EXPECT_EQ(elementNode->type(), XMLNode::Type::Element);
+
+    // The recursive entity should have been left unresolved
+    EXPECT_THAT(elementNode->value(), Eq("&recursive;"));
+  }
+}
+
+TEST_F(XMLParserTests, EntitiesComposition) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  // Test entity composition (one entity referencing another)
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY part1 "Hello">
+      <!ENTITY part2 "World">
+      <!ENTITY message "&part1;, &part2;!">
+    ]>
+    <node>&message;</node>
+  )",
+                                 options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLDocument doc = std::move(result.result());
+  XMLNode root = doc.root();
+  auto firstChild = root.firstChild();
+  auto elementNode = firstChild->nextSibling();
+  auto dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+
+  EXPECT_EQ(dataNode->value(), "Hello, World!");
+}
+
+TEST_F(XMLParserTests, ParameterEntities) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  // Test parameter entity declarations
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY % common "INCLUDE">
+      <!ENTITY % final "Complete">
+      <!ENTITY doc "Document is %final;">
+    ]>
+    <node>&doc;</node>
+  )",
+                                 options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLDocument doc = std::move(result.result());
+  XMLNode root = doc.root();
+  auto firstChild = root.firstChild();
+  auto elementNode = firstChild->nextSibling();
+  auto dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+  ASSERT_TRUE(dataNode->value().has_value());
+
+  EXPECT_EQ(dataNode->value().value(), "Document is Complete");
+
+  // Parameter entities should only be usable within DTD
+  auto result2 = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY % param "Parameter Content">
+    ]>
+    <node>Test: &param;</node>
+  )",
+                                  options);
+
+  ASSERT_THAT(result2, NoParseError());
+  XMLDocument doc2 = std::move(result2.result());
+  XMLNode root2 = doc2.root();
+  auto firstChild2 = root2.firstChild();
+  auto elementNode2 = firstChild2->nextSibling();
+  auto dataNode2 = elementNode2->firstChild();
+  ASSERT_TRUE(dataNode2.has_value());
+  ASSERT_TRUE(dataNode2->value().has_value());
+
+  // Parameter entities should not be expanded in content
+  EXPECT_EQ(dataNode2->value().value(), "Test: &param;");
 }
 
 TEST_F(XMLParserTests, ParseQualifiedNameErrors) {
@@ -615,6 +875,191 @@ TEST_F(XMLParserTests, GetAttributeLocationInvalidOffset) {
 
   EXPECT_THAT(XMLParser::GetAttributeLocation(xml, kChildOffset, "attr"),
               testing::Eq(std::nullopt));
+}
+
+TEST_F(XMLParserTests, ParameterEntitiesRecursionLimits) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY % recursive "%recursive;">
+      <!ENTITY doc "Document is %recursive;">
+    ]>
+    <node>&doc;</node>
+  )",
+                                 options);
+
+  // Ensure that the parser did not crash and no parse error occurred.
+  ASSERT_THAT(result, NoParseError())
+      << "Parsing should succeed without crashing for recursive parameter entities";
+
+  XMLDocument doc = std::move(result.result());
+
+  // The first child should be the DOCTYPE node.
+  std::optional<XMLNode> dtdNode = doc.root().firstChild();
+  ASSERT_TRUE(dtdNode.has_value());
+  EXPECT_EQ(dtdNode->type(), XMLNode::Type::DocType);
+
+  // The next sibling should be the element node.
+  std::optional<XMLNode> elementNode = dtdNode->nextSibling();
+  ASSERT_TRUE(elementNode.has_value());
+  EXPECT_EQ(elementNode->type(), XMLNode::Type::Element);
+
+  // The recursive parameter entity (%recursive;) should not be expanded.
+  // Therefore, the general entity "doc" remains with the literal "%recursive;" in its value.
+  std::optional<XMLNode> dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+  ASSERT_TRUE(dataNode->value().has_value());
+  EXPECT_EQ(dataNode->value().value(), "Document is %recursive;");
+}
+
+// Test the mapParseError method by triggering a nested error
+TEST_F(XMLParserTests, MapParseErrorNested) {
+  // Test with a deeply nested entity reference that will require error mapping
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY err "&#xfffe;">
+    ]>
+    <node>&err;</node>
+  )",
+                                 options);
+
+  EXPECT_THAT(result, ParseErrorIs("Invalid numeric character entity"));
+}
+
+// Test entity without semicolon
+TEST_F(XMLParserTests, EntityWithNoSemicolon) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY entity "replacement text">
+    ]>
+    <node>&entity</node>
+  )",
+                                 options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLDocument doc = std::move(result.result());
+  XMLNode root = doc.root();
+  auto firstChild = root.firstChild();
+  auto elementNode = firstChild->nextSibling();
+  auto dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+  ASSERT_TRUE(dataNode->value().has_value());
+
+  // The entity won't be expanded because there's no semicolon
+  EXPECT_EQ(dataNode->value().value(), "&entity");
+}
+
+// Test the case where PCData starts with an entity reference that causes an error
+TEST_F(XMLParserTests, PCDataStartsWithErrorEntity) {
+  EXPECT_THAT(XMLParser::Parse(R"(<node>&#xfffe;text</node>)"),
+              ParseErrorIs("Invalid numeric character entity"));
+}
+
+// Test with a single quote attribute having entities
+TEST_F(XMLParserTests, SingleQuoteAttributeWithEntity) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY custom "replacement">
+    ]>
+    <node attr='&custom; value' />
+  )",
+                                 options);
+
+  ASSERT_THAT(result, NoParseError());
+  XMLDocument doc = std::move(result.result());
+  XMLNode root = doc.root();
+  auto firstChild = root.firstChild();
+  auto elementNode = firstChild->nextSibling();
+
+  EXPECT_THAT(elementNode->getAttribute("attr"), Eq("replacement value"));
+}
+
+/// Validate that the parser can handle the "Billion Laughs" attack.
+/// @see https://en.wikipedia.org/wiki/Billion_laughs_attack
+TEST_F(XMLParserTests, BillionLaughs) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE lolz [
+    <!ENTITY lol "lol">
+    <!ELEMENT lolz (#PCDATA)>
+    <!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+    <!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;">
+    <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+    <!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">
+    <!ENTITY lol5 "&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;">
+    <!ENTITY lol6 "&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;">
+    <!ENTITY lol7 "&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;">
+    <!ENTITY lol8 "&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;">
+    <!ENTITY lol9 "&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;">
+    ]>
+    <lolz>&lol9;</lolz>
+  )",
+                                 options);
+
+  // Ensure that the parser did not crash and no parse error occurred.
+  ASSERT_THAT(result, NoParseError())
+      << "Parsing should succeed without crashing for recursive entities";
+
+  XMLDocument doc = std::move(result.result());
+
+  // The first child should be the DOCTYPE node.
+  std::optional<XMLNode> dtdNode = doc.root().firstChild();
+  ASSERT_TRUE(dtdNode.has_value());
+  EXPECT_EQ(dtdNode->type(), XMLNode::Type::DocType);
+
+  // The next sibling should be the element node.
+  std::optional<XMLNode> elementNode = dtdNode->nextSibling();
+  ASSERT_TRUE(elementNode.has_value());
+  EXPECT_EQ(elementNode->type(), XMLNode::Type::Element);
+
+  // The recursive parameter entity (%recursive;) should not be expanded.
+  // Therefore, the general entity "doc" remains with the literal "%recursive;" in its value.
+  std::optional<XMLNode> dataNode = elementNode->firstChild();
+  ASSERT_TRUE(dataNode.has_value());
+  ASSERT_TRUE(dataNode->value().has_value());
+  EXPECT_LE(dataNode->value().value().size(), 64 * 1024)
+      << "Size should be less than 64kb, per internal XMLParser constant";
+}
+
+TEST_F(XMLParserTests, EntityContainingNode) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY rect "<rect />">
+    ]>
+    &rect;
+  )",
+                                 options);
+
+  ASSERT_THAT(result, NoParseError());
+
+  XMLDocument doc = std::move(result.result());
+
+  // The first child should be the DOCTYPE node.
+  std::optional<XMLNode> dtdNode = doc.root().firstChild();
+  ASSERT_TRUE(dtdNode.has_value());
+  EXPECT_EQ(dtdNode->type(), XMLNode::Type::DocType);
+
+  // The next sibling should be the <rect> node.
+  std::optional<XMLNode> elementNode = dtdNode->nextSibling();
+  ASSERT_TRUE(elementNode.has_value());
+  EXPECT_EQ(elementNode->type(), XMLNode::Type::Element);
+  EXPECT_EQ(elementNode->tagName(), "rect");
 }
 
 }  // namespace donner::xml

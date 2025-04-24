@@ -314,4 +314,9 @@ TEST_F(RendererTests, RectAscii) {
         )"));
 }
 
+TEST_F(RendererTests, Edzample) {
+  SVGDocument document = loadSVG("donner/svg/renderer/testdata/Edzample_Anim3.svg");
+  renderAndCompare(document, "donner/svg/renderer/testdata/golden/Edzample_Anim3.png");
+}
+
 }  // namespace donner::svg
