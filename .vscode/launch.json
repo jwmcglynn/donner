@@ -222,7 +222,8 @@
       },
       "initCommands": [
         "command source ${workspaceFolder}/.lldbinit"
-      ]
+      ],
+      "preLaunchTask": "xml_tests"
     },
     {
       "type": "lldb",
@@ -246,6 +247,19 @@
       ],
       "sourceMap": {
         ".": "${workspaceFolder}"
+      },
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "xml_parser_structured_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/base/xml/xml_parser_structured_fuzzer_bin",
+      "args": [
+        "donner/base/xml/tests/xml_parser_structured_corpus/crash-27040538c563b7afb8cb1aa3f51f0c833376e936",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}",
+        "/proc/self/cwd": "${workspaceFolder}"
       },
     },
     {

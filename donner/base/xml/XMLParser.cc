@@ -92,10 +92,11 @@ struct ParsedAttribute {
 /// Detects qualified name characters, e.g. element or attribute names, which may contain a colon
 /// if they have a namespace prefix
 struct NamePredicate {
-  /// Valid names (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0`)
+  /// Valid names (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0` `'` `"`)
   static constexpr std::array<unsigned char, 256> kLookupName = BuildLookupTable([](char ch) {
     return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
-             ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0');
+             ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0' || ch == '\'' ||
+             ch == '"');
   });
 
   static unsigned char test(char ch) { return kLookupName[static_cast<unsigned char>(ch)]; }
@@ -114,11 +115,12 @@ struct DigitsPredicate {
 /// Detects attribute name characters without ':', which may be a namespace prefix or local name
 struct NameNoColonPredicate {
   /// Name without colon (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0`
-  /// `:`)
+  /// `:`, `'`, `"`)
   static constexpr std::array<unsigned char, 256> kLookupNameNoColon =
       BuildLookupTable([](char ch) {
         return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
-                 ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0' || ch == ':');
+                 ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0' || ch == ':' ||
+                 ch == '\'' || ch == '"');
       });
 
   static unsigned char test(char ch) { return kLookupNameNoColon[static_cast<unsigned char>(ch)]; }
@@ -879,9 +881,6 @@ private:
     // The string starts with `<!ENTITY` ... ends with '>'
     static constexpr std::string_view kPrefix = "<!ENTITY";
     assert(decl.starts_with(kPrefix) && "Expected '<!ENTITY' in parseEntityDeclInDoctype");
-
-    // Remove `<!ENTITY` prefix and trailing '>'
-    assert(decl.starts_with(kPrefix));
     decl.remove_prefix(kPrefix.size());
 
     // Skip whitespace
@@ -910,9 +909,8 @@ private:
       skipWhitespace(decl);
     }
 
-    if (decl[0] == '"' || decl[0] == '\'') {
-      const char quote = decl[0];
-
+    const char quote = decl[0];
+    if (quote == '"' || quote == '\'') {
       // Parse system identifier
       decl.remove_prefix(1);
 
@@ -936,8 +934,9 @@ private:
     assert(!maybePieces.hasError());  // This can only generate errors for numeric entities, which
     // don't parse for parameter entities
 
-    assert(peek(decl) == '>');
-    decl.remove_prefix(1);  // Remove the closing '>'
+    if (!tryConsume(decl, ">")) {
+      return createParseError("Expected '>' at end of entity declaration");
+    }
 
     RcString expandedEntityValue = maybePieces.result().toSingleRcString();
 

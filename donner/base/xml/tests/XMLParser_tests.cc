@@ -646,6 +646,19 @@ TEST_F(XMLParserTests, EntitiesCustomErrors) {
   EXPECT_THAT(
       XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext OTHER]>)", XMLParser::Options::ParseAll()),
       ParseErrorIs("Expected quoted string in entity decl"));
+
+  EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE [<!ENTITY "
+">]>)",
+                               XMLParser::Options::ParseAll()),
+              ParseErrorIs("Expected entity name"));
+
+  EXPECT_THAT(
+      XMLParser::Parse(
+          "\xef\xbb\xbf<!DOCTYPE Ca [<!ENTITY % [&'\b SYSTEM \"http://example.com/ext\">"
+          "<!ENTITY % a[ '&[&'\b;&[&'\b;&[&'\b;&[&'\b;&[&'\b;'><!ENTITY & '&[&'\b;&[&'\b;&[&'\b;&[&'\b;'>"
+          "<!ENTITY a '&[&'\b;&[&'\b;&[&'\b;&[&'\b;&[&'\b;'><!ENTITY a ''><!ENTITY a ''><!ENTITY a ''>]>"
+          "<a></a>"),
+      ParseErrorIs("Expected '>' at end of entity declaration"));
 }
 
 TEST_F(XMLParserTests, EntitiesExternalSecurity) {

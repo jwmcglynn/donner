@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <iomanip>
 
 #include "donner/base/xml/XMLParser.h"
 
@@ -240,10 +241,24 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // 1. Construct a structured XML payload.
   const std::string xml = BuildXmlString(provider);
 
-  if (::getenv("DUMP")) {
+  if (std::getenv("DUMP")) {
     // Print the generated XML for debugging purposes.
     std::cout << "---------------\n";
-    std::cout << xml << "\n";
+    std::cout << "\"";
+    for (char c : xml) {
+      unsigned char uc = static_cast<unsigned char>(c);
+      if (c == '\n') std::cout << "\\n";
+      else if (c == '\r') std::cout << "\\r";
+      else if (c == '\t') std::cout << "\\t";
+      else if (c == '\b') std::cout << "\\b";
+      else if (c == '\f') std::cout << "\\f";
+      else if (c == '\\') std::cout << "\\\\";
+      else if (c == '\"') std::cout << "\\\"";
+      else if (!std::isprint(uc)) std::cout << "\\x" << std::hex << std::setfill('0') 
+      << std::setw(2) << static_cast<int>(uc);
+      else std::cout << c;
+    }
+    std::cout << "\"\n";
     std::cout << "---------------\n";
   }
 
