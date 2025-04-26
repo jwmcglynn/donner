@@ -1,11 +1,8 @@
 #pragma once
 /// @file
 
-#include <optional>
-
 #include "donner/svg/core/MarkerOrient.h"
 #include "donner/svg/core/MarkerUnits.h"
-#include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg::components {
 

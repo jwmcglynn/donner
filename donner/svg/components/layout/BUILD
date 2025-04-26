@@ -4,6 +4,7 @@ cc_library(
     name = "components",
     hdrs = [
         "SizedElementComponent.h",
+        "SymbolComponent.h",
         "TransformComponent.h",
         "ViewboxComponent.h",
     ],

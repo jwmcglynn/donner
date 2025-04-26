@@ -12,7 +12,6 @@ The following structural elements are supported:
 - \subpage xml_g (\ref donner::svg::SVGGElement "SVGGElement")
 - \subpage xml_defs (\ref donner::svg::SVGDefsElement "SVGDefsElement")
 - \subpage xml_use (\ref donner::svg::SVGUseElement "SVGUseElement")
-
-@todo SVGSymbolElement support
+- \subpage xml_symbol (\ref donner::svg::SVGSymbolElement "SVGSymbolElement")
 
 */
