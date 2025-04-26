@@ -751,7 +751,7 @@ private:
         // Doctype ends here
         foundEnd = true;
         break;
-      } else if (inInternalSubset && i + 8 < remaining_.size() &&
+      } else if (options_.parseCustomEntities && inInternalSubset && i + 8 < remaining_.size() &&
                  remaining_.substr(i, 8) == std::string_view("<!ENTITY")) {
         // Find the matching '>' that is not inside quotes
         const size_t closePos = FindEntityDeclEnd(remaining_, i + 8);

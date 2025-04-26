@@ -21,6 +21,18 @@ namespace donner::xml {
 
 class XMLParserTests : public testing::Test {
 protected:
+  XMLParser::Options optionsCustomEntities() {
+    XMLParser::Options options;
+    options.parseCustomEntities = true;
+    return options;
+  }
+
+  XMLParser::Options optionsDisableEntityTranslation() {
+    XMLParser::Options options;
+    options.disableEntityTranslation = true;
+    return options;
+  }
+
   /**
    * Parse an XML string and return the first node.
    */
@@ -446,27 +458,24 @@ TEST_F(XMLParserTests, ParseXMLDeclarationErrors) {
 }
 
 TEST_F(XMLParserTests, EntitiesBuiltin) {
-  XMLParser::Options optionsDisableEntity;
-  optionsDisableEntity.disableEntityTranslation = true;
-
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&amp;</node>)"), ParseResultIs(RcString("&")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&amp;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&amp;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&amp;")));
 
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&apos;</node>)"), ParseResultIs(RcString("\'")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&apos;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&apos;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&apos;")));
 
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&quot;</node>)"), ParseResultIs(RcString("\"")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&quot;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&quot;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&quot;")));
 
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&lt;</node>)"), ParseResultIs(RcString("<")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&lt;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&lt;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&lt;")));
 
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&gt;</node>)"), ParseResultIs(RcString(">")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&gt;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&gt;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&gt;")));
 
   // Invalid entities are not parsed.
@@ -475,30 +484,24 @@ TEST_F(XMLParserTests, EntitiesBuiltin) {
 }
 
 TEST_F(XMLParserTests, EntitiesNumeric) {
-  XMLParser::Options optionsDisableEntity;
-  optionsDisableEntity.disableEntityTranslation = true;
-
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#48;</node>)"), ParseResultIs(RcString("0")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#48;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#48;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&#48;")));
 
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20;</node>)"), ParseResultIs(RcString(" ")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&#x20;")));
 
   EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20;</node>)"), ParseResultIs(RcString(" ")));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&#x20;")));
 }
 
 TEST_F(XMLParserTests, EntitiesNumericErrors) {
-  XMLParser::Options optionsDisableEntity;
-  optionsDisableEntity.disableEntityTranslation = true;
-
   // Invalid characters
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#abc;</node>)"),
               AllOf(ParseErrorIs("Unexpected character parsing integer"), ParseErrorPos(1, 8)));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#abc;</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#abc;</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&#abc;")));
 
   EXPECT_THAT(XMLParser::Parse("&#xfffe;"), ParseErrorIs("Invalid numeric character entity"));
@@ -506,8 +509,9 @@ TEST_F(XMLParserTests, EntitiesNumericErrors) {
   EXPECT_THAT(
       XMLParser::Parse(R"(<node>&#xhello;</node>)"),
       AllOf(ParseErrorIs("Invalid numeric entity syntax (missing digits)"), ParseErrorPos(1, 6)));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#xhello;</node>)", optionsDisableEntity),
-              ParseResultIs(RcString("&#xhello;")));
+  EXPECT_THAT(
+      parseAndGetNodeContents(R"(<node>&#xhello;</node>)", optionsDisableEntityTranslation()),
+      ParseResultIs(RcString("&#xhello;")));
 
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#a;</node>)"),
               AllOf(ParseErrorIs("Unexpected character parsing integer"), ParseErrorPos(1, 8)));
@@ -518,18 +522,19 @@ TEST_F(XMLParserTests, EntitiesNumericErrors) {
         <!ENTITY num "&#a;">
       ]>
       <node>&num;</node>
-    )"),
+    )",
+                               optionsCustomEntities()),
               ParseErrorIs("Unexpected character parsing integer"));
 
   // Missing semicolon
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#x20</node>)"),
               ParseErrorIs("Numeric character entity missing closing ';'"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x20</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&#x20")));
 
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#65</node>)"),
               ParseErrorIs("Numeric character entity missing closing ';'"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#65</node>)", optionsDisableEntity),
+  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#65</node>)", optionsDisableEntityTranslation()),
               ParseResultIs(RcString("&#65")));
 
   //
@@ -539,50 +544,64 @@ TEST_F(XMLParserTests, EntitiesNumericErrors) {
   // Above maximum allowed codepoint (0x10FFFF)
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#xffffffff;</node>)"),
               ParseErrorIs("Invalid numeric character entity"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#xffffffff;</node>)", optionsDisableEntity),
-              ParseResultIs(RcString("&#xffffffff;")));
+  EXPECT_THAT(
+      parseAndGetNodeContents(R"(<node>&#xffffffff;</node>)", optionsDisableEntityTranslation()),
+      ParseResultIs(RcString("&#xffffffff;")));
 
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#x110000;</node>)"),
               ParseErrorIs("Invalid numeric character entity"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#x110000;</node>)", optionsDisableEntity),
-              ParseResultIs(RcString("&#x110000;")));
+  EXPECT_THAT(
+      parseAndGetNodeContents(R"(<node>&#x110000;</node>)", optionsDisableEntityTranslation()),
+      ParseResultIs(RcString("&#x110000;")));
 
   // Surrogate codepoint (0xD800-0xDFFF)
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#xd800;</node>)"),
               ParseErrorIs("Invalid numeric character entity"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#xd800;</node>)", optionsDisableEntity),
-              ParseResultIs(RcString("&#xd800;")));
+  EXPECT_THAT(
+      parseAndGetNodeContents(R"(<node>&#xd800;</node>)", optionsDisableEntityTranslation()),
+      ParseResultIs(RcString("&#xd800;")));
 
   // Non-character codepoint (0xFFFE, 0xFFFF)
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#xfffe;</node>)"),
               ParseErrorIs("Invalid numeric character entity"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#xfffe;</node>)", optionsDisableEntity),
-              ParseResultIs(RcString("&#xfffe;")));
+  EXPECT_THAT(
+      parseAndGetNodeContents(R"(<node>&#xfffe;</node>)", optionsDisableEntityTranslation()),
+      ParseResultIs(RcString("&#xfffe;")));
 
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#xffff;</node>)"),
               ParseErrorIs("Invalid numeric character entity"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#xffff;</node>)", optionsDisableEntity),
-              ParseResultIs(RcString("&#xffff;")));
+  EXPECT_THAT(
+      parseAndGetNodeContents(R"(<node>&#xffff;</node>)", optionsDisableEntityTranslation()),
+      ParseResultIs(RcString("&#xffff;")));
 
   // Same check for base-10 path
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#65535;</node>)"),
               ParseErrorIs("Invalid numeric character entity"));
-  EXPECT_THAT(parseAndGetNodeContents(R"(<node>&#65535;</node>)", optionsDisableEntity),
-              ParseResultIs(RcString("&#65535;")));
+  EXPECT_THAT(
+      parseAndGetNodeContents(R"(<node>&#65535;</node>)", optionsDisableEntityTranslation()),
+      ParseResultIs(RcString("&#65535;")));
 
   // Invalid within an attribute
   EXPECT_THAT(XMLParser::Parse(R"(<node attrib="&#xfffe;" />)"),
               ParseErrorIs("Invalid numeric character entity"));
-  EXPECT_THAT(XMLParser::Parse(R"(<node attrib="&#xfffe;" />)", optionsDisableEntity),
+  EXPECT_THAT(XMLParser::Parse(R"(<node attrib="&#xfffe;" />)", optionsDisableEntityTranslation()),
               NoParseError());
+
+  // Test nested parse errors
+  EXPECT_THAT(XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY err "&#xfffe;">
+    ]>
+    <node>&err;</node>
+  )",
+                               optionsCustomEntities()),
+              ParseErrorIs("Invalid numeric character entity"));
 }
 
 TEST_F(XMLParserTests, EntitiesCustom) {
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   auto result = XMLParser::Parse(
-      R"(<!DOCTYPE test [<!ENTITY custom "replacement text">]><node>&custom;</node>)", options);
+      R"(<!DOCTYPE test [<!ENTITY custom "replacement text">]><node>&custom;</node>)",
+      optionsCustomEntities());
   ASSERT_THAT(result, NoParseError());
   XMLDocument doc = std::move(result.result());
 
@@ -618,14 +637,15 @@ TEST_F(XMLParserTests, EntitiesCustom) {
 TEST_F(XMLParserTests, EntitiesCustomErrors) {
   using std::string_view_literals::operator""sv;
 
-  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]"),
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]", optionsCustomEntities()),
               ParseErrorIs("Unterminated <!ENTITY declaration in DOCTYPE"));
-  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]>"),
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]>", optionsCustomEntities()),
               ParseErrorIs("Expected quoted string in entity decl"));
-  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY\0]"sv),
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY\0]"sv, optionsCustomEntities()),
               ParseErrorIs("Unterminated <!ENTITY declaration in DOCTYPE"));
 
-  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY>]>"), ParseErrorIs("Expected entity name"));
+  EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY>]>", optionsCustomEntities()),
+              ParseErrorIs("Expected entity name"));
 
   EXPECT_THAT(
       XMLParser::Parse(R"(<!DOCTYPE test [<!ENTITY ext SYSTEM]>)", XMLParser::Options::ParseAll()),
@@ -652,20 +672,18 @@ TEST_F(XMLParserTests, EntitiesCustomErrors) {
                                XMLParser::Options::ParseAll()),
               ParseErrorIs("Expected entity name"));
 
-  EXPECT_THAT(
-      XMLParser::Parse(
-          "\xef\xbb\xbf<!DOCTYPE Ca [<!ENTITY % [&'\b SYSTEM \"http://example.com/ext\">"
-          "<!ENTITY % a[ '&[&'\b;&[&'\b;&[&'\b;&[&'\b;&[&'\b;'><!ENTITY & '&[&'\b;&[&'\b;&[&'\b;&[&'\b;'>"
-          "<!ENTITY a '&[&'\b;&[&'\b;&[&'\b;&[&'\b;&[&'\b;'><!ENTITY a ''><!ENTITY a ''><!ENTITY a ''>]>"
-          "<a></a>"),
-      ParseErrorIs("Expected '>' at end of entity declaration"));
+  EXPECT_THAT(XMLParser::Parse(
+                  "\xef\xbb\xbf<!DOCTYPE Ca [<!ENTITY % [&'\b SYSTEM \"http://example.com/ext\">"
+                  "<!ENTITY % a[ '&[&'\b;&[&'\b;&[&'\b;&[&'\b;&[&'\b;'><!ENTITY & "
+                  "'&[&'\b;&[&'\b;&[&'\b;&[&'\b;'>"
+                  "<!ENTITY a '&[&'\b;&[&'\b;&[&'\b;&[&'\b;&[&'\b;'><!ENTITY a ''><!ENTITY a "
+                  "''><!ENTITY a ''>]>"
+                  "<a></a>",
+                  optionsCustomEntities()),
+              ParseErrorIs("Expected '>' at end of entity declaration"));
 }
 
 TEST_F(XMLParserTests, EntitiesExternalSecurity) {
-  // Using the same approach as the EntitiesCustom test
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   // By default, external entities should not be resolved
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
@@ -673,7 +691,7 @@ TEST_F(XMLParserTests, EntitiesExternalSecurity) {
     ]>
     <node>&external;</node>
   )",
-                                 options);
+                                 optionsCustomEntities());
 
   ASSERT_THAT(result, NoParseError());
   XMLDocument doc = std::move(result.result());
@@ -698,16 +716,13 @@ TEST_F(XMLParserTests, EntitiesExternalSecurity) {
       ]>
       <node>&external;</node>
     )",
-                                   options);
+                                   optionsCustomEntities());
 
     ASSERT_THAT(result, NoParseError());
   }
 }
 
 TEST_F(XMLParserTests, EntitiesRecursionLimits) {
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   // Test recursive entity definition - should be caught and limited
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
@@ -715,7 +730,7 @@ TEST_F(XMLParserTests, EntitiesRecursionLimits) {
     ]>
     <node>&recursive;</node>
   )",
-                                 options);
+                                 optionsCustomEntities());
 
   // The parse should succeed, but when we try to access the content with the recursive entity,
   // we should get an error
@@ -737,9 +752,6 @@ TEST_F(XMLParserTests, EntitiesRecursionLimits) {
 }
 
 TEST_F(XMLParserTests, EntitiesComposition) {
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   // Test entity composition (one entity referencing another)
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
@@ -749,7 +761,7 @@ TEST_F(XMLParserTests, EntitiesComposition) {
     ]>
     <node>&message;</node>
   )",
-                                 options);
+                                 optionsCustomEntities());
 
   ASSERT_THAT(result, NoParseError());
   XMLDocument doc = std::move(result.result());
@@ -763,9 +775,6 @@ TEST_F(XMLParserTests, EntitiesComposition) {
 }
 
 TEST_F(XMLParserTests, ParameterEntities) {
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   // Test parameter entity declarations
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
@@ -775,7 +784,7 @@ TEST_F(XMLParserTests, ParameterEntities) {
     ]>
     <node>&doc;</node>
   )",
-                                 options);
+                                 optionsCustomEntities());
 
   ASSERT_THAT(result, NoParseError());
   XMLDocument doc = std::move(result.result());
@@ -795,7 +804,7 @@ TEST_F(XMLParserTests, ParameterEntities) {
     ]>
     <node>Test: &param;</node>
   )",
-                                  options);
+                                  optionsCustomEntities());
 
   ASSERT_THAT(result2, NoParseError());
   XMLDocument doc2 = std::move(result2.result());
@@ -891,9 +900,6 @@ TEST_F(XMLParserTests, GetAttributeLocationInvalidOffset) {
 }
 
 TEST_F(XMLParserTests, ParameterEntitiesRecursionLimits) {
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
       <!ENTITY % recursive "%recursive;">
@@ -901,7 +907,7 @@ TEST_F(XMLParserTests, ParameterEntitiesRecursionLimits) {
     ]>
     <node>&doc;</node>
   )",
-                                 options);
+                                 optionsCustomEntities());
 
   // Ensure that the parser did not crash and no parse error occurred.
   ASSERT_THAT(result, NoParseError())
@@ -927,24 +933,7 @@ TEST_F(XMLParserTests, ParameterEntitiesRecursionLimits) {
   EXPECT_EQ(dataNode->value().value(), "Document is %recursive;");
 }
 
-// Test the mapParseError method by triggering a nested error
-TEST_F(XMLParserTests, MapParseErrorNested) {
-  // Test with a deeply nested entity reference that will require error mapping
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
-  auto result = XMLParser::Parse(R"(
-    <!DOCTYPE test [
-      <!ENTITY err "&#xfffe;">
-    ]>
-    <node>&err;</node>
-  )",
-                                 options);
-
-  EXPECT_THAT(result, ParseErrorIs("Invalid numeric character entity"));
-}
-
-// Test entity without semicolon
+/// @test entity without semicolon
 TEST_F(XMLParserTests, EntityWithNoSemicolon) {
   XMLParser::Options options;
   options.parseDoctype = true;
@@ -970,24 +959,21 @@ TEST_F(XMLParserTests, EntityWithNoSemicolon) {
   EXPECT_EQ(dataNode->value().value(), "&entity");
 }
 
-// Test the case where PCData starts with an entity reference that causes an error
+/// @test the case where PCData starts with an entity reference that causes an error
 TEST_F(XMLParserTests, PCDataStartsWithErrorEntity) {
   EXPECT_THAT(XMLParser::Parse(R"(<node>&#xfffe;text</node>)"),
               ParseErrorIs("Invalid numeric character entity"));
 }
 
-// Test with a single quote attribute having entities
+/// @test with a single quote attribute having entities
 TEST_F(XMLParserTests, SingleQuoteAttributeWithEntity) {
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
       <!ENTITY custom "replacement">
     ]>
     <node attr='&custom; value' />
   )",
-                                 options);
+                                 optionsCustomEntities());
 
   ASSERT_THAT(result, NoParseError());
   XMLDocument doc = std::move(result.result());
@@ -1048,16 +1034,13 @@ TEST_F(XMLParserTests, BillionLaughs) {
 }
 
 TEST_F(XMLParserTests, EntityContainingNode) {
-  XMLParser::Options options;
-  options.parseDoctype = true;
-
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
       <!ENTITY rect "<rect />">
     ]>
     &rect;
   )",
-                                 options);
+                                 optionsCustomEntities());
 
   ASSERT_THAT(result, NoParseError());
 

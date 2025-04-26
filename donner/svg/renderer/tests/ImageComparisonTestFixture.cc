@@ -68,6 +68,8 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
   file.read(fileData.data(), fileLength);
 
   parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
   std::unique_ptr<ResourceLoaderInterface> resourceLoader;
   if (resourceDir) {
     resourceLoader = std::make_unique<SandboxedFileResourceLoader>(*resourceDir,
