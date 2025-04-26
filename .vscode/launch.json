@@ -39,6 +39,9 @@
         "--gtest_break_on_failure",
       ],
       "cwd": "${workspaceFolder}",
+      "env": {
+        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/base/base_tests.runfiles"
+      },
       "sourceMap": {
         ".": "${workspaceFolder}"
       }
@@ -91,6 +94,9 @@
         "--gtest_break_on_failure",
       ],
       "cwd": "${workspaceFolder}",
+      "env": {
+        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/resvg_test_suite.runfiles"
+      },
       "sourceMap": {
         ".": "${workspaceFolder}"
       }
@@ -195,7 +201,10 @@
       "args": [
         "--gtest_break_on_failure"
       ],
-      "cwd": "${workspaceFolder}/bazel-bin/css/parser/css_parsing_tests.runfiles/__main__",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/css/parser/css_parsing_tests.runfiles"
+      },
       "sourceMap": {
         ".": "${workspaceFolder}"
       },
@@ -211,6 +220,10 @@
       "sourceMap": {
         ".": "${workspaceFolder}"
       },
+      "initCommands": [
+        "command source ${workspaceFolder}/.lldbinit"
+      ],
+      "preLaunchTask": "xml_tests"
     },
     {
       "type": "lldb",
@@ -234,6 +247,19 @@
       ],
       "sourceMap": {
         ".": "${workspaceFolder}"
+      },
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "xml_parser_structured_fuzzer",
+      "program": "${workspaceFolder}/bazel-bin/donner/base/xml/xml_parser_structured_fuzzer_bin",
+      "args": [
+        "donner/base/xml/tests/xml_parser_structured_corpus/crash-27040538c563b7afb8cb1aa3f51f0c833376e936",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}",
+        "/proc/self/cwd": "${workspaceFolder}"
       },
     },
     {

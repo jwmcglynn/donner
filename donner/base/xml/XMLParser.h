@@ -30,7 +30,7 @@ public:
     static Options ParseAll() {
       Options options;
       options.parseComments = true;
-      options.parseDoctype = true;
+      options.parseCustomEntities = true;
       options.parseProcessingInstructions = true;
       return options;
     }
@@ -46,7 +46,13 @@ public:
      * true, the doctype node will be parsed as a \ref XMLNode::Type::Doctype node added to the
      * document tree.
      */
-    bool parseDoctype = false;
+    bool parseDoctype = true;
+
+    /**
+     * Parse custom entities in the XML document, e.g. `<!ENTITY ...>`. If this flag is set to true,
+     * custom entities will be parsed and and translated in the document tree.
+     */
+     bool parseCustomEntities = false;
 
     /**
      * Parse processing instructions in the XML document, e.g. `<?php ...>`. If this flag is set to

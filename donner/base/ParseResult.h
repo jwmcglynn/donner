@@ -32,6 +32,11 @@ public:
   /* implicit */ ParseResult(ParseError&& error) : error_(std::move(error)) {}
 
   /**
+   * Construct from an error by value.
+   */
+  /* implicit */ ParseResult(const ParseError& error) : error_(error) {}
+
+  /**
    * Return a result, but also an error. Used in the case where partial parse results may be
    * returned.
    */

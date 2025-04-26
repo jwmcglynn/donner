@@ -292,7 +292,12 @@ public:
 ParseResult<SVGDocument> SVGParser::ParseSVG(
     std::string_view source, std::vector<ParseError>* outWarnings, SVGParser::Options options,
     std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept {
-  auto maybeDocument = xml::XMLParser::Parse(source);
+  xml::XMLParser::Options xmlOptions;
+  if (options.enableExperimental) {
+    xmlOptions.parseCustomEntities = true;
+  }
+
+  auto maybeDocument = xml::XMLParser::Parse(source, xmlOptions);
   if (maybeDocument.hasError()) {
     return std::move(maybeDocument.error());
   }

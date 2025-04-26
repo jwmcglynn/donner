@@ -43,6 +43,12 @@ std::string escapeFilename(std::string filename) {
 
 class RendererTests : public testing::Test {
 protected:
+  parser::SVGParser::Options optionsExperimental() {
+    parser::SVGParser::Options options;
+    options.enableExperimental = true;
+    return options;
+  }
+
   SVGDocument loadSVG(const char* filename, parser::SVGParser::Options options = {}) {
     std::ifstream file(filename);
     EXPECT_TRUE(file) << "Failed to open file: " << filename;
@@ -250,11 +256,7 @@ TEST_F(RendererTests, DonnerIcon) {
 }
 
 TEST_F(RendererTests, DonnerSplash) {
-  // Enable experimental features
-  parser::SVGParser::Options options;
-  options.enableExperimental = true;
-
-  SVGDocument document = loadSVG("donner_splash.svg", options);
+  SVGDocument document = loadSVG("donner_splash.svg", optionsExperimental());
   renderAndCompare(document, "donner/svg/renderer/testdata/golden/donner_splash.png");
 }
 
@@ -312,6 +314,11 @@ TEST_F(RendererTests, RectAscii) {
         ................
         ................
         )"));
+}
+
+TEST_F(RendererTests, Edzample) {
+  SVGDocument document = loadSVG("donner/svg/renderer/testdata/Edzample_Anim3.svg", optionsExperimental());
+  renderAndCompare(document, "donner/svg/renderer/testdata/golden/Edzample_Anim3.png");
 }
 
 }  // namespace donner::svg

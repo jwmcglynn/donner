@@ -2,9 +2,9 @@
 /// @file
 
 #include <ostream>
-#include <string>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/RcString.h"
 
 namespace donner {
 
@@ -13,7 +13,7 @@ namespace donner {
  */
 struct ParseError {
   /// Error message string.
-  std::string reason;
+  RcString reason;
 
   /// Location of the error, containing a character offset and optional line number.
   FileOffset location = FileOffset::Offset(0);

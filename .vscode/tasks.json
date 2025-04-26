@@ -206,6 +206,13 @@
       "command": "bazel build //donner/css/parser:parser_tests -c dbg",
       "problemMatcher": [],
       "group": "test"
+    },
+    {
+      "label": "xml_tests",
+      "type": "shell",
+      "command": "bazel build //donner/base/xml:xml_tests -c dbg",
+      "problemMatcher": [],
+      "group": "test"
     }
   ]
 }

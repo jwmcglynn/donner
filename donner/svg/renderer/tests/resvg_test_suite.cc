@@ -418,7 +418,6 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-svg-002.svg", Params::Skip()},                // Bug? xmlns validation
             {"e-svg-003.svg", Params::Skip()},                // Bug? mixed namespaces
-            {"e-svg-004.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
             {"e-svg-005.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
             {"e-svg-007.svg", Params::Skip()},                // Bug/Not impl? Non-UTF8 encoding
             {"e-svg-008.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.

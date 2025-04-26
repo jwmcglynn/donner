@@ -69,3 +69,14 @@ donner_cc_fuzzer(
         ":xml",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "xml_parser_structured_fuzzer",
+    srcs = [
+        "tests/XMLParser_structured_fuzzer.cc",
+    ],
+    corpus = "tests/xml_parser_structured_corpus",
+    deps = [
+        ":xml",
+    ],
+)

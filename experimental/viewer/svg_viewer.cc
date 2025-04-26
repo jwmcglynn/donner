@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
     }
 
     if (state.lastError) {
-      ImGui::Text("Error: %s", state.lastError->reason.c_str());
+      ImGui::Text("Error: %s", state.lastError->reason.str().c_str());
     }
 
     ImGui::End();  // End of Code Window
