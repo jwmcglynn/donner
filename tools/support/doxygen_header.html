@@ -31,7 +31,7 @@
     $treeview $search $mathjax $darkmode
     <link href="$relpath^$stylesheet" rel="stylesheet" type="text/css" />
     $extrastylesheet
-    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js"></script>
     <script type="text/javascript" src="$relpath^doxygen-awesome-fragment-copy-button.js"></script>
     <script type="text/javascript" src="$relpath^doxygen-awesome-darkmode-toggle.js"></script>
     <script type="text/javascript" src="$relpath^doxygen-awesome-paragraph-link.js"></script>
@@ -44,24 +44,37 @@
       DoxygenAwesomeInteractiveToc.init();
       DoxygenAwesomeTabs.init();
 
+      function unescapeHtml(str) {
+        return str
+          .replace(/&gt;/g, ">")
+          .replace(/&lt;/g, "<")
+          .replace(/&amp;/g, "&");
+      }
+
+      mermaid.startOnLoad = false;
+
       $(document).ready(function () {
         const elementCode = ".mermaid";
+
+        $(elementCode).each(function () {
+          const decodedHTML = unescapeHtml($(this).html());
+          console.log("Text: " + decodedHTML);
+
+          $(this).attr("data-original-code", decodedHTML);
+        });
+
 
         const loadMermaid = function (theme) {
           window.mermaid.initialize({ theme });
           window.mermaid.init({ theme }, document.querySelectorAll(elementCode));
         };
 
-        var els = document.querySelectorAll(elementCode);
-        els.forEach((element) => {
-          element.setAttribute("data-original-code", element.innerHTML);
-        });
 
-        loadMermaid(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default");
+        //loadMermaid(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default");
 
         const resetProcessed = function () {
           return new Promise(() => {
-            $(".mermaid").each(function () {
+            $(elementCode).each(function () {
               $(this).removeAttr("data-processed");
               $(this).html($(this).attr("data-original-code") || "");
             });

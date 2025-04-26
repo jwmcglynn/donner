@@ -10,6 +10,12 @@ Doxygen may be generated with:
 tools/doxygen.sh
 ```
 
+It requires the `doxygen` package to be installed. The generated documentation will be in `generated-doxygen/html/index.html`.
+
+Tools required to generate the documentation are:
+- `doxygen`
+- `graphviz` (for class diagrams)
+
 ## Code coverage
 
 To generate code coverage locally:

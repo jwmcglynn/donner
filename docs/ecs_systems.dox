@@ -7,4 +7,20 @@ for updating the components of entities.
 - Systems contain logic and interact with components.
 - Components are the data layer and contain the state, but no logic.
 
+Systems may depend on other systems, however there are no circular dependencies.
+
+@mermaid
+graph LR
+    LayoutSystem
+    ShapeSystem
+    StyleSystem
+    PaintSystem
+    ShadowTreeSystem
+
+    ShapeSystem --\> LayoutSystem
+    ShapeSystem --\> StyleSystem
+    LayoutSystem --\> StyleSystem
+    PaintSystem --\> StyleSystem
+@endmermaid
+
 */
