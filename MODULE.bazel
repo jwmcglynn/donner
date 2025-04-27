@@ -151,7 +151,7 @@ git_override(
 
 git_repository(
     name = "bazel_clang_tidy",
-    commit = "a965fb4cb5286812643e205a5f0db8927107b120",
+    commit = "07bc38524e61d9501d772726d6e27cb980db42c7",
     remote = "https://github.com/erenon/bazel_clang_tidy.git",
 )
 
