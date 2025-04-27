@@ -16,6 +16,7 @@ graph LR
     StyleSystem
     PaintSystem
     ShadowTreeSystem
+    FilterSystem
 
     ShapeSystem --\> LayoutSystem
     ShapeSystem --\> StyleSystem
