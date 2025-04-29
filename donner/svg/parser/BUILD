@@ -75,7 +75,7 @@ cc_library(
         "PointsListParser.cc",
         "PreserveAspectRatioParser.cc",
         "TransformParser.cc",
-        "ViewboxParser.cc",
+        "ViewBoxParser.cc",
     ],
     hdrs = [
         "AngleParser.h",
@@ -86,7 +86,7 @@ cc_library(
         "PointsListParser.h",
         "PreserveAspectRatioParser.h",
         "TransformParser.h",
-        "ViewboxParser.h",
+        "ViewBoxParser.h",
     ],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
@@ -109,7 +109,7 @@ cc_test(
         "tests/PreserveAspectRatioParser_tests.cc",
         "tests/SVGParser_tests.cc",
         "tests/TransformParser_tests.cc",
-        "tests/ViewboxParser_tests.cc",
+        "tests/ViewBoxParser_tests.cc",
     ],
     deps = [
         ":parser",

@@ -91,16 +91,16 @@ public:
    * Set the `viewBox` attribute, which defines a rectangle in user space
    * that is mapped to the symbol's viewport.
    *
-   * @param viewbox The viewBox value to set.
+   * @param viewBox The viewBox value to set.
    */
-  void setViewbox(OptionalRef<Boxd> viewbox);
+  void setViewBox(OptionalRef<Boxd> viewBox);
 
   /**
    * Get the parsed value of the `viewBox` attribute, if specified.
    *
    * @return The viewBox rectangle, if set.
    */
-  std::optional<Boxd> viewbox() const;
+  std::optional<Boxd> viewBox() const;
 
   /**
    * Set the `preserveAspectRatio` attribute, which determines how the

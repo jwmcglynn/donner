@@ -11,7 +11,7 @@ Donner implements a collection of parsers for these micro-syntaxes:
 - \ref donner::parser::LengthParser
 - \ref donner::svg::parser::ParseLengthPercentage
 - \ref donner::svg::parser::TransformParser
-- \ref donner::svg::parser::ViewboxParser
+- \ref donner::svg::parser::ViewBoxParser
 
 Additionally, Donner includes a standalone CSS parser, \ref donner::css::CSS.
 

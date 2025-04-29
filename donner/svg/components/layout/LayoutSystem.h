@@ -14,7 +14,7 @@ namespace donner::svg::components {
 
 /**
  * Handles layout and bounds calculations for SVG elements. This system is responsible for
- * calculating the the document size, viewboxes, and the bounds for elements.
+ * calculating the the document size, viewBoxes, and the bounds for elements.
  *
  * @ingroup ecs_systems
  * @see https://www.w3.org/TR/SVG2/coords.html
@@ -41,7 +41,7 @@ public:
   std::optional<float> intrinsicAspectRatio(EntityHandle entity) const;
 
   /**
-   * Calculate the document size of the current entity. This is the size of the document viewport
+   * Calculate the document size of the current entity. This is the size of the document viewBox
    * (the area that the SVG content is rendered into).
    *
    * @param registry ECS registry
@@ -49,19 +49,19 @@ public:
   Vector2i calculateDocumentSize(Registry& registry) const;
 
   /**
-   * Get the viewport affecting the current entity. This may be the viewport of a viewport-defining
-   * parent element or the document viewport.
+   * Get the viewBox affecting the current entity. This may be the viewBox of a viewBox-defining
+   * parent element or the document viewBox.
    *
    * @param entity Current entity.
    */
-  Boxd getViewport(EntityHandle entity);
+  Boxd getViewBox(EntityHandle entity);
 
   /**
-   * Returns true if the given entity overrides the viewport.
+   * Returns true if the given entity overrides the viewBox.
    *
    * @param entity Current entity.
    */
-  bool overridesViewport(EntityHandle entity) const;
+  bool overridesViewBox(EntityHandle entity) const;
 
   /**
    * Get the document size scaled to fit the canvas.
@@ -149,7 +149,7 @@ public:
   /// @{
 
   /**
-   * Create all computed components, such as \ref ComputedViewboxComponent and \ref
+   * Create all computed components, such as \ref ComputedViewBoxComponent and \ref
    * ComputedSizedElementComponent.
    *
    * @param registry ECS registry.
@@ -164,14 +164,14 @@ public:
    * @param entity Entity handle.
    * @param sizeProperties Size properties to evaluate.
    * @param unparsedProperties Unparsed properties to evaluate.
-   * @param viewbox Viewbox to use when converting size percentages.
+   * @param viewBox ViewBox to use when converting size percentages.
    * @param fontMetrics Font metrics, used to scale lengths.
    * @param outWarnings Output vector of parse errors, if any.
    * @return Computed bounds.
    */
   Boxd computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                             const Boxd& viewbox, FontMetrics fontMetrics,
+                             const Boxd& viewBox, FontMetrics fontMetrics,
                              std::vector<ParseError>* outWarnings);
 
   /**
@@ -232,11 +232,11 @@ private:
    *
    * @param entity The entity to calculate the size for.
    * @param properties The size properties of the element.
-   * @param inheritedViewbox The viewbox of the parent element.
+   * @param inheritedViewBox The viewBox of the parent element.
    * @param fontMetrics Font metrics, used to calculate the size of text elements.
    */
   Boxd calculateSizedElementBounds(EntityHandle entity, const SizedElementProperties& properties,
-                                   const Boxd& inheritedViewbox, FontMetrics fontMetrics);
+                                   const Boxd& inheritedViewBox, FontMetrics fontMetrics);
 
   /**
    * Get the document size scaled to fit the canvas, as a floating-point number without rounding.

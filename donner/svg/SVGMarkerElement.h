@@ -92,15 +92,15 @@ public:
    * Set the `viewBox` attribute, which defines a rectangle in userspace that should be mapped to
    * the SVG viewport bounds established by the pattern.
    *
-   * @param viewbox The viewBox value to set.
+   * @param viewBox The viewBox value to set.
    */
-  void setViewbox(OptionalRef<Boxd> viewbox);
+  void setViewBox(OptionalRef<Boxd> viewBox);
 
   /**
    * Get the parsed value of the `viewBox` attribute, if specified, which defines a rectangle in
    * userspace that should be mapped to the SVG viewport bounds established by the pattern.
    */
-  std::optional<Boxd> viewbox() const;
+  std::optional<Boxd> viewBox() const;
 
   /**
    * Set the `preserveAspectRatio` attribute, which defines how to scale the viewport to fit the

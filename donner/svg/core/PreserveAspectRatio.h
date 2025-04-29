@@ -82,18 +82,18 @@ public:
    * viewBox coordinate system (source) to the element's content coordinate system (destination).
    *
    * The `size` parameter represents the destination rectangle for the element's content, while the
-   * optional `viewbox` parameter defines the source coordinate system. If no viewbox is provided,
+   * optional `viewBox` parameter defines the source coordinate system. If no viewBox is provided,
    * the transformation is a simple translation to the top‐left of `size`.
    *
    * @see https://www.w3.org/TR/SVG2/coords.html#ComputingAViewportsTransform.
    *
    * @param size The destination rectangle for the element's content.
-   * @param viewbox The source viewBox rectangle, if any.
+   * @param viewBox The source viewBox rectangle, if any.
    * @return The computed transformation mapping points from the viewBox (source) to the element's
    * content (destination).
    */
   Transformd elementContentFromViewBoxTransform(const Boxd& size,
-                                                std::optional<Boxd> viewbox) const;
+                                                std::optional<Boxd> viewBox) const;
 
   /// Equality operator.
   bool operator==(const PreserveAspectRatio& other) const {

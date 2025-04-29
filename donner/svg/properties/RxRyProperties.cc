@@ -4,11 +4,11 @@ namespace donner::svg {
 
 std::tuple<Lengthd, double> CalculateRadiusMaybeAuto(const Property<Lengthd>& property,
                                                      const Property<Lengthd>& fallbackProperty,
-                                                     const Boxd& viewbox,
+                                                     const Boxd& viewBox,
                                                      const FontMetrics& fontMetrics) {
   if (property.hasValue()) {
     const Lengthd value = property.getRequired();
-    const double pixels = value.toPixels(viewbox, fontMetrics);
+    const double pixels = value.toPixels(viewBox, fontMetrics);
 
     if (pixels >= 0.0) {
       return std::make_tuple(value, pixels);
@@ -19,7 +19,7 @@ std::tuple<Lengthd, double> CalculateRadiusMaybeAuto(const Property<Lengthd>& pr
   // (fallbackProperty).
   if (fallbackProperty.hasValue()) {
     const Lengthd fallbackValue = fallbackProperty.getRequired();
-    const double fallbackPixels = fallbackValue.toPixels(viewbox, fontMetrics);
+    const double fallbackPixels = fallbackValue.toPixels(viewBox, fontMetrics);
     if (fallbackPixels >= 0.0) {
       return std::make_tuple(fallbackValue, fallbackPixels);
     }

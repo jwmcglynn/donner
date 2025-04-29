@@ -13,7 +13,7 @@ namespace donner::svg::parser {
  *
  * @see https://www.w3.org/TR/SVG/coords.html#ViewBoxAttribute
  */
-class ViewboxParser {
+class ViewBoxParser {
 public:
   /**
    * Parse an SVG viewBox attribute, such as `0 0 100 100`.

@@ -3,7 +3,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
-#include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
 
 namespace donner::svg {
@@ -15,17 +15,17 @@ SVGMarkerElement SVGMarkerElement::CreateOn(EntityHandle handle) {
       .emplace<components::RenderingBehaviorComponent>(
           components::RenderingBehavior::ShadowOnlyChildren)
       .inheritsParentTransform = false;
-  handle.emplace<components::ViewboxComponent>();
+  handle.emplace<components::ViewBoxComponent>();
   handle.emplace<components::PreserveAspectRatioComponent>();
   return SVGMarkerElement(handle);
 }
 
-void SVGMarkerElement::setViewbox(OptionalRef<Boxd> viewbox) {
-  handle_.get<components::ViewboxComponent>().viewbox = viewbox;
+void SVGMarkerElement::setViewBox(OptionalRef<Boxd> viewBox) {
+  handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 
-std::optional<Boxd> SVGMarkerElement::viewbox() const {
-  return handle_.get<components::ViewboxComponent>().viewbox;
+std::optional<Boxd> SVGMarkerElement::viewBox() const {
+  return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
 void SVGMarkerElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {

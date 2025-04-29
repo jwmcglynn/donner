@@ -25,7 +25,7 @@ namespace donner::svg {
  * from a `fill` or `stroke` attribute.
  *
  * ```xml
- * <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ * <pattern id="MyPattern" viewBox="0,0,10,10" width="15%" height="15%">
  *   <circle cx="5" cy="5" r="5" fill="red" />
  * </pattern>
  * ```
@@ -38,7 +38,7 @@ namespace donner::svg {
  * \htmlonly
  * <svg width="300" height="300">
  *   <defs>
- *     <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ *     <pattern id="MyPattern" viewBox="0,0,10,10" width="15%" height="15%">
  *       <circle cx="5" cy="5" r="5" fill="red" />
  *     </pattern>
  *   </defs>
@@ -64,7 +64,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_pattern element.
  *
  * ```xml
- * <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ * <pattern id="MyPattern" viewBox="0,0,10,10" width="15%" height="15%">
  *   <circle cx="5" cy="5" r="5" fill="red" />
  * </pattern>
  * ```
@@ -77,7 +77,7 @@ namespace donner::svg {
  * \htmlonly
  * <svg width="300" height="300">
  *   <defs>
- *     <pattern id="MyPattern" viewbox="0,0,10,10" width="15%" height="15%">
+ *     <pattern id="MyPattern" viewBox="0,0,10,10" width="15%" height="15%">
  *       <circle cx="5" cy="5" r="5" fill="red" />
  *     </pattern>
  *   </defs>
@@ -131,7 +131,7 @@ public:
    * Get the parsed value of the `viewBox` attribute, if specified, which defines a rectangle in
    * userspace that should be mapped to the SVG viewport bounds established by the pattern.
    */
-  std::optional<Boxd> viewbox() const;
+  std::optional<Boxd> viewBox() const;
 
   /**
    * The value of the `preserveAspectRatio` attribute, which defines how to scale the viewport to
@@ -193,9 +193,9 @@ public:
    * Set the `viewBox` attribute, which defines a rectangle in userspace that should be mapped to
    * the SVG viewport bounds established by the pattern.
    *
-   * @param viewbox The viewBox value to set.
+   * @param viewBox The viewBox value to set.
    */
-  void setViewbox(OptionalRef<Boxd> viewbox);
+  void setViewBox(OptionalRef<Boxd> viewBox);
 
   /**
    * Set the `preserveAspectRatio` attribute, which defines how to scale the viewport to fit the

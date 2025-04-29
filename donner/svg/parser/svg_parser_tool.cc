@@ -14,8 +14,8 @@ void DumpTree(SVGElement element, int depth) {
 
   std::cout << element.type() << ", id: '" << element.id() << "'";
   if (element.type() == ElementType::SVG) {
-    if (auto viewbox = element.cast<SVGSVGElement>().viewbox()) {
-      std::cout << ", viewbox: " << *viewbox;
+    if (auto viewBox = element.cast<SVGSVGElement>().viewBox()) {
+      std::cout << ", viewBox: " << *viewBox;
     }
   }
   std::cout << "\n";

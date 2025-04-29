@@ -120,7 +120,7 @@ public:
   /**
    * Get the rectangle in userspace that the SVG viewport is mapped to.
    */
-  std::optional<Boxd> viewbox() const;
+  std::optional<Boxd> viewBox() const;
 
   /**
    * Get how to scale the SVG viewport to fit the SVG content.
@@ -156,22 +156,22 @@ public:
   void setHeight(std::optional<Lengthd> value);
 
   /**
-   * Set the viewbox rectangle in userspace that the SVG viewport is mapped to.
+   * Set the viewBox rectangle in userspace that the SVG viewport is mapped to.
    *
-   * @param viewbox Rectangle in userspace.
+   * @param viewBox Rectangle in userspace.
    */
-  void setViewbox(std::optional<Boxd> viewbox);
+  void setViewBox(std::optional<Boxd> viewBox);
 
   /**
-   * Set the viewbox rectangle in userspace that the SVG viewport is mapped to.
+   * Set the viewBox rectangle in userspace that the SVG viewport is mapped to.
    *
    * @param x Top-left X coordinate.
    * @param y Top-left Y coordinate.
    * @param width Width.
    * @param height Height.
    */
-  void setViewbox(double x, double y, double width, double height) {
-    setViewbox(Boxd::FromXYWH(x, y, width, height));
+  void setViewBox(double x, double y, double width, double height) {
+    setViewBox(Boxd::FromXYWH(x, y, width, height));
   }
 
   /**

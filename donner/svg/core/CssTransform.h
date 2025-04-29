@@ -17,7 +17,7 @@ namespace donner::svg {
  * translate() = translate( <length-percentage> [, <length-percentage> ]? )
  * ```
  *
- * To resolve `translate()`, we need to know the font size and the viewbox size, which is
+ * To resolve `translate()`, we need to know the font size and the viewBox size, which is
  * context-dependent, so we cannot precompute the transform from the transform function list.
  * Instead, store a chain of of transforms and deferred operations, and compute the final transform
  * when needed, inside the \ref CssTransform::compute() function.
@@ -63,18 +63,18 @@ public:
   /**
    * Compute the final transform from the list of transforms and deferred operations.
    *
-   * @param viewbox Viewbox size, used to resolve percentage units.
+   * @param viewBox ViewBox size, used to resolve percentage units.
    * @param fontMetrics Font metrics, used to resolve 'em' and other font-relative units.
    */
-  Transformd compute(const Boxd& viewbox, FontMetrics fontMetrics) const {
+  Transformd compute(const Boxd& viewBox, FontMetrics fontMetrics) const {
     Transformd result;
     for (const auto& element : elements_) {
       if (const auto* simple = std::get_if<Simple>(&element)) {
         result = simple->transform * result;
       } else if (const auto* translate = std::get_if<Translate>(&element)) {
         result = Transformd::Translate(
-                     Vector2d(translate->x.toPixels(viewbox, fontMetrics, Lengthd::Extent::X),
-                              translate->y.toPixels(viewbox, fontMetrics, Lengthd::Extent::Y))) *
+                     Vector2d(translate->x.toPixels(viewBox, fontMetrics, Lengthd::Extent::X),
+                              translate->y.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y))) *
                  result;
       }
     }

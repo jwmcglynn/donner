@@ -14,7 +14,7 @@ void ComputedPatternComponent::inheritAttributesFrom(EntityHandle handle, Entity
       patternContentUnits = computedBase->patternContentUnits;
       tileRect = computedBase->tileRect;
       preserveAspectRatio = computedBase->preserveAspectRatio;
-      viewbox = computedBase->viewbox;
+      viewBox = computedBase->viewBox;
       sizeProperties = computedBase->sizeProperties;
     }
   }

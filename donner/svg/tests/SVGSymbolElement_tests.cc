@@ -12,7 +12,7 @@ namespace donner::svg {
 TEST(SVGSymbolElementTests, Defaults) {
   auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>("<symbol />");
 
-  EXPECT_THAT(symbol->viewbox(), testing::Eq(std::nullopt));
+  EXPECT_THAT(symbol->viewBox(), testing::Eq(std::nullopt));
   EXPECT_THAT(symbol->preserveAspectRatio(),
               testing::Eq(PreserveAspectRatio{PreserveAspectRatio::Align::XMidYMid,
                                               PreserveAspectRatio::MeetOrSlice::Meet}));
@@ -30,8 +30,8 @@ TEST(SVGSymbolElementTests, ViewBoxAndPreserveAspectRatio) {
   auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(
       R"(<symbol viewBox="0 0 100 50" preserveAspectRatio="xMinYMin slice" />)");
 
-  ASSERT_TRUE(symbol->viewbox());
-  const auto box = *symbol->viewbox();
+  ASSERT_TRUE(symbol->viewBox());
+  const auto box = *symbol->viewBox();
   EXPECT_DOUBLE_EQ(box.topLeft.x, 0.0);
   EXPECT_DOUBLE_EQ(box.topLeft.y, 0.0);
   EXPECT_DOUBLE_EQ(box.width(), 100.0);

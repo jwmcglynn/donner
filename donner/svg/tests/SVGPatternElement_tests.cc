@@ -13,7 +13,7 @@ namespace donner::svg {
 TEST(SVGPatternElementTests, Defaults) {
   auto pattern = instantiateSubtreeElementAs<SVGPatternElement>("<pattern />");
 
-  EXPECT_THAT(pattern->viewbox(), testing::Eq(std::nullopt));
+  EXPECT_THAT(pattern->viewBox(), testing::Eq(std::nullopt));
   EXPECT_THAT(pattern->preserveAspectRatio(),
               testing::Eq(PreserveAspectRatio{PreserveAspectRatio::Align::XMidYMid,
                                               PreserveAspectRatio::MeetOrSlice::Meet}));

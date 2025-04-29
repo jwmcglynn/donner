@@ -10,7 +10,7 @@
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
-#include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -132,18 +132,18 @@ template <typename T, PropertyCascade kCascade>
 double GetDefiniteSize(const Property<T, kCascade>& property) {
   assert(IsAbsolute(property) && "Property must be absolute to get definite size");
 
-  // Since we know the size is absolute, we don't need to specify a real viewbox or FontMetrics.
+  // Since we know the size is absolute, we don't need to specify a real viewBox or FontMetrics.
   return property.getRequired().toPixels(Boxd::CreateEmpty(Vector2d()), FontMetrics());
 }
 
-Boxd GetViewboxInternal(Registry& registry, Entity rootEntity, std::optional<Boxd> parentViewbox,
+Boxd GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Boxd> parentViewBox,
                         Entity currentEntity) {
-  if (const auto* viewboxComponent = registry.try_get<ComputedViewboxComponent>(currentEntity)) {
-    return viewboxComponent->viewbox;
+  if (const auto* viewBoxComponent = registry.try_get<ComputedViewBoxComponent>(currentEntity)) {
+    return viewBoxComponent->viewBox;
   } else {
-    if (const auto* newViewbox = registry.try_get<ViewboxComponent>(currentEntity)) {
-      if (newViewbox->viewbox) {
-        return newViewbox->viewbox.value();
+    if (const auto* newViewBox = registry.try_get<ViewBoxComponent>(currentEntity)) {
+      if (newViewBox->viewBox) {
+        return newViewBox->viewBox.value();
       } else if (currentEntity != rootEntity &&
                  registry.all_of<SizedElementComponent>(currentEntity)) {
         const EntityHandle handle(registry, currentEntity);
@@ -156,10 +156,10 @@ Boxd GetViewboxInternal(Registry& registry, Entity rootEntity, std::optional<Box
       }
     }
 
-    if (parentViewbox) {
-      return parentViewbox.value();
+    if (parentViewBox) {
+      return parentViewBox.value();
     } else {
-      // No viewbox found, use the document size.
+      // No viewBox found, use the document size.
       const Vector2i documentSize = LayoutSystem().calculateCanvasScaledDocumentSize(
           registry, LayoutSystem::InvalidSizeBehavior::ZeroSize);
       return Boxd(Vector2d::Zero(), documentSize);
@@ -178,17 +178,17 @@ std::optional<float> LayoutSystem::intrinsicAspectRatio(EntityHandle entity) con
   // > 1. If the width and height sizing properties on the ‘svg’ element are both absolute values:
   if (IsAbsolute(properties.width) && IsAbsolute(properties.height)) {
     // > 1. return width / height
-    // Since we know the size is absolute, we don't need to specify a real viewbox or FontMetrics.
+    // Since we know the size is absolute, we don't need to specify a real viewBox or FontMetrics.
     return GetDefiniteSize(properties.width) / GetDefiniteSize(properties.height);
   }
 
   // TODO(svg views): Do not handle "2. If an SVG View is active", this feature is not supported.
 
   // > 3. If the ‘viewBox’ on the ‘svg’ element is correctly specified:
-  if (const auto* viewbox = entity.try_get<ViewboxComponent>(); viewbox && viewbox->viewbox) {
-    // > 1. let viewbox be the viewbox defined by the ‘viewBox’ attribute on the ‘svg’ element
-    // > 2. return viewbox.width / viewbox.height
-    return viewbox->viewbox->size().x / viewbox->viewbox->size().y;
+  if (const auto* viewBox = entity.try_get<ViewBoxComponent>(); viewBox && viewBox->viewBox) {
+    // > 1. let viewBox be the viewBox defined by the ‘viewBox’ attribute on the ‘svg’ element
+    // > 2. return viewBox.width / viewBox.height
+    return viewBox->viewBox->size().x / viewBox->viewBox->size().y;
   }
 
   // > 4. return null
@@ -199,21 +199,21 @@ Vector2i LayoutSystem::calculateDocumentSize(Registry& registry) const {
   return RoundSize(calculateRawDocumentSize(registry));
 }
 
-Boxd LayoutSystem::getViewport(EntityHandle entity) {
-  if (const auto* computedViewbox = entity.try_get<ComputedViewboxComponent>()) {
-    return computedViewbox->viewbox;
+Boxd LayoutSystem::getViewBox(EntityHandle entity) {
+  if (const auto* computedViewBox = entity.try_get<ComputedViewBoxComponent>()) {
+    return computedViewBox->viewBox;
   }
 
   Registry& registry = *entity.registry();
   SmallVector<Entity, 8> parents;
 
-  std::optional<Boxd> parentViewbox;
+  std::optional<Boxd> parentViewBox;
 
-  // Traverse up through the parent list until we find the root or a previously computed viewbox.
+  // Traverse up through the parent list until we find the root or a previously computed viewBox.
   for (Entity parent = entity; parent != entt::null;
        parent = registry.get<donner::components::TreeComponent>(parent).parent()) {
-    if (const auto* computedViewbox = registry.try_get<ComputedViewboxComponent>(parent)) {
-      parentViewbox = computedViewbox->viewbox;
+    if (const auto* computedViewBox = registry.try_get<ComputedViewBoxComponent>(parent)) {
+      parentViewBox = computedViewBox->viewBox;
       break;
     }
 
@@ -223,26 +223,26 @@ Boxd LayoutSystem::getViewport(EntityHandle entity) {
   assert(!parents.empty());
 
   // Now the parents list has parents in order from nearest -> root
-  // Iterate from the end of the list to the start and cascade the viewbox.
+  // Iterate from the end of the list to the start and cascade the viewBox.
   const Entity rootEntity = registry.ctx().get<SVGDocumentContext>().rootEntity;
 
   while (!parents.empty()) {
     Entity currentEntity = parents[parents.size() - 1];
     parents.pop_back();
 
-    const Boxd currentViewbox =
-        GetViewboxInternal(registry, rootEntity, parentViewbox, currentEntity);
-    registry.emplace<ComputedViewboxComponent>(currentEntity, currentViewbox);
+    const Boxd currentViewBox =
+        GetViewBoxInternal(registry, rootEntity, parentViewBox, currentEntity);
+    registry.emplace<ComputedViewBoxComponent>(currentEntity, currentViewBox);
 
-    parentViewbox = currentViewbox;
+    parentViewBox = currentViewBox;
   }
 
-  return parentViewbox.value();
+  return parentViewBox.value();
 }
 
-bool LayoutSystem::overridesViewport(EntityHandle entity) const {
-  if (const auto* viewboxComponent = entity.try_get<ViewboxComponent>()) {
-    return viewboxComponent->viewbox.has_value();
+bool LayoutSystem::overridesViewBox(EntityHandle entity) const {
+  if (const auto* viewBoxComponent = entity.try_get<ViewBoxComponent>()) {
+    return viewBoxComponent->viewBox.has_value();
   }
 
   return false;
@@ -339,7 +339,7 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
   Transformd parentFromWorld;
   bool worldIsCanvas = true;
 
-  // Traverse up through the parent list until we find the root or a previously computed viewbox.
+  // Traverse up through the parent list until we find the root or a previously computed viewBox.
   for (Entity parent = entity;
        parent != entt::null &&
        registry.any_of<components::TransformComponent, components::ShadowEntityComponent>(parent);
@@ -400,16 +400,16 @@ void LayoutSystem::invalidate(EntityHandle entity) {
   entity.remove<components::ComputedLocalTransformComponent>();
   entity.remove<components::ComputedAbsoluteTransformComponent>();
   entity.remove<components::ComputedSizedElementComponent>();
-  entity.remove<components::ComputedViewboxComponent>();
+  entity.remove<components::ComputedViewBoxComponent>();
 }
 
 Transformd LayoutSystem::elementContentFromViewBoxTransform(
     EntityHandle entity, const ComputedSizedElementComponent& computedSizedElement) const {
   const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(entity);
   // If this entity also has a viewBox, it defines a viewport.
-  if (const auto* viewbox = entity.try_get<ViewboxComponent>()) {
+  if (const auto* viewBox = entity.try_get<ViewBoxComponent>()) {
     return preserveAspectRatio.elementContentFromViewBoxTransform(computedSizedElement.bounds,
-                                                                  viewbox->viewbox);
+                                                                  viewBox->viewBox);
   } else if (entity.all_of<ImageComponent>()) {
     // Images compute their transform based on the image's intrinsic size, not the viewBox.
     // TODO: This should be based on the image's intrinsic size, move this transform computation
@@ -418,7 +418,7 @@ Transformd LayoutSystem::elementContentFromViewBoxTransform(
   } else {
     // This branch is hit for <use> elements.
     return preserveAspectRatio.elementContentFromViewBoxTransform(
-        computedSizedElement.bounds, computedSizedElement.inheritedViewbox);
+        computedSizedElement.bounds, computedSizedElement.inheritedViewBox);
   }
 }
 
@@ -442,7 +442,7 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
   // TODO(jwmcglynn): Also calculate the absolute transform
   struct ElementContext {
     Entity entity;
-    std::optional<Boxd> parentViewbox;
+    std::optional<Boxd> parentViewBox;
   };
 
   const Entity rootEntity = registry.ctx().get<SVGDocumentContext>().rootEntity;
@@ -454,15 +454,15 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
     ElementContext current = stack[stack.size() - 1];
     stack.pop_back();
 
-    const Boxd currentViewbox =
-        GetViewboxInternal(registry, rootEntity, current.parentViewbox, current.entity);
-    registry.emplace_or_replace<ComputedViewboxComponent>(current.entity, currentViewbox);
+    const Boxd currentViewBox =
+        GetViewBoxInternal(registry, rootEntity, current.parentViewBox, current.entity);
+    registry.emplace_or_replace<ComputedViewBoxComponent>(current.entity, currentViewBox);
 
     for (Entity child =
              registry.get<donner::components::TreeComponent>(current.entity).firstChild();
          child != entt::null;
          child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-      stack.push_back(ElementContext{child, currentViewbox});
+      stack.push_back(ElementContext{child, currentViewBox});
     }
   }
 }
@@ -470,12 +470,12 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
 // Evaluates SizedElementProperties and returns the resulting bounds.
 Boxd LayoutSystem::computeSizeProperties(
     EntityHandle entity, const SizedElementProperties& sizeProperties,
-    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Boxd& viewbox,
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Boxd& viewBox,
     FontMetrics fontMetrics, std::vector<ParseError>* outWarnings) {
   SizedElementProperties mutableSizeProperties = sizeProperties;
 
   ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, outWarnings);
-  return LayoutSystem().calculateSizedElementBounds(entity, mutableSizeProperties, viewbox,
+  return LayoutSystem().calculateSizedElementBounds(entity, mutableSizeProperties, viewBox,
                                                     fontMetrics);
 }
 
@@ -487,8 +487,8 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
   const Entity parent = entity.get<donner::components::TreeComponent>().parent();
-  const Boxd viewport = parent != entt::null ? getViewport(EntityHandle(*entity.registry(), parent))
-                                             : getViewport(entity);
+  const Boxd viewport = parent != entt::null ? getViewBox(EntityHandle(*entity.registry(), parent))
+                                             : getViewBox(entity);
 
   const Boxd bounds =
       computeSizeProperties(entity, sizedElement.properties, style.properties->unparsedProperties,
@@ -539,7 +539,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   if (transform.transform.get()) {
     computedTransform.rawCssTransform = transform.transform.get().value();
     computedTransform.entityFromParent =
-        transform.transform.get().value().compute(getViewport(handle), fontMetrics);
+        transform.transform.get().value().compute(getViewBox(handle), fontMetrics);
   } else {
     computedTransform.entityFromParent = Transformd();
   }
@@ -548,7 +548,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
 }
 
 std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
-  if (handle.all_of<ViewboxComponent>()) {
+  if (handle.all_of<ViewBoxComponent>()) {
     return handle.get<ComputedSizedElementComponent>().bounds;
   }
 
@@ -557,14 +557,14 @@ std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
 
 Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
                                                const SizedElementProperties& properties,
-                                               const Boxd& inheritedViewbox,
+                                               const Boxd& inheritedViewBox,
                                                FontMetrics fontMetrics) {
   Registry& registry = *entity.registry();
 
-  Vector2d size = inheritedViewbox.size();
-  if (const auto* viewbox = entity.try_get<ViewboxComponent>()) {
-    if (!properties.width.hasValue() && !properties.height.hasValue() && viewbox->viewbox) {
-      size = viewbox->viewbox->size();
+  Vector2d size = inheritedViewBox.size();
+  if (const auto* viewBox = entity.try_get<ViewBoxComponent>()) {
+    if (!properties.width.hasValue() && !properties.height.hasValue() && viewBox->viewBox) {
+      size = viewBox->viewBox->size();
     }
 
     const auto& ctx = registry.ctx().get<SVGDocumentContext>();
@@ -582,21 +582,21 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
   // > The width and height attributes only have an effect if the referenced element defines a
   // > viewport (i.e., if it is a ‘svg’ or ‘symbol’)
   if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
-                      entity.registry()->all_of<ViewboxComponent>(shadowTree->mainLightRoot()))) {
+                      entity.registry()->all_of<ViewBoxComponent>(shadowTree->mainLightRoot()))) {
     if (properties.width.hasValue()) {
-      size.x = properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics,
+      size.x = properties.width.getRequired().toPixels(inheritedViewBox, fontMetrics,
                                                        Lengthd::Extent::X);
     }
 
     if (properties.height.hasValue()) {
-      size.y = properties.height.getRequired().toPixels(inheritedViewbox, fontMetrics,
+      size.y = properties.height.getRequired().toPixels(inheritedViewBox, fontMetrics,
                                                         Lengthd::Extent::Y);
     }
   }
 
   const Vector2d origin(
-      properties.x.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::X),
-      properties.y.getRequired().toPixels(inheritedViewbox, fontMetrics, Lengthd::Extent::Y));
+      properties.x.getRequired().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::X),
+      properties.y.getRequired().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::Y));
 
   if (registry.all_of<ImageComponent>(entity)) {
     if (auto maybeImageSize = registry.ctx().get<ResourceManagerContext>().getImageSize(entity)) {
@@ -612,11 +612,11 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
         const float aspectRatio = static_cast<float>(imageSize.x) / static_cast<float>(imageSize.y);
 
         if (!properties.width.hasValue()) {
-          size.x = properties.height.getRequired().toPixels(inheritedViewbox, fontMetrics,
+          size.x = properties.height.getRequired().toPixels(inheritedViewBox, fontMetrics,
                                                             Lengthd::Extent::X) *
                    aspectRatio;
         } else if (!properties.height.hasValue()) {
-          size.y = properties.width.getRequired().toPixels(inheritedViewbox, fontMetrics,
+          size.y = properties.width.getRequired().toPixels(inheritedViewBox, fontMetrics,
                                                            Lengthd::Extent::Y) /
                    aspectRatio;
         }
@@ -690,26 +690,26 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   // as if its natural dimensions were given as the specified size."
   //
   // > 2. Otherwise, its size is resolved as a contain constraint against the default object size.
-  const ViewboxComponent& viewbox = root.get<ViewboxComponent>();
-  if (!viewbox.viewbox) {
+  const ViewBoxComponent& viewBox = root.get<ViewBoxComponent>();
+  if (!viewBox.viewBox) {
     return maybeCanvasSize.value_or(Vector2i(kDefaultWidth, kDefaultHeight));
   }
 
-  const Vector2d viewboxSize = viewbox.viewbox->size();
+  const Vector2d viewBoxSize = viewBox.viewBox->size();
 
   // If there's no canvas size, there's no scaling to do, so we can directly return the rounded
-  // viewbox.
+  // viewBox.
   if (!maybeCanvasSize) {
-    return viewboxSize;
+    return viewBoxSize;
   }
 
   const Vector2d canvasSize(maybeCanvasSize.value());
 
-  // Scale the original viewbox to the canvas size.
+  // Scale the original viewBox to the canvas size.
   const Transformd transform = preserveAspectRatio.elementContentFromViewBoxTransform(
-      Boxd(Vector2d(), canvasSize), viewbox.viewbox);
+      Boxd(Vector2d(), canvasSize), viewBox.viewBox);
 
-  return transform.transformPosition(viewboxSize);
+  return transform.transformPosition(viewBoxSize);
 }
 
 }  // namespace donner::svg::components

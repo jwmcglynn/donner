@@ -47,12 +47,12 @@ struct InvalidateRenderTree {};
 registry.emplace<InvalidateRenderTree>(entity);
 ```
 
-For a real-world example, here is how the `ViewboxComponent` is created for SVG elements.
+For a real-world example, here is how the `ViewBoxComponent` is created for SVG elements.
 
 ```cpp
-struct ViewboxComponent {
-  /// Stored viewbox, if any.
-  std::optional<Boxd> viewbox;
+struct ViewBoxComponent {
+  /// Stored viewBox, if any.
+  std::optional<Boxd> viewBox;
 };
 ```
 

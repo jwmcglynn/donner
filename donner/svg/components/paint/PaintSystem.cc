@@ -4,7 +4,7 @@
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
-#include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -201,24 +201,24 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
 
   // If patternUnits are objectBoundingBox, we want to evaluate percentages to [0, 1]. Otherwise
   // evaluate to userUnits.
-  const Boxd tileViewbox = (computedPattern.patternUnits == PatternUnits::ObjectBoundingBox)
+  const Boxd tileViewBox = (computedPattern.patternUnits == PatternUnits::ObjectBoundingBox)
                                ? Boxd(Vector2d(), Vector2d(1.0, 1.0))
-                               : LayoutSystem().getViewport(handle);
+                               : LayoutSystem().getViewBox(handle);
 
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
-      handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewbox,
+      handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewBox,
       FontMetrics(), outWarnings);
 
   //
-  // 3. Apply viewbox transform
+  // 3. Apply viewBox transform
   //
-  // To disambiguate the inherited viewbox, check to see if this pattern has an explicitly-provided
-  // viewbox before inheriting from the computed viewbox.
-  if (const auto& viewbox = handle.get<ViewboxComponent>(); viewbox.viewbox) {
+  // To disambiguate the inherited viewBox, check to see if this pattern has an explicitly-provided
+  // viewBox before inheriting from the computed viewBox.
+  if (const auto& viewBox = handle.get<ViewBoxComponent>(); viewBox.viewBox) {
     if (const auto* component = handle.try_get<PreserveAspectRatioComponent>()) {
       computedPattern.preserveAspectRatio = component->preserveAspectRatio;
     }
-    computedPattern.viewbox = viewbox.viewbox.value();
+    computedPattern.viewBox = viewBox.viewBox.value();
   }
 }
 

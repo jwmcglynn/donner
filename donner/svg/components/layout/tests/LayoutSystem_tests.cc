@@ -26,7 +26,7 @@ TEST_F(LayoutSystemTest, ViewportRoot) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(document.rootEntityHandle()),
+  EXPECT_THAT(layoutSystem.getViewBox(document.rootEntityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(200, 200)));
 }
 
@@ -37,7 +37,7 @@ TEST_F(LayoutSystemTest, ViewportRootWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(document.rootEntityHandle()),
+  EXPECT_THAT(layoutSystem.getViewBox(document.rootEntityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(200, 200)));
 }
 
@@ -48,7 +48,7 @@ TEST_F(LayoutSystemTest, ViewportNestedSvg) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("#nested")->entityHandle()),
+  EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("#nested")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -60,7 +60,7 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("#nested")->entityHandle()),
+  EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("#nested")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -71,7 +71,7 @@ TEST_F(LayoutSystemTest, ViewportPattern) {
     </svg>
   )");
 
-  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("pattern")->entityHandle()),
+  EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("pattern")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
@@ -83,7 +83,7 @@ TEST_F(LayoutSystemTest, ViewportPatternWithComputedComponents) {
   )");
 
   layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
-  EXPECT_THAT(layoutSystem.getViewport(document.querySelector("pattern")->entityHandle()),
+  EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("pattern")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 

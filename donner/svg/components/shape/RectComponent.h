@@ -38,29 +38,29 @@ struct RectProperties {
   auto allProperties() { return std::forward_as_tuple(x, y, width, height, rx, ry); }
 
   /**
-   * Calculate the actual value of \ref rx in pixels, taking into account the viewbox and handling
+   * Calculate the actual value of \ref rx in pixels, taking into account the viewBox and handling
    * "auto".
    *
-   * @param viewbox The viewbox of the SVG document.
+   * @param viewBox The viewBox of the SVG document.
    * @param fontMetrics The font metrics of the SVG document.
    * @return The actual value of \ref rx in pixels.
    */
-  std::tuple<Lengthd, double> calculateRx(const Boxd& viewbox,
+  std::tuple<Lengthd, double> calculateRx(const Boxd& viewBox,
                                           const FontMetrics& fontMetrics) const {
-    return CalculateRadiusMaybeAuto(rx, ry, viewbox, fontMetrics);
+    return CalculateRadiusMaybeAuto(rx, ry, viewBox, fontMetrics);
   }
 
   /**
-   * Calculate the actual value of \ref ry in pixels, taking into account the viewbox and handling
+   * Calculate the actual value of \ref ry in pixels, taking into account the viewBox and handling
    * "auto".
    *
-   * @param viewbox The viewbox of the SVG document.
+   * @param viewBox The viewBox of the SVG document.
    * @param fontMetrics The font metrics of the SVG document.
    * @return The actual value of \ref ry in pixels.
    */
-  std::tuple<Lengthd, double> calculateRy(const Boxd& viewbox,
+  std::tuple<Lengthd, double> calculateRy(const Boxd& viewBox,
                                           const FontMetrics& fontMetrics) const {
-    return CalculateRadiusMaybeAuto(ry, rx, viewbox, fontMetrics);
+    return CalculateRadiusMaybeAuto(ry, rx, viewBox, fontMetrics);
   }
 };
 

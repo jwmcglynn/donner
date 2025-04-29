@@ -134,13 +134,13 @@ struct Length {
   }
 
   /**
-   * Selects which extent of the viewbox to use for percentage and viewbox-relative length
+   * Selects which extent of the viewBox to use for percentage and viewBox-relative length
    * conversions, see \ref toPixels().
    */
   enum class Extent : uint8_t {
-    X,     ///< Use X component of viewbox for percentage calculations.
-    Y,     ///< Use Y component of viewbox for percentage calculations.
-    Mixed  ///< Use diagonal extent of viewbox.
+    X,     ///< Use X component of viewBox for percentage calculations.
+    Y,     ///< Use Y component of viewBox for percentage calculations.
+    Mixed  ///< Use diagonal extent of viewBox.
   };
 
   /**
@@ -148,23 +148,23 @@ struct Length {
    * https://www.w3.org/TR/css-values/#absolute-lengths and
    * https://www.w3.org/TR/css-values/#relative-lengths.
    *
-   * @param viewbox Viewbox of the element for computing viewbox-relative conversions.
+   * @param viewBox ViewBox of the element for computing viewBox-relative conversions.
    * @param fontMetrics Font size information for font-relative sizes.
-   * @param extent Which extent of the viewbox to use for percentage and viewbox-relative length.
+   * @param extent Which extent of the viewBox to use for percentage and viewBox-relative length.
    * @return Length in pixels.
    */
-  T toPixels(const Box<T>& viewbox, const FontMetrics& fontMetrics,
+  T toPixels(const Box<T>& viewBox, const FontMetrics& fontMetrics,
              Extent extent = Extent::Mixed) const {
     switch (unit) {
       // Absolute units.
       case Unit::None: return value;
       case Unit::Percent: {
         if (extent == Extent::X) {
-          return value * viewbox.width() / 100;
+          return value * viewBox.width() / 100;
         } else if (extent == Extent::Y) {
-          return value * viewbox.height() / 100;
+          return value * viewBox.height() / 100;
         } else {
-          return value * diagonalExtent(viewbox) / 100;
+          return value * diagonalExtent(viewBox) / 100;
         }
       }
       case Unit::Cm: return value * AbsoluteLengthMetrics::kCmToPixels;
@@ -179,10 +179,10 @@ struct Length {
       case Unit::Ex: return value * fontMetrics.exUnit();
       case Unit::Ch: return value * fontMetrics.chUnit();
       case Unit::Rem: return value * fontMetrics.rootFontSize;
-      case Unit::Vw: return value * viewbox.width() / 100.0;
-      case Unit::Vh: return value * viewbox.height() / 100.0;
-      case Unit::Vmin: return value * std::min(viewbox.width(), viewbox.height()) / 100.0;
-      case Unit::Vmax: return value * std::max(viewbox.width(), viewbox.height()) / 100.0;
+      case Unit::Vw: return value * viewBox.width() / 100.0;
+      case Unit::Vh: return value * viewBox.height() / 100.0;
+      case Unit::Vmin: return value * std::min(viewBox.width(), viewBox.height()) / 100.0;
+      case Unit::Vmax: return value * std::max(viewBox.width(), viewBox.height()) / 100.0;
     }
   }
 

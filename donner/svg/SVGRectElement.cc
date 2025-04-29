@@ -112,14 +112,14 @@ Lengthd SVGRectElement::computedRx() const {
   compute();
 
   return std::get<0>(handle_.get<components::ComputedRectComponent>().properties.calculateRx(
-      components::LayoutSystem().getViewport(handle_), FontMetrics()));
+      components::LayoutSystem().getViewBox(handle_), FontMetrics()));
 }
 
 Lengthd SVGRectElement::computedRy() const {
   compute();
 
   return std::get<0>(handle_.get<components::ComputedRectComponent>().properties.calculateRy(
-      components::LayoutSystem().getViewport(handle_), FontMetrics()));
+      components::LayoutSystem().getViewBox(handle_), FontMetrics()));
 }
 
 std::optional<PathSpline> SVGRectElement::computedSpline() const {

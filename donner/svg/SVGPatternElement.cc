@@ -4,7 +4,7 @@
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
-#include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
@@ -22,13 +22,13 @@ SVGPatternElement SVGPatternElement::CreateOn(EntityHandle handle) {
 
   handle.emplace<components::PatternComponent>();
   handle.emplace<components::DoNotInheritFillOrStrokeTag>();
-  handle.emplace<components::ViewboxComponent>();
+  handle.emplace<components::ViewBoxComponent>();
   handle.emplace<components::PreserveAspectRatioComponent>();
   return SVGPatternElement(handle);
 }
 
-std::optional<Boxd> SVGPatternElement::viewbox() const {
-  return handle_.get<components::ViewboxComponent>().viewbox;
+std::optional<Boxd> SVGPatternElement::viewBox() const {
+  return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
 PreserveAspectRatio SVGPatternElement::preserveAspectRatio() const {
@@ -74,8 +74,8 @@ std::optional<RcString> SVGPatternElement::href() const {
   }
 }
 
-void SVGPatternElement::setViewbox(OptionalRef<Boxd> viewbox) {
-  handle_.get<components::ViewboxComponent>().viewbox = viewbox;
+void SVGPatternElement::setViewBox(OptionalRef<Boxd> viewBox) {
+  handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 
 void SVGPatternElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {

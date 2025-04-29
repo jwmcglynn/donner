@@ -5,7 +5,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
-#include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 
 namespace donner::svg {
 
@@ -14,19 +14,19 @@ SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
   // Set the rendering behavior for a symbol, which is not rendered directly.
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::ShadowOnlyChildren);
-  handle.emplace<components::ViewboxComponent>();
+  handle.emplace<components::ViewBoxComponent>();
   handle.emplace<components::PreserveAspectRatioComponent>();
   handle.emplace<components::SymbolComponent>();
   handle.emplace<components::SizedElementComponent>();
   return SVGSymbolElement(handle);
 }
 
-void SVGSymbolElement::setViewbox(OptionalRef<Boxd> viewbox) {
-  handle_.get<components::ViewboxComponent>().viewbox = viewbox;
+void SVGSymbolElement::setViewBox(OptionalRef<Boxd> viewBox) {
+  handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 
-std::optional<Boxd> SVGSymbolElement::viewbox() const {
-  return handle_.get<components::ViewboxComponent>().viewbox;
+std::optional<Boxd> SVGSymbolElement::viewBox() const {
+  return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
 void SVGSymbolElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {

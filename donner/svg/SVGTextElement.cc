@@ -3,7 +3,7 @@
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
-#include "donner/svg/components/layout/ViewboxComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 
 namespace donner::svg {
 
@@ -15,8 +15,8 @@ SVGTextElement SVGTextElement::CreateOn(EntityHandle handle) {
   return SVGTextElement(handle);
 }
 
-std::optional<Boxd> SVGSVGElement::viewbox() const {
-  return handle_.get<components::ViewboxComponent>().viewbox;
+std::optional<Boxd> SVGSVGElement::viewBox() const {
+  return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
 PreserveAspectRatio SVGSVGElement::preserveAspectRatio() const {
@@ -39,8 +39,8 @@ std::optional<Lengthd> SVGSVGElement::height() const {
   return handle_.get<components::SizedElementComponent>().properties.height.getRequired();
 }
 
-void SVGSVGElement::setViewbox(std::optional<Boxd> viewbox) {
-  handle_.get<components::ViewboxComponent>().viewbox = viewbox;
+void SVGSVGElement::setViewBox(std::optional<Boxd> viewBox) {
+  handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 
 void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {

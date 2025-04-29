@@ -225,7 +225,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
       circle.properties, style.properties->unparsedProperties, outWarnings);
 
-  const Boxd viewport = LayoutSystem().getViewport(handle);
+  const Boxd viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d center(computedCircle.properties.cx.getRequired().toPixels(viewport, fontMetrics,
                                                                             Lengthd::Extent::X),
@@ -249,7 +249,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedEllipseComponent& computedEllipse = handle.get_or_emplace<ComputedEllipseComponent>(
       ellipse.properties, style.properties->unparsedProperties, outWarnings);
 
-  const Boxd viewport = LayoutSystem().getViewport(handle);
+  const Boxd viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d center(
       computedEllipse.properties.cx.getRequired().toPixels(viewport, fontMetrics),
@@ -270,7 +270,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
-  const Boxd viewport = LayoutSystem().getViewport(handle);
+  const Boxd viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d start(line.x1.toPixels(viewport, fontMetrics),
                        line.y1.toPixels(viewport, fontMetrics));
@@ -350,7 +350,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(
       rect.properties, style.properties->unparsedProperties, outWarnings);
 
-  const Boxd viewport = LayoutSystem().getViewport(handle);
+  const Boxd viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d pos(
       computedRect.properties.x.getRequired().toPixels(viewport, fontMetrics, Lengthd::Extent::X),

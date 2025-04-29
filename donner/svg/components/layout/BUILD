@@ -6,7 +6,7 @@ cc_library(
         "SizedElementComponent.h",
         "SymbolComponent.h",
         "TransformComponent.h",
-        "ViewboxComponent.h",
+        "ViewBoxComponent.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",

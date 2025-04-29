@@ -1,4 +1,4 @@
-#include "donner/svg/parser/ViewboxParser.h"
+#include "donner/svg/parser/ViewBoxParser.h"
 
 #include "donner/base/parser/details/ParserBase.h"
 
@@ -6,13 +6,13 @@ namespace donner::svg::parser {
 
 namespace {
 
-/// Implementation class for \ref ViewboxParser.
-class ViewboxParserImpl : public donner::parser::ParserBase {
+/// Implementation class for \ref ViewBoxParser.
+class ViewBoxParserImpl : public donner::parser::ParserBase {
 public:
   /// Construct with the string to parse.
-  explicit ViewboxParserImpl(std::string_view str) : ParserBase(str) {}
+  explicit ViewBoxParserImpl(std::string_view str) : ParserBase(str) {}
 
-  /// Parse the viewbox string.
+  /// Parse the viewBox string.
   ParseResult<Boxd> parse() {
     double numbers[4];
     if (auto error = readNumbers(numbers)) {
@@ -38,8 +38,8 @@ public:
 
 }  // namespace
 
-ParseResult<Boxd> ViewboxParser::Parse(std::string_view str) {
-  ViewboxParserImpl parser(str);
+ParseResult<Boxd> ViewBoxParser::Parse(std::string_view str) {
+  ViewBoxParserImpl parser(str);
   return parser.parse();
 }
 

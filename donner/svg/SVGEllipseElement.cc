@@ -77,14 +77,14 @@ Lengthd SVGEllipseElement::computedRx() const {
   compute();
 
   return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRx(
-      components::LayoutSystem().getViewport(handle_), FontMetrics()));
+      components::LayoutSystem().getViewBox(handle_), FontMetrics()));
 }
 
 Lengthd SVGEllipseElement::computedRy() const {
   compute();
 
   return std::get<0>(handle_.get<components::ComputedEllipseComponent>().properties.calculateRy(
-      components::LayoutSystem().getViewport(handle_), FontMetrics()));
+      components::LayoutSystem().getViewBox(handle_), FontMetrics()));
 }
 
 void SVGEllipseElement::invalidate() const {

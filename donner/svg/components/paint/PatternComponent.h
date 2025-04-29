@@ -10,7 +10,7 @@
 namespace donner::svg::components {
 
 /**
- * Parameters for \ref xml_pattern elements which are not captured by \ref ViewboxComponent and \ref
+ * Parameters for \ref xml_pattern elements which are not captured by \ref ViewBoxComponent and \ref
  * SizedElementComponent.
  */
 struct PatternComponent {
@@ -43,8 +43,8 @@ struct ComputedPatternComponent {
   Boxd tileRect = Boxd::CreateEmpty(Vector2d());
   /// The preserveAspectRatio of the pattern, defaults to \ref PreserveAspectRatio::None.
   PreserveAspectRatio preserveAspectRatio;
-  /// The viewbox of the pattern, or \c std::nullopt if not set.
-  std::optional<Boxd> viewbox;
+  /// The viewBox of the pattern, or \c std::nullopt if not set.
+  std::optional<Boxd> viewBox;
   /// Resolved `x`, `y`, `width`, and `height` properties of the pattern tile rectangle.
   SizedElementProperties sizeProperties;
 

@@ -20,7 +20,7 @@
 #include "donner/svg/parser/Number2dParser.h"
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "donner/svg/parser/PreserveAspectRatioParser.h"
-#include "donner/svg/parser/ViewboxParser.h"
+#include "donner/svg/parser/ViewBoxParser.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
 
 namespace donner::svg::parser {
@@ -164,11 +164,11 @@ template <typename T>
 bool ParseViewBoxPreserveAspectRatio(SVGParserContext& context, T element,
                                      const XMLQualifiedNameRef& name, std::string_view value) {
   if (name == XMLQualifiedNameRef("viewBox")) {
-    auto maybeViewbox = ViewboxParser::Parse(value);
-    if (maybeViewbox.hasError()) {
-      context.addSubparserWarning(std::move(maybeViewbox.error()), context.parserOriginFrom(value));
+    auto maybeViewBox = ViewBoxParser::Parse(value);
+    if (maybeViewBox.hasError()) {
+      context.addSubparserWarning(std::move(maybeViewBox.error()), context.parserOriginFrom(value));
     } else {
-      element.setViewbox(maybeViewbox.result());
+      element.setViewBox(maybeViewBox.result());
     }
   } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
     auto maybeAspectRatio = PreserveAspectRatioParser::Parse(value);

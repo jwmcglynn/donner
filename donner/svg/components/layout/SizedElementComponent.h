@@ -36,11 +36,11 @@ struct SizedElementProperties {
 
 /**
  * Stores the computed bounds of a sized element, resolving units and percentages. Contains the
- * computed rect and inherited viewbox of the parent element.
+ * computed rect and inherited viewBox of the parent element.
  */
 struct ComputedSizedElementComponent {
   Boxd bounds;            ///< The computed rect of this sized element.
-  Boxd inheritedViewbox;  ///< The viewbox of the parent element, used for preserveAspectRatio
+  Boxd inheritedViewBox;  ///< The viewBox of the parent element, used for preserveAspectRatio
                           ///< transformations.
 };
 

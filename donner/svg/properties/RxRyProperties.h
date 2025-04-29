@@ -22,13 +22,13 @@ namespace donner::svg {
  *
  * @param property The property to compute, the storage for either `rx` or `ry`.
  * @param fallbackProperty The other property to use if the first one is "auto".
- * @param viewbox The viewbox to use for computing the length.
+ * @param viewBox The viewBox to use for computing the length.
  * @param fontMetrics The font metrics to use for computing the length.
  * @return Tuple containing the resolved length, and the converted length to pixels.
  */
 std::tuple<Lengthd, double> CalculateRadiusMaybeAuto(const Property<Lengthd>& property,
                                                      const Property<Lengthd>& fallbackProperty,
-                                                     const Boxd& viewbox,
+                                                     const Boxd& viewBox,
                                                      const FontMetrics& fontMetrics);
 
 }  // namespace donner::svg

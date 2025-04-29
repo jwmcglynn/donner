@@ -326,7 +326,7 @@ public:
                 instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
           drawPath(
               instance.dataHandle(registry), instance, *path, styleComponent.properties.value(),
-              components::LayoutSystem().getViewport(instance.dataHandle(registry)), FontMetrics());
+              components::LayoutSystem().getViewBox(instance.dataHandle(registry)), FontMetrics());
         } else if (const auto* image =
                        instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
           drawImage(instance.dataHandle(registry), instance, *image);
@@ -378,16 +378,16 @@ public:
 
   void drawPath(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
                 const components::ComputedPathComponent& path, const PropertyRegistry& style,
-                const Boxd& viewbox, const FontMetrics& fontMetrics) {
+                const Boxd& viewBox, const FontMetrics& fontMetrics) {
     if (HasPaint(instance.resolvedFill)) {
-      drawPathFill(dataHandle, path, instance.resolvedFill, style, viewbox);
+      drawPathFill(dataHandle, path, instance.resolvedFill, style, viewBox);
     }
 
     if (HasPaint(instance.resolvedStroke)) {
-      drawPathStroke(dataHandle, path, instance.resolvedStroke, style, viewbox, fontMetrics);
+      drawPathStroke(dataHandle, path, instance.resolvedStroke, style, viewBox, fontMetrics);
     }
 
-    drawMarkers(dataHandle, instance, path, viewbox, fontMetrics);
+    drawMarkers(dataHandle, instance, path, viewBox, fontMetrics);
   }
 
   std::optional<SkPaint> createFallbackPaint(const components::PaintResolvedReference& ref,
@@ -416,16 +416,16 @@ public:
     return value;
   }
 
-  inline SkScalar resolveGradientCoord(Lengthd value, const Boxd& viewbox, bool numbersArePercent) {
+  inline SkScalar resolveGradientCoord(Lengthd value, const Boxd& viewBox, bool numbersArePercent) {
     // Not plumbing FontMetrics here, since only percentage values are accepted.
-    return NarrowToFloat(toPercent(value, numbersArePercent).toPixels(viewbox, FontMetrics()));
+    return NarrowToFloat(toPercent(value, numbersArePercent).toPixels(viewBox, FontMetrics()));
   }
 
-  Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewbox,
+  Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewBox,
                                  bool numbersArePercent) {
     return Vector2d(
-        toPercent(x, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::X),
-        toPercent(y, numbersArePercent).toPixels(viewbox, FontMetrics(), Lengthd::Extent::Y));
+        toPercent(x, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::X),
+        toPercent(y, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y));
   }
 
   static bool CircleContainsPoint(Vector2d center, double radius, Vector2d point) {
@@ -434,9 +434,9 @@ public:
 
   Transformd ResolveTransform(
       const components::ComputedLocalTransformComponent* maybeTransformComponent,
-      const Boxd& viewbox, const FontMetrics& fontMetrics) {
+      const Boxd& viewBox, const FontMetrics& fontMetrics) {
     if (maybeTransformComponent) {
-      return maybeTransformComponent->rawCssTransform.compute(viewbox, fontMetrics);
+      return maybeTransformComponent->rawCssTransform.compute(viewBox, fontMetrics);
     } else {
       return Transformd();
     }
@@ -444,7 +444,7 @@ public:
 
   std::optional<SkPaint> instantiateGradient(
       EntityHandle target, const components::ComputedGradientComponent& computedGradient,
-      const components::PaintResolvedReference& ref, const Boxd& pathBounds, const Boxd& viewbox,
+      const components::PaintResolvedReference& ref, const Boxd& pathBounds, const Boxd& viewBox,
       css::RGBA currentColor, float opacity) {
     // Apply gradientUnits and gradientTransform.
     const bool objectBoundingBox =
@@ -483,10 +483,10 @@ public:
       // TODO(jwmcglynn): Can numbersArePercent be represented by the transform instead?
       numbersArePercent = true;
     } else {
-      gradientFromGradientUnits = ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+      gradientFromGradientUnits = ResolveTransform(maybeTransformComponent, viewBox, FontMetrics());
     }
 
-    const Boxd& bounds = objectBoundingBox ? kUnitPathBounds : viewbox;
+    const Boxd& bounds = objectBoundingBox ? kUnitPathBounds : viewBox;
 
     std::vector<SkScalar> pos;
     std::vector<SkColor> color;
@@ -642,7 +642,7 @@ public:
     } else {
       // maskUnits == UserSpaceOnUse
       // Use the viewport as bounds
-      maskUnitsBounds = components::LayoutSystem().getViewport(instance.dataHandle(registry));
+      maskUnitsBounds = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     }
 
     if (!maskComponent.useAutoBounds()) {
@@ -696,7 +696,7 @@ public:
    * @param computedPattern The resolved pattern component.
    * @param ref The reference to the pattern.
    * @param pathBounds The bounds of the path to which the pattern is applied.
-   * @param viewbox The viewbox of the the target entity.
+   * @param viewBox The viewBox of the the target entity.
    * @param currentColor Current context color inherited from the parent.
    * @param opacity Current opacity inherited from the parent.
    * @return SkPaint instance containing the pattern.
@@ -704,7 +704,7 @@ public:
   std::optional<SkPaint> instantiatePattern(
       components::ShadowBranchType branchType, EntityHandle dataHandle, EntityHandle target,
       const components::ComputedPatternComponent& computedPattern,
-      const components::PaintResolvedReference& ref, const Boxd& pathBounds, const Boxd& viewbox,
+      const components::PaintResolvedReference& ref, const Boxd& pathBounds, const Boxd& viewBox,
       css::RGBA currentColor, float opacity) {
     if (!ref.subtreeInfo) {
       // Subtree did not instantiate, indicating that recursion was detected.
@@ -751,16 +751,16 @@ public:
       rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
     }
 
-    if (computedPattern.viewbox) {
+    if (computedPattern.viewBox) {
       patternContentFromPatternTile =
           computedPattern.preserveAspectRatio.elementContentFromViewBoxTransform(
-              rect.toOrigin(), computedPattern.viewbox);
+              rect.toOrigin(), computedPattern.viewBox);
     } else if (patternContentObjectBoundingBox) {
       patternContentFromPatternTile = Transformd::Scale(pathBounds.size());
     }
 
     patternTileFromTarget = Transformd::Translate(rect.topLeft) *
-                            ResolveTransform(maybeTransformComponent, viewbox, FontMetrics());
+                            ResolveTransform(maybeTransformComponent, viewBox, FontMetrics());
 
     const SkRect skTileRect = toSkia(rect.toOrigin());
 
@@ -800,17 +800,17 @@ public:
   std::optional<SkPaint> instantiatePaintReference(components::ShadowBranchType branchType,
                                                    EntityHandle dataHandle,
                                                    const components::PaintResolvedReference& ref,
-                                                   const Boxd& pathBounds, const Boxd& viewbox,
+                                                   const Boxd& pathBounds, const Boxd& viewBox,
                                                    css::RGBA currentColor, float opacity) {
     const EntityHandle target = ref.reference.handle;
 
     if (const auto* computedGradient = target.try_get<components::ComputedGradientComponent>()) {
-      return instantiateGradient(target, *computedGradient, ref, pathBounds, viewbox, currentColor,
+      return instantiateGradient(target, *computedGradient, ref, pathBounds, viewBox, currentColor,
                                  opacity);
     } else if (const auto* computedPattern =
                    target.try_get<components::ComputedPatternComponent>()) {
       return instantiatePattern(branchType, dataHandle, target, *computedPattern, ref, pathBounds,
-                                viewbox, currentColor, opacity);
+                                viewBox, currentColor, opacity);
     }
 
     UTILS_UNREACHABLE();  // The computed tree should invalidate any references that don't point
@@ -831,7 +831,7 @@ public:
 
   void drawPathFill(EntityHandle dataHandle, const components::ComputedPathComponent& path,
                     const components::ResolvedPaintServer& paint, const PropertyRegistry& style,
-                    const Boxd& viewbox) {
+                    const Boxd& viewBox) {
     const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
 
     if (renderer_.verbose_) {
@@ -847,7 +847,7 @@ public:
     } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint)) {
       std::optional<SkPaint> skPaint = instantiatePaintReference(
           components::ShadowBranchType::OffscreenFill, dataHandle, *ref, path.spline.bounds(),
-          viewbox, style.color.getRequired().rgba(), fillOpacity);
+          viewBox, style.color.getRequired().rgba(), fillOpacity);
       if (skPaint) {
         drawPathFillWithSkPaint(path, skPaint.value(), style);
       }
@@ -862,7 +862,7 @@ public:
   void drawPathStrokeWithSkPaint(EntityHandle dataHandle,
                                  const components::ComputedPathComponent& path,
                                  const StrokeConfig& config, SkPaint& skPaint,
-                                 const PropertyRegistry& style, const Boxd& viewbox,
+                                 const PropertyRegistry& style, const Boxd& viewBox,
                                  const FontMetrics& fontMetrics) {
     const SkPath skPath = toSkia(path.spline);
 
@@ -889,14 +889,14 @@ public:
       for (int i = 0; i < numRepeats; ++i) {
         for (const Lengthd& dash : dashes) {
           skiaDashes.push_back(
-              static_cast<float>(dash.toPixels(viewbox, fontMetrics) * dashUnitsScale));
+              static_cast<float>(dash.toPixels(viewBox, fontMetrics) * dashUnitsScale));
         }
       }
 
       skPaint.setPathEffect(SkDashPathEffect::Make(
           skiaDashes.data(), static_cast<int>(skiaDashes.size()),
           static_cast<SkScalar>(
-              style.strokeDashoffset.get().value().toPixels(viewbox, fontMetrics) *
+              style.strokeDashoffset.get().value().toPixels(viewBox, fontMetrics) *
               dashUnitsScale)));
     }
 
@@ -913,9 +913,9 @@ public:
 
   void drawPathStroke(EntityHandle dataHandle, const components::ComputedPathComponent& path,
                       const components::ResolvedPaintServer& paint, const PropertyRegistry& style,
-                      const Boxd& viewbox, const FontMetrics& fontMetrics) {
+                      const Boxd& viewBox, const FontMetrics& fontMetrics) {
     const StrokeConfig config = {
-        .strokeWidth = style.strokeWidth.get().value().toPixels(viewbox, fontMetrics),
+        .strokeWidth = style.strokeWidth.get().value().toPixels(viewBox, fontMetrics),
         .miterLimit = style.strokeMiterlimit.get().value()};
     const double strokeOpacity = style.strokeOpacity.get().value();
 
@@ -929,14 +929,14 @@ public:
       skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(),
                                                    static_cast<float>(strokeOpacity))));
 
-      drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint, style, viewbox, fontMetrics);
+      drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint, style, viewBox, fontMetrics);
     } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint)) {
       std::optional<SkPaint> skPaint = instantiatePaintReference(
           components::ShadowBranchType::OffscreenStroke, dataHandle, *ref,
-          path.spline.strokeMiterBounds(config.strokeWidth, config.miterLimit), viewbox,
+          path.spline.strokeMiterBounds(config.strokeWidth, config.miterLimit), viewBox,
           style.color.getRequired().rgba(), NarrowToFloat((strokeOpacity)));
       if (skPaint) {
-        drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint.value(), style, viewbox,
+        drawPathStrokeWithSkPaint(dataHandle, path, config, skPaint.value(), style, viewBox,
                                   fontMetrics);
       }
     }
@@ -1008,7 +1008,7 @@ public:
   }
 
   void drawMarkers(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
-                   const components::ComputedPathComponent& path, const Boxd& viewbox,
+                   const components::ComputedPathComponent& path, const Boxd& viewBox,
                    const FontMetrics& fontMetrics) {
     const auto& commands = path.spline.commands();
 
@@ -1031,16 +1031,16 @@ public:
         if (i == 0) {
           if (hasMarkerStart) {
             drawMarker(dataHandle, instance, instance.markerStart.value(), vertex.point,
-                       vertex.orientation, MarkerOrient::MarkerType::Start, viewbox, fontMetrics);
+                       vertex.orientation, MarkerOrient::MarkerType::Start, viewBox, fontMetrics);
           }
         } else if (i == vertices.size() - 1) {
           if (hasMarkerEnd) {
             drawMarker(dataHandle, instance, instance.markerEnd.value(), vertex.point,
-                       vertex.orientation, MarkerOrient::MarkerType::Default, viewbox, fontMetrics);
+                       vertex.orientation, MarkerOrient::MarkerType::Default, viewBox, fontMetrics);
           }
         } else if (hasMarkerMid) {
           drawMarker(dataHandle, instance, instance.markerMid.value(), vertex.point,
-                     vertex.orientation, MarkerOrient::MarkerType::Default, viewbox, fontMetrics);
+                     vertex.orientation, MarkerOrient::MarkerType::Default, viewBox, fontMetrics);
         }
 
         view_.restore(viewSnapshot);
@@ -1063,7 +1063,7 @@ public:
   void drawMarker(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
                   const components::ResolvedMarker& marker, const Vector2d& vertexPosition,
                   const Vector2d& direction, MarkerOrient::MarkerType markerOrientType,
-                  const Boxd& viewbox, const FontMetrics& fontMetrics) {
+                  const Boxd& viewBox, const FontMetrics& fontMetrics) {
     Registry& registry = *dataHandle.registry();
 
     const EntityHandle markerHandle = marker.reference.handle;
@@ -1086,8 +1086,8 @@ public:
     components::LayoutSystem layoutSystem;
 
     const std::optional<Boxd> markerViewBox =
-        layoutSystem.overridesViewport(markerHandle)
-            ? std::optional<Boxd>(layoutSystem.getViewport(markerHandle))
+        layoutSystem.overridesViewBox(markerHandle)
+            ? std::optional<Boxd>(layoutSystem.getViewBox(markerHandle))
             : std::nullopt;
     const PreserveAspectRatio preserveAspectRatio =
         markerHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
