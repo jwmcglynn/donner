@@ -94,12 +94,13 @@
         "--gtest_break_on_failure",
       ],
       "cwd": "${workspaceFolder}",
-      "env": {
-        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/resvg_test_suite.runfiles"
-      },
       "sourceMap": {
         ".": "${workspaceFolder}"
-      }
+      },
+      "env": {
+        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/svg/renderer/tests/resvg_test_suite.runfiles",
+      },
+      "preLaunchTask": "resvg_test_suite",
     },
     {
       "type": "lldb",

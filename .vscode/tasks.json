@@ -205,14 +205,21 @@
       "type": "shell",
       "command": "bazel build //donner/css/parser:parser_tests -c dbg",
       "problemMatcher": [],
-      "group": "test"
+      "group": "build"
     },
     {
       "label": "xml_tests",
       "type": "shell",
       "command": "bazel build //donner/base/xml:xml_tests -c dbg",
       "problemMatcher": [],
-      "group": "test"
-    }
+      "group": "build"
+    },
+    {
+      "label": "resvg_test_suite",
+      "type": "shell",
+      "command": "bazel build --config=debug //donner/svg/renderer/tests:resvg_test_suite",
+      "problemMatcher": [],
+      "group": "build"
+    },
   ]
 }
