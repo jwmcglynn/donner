@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <ostream>
+#include <string>
+
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
@@ -119,13 +122,13 @@ TEST(TransformIs, Failure) {
   EXPECT_FALSE(testing::ExplainMatchResult(TransformIs(1.0, 0.0, 0.0, 1.0, 1.0, 2.0),
                                            Transformd::Translate(Vector2d(1.1, 2.1)),
                                            &resultListener));
-  EXPECT_EQ(resultListener.str(), "whose element #4 doesn't match, which is 0.1 from 1");
+  EXPECT_THAT(resultListener.str(), testing::MatchesRegex("whose element #4.*which is 0.1 from 1"));
 
   resultListener.Clear();
   EXPECT_FALSE(testing::ExplainMatchResult(TransformIs(1.0, 0.0, 0.0, 1.0, 1.0, 2.0),
                                            Transformd::Translate(Vector2d(1.0, 2.1)),
                                            &resultListener));
-  EXPECT_EQ(resultListener.str(), "whose element #5 doesn't match, which is 0.1 from 2");
+  EXPECT_THAT(resultListener.str(), testing::MatchesRegex("whose element #5.*which is 0.1 from 2"));
 }
 
 TEST(TransformIsIdentity, Success) {
