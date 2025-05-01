@@ -65,10 +65,7 @@ build:macos-binary-size --linkopt=-dead_strip
 build --config=libc++ --config=c++20 --define absl=1
 
 # Debug builds
-build:debug -c dbg --copt=-O0 --copt=-g
-# Creates symlinks in the workspace that point into the sandbox.
-build:debug --symlink_prefix=/
-
+build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone
 
 # Binary size builds
 build:binary-size -c opt --copt=-Os --copt=-g --strip=never
