@@ -25,6 +25,14 @@
       "digest": {
         "enabled": false
       }
+    },
+    {
+      "matchDepNames": [
+        "skia"
+      ],
+      "schedule": [
+        "at 10:00 on the 1st day of the month"
+      ]
     }
   ],
   "ignorePaths": [
