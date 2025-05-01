@@ -40,6 +40,13 @@ public:
   MeetOrSlice meetOrSlice = MeetOrSlice::Meet;
 
   /**
+   * Create a default PreserveAspectRatio from the SVG2 spec, which is `XMidYMid meet`.
+   *
+   * @see https://www.w3.org/TR/SVG2/coords.html#PreserveAspectRatioAttribute
+   */
+  static PreserveAspectRatio Default() { return PreserveAspectRatio{Align::XMidYMid, MeetOrSlice::Meet}; }
+
+  /**
    * Creates a PreserveAspectRatio with 'none' alignment.
    * Useful for scenarios where aspect ratio should be ignored.
    */

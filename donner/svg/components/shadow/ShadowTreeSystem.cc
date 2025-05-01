@@ -1,7 +1,11 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 
+#include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -97,9 +101,23 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
     return std::nullopt;
   }
 
+  Registry& registry = *entity.registry();
+
   RecursionGuard guard;
-  computeChildren(*entity.registry(), branchType, storage, guard, entity, lightTarget,
-                  shadowHostParents, outWarnings);
+  Entity shadowEntity = createShadowAndChildren(registry, branchType, storage, guard, entity,
+                                                lightTarget, shadowHostParents, outWarnings);
+  std::cout << "createShadowAndChildren returned " << shadowEntity << "\n";
+
+  if (shadowEntity != entt::null) {
+    registry.emplace<ShadowTreeRootComponent>(shadowEntity, entity);
+  }
+
+  // Handle sized element inheritance for <use> -> <symbol> shadow trees
+  if (branchType == ShadowBranchType::Main && sizedElementHandler_) {
+    // Use the provided sized element handler callback to process sized elements
+    // This avoids a direct dependency on the LayoutSystem
+    sizedElementHandler_(registry, shadowEntity, entity, lightTarget, branchType, nullptr);
+  }
 
   if (branchType == ShadowBranchType::Main) {
     assert(!shadow.mainBranch);
@@ -136,12 +154,11 @@ Entity ShadowTreeSystem::createShadowEntity(Registry& registry, ShadowBranchType
   return shadow;
 }
 
-void ShadowTreeSystem::computeChildren(Registry& registry, ShadowBranchType branchType,
-                                       ComputedShadowTreeComponent::BranchStorage& storage,
-                                       RecursionGuard& guard, Entity shadowParent,
-                                       Entity lightTarget,
-                                       const std::set<Entity>& shadowHostParents,
-                                       std::vector<ParseError>* outWarnings) {
+Entity ShadowTreeSystem::createShadowAndChildren(
+    Registry& registry, ShadowBranchType branchType,
+    ComputedShadowTreeComponent::BranchStorage& storage, RecursionGuard& guard, Entity shadowParent,
+    Entity lightTarget, const std::set<Entity>& shadowHostParents,
+    std::vector<ParseError>* outWarnings) {
   auto validateNoRecursion = [&guard, &shadowHostParents, outWarnings](
                                  const RcString& href, Entity targetEntity) -> bool {
     if (shadowHostParents.count(targetEntity)) {
@@ -174,7 +191,7 @@ void ShadowTreeSystem::computeChildren(Registry& registry, ShadowBranchType bran
     if (auto [targetEntity, href] = GetPaintTarget(registry, lightTarget, branchType);
         targetEntity != entt::null) {
       if (!validateNoRecursion(href, targetEntity)) {
-        return;
+        return entt::null;
       }
     }
   }
@@ -184,33 +201,64 @@ void ShadowTreeSystem::computeChildren(Registry& registry, ShadowBranchType bran
   if (const auto* nestedShadow = registry.try_get<ShadowTreeComponent>(lightTarget)) {
     if (auto targetEntity = nestedShadow->mainTargetEntity(registry)) {
       if (!validateNoRecursion(nestedShadow->mainHref().value_or(""), targetEntity.value())) {
-        return;
+        return entt::null;
       }
 
+      // TODO: Factor out common functionality to create a new tree w/ populateInstance
       const Entity shadow =
           createShadowEntity(registry, branchType, storage, lightTarget, shadowParent);
+      std::cout << "createShadowEntity for nested shadow: " << shadow << " "
+                << registry.get<components::ElementTypeComponent>(targetEntity.value()).type()
+                << "\n";
 
       RecursionGuard childGuard = guard.with(targetEntity.value());
-      computeChildren(registry, branchType, storage, childGuard, shadow, targetEntity->handle,
-                      shadowHostParents, outWarnings);
+      const Entity nestedShadowEntity =
+          createShadowAndChildren(registry, branchType, storage, childGuard, shadow,
+                                  targetEntity->handle, shadowHostParents, outWarnings);
+
+      std::cout << "createShadowAndChildren nested returned " << nestedShadowEntity << "\n";
+
+      // Handle sized element inheritance for <use> -> <symbol> shadow trees
+      if (branchType == ShadowBranchType::Main && sizedElementHandler_) {
+        // Use the provided sized element handler callback to process sized elements
+        // This avoids a direct dependency on the LayoutSystem
+        sizedElementHandler_(registry, nestedShadowEntity, EntityHandle(registry, lightTarget),
+                             targetEntity.value(), branchType, nullptr);
+      }
+
+      // Set the sourceEntity as the element in the light tree (i.e. the original <use>)
+      if (nestedShadowEntity != entt::null) {
+        registry.emplace<ShadowTreeRootComponent>(nestedShadowEntity, lightTarget);
+      }
+
+      return shadow;
     } else if (outWarnings) {
       ParseError err;
       err.reason = std::string("Failed to find target entity for nested shadow tree '") +
                    nestedShadow->mainHref().value_or("") + "'";
       outWarnings->emplace_back(std::move(err));
+      return entt::null;
     }
   } else {
     const Entity shadow =
         createShadowEntity(registry, branchType, storage, lightTarget, shadowParent);
 
+    std::cout << "createShadowEntity: " << shadow << " "
+              << registry.get<components::ElementTypeComponent>(lightTarget).type() << "\n";
+
     for (auto child = registry.get<donner::components::TreeComponent>(lightTarget).firstChild();
          child != entt::null;
          child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
       RecursionGuard childGuard = guard.with(child);
-      computeChildren(registry, branchType, storage, guard, shadow, child, shadowHostParents,
-                      outWarnings);
+      const Entity childShadow = createShadowAndChildren(
+          registry, branchType, storage, guard, shadow, child, shadowHostParents, outWarnings);
+      std::cout << "createShadowAndChildren child returned " << childShadow << "\n";
     }
+
+    return shadow;
   }
+
+  UTILS_UNREACHABLE();
 }
 
 }  // namespace donner::svg::components

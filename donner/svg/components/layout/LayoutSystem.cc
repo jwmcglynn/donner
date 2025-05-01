@@ -9,6 +9,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
@@ -87,7 +88,7 @@ PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
     return preserveAspectRatioComponent->preserveAspectRatio;
   }
 
-  return PreserveAspectRatio::None();
+  return PreserveAspectRatio::Default();
 }
 
 void ApplyUnparsedProperties(SizedElementProperties& properties,
@@ -175,7 +176,7 @@ std::optional<float> LayoutSystem::intrinsicAspectRatio(EntityHandle entity) con
   // Calculate the intrinsic aspect ratio per
   // https://svgwg.org/svg2-draft/coords.html#SizingSVGInCSS.
 
-  // > 1. If the width and height sizing properties on the ‘svg’ element are both absolute values:
+  // > 1. If the width and height sizing properties on the 'svg' element are both absolute values:
   if (IsAbsolute(properties.width) && IsAbsolute(properties.height)) {
     // > 1. return width / height
     // Since we know the size is absolute, we don't need to specify a real viewBox or FontMetrics.
@@ -184,9 +185,9 @@ std::optional<float> LayoutSystem::intrinsicAspectRatio(EntityHandle entity) con
 
   // TODO(svg views): Do not handle "2. If an SVG View is active", this feature is not supported.
 
-  // > 3. If the ‘viewBox’ on the ‘svg’ element is correctly specified:
+  // > 3. If the 'viewBox' on the 'svg' element is correctly specified:
   if (const auto* viewBox = entity.try_get<ViewBoxComponent>(); viewBox && viewBox->viewBox) {
-    // > 1. let viewBox be the viewBox defined by the ‘viewBox’ attribute on the ‘svg’ element
+    // > 1. let viewBox be the viewBox defined by the 'viewBox' attribute on the 'svg' element
     // > 2. return viewBox.width / viewBox.height
     return viewBox->viewBox->size().x / viewBox->viewBox->size().y;
   }
@@ -293,29 +294,55 @@ Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(rootEntity, nullptr);
 
     const ComputedSizedElementComponent& computedSizedElement =
-        LayoutSystem().createComputedSizedElementComponentWithStyle(rootEntity, computedStyle,
-                                                                    FontMetrics(), nullptr);
-    return LayoutSystem().elementContentFromViewBoxTransform(rootEntity, computedSizedElement);
+        createComputedSizedElementComponentWithStyle(rootEntity, computedStyle, FontMetrics(),
+                                                     nullptr);
+    return elementContentFromViewBoxTransform(rootEntity, computedSizedElement);
   } else {
     return Transformd();
   }
 }
 
 Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity) {
-  if (entity.all_of<SizedElementComponent>() &&
-      entity.registry()->ctx().get<SVGDocumentContext>().rootEntity != entity.entity()) {
+  // If a shadow tree has been instantiated, there may be a ComputedShadowSizedElementComponent,
+  // used for <symbol> elements.
+  if (UTILS_PREDICT_FALSE(entity.all_of<ShadowTreeRootComponent>())) {
+    EntityHandle lightEntity(*entity.registry(), entity.get<ShadowEntityComponent>().lightEntity);
+
+    if (const auto* computedShadowSizedElement =
+            entity.try_get<ComputedShadowSizedElementComponent>()) {
+      // If there is no viewBox, we cannot apply scaling, return identity
+      if (!overridesViewBox(lightEntity)) {
+        return Transformd();
+      }
+
+      const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(lightEntity);
+
+      const Boxd viewBox = getViewBox(lightEntity);
+      const Transformd viewBoxTransform = preserveAspectRatio.elementContentFromViewBoxTransform(
+          computedShadowSizedElement->bounds, viewBox);
+
+      return viewBoxTransform;
+    } else {
+      return getEntityContentFromEntityTransform(lightEntity);
+    }
+  } else if (entity.all_of<SizedElementComponent>() &&
+             entity.registry()->ctx().get<SVGDocumentContext>().rootEntity != entity.entity()) {
+    const SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
+    if (sizedElement.applyTranslationForUseElement) {
+      return Transformd::Translate(entity.get<ComputedSizedElementComponent>().bounds.topLeft);
+    }
+
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, nullptr);
 
     const ComputedSizedElementComponent& computedSizedElement =
-        LayoutSystem().createComputedSizedElementComponentWithStyle(entity, computedStyle,
-                                                                    FontMetrics(), nullptr);
-    return LayoutSystem().elementContentFromViewBoxTransform(entity, computedSizedElement);
-  } else if (const auto* shadowEntity = entity.try_get<ShadowEntityComponent>()) {
-    return getEntityContentFromEntityTransform(
-        EntityHandle(*entity.registry(), shadowEntity->lightEntity));
-  } else {
-    return Transformd();
+        createComputedSizedElementComponentWithStyle(entity, computedStyle, FontMetrics(), nullptr);
+    const Transformd viewBoxTransform =
+        elementContentFromViewBoxTransform(entity, computedSizedElement);
+
+    return viewBoxTransform;
   }
+
+  return Transformd();
 }
 
 void LayoutSystem::setEntityFromParentTransform(EntityHandle entity,
@@ -400,6 +427,7 @@ void LayoutSystem::invalidate(EntityHandle entity) {
   entity.remove<components::ComputedLocalTransformComponent>();
   entity.remove<components::ComputedAbsoluteTransformComponent>();
   entity.remove<components::ComputedSizedElementComponent>();
+  entity.remove<components::ComputedShadowSizedElementComponent>();
   entity.remove<components::ComputedViewBoxComponent>();
 }
 
@@ -475,8 +503,7 @@ Boxd LayoutSystem::computeSizeProperties(
   SizedElementProperties mutableSizeProperties = sizeProperties;
 
   ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, outWarnings);
-  return LayoutSystem().calculateSizedElementBounds(entity, mutableSizeProperties, viewBox,
-                                                    fontMetrics);
+  return calculateSizedElementBounds(entity, mutableSizeProperties, viewBox, fontMetrics);
 }
 
 // Creates a ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -487,13 +514,13 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
   const Entity parent = entity.get<donner::components::TreeComponent>().parent();
-  const Boxd viewport = parent != entt::null ? getViewBox(EntityHandle(*entity.registry(), parent))
-                                             : getViewBox(entity);
+  const Boxd viewBox = parent != entt::null ? getViewBox(EntityHandle(*entity.registry(), parent))
+                                            : getViewBox(entity);
 
   const Boxd bounds =
       computeSizeProperties(entity, sizedElement.properties, style.properties->unparsedProperties,
-                            viewport, fontMetrics, outWarnings);
-  return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, viewport);
+                            viewBox, fontMetrics, outWarnings);
+  return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, viewBox);
 }
 
 const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransformComponentWithStyle(
@@ -548,8 +575,16 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
 }
 
 std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
+  // Check for shadow sized element component
+  if (const auto* shadowSizedElement = handle.try_get<ComputedShadowSizedElementComponent>()) {
+    return shadowSizedElement->bounds;
+  }
+
+  // Check for regular sized element component
   if (handle.all_of<ViewBoxComponent>()) {
-    return handle.get<ComputedSizedElementComponent>().bounds;
+    if (const auto* sizedElement = handle.try_get<ComputedSizedElementComponent>()) {
+      return sizedElement->bounds;
+    }
   }
 
   return std::nullopt;
@@ -580,7 +615,7 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
 
   // From https://www.w3.org/TR/SVG/struct.html#UseElement:
   // > The width and height attributes only have an effect if the referenced element defines a
-  // > viewport (i.e., if it is a ‘svg’ or ‘symbol’)
+  // > viewport (i.e., if it is a 'svg' or 'symbol')
   if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
                       entity.registry()->all_of<ViewBoxComponent>(shadowTree->mainLightRoot()))) {
     if (properties.width.hasValue()) {
@@ -672,7 +707,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
     }
 
     // TODO(jwmcglynn): What are the objects "natural dimensions" for "2. Otherwise, if the missing
-    // dimension is present in the object’s natural dimensions"
+    // dimension is present in the object's natural dimensions"
 
     // > 3. Otherwise, the missing dimension of the concrete object size is taken from the default
     // > object size.
@@ -710,6 +745,60 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
       Boxd(Vector2d(), canvasSize), viewBox.viewBox);
 
   return transform.transformPosition(viewBoxSize);
+}
+
+bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity shadowEntity,
+                                                     EntityHandle useEntity, Entity symbolEntity,
+                                                     ShadowBranchType branchType,
+                                                     std::vector<ParseError>* outWarnings) {
+  // TODO: Plumb FontMetrics
+  FontMetrics fontMetrics;
+
+  if (branchType != ShadowBranchType::Main) {
+    return false;
+  }
+
+  // Must be sized elements
+  const auto* parentSizedElement = useEntity.try_get<SizedElementComponent>();
+  const auto* targetSizedElement = registry.try_get<SizedElementComponent>(symbolEntity);
+  if (!parentSizedElement || !targetSizedElement ||
+      !targetSizedElement->canOverrideWidthHeightForSymbol) {
+    return false;
+  }
+
+  const Boxd parentViewBox = getViewBox(useEntity);
+
+  // Override the width/height if the parent element specifies them
+  SizedElementProperties properties = targetSizedElement->properties;
+
+  if (parentSizedElement->properties.width.hasValue()) {
+    properties.width = parentSizedElement->properties.width;
+  }
+  if (parentSizedElement->properties.height.hasValue()) {
+    properties.height = parentSizedElement->properties.height;
+  }
+
+  Vector2d size = parentViewBox.size();
+
+  if (properties.width.hasValue()) {
+    size.x =
+        properties.width.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X);
+  }
+  if (properties.height.hasValue()) {
+    size.y =
+        properties.height.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y);
+  }
+
+  const Vector2d origin(
+      properties.x.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X),
+      properties.y.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y));
+
+  // Create the shadow component
+  auto& shadowSized =
+      registry.emplace_or_replace<ComputedShadowSizedElementComponent>(shadowEntity);
+  shadowSized.bounds = Boxd(origin, origin + size);
+
+  return true;
 }
 
 }  // namespace donner::svg::components

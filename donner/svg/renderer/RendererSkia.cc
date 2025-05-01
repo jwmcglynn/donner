@@ -200,6 +200,9 @@ public:
 
       if (instance.clipRect) {
         renderer_.currentCanvas_->save();
+        if (renderer_.verbose_) {
+          std::cout << "Clipping to " << instance.clipRect.value() << "\n";
+        }
         renderer_.currentCanvas_->clipRect(toSkia(instance.clipRect.value()));
       }
 
@@ -1205,7 +1208,7 @@ void RendererSkia::draw(SVGDocument& document) {
 
 std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   // TODO(jwmcglynn): Plumb outWarnings.
-  RendererUtils::prepareDocumentForRendering(document, verbose_);
+  RendererUtils::prepareDocumentForRendering(document, verbose_, nullptr);
 
   const Vector2i renderingSize = document.canvasSize();
 

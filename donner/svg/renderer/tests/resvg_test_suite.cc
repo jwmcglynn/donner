@@ -222,7 +222,6 @@ INSTANTIATE_TEST_SUITE_P(ClipPath, ImageComparisonTestFixture,
                                   Params::Skip()},  // UB: on root `<svg>` without size
                                  {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
                                  {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
-                                 {"e-clipPath-047.svg", Params::Skip()},  // Not impl: <symbol>
                              })),
                          TestNameFromFilename);
 
@@ -445,7 +444,18 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 
 // TODO: e-switch
-// TODO: e-symbol
+
+INSTANTIATE_TEST_SUITE_P(
+    SymbolElement, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("e-symbol",
+                                {
+
+                                    {"e-symbol-010.svg",
+                                     Params::Skip()},  // New SVG2 feature, transform on symbol
+
+                                })),
+    TestNameFromFilename);
+
 // TODO(text): e-text-
 // TODO(text): e-textPath
 // TODO(text): e-tspan

@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <functional>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseError.h"
 #include "donner/base/RcString.h"
@@ -14,6 +16,23 @@
 namespace donner::svg::components {
 
 /**
+ * Type definition for a callback to process sized elements.
+ * This allows systems that can't directly depend on LayoutSystem to request
+ * sized element processing.
+ *
+ * @param registry ECS registry.
+ * @param shadowEntity The shadow entity to create a computed component for.
+ * @param useEntity The source \ref xml_use that may provide size override.
+ * @param symbolEntity The target \ref xml_symbol entity whose properties might be overridden.
+ * @param branchType The type of branch being created.
+ * @param outWarnings Output vector of parse errors, if any.
+ * @return true if a component was created, false otherwise.
+ */
+using ShadowSizedElementHandler = std::function<bool(
+    Registry& registry, Entity shadowEntity, EntityHandle useEntity, Entity symbolEntity,
+    ShadowBranchType branchType, std::vector<ParseError>* outWarnings)>;
+
+/**
  * Instantiates shadow trees for elements that are not part of the main render graph, such as
  * \ref xml_use and \ref xml_pattern elements.
  *
@@ -23,6 +42,14 @@ namespace donner::svg::components {
  */
 class ShadowTreeSystem {
 public:
+  /**
+   * Constructor.
+   *
+   * @param sizedElementHandler Optional callback for handling sized elements in shadow trees.
+   */
+  explicit ShadowTreeSystem(ShadowSizedElementHandler sizedElementHandler = nullptr)
+      : sizedElementHandler_(std::move(sizedElementHandler)) {}
+
   /**
    * Destroy the instantiated shadow tree.
    *
@@ -60,11 +87,15 @@ private:
                             ComputedShadowTreeComponent::BranchStorage& storage, Entity lightTarget,
                             Entity shadowParent);
 
-  void computeChildren(Registry& registry, ShadowBranchType branchType,
-                       ComputedShadowTreeComponent::BranchStorage& storage, RecursionGuard& guard,
-                       Entity shadowParent, Entity lightTarget,
-                       const std::set<Entity>& shadowHostParents,
-                       std::vector<ParseError>* outWarnings);
+  Entity createShadowAndChildren(Registry& registry, ShadowBranchType branchType,
+                                 ComputedShadowTreeComponent::BranchStorage& storage,
+                                 RecursionGuard& guard, Entity shadowParent, Entity lightTarget,
+                                 const std::set<Entity>& shadowHostParents,
+                                 std::vector<ParseError>* outWarnings);
+
+private:
+  /// Callback for sized element processing, may be nullptr
+  ShadowSizedElementHandler sizedElementHandler_;
 };
 
 }  // namespace donner::svg::components

@@ -18,10 +18,10 @@ graph LR
     ShadowTreeSystem
     FilterSystem
 
-    ShapeSystem --\> LayoutSystem
-    ShapeSystem --\> StyleSystem
-    LayoutSystem --\> StyleSystem
-    PaintSystem --\> StyleSystem
+    ShapeSystem --> LayoutSystem
+    ShapeSystem --> StyleSystem
+    LayoutSystem --> StyleSystem
+    PaintSystem --> StyleSystem
 @endmermaid
 
 */

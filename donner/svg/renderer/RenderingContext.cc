@@ -11,6 +11,8 @@
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
@@ -43,6 +45,25 @@ struct ContextPaintServers {
   ResolvedPaintServer contextStroke = PaintServer::None();
 };
 
+/**
+ * Creates a ShadowTreeSystem with a handler for shadow sized element components.
+ * This allows LayoutSystem to process shadow sized elements without creating a circular dependency.
+ */
+ShadowTreeSystem createShadowTreeSystem() {
+  return ShadowTreeSystem([](Registry& registry, Entity shadowEntity, EntityHandle useEntity,
+                             Entity symbolEntity, ShadowBranchType branchType,
+                             std::vector<ParseError>* outWarnings) -> bool {
+    // Only create shadow sized element components for the main branch
+    if (branchType != ShadowBranchType::Main) {
+      return false;
+    }
+
+    // Use LayoutSystem to handle the creation of shadow sized element components
+    return LayoutSystem().createShadowSizedElementComponent(registry, shadowEntity, useEntity,
+                                                            symbolEntity, branchType, outWarnings);
+  });
+}
+
 bool IsValidPaintServer(EntityHandle handle) {
   return handle.any_of<ComputedGradientComponent, ComputedPatternComponent>();
 }
@@ -63,7 +84,19 @@ class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose)
       : registry_(registry), verbose_(verbose) {
-    documentWorldFromCanvasTransform_ = LayoutSystem().getDocumentFromCanvasTransform(registry);
+    // Get the LayoutSystem from the registry context if available
+    LayoutSystem* layoutSystem = nullptr;
+    if (registry_.ctx().contains<LayoutSystem*>()) {
+      layoutSystem = registry_.ctx().get<LayoutSystem*>();
+    }
+
+    documentWorldFromCanvasTransform_ =
+        layoutSystem ? layoutSystem->getDocumentFromCanvasTransform(registry)
+                     : LayoutSystem().getDocumentFromCanvasTransform(registry);
+    if (verbose_) {
+      std::cout << "Document world from canvas transform: " << documentWorldFromCanvasTransform_
+                << "\n";
+    }
   }
 
   /**
@@ -103,27 +136,39 @@ public:
       }
     }
 
-    const ComputedStyleComponent& styleComponent =
-        registry_.get<ComputedStyleComponent>(styleEntity);
+    const auto& styleComponent = registry_.get<ComputedStyleComponent>(styleEntity);
     const auto& properties = styleComponent.properties.value();
 
     if (properties.display.getRequired() == Display::None) {
       return;
     }
 
-    if (const auto* sizedElement = dataHandle.try_get<ComputedSizedElementComponent>()) {
-      if (sizedElement->bounds.isEmpty()) {
-        return;
-      }
+    bool isEmpty = false;
 
-      if (auto maybeClipRect = LayoutSystem().clipRect(dataHandle)) {
+    // Check for regular sized element component
+    if (const auto* sizedElement = dataHandle.try_get<ComputedSizedElementComponent>()) {
+      isEmpty = sizedElement->bounds.isEmpty();
+    }
+    // Check for shadow sized element component if regular one doesn't exist or is empty
+    else if (const auto* shadowSizedElement =
+                 dataHandle.try_get<ComputedShadowSizedElementComponent>()) {
+      isEmpty = shadowSizedElement->bounds.isEmpty();
+    }
+
+    if (isEmpty) {
+      return;
+    }
+
+    if (auto maybeClipRect = LayoutSystem().clipRect(EntityHandle(registry_, treeEntity))) {
+      const Overflow overflow = styleComponent.properties->overflow.getRequired();
+
+      if (overflow != Overflow::Visible && overflow != Overflow::Auto) {
         ++layerDepth;
         clipRect = maybeClipRect;
       }
     }
 
-    RenderingInstanceComponent& instance =
-        registry_.emplace<RenderingInstanceComponent>(styleEntity);
+    auto& instance = registry_.emplace<RenderingInstanceComponent>(styleEntity);
     instance.drawOrder = drawOrder_++;
 
     const auto& absoluteTransformComponent =
@@ -517,7 +562,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
   // Call ShadowTreeSystem::teardown() to destroy any existing shadow trees.
   for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
     auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
-    ShadowTreeSystem().teardown(registry_, shadow);
+    createShadowTreeSystem().teardown(registry_, shadow);
   }
   registry_.clear<ComputedShadowTreeComponent>();
 
@@ -600,9 +645,9 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     auto [shadowTreeComponent] = view.get(entity);
     if (auto targetEntity = shadowTreeComponent.mainTargetEntity(registry_)) {
       auto& shadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
-      ShadowTreeSystem().populateInstance(EntityHandle(registry_, entity), shadow,
-                                          ShadowBranchType::Main, targetEntity.value(),
-                                          shadowTreeComponent.mainHref().value(), outWarnings);
+      createShadowTreeSystem().populateInstance(
+          EntityHandle(registry_, entity), shadow, ShadowBranchType::Main, targetEntity.value(),
+          shadowTreeComponent.mainHref().value(), outWarnings);
 
     } else if (shadowTreeComponent.mainHref() && outWarnings) {
       // We had a main href but it failed to resolve.
@@ -659,7 +704,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
       if (auto targetEntity = offscreenTree.branchTargetEntity(registry_, branchType)) {
         auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
 
-        const std::optional<size_t> maybeInstanceIndex = ShadowTreeSystem().populateInstance(
+        const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
             EntityHandle(registry_, entity), computedShadow, branchType, targetEntity.value(),
             ref.href, outWarnings);
 

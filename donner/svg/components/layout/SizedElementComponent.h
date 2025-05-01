@@ -35,6 +35,21 @@ struct SizedElementProperties {
 };
 
 /**
+ * Stores the properties of a sized element, `x`, `y`, `width`, `height`. Used for \ref xml_svg,
+ * \ref xml_image and \ref xml_foreignObject by the standard, and also internally with \ref xml_use
+ * for Donner.
+ */
+struct SizedElementComponent {
+  /// The properties of the sized element, `x`, `y`, `width`, `height`.
+  SizedElementProperties properties;
+  /// Set to true for \ref xml_use elements, so that `x`/`y` are applied as a translation.
+  bool applyTranslationForUseElement = false;
+  /// Set to true for \ref xml_symbol elements, so that `width`/`height` are inherited from the \ref
+  /// xml_use element.
+  bool canOverrideWidthHeightForSymbol = false;
+};
+
+/**
  * Stores the computed bounds of a sized element, resolving units and percentages. Contains the
  * computed rect and inherited viewBox of the parent element.
  */
@@ -45,13 +60,17 @@ struct ComputedSizedElementComponent {
 };
 
 /**
- * Stores the properties of a sized element, `x`, `y`, `width`, `height`. Used for \ref xml_svg,
- * \ref xml_image and \ref xml_foreignObject by the standard, and also internally with \ref xml_use
- * for Donner.
+ * Stores a shadow tree's computed SizedElementComponent, where a \ref xml_use element overrides the
+ * width or height on \ref xml_symbol or \ref xml_svg which use \ref SizedElementComponent.
+ *
+ * From https://www.w3.org/TR/SVG2/struct.html#UseElement:
+ * > The width and height attributes only have an effect if the referenced element defines a viewport
+ * > (i.e., if it is a 'svg' or 'symbol'); if so, a value other than auto for the 'use' element
+ * > overrides the value of the corresponding geometric property on that element.
+ *
  */
-struct SizedElementComponent {
-  /// The properties of the sized element, `x`, `y`, `width`, `height`.
-  SizedElementProperties properties;
+struct ComputedShadowSizedElementComponent {
+  Boxd bounds;  ///< The computed rect of this sized element.
 };
 
 }  // namespace donner::svg::components

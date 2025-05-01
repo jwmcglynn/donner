@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <memory>
 #include <optional>
 
 #include "donner/base/Box.h"
@@ -8,6 +9,7 @@
 #include "donner/base/Transform.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg::components {
@@ -136,7 +138,7 @@ public:
   Transformd getEntityFromWorldTransform(EntityHandle entity);
 
   /**
-   * Invalidate cached state for the current entity, such as the computed viewport and
+   * Invalidate cached state for the current entity, such as the computed viewBox and
    * entity-from-world transform.
    *
    * @param entity Current entity.
@@ -173,6 +175,24 @@ public:
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
                              const Boxd& viewBox, FontMetrics fontMetrics,
                              std::vector<ParseError>* outWarnings);
+
+  /**
+   * Creates a ComputedShadowSizedElementComponent for shadow trees where a parent element's size
+   * properties should override target element's size properties (e.g., use element overriding
+   * symbol element's size).
+   *
+   * @param registry ECS registry.
+   * @param shadowEntity The shadow entity to create a computed component for.
+   * @param useEntity The source \ref xml_use that may provide size override.
+   * @param symbolEntity The target \ref xml_symbol entity whose properties might be overridden.
+   * @param branchType The type of branch being created.
+   * @param outWarnings Output vector of parse errors, if any.
+   * @return true if a component was created, false otherwise.
+   */
+  bool createShadowSizedElementComponent(Registry& registry, Entity shadowEntity,
+                                         EntityHandle useEntity, Entity symbolEntity,
+                                         ShadowBranchType branchType,
+                                         std::vector<ParseError>* outWarnings);
 
   /**
    * Creates a \ref ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -228,7 +248,7 @@ public:
 private:
   /**
    * Calculate the size of an element such as \ref xml_svg and \ref xml_use, which defines x, y,
-   * width, height, and an optional viewport.
+   * width, height, and an optional viewBox.
    *
    * @param entity The entity to calculate the size for.
    * @param properties The size properties of the element.

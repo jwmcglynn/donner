@@ -9,6 +9,7 @@ namespace donner::svg {
 
 SVGUseElement SVGUseElement::CreateOn(EntityHandle handle) {
   CreateEntityOn(handle, Tag, Type);
+  handle.emplace<components::SizedElementComponent>().applyTranslationForUseElement = true;
   return SVGUseElement(handle);
 }
 

@@ -15,4 +15,13 @@ struct ShadowEntityComponent {
   Entity lightEntity;
 };
 
+/**
+ * Indicates root of an instantiated shadow tree, where the light entity is is the target of the
+ * href, e.g. a \ref xml_symbol element.
+ */
+struct ShadowTreeRootComponent {
+  /// The entity of the source (e.g. \ref xml_use) element that instantiated this shadow tree.
+  Entity sourceEntity;
+};
+
 }  // namespace donner::svg::components

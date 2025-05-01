@@ -17,7 +17,7 @@ SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
   handle.emplace<components::ViewBoxComponent>();
   handle.emplace<components::PreserveAspectRatioComponent>();
   handle.emplace<components::SymbolComponent>();
-  handle.emplace<components::SizedElementComponent>();
+  handle.emplace<components::SizedElementComponent>().canOverrideWidthHeightForSymbol = true;
   return SVGSymbolElement(handle);
 }
 
