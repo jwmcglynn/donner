@@ -64,7 +64,7 @@ bazel_dep(name = "abseil-cpp", repo_name = "com_google_absl", version = "2025012
 ##
 # re2 is not used directly, but needs to use this version to resolve a build error in deps (googletest)
 bazel_dep(name = "re2", version = "2024-07-02.bcr.1", dev_dependency = True)
-bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.16.0.bcr.1", dev_dependency = True)
+bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.17.0", dev_dependency = True)
 
 bazel_dep(name = "nlohmann_json", version = "3.12.0", dev_dependency = True)
 
