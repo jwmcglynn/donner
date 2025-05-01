@@ -22,6 +22,7 @@ cc_library(
         "PointerEvents.h",
         "PreserveAspectRatio.h",
         "Stroke.h",
+        "UserAgentStylesheet.h",
         "Visibility.h",
     ],
     visibility = [

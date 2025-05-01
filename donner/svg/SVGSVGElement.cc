@@ -5,6 +5,7 @@
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
+#include "donner/svg/core/UserAgentStylesheet.h"
 
 namespace donner::svg {
 
@@ -18,27 +19,7 @@ SVGSVGElement SVGSVGElement::CreateOn(EntityHandle handle) {
   stylesheetComponent.isUserAgentStylesheet = true;
 
   // From https://www.w3.org/TR/SVG2/styling.html#UAStyleSheet
-  stylesheetComponent.parseStylesheet(R"(
-    @namespace url(http://www.w3.org/2000/svg);
-    @namespace xml url(http://www.w3.org/XML/1998/namespace);
-
-    svg:not(:root), image, marker, pattern, symbol { overflow: hidden; }
-
-    *:not(svg),
-    *:not(foreignObject) > svg {
-      /* TODO: transform-origin: 0 0; */
-    }
-
-    *[xml|space=preserve] {
-      text-space-collapse: preserve-spaces;
-    }
-
-    :host(use) > symbol {
-      display: inline !important;
-    }
-    :link, :visited {
-      cursor: pointer;
-    })");
+  stylesheetComponent.parseStylesheet(kUserAgentStylesheet);
   return SVGSVGElement(handle);
 }
 
