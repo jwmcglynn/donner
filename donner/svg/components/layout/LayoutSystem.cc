@@ -318,10 +318,18 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
       const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(lightEntity);
 
       const Boxd viewBox = getViewBox(lightEntity);
-      const Transformd viewBoxTransform = preserveAspectRatio.elementContentFromViewBoxTransform(
-          computedShadowSizedElement->bounds, viewBox);
+      const Transformd elementContentFromViewBox =
+          preserveAspectRatio.elementContentFromViewBoxTransform(computedShadowSizedElement->bounds,
+                                                                 viewBox);
 
-      return viewBoxTransform;
+      if (const auto* symbolComponent = lightEntity.try_get<SymbolComponent>()) {
+        const Transformd symbolContentFromElementContent =
+            Transformd::Translate(-symbolComponent->refX, -symbolComponent->refY);
+
+        return symbolContentFromElementContent * elementContentFromViewBox;
+      } else {
+        return elementContentFromViewBox;
+      }
     } else {
       return getEntityContentFromEntityTransform(lightEntity);
     }
