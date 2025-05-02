@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstddef>
+#include <string>
 
 #include "donner/base/Utils.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
