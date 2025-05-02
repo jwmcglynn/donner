@@ -106,7 +106,6 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
   RecursionGuard guard;
   Entity shadowEntity = createShadowAndChildren(registry, branchType, storage, guard, entity,
                                                 lightTarget, shadowHostParents, outWarnings);
-  std::cout << "createShadowAndChildren returned " << shadowEntity << "\n";
 
   if (shadowEntity != entt::null) {
     registry.emplace<ShadowTreeRootComponent>(shadowEntity, entity);
@@ -207,16 +206,11 @@ Entity ShadowTreeSystem::createShadowAndChildren(
       // TODO: Factor out common functionality to create a new tree w/ populateInstance
       const Entity shadow =
           createShadowEntity(registry, branchType, storage, lightTarget, shadowParent);
-      std::cout << "createShadowEntity for nested shadow: " << shadow << " "
-                << registry.get<components::ElementTypeComponent>(targetEntity.value()).type()
-                << "\n";
 
       RecursionGuard childGuard = guard.with(targetEntity.value());
       const Entity nestedShadowEntity =
           createShadowAndChildren(registry, branchType, storage, childGuard, shadow,
                                   targetEntity->handle, shadowHostParents, outWarnings);
-
-      std::cout << "createShadowAndChildren nested returned " << nestedShadowEntity << "\n";
 
       // Handle sized element inheritance for <use> -> <symbol> shadow trees
       if (branchType == ShadowBranchType::Main && sizedElementHandler_) {
@@ -243,16 +237,12 @@ Entity ShadowTreeSystem::createShadowAndChildren(
     const Entity shadow =
         createShadowEntity(registry, branchType, storage, lightTarget, shadowParent);
 
-    std::cout << "createShadowEntity: " << shadow << " "
-              << registry.get<components::ElementTypeComponent>(lightTarget).type() << "\n";
-
     for (auto child = registry.get<donner::components::TreeComponent>(lightTarget).firstChild();
          child != entt::null;
          child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
       RecursionGuard childGuard = guard.with(child);
-      const Entity childShadow = createShadowAndChildren(
-          registry, branchType, storage, guard, shadow, child, shadowHostParents, outWarnings);
-      std::cout << "createShadowAndChildren child returned " << childShadow << "\n";
+      std::ignore = createShadowAndChildren(registry, branchType, storage, guard, shadow, child,
+                                            shadowHostParents, outWarnings);
     }
 
     return shadow;
