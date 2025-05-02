@@ -29,7 +29,7 @@ public:
            type == ElementType::Ellipse || type == ElementType::G || type == ElementType::Image ||
            type == ElementType::Line || type == ElementType::Path || type == ElementType::Polygon ||
            type == ElementType::Polyline || type == ElementType::Rect || type == ElementType::SVG ||
-           type == ElementType::Unknown;
+           type == ElementType::Symbol || type == ElementType::Unknown;
   }
 
   /// Get the 2d transformation for this element, element-from-parent.

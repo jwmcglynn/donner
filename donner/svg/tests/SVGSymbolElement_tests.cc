@@ -8,7 +8,21 @@
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
+using testing::Ne;
+
 namespace donner::svg {
+
+/**
+ * @test that a `<symbol>` element can be created and safely cast to its base type.
+ */
+TEST(SVGSymbolElementTests, CreateAndCast) {
+  auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>("<symbol />");
+
+  // Verify that the symbol element can be cast to SVGGraphicsElement (its base class)
+  EXPECT_THAT(symbol->tryCast<SVGGraphicsElement>(), Ne(std::nullopt));
+  // And that casting to itself works.
+  EXPECT_THAT(symbol->tryCast<SVGSymbolElement>(), Ne(std::nullopt));
+}
 
 TEST(SVGSymbolElementTests, Defaults) {
   auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>("<symbol />");
@@ -86,9 +100,6 @@ TEST(SVGSymbolElementTests, ReferencePointAttributes) {
   EXPECT_DOUBLE_EQ(symbol->refX(), 5.0);
   EXPECT_DOUBLE_EQ(symbol->refY(), 6.0);
 }
-
-// TODO: Additional tests (e.g., rendering, href resolution) can be added once the
-// renderer supports <symbol> instantiation.
 
 /**
  * @test A simple case, with _no attributes at all_.

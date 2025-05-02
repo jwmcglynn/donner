@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "donner/base/OptionalRef.h"
-#include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg {
@@ -58,12 +58,12 @@ namespace donner::svg {
  * instantiated using a \ref xml_use element. The symbol element itself is not rendered directly;
  * instead, its contents are rendered when referenced.
  */
-class SVGSymbolElement : public SVGElement {
+class SVGSymbolElement : public SVGGraphicsElement {
   friend class parser::SVGParserImpl;
 
 private:
   /// Create an SVGSymbolElement wrapper from an entity.
-  explicit SVGSymbolElement(EntityHandle handle) : SVGElement(handle) {}
+  explicit SVGSymbolElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
   /**
    * Internal constructor to create the element on an existing entity.
