@@ -238,7 +238,7 @@ namespace string_literals {
  *
  * @param value Integer representation of the color value (without alpha, 24-bits used).
  */
-constexpr Color operator"" _rgb(unsigned long long value) {
+constexpr Color operator""_rgb(unsigned long long value) {
   return Color(RGBA::RGB((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF));
 }
 
@@ -253,7 +253,7 @@ constexpr Color operator"" _rgb(unsigned long long value) {
  *
  * @param value Integer representation of the color value.
  */
-constexpr Color operator"" _rgba(unsigned long long value) {
+constexpr Color operator""_rgba(unsigned long long value) {
   return Color(RGBA((value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF));
 }
 
