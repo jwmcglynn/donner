@@ -61,6 +61,50 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& c
   return std::nullopt;
 }
 
+/**
+ * Parse text content for \ref xml_text elements.
+ *
+ * @param context The parser context.
+ * @param element The text element to parse contents for.
+ * @param node The XML node containing the text content.
+ * @return std::nullopt if successful, otherwise a ParseError describing the failure.
+ */
+template <>
+std::optional<ParseError> ParseNodeContents<SVGTextElement>(SVGParserContext& context,
+                                                            SVGTextElement element,
+                                                            const XMLNode& node) {
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      if (auto maybeValue = child->value()) {
+        element.appendText(maybeValue.value());
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+/**
+ * Parse text content for \ref xml_tspan elements.
+ *
+ * @param context The parser context.
+ * @param element The tspan element to parse contents for.
+ * @param node The XML node containing the text content.
+ * @return std::nullopt if successful, otherwise a ParseError describing the failure.
+ */
+template <>
+std::optional<ParseError> ParseNodeContents<SVGTSpanElement>(SVGParserContext& context,
+                                                             SVGTSpanElement element,
+                                                             const XMLNode& node) {
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      if (auto maybeValue = child->value()) {
+        element.appendText(maybeValue.value());
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
   bool hasEmptyNamespacePrefix = false;
 

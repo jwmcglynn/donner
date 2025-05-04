@@ -28,6 +28,8 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::Style: return os << "Style";
     case ElementType::SVG: return os << "SVG";
     case ElementType::Symbol: return os << "Symbol";
+    case ElementType::Text: return os << "Text";
+    case ElementType::TSpan: return os << "TSpan";
     case ElementType::Unknown: return os << "Unknown";
     case ElementType::Use: return os << "Use";
   }

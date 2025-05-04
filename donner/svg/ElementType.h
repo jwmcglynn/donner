@@ -32,6 +32,8 @@ enum class ElementType : uint8_t {
   Style,           //!< \ref xml_style
   SVG,             //!< \ref xml_svg, SVG root element.
   Symbol,          //!< \ref xml_symbol
+  Text,            //!< \ref xml_text
+  TSpan,           //!< \ref xml_tspan
   Unknown,         //!< For unknown elements.
   Use,             //!< \ref xml_use
 };
@@ -106,6 +108,8 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
     case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());
     case ElementType::Symbol: return fn(std::integral_constant<ElementType, ElementType::Symbol>());
+    case ElementType::Text: return fn(std::integral_constant<ElementType, ElementType::Text>());
+    case ElementType::TSpan: return fn(std::integral_constant<ElementType, ElementType::TSpan>());
     case ElementType::Unknown:
       return fn(std::integral_constant<ElementType, ElementType::Unknown>());
     case ElementType::Use: return fn(std::integral_constant<ElementType, ElementType::Use>());

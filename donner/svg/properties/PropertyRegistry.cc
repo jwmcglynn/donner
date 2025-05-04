@@ -542,279 +542,302 @@ static constexpr frozen::unordered_set<frozen::string, 70> kValidPresentationAtt
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const parser::PropertyParseFnParams& params);
 
-static constexpr frozen::unordered_map<frozen::string, PropertyParseFn, 25> kProperties =
-    {
-        {"color",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           auto maybeError = Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return css::parser::ColorParser::Parse(params.components());
-               },
-               &registry.color);
-           if (maybeError.has_value()) {
-             return maybeError;
-           }
+using MapType = frozen::unordered_map<frozen::string, PropertyParseFn, 27>;
 
-           // From https://www.w3.org/TR/css-color-3/#currentcolor:
-           // If the ‘currentColor’ keyword is set on the ‘color’ property itself, it is treated as
-           // ‘color: inherit’.
-           if (registry.color.hasValue() && registry.color.getRequired().isCurrentColor()) {
-             registry.color.set(PropertyState::Inherit, registry.color.specificity);
-           }
+static constexpr MapType kProperties = {
+    {"color",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       auto maybeError = Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return css::parser::ColorParser::Parse(params.components());
+           },
+           &registry.color);
+       if (maybeError.has_value()) {
+         return maybeError;
+       }
 
-           return maybeError;
-         }},  //
-        {"display",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseDisplay(params.components());
-               },
-               &registry.display);
-         }},  //
-        {"opacity",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return parser::ParseAlphaValue(params.components());
-               },
-               &registry.opacity);
-         }},  //
-        {"visibility",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseVisibility(params.components());
-               },
-               &registry.visibility);
-         }},  //
-        {"overflow",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseOverflow(params.components());
-               },
-               &registry.overflow);
-         }},  //
-        {"fill",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParsePaintServer(params.components());
-               },
-               &registry.fill);
-         }},  //
-        {"fill-rule",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseFillRule(params.components());
-               },
-               &registry.fillRule);
-         }},  //
-        {"fill-opacity",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return parser::ParseAlphaValue(params.components());
-               },
-               &registry.fillOpacity);
-         }},  //
-        {"stroke",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParsePaintServer(params.components());
-               },
-               &registry.stroke);
-         }},  //
-        {"stroke-opacity",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return parser::ParseAlphaValue(params.components());
-               },
-               &registry.strokeOpacity);
-         }},  //
-        {"stroke-width",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
-               },
-               &registry.strokeWidth);
-         }},  //
-        {"stroke-linecap",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseStrokeLinecap(params.components());
-               },
-               &registry.strokeLinecap);
-         }},  //
-        {"stroke-linejoin",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseStrokeLinejoin(params.components());
-               },
-               &registry.strokeLinejoin);
-         }},  //
-        {"stroke-miterlimit",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseNumber(params.components());
-               },
-               &registry.strokeMiterlimit);
-         }},  //
-        {"stroke-dasharray",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseStrokeDasharray(params.components());
-               },
-               &registry.strokeDasharray);
-         }},  //
-        {"stroke-dashoffset",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
-               },
-               &registry.strokeDashoffset);
-         }},  //
-        {"clip-path",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseReference("clip-path", params.components());
-               },
-               &registry.clipPath);
-         }},  //
-        {"clip-rule",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseClipRule(params.components());
-               },
-               &registry.clipRule);
-         }},  //
-        {"mask",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseReference("mask", params.components());
-               },
-               &registry.mask);
-         }},  //
-        {"filter",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseFilter(params.components());
-               },
-               &registry.filter);
-         }},  //
-        {"pointer-events",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParsePointerEvents(params.components());
-               },
-               &registry.pointerEvents);
-         }},  //
-        {"marker-start",
-         [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-           return Parse(
-               params,
-               [](const parser::PropertyParseFnParams& params) {
-                 return ParseReference("marker-start", params.components());
-               },
-               &registry.markerStart);
-         }},  //
-        {
-            "marker-mid",
-            [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-              return Parse(
-                  params,
-                  [](const parser::PropertyParseFnParams& params) {
-                    return ParseReference("marker-mid", params.components());
-                  },
-                  &registry.markerMid);
-            }},  //
-        {
-            "marker-end",
-            [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-              return Parse(
-                  params,
-                  [](const parser::PropertyParseFnParams& params) {
-                    return ParseReference("marker-end", params.components());
-                  },
-                  &registry.markerEnd);
-            }},  //
-        {"marker",
-         [](PropertyRegistry& registry,
-            const parser::PropertyParseFnParams& params) -> std::optional<ParseError> {
-           // First, parse the shorthand value as a Reference
-           const auto parseResult = ParseReference("marker", params.components());
-           if (!parseResult.hasResult()) {
-             return parseResult.error();
-           }
+       // From https://www.w3.org/TR/css-color-3/#currentcolor:
+       // If the 'currentColor' keyword is set on the 'color' property itself, it is treated as
+       // `color: inherit`.
+       if (registry.color.hasValue() && registry.color.getRequired().isCurrentColor()) {
+         registry.color.set(PropertyState::Inherit, registry.color.specificity);
+       }
 
-           const Reference& markerValue = parseResult.result();
+       return maybeError;
+     }},  //
+    {"font-family",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& p) {
+             if (auto ident = parser::TryGetSingleIdent(p.components())) {
+               return ParseResult<RcString>(*ident);
+             }
+             ParseError err;
+             err.reason = "Invalid font-family";
+             err.location = !p.components().empty() ? p.components().front().sourceOffset()
+                                                    : FileOffset::Offset(0);
+             return ParseResult<RcString>(err);
+           },
+           &registry.fontFamily);
+     }},  //
+    {"font-size",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& p) {
+             return parser::ParseLengthPercentage(p.components(), p.allowUserUnits());
+           },
+           &registry.fontSize);
+     }},  //
+    {"display",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseDisplay(params.components());
+           },
+           &registry.display);
+     }},  //
+    {"opacity",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseAlphaValue(params.components());
+           },
+           &registry.opacity);
+     }},  //
+    {"visibility",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseVisibility(params.components());
+           },
+           &registry.visibility);
+     }},  //
+    {"overflow",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseOverflow(params.components());
+           },
+           &registry.overflow);
+     }},  //
+    {"fill",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParsePaintServer(params.components());
+           },
+           &registry.fill);
+     }},  //
+    {"fill-rule",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseFillRule(params.components());
+           },
+           &registry.fillRule);
+     }},  //
+    {"fill-opacity",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseAlphaValue(params.components());
+           },
+           &registry.fillOpacity);
+     }},  //
+    {"stroke",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParsePaintServer(params.components());
+           },
+           &registry.stroke);
+     }},  //
+    {"stroke-opacity",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseAlphaValue(params.components());
+           },
+           &registry.strokeOpacity);
+     }},  //
+    {"stroke-width",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
+           },
+           &registry.strokeWidth);
+     }},  //
+    {"stroke-linecap",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseStrokeLinecap(params.components());
+           },
+           &registry.strokeLinecap);
+     }},  //
+    {"stroke-linejoin",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseStrokeLinejoin(params.components());
+           },
+           &registry.strokeLinejoin);
+     }},  //
+    {"stroke-miterlimit",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseNumber(params.components());
+           },
+           &registry.strokeMiterlimit);
+     }},  //
+    {"stroke-dasharray",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseStrokeDasharray(params.components());
+           },
+           &registry.strokeDasharray);
+     }},  //
+    {"stroke-dashoffset",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
+           },
+           &registry.strokeDashoffset);
+     }},  //
+    {"clip-path",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseReference("clip-path", params.components());
+           },
+           &registry.clipPath);
+     }},  //
+    {"clip-rule",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseClipRule(params.components());
+           },
+           &registry.clipRule);
+     }},  //
+    {"mask",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseReference("mask", params.components());
+           },
+           &registry.mask);
+     }},  //
+    {"filter",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseFilter(params.components());
+           },
+           &registry.filter);
+     }},  //
+    {"pointer-events",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParsePointerEvents(params.components());
+           },
+           &registry.pointerEvents);
+     }},  //
+    {"marker-start",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseReference("marker-start", params.components());
+           },
+           &registry.markerStart);
+     }},  //
+    {"marker-mid",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseReference("marker-mid", params.components());
+           },
+           &registry.markerMid);
+     }},  //
+    {"marker-end",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseReference("marker-end", params.components());
+           },
+           &registry.markerEnd);
+     }},  //
+    {"marker",
+     [](PropertyRegistry& registry,
+        const parser::PropertyParseFnParams& params) -> std::optional<ParseError> {
+       // First, parse the shorthand value as a Reference
+       const auto parseResult = ParseReference("marker", params.components());
+       if (!parseResult.hasResult()) {
+         return parseResult.error();
+       }
 
-           // Now, set marker-start, marker-mid, and marker-end using the Parse function
-           std::optional<ParseError> error;
+       const Reference& markerValue = parseResult.result();
 
-           // Set marker-start
-           error = Parse(
-               params,
-               [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                   -> ParseResult<Reference> { return markerValue; },
-               &registry.markerStart);
-           assert(!error && "Unexpected error parsing marker shorthand property");
+       // Now, set marker-start, marker-mid, and marker-end using the Parse function
+       std::optional<ParseError> error;
 
-           // Set marker-mid
-           error = Parse(
-               params,
-               [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                   -> ParseResult<Reference> { return markerValue; },
-               &registry.markerMid);
-           assert(!error && "Unexpected error parsing marker shorthand property");
+       // Set marker-start
+       error = Parse(
+           params,
+           [markerValue](const parser::PropertyParseFnParams& /*unused*/)
+               -> ParseResult<Reference> { return markerValue; },
+           &registry.markerStart);
+       assert(!error && "Unexpected error parsing marker shorthand property");
 
-           // Set marker-end
-           error = Parse(
-               params,
-               [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                   -> ParseResult<Reference> { return markerValue; },
-               &registry.markerEnd);
-           assert(!error && "Unexpected error parsing marker shorthand property");
+       // Set marker-mid
+       error = Parse(
+           params,
+           [markerValue](const parser::PropertyParseFnParams& /*unused*/)
+               -> ParseResult<Reference> { return markerValue; },
+           &registry.markerMid);
+       assert(!error && "Unexpected error parsing marker shorthand property");
 
-           return std::nullopt;  // Parsing succeeded
-         }},                     //
+       // Set marker-end
+       error = Parse(
+           params,
+           [markerValue](const parser::PropertyParseFnParams& /*unused*/)
+               -> ParseResult<Reference> { return markerValue; },
+           &registry.markerEnd);
+       assert(!error && "Unexpected error parsing marker shorthand property");
 
+       return std::nullopt;  // Parsing succeeded
+     }},                     //
 };
 
 }  // namespace

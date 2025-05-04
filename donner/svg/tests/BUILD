@@ -18,6 +18,8 @@ cc_test(
         "SVGRadialGradientElement_tests.cc",
         "SVGRectElement_tests.cc",
         "SVGSymbolElement_tests.cc",
+        "SVGTSpanElement_tests.cc",
+        "SVGTextElement_tests.cc",
     ],
     deps = [
         ":parser_test_utils",

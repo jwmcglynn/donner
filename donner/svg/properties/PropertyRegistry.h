@@ -241,6 +241,14 @@ public:
   Property<Reference, PropertyCascade::Inherit> markerEnd{
       "marker-end", []() -> std::optional<Reference> { return std::nullopt; }};
 
+  /// `font-family` property, which determines the font family for text content. Inherited.
+  Property<RcString, PropertyCascade::Inherit> fontFamily{
+      "font-family", []() -> std::optional<RcString> { return RcString("serif"); }};
+
+  /// `font-size` property, which determines the font size for text content. Inherited.
+  Property<Lengthd, PropertyCascade::Inherit> fontSize{
+      "font-size", []() -> std::optional<Lengthd> { return Lengthd(16, Lengthd::Unit::Px); }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
@@ -271,7 +279,7 @@ public:
                                  fillOpacity, stroke, strokeOpacity, strokeWidth, strokeLinecap,
                                  strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
-                                 markerStart, markerMid, markerEnd);
+                                 markerStart, markerMid, markerEnd, fontFamily, fontSize);
   }
 
   /**

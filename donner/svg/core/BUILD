@@ -13,6 +13,7 @@ cc_library(
         "Display.h",
         "FillRule.h",
         "Gradient.h",
+        "LengthAdjust.h",
         "MarkerOrient.h",
         "MarkerUnits.h",
         "MaskUnits.h",

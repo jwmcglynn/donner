@@ -66,5 +66,6 @@ cc_library(
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/components/shape:shape_system",
+        "//donner/svg/components/text:text_system",
     ],
 )
