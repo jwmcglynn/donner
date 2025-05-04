@@ -30,6 +30,8 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/graph/RecursionGuard.h"
 
 namespace donner::svg::components {
@@ -282,7 +284,8 @@ public:
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
     const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
 
-    if (setsContextColors || (instance.visible && dataHandle.all_of<ComputedPathComponent>())) {
+    if (setsContextColors || (instance.visible && (dataHandle.all_of<ComputedPathComponent>() ||
+                                                   dataHandle.all_of<ComputedTextComponent>()))) {
       if (auto fill = properties.fill.get()) {
         instance.resolvedFill = resolvePaint(ShadowBranchType::OffscreenFill, dataHandle,
                                              fill.value(), contextPaintServers_);
@@ -726,6 +729,8 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   }
 
   LayoutSystem().instantiateAllComputedComponents(registry_, outWarnings);
+
+  TextSystem().instantiateAllComputedComponents(registry_, outWarnings);
 
   ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 

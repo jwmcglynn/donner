@@ -3,16 +3,30 @@
 // Skia
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "include/core/SkColorFilter.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkFontMgr.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkStream.h"
+#include "include/core/SkTypeface.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
+
+#ifdef DONNER_USE_CORETEXT
+#include "include/ports/SkFontMgr_mac_ct.h"
+#elif defined(DONNER_USE_FREETYPE)
+#include "include/ports/SkFontMgr_empty.h"
+#elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
+#include "include/ports/SkFontMgr_fontconfig.h"
+#else
+#error \
+    "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
+#endif
 //
 #include "donner/base/xml/components/TreeComponent.h"  // ForAllChildren
 #include "donner/svg/SVGMarkerElement.h"
@@ -40,10 +54,14 @@
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
+
+// Embedded resources
+#include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
 
@@ -333,6 +351,12 @@ public:
         } else if (const auto* image =
                        instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
           drawImage(instance.dataHandle(registry), instance, *image);
+        } else if (const auto* text =
+                       instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+          // Draw text spans
+          drawText(
+              instance.dataHandle(registry), instance, *text, styleComponent.properties.value(),
+              components::LayoutSystem().getViewBox(instance.dataHandle(registry)), FontMetrics());
         }
       }
 
@@ -561,8 +585,8 @@ public:
       // This changes in SVG2, where a cone is created,
       // https://www.w3.org/TR/SVG2/pservers.html#RadialGradientNotes:
       //
-      // > If the start circle defined by ‘fx’, ‘fy’ and ‘fr’ lies outside the end circle
-      // > defined by ‘cx’, ‘cy’, and ‘r’, effectively a cone is created, touched by the two
+      // > If the start circle defined by 'fx', 'fy' and 'fr' lies outside the end circle
+      // > defined by 'cx', 'cy', and 'r', effectively a cone is created, touched by the two
       // > circles. Areas outside the cone stay untouched by the gradient (transparent black).
       //
       // Skia will automatically create the cone, but we need to handle the degenerate case:
@@ -979,6 +1003,75 @@ public:
     renderer_.currentCanvas_->drawImage(skImage, 0, 0, SkSamplingOptions(SkFilterMode::kLinear),
                                         &paint);
     renderer_.currentCanvas_->restore();
+  }
+
+  // Draws text content using computed spans, font-family, and font-size from style
+  void drawText(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
+                const components::ComputedTextComponent& text, const PropertyRegistry& style,
+                const Boxd& viewBox, const FontMetrics& fontMetrics) {
+    SkPaint skPaint;
+
+    if (!HasPaint(instance.resolvedFill)) {
+      return;
+    }
+
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&instance.resolvedFill)) {
+      const float fillOpacity = NarrowToFloat(style.fillOpacity.get().value());
+
+      skPaint.setAntiAlias(renderer_.antialias_);
+      skPaint.setColor(toSkia(solid->color.resolve(style.color.getRequired().rgba(), fillOpacity)));
+    } else {
+      return;
+    }
+
+    // Determine font size in pixels
+    const Lengthd sizeLen = style.fontSize.getRequired();
+    const SkScalar fontSizePx =
+        static_cast<SkScalar>(sizeLen.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
+
+// Load typeface by family
+#ifdef DONNER_USE_CORETEXT
+    sk_sp<SkFontMgr> fontMgr = SkFontMgr_New_CoreText(nullptr);
+#elif defined(DONNER_USE_FREETYPE)
+    sk_sp<SkFontMgr> fontMgr = SkFontMgr_New_Custom_Empty();
+#elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
+    sk_sp<SkFontMgr> fontMgr = SkFontMgr_New_FontConfig(nullptr);
+#endif
+
+    const RcString& family = style.fontFamily.getRequired();
+    sk_sp<SkTypeface> typeface = fontMgr->matchFamilyStyle(family.str().c_str(), SkFontStyle());
+    if (!typeface) {
+      typeface = fontMgr->makeFromData(SkData::MakeWithoutCopy(
+          embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));
+    }
+    SkFont font(typeface, fontSizePx);
+    // Draw each text span
+    for (const auto& span : text.spans) {
+      // Compute positions
+      const SkScalar x =
+          static_cast<SkScalar>(span.x.toPixels(viewBox, fontMetrics, Lengthd::Extent::X) +
+                                span.dx.toPixels(viewBox, fontMetrics, Lengthd::Extent::X));
+      const SkScalar y =
+          static_cast<SkScalar>(span.y.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y) +
+                                span.dy.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y));
+      // Apply rotation if specified
+      bool rotated = false;
+      if (span.rotate.value != 0.0) {
+        const SkScalar angle = static_cast<SkScalar>(span.rotate.value);
+        renderer_.currentCanvas_->save();
+        renderer_.currentCanvas_->translate(x, y);
+        renderer_.currentCanvas_->rotate(angle);
+        renderer_.currentCanvas_->translate(-x, -y);
+        rotated = true;
+      }
+      // Draw text as UTF-8
+      const std::string_view textStr = span.text;
+      renderer_.currentCanvas_->drawSimpleText(textStr.data(), textStr.size(),
+                                               SkTextEncoding::kUTF8, x, y, font, skPaint);
+      if (rotated) {
+        renderer_.currentCanvas_->restore();
+      }
+    }
   }
 
   void createFilterChain(SkPaint& filterPaint, const std::vector<FilterEffect>& effectList) {

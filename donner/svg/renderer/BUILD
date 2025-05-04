@@ -1,5 +1,32 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("//build_defs:rules.bzl", "donner_cc_library_perf_sensitive")
+
+# Enable CoreText font rendering on macOS. Set with --@donner//donner/svg/renderer:use_coretext=true
+bool_flag(
+    name = "use_coretext",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+# Enable Fontconfig font rendering on Linux. Set with --@donner//donner/svg/renderer:use_fontconfig=true
+bool_flag(
+    name = "use_fontconfig",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "macos_coretext",
+    constraint_values = ["@platforms//os:macos"],
+    flag_values = {":use_coretext": "true"},
+)
+
+config_setting(
+    name = "linux_fontconfig",
+    constraint_values = ["@platforms//os:linux"],
+    flag_values = {":use_fontconfig": "true"},
+)
 
 cc_library(
     name = "renderer_image_io",
@@ -33,10 +60,29 @@ cc_library(
 
 donner_cc_library_perf_sensitive(
     name = "skia_deps",
+    defines = select({
+        ":macos_coretext": ["DONNER_USE_CORETEXT"],
+        ":linux_fontconfig": ["DONNER_USE_FREETYPE_WITH_FONTCONFIG"],
+        "//conditions:default": ["DONNER_USE_FREETYPE"],
+    }),
+    linkopts = select({
+        ":linux_fontconfig": ["-lfontconfig"],
+        "//conditions:default": [],
+    }),
     deps = [
         "@skia//:core",
         "@skia//:pathops",
-    ],
+    ] + select({
+        ":macos_coretext": [
+            "@skia//:fontmgr_coretext",
+        ],
+        ":linux_fontconfig": [
+            "@skia//:fontmgr_fontconfig_freetype",
+        ],
+        "//conditions:default": [
+            "@skia//:fontmgr_empty_freetype",
+        ],
+    }),
 )
 
 cc_library(
@@ -50,6 +96,7 @@ cc_library(
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",
+        "//third_party/public-sans",
     ],
 )
 

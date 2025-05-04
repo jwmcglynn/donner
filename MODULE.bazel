@@ -38,6 +38,8 @@ bazel_deps = use_repo_rule("@skia//bazel:deps.bzl", "bazel_deps")
 c_plus_plus_deps = use_repo_rule("@skia//bazel:deps.bzl", "c_plus_plus_deps")
 header_based_configs = use_repo_rule("@skia//bazel:deps.bzl", "header_based_configs")
 
+bazel_dep(name = "freetype", version = "2.13.3")
+
 git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt",

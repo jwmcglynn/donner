@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="400" height="400">
+  <style>
+    text, tspan {
+      font-family: fallback-font;
+      font-size: 12px;
+      fill: black;
+    }
+  </style>
+  <rect width="100" height="100" fill="white" />
+  <text x="5" y="12">Hello, world!</text>
+  <text x="5" y="30">Hello, world!</text>
+  <tspan x="5" y="50">Test</tspan>
+</svg>
