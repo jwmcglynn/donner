@@ -81,6 +81,7 @@ cc_library(
         "AngleParser.h",
         "CssTransformParser.h",
         "LengthPercentageParser.h",
+        "ListParser.h",
         "Number2dParser.h",
         "PathParser.h",
         "PointsListParser.h",
@@ -103,6 +104,7 @@ cc_test(
         "tests/AngleParser_tests.cc",
         "tests/CssTransformParser_tests.cc",
         "tests/LengthPercentageParser_tests.cc",
+        "tests/ListParser_tests.cc",
         "tests/Number2dParser_tests.cc",
         "tests/PathParser_tests.cc",
         "tests/PointsListParser_tests.cc",
@@ -163,5 +165,16 @@ donner_cc_fuzzer(
     corpus = "tests/svg_parser_structured_corpus",
     deps = [
         ":parser",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "list_parser_fuzzer",
+    srcs = [
+        "tests/ListParser_fuzzer.cc",
+    ],
+    corpus = "tests/list_parser_corpus",
+    deps = [
+        ":parser_core",
     ],
 )
