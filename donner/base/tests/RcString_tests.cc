@@ -55,6 +55,15 @@ TEST(RcString, ConstructFromVector) {
   EXPECT_EQ(str, "hello");
 }
 
+TEST(RcString, ConstructEmptyVector) {
+  std::vector<char> vec;
+  RcString str = RcString::fromVector(std::move(vec));
+
+  EXPECT_TRUE(str.empty());
+  EXPECT_EQ(str.size(), 0u);
+  EXPECT_EQ(str, "");
+}
+
 TEST(RcString, Copy) {
   // Copy from short.
   {
