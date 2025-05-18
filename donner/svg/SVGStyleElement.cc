@@ -18,7 +18,11 @@ void SVGStyleElement::setType(const RcStringOrRef& type) {
 void SVGStyleElement::setContents(std::string_view style) {
   if (isCssType()) {
     auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
-    stylesheetComponent.parseStylesheet(style);
+    components::FontContext* fontCtx = nullptr;
+    if (handle_.registry()->ctx().contains<components::FontContext>()) {
+      fontCtx = &handle_.registry()->ctx().get<components::FontContext>();
+    }
+    stylesheetComponent.parseStylesheet(style, fontCtx);
   }
 }
 

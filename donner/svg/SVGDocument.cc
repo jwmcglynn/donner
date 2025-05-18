@@ -7,6 +7,7 @@
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/text/FontContext.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
@@ -25,6 +26,8 @@ SVGDocument::SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
   components::ResourceManagerContext& resourceCtx =
       registry_->ctx().emplace<components::ResourceManagerContext>(*registry_);
   resourceCtx.setResourceLoader(std::move(settings.resourceLoader));
+
+  registry_->ctx().emplace<components::FontContext>(*registry_);
 
   registry_->ctx().emplace<xml::components::XMLNamespaceContext>(*registry_);
 }

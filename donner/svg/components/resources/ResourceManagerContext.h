@@ -39,6 +39,9 @@ public:
     loader_ = std::move(loader);
   }
 
+  /// Get the resource loader if set.
+  ResourceLoaderInterface* resourceLoader() const { return loader_.get(); }
+
   /**
    * Get the size of an image resource for an entity, if it has one and successfully loaded.
    *

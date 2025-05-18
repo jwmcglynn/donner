@@ -55,6 +55,7 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/FontContext.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -1039,7 +1040,14 @@ public:
 #endif
 
     const RcString& family = style.fontFamily.getRequired();
-    sk_sp<SkTypeface> typeface = fontMgr->matchFamilyStyle(family.str().c_str(), SkFontStyle());
+    Registry& registry = *dataHandle.registry();
+    sk_sp<SkTypeface> typeface = nullptr;
+    if (registry.ctx().contains<components::FontContext>()) {
+      typeface = registry.ctx().get<components::FontContext>().getTypeface(family);
+    }
+    if (!typeface) {
+      typeface = fontMgr->matchFamilyStyle(family.str().c_str(), SkFontStyle());
+    }
     if (!typeface) {
       typeface = fontMgr->makeFromData(SkData::MakeWithoutCopy(
           embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));

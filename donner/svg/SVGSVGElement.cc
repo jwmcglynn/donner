@@ -19,7 +19,11 @@ SVGSVGElement SVGSVGElement::CreateOn(EntityHandle handle) {
   stylesheetComponent.isUserAgentStylesheet = true;
 
   // From https://www.w3.org/TR/SVG2/styling.html#UAStyleSheet
-  stylesheetComponent.parseStylesheet(kUserAgentStylesheet);
+  components::FontContext* fontCtx = nullptr;
+  if (handle.registry()->ctx().contains<components::FontContext>()) {
+    fontCtx = &handle.registry()->ctx().get<components::FontContext>();
+  }
+  stylesheetComponent.parseStylesheet(kUserAgentStylesheet, fontCtx);
   return SVGSVGElement(handle);
 }
 

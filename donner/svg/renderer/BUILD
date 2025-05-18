@@ -96,6 +96,7 @@ cc_library(
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",
+        "//donner/svg/components/text:font_context",
         "//third_party/public-sans",
     ],
 )
