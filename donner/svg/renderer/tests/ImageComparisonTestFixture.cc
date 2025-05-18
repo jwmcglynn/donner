@@ -89,13 +89,21 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
 void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
                                                   const std::filesystem::path& svgFilename,
                                                   const char* goldenImageFilename) {
+  renderAndCompare(document, svgFilename, goldenImageFilename, GetParam().params);
+}
+
+void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
+                                                  const std::filesystem::path& svgFilename,
+                                                  const char* goldenImageFilename,
+                                                  const ImageComparisonParams& params) {
   std::cout << "[  COMPARE ] " << svgFilename.string()
             << ": ";  // No endl yet, the line will be continued
 
   // The canvas size to draw into, as a recommendation instead of a strict guideline, since some
   // SVGs may override.
-  // TODO: Add a flag to disable this behavior.
-  document.setCanvasSize(500, 500);
+  if (params.canvasSize) {
+    document.setCanvasSize(params.canvasSize->x, params.canvasSize->y);
+  }
 
   RendererSkia renderer(/*verbose*/ false);
   renderer.draw(document);
@@ -103,6 +111,18 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   const size_t strideInPixels = renderer.width();
   const int width = renderer.width();
   const int height = renderer.height();
+
+  if (params.updateGoldenFromEnv) {
+    const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
+    if (goldenImageDirToUpdate != nullptr) {
+      const std::filesystem::path goldenImagePath =
+          std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
+      RendererImageIO::writeRgbaPixelsToPngFile(
+          goldenImagePath.string().c_str(), renderer.pixelData(), width, height, strideInPixels);
+      std::cout << "Updated golden image: " << goldenImagePath.string() << "\n";
+      return;
+    }
+  }
 
   auto maybeGoldenImage = RendererTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
   ASSERT_TRUE(maybeGoldenImage.has_value());
@@ -116,8 +136,6 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   std::vector<uint8_t> diffImage;
   diffImage.resize(strideInPixels * height * 4);
 
-  const ImageComparisonParams params = GetParam().params;
-
   pixelmatch::Options options;
   options.threshold = params.threshold;
   const int mismatchedPixels = pixelmatch::pixelmatch(
@@ -129,29 +147,13 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
     const std::filesystem::path actualImagePath =
         std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
-    std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(),
                                               renderer.pixelData(), width, height, strideInPixels);
 
-    std::cout << "Expected: " << goldenImageFilename << "\n";
-
     const std::filesystem::path diffFilePath =
         std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
-    std::cerr << "Diff: " << diffFilePath.string() << "\n";
-
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
-
-    // Output the SVG content for easier debugging
-    std::cout << "SVG Content for " << svgFilename.filename().string() << ":\n---\n";
-    std::ifstream svgFile(svgFilename);
-    if (svgFile) {
-      std::string svgContent((std::istreambuf_iterator<char>(svgFile)),
-                             std::istreambuf_iterator<char>());
-      std::cout << svgContent << "\n---\n";
-    } else {
-      std::cout << "Could not read SVG file: " << svgFilename << "\n---\n";
-    }
 
     if (params.saveDebugSkpOnFailure) {
       std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
@@ -173,11 +175,33 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
         }
 
         std::cout << "Load this .skp into https://debugger.skia.org/\n"
-                  << "=> " << skpFilePath.string() << "\n";
+                  << "=> " << skpFilePath.string() << "\n\n";
       }
     }
 
-    FAIL() << mismatchedPixels << " pixels different.";
+    ADD_FAILURE() << mismatchedPixels << " pixels different.";
+
+    // Output the SVG content for easier debugging
+    std::cout << "\n\nSVG Content for " << svgFilename.filename().string() << ":\n---\n";
+    std::ifstream svgFile(svgFilename);
+    if (svgFile) {
+      std::string svgContent((std::istreambuf_iterator<char>(svgFile)),
+                             std::istreambuf_iterator<char>());
+      std::cout << svgContent << "\n---\n";
+    } else {
+      std::cout << "Could not read SVG file: " << svgFilename << "\n---\n";
+    }
+
+    std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
+    std::cout << "Expected: " << goldenImageFilename << "\n";
+    std::cout << "Diff: " << diffFilePath.string() << "\n\n";
+
+    if (params.updateGoldenFromEnv) {
+      std::cout << "To update the golden image, prefix UPDATE_GOLDEN_IMAGES_DIR=$(bazel info "
+                   "workspace) to the bazel run command, e.g.:\n";
+      std::cout << "  UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run "
+                   "//donner/svg/renderer/tests:renderer_tests\n\n";
+    }
   } else {
     std::cout << "PASS";
     if (mismatchedPixels != 0) {

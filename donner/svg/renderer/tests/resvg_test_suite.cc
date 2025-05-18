@@ -30,6 +30,9 @@ std::vector<ImageComparisonTestcase> getTestsWithPrefix(
         test.params = it->second;
       }
 
+      // Always set the canvas size to 500x500 for these tests.
+      test.params.setCanvasSize(500, 500);
+
       testPlan.emplace_back(std::move(test));
     }
   }

@@ -47,13 +47,12 @@ cc_test(
         "//donner/svg/renderer/testdata",
     ],
     deps = [
+        ":image_comparison_test_fixture",
         ":renderer_test_utils",
         "//donner/svg/parser",
         "//donner/svg/renderer",
-        "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
-        "@pixelmatch-cpp17",
     ],
 )
 
