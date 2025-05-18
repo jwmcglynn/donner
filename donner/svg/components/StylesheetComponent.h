@@ -2,6 +2,7 @@
 /// @file
 
 #include "donner/css/Stylesheet.h"
+#include "donner/svg/components/text/FontContext.h"
 
 namespace donner::svg::components {
 
@@ -31,7 +32,7 @@ struct StylesheetComponent {
    *
    * @param str The contents of the \ref xml_style element.
    */
-  void parseStylesheet(const RcStringOrRef& str);
+  void parseStylesheet(const RcStringOrRef& str, components::FontContext* fontContext = nullptr);
 };
 
 }  // namespace donner::svg::components

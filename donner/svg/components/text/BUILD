@@ -17,6 +17,17 @@ cc_library(
 )
 
 cc_library(
+    name = "font_context",
+    srcs = ["FontContext.cc"],
+    hdrs = ["FontContext.h"],
+    visibility = ["//donner/svg/components:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "@skia//:skia",
+    ],
+)
+
+cc_library(
     name = "text_system",
     srcs = [
         "TextSystem.cc",
