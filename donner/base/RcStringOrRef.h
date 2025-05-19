@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <variant>
+
 #include "donner/base/RcString.h"
 
 namespace donner {

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <ostream>
 
 #include "donner/base/Utils.h"
@@ -14,7 +15,7 @@ namespace donner::svg {
  * This is used on the \ref xml_text and \ref xml_tspan elements, and controls how the text is
  * stretched, either by adding spacing between glyphs or also by stretching the glyphs themselves.
  */
-enum class LengthAdjust {
+enum class LengthAdjust : uint8_t {
   /**
    * The text is stretched by adding spacing between glyphs, but the glyphs themselves are not
    * scaled.

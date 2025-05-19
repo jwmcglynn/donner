@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <ostream>
 
 #include "donner/base/Utils.h"

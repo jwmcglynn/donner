@@ -6,6 +6,7 @@
  * content that is too large for its container.
  */
 
+#include <cstdint>
 #include <ostream>
 
 #include "donner/base/Utils.h"

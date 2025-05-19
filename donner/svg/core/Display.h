@@ -7,6 +7,7 @@
  */
 
 #include <ostream>
+#include <cstdint>
 
 #include "donner/base/Utils.h"
 

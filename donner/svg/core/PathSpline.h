@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <vector>
 
 #include "donner/base/Box.h"

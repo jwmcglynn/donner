@@ -4,6 +4,7 @@
  * Defines the \ref donner::svg::FillRule enum used for determining how fills are painted on shapes.
  */
 
+#include <cstdint>
 #include <ostream>
 
 #include "donner/base/Utils.h"

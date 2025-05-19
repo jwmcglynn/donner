@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <fstream>
+#include <limits>
 
 namespace donner::svg {
 

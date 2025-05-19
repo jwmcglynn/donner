@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <functional>
 #include <vector>
 
 #include "donner/base/Utils.h"

@@ -17,6 +17,7 @@ cc_library(
     deps = [
         "//donner/svg/properties",
     ],
+    alwayslink = 1,
 )
 
 cc_library(

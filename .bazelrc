@@ -20,6 +20,13 @@ build --enable_platform_specific_config
 ## Build config
 ##
 
+# Force clang to be the default compiler for all Bazel C/C++ actions.
+# Propagates CC/CXX so every action (including host tools) uses clang/clang++.
+build --action_env=CC=clang
+build --action_env=CXX=clang++
+build --host_action_env=CC=clang
+build --host_action_env=CXX=clang++
+
 # Disable layering check since toolchains_llvm has issues with it.
 build --features=-layering_check
 
@@ -37,16 +44,13 @@ build --incompatible_enable_cc_toolchain_resolution
 common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
 common:latest_llvm --//build_defs:llvm_latest=1
 
-# Build with clang on Linux
-build:linux --config=latest_llvm
-
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
 build:libc++ --action_env=LDFLAGS=-stdlib=libc++
 build:libc++ --define force_libcpp=enabled
 
 # C++20
-build:c++20 --cxxopt=-std=c++20 --cxxopt=-fexperimental-library
+build:c++20 --cxxopt=-std=c++20
 
 # Host toolchain using libstdc++ instead of libc++, for libclang support
 build:host_libstdc++ --host_cxxopt=-std=c++20 --host_cxxopt=-stdlib=libstdc++ --host_linkopt=-lstdc++

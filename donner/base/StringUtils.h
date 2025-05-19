@@ -1,10 +1,12 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <iterator>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace donner {
 

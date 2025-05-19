@@ -33,6 +33,7 @@ cc_library(
         "//donner/svg/components/shape:components",
         "//donner/svg/properties",
     ],
+    alwayslink = 1,
 )
 
 cc_library(
