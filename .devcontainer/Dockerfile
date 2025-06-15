@@ -1,4 +1,4 @@
-ARG VARIANT=jammy
+ARG VARIANT=ubuntu-24.04
 FROM mcr.microsoft.com/vscode/devcontainers/base:${VARIANT}
 
 ARG USERNAME=vscode
@@ -17,6 +17,13 @@ RUN case "${TARGETPLATFORM}" in \
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends software-properties-common libncurses-dev
+
+#
+# Install clang
+#
+RUN apt-get update \
+    && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get -y install --no-install-recommends clang
 
 #
 # Install java
