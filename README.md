@@ -44,7 +44,8 @@ Donner renders with Skia, which provides the same high-quality rendering used by
 
 ### Limitations
 
-- Donner currently requires bazel to build, so it is only suitable for bazel-based projects. CMake support is planned.
+- Most targets currently build with Bazel, but an initial CMake build is available for the `donner/base` library.
+- Run `tools/cmake/gen_base_cmakelists.py` and configure with CMake to build just the base library.
 - `<text>` support is not yet implemented
 
 ## Supported Elements
