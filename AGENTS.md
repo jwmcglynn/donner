@@ -39,6 +39,9 @@ architecture, and the rendering pipeline.
 ## Development Notes
 - Format C++ code with `clang-format` and TypeScript/JSON/Markdown with `dprint`
   (`dprint.json` sets line width to 100 and indent width to 2).
+- Use `clang-format -i <files>` to reformat sources. `git clang-format` is handy to
+  format only your pending changes. Avoid formatting files under `third_party/`
+  or `external/`.
 - Tests are run with **Bazel**. Typical command:
   ```sh
   bazel test //donner/...
