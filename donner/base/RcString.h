@@ -45,7 +45,7 @@ public:
   using const_iterator = std::string_view::const_iterator;
 
   /// Create an empty string.
-  constexpr RcString() = default;
+  RcString() = default;
 
   /// Destructor.
   ~RcString() = default;
@@ -76,21 +76,15 @@ public:
   static RcString fromVector(std::vector<char>&& data) { return RcString(std::move(data)); }
 
   /// Copy constructor.
-  constexpr RcString(const RcString& other) : data_(other.data_) {}
+  RcString(const RcString& other) = default;
   /// Move constructor.
-  constexpr RcString(RcString&& other) noexcept : data_(std::move(other.data_)) {}
+  RcString(RcString&& other) noexcept = default;
 
   /// Copy assignment operator.
-  RcString& operator=(const RcString& other) {
-    data_ = other.data_;
-    return *this;
-  }
+  RcString& operator=(const RcString& other) = default;
 
   /// Move assignment operator.
-  RcString& operator=(RcString&& other) noexcept {
-    data_ = std::move(other.data_);
-    return *this;
-  }
+  RcString& operator=(RcString&& other) noexcept = default;
 
   /// Assignment operator from a C-style string.
   RcString& operator=(const char* data) {
@@ -113,17 +107,17 @@ public:
   /// @{
 
   /// Spaceship equality operator to another \ref RcString.
-  constexpr friend auto operator<=>(const RcString& lhs, const RcString& rhs) {
+  friend auto operator<=>(const RcString& lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
   /// Spaceship equality operator to a C-style string.
-  constexpr friend auto operator<=>(const RcString& lhs, const char* rhs) {
+  friend auto operator<=>(const RcString& lhs, const char* rhs) {
     return compareStringViews(lhs, rhs);
   }
 
   /// Spaceship equality operator to a `std::string_view`.
-  constexpr friend auto operator<=>(const RcString& lhs, std::string_view rhs) {
+  friend auto operator<=>(const RcString& lhs, std::string_view rhs) {
     return compareStringViews(lhs, rhs);
   }
 
@@ -132,12 +126,12 @@ public:
   //
 
   /// Spaceship equality operator to another \ref RcString.
-  constexpr friend auto operator<=>(const char* lhs, const RcString& rhs) {
+  friend auto operator<=>(const char* lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
   /// Spaceship equality operator to a C-style string.
-  constexpr friend auto operator<=>(std::string_view lhs, const RcString& rhs) {
+  friend auto operator<=>(std::string_view lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
@@ -146,27 +140,27 @@ public:
   //
 
   /// Equality operator to another \ref RcString.
-  constexpr friend bool operator==(const RcString& lhs, const RcString& rhs) {
+  friend bool operator==(const RcString& lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
   /// Equality operator to a C-style string.
-  constexpr friend bool operator==(const RcString& lhs, const char* rhs) {
+  friend bool operator==(const RcString& lhs, const char* rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
   /// Equality operator to a `std::string_view`.
-  constexpr friend bool operator==(const RcString& lhs, std::string_view rhs) {
+  friend bool operator==(const RcString& lhs, std::string_view rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
   /// Reversed equality operator to another \ref RcString.
-  constexpr friend bool operator==(const char* lhs, const RcString& rhs) {
+  friend bool operator==(const char* lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
   /// Reversed equality operator to a C-style string.
-  constexpr friend bool operator==(std::string_view lhs, const RcString& rhs) {
+  friend bool operator==(std::string_view lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
@@ -229,13 +223,13 @@ public:
 
   // Iterators.
   /// Begin iterator.
-  constexpr const_iterator begin() const noexcept { return cbegin(); }
+  const_iterator begin() const noexcept { return cbegin(); }
   /// End iterator.
-  constexpr const_iterator end() const noexcept { return cend(); }
+  const_iterator end() const noexcept { return cend(); }
   /// Begin iterator.
-  constexpr const_iterator cbegin() const noexcept { return data(); }
+  const_iterator cbegin() const noexcept { return data(); }
   /// End iterator.
-  constexpr const_iterator cend() const noexcept { return data() + size(); }
+  const_iterator cend() const noexcept { return data() + size(); }
 
   /**
    * Returns true if the string equals another all-lowercase string, with a case insensitive
@@ -422,7 +416,7 @@ private:
     LongStringData long_;
     ShortStringData short_;
 
-    constexpr Storage() : short_() {
+    Storage() : short_() {
       // Call the empty LongStringData constructor, to clear the field containing the shared_ptr so
       // we don't need to zero the entire short_ buffer.
       new (&long_) LongStringData(LongStringData::InitOnlySharedPtr());
@@ -432,7 +426,7 @@ private:
 
     ~Storage() { clear(); }
 
-    constexpr Storage(const Storage& other) {
+    Storage(const Storage& other) {
       if (other.isLong()) {
         // Specifically use the placement new operator since long_ has not been initialized yet.
         new (&long_) LongStringData(other.long_);
@@ -441,7 +435,7 @@ private:
       }
     }
 
-    constexpr Storage(Storage&& other) noexcept {
+    Storage(Storage&& other) noexcept {
       if (other.isLong()) {
         // Specifically use the placement new operator since long_ has not been initialized yet.
         new (&long_) LongStringData(std::move(other.long_));
@@ -497,7 +491,7 @@ private:
       new (&long_) LongStringData(LongStringData::InitOnlySharedPtr());
     }
 
-    constexpr bool isLong() const { return (short_.shiftedSizeByte & 1) == 1; }
+    bool isLong() const { return (short_.shiftedSizeByte & 1) == 1; }
   };
 
   Storage data_;

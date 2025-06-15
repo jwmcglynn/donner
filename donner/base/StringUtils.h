@@ -307,10 +307,10 @@ public:
    * }
    * ```
    *
-   * @tparam T The string type to split.
+   * @tparam T The string type to split, must be \ref StringLike (have `size()` and `data()`
+   * methods).
    * @param str The string to split.
    * @param ch The character to split by.
-   * @tparam T The type of the string, must be \ref StringLike (have `size()` and `data()` methods).
    * @return A vector of the split string views.
    */
   template <StringLike T>
@@ -362,8 +362,7 @@ private:
    * @param lhs First string to compare.
    * @param rhs Second string to compare.
    * @param sizeToCompare The number of characters to compare, \ref lhs and \ref rhs must be at
-   * least this size, e.g `std::min(lhsSize, rhsSize)`.
-   * @tparam Comparison The comparison type to use.
+   * least this size, e.g. `std::min(lhsSize, rhsSize)`.
    * @return true If the strings are equal.
    */
   template <StringComparison Comparison>

@@ -59,7 +59,7 @@ struct XMLQualifiedName {
    *
    * @param name The attribute name.
    */
-  constexpr XMLQualifiedName(const RcString& name) : namespacePrefix(), name(name) {}
+  /* implicit */ XMLQualifiedName(const RcString& name) : namespacePrefix(), name(name) {}
 
   /**
    * Construct from an attribute with a namespace prefix.
@@ -68,7 +68,7 @@ struct XMLQualifiedName {
    * namespace.
    * @param name The attribute name.
    */
-  constexpr XMLQualifiedName(const RcString& namespacePrefix, const RcString& name)
+  XMLQualifiedName(const RcString& namespacePrefix, const RcString& name)
       : namespacePrefix(namespacePrefix), name(name) {}
 
   /// Destructor.
