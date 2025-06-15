@@ -24,3 +24,54 @@ add_library(donner_base
 target_include_directories(donner_base PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(donner_base PUBLIC EnTT::EnTT)
 set_target_properties(donner_base PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+
+add_library(donner_base_test_utils STATIC
+  tests/BaseTestUtils.h
+  tests/ParseResultTestUtils.h
+  tests/Runfiles.h
+)
+target_include_directories(donner_base_test_utils PUBLIC ${PROJECT_SOURCE_DIR})
+target_link_libraries(donner_base_test_utils PUBLIC gtest gmock rules_cc_runfiles)
+
+add_executable(base_tests
+  tests/BaseTestUtils_tests.cc
+  tests/Box_tests.cc
+  tests/ChunkedString_tests.cc
+  tests/Length_tests.cc
+  tests/MathUtils_tests.cc
+  tests/OptionalRef_tests.cc
+  tests/ParseError_tests.cc
+  tests/ParseResult_tests.cc
+  tests/RcStringOrRef_tests.cc
+  tests/RcString_tests.cc
+  tests/Runfiles_tests.cc
+  tests/SmallVector_tests.cc
+  tests/StringUtils_tests.cc
+  tests/Transform_tests.cc
+  tests/Utf8_tests.cc
+  tests/Utils_tests.cc
+  tests/Vector2_tests.cc
+)
+target_link_libraries(base_tests PRIVATE donner_base gtest_main gmock_main donner_base_test_utils)
+add_test(NAME base_tests COMMAND base_tests)
+set_tests_properties(base_tests PROPERTIES ENVIRONMENT "RUNFILES_DIR=${PROJECT_SOURCE_DIR}")
+
+add_executable(base_tests_ndebug
+  tests/Utils_tests.cc
+)
+target_compile_definitions(base_tests_ndebug PRIVATE NDEBUG)
+target_link_libraries(base_tests_ndebug PRIVATE donner_base gtest_main gmock_main donner_base_test_utils)
+add_test(NAME base_tests_ndebug COMMAND base_tests_ndebug)
+set_tests_properties(base_tests_ndebug PROPERTIES ENVIRONMENT "RUNFILES_DIR=${PROJECT_SOURCE_DIR}")
+
+add_executable(rcstring_tests_with_exceptions
+  tests/RcString_tests.cc
+)
+target_compile_options(rcstring_tests_with_exceptions PRIVATE -fexceptions)
+target_link_libraries(rcstring_tests_with_exceptions PRIVATE donner_base gtest_main gmock_main donner_base_test_utils)
+add_test(NAME rcstring_tests_with_exceptions COMMAND rcstring_tests_with_exceptions)
+set_tests_properties(rcstring_tests_with_exceptions PROPERTIES ENVIRONMENT "RUNFILES_DIR=${PROJECT_SOURCE_DIR}")
+
+file(COPY
+  tests/testdata/test.txt
+DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/tests/testdata)

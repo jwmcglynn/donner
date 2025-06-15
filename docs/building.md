@@ -72,15 +72,16 @@ python3 tools/generate_build_report.py --all --save docs/build_report.md
 
 ## CMake build (experimental)
 
-The `donner/base` library can be built with CMake. Generate build files with:
+The `donner/base` library and its tests can be built with CMake. Generate build files with:
 
 ```sh
 tools/cmake/gen_base_cmakelists.py
 cmake -S . -B build
 cmake --build build
+ctest --test-dir build
 ```
 
-This fetches the `EnTT` dependency via `FetchContent` and builds only the base library.
+This fetches the `EnTT`, `googletest`, and `rules_cc` dependencies via `FetchContent` and builds the base library along with its unit tests.
 
 ## Frequently Asked Questions (FAQ)
 

@@ -1,27 +1,41 @@
 #!/usr/bin/env python3
-"""Generate CMakeLists.txt for the donner/base library using bazel query."""
+"""Generate CMakeLists.txt for the donner/base library and tests using bazel query."""
 
 import subprocess
 from pathlib import Path
 
 TARGET = "//donner/base:base"
 PACKAGE = "donner/base"
+TEST_TARGETS = {
+    "base_tests": "//donner/base:base_tests",
+    "base_tests_ndebug": "//donner/base:base_tests_ndebug",
+    "rcstring_tests_with_exceptions": "//donner/base:rcstring_tests_with_exceptions",
+}
+TEST_UTILS_TARGET = "//donner/base:base_test_utils"
+TESTDATA_TARGET = "//donner/base:base_tests_testdata"
 
 
-def query_labels(attr: str) -> list[str]:
-    expr = f"labels({attr}, {TARGET})"
+def query_labels(attr: str, target: str) -> list[str]:
+    expr = f"labels({attr}, {target})"
     out = subprocess.check_output(["bazel", "query", expr], text=True)
     files = []
     prefix = f"//{PACKAGE}:"
     for line in out.splitlines():
         if line.startswith(prefix):
-            files.append(line[len(prefix):])
+            files.append(line[len(prefix) :])
     return files
 
 
+
+
 def main() -> None:
-    srcs = query_labels("srcs")
-    hdrs = query_labels("hdrs")
+    srcs = query_labels("srcs", TARGET)
+    hdrs = query_labels("hdrs", TARGET)
+
+    utils_hdrs = query_labels("hdrs", TEST_UTILS_TARGET)
+
+    test_srcs = {name: query_labels("srcs", target) for name, target in TEST_TARGETS.items()}
+    testdata = query_labels("srcs", TESTDATA_TARGET)
 
     out_path = Path(PACKAGE) / "CMakeLists.txt"
     with out_path.open("w") as f:
@@ -36,6 +50,40 @@ def main() -> None:
             "set_target_properties(donner_base PROPERTIES "
             "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)\n"
         )
+
+        if utils_hdrs:
+            f.write("\nadd_library(donner_base_test_utils STATIC\n")
+            for path in utils_hdrs:
+                f.write(f"  {path}\n")
+            f.write(")\n")
+            f.write("target_include_directories(donner_base_test_utils PUBLIC ${PROJECT_SOURCE_DIR})\n")
+            f.write("target_link_libraries(donner_base_test_utils PUBLIC gtest gmock rules_cc_runfiles)\n")
+
+        for name, sources in test_srcs.items():
+            if not sources:
+                continue
+            f.write(f"\nadd_executable({name}\n")
+            for path in sources:
+                f.write(f"  {path}\n")
+            f.write(")\n")
+            if name == "base_tests_ndebug":
+                f.write("target_compile_definitions(base_tests_ndebug PRIVATE NDEBUG)\n")
+            if name == "rcstring_tests_with_exceptions":
+                f.write("target_compile_options(rcstring_tests_with_exceptions PRIVATE -fexceptions)\n")
+            f.write("target_link_libraries(" + name + " PRIVATE donner_base gtest_main gmock_main")
+            if utils_hdrs:
+                f.write(" donner_base_test_utils")
+            f.write(")\n")
+            f.write(f"add_test(NAME {name} COMMAND {name})\n")
+            f.write(
+                f"set_tests_properties({name} PROPERTIES ENVIRONMENT \"RUNFILES_DIR=${{PROJECT_SOURCE_DIR}}\")\n"
+            )
+
+        if testdata:
+            f.write("\nfile(COPY\n")
+            for path in testdata:
+                f.write(f"  {path}\n")
+            f.write("DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/tests/testdata)\n")
 
 
 if __name__ == "__main__":
