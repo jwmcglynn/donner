@@ -70,6 +70,22 @@ To regenerate the checked-in build report at `docs/build_report.md`:
 python3 tools/generate_build_report.py --all --save docs/build_report.md
 ```
 
+## CMake build (experimental)
+
+The `donner/base` and `donner/css` libraries can be built with CMake. Generate
+build files with:
+
+```sh
+tools/cmake/gen_cmakelists.py
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build
+```
+
+This fetches the `EnTT`, `googletest`, `rules_cc`, and `nlohmann_json`
+dependencies via `FetchContent` and builds the libraries along with their unit
+tests.
+
 ## Frequently Asked Questions (FAQ)
 
 ### On macOS: bazel crashed due to an internal error
@@ -77,11 +93,13 @@ python3 tools/generate_build_report.py --all --save docs/build_report.md
 That indicates that xcode is not installed, the bad error message is a known bazel issue: https://github.com/bazelbuild/bazel/issues/23111
 
 Validate that xcode is installed with:
+
 ```sh
 xcodebuild -version
 ```
 
 If it is not installed, install it from the App Store. Once this is complete clean bazel state and retry:
+
 ```sh
 bazel clean --expunge
 ```
@@ -92,7 +110,7 @@ Donner builds everything from source, and particularly the skia dependency is la
 
 ### How do I build the editor?
 
-The Editor is an early prototype and hasn't made it to the tree. The Editor is built on the same foundation as the experimental svg_viewer in the tree.  Run it with an opt build for the best experience:
+The Editor is an early prototype and hasn't made it to the tree. The Editor is built on the same foundation as the experimental svg_viewer in the tree. Run it with an opt build for the best experience:
 
 ```sh
 bazel run -c opt --run_under="cd $PWD &&" //experimental/viewer:svg_viewer -- donner_icon.svg
