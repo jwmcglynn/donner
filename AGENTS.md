@@ -1,9 +1,9 @@
 # AGENT Instructions for Donner Repository
 
 This repository contains the Donner SVG project written in modern C++20.
+
 The bulk of the source lives in the `donner/` directory.
-The `.roo/rules` directory provides condensed guidelines on coding style,
-architecture, and the rendering pipeline.
+The `.roo/rules` directory provides condensed guidelines on coding style, architecture, and the rendering pipeline.
 
 ## Coding Style
 
@@ -17,6 +17,7 @@ architecture, and the rendering pipeline.
 - Headers start with `#pragma once` and a `/// @file` comment.
 - Use Doxygen comments (`/** ... */`, `//!<`) for public APIs.
 - Place all code in the `donner` namespace (and sub-namespaces like `donner::svg`).
+- Never omit curly braces for control structures, even for single-line bodies.
 - Naming conventions:
   - Classes/Structs: `UpperCamelCase`.
   - Methods: `lowerCamelCase`.
@@ -37,16 +38,27 @@ architecture, and the rendering pipeline.
 - The rendering pipeline ultimately creates `RenderingInstanceComponent` objects
   consumed by a backend like Skia.
 
+## Building
+
+- Both bazel and CMake are supported, but Bazel is the primary build system. CMake is experimental and may not support all features.
+- The renderer is slow to build. Scope tests to specific directories when possible. Example: `bazel test //donner/base/...`.
+- Use `bazel build //donner/...` to build everything.
+- Run tests with `bazel test`.
+- To build with CMake, run:
+  ```bash
+  python3 tools/cmake/gen_cmakelists.py && cmake -S . -B build && cmake --build build -j$(nproc)
+  ```
+  - CMake tests are also supported, but not built by default. To build tests, use:
+  ```bash
+  cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) && ctest --test-dir build
+  ```
+
 ## Development Notes
 
 - Format C++ code with `clang-format` and TypeScript/JSON/Markdown with `dprint`
   - Use `clang-format -i <files>` to reformat sources. `git clang-format` is handy to
   format only your pending changes. Avoid formatting files under `third_party/`
   (`dprint.json` sets line width to 100 and indent width to 2).
-- Tests are run with **Bazel**.
-- The renderer is slow to build. Scope tests to specific directories when
-  possible. Example: `bazel test //donner/base/...`.
-- Use `bazel build //donner/...` to build everything.
 - Use `buildifier` to format Bazel build files (e.g. `.bzl`, `BUILD.bazel`).
   or `external/`.
 - For doc-only changes, don't run `clang-format` or `dprint`, or build.
