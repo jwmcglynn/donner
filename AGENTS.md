@@ -40,21 +40,17 @@ architecture, and the rendering pipeline.
 ## Development Notes
 
 - Format C++ code with `clang-format` and TypeScript/JSON/Markdown with `dprint`
-  (`dprint.json` sets line width to 100 and indent width to 2).
-- Tests are run with **Bazel**. Typical command:
-  ```sh
-  bazel test //donner/...
-  ```
-- The renderer is slow to build. Scope tests to specific directories when
-  possible. Example:
-  ```sh
-  bazel test //donner/base/...
-  ```
-- Use `clang-format -i <files>` to reformat sources. `git clang-format` is handy to
+  - Use `clang-format -i <files>` to reformat sources. `git clang-format` is handy to
   format only your pending changes. Avoid formatting files under `third_party/`
+  (`dprint.json` sets line width to 100 and indent width to 2).
+- Tests are run with **Bazel**.
+- The renderer is slow to build. Scope tests to specific directories when
+  possible. Example: `bazel test //donner/base/...`.
+- Use `bazel build //donner/...` to build everything.
+- Use `buildifier` to format Bazel build files (e.g. `.bzl`, `BUILD.bazel`).
   or `external/`.
 - For doc-only changes, don't run `clang-format` or `dprint`, or build.
 - Doc files under docs/ are used to generate Doxygen documentation.
   - Use `tools/doxygen.sh` to generate the docs.
   - The generated docs are in `generated-doxygen/html/`.
-- Use `tools/coverage.sh` to generate code coverage reports.
+- Use `tools/coverage.sh` to generate code coverage reports (if lcov is installed).
