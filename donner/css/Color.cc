@@ -3,6 +3,8 @@
 #include <frozen/string.h>
 #include <frozen/unordered_map.h>
 
+#include <cmath>
+
 #include "donner/base/MathUtils.h"
 
 namespace donner::css {
@@ -187,14 +189,14 @@ uint8_t numberToChannel(double number) {
  * @param lightness  Lightness in reference range [0,1]
  */
 RGBA hslToRgb(float hueDegrees, float saturation, float lightness) {
-  hueDegrees = fmodf(hueDegrees, 360.0f);
+  hueDegrees = std::fmod(hueDegrees, 360.0f);
 
   if (hueDegrees < 0.0f) {
     hueDegrees += 360.0f;
   }
 
   auto f = [&](float n) {
-    const float k = std::fmodf(n + hueDegrees / 30.0f, 12.0f);
+    const float k = std::fmod(n + hueDegrees / 30.0f, 12.0f);
     const float a = saturation * Min(lightness, 1.0f - lightness);
     return lightness - a * Max(-1.0f, Min(k - 3.0f, 9.0f - k, 1.0f));
   };

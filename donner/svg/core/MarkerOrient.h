@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+
 #include "donner/base/MathUtils.h"
 #include "donner/base/Vector2.h"
 

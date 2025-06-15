@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <span>
 
 namespace donner::svg {

@@ -4,6 +4,7 @@
  * Defines the ClipRule enum used for determining how paths are clipped with \ref xml_clipPath.
  */
 
+#include <cstdint>
 #include <ostream>
 
 #include "donner/base/Utils.h"

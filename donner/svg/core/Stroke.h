@@ -6,6 +6,7 @@
  * donner::svg::StrokeLinejoin, and \ref donner::svg::StrokeDasharray.
  */
 
+#include <cstdint>
 #include <ostream>
 #include <vector>
 

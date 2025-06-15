@@ -2,6 +2,7 @@
 /// @file
 /// Defines PreserveAspectRatio for SVG aspect ratio preservation.
 
+#include <cstdint>
 #include <optional>
 #include <ostream>
 
@@ -44,7 +45,9 @@ public:
    *
    * @see https://www.w3.org/TR/SVG2/coords.html#PreserveAspectRatioAttribute
    */
-  static PreserveAspectRatio Default() { return PreserveAspectRatio{Align::XMidYMid, MeetOrSlice::Meet}; }
+  static PreserveAspectRatio Default() {
+    return PreserveAspectRatio{Align::XMidYMid, MeetOrSlice::Meet};
+  }
 
   /**
    * Creates a PreserveAspectRatio with 'none' alignment.

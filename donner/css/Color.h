@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <optional>
 #include <ostream>
 #include <string_view>

@@ -1,3 +1,5 @@
+#include <cmath>  // for std::isnan
+
 #include "donner/base/parser/NumberParser.h"
 
 namespace donner::parser {
