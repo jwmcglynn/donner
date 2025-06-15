@@ -76,15 +76,22 @@ The `donner/base` and `donner/css` libraries can be built with CMake. Generate
 build files with:
 
 ```sh
-tools/cmake/gen_cmakelists.py
+python3 tools/cmake/gen_cmakelists.py
 cmake -S . -B build
+cmake --build build -j$(nproc)
+```
+
+To run tests, they must be enabled during the CMake configuration step:
+```
+cmake -S . -B build -DDONNER_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build
 ```
 
 This fetches the `EnTT`, `googletest`, `rules_cc`, and `nlohmann_json`
-dependencies via `FetchContent` and builds the libraries along with their unit
-tests.
+dependencies via `FetchContent` and builds the libraries. Unit tests are
+not built by default and can be enabled by setting the `DONNER_BUILD_TESTS`
+CMake option to `ON` (e.g. `cmake -DDONNER_BUILD_TESTS=ON ...`).
 
 ## Frequently Asked Questions (FAQ)
 
