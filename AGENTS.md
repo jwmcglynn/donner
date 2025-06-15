@@ -28,6 +28,7 @@ architecture, and the rendering pipeline.
 - Assert preconditions using `UTILS_RELEASE_ASSERT` or `assert` for debug builds.
 
 ## Architecture
+
 - Donner builds a dynamic SVG **DOM** using an Entity‑Component‑System (ECS) with **EnTT**.
 - Parsing, CSS, styling, layout, and rendering are separate components so they
   can be tested in isolation.
@@ -37,9 +38,23 @@ architecture, and the rendering pipeline.
   consumed by a backend like Skia.
 
 ## Development Notes
+
 - Format C++ code with `clang-format` and TypeScript/JSON/Markdown with `dprint`
   (`dprint.json` sets line width to 100 and indent width to 2).
 - Tests are run with **Bazel**. Typical command:
   ```sh
   bazel test //donner/...
   ```
+- The renderer is slow to build. Scope tests to specific directories when
+  possible. Example:
+  ```sh
+  bazel test //donner/base/...
+  ```
+- Use `clang-format -i <files>` to reformat sources. `git clang-format` is handy to
+  format only your pending changes. Avoid formatting files under `third_party/`
+  or `external/`.
+- For doc-only changes, don't run `clang-format` or `dprint`, or build.
+- Doc files under docs/ are used to generate Doxygen documentation.
+  - Use `tools/doxygen.sh` to generate the docs.
+  - The generated docs are in `generated-doxygen/html/`.
+- Use `tools/coverage.sh` to generate code coverage reports.
