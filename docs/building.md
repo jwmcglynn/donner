@@ -72,8 +72,8 @@ python3 tools/generate_build_report.py --all --save docs/build_report.md
 
 ## CMake build (experimental)
 
-The `donner/base` and `donner/css` libraries can be built with CMake. Generate
-build files with:
+The `donner/base`, `donner/css`, and `donner/svg` libraries can be built with
+CMake. Generate build files with:
 
 ```sh
 python3 tools/cmake/gen_cmakelists.py
