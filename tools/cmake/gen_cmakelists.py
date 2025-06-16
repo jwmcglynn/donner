@@ -143,6 +143,7 @@ def generate_root() -> None:
             "execute_process(COMMAND ${skia_SOURCE_DIR}/bin/gn gen "
             "${skia_SOURCE_DIR}/out/cmake --ide=json --json-ide-script="
             "${skia_SOURCE_DIR}/gn/gn_to_cmake.py "
+            "--args=skia_use_gl=false "
             "WORKING_DIRECTORY ${skia_SOURCE_DIR})\n"
         )
         f.write("set(BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n")
@@ -561,6 +562,12 @@ def generate_svg() -> None:
                 # This ensures 'skia' is linked if not already covered by the general dep logic.
                 if "skia" not in unique_linked_deps: # Avoid duplicate linking
                     f.write(f"target_link_libraries(donner_svg_renderer_skia PUBLIC skia)\n")
+                # Skia headers live relative to skia_SOURCE_DIR which is defined
+                # by FetchContent. Propagate these include directories so that
+                # RendererSkia.cc can include files like include/core/SkBitmap.h.
+                f.write(
+                    "target_include_directories(donner_svg_renderer_skia PUBLIC ${skia_SOURCE_DIR})\n"
+                )
 
 def generate_base_support() -> None:
     packages = [
