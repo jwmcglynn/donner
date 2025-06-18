@@ -43,3 +43,4 @@ imgui.ini
 # CMake
 /build
 CMakeLists.txt
+third_party/public-sans/embed_resources/
