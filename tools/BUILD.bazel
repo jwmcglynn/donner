@@ -4,3 +4,30 @@ refresh_compile_commands(
     name = "refresh_compile_commands",
     targets = "//donner/...",
 )
+
+py_binary(
+    name = "embed_resources",
+    srcs = ["embed_resources.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "diff_files",
+    srcs = ["diff_files.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "embed_resources_tests",
+    srcs = ["embed_resources_tests.py"],
+    args = [
+        "--header",
+        "$(location //third_party/public-sans:embedded_header)",
+    ],
+    data = [
+        "//third_party/public-sans:PublicSans-Medium.otf",
+        "//third_party/public-sans:embedded_cpp",
+        "//third_party/public-sans:embedded_header",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
