@@ -26,6 +26,8 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@stb//:image": "stb_image",
     "@stb//:image_write": "stb_image_write",
     "//third_party/public-sans:public-sans": "public_sans_font",
+    "@com_google_absl//absl/debugging:failure_signal_handler": "absl::failure_signal_handler",
+    "@com_google_absl//absl/debugging:symbolize": "absl::symbolize",
 }
 
 
@@ -57,6 +59,10 @@ def query_cc_libraries(pkg: str) -> List[str]:
 
 def cmake_target_name(pkg: str, lib: str) -> str:
     pkg_rel = pkg.removeprefix("donner/").replace("/", "_")
+    # Handle the root package ("//:donner") which results in an empty pkg_rel
+    if not pkg_rel:
+        return "donner" if lib == "donner" else f"donner_{lib}"
+
     base = f"donner_{pkg_rel}"
     pkg_last = pkg_rel.split("_")[-1]
     if lib == pkg_last:
@@ -121,6 +127,13 @@ def generate_root() -> None:
         f.write("FetchContent_MakeAvailable(nlohmann_json)\n\n")
 
         f.write("FetchContent_Declare(\n")
+        f.write("  absl\n")
+        f.write("  GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git\n")
+        f.write("  GIT_TAG        20250512.0\n")
+        f.write(")\n")
+        f.write("FetchContent_MakeAvailable(absl)\n\n")
+
+        f.write("FetchContent_Declare(\n")
         f.write("  rules_cc\n")
         f.write("  GIT_REPOSITORY https://github.com/bazelbuild/rules_cc.git\n")
         f.write("  GIT_TAG        0.1.1\n")
@@ -181,6 +194,11 @@ def generate_root() -> None:
         f.write("add_subdirectory(third_party/frozen)\n")
         f.write("add_subdirectory(donner/css)\n")
         f.write("add_subdirectory(donner/svg)\n")
+        f.write("\n")
+        f.write("add_library(donner INTERFACE)\n")
+        f.write("target_link_libraries(donner INTERFACE donner_svg_renderer)\n")
+        f.write("\n")
+        f.write("add_subdirectory(examples)\n")
 
 
 def write_library(f, name: str, srcs: List[str], hdrs: List[str]) -> None:
@@ -222,7 +240,8 @@ def generate_public_sans() -> None:
         f.write("##\n\n")
         f.write("find_package(Python3 REQUIRED)\n")
         f.write("set(PUBLIC_SANS_FONT ${PROJECT_SOURCE_DIR}/third_party/public-sans/PublicSans-Medium.otf)\n")
-        f.write("set(PUBLIC_SANS_OUT ${CMAKE_CURRENT_BINARY_DIR}/embed_resources)\n")
+        f.write("set(PUBLIC_SANS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/public-sans)\n")
+        f.write("set(PUBLIC_SANS_OUT ${CMAKE_CURRENT_BINARY_DIR}/public-sans/embed_resources)\n")
         f.write("file(MAKE_DIRECTORY ${PUBLIC_SANS_OUT})\n")
         f.write("add_custom_command(\n")
         f.write("  OUTPUT ${PUBLIC_SANS_OUT}/PublicSans_Medium_otf.cpp ${PUBLIC_SANS_OUT}/PublicSansFont.h\n")
@@ -232,7 +251,7 @@ def generate_public_sans() -> None:
         f.write("  VERBATIM\n")
         f.write(")\n")
         f.write("add_library(public_sans_font ${PUBLIC_SANS_OUT}/PublicSans_Medium_otf.cpp)\n")
-        f.write("target_include_directories(public_sans_font PUBLIC ${PUBLIC_SANS_OUT})\n")
+        f.write("target_include_directories(public_sans_font PUBLIC ${PUBLIC_SANS_INCLUDE_DIR})\n")
         f.write("set_target_properties(public_sans_font PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n")
         f.write("target_compile_options(public_sans_font PRIVATE -fno-exceptions)\n")
 
@@ -496,6 +515,7 @@ def generate_svg() -> None:
         "donner/svg/properties",
         "donner/svg/resources",
         "donner/svg/renderer",
+        "donner/svg/renderer/common",
     ]
 
     libs: List[Tuple[str, str]] = []
@@ -614,11 +634,50 @@ def generate_svg() -> None:
                         "target_compile_definitions(donner_svg_renderer_skia_deps INTERFACE DONNER_USE_FREETYPE)\n"
                     )
 
+        tool_srcs = query_labels(
+            "srcs", "//donner/svg/renderer:renderer_tool", relative_to="donner/svg"
+        )
+        if tool_srcs:
+            f.write("\nadd_executable(renderer_tool\n")
+            for p in tool_srcs:
+                f.write(f"  {p}\n")
+            f.write(")\n")
+            f.write(
+                "target_include_directories(renderer_tool PRIVATE ${PROJECT_SOURCE_DIR})\n"
+            )
+            f.write(
+                "set_target_properties(renderer_tool PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)\n"
+            )
+            f.write("target_compile_options(renderer_tool PRIVATE -fno-exceptions)\n")
+
+            tool_deps = query_direct_deps_labels("//donner/svg/renderer:renderer_tool")
+            cmake_dep_targets: List[str] = []
+            for dep_label in tool_deps:
+                mapped_dep_target = None
+                if dep_label.startswith("//donner/"):
+                    parts = dep_label.removeprefix("//").split(":", 1)
+                    dep_pkg = parts[0]
+                    dep_name = parts[1] if len(parts) > 1 else Path(dep_pkg).name
+                    mapped_dep_target = cmake_target_name(dep_pkg, dep_name)
+                elif dep_label in KNOWN_BAZEL_TO_CMAKE_DEPS:
+                    mapped_dep_target = KNOWN_BAZEL_TO_CMAKE_DEPS[dep_label]
+
+                if mapped_dep_target and mapped_dep_target != "renderer_tool":
+                    if mapped_dep_target not in cmake_dep_targets:
+                        cmake_dep_targets.append(mapped_dep_target)
+
+            if cmake_dep_targets:
+                all_deps_str = " ".join(cmake_dep_targets)
+                f.write(
+                    f"target_link_libraries(renderer_tool PRIVATE {all_deps_str})\n"
+                )
+
 def generate_base_support() -> None:
     packages = [
         "donner/base/parser",
         "donner/base/element",
         "donner/base/xml",
+        "donner/base/xml/components",
     ]
     libs: List[Tuple[str, str]] = []
     for p in packages:
@@ -648,6 +707,49 @@ def generate_base_support() -> None:
                 f.write(f"target_link_libraries(donner_base_xml {current_target_link_scope} donner_base)\n")
             elif target == "donner_base_xml_qualified_name":
                 f.write(f"target_link_libraries(donner_base_xml_qualified_name {current_target_link_scope} donner_base)\n")
+            elif target == "donner_base_xml_components":
+                f.write(f"target_link_libraries(donner_base_xml_components {current_target_link_scope} donner_base donner_base_xml_qualified_name)\n")
+
+
+def generate_examples() -> None:
+    pkg = Path("examples")
+    srcs = query_labels("srcs", "//examples:svg_to_png", relative_to="examples")
+    deps = query_direct_deps_labels("//examples:svg_to_png")
+
+    cmake = pkg / "CMakeLists.txt"
+    with cmake.open("w") as f:
+        f.write("##\n")
+        f.write("## Generated by tools/cmake/gen_cmakelists.py.\n")
+        f.write("## NOTE: Do not edit this file directly, edit gen_cmakelists.py instead\n")
+        f.write("##\n\n")
+
+        f.write("add_executable(svg_to_png\n")
+        for p in srcs:
+            f.write(f"  {p}\n")
+        f.write(")\n")
+        f.write("target_include_directories(svg_to_png PRIVATE ${PROJECT_SOURCE_DIR})\n")
+        f.write(
+            "set_target_properties(svg_to_png PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)\n"
+        )
+        f.write("target_compile_options(svg_to_png PRIVATE -fno-exceptions)\n")
+
+        cmake_deps: List[str] = []
+        for dep_label in deps:
+            mapped_dep_target = None
+            if dep_label.startswith("//donner/") or dep_label.startswith("//"):
+                parts = dep_label.removeprefix("//").split(":", 1)
+                dep_pkg = parts[0]
+                dep_name = parts[1] if len(parts) > 1 else Path(dep_pkg).name
+                mapped_dep_target = cmake_target_name(dep_pkg, dep_name)
+            elif dep_label in KNOWN_BAZEL_TO_CMAKE_DEPS:
+                mapped_dep_target = KNOWN_BAZEL_TO_CMAKE_DEPS[dep_label]
+
+            if mapped_dep_target and mapped_dep_target not in cmake_deps:
+                cmake_deps.append(mapped_dep_target)
+
+        if cmake_deps:
+            deps_str = " ".join(cmake_deps)
+            f.write(f"target_link_libraries(svg_to_png PRIVATE {deps_str})\n")
 
 
 def main() -> None:
@@ -657,6 +759,7 @@ def main() -> None:
     generate_public_sans()
     generate_css()
     generate_svg()
+    generate_examples()
 
 
 if __name__ == "__main__":

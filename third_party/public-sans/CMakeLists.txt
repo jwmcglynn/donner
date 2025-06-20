@@ -5,7 +5,8 @@
 
 find_package(Python3 REQUIRED)
 set(PUBLIC_SANS_FONT ${PROJECT_SOURCE_DIR}/third_party/public-sans/PublicSans-Medium.otf)
-set(PUBLIC_SANS_OUT ${CMAKE_CURRENT_BINARY_DIR}/embed_resources)
+set(PUBLIC_SANS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/public-sans)
+set(PUBLIC_SANS_OUT ${CMAKE_CURRENT_BINARY_DIR}/public-sans/embed_resources)
 file(MAKE_DIRECTORY ${PUBLIC_SANS_OUT})
 add_custom_command(
   OUTPUT ${PUBLIC_SANS_OUT}/PublicSans_Medium_otf.cpp ${PUBLIC_SANS_OUT}/PublicSansFont.h
@@ -15,6 +16,6 @@ add_custom_command(
   VERBATIM
 )
 add_library(public_sans_font ${PUBLIC_SANS_OUT}/PublicSans_Medium_otf.cpp)
-target_include_directories(public_sans_font PUBLIC ${PUBLIC_SANS_OUT})
+target_include_directories(public_sans_font PUBLIC ${PUBLIC_SANS_INCLUDE_DIR})
 set_target_properties(public_sans_font PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)
 target_compile_options(public_sans_font PRIVATE -fno-exceptions)
