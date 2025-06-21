@@ -42,9 +42,6 @@ BAZEL_PREFIX = ["bazel"]
 # Global state collected while emitting libraries
 #
 
-# Records whether each emitted CMake target is INTERFACE, PUBLIC, or EXECUTABLE.
-CMAKE_GENERATED_TARGETS_LINK_TYPE: Dict[str, str] = {}
-
 # Mapping of known Bazel labels for external/third-party deps → CMake targets.
 # Adjust when an external project changes its exported target name.
 KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
@@ -59,7 +56,7 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@rules_cc//cc/runfiles:runfiles": "rules_cc_runfiles",
     "@stb//:image_write": "stb_image_write",
     "@stb//:image": "stb_image",
-    "//third_party/public-sans:public-sans": "public_sans_font",
+    "@pixelmatch-cpp17//:pixelmatch-cpp17": "pixelmatch-cpp17",
 }
 
 # Packages whose CMake build is provided manually or by FetchContent and must
@@ -68,8 +65,7 @@ SKIPPED_PACKAGES = {
     "",  # root package – handled by generate_root()
     "third_party/frozen",
     "third_party/stb",
-    "third_party/public-sans",
-    "examples",
+    "pixelmatch-cpp17",
 }
 
 #
@@ -167,6 +163,19 @@ def get_copts(target_label: str) -> List[str]:
             "Ensure the target exists and has a 'copts' attribute."
         )
 
+def get_includes(target_label: str) -> List[str]:
+    """Return the includes for a given target."""
+    try:
+        return query_labels(
+            "includes", target_label,
+            relative_to=target_label.split(":")[0].removeprefix("//")
+        )
+    except RuntimeError:
+        raise RuntimeError(
+            f"Failed to query includes for target {target_label}. "
+            "Ensure the target exists and has an 'includes' attribute."
+        )
+
 
 def query_deps(target_label: str) -> List[str]:
     """Return transitive cc_library dependencies for *target_label* (excluding itself)."""
@@ -205,7 +214,6 @@ def cmake_target_name(pkg: str, lib: str) -> str:
 def write_library(f, name: str, srcs: List[str], hdrs: List[str]) -> None:
     """Emit a CMake library target (PUBLIC or INTERFACE) to file *f*."""
     if srcs:  # Concrete library
-        CMAKE_GENERATED_TARGETS_LINK_TYPE[name] = "PUBLIC"
         f.write(f"add_library({name}\n")
         for path in srcs + hdrs:
             f.write(f"  {path}\n")
@@ -217,7 +225,6 @@ def write_library(f, name: str, srcs: List[str], hdrs: List[str]) -> None:
         )
         f.write(f"target_compile_options({name} PRIVATE -fno-exceptions)\n")
     else:  # Header-only
-        CMAKE_GENERATED_TARGETS_LINK_TYPE[name] = "INTERFACE"
         f.write(f"add_library({name} INTERFACE)\n")
         if hdrs:
             f.write(f"target_sources({name} INTERFACE\n")
@@ -252,6 +259,7 @@ def generate_root() -> None:
             ("nlohmann_json", "https://github.com/nlohmann/json.git", "v3.12.0"),
             ("absl", "https://github.com/abseil/abseil-cpp.git", "20250512.0"),
             ("rules_cc", "https://github.com/bazelbuild/rules_cc.git", "0.1.1"),
+            ("pixelmatch-cpp17", "https://github.com/jwmcglynn/pixelmatch-cpp17.git", "ad7b103b746c9b23c61b4ce629fea64ae802df15"),
         ]
         for name, repo, tag in externals:
             f.write(f"FetchContent_Declare(\n  {name}\n  GIT_REPOSITORY {repo}\n")
@@ -298,7 +306,6 @@ def generate_root() -> None:
             "set_target_properties(stb_image PROPERTIES CXX_STANDARD 20 "
             "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
         )
-        CMAKE_GENERATED_TARGETS_LINK_TYPE["stb_image"] = "PUBLIC\n"
 
         f.write(
             "add_library(stb_image_write third_party/stb/stb_image_write_impl.cc "
@@ -312,7 +319,6 @@ def generate_root() -> None:
             "set_target_properties(stb_image_write PROPERTIES CXX_STANDARD 20 "
             "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
         )
-        CMAKE_GENERATED_TARGETS_LINK_TYPE["stb_image_write"] = "PUBLIC\n"
 
         f.write("\n# Frozen library (locally vendored)\n")
         f.write("add_library(frozen INTERFACE)\n")
@@ -320,9 +326,17 @@ def generate_root() -> None:
             "target_include_directories(frozen INTERFACE "
             "${PROJECT_SOURCE_DIR}/third_party/frozen/include)\n"
         )
-        CMAKE_GENERATED_TARGETS_LINK_TYPE["frozen"] = "INTERFACE"
+
+        f.write("\n# Pixelmatch library\n")
+        f.write("add_library(pixelmatch INTERFACE)\n")
+        f.write(
+            "target_include_directories(pixelmatch INTERFACE "
+            "${pixelmatch_SOURCE_DIR}/src)\n"
+        )
+
 
         # Optional test enable switch
+        f.write("\n")
         f.write("if(DONNER_BUILD_TESTS)\n  enable_testing()\nendif()\n\n")
 
         # Symlink hack for rules_cc runfiles
@@ -401,15 +415,15 @@ def generate_public_sans() -> None:
         f.write("  VERBATIM\n")
         f.write(")\n")
         f.write(
-            "add_library(public_sans_font "
+            "add_library(donner_third_party_public-sans_public-sans "
             "${PUBLIC_SANS_OUT}/PublicSans_Medium_otf.cpp)\n"
         )
-        f.write("target_include_directories(public_sans_font PUBLIC ${PUBLIC_SANS_INCLUDE_DIR})\n")
+        f.write("target_include_directories(donner_third_party_public-sans_public-sans PUBLIC ${PUBLIC_SANS_INCLUDE_DIR})\n")
         f.write(
-            "set_target_properties(public_sans_font PROPERTIES "
+            "set_target_properties(donner_third_party_public-sans_public-sans PROPERTIES "
             "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
         )
-        f.write("target_compile_options(public_sans_font PRIVATE -fno-exceptions)\n")
+        f.write("target_compile_options(donner_third_party_public-sans_public-sans PRIVATE -fno-exceptions)\n")
 
 
 #
@@ -445,6 +459,16 @@ def generate_all_packages() -> None:
                 hdrs, srcs = get_hdrs_and_srcs(bazel_label)
                 cmake_name = cmake_target_name(pkg, tgt)
                 copts = get_copts(bazel_label)
+                includes = get_includes(bazel_label)
+
+                scope = (
+                    "PRIVATE"
+                    if kind in {"cc_binary", "cc_test"}
+                    else (
+                        "PUBLIC" if srcs
+                        else "INTERFACE"  # Header-only libraries
+                    )
+                )
 
                 if "_fuzzer" in tgt:
                     # Skip fuzzers, they are not built with CMake
@@ -459,15 +483,21 @@ def generate_all_packages() -> None:
                     write_library(f, cmake_name, srcs, hdrs)
                     if copts:
                         f.write(
-                            f"target_compile_options({cmake_name} INTERFACE {' '.join(copts)})\n"
+                            f"target_compile_options({cmake_name} {scope} {' '.join(copts)})\n"
                         )
+                    if includes:
+                        for inc in includes:
+                            f.write(
+                                f"target_include_directories({cmake_name} {scope} "
+                                f"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc})\n"
+                            )
                 else:  # cc_binary or cc_test
                     f.write(f"add_executable({cmake_name}\n")
                     for p in srcs + hdrs:
                         f.write(f"  {p}\n")
                     f.write(")\n")
                     f.write(
-                        f"target_include_directories({cmake_name} PRIVATE "
+                        f"target_include_directories({cmake_name} {scope} "
                         "${PROJECT_SOURCE_DIR})\n"
                     )
                     f.write(
@@ -479,20 +509,19 @@ def generate_all_packages() -> None:
                     )
                     all_copts = [flag] + copts
                     f.write(
-                        f"target_compile_options({cmake_name} PRIVATE {' '.join(all_copts)})\n"
+                        f"target_compile_options({cmake_name} {scope} {' '.join(all_copts)})\n"
                     )
                     if kind == "cc_test":
                         f.write(f"add_test(NAME {cmake_name} COMMAND {cmake_name})\n")
+                    if includes:
+                        for inc in includes:
+                            f.write(
+                                f"target_include_directories({cmake_name} {scope} "
+                                f"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc})\n"
+                            )
 
                 # Link dependencies
                 deps: List[str] = []
-                if pkg == "examples" and kind == "cc_binary" and tgt in (
-                    "svg_to_png",
-                    "svg_tree_interaction",
-                ):
-                    f.write(f"target_link_libraries({cmake_name} PRIVATE donner)\n")
-                    continue
-
                 for dep in query_deps(bazel_label):
                     mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
                     if not mapped and dep.startswith("//"):
@@ -502,30 +531,21 @@ def generate_all_packages() -> None:
                         deps.append(mapped)
 
                 if deps:
-                    scope = (
-                        "PRIVATE"
-                        if kind in {"cc_binary", "cc_test"}
-                        else (
-                            "INTERFACE"
-                            if CMAKE_GENERATED_TARGETS_LINK_TYPE.get(cmake_name) == "INTERFACE"
-                            else "PUBLIC"
-                        )
-                    )
                     deps_list = " ".join(dict.fromkeys(deps))
                     f.write(f"target_link_libraries({cmake_name} {scope} {deps_list})\n")
 
                 # Hand-written tweaks
                 if cmake_name == "donner_svg_renderer_skia_deps":
-                    f.write("target_link_libraries(donner_svg_renderer_skia_deps PUBLIC skia)\n")
+                    f.write(f"target_link_libraries(donner_svg_renderer_skia_deps {scope} skia)\n")
                     f.write(
-                        "target_include_directories(donner_svg_renderer_skia_deps "
-                        "PUBLIC ${skia_SOURCE_DIR})\n"
+                        f"target_include_directories(donner_svg_renderer_skia_deps {scope} "
+                        "${skia_SOURCE_DIR})\n"
                     )
 
                     if sys.platform == "darwin":
                         f.write(
-                            "target_compile_definitions(donner_svg_renderer_skia_deps "
-                            "INTERFACE DONNER_USE_CORETEXT)\n"
+                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
+                            "DONNER_USE_CORETEXT)\n"
                         )
                     elif sys.platform.startswith("linux"):
                         f.write(
@@ -533,13 +553,12 @@ def generate_all_packages() -> None:
                             "INTERFACE DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
                         )
                         f.write(
-                            "target_link_libraries(donner_svg_renderer_skia_deps "
-                            "INTERFACE fontconfig)\n"
+                            f"target_link_libraries(donner_svg_renderer_skia_deps {scope} fontconfig)\n"
                         )
                     else:
                         f.write(
-                            "target_compile_definitions(donner_svg_renderer_skia_deps "
-                            "INTERFACE DONNER_USE_FREETYPE)\n"
+                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
+                            "DONNER_USE_FREETYPE)\n"
                         )
 
     # Umbrella INTERFACE target mirroring //:donner
