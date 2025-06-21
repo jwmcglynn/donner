@@ -282,15 +282,15 @@ def generate_root() -> None:
             "WORKING_DIRECTORY ${skia_SOURCE_DIR})\n"
         )
         f.write(
-            "execute_process(COMMAND ${skia_SOURCE_DIR}/bin/gn gen "
-            "${skia_SOURCE_DIR}/out/cmake --ide=json "
-            "--json-ide-script=${skia_SOURCE_DIR}/gn/gn_to_cmake.py "
-            "--args=skia_use_gl=false "
-            "WORKING_DIRECTORY ${skia_SOURCE_DIR})\n"
+            "execute_process(\n"
+            "  COMMAND ${skia_SOURCE_DIR}/bin/gn gen ${skia_SOURCE_DIR}/out/cmake\n"
+            "    --ide=json\n"
+            "    --json-ide-script=${skia_SOURCE_DIR}/gn/gn_to_cmake.py\n"
+            "    \"--args=skia_use_gl=false skia_enable_tools=false\"\n"
+            "  WORKING_DIRECTORY ${skia_SOURCE_DIR}\n"
+            ")\n"
         )
-        f.write("set(BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n")
         f.write("add_subdirectory(${skia_SOURCE_DIR}/out/cmake skia)\n")
-        f.write("set(BUILD_TESTING ON CACHE BOOL \"\" FORCE)\n\n")
 
         # Build / install rules for STB (header-only + impl)
         f.write("# STB libraries (locally vendored)\n")
@@ -327,17 +327,11 @@ def generate_root() -> None:
             "${PROJECT_SOURCE_DIR}/third_party/frozen/include)\n"
         )
 
-        f.write("\n# Pixelmatch library\n")
-        f.write("add_library(pixelmatch INTERFACE)\n")
-        f.write(
-            "target_include_directories(pixelmatch INTERFACE "
-            "${pixelmatch_SOURCE_DIR}/src)\n"
-        )
-
-
         # Optional test enable switch
         f.write("\n")
-        f.write("if(DONNER_BUILD_TESTS)\n  enable_testing()\nendif()\n\n")
+        f.write("if(DONNER_BUILD_TESTS)\n")
+        f.write("  enable_testing()\n")
+        f.write("endif()\n\n")
 
         # Symlink hack for rules_cc runfiles
         f.write(
