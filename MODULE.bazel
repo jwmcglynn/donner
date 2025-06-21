@@ -46,9 +46,8 @@ git_repository(
     tag = "v3.13.2",
 )
 
-new_local_repository(
+local_repository(
     name = "frozen",
-    build_file = "//third_party:BUILD.frozen",
     path = "third_party/frozen",
 )
 
