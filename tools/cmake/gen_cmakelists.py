@@ -36,7 +36,7 @@ from typing import DefaultDict, Dict, List, Tuple
 #
 
 # Use bzlmod-aware queries since this repository relies on MODULE.bazel.
-BAZEL_QUERY_PREFIX = ["bazel", "query", "--enable_bzlmod", "--keep_going"]
+BAZEL_PREFIX = ["bazel"]
 
 #
 # Global state collected while emitting libraries
@@ -66,6 +66,7 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
 # *not* be auto-generated here.
 SKIPPED_PACKAGES = {
     "",  # root package – handled by generate_root()
+    "third_party/frozen",
     "third_party/stb",
     "third_party/public-sans",
     "examples",
@@ -76,16 +77,53 @@ SKIPPED_PACKAGES = {
 #
 
 
-def _run_bazel(expr: str) -> str:
-    """Run a Bazel query expression and return stdout (stripped)."""
+def _run_bazel(args: List[str]) -> str:
+    """Run a Bazel command and return stdout (stripped)."""
     try:
         return subprocess.check_output(
-            BAZEL_QUERY_PREFIX + [expr],
+            BAZEL_PREFIX + args,
             text=True,
             stderr=subprocess.PIPE,
         ).strip()
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"Bazel query failed:\n  {expr}\n{exc.stderr}") from exc
+        cmd_str = " ".join(BAZEL_PREFIX + args)
+        raise RuntimeError(f"Bazel command failed:\n  {cmd_str}\n{exc.stderr}") from exc
+
+
+def query_cc_targets() -> List[Tuple[str, str]]:
+    """Return ``(kind, label)`` for every cc_* target under //… (excluding externals)."""
+    query = "kind(\".*cc_.*\", set(//donner/... //examples/...))"
+    output = _run_bazel(["cquery", query, "--output=label_kind"])
+
+    if not output:
+        raise RuntimeError("No cc_library, cc_binary, or cc_test targets found.")
+
+    results: List[Tuple[str, str]] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+
+        print(f"Processing line: {line}")
+            
+        parts = line.strip().split(" ")
+        if len(parts) >= 2:  # Should have at least kind and label
+            kind = parts[0]
+            label = parts[2]  # The label is the third part
+            
+            # Normalize rule kinds
+            if kind.endswith("cc_library"):
+                kind = "cc_library"
+            elif kind.endswith("cc_binary"):
+                kind = "cc_binary"
+            elif kind.endswith("cc_test"):
+                kind = "cc_test"
+            else:
+                print(f"Skipping unknown target kind: {kind} for label {label}")
+                continue
+                
+            results.append((kind, label))
+    return results
+
 
 
 def query_labels(attr: str, target: str, *, relative_to: str) -> List[str]:
@@ -97,29 +135,42 @@ def query_labels(attr: str, target: str, *, relative_to: str) -> List[str]:
     pkg = target.split(":")[0].removeprefix("//")
     prefix = f"//{pkg}:"
     results: List[str] = []
-    for line in _run_bazel(f"labels({attr}, {target})").splitlines():
+    for line in _run_bazel(["query", f"labels({attr}, {target})"]).splitlines():
         line = line.strip()
         if line.startswith(prefix):
             label = line[len(prefix) :]
             results.append(str(Path(pkg, label).relative_to(relative_to)))
     return results
 
+def get_hdrs_and_srcs(target_label: str) -> Tuple[List[str], List[str]]:
+    """Return hdrs and srcs for a given target, with paths relative to the package dir."""
 
-def query_cc_targets() -> List[Tuple[str, str]]:
-    """Return ``(kind, label)`` for every cc_* target under //… (excluding externals)."""
-    kinds = ("cc_library", "cc_binary", "cc_test")
-    out: List[Tuple[str, str]] = []
-    for kind in kinds:
-        for line in _run_bazel(f"kind({kind}, set(//donner/... //examples/...))").splitlines():
-            line = line.strip()
-            if line and not line.startswith("@"):  # skip external repos
-                out.append((kind, line))
-    return out
+    try:
+        hdrs = query_labels("hdrs", target_label, relative_to=target_label.split(":")[0].removeprefix("//"))
+        srcs = query_labels("srcs", target_label, relative_to=target_label.split(":")[0].removeprefix("//"))
+        return hdrs, srcs
+    except (RuntimeError, ValueError):
+        raise RuntimeError(
+            f"Failed to query headers and sources for target {target_label}. "
+            "Ensure the target exists and has 'hdrs' or 'srcs' attributes."
+        )
+
+def get_copts(target_label: str) -> List[str]:
+    """Return the copts for a given target."""
+    try:
+        return query_labels(
+            "copts", target_label, relative_to=target_label.split(":")[0].removeprefix("//")
+        )
+    except RuntimeError:
+        raise RuntimeError(
+            f"Failed to query copts for target {target_label}. "
+            "Ensure the target exists and has a 'copts' attribute."
+        )
 
 
 def query_deps(target_label: str) -> List[str]:
     """Return transitive cc_library dependencies for *target_label* (excluding itself)."""
-    deps = _run_bazel(f'kind("cc_library", deps({target_label}))').splitlines()
+    deps = _run_bazel(["query", f'kind("cc_library", deps({target_label}))']).splitlines()
     return [
         d.strip()
         for d in deps
@@ -134,7 +185,7 @@ def cmake_target_name(pkg: str, lib: str) -> str:
     Examples
     --------
     >>> cmake_target_name("donner/svg", "svg_core")
-    'donner_svg_core'
+    'donner_svg_svg_core'
     >>> cmake_target_name("", "donner")
     'donner'
     """
@@ -143,13 +194,6 @@ def cmake_target_name(pkg: str, lib: str) -> str:
         return "donner" if lib == "donner" else f"donner_{lib}"
 
     base = f"donner_{pkg_rel}"
-    pkg_last = pkg_rel.split("_")[-1]
-    if lib == pkg_last:
-        return base
-    if lib.startswith(pkg_last + "_"):
-        return f"{base}_{lib[len(pkg_last)+1:]}"
-    if lib.endswith("_" + pkg_last):
-        return f"{base}_{lib[:-len(pkg_last)-1]}"
     return f"{base}_{lib}"
 
 
@@ -270,6 +314,14 @@ def generate_root() -> None:
         )
         CMAKE_GENERATED_TARGETS_LINK_TYPE["stb_image_write"] = "PUBLIC\n"
 
+        f.write("\n# Frozen library (locally vendored)\n")
+        f.write("add_library(frozen INTERFACE)\n")
+        f.write(
+            "target_include_directories(frozen INTERFACE "
+            "${PROJECT_SOURCE_DIR}/third_party/frozen/include)\n"
+        )
+        CMAKE_GENERATED_TARGETS_LINK_TYPE["frozen"] = "INTERFACE"
+
         # Optional test enable switch
         f.write("if(DONNER_BUILD_TESTS)\n  enable_testing()\nendif()\n\n")
 
@@ -285,12 +337,28 @@ def generate_root() -> None:
         )
         f.write("target_include_directories(rules_cc_runfiles PUBLIC ${CMAKE_BINARY_DIR})\n\n")
 
-        # Add generated subdirectories
-        f.write("add_subdirectory(third_party/public-sans)\n\n")
-        f.write("add_subdirectory(donner/base)\n")
-        f.write("add_subdirectory(donner/css)\n")
-        f.write("add_subdirectory(donner/svg)\n\n")
-        f.write("add_subdirectory(examples)\n")
+        # Add generated subdirectories.
+        #
+        # Discover every internal Bazel package that contains at least one C++
+        # target and emit a corresponding add_subdirectory() line.  This keeps
+        # the root CMakeLists.txt in sync with the Bazel graph instead of
+        # relying on a hand‑maintained list.
+        discovered_pkgs = {
+            label.removeprefix("//").split(":", 1)[0]
+            for _, label in query_cc_targets()
+        }
+
+        # Skip third‑party packages that are handled manually elsewhere, except
+        # for Public Sans, whose CMakeLists.txt is generated in
+        # generate_public_sans().
+        discovered_pkgs -= SKIPPED_PACKAGES - {"third_party/public-sans"}
+
+        # Ensure helper packages are always included.
+        discovered_pkgs.add("third_party/public-sans")
+
+        for pkg in sorted(discovered_pkgs):
+            f.write(f"add_subdirectory({pkg})\n")
+        f.write("\n")
 
 
 #
@@ -350,11 +418,16 @@ def generate_public_sans() -> None:
 
 def generate_all_packages() -> None:
     """Emit a CMakeLists.txt for every internal package discovered with Bazel."""
+    
+    print("Discovering cc_library, cc_binary, and cc_test targets...")
     by_pkg: DefaultDict[str, List[Tuple[str, str]]] = DefaultDict(list)
     for kind, label in query_cc_targets():
         pkg, tgt = label.removeprefix("//").split(":", 1)
+        print(f"Processing {kind} {label} → {pkg}/{tgt}")
         if pkg in SKIPPED_PACKAGES:
             continue
+        if "_fuzzer" in tgt:
+            continue  # Skip fuzzers
         by_pkg[pkg].append((kind, tgt))
 
     # Per-package generation
@@ -369,13 +442,25 @@ def generate_all_packages() -> None:
 
             for kind, tgt in sorted(entries):
                 bazel_label = f"//{pkg}:{tgt}"
-                srcs = query_labels("srcs", bazel_label, relative_to=pkg)
-                hdrs = query_labels("hdrs", bazel_label, relative_to=pkg)
+                hdrs, srcs = get_hdrs_and_srcs(bazel_label)
                 cmake_name = cmake_target_name(pkg, tgt)
+                copts = get_copts(bazel_label)
+
+                if "_fuzzer" in tgt:
+                    # Skip fuzzers, they are not built with CMake
+                    print(f"Skipping fuzzer {bazel_label}")
+                    continue
+
+                print("Adding target:", cmake_name,
+                      f" (kind={kind}, srcs={len(srcs)}, hdrs={len(hdrs)})")
 
                 # Target declaration
                 if kind == "cc_library":
                     write_library(f, cmake_name, srcs, hdrs)
+                    if copts:
+                        f.write(
+                            f"target_compile_options({cmake_name} INTERFACE {' '.join(copts)})\n"
+                        )
                 else:  # cc_binary or cc_test
                     f.write(f"add_executable({cmake_name}\n")
                     for p in srcs + hdrs:
@@ -389,8 +474,13 @@ def generate_all_packages() -> None:
                         f"set_target_properties({cmake_name} PROPERTIES "
                         "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)\n"
                     )
-                    flag = "-fexceptions" if "_with_exceptions" in cmake_name else "-fno-exceptions"
-                    f.write(f"target_compile_options({cmake_name} PRIVATE {flag})\n")
+                    flag = (
+                        "-fexceptions" if "_with_exceptions" in cmake_name else "-fno-exceptions"
+                    )
+                    all_copts = [flag] + copts
+                    f.write(
+                        f"target_compile_options({cmake_name} PRIVATE {' '.join(all_copts)})\n"
+                    )
                     if kind == "cc_test":
                         f.write(f"add_test(NAME {cmake_name} COMMAND {cmake_name})\n")
 
@@ -425,14 +515,13 @@ def generate_all_packages() -> None:
                     f.write(f"target_link_libraries({cmake_name} {scope} {deps_list})\n")
 
                 # Hand-written tweaks
-                if cmake_name == "donner_svg_renderer_skia":
-                    if "skia" not in deps:
-                        f.write("target_link_libraries(donner_svg_renderer_skia PUBLIC skia)\n")
+                if cmake_name == "donner_svg_renderer_skia_deps":
+                    f.write("target_link_libraries(donner_svg_renderer_skia_deps PUBLIC skia)\n")
                     f.write(
-                        "target_include_directories(donner_svg_renderer_skia "
+                        "target_include_directories(donner_svg_renderer_skia_deps "
                         "PUBLIC ${skia_SOURCE_DIR})\n"
                     )
-                elif cmake_name == "donner_svg_renderer_skia_deps":
+
                     if sys.platform == "darwin":
                         f.write(
                             "target_compile_definitions(donner_svg_renderer_skia_deps "
@@ -476,10 +565,16 @@ def generate_all_packages() -> None:
 
 
 def main() -> None:
+    """Main entry point to generate all CMakeLists.txt files."""
+    print("Generating CMakeLists.txt files for Donner libraries...")
+    print("This may take a while, please wait...\n")
     generate_root()
     generate_public_sans()
     generate_all_packages()
 
+    print("\nCMakeLists.txt generation complete.")
+    print("You can now build Donner with CMake as follows:")
+    print("  cmake -S . -B build && cmake --build build -j$(nproc)")
 
 if __name__ == "__main__":
     main()
