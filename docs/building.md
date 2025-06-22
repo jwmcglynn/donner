@@ -70,10 +70,9 @@ To regenerate the checked-in build report at `docs/build_report.md`:
 python3 tools/generate_build_report.py --all --save docs/build_report.md
 ```
 
-## CMake build (experimental)
+## CMake build (experimental) {#cmake-build-experimental}
 
-The `donner/base`, `donner/css`, and `donner/svg` libraries can be built with
-CMake. Generate build files with:
+Bazel is the primary build system, but CMake support is also available through an exerimental Bazel-to-CMake converter. This is for users who want to integrate Donner into their CMake-based projects.
 
 ```sh
 python3 tools/cmake/gen_cmakelists.py
@@ -82,7 +81,8 @@ cmake --build build -j$(nproc)
 ```
 
 To run tests, they must be enabled during the CMake configuration step:
-```
+
+```sh
 cmake -S . -B build -DDONNER_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build

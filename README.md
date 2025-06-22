@@ -44,7 +44,6 @@ Donner renders with Skia, which provides the same high-quality rendering used by
 
 ### Limitations
 
-- Donner currently requires bazel to build, so it is only suitable for bazel-based projects. CMake support is planned.
 - `<text>` support is not yet implemented
 
 ## Supported Elements
@@ -162,6 +161,12 @@ See the source at: [experimental/viewer/svg_viewer.cc](./experimental/viewer/svg
 
 - [Project status](https://github.com/jwmcglynn/donner/issues/149)
 - [Build report](docs/build_report.md)
+
+## CMake Support
+
+CMake support is available, but experimental. It is intended for users who want to integrate Donner into their CMake-based projects. The CMake build fetches dependencies and builds the library.
+
+See the [CMake documentation](https://jwmcglynn.github.io/donner/BuildingDonner.html#cmake-build-experimental) for more details.
 
 ## Other Libraries
 
