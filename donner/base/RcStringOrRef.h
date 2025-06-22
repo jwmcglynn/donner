@@ -133,13 +133,13 @@ public:
   /// @{
 
   /// Spaceship equality operator to another \ref RcStringOrRef.
-  constexpr friend auto operator<=>(const RcStringOrRef& lhs, const RcStringOrRef& rhs) {
+  friend auto operator<=>(const RcStringOrRef& lhs, const RcStringOrRef& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
   /// Spaceship equality operator to a StringLike type such as \c std::string_view or \ref RcString.
   template <StringLike StringT>
-  constexpr friend auto operator<=>(const RcStringOrRef& lhs, const StringT& rhs) {
+  friend auto operator<=>(const RcStringOrRef& lhs, const StringT& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
@@ -149,7 +149,7 @@ public:
 
   /// Spaceship equality operator to a StringLike type such as \c std::string_view or \ref RcString.
   template <StringLike StringT>
-  constexpr friend auto operator<=>(const StringT& lhs, const RcStringOrRef& rhs) {
+  friend auto operator<=>(const StringT& lhs, const RcStringOrRef& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
@@ -158,20 +158,20 @@ public:
   //
 
   /// Equality operator to another \ref RcString.
-  constexpr friend bool operator==(const RcStringOrRef& lhs, const RcStringOrRef& rhs) {
+  friend bool operator==(const RcStringOrRef& lhs, const RcStringOrRef& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
   /// Equality operator to a StringLike type such as \c std::string_view or \ref RcString.
   template <StringLike StringT>
-  constexpr friend bool operator==(const RcStringOrRef& lhs, const StringT& rhs) {
+  friend bool operator==(const RcStringOrRef& lhs, const StringT& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
   /// Reversed equality operator to a StringLike type such as \c std::string_view or \ref
   /// RcString.
   template <StringLike StringT>
-  constexpr friend bool operator==(const StringT& lhs, const RcStringOrRef& rhs) {
+  friend bool operator==(const StringT& lhs, const RcStringOrRef& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
@@ -251,13 +251,13 @@ public:
 
   // Iterators.
   /// Begin iterator.
-  constexpr const_iterator begin() const noexcept { return cbegin(); }
+  const_iterator begin() const noexcept { return cbegin(); }
   /// End iterator.
-  constexpr const_iterator end() const noexcept { return cend(); }
+  const_iterator end() const noexcept { return cend(); }
   /// Begin iterator.
-  constexpr const_iterator cbegin() const noexcept { return data(); }
+  const_iterator cbegin() const noexcept { return data(); }
   /// End iterator.
-  constexpr const_iterator cend() const noexcept { return data() + size(); }
+  const_iterator cend() const noexcept { return data() + size(); }
 
   /**
    * Returns true if the string equals another all-lowercase string, with a case insensitive
@@ -300,8 +300,7 @@ private:
    * @return std::strong_ordering representing the comparison result, similar to
    *   std::string_view::compare but returning a std::strong_ordering instead of an int.
    */
-  constexpr static std::strong_ordering compareStringViews(std::string_view lhs,
-                                                           std::string_view rhs) {
+  static std::strong_ordering compareStringViews(std::string_view lhs, std::string_view rhs) {
     const size_t lhsSize = lhs.size();
     const size_t rhsSize = rhs.size();
     const size_t sharedSize = std::min(lhsSize, rhsSize);

@@ -333,6 +333,13 @@ def generate_root() -> None:
         f.write("  enable_testing()\n")
         f.write("endif()\n\n")
 
+        f.write("# System font dependencies for Linux\n")
+        f.write("if(UNIX AND NOT APPLE)\n")
+        f.write("  find_package(PkgConfig REQUIRED)\n")
+        f.write("  pkg_check_modules(FREETYPE REQUIRED freetype2)\n")
+        f.write("  pkg_check_modules(FONTCONFIG REQUIRED fontconfig)\n")
+        f.write("endif()\n\n")
+
         # Symlink hack for rules_cc runfiles
         f.write(
             "execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink "
@@ -459,7 +466,7 @@ def generate_all_packages() -> None:
                     "PRIVATE"
                     if kind in {"cc_binary", "cc_test"}
                     else (
-                        "PUBLIC" if srcs
+                        "LINK_PUBLIC" if srcs
                         else "INTERFACE"  # Header-only libraries
                     )
                 )
@@ -543,11 +550,13 @@ def generate_all_packages() -> None:
                         )
                     elif sys.platform.startswith("linux"):
                         f.write(
-                            "target_compile_definitions(donner_svg_renderer_skia_deps "
-                            "INTERFACE DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
+                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
                         )
                         f.write(
-                            f"target_link_libraries(donner_svg_renderer_skia_deps {scope} fontconfig)\n"
+                            f"target_link_libraries(donner_svg_renderer_skia_deps {scope} ${{FREETYPE_LIBRARIES}} ${{FONTCONFIG_LIBRARIES}})\n"
+                        )
+                        f.write(
+                            f"target_include_directories(donner_svg_renderer_skia_deps {scope} ${{FREETYPE_INCLUDE_DIRS}} ${{FONTCONFIG_INCLUDE_DIRS}})\n"
                         )
                     else:
                         f.write(

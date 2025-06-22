@@ -6,6 +6,12 @@ Donner is intended as a hobby project with the latest C++ spec, so it is likely 
 
 - Bazel
 - On macOS: A working Xcode installation
+- CMake builds on Linux: pkg-config and development libraries for Fontconfig and Freetype.
+  For Debian/Ubuntu:
+
+  ```sh
+  sudo apt-get install pkg-config libfontconfig1-dev libfreetype6-dev
+  ```
 
 ### Installing Bazel
 

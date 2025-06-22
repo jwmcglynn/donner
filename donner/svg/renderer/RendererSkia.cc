@@ -118,6 +118,8 @@ SkPaint::Cap toSkia(StrokeLinecap lineCap) {
     case StrokeLinecap::Round: return SkPaint::Cap::kRound_Cap;
     case StrokeLinecap::Square: return SkPaint::Cap::kSquare_Cap;
   }
+
+  UTILS_UNREACHABLE();
 }
 
 SkPaint::Join toSkia(StrokeLinejoin lineJoin) {
@@ -130,6 +132,8 @@ SkPaint::Join toSkia(StrokeLinejoin lineJoin) {
     case StrokeLinejoin::Bevel: return SkPaint::Join::kBevel_Join;
     case StrokeLinejoin::Arcs: return SkPaint::Join::kMiter_Join;
   }
+
+  UTILS_UNREACHABLE();
 }
 
 SkPath toSkia(const PathSpline& spline) {
@@ -173,6 +177,8 @@ SkTileMode toSkia(GradientSpreadMethod spreadMethod) {
     case GradientSpreadMethod::Reflect: return SkTileMode::kMirror;
     case GradientSpreadMethod::Repeat: return SkTileMode::kRepeat;
   }
+
+  UTILS_UNREACHABLE();
 }
 
 }  // namespace

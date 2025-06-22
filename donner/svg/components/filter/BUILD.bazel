@@ -2,22 +2,18 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
     name = "components",
-    srcs = [
-        "FilterComponent.cc",
-        "FilterPrimitiveComponent.cc",
-    ],
     hdrs = [
         "FilterComponent.h",
         "FilterPrimitiveComponent.h",
         "FilterUnits.h",
     ],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
-        "//donner/svg/properties",
+        ":filter_effect",
+        "//donner/base",
     ],
-    alwayslink = 1,
 )
 
 cc_library(

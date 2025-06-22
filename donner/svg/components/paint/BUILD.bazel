@@ -3,11 +3,8 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "components",
     srcs = [
-        "ClipPathComponent.cc",
         "GradientComponent.cc",
         "LinearGradientComponent.cc",
-        "MarkerComponent.cc",
-        "MaskComponent.cc",
         "PatternComponent.cc",
         "RadialGradientComponent.cc",
         "StopComponent.cc",
