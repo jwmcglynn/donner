@@ -114,7 +114,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Unknown:
       return fn(std::integral_constant<ElementType, ElementType::Unknown>());
     case ElementType::Use: return fn(std::integral_constant<ElementType, ElementType::Use>());
-  };
+  }
 }
 
 }  // namespace donner::svg

@@ -39,3 +39,8 @@ imgui.ini
 
 # Fuzz testing
 /fuzz-*.log
+
+# CMake
+/build
+CMakeLists.txt
+third_party/public-sans/embed_resources/

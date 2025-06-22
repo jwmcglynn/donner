@@ -184,6 +184,8 @@ struct Length {
       case Unit::Vmin: return value * std::min(viewBox.width(), viewBox.height()) / 100.0;
       case Unit::Vmax: return value * std::max(viewBox.width(), viewBox.height()) / 100.0;
     }
+
+    UTILS_UNREACHABLE();
   }
 
   /**

@@ -10,3 +10,20 @@ embed_resources(
         "//donner:__subpackages__",
     ],
 )
+
+exports_files(
+    ["PublicSans-Medium.otf"],
+    visibility = ["//tools:__pkg__"],
+)
+
+filegroup(
+    name = "embedded_header",
+    srcs = [":public-sans_header_gen"],
+    visibility = ["//tools:__pkg__"],
+)
+
+filegroup(
+    name = "embedded_cpp",
+    srcs = [":public-sans_embedded_PublicSans_Medium_otf"],
+    visibility = ["//tools:__pkg__"],
+)

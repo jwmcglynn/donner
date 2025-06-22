@@ -2,8 +2,8 @@
 Helper rules, such as for building fuzzers.
 """
 
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 def fuzzer_compatible_with():
     """
@@ -127,7 +127,7 @@ def _is_compilation_outputs_empty(compilation_outputs):
     return (len(compilation_outputs.pic_objects) == 0 and
             len(compilation_outputs.objects) == 0)
 
-def _donner_cc_library_perf_sensitive_impl(ctx):
+def _donner_perf_sensitive_cc_library_impl(ctx):
     cc_toolchain = find_cpp_toolchain(ctx)
 
     feature_configuration = cc_common.configure_features(
@@ -177,8 +177,8 @@ def _donner_cc_library_perf_sensitive_impl(ctx):
 
     return [cc_info]
 
-donner_cc_library_perf_sensitive = rule(
-    implementation = _donner_cc_library_perf_sensitive_impl,
+donner_perf_sensitive_cc_library = rule(
+    implementation = _donner_perf_sensitive_cc_library_impl,
     toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
     attrs = {
         "srcs": attr.label_list(allow_files = [".c", ".cc", ".cpp", ".h"]),

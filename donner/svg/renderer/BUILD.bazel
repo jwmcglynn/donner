@@ -1,6 +1,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
-load("//build_defs:rules.bzl", "donner_cc_library_perf_sensitive")
+load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
 
 # Enable CoreText font rendering on macOS. Set with --@donner//donner/svg/renderer:use_coretext=true
 bool_flag(
@@ -58,7 +58,7 @@ cc_library(
     ],
 )
 
-donner_cc_library_perf_sensitive(
+donner_perf_sensitive_cc_library(
     name = "skia_deps",
     defines = select({
         ":macos_coretext": ["DONNER_USE_CORETEXT"],
