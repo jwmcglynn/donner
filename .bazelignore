@@ -1,2 +1,6 @@
 .git
 examples/bazel-examples
+
+# Ignore CMake-generated files
+build
+CMakeFiles
