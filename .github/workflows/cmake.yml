@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install fontconfig and freetype
+        run: |
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
+
       - name: Build with CMake
         run: |
           python3 tools/cmake/gen_cmakelists.py
