@@ -98,6 +98,33 @@ embed_resources_generate_header = rule(
     },
 )
 
+def _save_repro_dict_impl(ctx):
+    """Implementation for rule that outputs the header_output and resources parameters as JSON."""
+    repro_json = {
+        "header_output": ctx.attr.header_output,
+        "resources": ctx.attr.resources,
+    }
+
+    ctx.actions.write(
+        output = ctx.outputs.out,
+        content = json.encode(repro_json),
+    )
+
+_save_repro_dict = rule(
+    implementation = _save_repro_dict_impl,
+    attrs = {
+        "resources": attr.string_dict(
+            mandatory = True,
+            doc = "Dict mapping each resource file to its variable name.",
+        ),
+        "header_output": attr.string(
+            mandatory = True,
+            doc = "Path to the header file that will be generated.",
+        ),
+        "out": attr.output(mandatory = True, doc = "JSON file to generate with resource mapping."),
+    },
+)
+
 def embed_resources(name, resources, header_output, **kwargs):
     """Embed resources into C++ source files.
 
@@ -124,6 +151,14 @@ def embed_resources(name, resources, header_output, **kwargs):
             variable_name = "__donner_embedded_" + variable_name,
         )
         assets.append(":" + name + "_embedded_" + filename)
+
+    _save_repro_dict(
+        name = name + "_repro_json",
+        header_output = header_output,
+        resources = resources,
+        out = name + "_repro.json",
+        tags = ["embed_resources_repro"],
+    )
 
     variable_names = [vn for vn, _ in sorted(resources.items())]
     header_output_name = header_output.split("/")[-1]
