@@ -4,20 +4,15 @@ Generate CMakeLists.txt files for Donner libraries using Bazel query.
 
 This script performs three high-level steps:
 
-1.  **generate_root()**  
+1.  **generate_root()**
     Creates the project-level `CMakeLists.txt`, declares external
     dependencies via FetchContent (absl, EnTT, frozen, googletest, …),
     embeds Skia, and wires up umbrella and convenience libraries.
 
-2.  **generate_public_sans()**  
-    Emits a tiny CMake fragment that runs the Donner
-    `embed_resources.py` tool to compile the Public Sans font into a
-    self-contained object file.
-
-3.  **generate_all_packages()**  
-    Discovers every `cc_library`, `cc_binary`, and `cc_test` under the
-    `//…` Bazel workspace (excluding a few hand-curated packages) and
-    mirrors them as CMake targets with appropriate source files,
+2.  **generate_all_packages()**
+    Discovers every `cc_library`, `cc_binary`, `cc_test`, and `embed_resources`
+    under the `//…` Bazel workspace (excluding a few hand-curated packages)
+    and mirrors them as CMake targets with appropriate source files,
     include paths, and transitive dependencies.
 
 The generated tree lets consumers build Donner without Bazel, while
@@ -28,8 +23,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import re
 from pathlib import Path
 from typing import DefaultDict, Dict, List, Tuple
+from dataclasses import dataclass
+import json
+import os
+import xml.etree.ElementTree as ElementTree
 
 #
 # Bazel helpers
@@ -62,7 +62,7 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
 # Packages whose CMake build is provided manually or by FetchContent and must
 # *not* be auto-generated here.
 SKIPPED_PACKAGES = {
-    "",  # root package – handled by generate_root()
+    "",  # root package - handled by generate_root()
     "third_party/frozen",
     "third_party/stb",
     "pixelmatch-cpp17",
@@ -86,40 +86,42 @@ def _run_bazel(args: List[str]) -> str:
         raise RuntimeError(f"Bazel command failed:\n  {cmd_str}\n{exc.stderr}") from exc
 
 
-def query_cc_targets() -> List[Tuple[str, str]]:
-    """Return ``(kind, label)`` for every cc_* target under //… (excluding externals)."""
-    query = "kind(\".*cc_.*\", set(//donner/... //examples/...))"
-    output = _run_bazel(["cquery", query, "--output=label_kind"])
+def query_targets() -> Dict[str, str]:
+    """Return label->kind mapping for every cc_* and embed_resources target."""
+    query = 'kind(".*cc_.*|embed_resources_generate_header", //donner/... + //examples/... + //third_party/...)'
+    output = _run_bazel(["query", query, "--output=label_kind"])
 
     if not output:
-        raise RuntimeError("No cc_library, cc_binary, or cc_test targets found.")
+        raise RuntimeError("No cc_library, cc_binary, cc_test, or embed_resources targets found.")
 
-    results: List[Tuple[str, str]] = []
+    results: Dict[str, str] = {}
     for line in output.splitlines():
         if not line.strip():
             continue
 
-        print(f"Processing line: {line}")
-            
         parts = line.strip().split(" ")
-        if len(parts) >= 2:  # Should have at least kind and label
+        if len(parts) >= 3:  # Should have at least kind, 'rule', and label
             kind = parts[0]
-            label = parts[2]  # The label is the third part
-            
+            label = parts[2]
+
             # Normalize rule kinds
             if kind.endswith("cc_library"):
                 kind = "cc_library"
+                if label in results:
+                    continue  # Already covered as an embed_resources target
             elif kind.endswith("cc_binary"):
                 kind = "cc_binary"
             elif kind.endswith("cc_test"):
                 kind = "cc_test"
+            elif kind.endswith("embed_resources_generate_header"):
+                label = label.removesuffix("_header_gen")
+                kind = "embed_resources"
             else:
                 print(f"Skipping unknown target kind: {kind} for label {label}")
                 continue
-                
-            results.append((kind, label))
-    return results
 
+            results[label] = kind
+    return results
 
 
 def query_labels(attr: str, target: str, *, relative_to: str) -> List[str]:
@@ -138,54 +140,80 @@ def query_labels(attr: str, target: str, *, relative_to: str) -> List[str]:
             results.append(str(Path(pkg, label).relative_to(relative_to)))
     return results
 
-def get_hdrs_and_srcs(target_label: str) -> Tuple[List[str], List[str]]:
-    """Return hdrs and srcs for a given target, with paths relative to the package dir."""
+@dataclass
+class CcTargetInfo:
+    hdrs: List[str]
+    srcs: List[str]
+    copts: List[str]
+    includes: List[str]
 
-    try:
-        hdrs = query_labels("hdrs", target_label, relative_to=target_label.split(":")[0].removeprefix("//"))
-        srcs = query_labels("srcs", target_label, relative_to=target_label.split(":")[0].removeprefix("//"))
-        return hdrs, srcs
-    except (RuntimeError, ValueError):
-        raise RuntimeError(
-            f"Failed to query headers and sources for target {target_label}. "
-            "Ensure the target exists and has 'hdrs' or 'srcs' attributes."
-        )
+def get_cc_target_info(target_label: str) -> CcTargetInfo:
+    """
+    Return a CcTargetInfo containing headers, sources, copts, and includes
+    for *target_label* using a single Bazel XML query.
 
-def get_copts(target_label: str) -> List[str]:
-    """Return the copts for a given target."""
-    try:
-        return query_labels(
-            "copts", target_label, relative_to=target_label.split(":")[0].removeprefix("//")
-        )
-    except RuntimeError:
-        raise RuntimeError(
-            f"Failed to query copts for target {target_label}. "
-            "Ensure the target exists and has a 'copts' attribute."
-        )
+    The paths in ``hdrs`` and ``srcs`` are made relative to the package
+    directory to match the expectations of downstream CMake generation.
+    """
+    # Query Bazel once and parse the XML.  This is substantially faster than
+    # issuing separate ``labels()`` queries for each attribute.
+    xml_out = _run_bazel(["query", target_label, "--output=xml"])
 
-def get_includes(target_label: str) -> List[str]:
-    """Return the includes for a given target."""
-    try:
-        return query_labels(
-            "includes", target_label,
-            relative_to=target_label.split(":")[0].removeprefix("//")
-        )
-    except RuntimeError:
-        raise RuntimeError(
-            f"Failed to query includes for target {target_label}. "
-            "Ensure the target exists and has an 'includes' attribute."
-        )
+    # The XML root looks like:
+    # <query><rule ...> ... </rule></query>
+    root = ElementTree.fromstring(xml_out)
+    rule = root.find("rule")
+    if rule is None:
+        raise RuntimeError(f"Failed to parse XML for {target_label}")
+
+    pkg = target_label.split(":", 1)[0].removeprefix("//")
+    pkg_prefix = f"//{pkg}:"
+
+    hdrs: List[str] = []
+    srcs: List[str] = []
+    copts: List[str] = []
+    includes: List[str] = []
+
+    def _maybe_add_label(value: str, out: List[str]) -> None:
+        """Convert ``//pkg:sub/dir/file`` → ``sub/dir/file`` and append."""
+        if value.startswith(pkg_prefix):
+            rel = value[len(pkg_prefix):]
+            out.append(str(Path(rel)))
+
+    # Traverse <list name="..."> nodes to gather attributes.
+    for lst in rule.findall("list"):
+        name = lst.attrib.get("name", "")
+        if name == "hdrs":
+            for elem in lst.findall("label"):
+                _maybe_add_label(elem.attrib["value"], hdrs)
+        elif name == "srcs":
+            for elem in lst.findall("label"):
+                _maybe_add_label(elem.attrib["value"], srcs)
+        elif name == "copts":
+            for elem in lst.findall("string"):
+                value = elem.attrib["value"]
+                if value.startswith("-I") or value.startswith("-isystem"):
+                    # Skip, these are handled in includes
+                    continue
+
+                copts.append(value)
+        elif name == "includes":
+            for elem in lst.findall("string"):
+                includes.append(elem.attrib["value"])
+
+    return CcTargetInfo(hdrs=hdrs, srcs=srcs, copts=copts, includes=includes)
 
 
 def query_deps(target_label: str) -> List[str]:
-    """Return transitive cc_library dependencies for *target_label* (excluding itself)."""
-    deps = _run_bazel(["query", f'kind("cc_library", deps({target_label}))']).splitlines()
-    return [
-        d.strip()
-        for d in deps
-        if d.strip() and d.strip() != target_label and (d.startswith("//") or d.startswith("@"))
-    ]
+    """Return cc_library deps, excluding *target_label* itself."""
+    deps = _run_bazel(
+        [
+            "query",
+            f'kind("cc_library", deps({target_label}, 2) - {target_label})',
+        ]
+    ).splitlines()
 
+    return deps
 
 def cmake_target_name(pkg: str, lib: str) -> str:
     """
@@ -209,7 +237,6 @@ def cmake_target_name(pkg: str, lib: str) -> str:
 #
 # CMake generation helpers
 #
-
 
 def write_library(f, name: str, srcs: List[str], hdrs: List[str]) -> None:
     """Emit a CMake library target (PUBLIC or INTERFACE) to file *f*."""
@@ -240,12 +267,60 @@ def write_library(f, name: str, srcs: List[str], hdrs: List[str]) -> None:
 #
 
 
+@dataclass
+class EmbedInfo:
+    package: str
+    name: str
+    header_output: str
+    resources: Dict[str, str]
+
+def get_embed_info(target_label: str) -> EmbedInfo:
+    """
+    Extract embed_resources information from a Bazel target label.
+
+    Returns an EmbedInfo object containing the package, name, header output,
+    and resources dictionary.
+    """
+    pkg, main_name = target_label.removeprefix("//").split(":", 1)
+
+    repro_name = main_name + "_repro_json"
+    repro_label = f"//{pkg}:{repro_name}"
+
+    # Extract header_output and resources (from the repro json output).
+    _run_bazel(["build", repro_label])
+
+    repro_filename = _run_bazel(
+        [
+            "cquery",
+            repro_label,
+            "--output=files",
+        ]
+    ).strip().strip('"')
+
+    if not repro_filename:
+        raise RuntimeError(
+            f"Could not determine header_output for {repro_label}"
+        )
+
+    # Read the repro file to extract the header_output and resources
+    try:
+        with open(repro_filename, "r") as f:
+            repro_data = json.load(f)
+        
+        header_output = repro_data["header_output"]
+        resources = repro_data["resources"]
+
+        return EmbedInfo(pkg, main_name, header_output, resources)
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        raise RuntimeError(f"Failed to parse repro file for //{pkg}:{main_name}: {e}")
+
+
 def generate_root() -> None:
     """Create the project-root CMakeLists.txt."""
     path = Path("CMakeLists.txt")
     with path.open("w") as f:
         f.write("cmake_minimum_required(VERSION 3.20)\n")
-        f.write("project(donner LANGUAGES CXX)\n\n")
+        f.write("project(donner LANGUAGES C CXX)\n\n")
         f.write("set(CMAKE_CXX_STANDARD 20)\n")
         f.write("set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n")
         f.write("include(FetchContent)\n")
@@ -360,89 +435,83 @@ def generate_root() -> None:
         # relying on a hand‑maintained list.
         discovered_pkgs = {
             label.removeprefix("//").split(":", 1)[0]
-            for _, label in query_cc_targets()
+            for label in query_targets().keys()
         }
 
-        # Skip third‑party packages that are handled manually elsewhere, except
-        # for Public Sans, whose CMakeLists.txt is generated in
-        # generate_public_sans().
-        discovered_pkgs -= SKIPPED_PACKAGES - {"third_party/public-sans"}
+        # Skip third‑party packages that are handled manually elsewhere.
+        discovered_pkgs -= SKIPPED_PACKAGES
 
-        # Ensure helper packages are always included.
-        discovered_pkgs.add("third_party/public-sans")
 
         for pkg in sorted(discovered_pkgs):
             f.write(f"add_subdirectory({pkg})\n")
         f.write("\n")
 
 
-#
-# Step 2: Public Sans embedding helper
-#
+def _sanitize(name: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in name)
 
 
-def generate_public_sans() -> None:
-    """Create CMakeLists.txt under third_party/public-sans to embed the font."""
-    cmake = Path("third_party/public-sans/CMakeLists.txt")
-    with cmake.open("w") as f:
-        f.write("cmake_minimum_required(VERSION 3.20)\n\n")
-        f.write("##\n")
-        f.write("## Generated by tools/cmake/gen_cmakelists.py – DO NOT EDIT\n")
-        f.write("##\n\n")
-        f.write("find_package(Python3 REQUIRED)\n")
-        f.write(
-            "set(PUBLIC_SANS_FONT "
-            "${PROJECT_SOURCE_DIR}/third_party/public-sans/PublicSans-Medium.otf)\n"
-        )
-        f.write("set(PUBLIC_SANS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/public-sans)\n")
-        f.write("set(PUBLIC_SANS_OUT ${CMAKE_CURRENT_BINARY_DIR}/public-sans/embed_resources)\n")
-        f.write("file(MAKE_DIRECTORY ${PUBLIC_SANS_OUT})\n")
-        f.write("add_custom_command(\n")
-        f.write(
-            "  OUTPUT ${PUBLIC_SANS_OUT}/PublicSans_Medium_otf.cpp "
-            "${PUBLIC_SANS_OUT}/PublicSansFont.h\n"
-        )
-        f.write(
-            "  COMMAND ${Python3_EXECUTABLE} "
-            "${PROJECT_SOURCE_DIR}/tools/embed_resources.py "
-            "--out ${PUBLIC_SANS_OUT} --header PublicSansFont.h "
-            "kPublicSansMediumOtf=${PUBLIC_SANS_FONT}\n"
-        )
-        f.write(
-            "  DEPENDS ${PUBLIC_SANS_FONT} "
-            "${PROJECT_SOURCE_DIR}/tools/embed_resources.py\n"
-        )
-        f.write("  COMMENT \"Embedding Public Sans\"\n")
-        f.write("  VERBATIM\n")
-        f.write(")\n")
-        f.write(
-            "add_library(donner_third_party_public-sans_public-sans "
-            "${PUBLIC_SANS_OUT}/PublicSans_Medium_otf.cpp)\n"
-        )
-        f.write("target_include_directories(donner_third_party_public-sans_public-sans PUBLIC ${PUBLIC_SANS_INCLUDE_DIR})\n")
-        f.write(
-            "set_target_properties(donner_third_party_public-sans_public-sans PROPERTIES "
-            "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
-        )
-        f.write("target_compile_options(donner_third_party_public-sans_public-sans PRIVATE -fno-exceptions)\n")
+def _emit_embed_resources(f, pkg: str, info: EmbedInfo) -> None:
+    var_prefix = _sanitize(info.name).upper()
+    out_dir = f"${{{var_prefix}_OUT}}"
+    f.write(f"# embed_resources({info.name})\n")
+    # 1. Variables and directories.
+    for var, src in info.resources.items():
+        f.write(f'set({var.upper()} ${{PROJECT_SOURCE_DIR}}/{pkg}/{src})\n')
+    f.write(f'set({var_prefix}_INCLUDE_DIR ${{CMAKE_CURRENT_BINARY_DIR}}/{info.name})\n')
+    f.write(
+        f'set({var_prefix}_OUT ${{CMAKE_CURRENT_BINARY_DIR}}/{info.name}/embed_resources)\n'
+    )
+    f.write(f"file(MAKE_DIRECTORY {out_dir})\n")
 
+    # 2. Custom command that runs tools/embed_resources.py.
+    outputs = [
+        f"{out_dir}/{_sanitize(Path(src).name)}.cpp" for src in info.resources.values()
+    ]
+    outputs.append(f"{out_dir}/{Path(info.header_output).name}")
+
+    cmd = (
+        f"${{Python3_EXECUTABLE}} ${{PROJECT_SOURCE_DIR}}/tools/embed_resources.py "
+        f"--out {out_dir} --header {Path(info.header_output).name} "
+        + " ".join(f"{k}=${{{k.upper()}}}" for k in info.resources)
+    )
+
+    f.write("add_custom_command(\n")
+    f.write("  OUTPUT " + " ".join(outputs) + "\n")
+    f.write(f"  COMMAND {cmd}\n")
+    f.write(
+        "  DEPENDS "
+        + " ".join(f"${{{k.upper()}}}" for k in info.resources)
+        + " ${PROJECT_SOURCE_DIR}/tools/embed_resources.py\n"
+    )
+    f.write(f'  COMMENT "Embedding {info.name}"\n  VERBATIM)\n')
+
+    # 3. Object library that other targets can link against.
+    tgt_name = cmake_target_name(pkg, info.name)
+    f.write(f"add_library({tgt_name} {' '.join(outputs[:-1])})\n")
+    f.write(
+        f"target_include_directories({tgt_name} PUBLIC ${{{var_prefix}_INCLUDE_DIR}})\n"
+    )
+    f.write(
+        f"set_target_properties({tgt_name} PROPERTIES "
+        "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
+    )
+    f.write("target_compile_options(" + tgt_name + " PRIVATE -fno-exceptions)\n\n")
 
 #
-# Step 3: Generate per-package CMakeLists.txt
+# Step 2: Generate per-package CMakeLists.txt
 #
+
 
 def generate_all_packages() -> None:
     """Emit a CMakeLists.txt for every internal package discovered with Bazel."""
-    
+
     print("Discovering cc_library, cc_binary, and cc_test targets...")
     by_pkg: DefaultDict[str, List[Tuple[str, str]]] = DefaultDict(list)
-    for kind, label in query_cc_targets():
+    for label, kind in query_targets().items():
         pkg, tgt = label.removeprefix("//").split(":", 1)
-        print(f"Processing {kind} {label} → {pkg}/{tgt}")
         if pkg in SKIPPED_PACKAGES:
             continue
-        if "_fuzzer" in tgt:
-            continue  # Skip fuzzers
         by_pkg[pkg].append((kind, tgt))
 
     # Per-package generation
@@ -451,16 +520,42 @@ def generate_all_packages() -> None:
         cmake.parent.mkdir(parents=True, exist_ok=True)
         with cmake.open("w") as f:
             f.write("##\n")
-            f.write("## Generated by tools/cmake/gen_cmakelists.py – DO NOT EDIT\n")
+            f.write("## Generated by tools/cmake/gen_cmakelists.py - DO NOT EDIT\n")
             f.write("##\n\n")
             f.write("cmake_minimum_required(VERSION 3.20)\n\n")
 
             for kind, tgt in sorted(entries):
                 bazel_label = f"//{pkg}:{tgt}"
-                hdrs, srcs = get_hdrs_and_srcs(bazel_label)
                 cmake_name = cmake_target_name(pkg, tgt)
-                copts = get_copts(bazel_label)
-                includes = get_includes(bazel_label)
+
+                if "_fuzzer" in tgt:
+                    # Skip fuzzers, they are not built with CMake
+                    print(f"Skipping fuzzer {bazel_label}")
+                    continue
+
+                if kind == "embed_resources":
+                    print(
+                        "Adding target:",
+                        cmake_name,
+                        f" (kind={kind})",
+                    )
+
+                    embed_info = get_embed_info(bazel_label)
+                    _emit_embed_resources(f, pkg, embed_info)
+                    continue
+
+                target_info = get_cc_target_info(bazel_label)
+
+                hdrs = target_info.hdrs
+                srcs = target_info.srcs
+                copts = target_info.copts
+                includes = target_info.includes
+
+                print(
+                    "Adding target:",
+                    cmake_name,
+                    f" (kind={kind}, srcs={len(srcs)}, hdrs={len(hdrs)})",
+                )
 
                 scope = (
                     "PRIVATE"
@@ -471,13 +566,6 @@ def generate_all_packages() -> None:
                     )
                 )
 
-                if "_fuzzer" in tgt:
-                    # Skip fuzzers, they are not built with CMake
-                    print(f"Skipping fuzzer {bazel_label}")
-                    continue
-
-                print("Adding target:", cmake_name,
-                      f" (kind={kind}, srcs={len(srcs)}, hdrs={len(hdrs)})")
 
                 # Target declaration
                 if kind == "cc_library":
@@ -487,10 +575,15 @@ def generate_all_packages() -> None:
                             f"target_compile_options({cmake_name} {scope} {' '.join(copts)})\n"
                         )
                     if includes:
+                        include_scope = (
+                            "PUBLIC" if srcs
+                            else "INTERFACE"
+                        )
+
                         for inc in includes:
                             f.write(
-                                f"target_include_directories({cmake_name} {scope} "
-                                f"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc})\n"
+                                f"target_include_directories({cmake_name} {include_scope} "
+                                f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n'
                             )
                 else:  # cc_binary or cc_test
                     f.write(f"add_executable({cmake_name}\n")
@@ -506,7 +599,9 @@ def generate_all_packages() -> None:
                         "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)\n"
                     )
                     flag = (
-                        "-fexceptions" if "_with_exceptions" in cmake_name else "-fno-exceptions"
+                        "-fexceptions"
+                        if "_with_exceptions" in cmake_name
+                        else "-fno-exceptions"
                     )
                     all_copts = [flag] + copts
                     f.write(
@@ -518,7 +613,7 @@ def generate_all_packages() -> None:
                         for inc in includes:
                             f.write(
                                 f"target_include_directories({cmake_name} {scope} "
-                                f"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc})\n"
+                                f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n'
                             )
 
                 # Link dependencies
@@ -533,11 +628,15 @@ def generate_all_packages() -> None:
 
                 if deps:
                     deps_list = " ".join(dict.fromkeys(deps))
-                    f.write(f"target_link_libraries({cmake_name} {scope} {deps_list})\n")
+                    f.write(
+                        f"target_link_libraries({cmake_name} {scope} {deps_list})\n"
+                    )
 
                 # Hand-written tweaks
                 if cmake_name == "donner_svg_renderer_skia_deps":
-                    f.write(f"target_link_libraries(donner_svg_renderer_skia_deps {scope} skia)\n")
+                    f.write(
+                        f"target_link_libraries(donner_svg_renderer_skia_deps {scope} skia)\n"
+                    )
                     f.write(
                         f"target_include_directories(donner_svg_renderer_skia_deps {scope} "
                         "${skia_SOURCE_DIR})\n"
@@ -550,13 +649,16 @@ def generate_all_packages() -> None:
                         )
                     elif sys.platform.startswith("linux"):
                         f.write(
-                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
+                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
+                            "DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
                         )
                         f.write(
-                            f"target_link_libraries(donner_svg_renderer_skia_deps {scope} ${{FREETYPE_LIBRARIES}} ${{FONTCONFIG_LIBRARIES}})\n"
+                            f"target_link_libraries(donner_svg_renderer_skia_deps {scope} "
+                            "${FREETYPE_LIBRARIES} ${FONTCONFIG_LIBRARIES})\n"
                         )
                         f.write(
-                            f"target_include_directories(donner_svg_renderer_skia_deps {scope} ${{FREETYPE_INCLUDE_DIRS}} ${{FONTCONFIG_INCLUDE_DIRS}})\n"
+                            f"target_include_directories(donner_svg_renderer_skia_deps {scope} "
+                            "${FREETYPE_INCLUDE_DIRS} ${FONTCONFIG_INCLUDE_DIRS})\n"
                         )
                     else:
                         f.write(
@@ -580,7 +682,6 @@ def generate_all_packages() -> None:
                 f.write(f"  target_link_libraries(donner INTERFACE {mapped})\n")
         f.write("endif()\n")
 
-
 #
 # Entry point
 #
@@ -590,13 +691,14 @@ def main() -> None:
     """Main entry point to generate all CMakeLists.txt files."""
     print("Generating CMakeLists.txt files for Donner libraries...")
     print("This may take a while, please wait...\n")
+
     generate_root()
-    generate_public_sans()
     generate_all_packages()
 
     print("\nCMakeLists.txt generation complete.")
     print("You can now build Donner with CMake as follows:")
     print("  cmake -S . -B build && cmake --build build -j$(nproc)")
+
 
 if __name__ == "__main__":
     main()
