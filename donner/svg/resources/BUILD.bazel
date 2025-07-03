@@ -62,6 +62,17 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "gzip",
+    srcs = ["Gzip.cc"],
+    hdrs = ["Gzip.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "@zlib",
+    ],
+)
+
 cc_test(
     name = "url_loader_tests",
     srcs = [
@@ -81,6 +92,16 @@ cc_test(
     srcs = ["tests/SandboxedFileResourceLoader_tests.cc"],
     deps = [
         ":sandboxed_file_resource_loader",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "gzip_tests",
+    srcs = ["tests/Gzip_tests.cc"],
+    deps = [
+        ":gzip",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
