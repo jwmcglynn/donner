@@ -1,7 +1,6 @@
 #pragma once
 /// @file
 
-#include <cstddef>
 #include <string>
 
 #include "donner/base/Utils.h"

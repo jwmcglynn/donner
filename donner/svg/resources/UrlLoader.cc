@@ -1,7 +1,7 @@
 #include "donner/svg/resources/UrlLoader.h"
 
 #include "donner/base/StringUtils.h"
-#include "donner/svg/resources/Base64.h"
+#include "donner/base/encoding/Base64.h"
 #include "donner/svg/resources/UrlDecode.h"
 
 namespace donner::svg {

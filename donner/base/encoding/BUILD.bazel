@@ -1,0 +1,49 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+
+cc_library(
+    name = "base64",
+    srcs = [
+        "Base64.cc",
+    ],
+    hdrs = [
+        "Base64.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+    ],
+)
+
+cc_library(
+    name = "gzip",
+    srcs = ["Gzip.cc"],
+    hdrs = ["Gzip.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "@zlib",
+    ],
+)
+
+cc_test(
+    name = "base64_tests",
+    srcs = [
+        "tests/Base64_tests.cc",
+    ],
+    deps = [
+        ":base64",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "gzip_tests",
+    srcs = ["tests/Gzip_tests.cc"],
+    deps = [
+        ":gzip",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

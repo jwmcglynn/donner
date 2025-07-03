@@ -1,6 +1,6 @@
-#include "donner/svg/resources/Base64.h"
+#include "donner/base/encoding/Base64.h"
 
-namespace donner::svg {
+namespace donner {
 
 namespace {
 
@@ -66,4 +66,4 @@ ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String
   return decodedData;
 }
 
-}  // namespace donner::svg
+}  // namespace donner
