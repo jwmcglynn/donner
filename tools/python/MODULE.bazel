@@ -1,0 +1,21 @@
+"""Donner is a modern C++20 SVG rendering library which intends to provide easily
+embeddable SVG support into apps and games, enabling browser-level functionalit
+ without the browser."""
+
+module(name = "donner_tools_python", version = "0.0.1")
+
+bazel_dep(name = "rules_python", version = "1.5.0", dev_dependency = True)
+
+pip = use_extension(
+    "@rules_python//python/extensions:pip.bzl",
+    "pip",
+    dev_dependency = True,
+)
+
+pip.parse(
+    hub_name = "py_deps",
+    python_version = "3.11",
+    requirements_lock = "//:requirements.txt",
+)
+
+use_repo(pip, "py_deps")

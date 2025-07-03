@@ -84,23 +84,7 @@ new_git_repository(
     remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
 )
 
-# Skia dependencies
-bazel_dep(name = "rules_go", version = "0.55.1")
 bazel_dep(name = "rules_python", version = "1.5.0", dev_dependency = True)
-
-pip = use_extension(
-    "@rules_python//python/extensions:pip.bzl",
-    "pip",
-    dev_dependency = True,
-)
-
-pip.parse(
-    hub_name = "donner_tools_py_deps",
-    python_version = "3.11",
-    requirements_lock = "//tools/python:requirements.txt",
-)
-
-use_repo(pip, "donner_tools_py_deps")
 
 #
 # Toolchain

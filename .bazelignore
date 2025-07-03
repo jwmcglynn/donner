@@ -1,5 +1,6 @@
 .git
 examples/bazel-examples
+tools/python
 
 # Ignore CMake-generated files
 build

@@ -1,1 +1,13 @@
+load("@py_deps//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_binary")
+
 exports_files(["requirements.txt"])
+
+py_binary(
+    name = "generate_test_pathlength_numpy",
+    srcs = ["generate_test_pathlength_numpy.py"],
+    deps = [
+        requirement("scipy"),
+        requirement("numpy"),
+    ],
+)
