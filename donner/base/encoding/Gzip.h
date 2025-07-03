@@ -7,7 +7,7 @@
 
 #include "donner/base/ParseResult.h"
 
-namespace donner::svg {
+namespace donner {
 
 /**
  * Decompress gzip-compressed data.
@@ -17,4 +17,4 @@ namespace donner::svg {
  */
 ParseResult<std::vector<uint8_t>> DecompressGzip(std::string_view compressedData);
 
-}  // namespace donner::svg
+}  // namespace donner

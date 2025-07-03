@@ -1,8 +1,8 @@
-#include "donner/svg/resources/Gzip.h"
+#include "donner/base/encoding/Gzip.h"
 
 #include <zlib.h>
 
-namespace donner::svg {
+namespace donner {
 
 ParseResult<std::vector<uint8_t>> DecompressGzip(std::string_view compressedData) {
   if (compressedData.size() < 2) {
@@ -61,4 +61,4 @@ ParseResult<std::vector<uint8_t>> DecompressGzip(std::string_view compressedData
   return output;
 }
 
-}  // namespace donner::svg
+}  // namespace donner

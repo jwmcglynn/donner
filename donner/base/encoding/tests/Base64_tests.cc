@@ -1,11 +1,11 @@
-#include "donner/svg/resources/Base64.h"
+#include "donner/base/encoding/Base64.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
 
-namespace donner::svg {
+namespace donner {
 
 using testing::HasSubstr;
 
@@ -29,4 +29,4 @@ TEST(Base64, InvalidCharacter) {
   EXPECT_THAT(DecodeBase64Data("TWE*"), ParseErrorIs(HasSubstr("Invalid base64 char '*'")));
 }
 
-}  // namespace donner::svg
+}  // namespace donner

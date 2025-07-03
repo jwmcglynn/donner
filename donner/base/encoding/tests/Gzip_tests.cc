@@ -1,11 +1,11 @@
-#include "donner/svg/resources/Gzip.h"
+#include "donner/base/encoding/Gzip.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
 
-namespace donner::svg {
+namespace donner {
 
 using testing::ElementsAreArray;
 using testing::HasSubstr;
@@ -50,4 +50,4 @@ TEST(Gzip, DecompressTruncated) {
   EXPECT_THAT(DecompressGzip(gzipStr), ParseErrorIs(HasSubstr("Failed to decompress")));
 }
 
-}  // namespace donner::svg
+}  // namespace donner

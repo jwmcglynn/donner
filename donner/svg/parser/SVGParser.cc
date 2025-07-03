@@ -6,6 +6,7 @@
 #include <tuple>
 
 #include "donner/base/RcString.h"
+#include "donner/base/encoding/Gzip.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -13,7 +14,6 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/parser/AttributeParser.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
-#include "donner/svg/resources/Gzip.h"
 
 namespace donner::svg::parser {
 
