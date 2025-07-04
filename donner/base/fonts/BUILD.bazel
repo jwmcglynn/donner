@@ -1,0 +1,28 @@
+load("@rules_cc//cc:defs.bzl", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library")
+
+donner_cc_library(
+    name = "fonts",
+    srcs = [
+        "WoffParser.cc",
+    ],
+    hdrs = [
+        "WoffFont.h",
+        "WoffParser.h",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/base/encoding:decompress",
+    ],
+)
+
+cc_test(
+    name = "fonts_tests",
+    srcs = ["tests/WoffParser_tests.cc"],
+    data = ["testdata/valid-001.woff"],
+    deps = [
+        ":fonts",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
