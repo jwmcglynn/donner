@@ -16,9 +16,9 @@ cc_library(
 )
 
 cc_library(
-    name = "gzip",
-    srcs = ["Gzip.cc"],
-    hdrs = ["Gzip.h"],
+    name = "decompress",
+    srcs = ["Decompress.cc"],
+    hdrs = ["Decompress.h"],
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",
@@ -39,10 +39,10 @@ cc_test(
 )
 
 cc_test(
-    name = "gzip_tests",
-    srcs = ["tests/Gzip_tests.cc"],
+    name = "decompress_tests",
+    srcs = ["tests/Decompress_tests.cc"],
     deps = [
-        ":gzip",
+        ":decompress",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
