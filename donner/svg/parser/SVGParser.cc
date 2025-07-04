@@ -6,7 +6,7 @@
 #include <tuple>
 
 #include "donner/base/RcString.h"
-#include "donner/base/encoding/Gzip.h"
+#include "donner/base/encoding/Decompress.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -345,7 +345,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(
   std::vector<uint8_t> decompressedData;
   if (source.size() >= 2 && static_cast<unsigned char>(source[0]) == 0x1F &&
       static_cast<unsigned char>(source[1]) == 0x8B) {
-    auto maybeDecompressedData = DecompressGzip(source);
+    auto maybeDecompressedData = Decompress::Gzip(source);
     if (maybeDecompressedData.hasError()) {
       return std::move(maybeDecompressedData.error());
     }
