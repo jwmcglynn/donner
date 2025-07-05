@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 
+#include "donner/base/ParseResult.h"
 #include "donner/base/fonts/WoffFont.h"
 
 namespace donner::fonts {

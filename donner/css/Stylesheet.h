@@ -6,6 +6,7 @@
 #include <ostream>
 
 #include "donner/css/Declaration.h"
+#include "donner/css/FontFace.h"
 #include "donner/css/Selector.h"
 
 namespace donner::css {
@@ -56,7 +57,8 @@ public:
    *
    * @param rules List of rules, ownership is taken.
    */
-  explicit Stylesheet(std::vector<SelectorRule>&& rules) : rules_(std::move(rules)) {}
+  explicit Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces = {})
+      : rules_(std::move(rules)), fontFaces_(std::move(fontFaces)) {}
 
   // Copyable and moveable.
   /// Copy constructor.
@@ -77,6 +79,11 @@ public:
   std::span<const SelectorRule> rules() const { return rules_; }
 
   /**
+   * Get the list of @font-face rules in this stylesheet.
+   */
+  std::span<const FontFace> fontFaces() const { return fontFaces_; }
+
+  /**
    * Output a human-readable representation of the stylesheet to a stream.
    *
    * @param os Output stream.
@@ -91,6 +98,7 @@ public:
 
 private:
   std::vector<SelectorRule> rules_;
+  std::vector<FontFace> fontFaces_;
 };
 
 }  // namespace donner::css

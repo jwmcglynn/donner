@@ -32,6 +32,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
+        "//donner/base/encoding:base64",
         "//donner/base/parser",
         "//donner/css:core",
     ],
