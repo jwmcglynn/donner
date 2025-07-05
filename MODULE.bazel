@@ -160,7 +160,7 @@ bazel_dep(name = "glfw", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "glfw",
     remote = "https://github.com/glfw/glfw",
-    commit = "e7ea71be039836da3a98cea55ae5569cb5eb885c",
+    commit = "506c11ba43b901dbcc4d90449f46de67cf000af4",
     patches = [
         "//third_party/patches:glfw_bazel_build_files.patch",
     ],
