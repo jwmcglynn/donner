@@ -4,7 +4,7 @@ embeddable SVG support into apps and games, enabling browser-level functionalit
 
 module(name = "donner_tools_python", version = "0.0.1")
 
-bazel_dep(name = "rules_python", version = "1.5.0", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "1.5.1", dev_dependency = True)
 
 pip = use_extension(
     "@rules_python//python/extensions:pip.bzl",
