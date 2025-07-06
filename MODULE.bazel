@@ -84,7 +84,7 @@ new_git_repository(
     remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
 )
 
-bazel_dep(name = "rules_python", version = "1.5.0", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "1.5.1", dev_dependency = True)
 
 #
 # Toolchain
