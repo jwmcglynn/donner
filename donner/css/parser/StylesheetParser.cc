@@ -18,8 +18,10 @@ namespace {
  */
 std::optional<FontFaceSource> TryParseDataUrl(std::string_view url) {
   if (StringUtils::StartsWith(url, std::string_view("data:"))) {
-    FontFaceSource source{FontFaceSource::Kind::Data, std::string(url), "", {}};
+    FontFaceSource source;
+    source.kind = FontFaceSource::Kind::Data;
 
+    // TODO: Add support for regular non-base64 data URLs, share logic with UrlLoader.
     if (size_t pos = StringUtils::Find(url, std::string_view("base64,"));
         pos != std::string::npos) {
       std::string_view b64 = url.substr(pos + 7);
@@ -75,25 +77,25 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
           if (const Function* func = std::get_if<Function>(&first.value)) {
             if (func->name.equalsLowercase("local") && !func->values.empty()) {
               if (const Token* t = std::get_if<Token>(&func->values.front().value)) {
-                std::string name;
+                RcString name;
                 if (t->is<Token::Ident>()) {
-                  name = std::string(t->get<Token::Ident>().value);
+                  name = t->get<Token::Ident>().value;
                 } else if (t->is<Token::String>()) {
-                  name = std::string(t->get<Token::String>().value);
+                  name = t->get<Token::String>().value;
                 }
                 source = FontFaceSource{FontFaceSource::Kind::Local, std::move(name), "", {}};
               }
             } else if (func->name.equalsLowercase("url") && !func->values.empty()) {
-              std::string url;
+              RcString url;
               if (const Token* t = std::get_if<Token>(&func->values.front().value)) {
                 // The tokenizer will produce a String or Ident for url("...") or url(foo), so we
                 // need to handle both.
                 if (t->is<Token::String>()) {
-                  url = std::string(t->get<Token::String>().value);
+                  url = t->get<Token::String>().value;
                 } else if (t->is<Token::Ident>()) {
-                  url = std::string(t->get<Token::Ident>().value);
+                  url = t->get<Token::Ident>().value;
                 } else if (t->is<Token::Url>()) {
-                  url = std::string(t->get<Token::Url>().value);
+                  url = t->get<Token::Url>().value;
                 }
               }
 
@@ -107,11 +109,11 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
             }
           } else if (const Token* urlTok = std::get_if<Token>(&first.value)) {
             if (urlTok->is<Token::Url>()) {
-              std::string_view url = urlTok->get<Token::Url>().value;
+              const RcString url = urlTok->get<Token::Url>().value;
               if (auto dataUrl = TryParseDataUrl(url)) {
                 source = std::move(dataUrl);
               } else {
-                source = FontFaceSource{FontFaceSource::Kind::Url, std::string(url), "", {}};
+                source = FontFaceSource{FontFaceSource::Kind::Url, url, "", {}};
               }
             }
           }

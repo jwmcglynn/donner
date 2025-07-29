@@ -6,6 +6,8 @@
 
 namespace donner::svg::components {
 
+class ResourceManagerContext;
+
 /**
  * Computes stylesheet information for elements, applying the CSS cascade and inheritance rules.
  *
@@ -18,47 +20,54 @@ public:
    * Compute the style for the given entity handle, applying the CSS cascade and inheritance rules.
    *
    * @param handle Entity handle to compute the style for
+   * @param resourceManager The resource manager to use for loading fonts.
    * @param outWarnings Containing any warnings found
    * @returns Computed style component for the entity
    */
-  const ComputedStyleComponent& computeStyle(EntityHandle handle,
-                                             std::vector<ParseError>* outWarnings);
+  static const ComputedStyleComponent& computeStyle(EntityHandle handle,
+                                                    ResourceManagerContext& resourceManager,
+                                                    std::vector<ParseError>* outWarnings);
 
   /**
    * Computes the style for all entities in the registry.
    *
    * @param registry Registry to compute the styles, used to query for all entities in the tree.
+   * @param resourceManager The resource manager to use for loading fonts.
    * @param outWarnings Containing any warnings found
    */
-  void computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings);
+  static void computeAllStyles(Registry& registry, ResourceManagerContext& resourceManager,
+                               std::vector<ParseError>* outWarnings);
 
   /**
    * Computes the style for the given entities in the registry.
    *
    * @param registry Registry containing the entities
    * @param entities Entities to compute
+   * @param resourceManager The resource manager to use for loading fonts.
    * @param outWarnings Containing any warnings found
    */
-  void computeStylesFor(Registry& registry, std::span<const Entity> entities,
-                        std::vector<ParseError>* outWarnings);
+  static void computeStylesFor(Registry& registry, std::span<const Entity> entities,
+                               ResourceManagerContext& resourceManager,
+                               std::vector<ParseError>* outWarnings);
 
   /**
    * Invalidate the computed style for a given entity.
    *
    * @param handle Entity handle to invalidate
    */
-  void invalidateComputed(EntityHandle handle);
+  static void invalidateComputed(EntityHandle handle);
 
   /**
    * Invalidate the full style and reparse attributes.
    *
    * @param handle Entity handle to invalidate
    */
-  void invalidateAll(EntityHandle handle);
+  static void invalidateAll(EntityHandle handle);
 
 private:
-  void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                             std::vector<ParseError>* outWarnings);
+  static void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
+                                    ResourceManagerContext& resourceManager,
+                                    std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

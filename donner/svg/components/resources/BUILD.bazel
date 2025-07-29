@@ -16,6 +16,13 @@ cc_library(
 )
 
 cc_library(
+    name = "font_resource",
+    hdrs = ["FontResource.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = ["//donner/base/fonts"],
+)
+
+cc_library(
     name = "resource_manager_context",
     srcs = [
         "ResourceManagerContext.cc",
@@ -28,6 +35,9 @@ cc_library(
     ],
     deps = [
         ":components",
+        ":font_resource",
+        "//donner/css:core",
+        "//donner/svg/resources:font_loader",
         "//donner/svg/resources:image_loader",
         "//donner/svg/resources:resource_loader_interface",
     ],

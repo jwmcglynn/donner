@@ -8,6 +8,7 @@
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -59,7 +60,8 @@ const ComputedStopComponent& PaintSystem::createComputedStop(EntityHandle handle
     return *computedStop;
   }
 
-  const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
+  const ComputedStyleComponent& style = StyleSystem().computeStyle(
+      handle, handle.registry().ctx().get<ResourceManagerContext>(), outWarnings);
   return createComputedStopWithStyle(handle, stop, style, outWarnings);
 }
 

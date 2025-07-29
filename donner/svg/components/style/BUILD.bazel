@@ -30,6 +30,7 @@ cc_library(
         ":components",
         "//donner/base",
         "//donner/svg/components:components_core",
+        "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
     ],
 )

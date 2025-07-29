@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_test")
 load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
     name = "fonts",
@@ -10,6 +11,7 @@ donner_cc_library(
         "WoffFont.h",
         "WoffParser.h",
     ],
+    visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",
         "//donner/base/encoding:decompress",

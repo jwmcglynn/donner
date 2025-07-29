@@ -8,6 +8,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
@@ -128,13 +129,15 @@ private:
 }  // namespace
 
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
+                                                        ResourceManagerContext& resourceManager,
                                                         std::vector<ParseError>* outWarnings) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
-  computePropertiesInto(handle, computedStyle, outWarnings);
+  computePropertiesInto(handle, computedStyle, resourceManager, outWarnings);
   return computedStyle;
 }
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
+                                        ResourceManagerContext& resourceManager,
                                         std::vector<ParseError>* outWarnings) {
   if (computedStyle.properties) {
     return;  // Already computed.
@@ -156,6 +159,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // Apply style from stylesheets.
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     auto [stylesheet] = view.get(stylesheetEntity);
+
+    resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
 
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
       if (css::SelectorMatchResult match =
@@ -181,7 +186,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   if (const Entity parent = handle.get<donner::components::TreeComponent>().parent();
       parent != entt::null) {
     auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
-    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, outWarnings);
+    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, resourceManager,
+                          outWarnings);
 
     // <pattern> elements can't inherit 'fill' or 'stroke' or it creates recursion in the shadow
     // tree.
@@ -196,7 +202,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 }
 
-void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings) {
+void StyleSystem::computeAllStyles(Registry& registry, ResourceManagerContext& resourceManager,
+                                   std::vector<ParseError>* outWarnings) {
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating
   // computed style components also creates the parents, and we can't modify the component list
   // while iterating it.
@@ -207,14 +214,15 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* 
 
   // Compute the styles for all elements.
   for (auto entity : view) {
-    computeStyle(EntityHandle(registry, entity), outWarnings);
+    computeStyle(EntityHandle(registry, entity), resourceManager, outWarnings);
   }
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
+                                   ResourceManagerContext& resourceManager,
                                    std::vector<ParseError>* outWarnings) {
   for (Entity entity : entities) {
-    computeStyle(EntityHandle(registry, entity), outWarnings);
+    computeStyle(EntityHandle(registry, entity), resourceManager, outWarnings);
   }
 }
 
