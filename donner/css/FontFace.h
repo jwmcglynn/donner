@@ -7,6 +7,8 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/RcString.h"
+
 namespace donner::css {
 
 /// How text is rendered while the web-font is loading (§4.9 font-display).
@@ -19,10 +21,17 @@ enum class FontStyle { Normal, Italic, Oblique };
 struct FontFaceSource {
   enum class Kind { Local, Url, Data };
 
+  /// Font source kind.
   Kind kind;
-  std::variant<std::string, std::vector<uint8_t>> payload;
-  std::string formatHint;              ///< e.g. "woff2" or "opentype"
-  std::vector<std::string> techHints;  ///< e.g. {"variations","color-COLRv1"}
+
+  /// The payload of the source, which can be a URL or raw data (already parsed from the data URL).
+  std::variant<RcString, std::vector<uint8_t>> payload;
+
+  /// Format hint, if provided, e.g. "woff2" or "opentype".
+  std::string formatHint;
+
+  /// Technology hints, if provided, e.g. {"variations","color-COLRv1"}.
+  std::vector<std::string> techHints;
 };
 
 /// Numeric range helpers for variable-font axes.

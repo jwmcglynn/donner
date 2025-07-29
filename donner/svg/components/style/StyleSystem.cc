@@ -8,6 +8,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
@@ -141,6 +142,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   Registry& registry = *handle.registry();
+  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
 
   const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
@@ -156,6 +158,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // Apply style from stylesheets.
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     auto [stylesheet] = view.get(stylesheetEntity);
+
+    resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
 
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
       if (css::SelectorMatchResult match =
