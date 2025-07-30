@@ -40,6 +40,7 @@ jobs:
           bazelisk coverage \
             --local_test_jobs=1 \
             --nocache_test_results \
+            --config=latest_llvm \
             //donner/...
 
       - name: Filter coverage
