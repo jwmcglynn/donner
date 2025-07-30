@@ -145,4 +145,36 @@ TEST(SVGTextElementViewportTests, SimpleLetter) {
   )"));
 }
 
+// Verify that a <text> element with multiple <tspan> children generates multiple
+// computed text spans.
+TEST(SVGTextElementViewportTests, MultipleTSpansComputed) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 16 16">
+      <text id="root" x="0" y="12" font-family="fallback-font" font-size="12px" fill="white">
+        <tspan>A</tspan><tspan dx="8">B</tspan>
+      </text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(doc).matches(R"(
+      ................
+      ................
+      ................
+      ...-*....****=..
+      ...%@=...@*-=%%.
+      ..:@=#...@-..,@,
+      ..+*.@,..@-..-@.
+      ..@:.#=..@@@@@:.
+      .-@==*%..@=,:+@.
+      .*%###@:.@-...@-
+      .@:...#+.@=.,=@:
+      -@....-@.@@@@%=.
+      ................
+      ................
+      ................
+      ................
+  )"));
+}
+
 }  // namespace donner::svg

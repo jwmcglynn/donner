@@ -1062,8 +1062,8 @@ public:
                                 span.dy.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y));
       // Apply rotation if specified
       bool rotated = false;
-      if (span.rotate.value != 0.0) {
-        const SkScalar angle = static_cast<SkScalar>(span.rotate.value);
+      if (span.rotateDegrees != 0.0) {
+        const SkScalar angle = static_cast<SkScalar>(span.rotateDegrees);
         renderer_.currentCanvas_->save();
         renderer_.currentCanvas_->translate(x, y);
         renderer_.currentCanvas_->rotate(angle);

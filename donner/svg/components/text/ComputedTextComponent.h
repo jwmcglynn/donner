@@ -47,7 +47,7 @@ struct ComputedTextComponent {
     /// Relative Y shift applied to the span.
     Lengthd dy;
     /// Rotation applied to each glyph in the span (degrees).
-    Lengthd rotate;
+    double rotateDegrees = 0.0;
   };
 
   // Computed spans with positioning data for rendering.
