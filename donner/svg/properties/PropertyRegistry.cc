@@ -7,12 +7,34 @@
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/core/Stroke.h"
+#include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg {
 
 namespace {
+
+template <typename T>
+bool TrySkipToken(std::span<const css::ComponentValue>& components) {
+  if (!components.empty() && components.front().isToken<T>()) {
+    components = components.subspan(1);
+    return true;
+  }
+  return false;
+}
+
+/// Returns true if whitespace tokens were skipped.
+bool SkipWhitespace(std::span<const css::ComponentValue>& components) {
+  bool foundWhitespace = false;
+
+  while (!components.empty() && components.front().isToken<css::Token::Whitespace>()) {
+    components = components.subspan(1);
+    foundWhitespace = true;
+  }
+
+  return foundWhitespace;
+}
 
 ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
@@ -296,19 +318,11 @@ ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::Component
   // https://www.w3.org/TR/css-values-4/#mult-comma
   StrokeDasharray result;
 
-  auto trySkipToken = [&components]<typename T>() -> bool {
-    if (!components.empty() && components.front().isToken<T>()) {
-      components = components.subspan(1);
-      return true;
-    }
-    return false;
-  };
-
   while (!components.empty()) {
     if (!result.empty()) {
-      if (trySkipToken.template operator()<css::Token::Whitespace>() ||
-          trySkipToken.template operator()<css::Token::Comma>() || components.empty()) {
-        trySkipToken.template operator()<css::Token::Whitespace>();
+      if (TrySkipToken<css::Token::Whitespace>(components) ||
+          TrySkipToken<css::Token::Comma>(components) || components.empty()) {
+        TrySkipToken<css::Token::Whitespace>(components);
       } else {
         ParseError err;
         err.reason = "Unexpected tokens after dasharray value";
@@ -344,6 +358,75 @@ ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::Component
     }
 
     components = components.subspan(1);
+  }
+
+  return result;
+}
+
+ParseResult<TransformOrigin> ParseTransformOrigin(std::span<const css::ComponentValue> components) {
+  SkipWhitespace(components);
+
+  auto parseCoord = [](const css::ComponentValue& component, bool isY) -> ParseResult<Lengthd> {
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+      if (!isY) {
+        if (value.equalsLowercase("left")) {
+          return Lengthd(0, Lengthd::Unit::Percent);
+        } else if (value.equalsLowercase("right")) {
+          return Lengthd(100, Lengthd::Unit::Percent);
+        } else if (value.equalsLowercase("center")) {
+          return Lengthd(50, Lengthd::Unit::Percent);
+        }
+      } else {
+        if (value.equalsLowercase("top")) {
+          return Lengthd(0, Lengthd::Unit::Percent);
+        } else if (value.equalsLowercase("bottom")) {
+          return Lengthd(100, Lengthd::Unit::Percent);
+        } else if (value.equalsLowercase("center")) {
+          return Lengthd(50, Lengthd::Unit::Percent);
+        }
+      }
+    }
+
+    return parser::ParseLengthPercentage(component, true);
+  };
+
+  TransformOrigin result{Lengthd(50, Lengthd::Unit::Percent), Lengthd(50, Lengthd::Unit::Percent)};
+
+  if (!components.empty()) {
+    auto first = parseCoord(components.front(), false);
+    if (first.hasError()) {
+      return std::move(first.error());
+    }
+    result.x = first.result();
+    components = components.subspan(1);
+
+    if (!SkipWhitespace(components)) {
+      ParseError err;
+      err.reason = "Unexpected token in transform-origin";
+      err.location =
+          components.empty() ? FileOffset::EndOfString() : components.front().sourceOffset();
+
+      return err;
+    }
+
+    if (!components.empty()) {
+      auto second = parseCoord(components.front(), true);
+      if (second.hasError()) {
+        return std::move(second.error());
+      }
+      result.y = second.result();
+      components = components.subspan(1);
+    }
+
+    SkipWhitespace(components);
+
+    if (!components.empty()) {
+      ParseError err;
+      err.reason = "Unexpected token in transform-origin";
+      err.location = components.front().sourceOffset();
+      return err;
+    }
   }
 
   return result;
@@ -542,7 +625,7 @@ static constexpr frozen::unordered_set<frozen::string, 70> kValidPresentationAtt
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const parser::PropertyParseFnParams& params);
 
-using MapType = frozen::unordered_map<frozen::string, PropertyParseFn, 27>;
+using MapType = frozen::unordered_map<frozen::string, PropertyParseFn, 28>;
 
 static constexpr MapType kProperties = {
     {"color",
@@ -626,6 +709,15 @@ static constexpr MapType kProperties = {
              return ParseOverflow(params.components());
            },
            &registry.overflow);
+     }},  //
+    {"transform-origin",
+     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+       return Parse(
+           params,
+           [](const parser::PropertyParseFnParams& params) {
+             return ParseTransformOrigin(params.components());
+           },
+           &registry.transformOrigin);
      }},  //
     {"fill",
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

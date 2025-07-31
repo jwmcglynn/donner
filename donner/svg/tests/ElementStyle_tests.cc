@@ -17,6 +17,7 @@ TEST(ElementStyleTests, Attributes) {
     )")
                   ->getComputedStyle(),
               ToStringIs(R"(PropertyRegistry {
+  transform-origin: 0 0 (set) @ Specificity(0, 0, 1)
   fill: PaintServer(solid rgba(255, 0, 0, 255)) (set) @ Specificity(0, 0, 0)
 }
 )"));

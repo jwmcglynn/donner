@@ -25,7 +25,7 @@ GradientUnits SVGGradientElement::gradientUnits() const {
 }
 
 Transformd SVGGradientElement::gradientTransform() const {
-  return components::LayoutSystem().getEntityFromParentTransform(handle_);
+  return components::LayoutSystem().getRawEntityFromParentTransform(handle_);
 }
 
 GradientSpreadMethod SVGGradientElement::spreadMethod() const {
@@ -44,7 +44,7 @@ void SVGGradientElement::setGradientUnits(GradientUnits value) {
 }
 
 void SVGGradientElement::setGradientTransform(const Transformd& value) {
-  components::LayoutSystem().setEntityFromParentTransform(handle_, value);
+  components::LayoutSystem().setRawEntityFromParentTransform(handle_, value);
 }
 
 void SVGGradientElement::setSpreadMethod(GradientSpreadMethod value) {

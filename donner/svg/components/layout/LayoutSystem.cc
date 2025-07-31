@@ -20,6 +20,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
+#include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/parser/TransformParser.h"
@@ -279,13 +280,24 @@ Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
   return RoundSize(transform.transformPosition(documentSize));
 }
 
-Transformd LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
+Transformd LayoutSystem::getRawEntityFromParentTransform(EntityHandle entity) {
   const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, nullptr);
 
   const ComputedLocalTransformComponent& computedTransform =
       createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), nullptr);
 
   return computedTransform.entityFromParent;
+}
+
+Transformd LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
+  const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, nullptr);
+
+  const ComputedLocalTransformComponent& computedTransform =
+      createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), nullptr);
+
+  return Transformd::Translate(computedTransform.transformOrigin) *
+         computedTransform.entityFromParent *
+         Transformd::Translate(-computedTransform.transformOrigin);
 }
 
 Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
@@ -353,8 +365,8 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
   return Transformd();
 }
 
-void LayoutSystem::setEntityFromParentTransform(EntityHandle entity,
-                                                const Transformd& entityFromParent) {
+void LayoutSystem::setRawEntityFromParentTransform(EntityHandle entity,
+                                                   const Transformd& entityFromParent) {
   auto& component = entity.get_or_emplace<components::TransformComponent>();
   component.transform.set(CssTransform(entityFromParent), css::Specificity::Override());
 
@@ -573,10 +585,38 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   auto& computedTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
   if (transform.transform.get()) {
     computedTransform.rawCssTransform = transform.transform.get().value();
+    const TransformOrigin originValue = style.properties->transformOrigin.getRequired();
+
+    // The transform-origin is relative to the element's bounding box.
+    Boxd bounds;
+    if (handle.all_of<SizedElementComponent>() && !handle.all_of<ImageComponent>()) {
+      // For sized elements, we need to compute the size first to get the bounding box. The bounds
+      // of an element are defined in the parent's coordinate system, which is what we need.
+      const ComputedSizedElementComponent& sizedElement =
+          createComputedSizedElementComponentWithStyle(handle, style, fontMetrics, outWarnings);
+      bounds = sizedElement.bounds;
+    } else {
+      // For other elements, transform-origin is relative to the viewBox.
+      bounds = getViewBox(handle);
+    }
+
+    // Percentages are resolved against the size of the bounding box.
+    const Boxd percentageBox = Boxd::WithSize(bounds.size());
+
+    Vector2d originOffset(originValue.x.toPixels(percentageBox, fontMetrics, Lengthd::Extent::X),
+                          originValue.y.toPixels(percentageBox, fontMetrics, Lengthd::Extent::Y));
+
+    // The final origin is the top-left of the bounds plus the computed offset.
+    const Vector2d absoluteOrigin = bounds.topLeft + originOffset;
+    computedTransform.transformOrigin = absoluteOrigin;
+
+    // The transform itself is also computed relative to the element's bounding box.
     computedTransform.entityFromParent =
-        transform.transform.get().value().compute(getViewBox(handle), fontMetrics);
+        transform.transform.get().value().compute(percentageBox, fontMetrics);
+
   } else {
     computedTransform.entityFromParent = Transformd();
+    computedTransform.transformOrigin = Vector2d();
   }
 
   return computedTransform;

@@ -100,16 +100,16 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
   auto rectEntityHandle = document.querySelector("#rect1")->entityHandle();
 
   // Test getting the transform for the group
-  const Transformd groupTransform = layoutSystem.getEntityFromParentTransform(groupEntityHandle);
+  const Transformd groupTransform = layoutSystem.getRawEntityFromParentTransform(groupEntityHandle);
   EXPECT_THAT(groupTransform, TransformEq(Transformd::Translate({10.0, 20.0})));
 
   // Test setting a new transform for the rectangle
   const Transformd newRectTransform = Transformd::Translate({30.0, 40.0});
-  layoutSystem.setEntityFromParentTransform(rectEntityHandle, newRectTransform);
+  layoutSystem.setRawEntityFromParentTransform(rectEntityHandle, newRectTransform);
 
   // Verify the new transform
   const Transformd updatedRectTransform =
-      layoutSystem.getEntityFromParentTransform(rectEntityHandle);
+      layoutSystem.getRawEntityFromParentTransform(rectEntityHandle);
   EXPECT_THAT(updatedRectTransform, TransformEq(Transformd::Translate({30.0, 40.0})));
 }
 
@@ -127,10 +127,11 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransformWithScale) {
   // Set a transform with scale and translation
   const Transformd scaleTransform =
       Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0});
-  layoutSystem.setEntityFromParentTransform(rectEntityHandle, scaleTransform);
+  layoutSystem.setRawEntityFromParentTransform(rectEntityHandle, scaleTransform);
 
   // Verify the new transform
-  const Transformd updatedTransform = layoutSystem.getEntityFromParentTransform(rectEntityHandle);
+  const Transformd updatedTransform =
+      layoutSystem.getRawEntityFromParentTransform(rectEntityHandle);
 
   EXPECT_THAT(updatedTransform,
               TransformEq(Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0})));
@@ -178,4 +179,84 @@ TEST_F(LayoutSystemTest, GetEntityFromWorldTransform) {
                           Transformd::Translate({50.0, 50.0})));
 }
 
+TEST_F(LayoutSystemTest, TransformOriginSupport) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="a" x="0" y="0" width="100" height="100" style="transform-origin: 50% 50%; transform: rotate(90deg)" />
+      <rect id="b" x="0" y="0" width="100" height="100" style="transform-origin: 0 0; transform: rotate(90deg)" />
+    </svg>
+  )-");
+
+  auto rectA = document.querySelector("#a")->entityHandle();
+  auto rectB = document.querySelector("#b")->entityHandle();
+
+  const Transformd expectedOrigin50Percent = Transformd::Translate({50.0, 50.0}) *
+                                             Transformd::Rotate(MathConstants<double>::kHalfPi) *
+                                             Transformd::Translate({-50.0, -50.0});
+
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectA),
+              TransformEq(expectedOrigin50Percent));
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectB),
+              TransformEq(Transformd::Rotate(MathConstants<double>::kHalfPi)));
+}
+
+/**
+ * Verify transform-origin with 100 % 100 % (bottom‑right corner of the element).
+ */
+TEST_F(LayoutSystemTest, TransformOriginBottomRight) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="c" x="0" y="0" width="100" height="100"
+            style="transform-origin: 100% 100%; transform: rotate(90deg)" />
+    </svg>
+  )-");
+
+  auto rectC = document.querySelector("#c")->entityHandle();
+
+  const Transformd expected = Transformd::Translate({100.0, 100.0}) *
+                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
+                              Transformd::Translate({-100.0, -100.0});
+
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectC), TransformEq(expected));
+}
+
+/**
+ * Verify transform-origin with 25 % 75 % (mixed percentages).
+ */
+TEST_F(LayoutSystemTest, TransformOriginQuarterThreeQuarter) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="d" x="0" y="0" width="100" height="100"
+            style="transform-origin: 25% 75%; transform: rotate(90deg)" />
+    </svg>
+  )-");
+
+  auto rectD = document.querySelector("#d")->entityHandle();
+
+  const Transformd expected = Transformd::Translate({25.0, 75.0}) *
+                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
+                              Transformd::Translate({-25.0, -75.0});
+
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectD), TransformEq(expected));
+}
+
+/**
+ * Verify transform-origin with absolute pixel values (10 px 20 px).
+ */
+TEST_F(LayoutSystemTest, TransformOriginPixels) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="e" x="0" y="0" width="100" height="100"
+            style="transform-origin: 10px 20px; transform: rotate(90deg)" />
+    </svg>
+  )-");
+
+  auto rectE = document.querySelector("#e")->entityHandle();
+
+  const Transformd expected = Transformd::Translate({10.0, 20.0}) *
+                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
+                              Transformd::Translate({-10.0, -20.0});
+
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectE), TransformEq(expected));
+}
 }  // namespace donner::svg::components

@@ -527,7 +527,8 @@ TEST_F(SVGElementTests, GetComputedStyleBasic) {
 
   const auto& computedStyle = maybeRect->getComputedStyle();
 
-  EXPECT_EQ(computedStyle.numPropertiesSet(), 2);
+  // Expect transform-origin plus the two properties we set.
+  EXPECT_EQ(computedStyle.numPropertiesSet(), 3);
 }
 
 }  // namespace donner::svg

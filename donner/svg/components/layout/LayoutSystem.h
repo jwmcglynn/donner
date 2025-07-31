@@ -76,8 +76,14 @@ public:
                                              InvalidSizeBehavior behavior) const;
 
   /**
-   * Returns the transformation in destinationFromSource notation that converts coordinates from the
-   * parent coordinate system (source) to the entity's coordinate system (destination).
+   * Returns the entityFromParent transform without modifiers (e.g. not including transform-origin)
+   *
+   * @param entity Current entity.
+   */
+  Transformd getRawEntityFromParentTransform(EntityHandle entity);
+
+  /**
+   * Returns the entityFromParent transform with modifiers.
    *
    * @param entity Current entity.
    */
@@ -113,12 +119,13 @@ public:
   Transformd getEntityContentFromEntityTransform(EntityHandle entity);
 
   /**
-   * Set the entity-from-parent transform for the current entity.
+   * Set the entityFromParent transform for the current entity. This will be transformed with
+   * modifiers such as transform-origin before being applied to the entity.
    *
    * @param entity Current entity.
    * @param entityFromParent New transform.
    */
-  void setEntityFromParentTransform(EntityHandle entity, const Transformd& entityFromParent);
+  void setRawEntityFromParentTransform(EntityHandle entity, const Transformd& entityFromParent);
 
   /**
    * Get the computed absolute transform for the current entity. This is the same as \ref

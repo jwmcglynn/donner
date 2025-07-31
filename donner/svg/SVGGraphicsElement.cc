@@ -7,11 +7,11 @@ namespace donner::svg {
 SVGGraphicsElement::SVGGraphicsElement(EntityHandle handle) : SVGElement(handle) {}
 
 Transformd SVGGraphicsElement::transform() const {
-  return components::LayoutSystem().getEntityFromParentTransform(handle_);
+  return components::LayoutSystem().getRawEntityFromParentTransform(handle_);
 }
 
 void SVGGraphicsElement::setTransform(const Transformd& transform) {
-  components::LayoutSystem().setEntityFromParentTransform(handle_, transform);
+  components::LayoutSystem().setRawEntityFromParentTransform(handle_, transform);
 }
 
 Transformd SVGGraphicsElement::elementFromWorld() const {

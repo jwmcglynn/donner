@@ -12,6 +12,7 @@
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
+#include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
@@ -121,6 +122,13 @@ public:
   /// Defaults to `visible`.
   Property<Overflow> overflow{"overflow",
                               []() -> std::optional<Overflow> { return Overflow::Visible; }};
+
+  /// `transform-origin` property, which sets the origin for transformations.
+  Property<TransformOrigin> transformOrigin{
+      "transform-origin", []() -> std::optional<TransformOrigin> {
+        return TransformOrigin{Lengthd(50, Lengthd::Unit::Percent),
+                               Lengthd(50, Lengthd::Unit::Percent)};
+      }};
 
   //
   // Fill
@@ -275,9 +283,9 @@ public:
    * To get the size of the tuple, use \ref numProperties().
    */
   auto allProperties() const {
-    return std::forward_as_tuple(color, display, opacity, visibility, overflow, fill, fillRule,
-                                 fillOpacity, stroke, strokeOpacity, strokeWidth, strokeLinecap,
-                                 strokeLinejoin, strokeMiterlimit, strokeDasharray,
+    return std::forward_as_tuple(color, display, opacity, visibility, overflow, transformOrigin,
+                                 fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
+                                 strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
                                  markerStart, markerMid, markerEnd, fontFamily, fontSize);
   }

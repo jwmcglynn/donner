@@ -469,7 +469,10 @@ public:
       const components::ComputedLocalTransformComponent* maybeTransformComponent,
       const Boxd& viewBox, const FontMetrics& fontMetrics) {
     if (maybeTransformComponent) {
-      return maybeTransformComponent->rawCssTransform.compute(viewBox, fontMetrics);
+      const Vector2d origin = maybeTransformComponent->transformOrigin;
+      const Transformd entityFromParent =
+          maybeTransformComponent->rawCssTransform.compute(viewBox, fontMetrics);
+      return Transformd::Translate(origin) * entityFromParent * Transformd::Translate(-origin);
     } else {
       return Transformd();
     }

@@ -62,7 +62,7 @@ PatternContentUnits SVGPatternElement::patternContentUnits() const {
 }
 
 Transformd SVGPatternElement::patternTransform() const {
-  return components::LayoutSystem().getEntityFromParentTransform(handle_);
+  return components::LayoutSystem().getRawEntityFromParentTransform(handle_);
 }
 
 std::optional<RcString> SVGPatternElement::href() const {
@@ -112,7 +112,7 @@ void SVGPatternElement::setPatternContentUnits(PatternContentUnits value) {
 }
 
 void SVGPatternElement::setPatternTransform(Transformd transform) {
-  components::LayoutSystem().setEntityFromParentTransform(handle_, transform);
+  components::LayoutSystem().setRawEntityFromParentTransform(handle_, transform);
 }
 
 void SVGPatternElement::setHref(OptionalRef<RcStringOrRef> value) {

@@ -17,7 +17,7 @@ svg:not(:root), image, marker, pattern, symbol { overflow: hidden; }
 
 *:not(svg),
 *:not(foreignObject) > svg {
-  /* TODO: transform-origin: 0 0; */
+  transform-origin: 0 0;
 }
 
 *[xml|space=preserve] {

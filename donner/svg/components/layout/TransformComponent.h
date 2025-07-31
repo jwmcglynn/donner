@@ -2,6 +2,7 @@
 /// @file
 
 #include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/svg/core/CssTransform.h"
 #include "donner/svg/properties/Property.h"
 
@@ -27,6 +28,7 @@ struct ComputedLocalTransformComponent {
   Transformd entityFromParent;   //!< Transform from the entity from its parent.
   CssTransform rawCssTransform;  //!< Raw CSS transform value, before resolving percentages relative
                                  //!< to the viewport.
+  Vector2d transformOrigin;      //!< Resolved transform origin in pixels.
 };
 
 /**

@@ -357,5 +357,17 @@
         ".": "${workspaceFolder}"
       },
     },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "layout_system_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/components/layout/layout_system_tests",
+      "args": [
+        "--gtest_break_on_failure",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      },
+    },
   ]
 }
