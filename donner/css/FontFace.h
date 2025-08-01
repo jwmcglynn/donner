@@ -19,7 +19,14 @@ enum class FontStyle { Normal, Italic, Oblique };
 
 /// A single entry listed in `src:`—either a local face, a URL, or inline data.
 struct FontFaceSource {
-  enum class Kind { Local, Url, Data };
+  /**
+   * Specifies the source type for a font face declaration.
+   */
+  enum class Kind : uint8_t {
+    Local,  ///< Font is loaded from a local system font by name (local() function)
+    Url,    ///< Font is loaded from a remote URL or file path (url() function)
+    Data    ///< Font is embedded as inline data using a data URI scheme
+  };
 
   /// Font source kind.
   Kind kind;

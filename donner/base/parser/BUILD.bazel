@@ -4,12 +4,14 @@ load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
 donner_cc_library(
     name = "parser",
     srcs = [
+        "DataUrlParser.cc",
         "IntegerParser.cc",
         "LengthParser.cc",
         "NumberParser.cc",
         "details/ParserBase.cc",
     ],
     hdrs = [
+        "DataUrlParser.h",
         "IntegerParser.h",
         "LengthParser.h",
         "NumberParser.h",
@@ -18,6 +20,8 @@ donner_cc_library(
     visibility = ["//donner:__subpackages__"],
     deps = [
         "//donner/base",
+        "//donner/base/encoding:base64",
+        "//donner/base/encoding:url_decode",
     ],
 )
 

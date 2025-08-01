@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace donner::svg {
+namespace donner {
 
 /**
  * Decode a URL-encoded string into a byte array, translating `%XX` sequences into the corresponding
@@ -18,4 +18,4 @@ namespace donner::svg {
  */
 std::vector<uint8_t> UrlDecode(std::string_view urlEncodedString);
 
-}  // namespace donner::svg
+}  // namespace donner

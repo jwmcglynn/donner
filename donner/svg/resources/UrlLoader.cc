@@ -1,10 +1,12 @@
 #include "donner/svg/resources/UrlLoader.h"
 
 #include "donner/base/StringUtils.h"
-#include "donner/base/encoding/Base64.h"
-#include "donner/svg/resources/UrlDecode.h"
+#include "donner/base/parser/DataUrlParser.h"
 
 namespace donner::svg {
+
+using parser::DataUrlParser;
+using parser::DataUrlParserError;
 
 namespace {
 
@@ -13,41 +15,36 @@ UrlLoaderError MapError([[maybe_unused]] ResourceLoaderError error) {
   return UrlLoaderError::NotFound;
 }
 
+UrlLoaderError MapError(DataUrlParserError error) {
+  switch (error) {
+    case DataUrlParserError::InvalidDataUrl: return UrlLoaderError::InvalidDataUrl;
+  }
+
+  UTILS_UNREACHABLE();
+}
+
 }  // namespace
 
 std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_view uri) {
   Result result;
 
-  // If the URI is of format "data:image/png;base64,...", it is a data URL.
-  constexpr std::string_view dataPrefix = "data:";
-  if (StringUtils::StartsWith(uri, dataPrefix)) {
-    std::string_view remaining = uri.substr(dataPrefix.size());
+  std::variant<DataUrlParser::Result, DataUrlParserError> maybeParsedUrl =
+      DataUrlParser::Parse(uri);
 
-    // Extract the mime type, until the first semicolon.
-    if (const size_t mimeTypeEnd = remaining.find(';'); mimeTypeEnd != std::string::npos) {
-      result.mimeType = remaining.substr(0, mimeTypeEnd);
-      remaining.remove_prefix(result.mimeType.size() + 1);
-    }
+  if (std::holds_alternative<DataUrlParserError>(maybeParsedUrl)) {
+    return MapError(std::get<DataUrlParserError>(maybeParsedUrl));
+  }
 
-    // After the semicolon, look for a "base64," prefix
-    constexpr std::string_view base64Prefix = "base64,";
-    if (StringUtils::StartsWith(remaining, base64Prefix)) {
-      remaining.remove_prefix(base64Prefix.size());
+  DataUrlParser::Result& parsedUrl = std::get<DataUrlParser::Result>(maybeParsedUrl);
 
-      auto maybeLoadedData = DecodeBase64Data(remaining);
-      if (maybeLoadedData.hasResult()) {
-        result.data = std::move(maybeLoadedData.result());
-      } else {
-        return UrlLoaderError::InvalidDataUrl;
-      }
-    } else {
-      // No "base64," prefix found, decode as URL-encoded data.
-      result.data = UrlDecode(remaining);
-    }
-
+  if (parsedUrl.kind == DataUrlParser::Result::Kind::Data) {
+    result.data = std::move(std::get<std::vector<uint8_t>>(parsedUrl.payload));
+    result.mimeType = parsedUrl.mimeType;
+    return result;
   } else {
-    // Assume it's a file path or URL.
-    auto maybeLoadedData = resourceLoader_.fetchExternalResource(uri);
+    // It's an external URL, fetch it.
+    auto maybeLoadedData =
+        resourceLoader_.fetchExternalResource(std::get<RcString>(parsedUrl.payload));
     if (std::holds_alternative<ResourceLoaderError>(maybeLoadedData)) {
       return MapError(std::get<ResourceLoaderError>(maybeLoadedData));
     }

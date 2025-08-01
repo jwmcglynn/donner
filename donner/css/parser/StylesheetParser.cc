@@ -2,6 +2,8 @@
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/encoding/Base64.h"
+#include "donner/base/parser/DataUrlParser.h"
+#include "donner/css/FontFace.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/css/parser/RuleParser.h"
 #include "donner/css/parser/SelectorParser.h"
@@ -11,24 +13,38 @@ namespace donner::css::parser {
 namespace {
 
 /**
- * Try to parse a `url()` function that contains a data URL.
+ * Try to parse a `url()` function into either a data URL or an external URL.
  *
  * @param url The URL to parse.
- * @return A `FontFaceSource` if the URL is a data URL, otherwise `std::nullopt`.
+ * @return \ref FontFaceSource if the URL is a data URL, otherwise \c std::nullopt.
  */
-std::optional<FontFaceSource> TryParseDataUrl(std::string_view url) {
-  if (StringUtils::StartsWith(url, std::string_view("data:"))) {
+std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url) {
+  using donner::parser::DataUrlParser;
+  using donner::parser::DataUrlParserError;
+
+  if (url.empty()) {
+    return std::nullopt;
+  }
+
+  std::variant<DataUrlParser::Result, DataUrlParserError> maybeParsedUrl =
+      DataUrlParser::Parse(url);
+
+  if (std::holds_alternative<DataUrlParserError>(maybeParsedUrl)) {
+    return std::nullopt;
+  }
+
+  DataUrlParser::Result& parsedUrl = std::get<DataUrlParser::Result>(maybeParsedUrl);
+
+  if (parsedUrl.kind == DataUrlParser::Result::Kind::Data) {
     FontFaceSource source;
     source.kind = FontFaceSource::Kind::Data;
-
-    // TODO: Add support for regular non-base64 data URLs, share logic with UrlLoader.
-    if (size_t pos = StringUtils::Find(url, std::string_view("base64,"));
-        pos != std::string::npos) {
-      std::string_view b64 = url.substr(pos + 7);
-      if (auto res = DecodeBase64Data(b64); res.hasResult()) {
-        source.payload = std::move(res.result());
-      }
-    }
+    source.payload = std::move(std::get<std::vector<uint8_t>>(parsedUrl.payload));
+    source.formatHint = parsedUrl.mimeType;
+    return source;
+  } else if (parsedUrl.kind == DataUrlParser::Result::Kind::ExternalUrl) {
+    FontFaceSource source;
+    source.kind = FontFaceSource::Kind::Url;
+    source.payload = parsedUrl.payload;
 
     return source;
   }
@@ -99,21 +115,15 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
                 }
               }
 
-              if (!url.empty()) {
-                if (auto dataUrl = TryParseDataUrl(url)) {
-                  source = std::move(dataUrl);
-                } else {
-                  source = FontFaceSource{FontFaceSource::Kind::Url, std::move(url), "", {}};
-                }
+              if (auto maybeSource = TryParseFontFaceSourceFromUrl(url)) {
+                source = std::move(*maybeSource);
               }
             }
           } else if (const Token* urlTok = std::get_if<Token>(&first.value)) {
             if (urlTok->is<Token::Url>()) {
-              const RcString url = urlTok->get<Token::Url>().value;
-              if (auto dataUrl = TryParseDataUrl(url)) {
-                source = std::move(dataUrl);
-              } else {
-                source = FontFaceSource{FontFaceSource::Kind::Url, url, "", {}};
+              const RcString& url = urlTok->get<Token::Url>().value;
+              if (auto maybeSource = TryParseFontFaceSourceFromUrl(url)) {
+                source = std::move(*maybeSource);
               }
             }
           }
@@ -162,8 +172,8 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
           } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("src"))) {
             std::vector<ComponentValue> current;
             for (const ComponentValue& cv : decl.values) {
-              if (const Token* tok = std::get_if<Token>(&cv.value);
-                  tok && tok->is<Token::Comma>()) {
+              if (const Token* token = std::get_if<Token>(&cv.value);
+                  token && token->is<Token::Comma>()) {
                 addSrc(std::move(current));
                 current.clear();
               } else {
@@ -175,14 +185,15 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
                      !decl.values.empty()) {
             if (const Token* token = std::get_if<Token>(&decl.values.front().value)) {
               if (token->is<Token::Ident>()) {
-                auto val = token->get<Token::Ident>().value;
-                if (val.equalsLowercase("block")) {
+                const RcString value = token->get<Token::Ident>().value;
+
+                if (value.equalsLowercase("block")) {
                   fontFace.display_ = FontDisplay::Block;
-                } else if (val.equalsLowercase("swap")) {
+                } else if (value.equalsLowercase("swap")) {
                   fontFace.display_ = FontDisplay::Swap;
-                } else if (val.equalsLowercase("fallback")) {
+                } else if (value.equalsLowercase("fallback")) {
                   fontFace.display_ = FontDisplay::Fallback;
-                } else if (val.equalsLowercase("optional")) {
+                } else if (value.equalsLowercase("optional")) {
                   fontFace.display_ = FontDisplay::Optional;
                 } else {
                   fontFace.display_ = FontDisplay::Auto;

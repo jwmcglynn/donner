@@ -27,17 +27,15 @@ cc_library(
 cc_library(
     name = "url_loader",
     srcs = [
-        "UrlDecode.cc",
         "UrlLoader.cc",
     ],
     hdrs = [
-        "UrlDecode.h",
         "UrlLoader.h",
     ],
     deps = [
         ":resource_loader_interface",
         "//donner/base",
-        "//donner/base/encoding:base64",
+        "//donner/base/parser",
         "@stb//:image",
     ],
 )
@@ -75,7 +73,6 @@ cc_library(
 cc_test(
     name = "url_loader_tests",
     srcs = [
-        "tests/UrlDecode_tests.cc",
         "tests/UrlLoader_tests.cc",
     ],
     deps = [
