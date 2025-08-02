@@ -1,7 +1,8 @@
 #include "donner/svg/renderer/RendererSkia.h"
 
+#include <algorithm>  // For std::sort
+
 // Skia
-#include "donner/svg/components/ElementTypeComponent.h"
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkFont.h"
 #include "include/core/SkFontMgr.h"
@@ -23,14 +24,17 @@
 #include "include/ports/SkFontMgr_empty.h"
 #elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
 #include "include/ports/SkFontMgr_fontconfig.h"
+#include "include/ports/SkFontScanner_FreeType.h"
 #else
 #error \
     "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
 #endif
-//
+// Donner
+#include "donner/base/fonts/WoffFont.h"
 #include "donner/base/xml/components/TreeComponent.h"  // ForAllChildren
 #include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"  // For verbose logging.
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -48,6 +52,7 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -181,6 +186,128 @@ SkTileMode toSkia(GradientSpreadMethod spreadMethod) {
   UTILS_UNREACHABLE();
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+#define DONNER_PACKED __attribute__((packed))
+#else
+#define DONNER_PACKED
+#endif
+
+// SFNT header structure, see https://learn.microsoft.com/en-us/typography/opentype/spec/otff
+struct DONNER_PACKED SfntHeader {
+  uint32_t sfntVersion;
+  uint16_t numTables;
+  uint16_t searchRange;
+  uint16_t entrySelector;
+  uint16_t rangeShift;
+};
+
+// SFNT table record, see https://learn.microsoft.com/en-us/typography/opentype/spec/otff
+struct DONNER_PACKED SfntTableRecord {
+  uint32_t tag;
+  uint32_t checksum;
+  uint32_t origOffset;
+  uint32_t origLength;
+};
+
+static inline uint16_t ByteSwap16(uint16_t x) {
+  return (x >> 8) | (x << 8);
+}
+
+static inline uint32_t ByteSwap32(uint32_t x) {
+  return ((x & 0xFF000000) >> 24) | ((x & 0x00FF0000) >> 8) | ((x & 0x0000FF00) << 8) |
+         ((x & 0x000000FF) << 24);
+}
+
+// Helper function to calculate floor log2 of a number
+static inline uint32_t FloorLog2(uint32_t x) {
+  if (x == 0) return 0;
+  uint32_t result = 0;
+  while (x >>= 1) result++;
+  return result;
+}
+
+/// Aligns \p n to the next 4‑byte boundary.
+static constexpr size_t Align4(size_t n) {
+  return (n + 3u) & ~size_t{3};
+}
+
+static sk_sp<SkData> CreateInMemoryFont(const donner::fonts::WoffFont& font) {
+  // The sfnt spec (§5.2) requires table records to be sorted by tag.  Skipping
+  // this leads to FreeType rejecting some fonts (notably those with an `OTTO`
+  // flavor).  We also have to keep each table 4‑byte aligned.
+  std::vector<const donner::fonts::WoffTable*> sortedTables;
+  sortedTables.reserve(font.tables.size());
+  for (const auto& t : font.tables) {
+    sortedTables.push_back(&t);
+  }
+  std::sort(sortedTables.begin(), sortedTables.end(),
+            [](const donner::fonts::WoffTable* a, const donner::fonts::WoffTable* b) {
+              return a->tag < b->tag;
+            });
+
+  const size_t numTables = sortedTables.size();
+  const size_t headerSize = sizeof(SfntHeader) + numTables * sizeof(SfntTableRecord);
+
+  // Include padding so every table starts on a 4‑byte boundary.
+  size_t totalSize = headerSize;
+  for (const auto* table : sortedTables) {
+    totalSize += Align4(table->data.size());
+  }
+
+  auto fontData = SkData::MakeUninitialized(totalSize);
+  uint8_t* data = static_cast<uint8_t*>(fontData->writable_data());
+  uint8_t* const base = data;
+
+  // Write the SFNT header
+  SfntHeader header;
+  header.sfntVersion = ByteSwap32(font.flavor);
+
+  header.numTables = ByteSwap16(static_cast<uint16_t>(numTables));
+
+  // searchRange, entrySelector and rangeShift are calculated from numTables.
+  const uint16_t maxPowerOf2 = (numTables > 0) ? (1u << FloorLog2(numTables)) : 0;
+  header.searchRange = ByteSwap16(static_cast<uint16_t>(maxPowerOf2 * 16));
+  header.entrySelector = (numTables > 0) ? ByteSwap16(FloorLog2(numTables)) : 0;
+  header.rangeShift =
+      (numTables > 0) ? ByteSwap16(static_cast<uint16_t>(numTables * 16 - maxPowerOf2 * 16)) : 0;
+
+  memcpy(data, &header, sizeof(header));
+  data += sizeof(header);
+
+  // Write table directory
+  const uint32_t headerStartOffset = static_cast<uint32_t>(headerSize);
+  uint32_t payloadOffset = headerStartOffset;
+
+  for (const auto* table : sortedTables) {
+    SfntTableRecord record;
+    record.tag = ByteSwap32(table->tag);
+    record.checksum = 0;  // Freetype doesn't check
+    record.origOffset = ByteSwap32(payloadOffset);
+    record.origLength = ByteSwap32(static_cast<uint32_t>(table->data.size()));
+
+    memcpy(data, &record, sizeof(record));
+    data += sizeof(record);
+
+    payloadOffset += static_cast<uint32_t>(Align4(table->data.size()));
+  }
+
+  // Write table data
+  for (const auto* table : sortedTables) {
+    const auto& bytes = table->data;
+    memcpy(data, bytes.data(), bytes.size());
+    data += bytes.size();
+
+    const size_t pad = Align4(bytes.size()) - bytes.size();
+    if (pad) {
+      memset(data, 0, pad);
+      data += pad;
+    }
+  }
+
+  assert(static_cast<size_t>(data - base) == totalSize);
+  return fontData;
+}
+
 }  // namespace
 
 /// Implementation class for \ref RendererSkia
@@ -188,6 +315,41 @@ class RendererSkia::Impl {
 public:
   Impl(RendererSkia& renderer, const RenderingInstanceView& view)
       : renderer_(renderer), view_(view) {}
+
+  void initialize(Registry& registry) {
+    // Load typeface by family
+    if (!renderer_.fontMgr_) {
+#ifdef DONNER_USE_CORETEXT
+      renderer_.fontMgr_ = SkFontMgr_New_CoreText(nullptr);
+#elif defined(DONNER_USE_FREETYPE)
+      renderer_.fontMgr_ = SkFontMgr_New_Custom_Empty();
+#elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
+      renderer_.fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
+    }
+
+    // If we have custom fonts, load them into a font manager.
+    auto& resourceManager = registry.ctx().get<components::ResourceManagerContext>();
+
+    const std::vector<donner::svg::components::FontResource>& loadedFonts =
+        resourceManager.loadedFonts();
+    if (!loadedFonts.empty()) {
+      for (const auto& font : loadedFonts) {
+        auto fontData = CreateInMemoryFont(font.font);
+        if (auto typeface = renderer_.fontMgr_->makeFromData(std::move(fontData))) {
+          if (font.font.familyName.has_value()) {
+            renderer_.typefaces_[font.font.familyName.value()] = std::move(typeface);
+          } else {
+            // We don't have a family name, so the font will not be usable. Ignore it.
+          }
+        } else {
+          std::cerr << "Failed to load font face from data for family: "
+                    << (font.font.familyName.has_value() ? font.font.familyName.value() : "unknown")
+                    << "\n";
+        }
+      }
+    }
+  }
 
   void drawUntil(Registry& registry, Entity endEntity) {
     bool foundEndEntity = false;
@@ -1038,21 +1200,23 @@ public:
     const SkScalar fontSizePx =
         static_cast<SkScalar>(sizeLen.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
 
-// Load typeface by family
-#ifdef DONNER_USE_CORETEXT
-    sk_sp<SkFontMgr> fontMgr = SkFontMgr_New_CoreText(nullptr);
-#elif defined(DONNER_USE_FREETYPE)
-    sk_sp<SkFontMgr> fontMgr = SkFontMgr_New_Custom_Empty();
-#elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
-    sk_sp<SkFontMgr> fontMgr = SkFontMgr_New_FontConfig(nullptr);
-#endif
+    // Load typeface by family
+    const SmallVector<RcString, 1>& families = style.fontFamily.getRequiredRef();
+    const std::string familyName = families.empty() ? "" : families[0].str();
 
-    const RcString& family = style.fontFamily.getRequired();
-    sk_sp<SkTypeface> typeface = fontMgr->matchFamilyStyle(family.str().c_str(), SkFontStyle());
-    if (!typeface) {
-      typeface = fontMgr->makeFromData(SkData::MakeWithoutCopy(
-          embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));
+    sk_sp<SkTypeface> typeface;
+    // First try to find the typeface in the font face list
+    if (renderer_.typefaces_.find(familyName) != renderer_.typefaces_.end()) {
+      typeface = renderer_.typefaces_[familyName];
+    } else {
+      // If not found, try to match the family style with the font manager
+      typeface = renderer_.fontMgr_->matchFamilyStyle(familyName.c_str(), SkFontStyle());
+      if (!typeface) {
+        typeface = renderer_.fontMgr_->makeFromData(SkData::MakeWithoutCopy(
+            embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));
+      }
     }
+
     SkFont font(typeface, fontSizePx);
     // Draw each text span
     for (const auto& span : text.spans) {
@@ -1385,6 +1549,7 @@ std::span<const uint8_t> RendererSkia::pixelData() const {
 
 void RendererSkia::draw(Registry& registry) {
   Impl impl(*this, RenderingInstanceView{registry});
+  impl.initialize(registry);
   impl.drawUntil(registry, entt::null);
 }
 

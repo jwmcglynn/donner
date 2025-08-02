@@ -8,6 +8,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
@@ -208,6 +209,13 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* 
   // Compute the styles for all elements.
   for (auto entity : view) {
     computeStyle(EntityHandle(registry, entity), outWarnings);
+  }
+
+  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    auto [stylesheet] = view.get(stylesheetEntity);
+
+    resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
   }
 }
 

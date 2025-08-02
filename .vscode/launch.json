@@ -369,5 +369,19 @@
         ".": "${workspaceFolder}"
       },
     },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "fonts_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/base/fonts/fonts_tests",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      },
+      "env": {
+        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/base/fonts/fonts_tests.runfiles"
+      },
+    },
   ]
 }

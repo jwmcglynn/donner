@@ -2,11 +2,14 @@
 /// @file
 
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseError.h"
 #include "donner/base/Vector2.h"
+#include "donner/css/FontFace.h"
+#include "donner/svg/components/resources/FontResource.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
@@ -46,6 +49,18 @@ public:
    */
   std::optional<Vector2i> getImageSize(Entity entity) const;
 
+  /**
+   * Add a list of \ref css::FontFace objects to be loaded.
+   *
+   * @param fontFaces Font faces to load.
+   */
+  void addFontFaces(std::span<const css::FontFace> fontFaces);
+
+  /**
+   * Get loaded font faces, valid after `loadResources()` is called.
+   */
+  const std::vector<FontResource>& loadedFonts() const { return loadedFonts_; }
+
 private:
   /**
    * Get the \ref LoadedImageComponent for an entity. This will synchronously load the image if it
@@ -62,6 +77,12 @@ private:
   /// A user-supplied handler interface which handles loading URLs based on application-specific
   /// logic.
   std::unique_ptr<ResourceLoaderInterface> loader_;
+
+  /// A list of all font faces that need to be loaded.
+  std::vector<css::FontFace> fontFacesToLoad_;
+
+  /// A list of all successfully loaded fonts.
+  std::vector<FontResource> loadedFonts_;
 };
 
 }  // namespace donner::svg::components

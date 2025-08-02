@@ -4,6 +4,10 @@
 #include <frozen/unordered_map.h>
 #include <frozen/unordered_set.h>
 
+#include <span>
+#include <string>
+
+#include "donner/base/SmallVector.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/core/Stroke.h"
@@ -653,15 +657,76 @@ static constexpr MapType kProperties = {
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const parser::PropertyParseFnParams& p) {
-             if (auto ident = parser::TryGetSingleIdent(p.components())) {
-               return ParseResult<RcString>(*ident);
+           [](const parser::PropertyParseFnParams& params)
+               -> ParseResult<SmallVector<RcString, 1>> {
+             auto components = params.components();
+             SmallVector<RcString, 1> families;
+             size_t i = 0;
+             while (i < components.size()) {
+               // Skip commas and whitespace.
+               if (components[i].isToken<css::Token::Comma>() ||
+                   components[i].isToken<css::Token::Whitespace>()) {
+                 ++i;
+                 continue;
+               }
+               // Collect one family item until the next comma.
+               size_t start = i;
+               while (i < components.size() && !components[i].isToken<css::Token::Comma>()) {
+                 ++i;
+               }
+               auto item =
+                   std::span<const css::ComponentValue>(components.data() + start, i - start);
+               // Quoted family name.
+               if (item.size() == 1 && item[0].isToken<css::Token::String>()) {
+                 families.emplace_back(item[0].get<css::Token>().get<css::Token::String>().value);
+               } else if (item.size() == 1 && item[0].is<css::Function>()) {
+                 const auto& func = item[0].get<css::Function>();
+                 if (func.name.equalsLowercase("generic")) {
+                   std::string name;
+                   bool first = true;
+                   for (const auto& cv : func.values) {
+                     if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
+                       if (!first) {
+                         name.push_back(' ');
+                       }
+                       first = false;
+                       name.append(ident->value);
+                     } else {
+                       ParseError err;
+                       err.reason = "Invalid generic-family";
+                       err.location = cv.sourceOffset();
+                       return err;
+                     }
+                   }
+                   families.emplace_back(RcString(name));
+                 } else {
+                   ParseError err;
+                   err.reason = "Invalid font-family function";
+                   err.location = item.front().sourceOffset();
+                   return err;
+                 }
+               } else {
+                 // Unquoted family name (sequence of idents).
+                 std::string name;
+                 bool first = true;
+                 for (const auto& cv : item) {
+                   if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
+                     if (!first) {
+                       name.push_back(' ');
+                     }
+                     first = false;
+                     name.append(ident->value);
+                   } else {
+                     ParseError err;
+                     err.reason = "Invalid font-family";
+                     err.location = cv.sourceOffset();
+                     return err;
+                   }
+                 }
+                 families.emplace_back(RcString(name));
+               }
              }
-             ParseError err;
-             err.reason = "Invalid font-family";
-             err.location = !p.components().empty() ? p.components().front().sourceOffset()
-                                                    : FileOffset::Offset(0);
-             return ParseResult<RcString>(err);
+             return families;
            },
            &registry.fontFamily);
      }},  //
@@ -669,8 +734,8 @@ static constexpr MapType kProperties = {
      [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
        return Parse(
            params,
-           [](const parser::PropertyParseFnParams& p) {
-             return parser::ParseLengthPercentage(p.components(), p.allowUserUnits());
+           [](const parser::PropertyParseFnParams& params) {
+             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
            },
            &registry.fontSize);
      }},  //

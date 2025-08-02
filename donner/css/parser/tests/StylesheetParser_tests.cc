@@ -32,4 +32,35 @@ TEST(StylesheetParser, WithRules) {
                   ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")))))));
 }
 
+TEST(StylesheetParser, FontFace) {
+  Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face {
+      font-family: test;
+      src: url(test.woff);
+    }
+    svg { fill: red; }
+  )");
+
+  ASSERT_EQ(sheet.fontFaces().size(), 1u);
+  EXPECT_EQ(sheet.fontFaces()[0].familyName, "test");
+  ASSERT_EQ(sheet.fontFaces()[0].sources.size(), 1u);
+  EXPECT_EQ(sheet.fontFaces()[0].sources[0].kind, FontFaceSource::Kind::Url);
+}
+
+TEST(StylesheetParser, FontFaceDataUrl) {
+  Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face {
+      font-family: datafont;
+      src: url(data:font/woff;base64,dGVzdA==);
+    }
+  )");
+
+  ASSERT_EQ(sheet.fontFaces().size(), 1u);
+  EXPECT_EQ(sheet.fontFaces()[0].familyName, "datafont");
+  ASSERT_EQ(sheet.fontFaces()[0].sources.size(), 1u);
+  EXPECT_EQ(sheet.fontFaces()[0].sources[0].kind, FontFaceSource::Kind::Data);
+  EXPECT_THAT(std::get<std::vector<uint8_t>>(sheet.fontFaces()[0].sources[0].payload),
+              testing::ElementsAre('t', 'e', 's', 't'));
+}
+
 }  // namespace donner::css::parser

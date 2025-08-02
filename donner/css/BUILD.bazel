@@ -34,6 +34,7 @@ donner_cc_library(
         "Color.h",
         "ComponentValue.h",
         "Declaration.h",
+        "FontFace.h",
         "Rule.h",
         "Selector.h",
         "Specificity.h",

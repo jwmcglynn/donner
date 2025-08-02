@@ -20,6 +20,7 @@
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
@@ -662,6 +663,9 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   }
 
   StyleSystem().computeAllStyles(registry_, outWarnings);
+
+  // After styles are computed, we can load fonts and other embedded resources.
+  registry_.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
 
   // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
   // after those styles are evaluated, and after which we need to compute the styles for that subset

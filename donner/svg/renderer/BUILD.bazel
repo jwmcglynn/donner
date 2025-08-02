@@ -93,6 +93,7 @@ cc_library(
         ":renderer_image_io",
         ":renderer_utils",
         ":skia_deps",
+        "//donner/base/fonts",
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",

@@ -58,6 +58,18 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "font_loader",
+    srcs = ["FontLoader.cc"],
+    hdrs = ["FontLoader.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base/fonts",
+        "//donner/svg/components/resources:font_resource",
+        "//donner/svg/resources:url_loader",
+    ],
+)
+
 cc_test(
     name = "url_loader_tests",
     srcs = [
