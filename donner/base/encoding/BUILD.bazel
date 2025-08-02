@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 cc_library(
@@ -72,4 +73,11 @@ cc_test(
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_fuzzer(
+    name = "decompress_fuzzer",
+    srcs = ["tests/Decompress_fuzzer.cc"],
+    corpus = "tests/decompress_corpus",
+    deps = [":decompress"],
 )

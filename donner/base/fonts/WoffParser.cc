@@ -7,6 +7,8 @@
 namespace donner::fonts {
 namespace {
 
+constexpr uint32_t kMaxTableSize = 30 * 1024 * 1024;  // 30MB
+
 uint32_t ReadBE32(const uint8_t* p) {
   return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
@@ -206,7 +208,7 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
     dir += 4;
     rec.checksum = ReadBE32(dir);
     dir += 4;
-    if (rec.offset + rec.compLength > bytes.size()) {
+    if (rec.offset > bytes.size() || rec.compLength > bytes.size() - rec.offset) {
       ParseError err;
       err.reason = "Table outside of data";
       return err;
@@ -216,6 +218,12 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
 
   font.tables.reserve(numTables);
   for (const auto& rec : records) {
+    if (rec.origLength > kMaxTableSize) {
+      ParseError err;
+      err.reason = "Table size is too large";
+      return err;
+    }
+
     std::vector<uint8_t> table;
 
     const uint8_t* src = bytes.data() + rec.offset;

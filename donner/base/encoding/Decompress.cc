@@ -49,6 +49,7 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
     }
 
     if (stream.total_out != output.size()) {
+      inflateEnd(&stream);
       return ParseError("Zlib decompression size mismatch");
     }
   } else {

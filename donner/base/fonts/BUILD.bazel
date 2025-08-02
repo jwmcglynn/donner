@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -26,5 +26,14 @@ cc_test(
         ":fonts",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "woff_parser_fuzzer",
+    srcs = ["tests/WoffParser_fuzzer.cc"],
+    corpus = "testdata",
+    deps = [
+        ":fonts",
     ],
 )
