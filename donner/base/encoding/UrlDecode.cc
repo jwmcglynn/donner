@@ -1,6 +1,6 @@
-#include "donner/svg/resources/UrlDecode.h"
+#include "donner/base/encoding/UrlDecode.h"
 
-namespace donner::svg {
+namespace donner {
 
 namespace {
 
@@ -54,4 +54,4 @@ std::vector<uint8_t> UrlDecode(std::string_view urlEncodedString) {
   return decodedData;
 }
 
-}  // namespace donner::svg
+}  // namespace donner

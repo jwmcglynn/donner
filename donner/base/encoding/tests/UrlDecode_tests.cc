@@ -1,9 +1,9 @@
-#include "donner/svg/resources/UrlDecode.h"
+#include "donner/base/encoding/UrlDecode.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-namespace donner::svg {
+namespace donner {
 
 using testing::ElementsAre;
 
@@ -64,4 +64,4 @@ TEST(UrlDecode, PlusSignRemainsUnchanged) {
               ElementsAre('H', 'e', 'l', 'l', 'o', '+', 'W', 'o', 'r', 'l', 'd'));
 }
 
-}  // namespace donner::svg
+}  // namespace donner

@@ -1,12 +1,11 @@
 #pragma once
 /// @file
 
-#include <cstddef>
 #include <vector>
 
 #include "donner/base/ParseResult.h"
 
-namespace donner::svg {
+namespace donner {
 
 /**
  * Decode a base64-encoded string into a byte array. If the string is not valid base64, an error is
@@ -17,4 +16,4 @@ namespace donner::svg {
  */
 ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String);
 
-}  // namespace donner::svg
+}  // namespace donner

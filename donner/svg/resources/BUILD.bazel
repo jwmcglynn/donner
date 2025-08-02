@@ -27,13 +27,9 @@ cc_library(
 cc_library(
     name = "url_loader",
     srcs = [
-        "Base64.cc",
-        "UrlDecode.cc",
         "UrlLoader.cc",
     ],
     hdrs = [
-        "Base64.h",
-        "UrlDecode.h",
         "UrlLoader.h",
     ],
     deps = [
@@ -65,8 +61,6 @@ cc_library(
 cc_test(
     name = "url_loader_tests",
     srcs = [
-        "tests/Base64_tests.cc",
-        "tests/UrlDecode_tests.cc",
         "tests/UrlLoader_tests.cc",
     ],
     deps = [
