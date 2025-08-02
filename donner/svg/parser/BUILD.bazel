@@ -12,6 +12,7 @@ donner_cc_library(
         ":attribute_parser",
         ":parser_details",
         ":parser_header",
+        "//donner/base/encoding:decompress",
         "//donner/base/xml",
         "//donner/svg:svg_core",
     ],
