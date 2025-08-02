@@ -57,6 +57,7 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@stb//:image_write": "stb_image_write",
     "@stb//:image": "stb_image",
     "@pixelmatch-cpp17//:pixelmatch-cpp17": "pixelmatch-cpp17",
+    "@zlib//:z": "zlib",
 }
 
 # Packages whose CMake build is provided manually or by FetchContent and must
@@ -335,6 +336,7 @@ def generate_root() -> None:
             ("absl", "https://github.com/abseil/abseil-cpp.git", "20250512.0"),
             ("rules_cc", "https://github.com/bazelbuild/rules_cc.git", "0.1.1"),
             ("pixelmatch-cpp17", "https://github.com/jwmcglynn/pixelmatch-cpp17.git", "ad7b103b746c9b23c61b4ce629fea64ae802df15"),
+            ("zlib", "https://github.com/madler/zlib.git", "v1.3.1"),
         ]
         for name, repo, tag in externals:
             f.write(f"FetchContent_Declare(\n  {name}\n  GIT_REPOSITORY {repo}\n")

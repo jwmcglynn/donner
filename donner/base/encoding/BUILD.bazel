@@ -29,6 +29,17 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "decompress",
+    srcs = ["Decompress.cc"],
+    hdrs = ["Decompress.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "@zlib",
+    ],
+)
+
 cc_test(
     name = "base64_tests",
     srcs = [
@@ -36,6 +47,16 @@ cc_test(
     ],
     deps = [
         ":base64",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "decompress_tests",
+    srcs = ["tests/Decompress_tests.cc"],
+    deps = [
+        ":decompress",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
