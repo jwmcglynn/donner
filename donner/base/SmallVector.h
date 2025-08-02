@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <new>
+#include <ostream>
 #include <utility>
 
 namespace donner {
@@ -159,6 +160,22 @@ public:
   }
 
   /**
+   * Constructs an element in-place at the end of the vector.
+   *
+   * @tparam Args Types of the arguments to forward to the constructor.
+   * @param args Arguments to forward to the constructor of the element.
+   * @return Reference to the constructed element.
+   */
+  template <typename... Args>
+  T& emplace_back(Args&&... args) {
+    ensureCapacity(size_ + 1);
+
+    new (data() + size_) T(std::forward<Args>(args)...);
+    ++size_;
+    return data()[size_ - 1];
+  }
+
+  /**
    * Removes the last element from the vector.
    */
   void pop_back() noexcept {
@@ -169,10 +186,10 @@ public:
       }
     }
   }
-  
+
   /**
    * Inserts an element at the specified position.
-   * 
+   *
    * @param pos Iterator to the position where the element will be inserted.
    * @param value The value to insert.
    * @return Iterator to the inserted element.
@@ -182,10 +199,10 @@ public:
     if (index > size_) {
       index = size_;
     }
-    
+
     // Ensure we have capacity for one more element
     ensureCapacity(size_ + 1);
-    
+
     // If we're not inserting at the end, shift elements to make room
     if (index < size_) {
       // Move existing elements forward by one position
@@ -196,11 +213,11 @@ public:
         }
       }
     }
-    
+
     // Place the new element
     new (data() + index) T(value);
     ++size_;
-    
+
     return begin() + index;
   }
 
@@ -288,6 +305,22 @@ public:
    * Returns a const iterator to the end of the vector.
    */
   const_iterator end() const noexcept { return begin() + size_; }
+
+  /// Ostream output operator for SmallVector.
+  friend std::ostream& operator<<(std::ostream& os, const SmallVector<T, DefaultSize>& vec) {
+    os << "[";
+
+    for (std::size_t i = 0; i < vec.size(); ++i) {
+      if (i > 0) {
+        os << ", ";  // Add a comma and space between elements
+      }
+      os << vec[i];
+    }
+
+    os << "]";
+
+    return os;
+  }
 
 private:
   /**

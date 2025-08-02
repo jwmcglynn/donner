@@ -31,4 +31,19 @@ TEST(WoffParser, Simple) {
   ASSERT_THAT(maybeWoffFont, NoParseError());
 }
 
+/// Ensures WoffParser::Parse extracts the UTF‑8 family name.
+TEST(WoffParser, ExtractsFamilyName) {
+  const std::string location =
+      Runfiles::instance().Rlocation("donner/base/fonts/testdata/valid-001.woff");
+
+  std::vector<uint8_t> woffData = LoadFile(location);
+  ASSERT_FALSE(woffData.empty()) << "WOFF file is empty: " << location;
+
+  auto result = WoffParser::Parse(woffData);
+  ASSERT_TRUE(result.hasResult()) << result.error().reason;
+  const WoffFont& font = result.result();
+
+  EXPECT_THAT(font.familyName, testing::Eq("WOFF Test CFF"));
+}
+
 }  // namespace donner::fonts

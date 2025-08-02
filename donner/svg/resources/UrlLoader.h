@@ -19,6 +19,7 @@ enum class UrlLoaderError : uint8_t {
   DataCorrupt,        ///< The loaded data is corrupt and cannot be decoded.
 };
 
+/// Converts a \ref UrlLoaderError to a human-readable string.
 inline std::string_view ToString(UrlLoaderError err) {
   switch (err) {
     case UrlLoaderError::NotFound: return "File not found";
@@ -28,6 +29,11 @@ inline std::string_view ToString(UrlLoaderError err) {
   }
 
   UTILS_UNREACHABLE();
+}
+
+/// Ostream operator for \ref UrlLoaderError.
+inline std::ostream& operator<<(std::ostream& os, UrlLoaderError err) {
+  return os << ToString(err);
 }
 
 /**

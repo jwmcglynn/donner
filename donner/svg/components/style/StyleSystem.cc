@@ -142,7 +142,6 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   Registry& registry = *handle.registry();
-  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
 
   const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
@@ -158,8 +157,6 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // Apply style from stylesheets.
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     auto [stylesheet] = view.get(stylesheetEntity);
-
-    resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
 
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
       if (css::SelectorMatchResult match =
@@ -212,6 +209,13 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* 
   // Compute the styles for all elements.
   for (auto entity : view) {
     computeStyle(EntityHandle(registry, entity), outWarnings);
+  }
+
+  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    auto [stylesheet] = view.get(stylesheetEntity);
+
+    resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
   }
 }
 

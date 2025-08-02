@@ -39,6 +39,7 @@ donner_cc_library(
 cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/DataUrlParser_tests.cc",
         "tests/IntegerParser_tests.cc",
         "tests/LengthParser_tests.cc",
         "tests/NumberParser_tests.cc",

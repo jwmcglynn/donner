@@ -73,7 +73,18 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
           loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
         }
       } else if (source.kind == css::FontFaceSource::Kind::Data) {
-        // TODO: Load raw font data.
+        auto maybeFontData = fontLoader.fromData(std::get<std::vector<uint8_t>>(source.payload));
+
+        if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
+          if (outWarnings) {
+            ParseError err;
+            err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
+
+            outWarnings->emplace_back(err);
+          }
+        } else {
+          loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
+        }
       } else {
         if (outWarnings) {
           ParseError err;

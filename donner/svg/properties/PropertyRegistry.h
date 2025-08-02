@@ -3,6 +3,7 @@
 
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
 #include "donner/base/ParseResult.h"
+#include "donner/base/SmallVector.h"
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
 #include "donner/svg/components/filter/FilterEffect.h"
@@ -250,8 +251,10 @@ public:
       "marker-end", []() -> std::optional<Reference> { return std::nullopt; }};
 
   /// `font-family` property, which determines the font family for text content. Inherited.
-  Property<RcString, PropertyCascade::Inherit> fontFamily{
-      "font-family", []() -> std::optional<RcString> { return RcString("serif"); }};
+  Property<SmallVector<RcString, 1>, PropertyCascade::Inherit> fontFamily{
+      "font-family", []() -> std::optional<SmallVector<RcString, 1>> {
+        return SmallVector<RcString, 1>{RcString("serif")};
+      }};
 
   /// `font-size` property, which determines the font size for text content. Inherited.
   Property<Lengthd, PropertyCascade::Inherit> fontSize{

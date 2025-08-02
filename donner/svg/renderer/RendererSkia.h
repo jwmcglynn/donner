@@ -1,10 +1,13 @@
 #pragma once
 /// @file
 
+#include <string>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
+#include "include/core/SkFontMgr.h"
 #include "include/core/SkGraphics.h"
 
 namespace donner::svg {
@@ -140,6 +143,9 @@ private:
   void draw(Registry& registry);
 
   bool verbose_;  //!< If true, print verbose logging.
+
+  sk_sp<class SkFontMgr> fontMgr_;  //!< Font manager, may be initialized with custom fonts.
+  std::map<std::string, sk_sp<SkTypeface>> typefaces_;  //!< Cached typefaces by family name.
 
   SkBitmap bitmap_;                    //!< The bitmap to render into.
   SkCanvas* rootCanvas_ = nullptr;     //!< The root canvas.

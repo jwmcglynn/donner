@@ -33,8 +33,9 @@ struct WoffTable {
  * were encountered in the source file.
  */
 struct WoffFont {
-  uint32_t flavor = 0;            ///< SFNT flavor, e.g. 0x00010000 or 'OTTO'.
-  std::vector<WoffTable> tables;  ///< Parsed tables.
+  std::optional<std::string> familyName;  ///< Optional family name, if available.
+  uint32_t flavor = 0;                    ///< SFNT flavor, e.g. 0x00010000 or 'OTTO'.
+  std::vector<WoffTable> tables;          ///< Parsed tables.
 };
 
 }  // namespace donner::fonts

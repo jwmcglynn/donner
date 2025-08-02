@@ -56,6 +56,11 @@ public:
    */
   void addFontFaces(std::span<const css::FontFace> fontFaces);
 
+  /**
+   * Get loaded font faces, valid after `loadResources()` is called.
+   */
+  const std::vector<FontResource>& loadedFonts() const { return loadedFonts_; }
+
 private:
   /**
    * Get the \ref LoadedImageComponent for an entity. This will synchronously load the image if it

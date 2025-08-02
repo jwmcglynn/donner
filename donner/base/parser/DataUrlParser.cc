@@ -11,37 +11,49 @@ std::variant<DataUrlParser::Result, DataUrlParserError> DataUrlParser::Parse(std
 
   // If the URI is of format "data:image/png;base64,...", it is a data URL.
   constexpr std::string_view dataPrefix = "data:";
-  if (StringUtils::StartsWith(uri, dataPrefix)) {
-    std::string_view remaining = uri.substr(dataPrefix.size());
-
-    result.kind = Result::Kind::Data;
-
-    // Extract the mime type, until the first semicolon.
-    if (const size_t mimeTypeEnd = remaining.find(';'); mimeTypeEnd != std::string::npos) {
-      result.mimeType = remaining.substr(0, mimeTypeEnd);
-      remaining.remove_prefix(result.mimeType.size() + 1);
-    }
-
-    // After the semicolon, look for a "base64," prefix
-    constexpr std::string_view base64Prefix = "base64,";
-    if (StringUtils::StartsWith(remaining, base64Prefix)) {
-      remaining.remove_prefix(base64Prefix.size());
-
-      auto maybeLoadedData = DecodeBase64Data(remaining);
-      if (maybeLoadedData.hasResult()) {
-        result.payload = std::move(maybeLoadedData.result());
-      } else {
-        return DataUrlParserError::InvalidDataUrl;
-      }
-    } else {
-      // No "base64," prefix found, decode as URL-encoded data.
-      result.payload = UrlDecode(remaining);
-    }
-
-  } else {
-    // Assume it's a file path or URL.
+  if (!StringUtils::StartsWith(uri, dataPrefix)) {
     result.kind = Result::Kind::ExternalUrl;
     result.payload = RcString(uri);
+    return result;
+  }
+
+  std::string_view remaining = uri.substr(dataPrefix.size());
+
+  result.kind = Result::Kind::Data;
+
+  const size_t commaPos = remaining.find(',');
+  if (commaPos == std::string_view::npos) {
+    return DataUrlParserError::InvalidDataUrl;
+  }
+
+  const std::string_view metadata = remaining.substr(0, commaPos);
+  std::string_view payload = remaining.substr(commaPos + 1);
+
+  std::string_view mimeTypePart = metadata;
+  bool isBase64 = false;
+  if (metadata.ends_with(";base64")) {
+    isBase64 = true;
+    mimeTypePart.remove_suffix(7);
+  }
+
+  if (!mimeTypePart.empty()) {
+    if (const size_t semicolonPos = mimeTypePart.find(';');
+        semicolonPos != std::string_view::npos) {
+      result.mimeType = std::string(mimeTypePart.substr(0, semicolonPos));
+    } else {
+      result.mimeType = std::string(mimeTypePart);
+    }
+  }
+
+  if (isBase64) {
+    auto maybeLoadedData = DecodeBase64Data(payload);
+    if (maybeLoadedData.hasResult()) {
+      result.payload = std::move(maybeLoadedData.result());
+    } else {
+      return DataUrlParserError::InvalidDataUrl;
+    }
+  } else {
+    result.payload = UrlDecode(payload);
   }
 
   return result;

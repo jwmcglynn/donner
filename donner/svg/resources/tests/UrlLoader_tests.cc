@@ -82,9 +82,9 @@ TEST(UrlLoader, FetchDataUrlBase64) {
 TEST(UrlLoader, FetchDataUrlUrlEncodedWithMime) {
   InProcResourceLoader loader;
   UrlLoader urlLoader(loader);
-  // Here, the semicolon separates the MIME type from the data.
+  // Here, the comma separates the MIME type from the data.
   // "hello%20world" should URL-decode to "hello world".
-  auto result = urlLoader.fromUri("data:text/plain;hello%20world");
+  auto result = urlLoader.fromUri("data:text/plain,hello%20world");
 
   EXPECT_THAT(result, VariantWith<UrlLoader::Result>(AllOf(
                           Field(&UrlLoader::Result::mimeType, Eq("text/plain")),
@@ -96,13 +96,14 @@ TEST(UrlLoader, FetchDataUrlUrlEncodedWithMime) {
 TEST(UrlLoader, FetchDataUrlUrlEncodedNoMime) {
   InProcResourceLoader loader;
   UrlLoader urlLoader(loader);
-  // With no semicolon, the entire string is treated as URL-encoded data.
-  auto result = urlLoader.fromUri("data:hello%20world");
+  // With no semicolon, the entire string is treated as URL-encoded data, but the comma is required.
+  auto result = urlLoader.fromUri("data:,hello%20world");
 
-  EXPECT_THAT(result, VariantWith<UrlLoader::Result>(AllOf(
-                          Field(&UrlLoader::Result::mimeType, Eq("")),
-                          Field(&UrlLoader::Result::data, ElementsAre('h', 'e', 'l', 'l', 'o', ' ',
-                                                                      'w', 'o', 'r', 'l', 'd')))));
+  const std::string_view expectedStr = "hello world";
+  EXPECT_THAT(result,
+              VariantWith<UrlLoader::Result>(
+                  AllOf(Field(&UrlLoader::Result::mimeType, Eq("")),
+                        Field(&UrlLoader::Result::data, testing::ElementsAreArray(expectedStr)))));
 }
 
 /// @test that an invalid base64 data URL is handled appropriately.
