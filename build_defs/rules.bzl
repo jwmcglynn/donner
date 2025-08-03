@@ -177,7 +177,7 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
 
     return [cc_info]
 
-_donner_perf_sensitive_cc_library_rule = rule(
+_donner_perf_sensitive_cc_library = rule(
     implementation = _donner_perf_sensitive_cc_library_impl,
     toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
     attrs = {
@@ -215,7 +215,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **k
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
     if allow_debug_builds_config != None:
-        _donner_perf_sensitive_cc_library_rule(
+        _donner_perf_sensitive_cc_library(
             name = name + "_opt",
             **kwargs
         )
@@ -235,7 +235,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **k
             tags = ["perf_sensitive"],
         )
     else:
-        _donner_perf_sensitive_cc_library_rule(
+        _donner_perf_sensitive_cc_library(
             name = name,
             tags = ["perf_sensitive"],
             **kwargs
