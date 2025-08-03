@@ -5,6 +5,7 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/resources/FontLoader.h"
 #include "donner/svg/resources/ImageLoader.h"
+#include "donner/svg/resources/NullResourceLoader.h"
 
 namespace donner::svg::components {
 
@@ -14,13 +15,16 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
   auto imageView = registry_.view<ImageComponent>();
   const bool hasResourcesToLoad = !imageView.empty() || !fontFacesToLoad_.empty();
 
+  NullResourceLoader nullLoader;
+  ResourceLoaderInterface& loader =
+      loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader);
+
   if (!loader_ && hasResourcesToLoad) {
     if (outWarnings) {
       ParseError err;
       err.reason = "Could not load external resources, no ResourceLoader provided";
       outWarnings->emplace_back(err);
     }
-    return;
   }
 
   // Iterate over all ImageComponents and load them.
@@ -32,7 +36,7 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
 
     auto [image] = view.get(entity);
 
-    ImageLoader imageLoader(*loader_);
+    ImageLoader imageLoader(loader);
 
     auto maybeImageData = imageLoader.fromUri(image.href);
     if (std::holds_alternative<UrlLoaderError>(maybeImageData)) {
@@ -51,7 +55,7 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
   }
 
   // Iterate over all font faces and load them.
-  FontLoader fontLoader(*loader_);
+  FontLoader fontLoader(loader);
   for (const auto& fontFace : fontFacesToLoad_) {
     for (const css::FontFaceSource& source : fontFace.sources) {
       if (source.kind == css::FontFaceSource::Kind::Url) {
@@ -118,7 +122,10 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
     return nullptr;
   }
 
-  ImageLoader imageLoader(*loader_);
+  NullResourceLoader nullLoader;
+  ResourceLoaderInterface& loader =
+      loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader);
+  ImageLoader imageLoader(loader);
 
   auto maybeImageData = imageLoader.fromUri(image->href);
   if (std::holds_alternative<UrlLoaderError>(maybeImageData)) {

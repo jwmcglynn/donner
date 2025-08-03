@@ -8,8 +8,7 @@
 namespace donner::svg {
 
 /**
- * Interface for loading external resources, such as images. To load files from the local
- * filesystem, use \ref SandboxedFileResourceLoader.
+ * A resource loader that loads files from a sandboxed directory.
  */
 class SandboxedFileResourceLoader : public ResourceLoaderInterface {
 public:

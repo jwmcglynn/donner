@@ -20,7 +20,10 @@ cc_library(
 
 cc_library(
     name = "resource_loader_interface",
-    hdrs = ["ResourceLoaderInterface.h"],
+    hdrs = [
+        "NullResourceLoader.h",
+        "ResourceLoaderInterface.h",
+    ],
     visibility = ["//donner/svg:__subpackages__"],
 )
 
@@ -83,9 +86,13 @@ cc_test(
 )
 
 cc_test(
-    name = "sandboxed_file_resource_loader_tests",
-    srcs = ["tests/SandboxedFileResourceLoader_tests.cc"],
+    name = "resource_loader_tests",
+    srcs = [
+        "tests/NullResourceLoader_tests.cc",
+        "tests/SandboxedFileResourceLoader_tests.cc",
+    ],
     deps = [
+        ":resource_loader_interface",
         ":sandboxed_file_resource_loader",
         "@com_google_gtest//:gtest_main",
     ],

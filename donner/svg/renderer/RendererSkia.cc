@@ -333,20 +333,18 @@ public:
 
     const std::vector<donner::svg::components::FontResource>& loadedFonts =
         resourceManager.loadedFonts();
-    if (!loadedFonts.empty()) {
-      for (const auto& font : loadedFonts) {
-        auto fontData = CreateInMemoryFont(font.font);
-        if (auto typeface = renderer_.fontMgr_->makeFromData(std::move(fontData))) {
-          if (font.font.familyName.has_value()) {
-            renderer_.typefaces_[font.font.familyName.value()] = std::move(typeface);
-          } else {
-            // We don't have a family name, so the font will not be usable. Ignore it.
-          }
+    for (const auto& font : loadedFonts) {
+      auto fontData = CreateInMemoryFont(font.font);
+      if (auto typeface = renderer_.fontMgr_->makeFromData(std::move(fontData))) {
+        if (font.font.familyName.has_value()) {
+          renderer_.typefaces_[font.font.familyName.value()] = std::move(typeface);
         } else {
-          std::cerr << "Failed to load font face from data for family: "
-                    << (font.font.familyName.has_value() ? font.font.familyName.value() : "unknown")
-                    << "\n";
+          // We don't have a family name, so the font will not be usable. Ignore it.
         }
+      } else {
+        std::cerr << "Failed to load font face from data for family: "
+                  << (font.font.familyName.has_value() ? font.font.familyName.value() : "unknown")
+                  << "\n";
       }
     }
   }
