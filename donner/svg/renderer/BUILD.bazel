@@ -16,6 +16,13 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Build skia debug. Set with --@donner//donner/svg/renderer:skia_debug=true
+bool_flag(
+    name = "skia_debug",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "macos_coretext",
     constraint_values = ["@platforms//os:macos"],
@@ -26,6 +33,11 @@ config_setting(
     name = "linux_fontconfig",
     constraint_values = ["@platforms//os:linux"],
     flag_values = {":use_fontconfig": "true"},
+)
+
+config_setting(
+    name = "config_skia_debug",
+    flag_values = {":skia_debug": "true"},
 )
 
 cc_library(
@@ -60,6 +72,7 @@ cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "skia_deps",
+    allow_debug_builds_config = ":config_skia_debug",
     defines = select({
         ":macos_coretext": ["DONNER_USE_CORETEXT"],
         ":linux_fontconfig": ["DONNER_USE_FREETYPE_WITH_FONTCONFIG"],

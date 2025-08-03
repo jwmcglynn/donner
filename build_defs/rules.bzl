@@ -177,7 +177,7 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
 
     return [cc_info]
 
-donner_perf_sensitive_cc_library = rule(
+_donner_perf_sensitive_cc_library_rule = rule(
     implementation = _donner_perf_sensitive_cc_library_impl,
     toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
     attrs = {
@@ -192,3 +192,51 @@ donner_perf_sensitive_cc_library = rule(
     },
     fragments = ["cpp"],
 )
+
+def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **kwargs):
+    """
+    Wrapper around a cc_library that is always compiled with optimizations.
+
+    By default, this rule is always compiled in "opt" mode, regardless of the
+    --compilation_mode flag. This is useful for performance-sensitive code that
+    should not be run in debug builds, such as benchmarks or core rendering code.
+
+    If `allow_debug_builds_config` is set, this creates a configurable target
+    that will switch between the optimized and unconfigured versions of the library.
+    This is useful for tests which may want to run in debug mode.
+
+    Valid `allow_debug_builds_config` values are `config_setting` rules,
+    e.g. something that is valid as a select() key.
+
+    Args:
+      name: Rule name.
+      allow_debug_builds_config: A `selects.config_setting` that, if enabled,
+        will allow this library to be built in debug mode.
+      **kwargs: Additional arguments, matching the implementation of cc_library.
+    """
+    if allow_debug_builds_config != None:
+        _donner_perf_sensitive_cc_library_rule(
+            name = name + "_opt",
+            **kwargs
+        )
+
+        cc_library(
+            name = name + "_unconfigured",
+            **kwargs
+        )
+
+        cc_library(
+            name = name,
+            deps = select({
+                allow_debug_builds_config: [":" + name + "_unconfigured"],
+                "//conditions:default": [":" + name + "_opt"],
+            }),
+            visibility = ["//donner:__subpackages__"],
+            tags = ["perf_sensitive"],
+        )
+    else:
+        _donner_perf_sensitive_cc_library_rule(
+            name = name,
+            tags = ["perf_sensitive"],
+            **kwargs
+        )
