@@ -2,9 +2,9 @@ Subject: [PATCH] Add bazel build files
 Base-commit: b35641f4a3c62aa86a0b3c983d163bc0fe36026d
 
 ---
- BUILD.bazel  | 105 +++++++++++++++++++++++++++++++++++++++++++++++++++
- MODULE.bazel |   9 +++++
- 2 files changed, 114 insertions(+)
+ BUILD.bazel  | 145 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ MODULE.bazel |   10 +++++
+ 2 files changed, 155 insertions(+)
  create mode 100644 BUILD.bazel
  create mode 100644 MODULE.bazel
 
@@ -13,13 +13,38 @@ new file mode 100644
 index 00000000..952ce1c3
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,145 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
++load("@bazel_skylib//lib:selects.bzl", "selects")
 +
 +package(default_visibility = ["//visibility:public"])
 +
 +cc_library(
 +    name = "glfw",
++    deps = selects.with_or({
++        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
++        "//conditions:default": [":glfw_lib"],
++    }),
++    visibility = ["//visibility:public"],
++    linkopts = selects.with_or({
++        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [
++            "-s USE_WEBGL2=1",
++            "-s USE_GLFW=3",
++            "-s FULL_ES3=1",
++            "-s WASM=1",
++            "-s USE_PTHREADS=1",
++        ],
++        "//conditions:default": [],
++    }),
++    hdrs = [
++        "include/GLFW/glfw3.h",
++        "include/GLFW/glfw3native.h",
++    ],
++    includes = ["include/"],
++)
++
++cc_library(
++    name = "glfw_lib",
 +    srcs = [
 +        "src/context.c",
 +        "src/egl_context.c",
@@ -35,7 +60,7 @@ index 00000000..952ce1c3
 +        "src/posix_module.c",
 +        "src/vulkan.c",
 +        "src/window.c",
-+    ] + select({
++    ] + selects.with_or({
 +        "@bazel_tools//src/conditions:darwin": [],
 +        "@bazel_tools//src/conditions:windows": [
 +            "src/wgl_context.c",
@@ -45,6 +70,9 @@ index 00000000..952ce1c3
 +            "src/win32_thread.c",
 +            "src/win32_time.c",
 +            "src/win32_window.c",
++        ],
++        ("@platforms//cpu:wasm32","@platforms//cpu:wasm64"): [
++            "src/posix_thread.c",
 +        ],
 +        "//conditions:default": [
 +            "src/glx_context.c",
@@ -62,16 +90,28 @@ index 00000000..952ce1c3
 +        "include/GLFW/glfw3native.h",
 +    ] + glob(["src/*.h"]),
 +    copts = ["-std=c99"],
-+    defines = select({
++    defines = selects.with_or({
 +        "@bazel_tools//src/conditions:darwin": ["_GLFW_COCOA"],
 +        "@bazel_tools//src/conditions:windows": ["_GLFW_WIN32"],
-+        "//conditions:default": ["_GLFW_X11"],
++        ("@platforms//cpu:wasm32","@platforms//cpu:wasm64"): [],
++        "//conditions:default": [
++            "_GLFW_X11",
++            "_POSIX_C_SOURCE=200809L",
++        ],
 +    }),
 +    includes = ["include/"],
-+    linkopts = select({
++    linkopts = selects.with_or({
 +        "@bazel_tools//src/conditions:darwin": [],
 +        "@bazel_tools//src/conditions:windows": ["-lgdi32"],
++        ("@platforms//cpu:wasm32","@platforms//cpu:wasm64"): [
++            "-s USE_WEBGL2=1",
++            "-s USE_GLFW=3",
++            "-s FULL_ES3=1",
++            "-s WASM=1",
++            "-s USE_PTHREADS=1",
++        ],
 +        "//conditions:default": [
++            "-lrt",
 +            "-lX11",
 +            "-lXrandr",
 +            "-lXinerama",
@@ -124,15 +164,16 @@ new file mode 100644
 index 00000000..dcfdf080
 --- /dev/null
 +++ b/MODULE.bazel
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,10 @@
 +module(
 +    name = "glfw",
 +    version = "0.0.0",
 +)
 +
-+bazel_dep(name = "apple_support", version = "1.16.0", repo_name = "build_bazel_apple_support")
++bazel_dep(name = "apple_support", version = "1.22.1", repo_name = "build_bazel_apple_support")
++bazel_dep(name = "bazel_skylib", version = "1.7.1")
 +
-+bazel_dep(name = "rules_cc", version = "0.0.9")
-+bazel_dep(name = "platforms", version = "0.0.10")
++bazel_dep(name = "rules_cc", version = "0.1.4")
++bazel_dep(name = "platforms", version = "1.0.0")
 -- 
 2.39.3 (Apple Git-146)
