@@ -44,9 +44,9 @@ public:
   /// Sentinel value for the maximum value of size_t, used to indicate when the size is not known.
   static constexpr size_t npos = std::string_view::npos;
   /// String iterator.
-  using iterator = std::string_view::iterator;
+  using iterator = char*;
   /// Const string iterator.
-  using const_iterator = std::string_view::const_iterator;
+  using const_iterator = const char*;
 
   /// Create an empty string.
   constexpr RcStringOrRef() = default;
