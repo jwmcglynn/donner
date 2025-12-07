@@ -41,25 +41,27 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-transform",
         {
-            {"a-transform-007.svg",
+            {"rotate-at-position.svg",
             Params::WithThreshold(0.05f)},  // Larger threshold due to anti-aliasing artifacts.
         })),
     TestNameFromFilename);
 ```
 
-The Resvg test suite files all start with a letter, either "a-" for attribute, or "e-" for element,
-followed by a dash-delimited name, and then a zero-prefixed number. So "a-transform" will match
-all tests like "a-transform-007.svg" or "a-transform-origin-001.svg" (hypothetically).
+The Resvg test suite was restructured in May 2023, moving from a flat structure with numbered files
+(e.g., `a-transform-007.svg`) to a nested directory structure with descriptive names (e.g.,
+`tests/structure/transform/rotate-at-position.svg`). The test registration uses a prefix like
+"a-transform" or "e-circle" which maps to the corresponding directory in the test suite. All SVG
+files in that directory are automatically included in the test.
 
 The test name is generated based on the test suite name, "Transform" above and the sanitized
 filename. For the above example, an example test would be named:
 
-`Transform/ImageComparisonTestFixture.ResvgTest/a_transform_001`
+`Transform/ImageComparisonTestFixture.ResvgTest/rotate_at_position`
 
 To run a test with only one test:
 
 ```sh
-bazel run -c dbg //donner/svg/renderer/tests:resvg_test_suite -- --gtest_filter="*a_transform_001"
+bazel run -c dbg //donner/svg/renderer/tests:resvg_test_suite -- --gtest_filter="*rotate_at_position"
 ```
 
 If a test is skipped, it's still useful to manually run it without code changes. With gtest, the
@@ -70,7 +72,7 @@ still be run manually from the command line.
 To run a test that has been disabled, invoke it the same way:
 
 ```sh
-bazel run -c dbg //donner/svg/renderer/tests:resvg_test_suite -- --gtest_filter="*a_transform_008" --gtest_also_run_disabled_tests
+bazel run -c dbg //donner/svg/renderer/tests:resvg_test_suite -- --gtest_filter="*simple_case" --gtest_also_run_disabled_tests
 ```
 
 With suffix-matching, the same test identifier can be used.
