@@ -43,7 +43,7 @@ bazel_dep(name = "freetype", version = "2.13.3")
 git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt",
-    tag = "v3.15.0",
+    tag = "v3.16.0",
 )
 
 local_repository(
