@@ -38,6 +38,17 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
 - The rendering pipeline ultimately creates `RenderingInstanceComponent` objects
   consumed by a backend like Skia.
 
+## General Practices
+
+- Prefer existing Donner utilities (e.g., `Transformd`, `RcString`,
+  `StringUtils`) before introducing new dependencies. Keep external libraries
+  to a minimum and justify any additions.
+- Optimize for readability and testability. Extract helpers rather than adding
+  large inline logic blocks.
+- Tests:
+  - Use gMock with gTest for C++ tests.
+  - Add fuzzers for parser-style code paths when practical.
+
 ## Building
 
 - Both bazel and CMake are supported, but Bazel is the primary build system. CMake is experimental and may not support all features.
@@ -61,6 +72,8 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   (`dprint.json` sets line width to 100 and indent width to 2).
 - Use `buildifier` to format Bazel build files (e.g. `.bzl`, `BUILD.bazel`).
   or `external/`.
+- Design docs have dedicated guidance under `docs/design_docs/AGENTS.md`.
+  Refer to those instructions when authoring or updating design documentation.
 - For doc-only changes, don't run `clang-format` or `dprint`, or build.
 - Doc files under docs/ are used to generate Doxygen documentation.
   - Use `tools/doxygen.sh` to generate the docs.
