@@ -289,8 +289,11 @@ INSTANTIATE_TEST_SUITE_P(Shape, ImageComparisonTestFixture,
                                                      })),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(StopAttributes, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-stop")), TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StopColor, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-stop-color")), TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(StopOpacity, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-stop-opacity")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Stroke, ImageComparisonTestFixture,
