@@ -1,6 +1,7 @@
 # Agent Instructions for Design Docs
 
 This directory holds guidance for writing design documents for new features.
+All new and updated design documents must live under this `docs/design_docs/` directory so they stay co-located with the design guidance.
 Follow these steps when collaborating on a feature:
 
 1. **Start with goals.** Begin every feature by writing a design doc driven by
@@ -20,6 +21,9 @@ Follow these steps when collaborating on a feature:
    work to ship the feature. Convert the design doc into developer-facing
    documentation by removing prior-state notes and step-by-step plans. Document
    the current architecture and the resulting feature set.
+7. **Communicate the next step.** When working step by step, always state the
+   next planned step in the summary so collaborators know what will happen
+   next.
 
 Quality expectations for this directory:
 
