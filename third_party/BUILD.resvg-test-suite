@@ -1,7 +1,7 @@
 filegroup(
     name = "svg",
     srcs = glob([
-        "svg/*.svg",
+        "tests/**/*.svg",
     ]),
     visibility = ["//visibility:public"],
 )
@@ -9,7 +9,7 @@ filegroup(
 filegroup(
     name = "png",
     srcs = glob([
-        "png/*.png",
+        "tests/**/*.png",
     ]),
     visibility = ["//visibility:public"],
 )
@@ -17,7 +17,7 @@ filegroup(
 filegroup(
     name = "images",
     srcs = glob([
-        "images/*.*",
+        "resources/*.*",
     ]),
     visibility = ["//visibility:public"],
 )
