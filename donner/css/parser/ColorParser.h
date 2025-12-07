@@ -6,6 +6,7 @@
 
 #include "donner/base/ParseResult.h"
 #include "donner/css/Color.h"
+#include "donner/css/ColorProfile.h"
 #include "donner/css/ComponentValue.h"
 
 namespace donner::css::parser {
@@ -16,6 +17,12 @@ namespace donner::css::parser {
  */
 class ColorParser {
 public:
+  /// Options for color parsing.
+  struct Options {
+    /// Optional registry containing custom `@color-profile` bindings.
+    const ColorProfileRegistry* profileRegistry = nullptr;
+  };
+
   /**
    * Parse a CSS color, per https://www.w3.org/TR/2021/WD-css-color-4-20210601/
    *
@@ -25,6 +32,8 @@ public:
    * @return Parsed color.
    */
   static ParseResult<Color> Parse(std::span<const ComponentValue> components);
+  static ParseResult<Color> Parse(std::span<const ComponentValue> components,
+                                  const Options& options);
 
   /**
    * Parse a CSS color from a string, per https://www.w3.org/TR/2021/WD-css-color-4-20210601/
@@ -35,6 +44,7 @@ public:
    * @return Parsed color.
    */
   static ParseResult<Color> ParseString(std::string_view str);
+  static ParseResult<Color> ParseString(std::string_view str, const Options& options);
 };
 
 }  // namespace donner::css::parser

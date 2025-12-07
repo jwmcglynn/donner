@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 
 #include "donner/base/MathUtils.h"
 #include "donner/css/parser/details/ComponentValueParser.h"
@@ -151,8 +152,8 @@ private:
 
 class ColorParserImpl {
 public:
-  ColorParserImpl(std::span<const css::ComponentValue> components)
-      : components_(trimWhitespace(components)) {}
+  ColorParserImpl(std::span<const css::ComponentValue> components, ColorParser::Options options)
+      : components_(trimWhitespace(components)), options_(std::move(options)) {}
 
   ParseResult<Color> parseColor() {
     if (components_.empty()) {
@@ -210,6 +211,10 @@ public:
         return parseLab(name, f.values);
       } else if (name.equalsLowercase("lch")) {
         return parseLch(name, f.values);
+      } else if (name.equalsLowercase("oklab")) {
+        return parseOklab(name, f.values);
+      } else if (name.equalsLowercase("oklch")) {
+        return parseOklch(name, f.values);
       } else if (name.equalsLowercase("color")) {
         return parseColorFunction(name, f.values);
       } else if (name.equalsLowercase("device-cmyk")) {
@@ -455,15 +460,20 @@ public:
       return std::move(blacknessResult.error());
     }
 
-    const RGBA rgb = hwbToRgb(normalizeAngleDegrees(hueResult.result()),
-                              Clamp(whitenessResult.result().value / 100.0, 0.0, 1.0),
-                              Clamp(blacknessResult.result().value / 100.0, 0.0, 1.0));
+    ColorSpaceValue value;
+    value.id = ColorSpaceId::kHwb;
+    value.c1 = normalizeAngleDegrees(hueResult.result());
+    value.c2 = Clamp(whitenessResult.result().value / 100.0, 0.0, 1.0);
+    value.c3 = Clamp(blacknessResult.result().value / 100.0, 0.0, 1.0);
+
     auto alphaResult = tryParseOptionalAlpha(hwbParams, requiresCommas);
     if (alphaResult.hasError()) {
       return std::move(alphaResult.error());
     }
 
-    return Color(RGBA(rgb.r, rgb.g, rgb.b, alphaResult.result()));
+    value.alpha = alphaResult.result();
+
+    return Color(value);
   }
 
   ParseResult<Color> parseLab(const RcString& functionName,
@@ -534,9 +544,14 @@ public:
       return std::move(error.value());
     }
 
-    // Convert Lab to RGB
-    const RGBA rgb = labToSRGB(L, a, b, alpha);
-    return Color(rgb);
+    ColorSpaceValue value;
+    value.id = ColorSpaceId::kLab;
+    value.c1 = L;
+    value.c2 = a;
+    value.c3 = b;
+    value.alpha = static_cast<uint8_t>(alpha * 255.0);
+
+    return Color(value);
   }
 
   ParseResult<Color> parseLch(const RcString& functionName,
@@ -597,15 +612,161 @@ public:
       return std::move(error.value());
     }
 
-    // Convert LCH to Lab
-    double a, b;
-    lchToLab(L, C, H, a, b);
-    // Convert Lab to RGB
-    const RGBA rgb = labToSRGB(L, a, b, alpha);
-    return Color(rgb);
+    ColorSpaceValue value;
+    value.id = ColorSpaceId::kLch;
+    value.c1 = L;
+    value.c2 = C;
+    value.c3 = H;
+    value.alpha = static_cast<uint8_t>(alpha * 255.0);
+
+    return Color(value);
   }
 
-  void lchToLab(double L, double C, double H_deg, double& a, double& b) {
+  ParseResult<Color> parseOklab(const RcString& functionName,
+                                std::span<const css::ComponentValue> components) {
+    FunctionParameterParser params(functionName, components);
+
+    // Parse L component
+    auto LResult = params.next();
+    if (LResult.hasError()) {
+      return std::move(LResult.error());
+    }
+
+    double L;
+    if (LResult.result().is<Token::Percentage>()) {
+      L = Clamp(LResult.result().get<Token::Percentage>().value / 100.0, 0.0, 1.0);
+    } else if (LResult.result().is<Token::Number>()) {
+      L = Clamp(LResult.result().get<Token::Number>().value, 0.0, 1.0);
+    } else {
+      return unexpectedTokenError(functionName, LResult.result());
+    }
+
+    // Parse a component
+    auto aResult = params.next();
+    if (aResult.hasError()) {
+      return std::move(aResult.error());
+    }
+
+    double a;
+    if (aResult.result().is<Token::Percentage>()) {
+      a = Clamp(aResult.result().get<Token::Percentage>().value / 100.0 * 0.4, -0.4, 0.4);
+    } else if (aResult.result().is<Token::Number>()) {
+      a = aResult.result().get<Token::Number>().value;
+    } else {
+      return unexpectedTokenError(functionName, aResult.result());
+    }
+
+    // Parse b component
+    auto bResult = params.next();
+    if (bResult.hasError()) {
+      return std::move(bResult.error());
+    }
+
+    double b;
+    if (bResult.result().is<Token::Percentage>()) {
+      b = Clamp(bResult.result().get<Token::Percentage>().value / 100.0 * 0.4, -0.4, 0.4);
+    } else if (bResult.result().is<Token::Number>()) {
+      b = bResult.result().get<Token::Number>().value;
+    } else {
+      return unexpectedTokenError(functionName, bResult.result());
+    }
+
+    // Parse optional alpha
+    double alpha = 1.0;
+    if (!params.isEOF()) {
+      if (auto error = params.requireSlash()) {
+        return std::move(error.value());
+      }
+      auto alphaResult = parseAlpha(params);
+      if (alphaResult.hasError()) {
+        return std::move(alphaResult.error());
+      }
+      alpha = alphaResult.result() / 255.0;
+    }
+
+    if (auto error = params.requireEOF()) {
+      return std::move(error.value());
+    }
+
+    ColorSpaceValue value;
+    value.id = ColorSpaceId::kOklab;
+    value.c1 = L;
+    value.c2 = a;
+    value.c3 = b;
+    value.alpha = static_cast<uint8_t>(alpha * 255.0);
+
+    return Color(value);
+  }
+
+  ParseResult<Color> parseOklch(const RcString& functionName,
+                                std::span<const css::ComponentValue> components) {
+    FunctionParameterParser params(functionName, components);
+
+    // Parse L component
+    auto LResult = params.next();
+    if (LResult.hasError()) {
+      return std::move(LResult.error());
+    }
+
+    double L;
+    if (LResult.result().is<Token::Percentage>()) {
+      L = Clamp(LResult.result().get<Token::Percentage>().value / 100.0, 0.0, 1.0);
+    } else if (LResult.result().is<Token::Number>()) {
+      L = Clamp(LResult.result().get<Token::Number>().value, 0.0, 1.0);
+    } else {
+      return unexpectedTokenError(functionName, LResult.result());
+    }
+
+    // Parse C component
+    auto CResult = params.next();
+    if (CResult.hasError()) {
+      return std::move(CResult.error());
+    }
+
+    double C;
+    if (CResult.result().is<Token::Percentage>()) {
+      C = Clamp(CResult.result().get<Token::Percentage>().value / 100.0 * 0.4, 0.0, 0.4);
+    } else if (CResult.result().is<Token::Number>()) {
+      C = std::max(0.0, CResult.result().get<Token::Number>().value);
+    } else {
+      return unexpectedTokenError(functionName, CResult.result());
+    }
+
+    // Parse H component
+    auto hueResult = parseHue(params);
+    if (hueResult.hasError()) {
+      return std::move(hueResult.error());
+    }
+    const double H = normalizeAngleDegrees(hueResult.result());
+
+    // Parse optional alpha
+    double alpha = 1.0;
+    if (!params.isEOF()) {
+      if (auto error = params.requireSlash()) {
+        return std::move(error.value());
+      }
+      auto alphaResult = parseAlpha(params);
+      if (alphaResult.hasError()) {
+        return std::move(alphaResult.error());
+      }
+      alpha = alphaResult.result() / 255.0;
+    }
+
+    if (auto error = params.requireEOF()) {
+      return std::move(error.value());
+    }
+
+    ColorSpaceValue value;
+    value.id = ColorSpaceId::kOklch;
+    value.c1 = L;
+    value.c2 = C;
+    value.c3 = H;
+    value.alpha = static_cast<uint8_t>(alpha * 255.0);
+
+    return Color(value);
+  }
+
+  void oklchToOklab(double L, double C, double H_deg, double& a, double& b) {
     const double H_rad = H_deg * MathConstants<double>::kDegToRad;
     a = C * cos(H_rad);
     b = C * sin(H_rad);
@@ -613,9 +774,70 @@ public:
 
   ParseResult<Color> parseColorFunction(const RcString& functionName,
                                         std::span<const css::ComponentValue> components) {
-    ParseError err;
-    err.reason = "Not implemented";
-    return err;
+    FunctionParameterParser params(functionName, components);
+
+    auto identTokenResult = params.next();
+    if (identTokenResult.hasError()) {
+      return std::move(identTokenResult.error());
+    }
+    const auto& identToken = identTokenResult.result();
+    if (!identToken.is<Token::Ident>()) {
+      return unexpectedTokenError(functionName, identToken);
+    }
+    std::string space = identToken.get<Token::Ident>().value.str();
+    std::transform(space.begin(), space.end(), space.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    const auto spaceId = resolveColorSpace(space);
+    if (!spaceId) {
+      ParseError err;
+      err.reason = "Unsupported color space '" + space + "'";
+      err.location = identToken.offset();
+      return err;
+    }
+
+    double comps[3];
+    for (int i = 0; i < 3; ++i) {
+      auto vResult = params.next();
+      if (vResult.hasError()) {
+        return std::move(vResult.error());
+      }
+      const auto& tok = vResult.result();
+      double v;
+      if (tok.is<Token::Number>()) {
+        v = tok.get<Token::Number>().value;
+      } else if (tok.is<Token::Percentage>()) {
+        v = tok.get<Token::Percentage>().value / 100.0;
+      } else {
+        return unexpectedTokenError(functionName, tok);
+      }
+      comps[i] = v;
+    }
+
+    double alpha = 1.0;
+    if (!params.isEOF()) {
+      if (auto error = params.requireSlash()) {
+        return std::move(error.value());
+      }
+      auto alphaResult = parseAlpha(params);
+      if (alphaResult.hasError()) {
+        return std::move(alphaResult.error());
+      }
+      alpha = alphaResult.result() / 255.0;
+    }
+
+    if (auto error = params.requireEOF()) {
+      return std::move(error.value());
+    }
+
+    ColorSpaceValue value;
+    value.id = spaceId.value();
+    value.c1 = comps[0];
+    value.c2 = comps[1];
+    value.c3 = comps[2];
+    value.alpha = static_cast<uint8_t>(alpha * 255.0);
+
+    return Color(value);
   }
 
   ParseResult<Color> parseDeviceCmyk(const RcString& functionName,
@@ -652,21 +874,14 @@ private:
     return err;
   }
 
-  static RGBA hwbToRgb(double hue, double white, double black) {
-    if (white + black >= 1) {
-      const uint8_t gray = numberToChannel(white / (white + black));
-      return RGBA::RGB(gray, gray, gray);
+  std::optional<ColorSpaceId> resolveColorSpace(const std::string& name) const {
+    if (options_.profileRegistry) {
+      if (auto fromProfile = options_.profileRegistry->resolve(name)) {
+        return fromProfile;
+      }
     }
 
-    HSLA hsl = HSLA::HSL(static_cast<float>(hue), 1.0f, 0.5f);
-    float* hslComponents[3] = {&hsl.hDeg, &hsl.s, &hsl.l};
-
-    for (int i = 0; i < 3; i++) {
-      *hslComponents[i] *= static_cast<float>(1 - white - black);
-      *hslComponents[i] += static_cast<float>(white);
-    }
-
-    return hsl.toRGBA();
+    return ColorSpaceIdFromString(name);
   }
 
   static double normalizeAngleDegrees(double angleDegrees) {
@@ -699,99 +914,32 @@ private:
     }
   }
 
-  // Helper function to convert Lab to sRGB
-  RGBA labToSRGB(double L, double a, double b, double alpha) {
-    // Convert Lab to XYZ (D50)
-    double X_D50, Y_D50, Z_D50;
-    labToXYZ(L, a, b, X_D50, Y_D50, Z_D50);
-
-    // Adapt XYZ from D50 to D65
-    double X_D65, Y_D65, Z_D65;
-    adaptD50toD65(X_D50, Y_D50, Z_D50, X_D65, Y_D65, Z_D65);
-
-    // Convert XYZ (D65) to linear sRGB
-    double r_lin, g_lin, b_lin;
-    xyzToLinearRGB(X_D65, Y_D65, Z_D65, r_lin, g_lin, b_lin);
-
-    // Convert linear sRGB to sRGB
-    const uint8_t R = linearToSRGB(r_lin);
-    const uint8_t G = linearToSRGB(g_lin);
-    const uint8_t B = linearToSRGB(b_lin);
-
-    return RGBA(R, G, B, static_cast<uint8_t>(alpha * 255.0));
-  }
-
-  // Convert Lab to XYZ
-  void labToXYZ(double L, double a, double b, double& X, double& Y, double& Z) {
-    // Normalize L*, a*, b*
-    const double κ = 24389.0 / 27.0;   // 29^3 / 3^3
-    const double ε = 216.0 / 24389.0;  // 6^3 / 29^3
-
-    const double fy = (L + 16.0) / 116.0;
-    const double fx = fy + (a / 500.0);
-    const double fz = fy - (b / 200.0);
-
-    const double fx3 = fx * fx * fx;
-    const double fz3 = fz * fz * fz;
-
-    const double xr = fx3 > ε ? fx3 : (116.0 * fx - 16.0) / κ;
-    const double yr = L > (κ * ε) ? pow((L + 16.0) / 116.0, 3) : L / κ;
-    const double zr = fz3 > ε ? fz3 : (116.0 * fz - 16.0) / κ;
-
-    // Reference white D50
-    const double Xn = 0.96422;  // Xn, Yn, Zn for D50
-    const double Yn = 1.0;
-    const double Zn = 0.82521;
-
-    X = xr * Xn;
-    Y = yr * Yn;
-    Z = zr * Zn;
-  }
-
-  void adaptD50toD65(double X_D50, double Y_D50, double Z_D50, double& X_D65, double& Y_D65,
-                     double& Z_D65) {
-    // Bradford transformation matrix
-    const double M[3][3] = {{0.9554734527042182, -0.0230985368742614, 0.0632593086610217},
-                            {-0.0283697069632081, 1.0099954580058226, 0.0210413989669430},
-                            {0.0123140016883199, -0.0205076964334771, 1.3303659908427779}};
-
-    X_D65 = M[0][0] * X_D50 + M[0][1] * Y_D50 + M[0][2] * Z_D50;
-    Y_D65 = M[1][0] * X_D50 + M[1][1] * Y_D50 + M[1][2] * Z_D50;
-    Z_D65 = M[2][0] * X_D50 + M[2][1] * Y_D50 + M[2][2] * Z_D50;
-  }
-
-  // Convert XYZ to linear RGB
-  void xyzToLinearRGB(double X, double Y, double Z, double& r, double& g, double& b) {
-    // sRGB conversion matrix (D65)
-    r = 3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z;
-    g = -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z;
-    b = 0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z;
-  }
-
-  // Convert linear RGB to sRGB
-  uint8_t linearToSRGB(double value) {
-    double v = value <= 0.0031308 ? 12.92 * value : 1.055 * pow(value, 1.0 / 2.4) - 0.055;
-
-    // Ensure the value is within [0,1]
-    v = Clamp(v, 0.0, 1.0);
-    return static_cast<uint8_t>(Round(v * 255.0));
-  }
-
   std::span<const css::ComponentValue> components_;
+  ColorParser::Options options_;
 };
 
 }  // namespace
 
 ParseResult<Color> ColorParser::Parse(std::span<const css::ComponentValue> components) {
-  ColorParserImpl parser(components);
+  return Parse(components, Options());
+}
+
+ParseResult<Color> ColorParser::Parse(std::span<const css::ComponentValue> components,
+                                      const ColorParser::Options& options) {
+  ColorParserImpl parser(components, options);
   return parser.parseColor();
 }
 
 ParseResult<Color> ColorParser::ParseString(std::string_view str) {
+  return ParseString(str, Options());
+}
+
+ParseResult<Color> ColorParser::ParseString(std::string_view str,
+                                            const ColorParser::Options& options) {
   details::Tokenizer tokenizer(str);
   const std::vector<ComponentValue> componentValues =
       details::parseListOfComponentValues(tokenizer);
-  ColorParserImpl parser(componentValues);
+  ColorParserImpl parser(componentValues, options);
   return parser.parseColor();
 }
 
