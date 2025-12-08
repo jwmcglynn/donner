@@ -6,6 +6,7 @@
   OKLab/OKLCH, Lab/LCH, HSL, and HWB with deferred conversion through `Color::asRGBA()`.
 - Implemented `@color-profile` parsing with alias binding to the supported SVG2 profiles.
 - Documented the color-space architecture and validation approach for future HDR/ICC work.
+- Tracked in issue #6 to confirm all CSS Color 4 functions are implemented and tested.
 
 ## v0.1.0
 

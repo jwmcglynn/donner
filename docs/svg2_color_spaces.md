@@ -9,6 +9,12 @@ conversion pipeline to cover additional SVG2 color spaces while keeping color ma
 centralized in the `Color` class and downstream render backends. The implementation is complete
 end-to-end; future work is limited to optional ICC profile loading and HDR tone-mapping research.
 
+## Tracking
+
+- Issue: https://github.com/jwmcglynn/donner/issues/6
+- Scope: Complete CSS Color 4 function coverage (`hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`,
+  `oklch()`, and `color()`), deferred color conversion, and `@color-profile` parsing.
+
 ## Goals
 
 - Represent authored color-space intent instead of eagerly flattening to sRGB in the parser.
@@ -65,9 +71,10 @@ full ICC data.
 ## Validation
 
 Unit tests cover parser behavior for all supported profiles, the `@color-profile` binding flow, and
-the color-function conversions through `Color::asRGBA()`. Conversion expectations are derived from
-the CSS Color 4 spec reference values. Parser tests run under Bazel via
-`//donner/css/parser:parser_tests`.
+the color-function conversions through `Color::asRGBA()`. The test matrix explicitly exercises the
+CSS Color 4 functions that prompted [issue #6](https://github.com/jwmcglynn/donner/issues/6),
+verifying `hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`, and `color()` against spec
+reference values. Parser tests run under Bazel via `//donner/css/parser:parser_tests`.
 
 ## Future work
 
