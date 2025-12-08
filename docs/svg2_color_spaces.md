@@ -76,6 +76,20 @@ CSS Color 4 functions that prompted [issue #6](https://github.com/jwmcglynn/donn
 verifying `hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`, and `color()` against spec
 reference values. Parser tests run under Bazel via `//donner/css/parser:parser_tests`.
 
+## Issue #6 verification
+
+| Checklist item | Status |
+| --- | --- |
+| Implement `hsl()` with deferred conversion in `Color` | Complete |
+| Implement `hwb()` | Complete |
+| Implement `lab()` | Complete |
+| Implement `lch()` | Complete |
+| Implement `oklab()` | Complete |
+| Implement `oklch()` | Complete |
+| Implement `color()` with SVG2 profiles and aliasing | Complete |
+| Parse `@color-profile` and bind aliases to supported profiles | Complete |
+| Validate color-function conversions against CSS Color 4 references | Complete |
+
 ## Future work
 
 Potential extensions include full ICC profile loading, HDR tone mapping, and more advanced gamut
