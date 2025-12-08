@@ -63,13 +63,14 @@ cc_test(
     ],
     data = [
         "//donner/svg/renderer/testdata",
-        "@resvg-test-suite//:images",
-        "@resvg-test-suite//:png",
-        "@resvg-test-suite//:svg",
+        "@resvg-test-suite//:fonts",
+        "@resvg-test-suite//:resources",
+        "@resvg-test-suite//:tests",
     ],
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+    timeout = "long",
 )
