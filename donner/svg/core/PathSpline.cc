@@ -7,6 +7,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utils.h"
+#include "donner/svg/core/PathBooleanOps.h"
 
 namespace donner::svg {
 
@@ -1026,6 +1027,48 @@ bool PathSpline::isOnPath(const Vector2d& point, double strokeWidth) const {
   }
 
   return false;
+}
+
+PathSpline PathSpline::BooleanOp(const PathSpline& subject, const PathSpline& clip,
+                                 PathBooleanOp op, FillRule subjectFillRule, FillRule clipFillRule,
+                                 PathBooleanEngine& engine, double tolerance) {
+  return PathBooleanOps::Compute(subject, clip, op, subjectFillRule, clipFillRule, engine,
+                                 tolerance);
+}
+
+PathSpline PathSpline::booleanUnion(const PathSpline& other, FillRule subjectFillRule,
+                                    FillRule clipFillRule, PathBooleanEngine& engine,
+                                    double tolerance) const {
+  return BooleanOp(*this, other, PathBooleanOp::kUnion, subjectFillRule, clipFillRule, engine,
+                   tolerance);
+}
+
+PathSpline PathSpline::booleanIntersection(const PathSpline& other, FillRule subjectFillRule,
+                                           FillRule clipFillRule, PathBooleanEngine& engine,
+                                           double tolerance) const {
+  return BooleanOp(*this, other, PathBooleanOp::kIntersection, subjectFillRule, clipFillRule,
+                   engine, tolerance);
+}
+
+PathSpline PathSpline::booleanDifference(const PathSpline& other, FillRule subjectFillRule,
+                                         FillRule clipFillRule, PathBooleanEngine& engine,
+                                         double tolerance) const {
+  return BooleanOp(*this, other, PathBooleanOp::kDifference, subjectFillRule, clipFillRule, engine,
+                   tolerance);
+}
+
+PathSpline PathSpline::booleanReverseDifference(const PathSpline& other, FillRule subjectFillRule,
+                                                FillRule clipFillRule, PathBooleanEngine& engine,
+                                                double tolerance) const {
+  return BooleanOp(*this, other, PathBooleanOp::kReverseDifference, subjectFillRule, clipFillRule,
+                   engine, tolerance);
+}
+
+PathSpline PathSpline::booleanXor(const PathSpline& other, FillRule subjectFillRule,
+                                  FillRule clipFillRule, PathBooleanEngine& engine,
+                                  double tolerance) const {
+  return BooleanOp(*this, other, PathBooleanOp::kXor, subjectFillRule, clipFillRule, engine,
+                   tolerance);
 }
 
 std::ostream& operator<<(std::ostream& os, const PathSpline& spline) {
