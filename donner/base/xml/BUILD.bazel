@@ -17,11 +17,19 @@ donner_cc_library(
 donner_cc_library(
     name = "xml",
     srcs = [
+        "Save.cc",
+        "LocalizedEditBuilder.cc",
+        "ReplaceSpanPlanner.cc",
+        "SourceDocument.cc",
         "XMLDocument.cc",
         "XMLNode.cc",
         "XMLParser.cc",
     ],
     hdrs = [
+        "Save.h",
+        "LocalizedEditBuilder.h",
+        "ReplaceSpanPlanner.h",
+        "SourceDocument.h",
         "XMLDocument.h",
         "XMLNode.h",
         "XMLParser.h",
@@ -48,6 +56,10 @@ cc_binary(
 cc_test(
     name = "xml_tests",
     srcs = [
+        "tests/LocalizedEditBuilder_tests.cc",
+        "tests/Save_tests.cc",
+        "tests/ReplaceSpanPlanner_tests.cc",
+        "tests/SourceDocument_tests.cc",
         "tests/XMLNode_tests.cc",
         "tests/XMLParser_tests.cc",
         "tests/XMLQualifiedName_tests.cc",

@@ -87,6 +87,8 @@ static size_t FindEntityDeclEnd(const ChunkedString& text, size_t start) {
 struct ParsedAttribute {
   XMLQualifiedNameRef name;
   RcStringOrRef value;
+  FileOffsetRange location;
+  FileOffsetRange valueLocation;
 };
 
 /// Detects qualified name characters, e.g. element or attribute names, which may contain a colon
@@ -699,6 +701,7 @@ private:
 
   // Parse XML comment (<!--...)
   ParseResult<std::optional<XMLNode>> parseComment(FileOffset startOffset) {
+    const FileOffset valueStart = currentOffsetWithLineNumber(remaining_);
     const auto maybeComment = consumeContentsUntilEndString("-->");
     if (!maybeComment) {
       return createParseError("Comment node does not end with '-->'");
@@ -709,8 +712,11 @@ private:
     // If Comment nodes are enabled
     if (options_.parseComments) {
       XMLNode commentNode = XMLNode::CreateCommentNode(document_, commentStr.toSingleRcString());
+      const FileOffset valueEnd =
+          lineOffsets().fileOffset(valueStart.offset.value() + commentStr.size());
       commentNode.setSourceStartOffset(startOffset);
       commentNode.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+      commentNode.setValueSourceRange(FileOffsetRange{valueStart, valueEnd});
       return std::make_optional(commentNode);
     } else {
       return std::optional<XMLNode>(std::nullopt);
@@ -807,6 +813,7 @@ private:
     skipWhitespace(remaining_);
 
     // Consume contents until finding a '?>'
+    const FileOffset valueStart = currentOffsetWithLineNumber(remaining_);
     const auto maybePiValue = consumeContentsUntilEndString("?>");
     if (!maybePiValue) {
       return createParseError("PI node does not end with '?>'");
@@ -817,8 +824,11 @@ private:
     if (options_.parseProcessingInstructions) {
       XMLNode pi = XMLNode::CreateProcessingInstructionNode(document_, piName.toSingleRcString(),
                                                             piValue.toSingleRcString());
+      const FileOffset valueEnd =
+          lineOffsets().fileOffset(valueStart.offset.value() + piValue.size());
       pi.setSourceStartOffset(startOffset);
       pi.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+      pi.setValueSourceRange(FileOffsetRange{valueStart, valueEnd});
       return std::make_optional(pi);
     } else {
       return std::optional<XMLNode>(std::nullopt);
@@ -829,6 +839,8 @@ private:
    * Read raw text (PCDATA) until `<` or `\0`
    */
   std::optional<ParseError> parseAndAppendData(XMLNode& node) {
+    const FileOffset dataStartOffset = currentOffsetWithLineNumber(remaining_);
+
     // Expand all entities in the current text chunk
     auto maybeData = consumePCDataOnce();
     if (maybeData.hasError()) {
@@ -842,6 +854,10 @@ private:
 
       // Create new data node
       XMLNode data = XMLNode::CreateDataNode(document_, dataStrAllocated);
+      const FileOffset dataEndOffset = currentOffsetWithLineNumber(remaining_);
+      data.setSourceStartOffset(dataStartOffset);
+      data.setSourceEndOffset(dataEndOffset);
+      data.setValueSourceRange(FileOffsetRange{dataStartOffset, dataEndOffset});
       node.appendChild(data);
 
       // Add data to parent node as well
@@ -856,6 +872,7 @@ private:
    * parseCData: e.g. `<![CDATA[ ... ]]>`
    */
   ParseResult<XMLNode> parseCData(FileOffset startOffset) {
+    const FileOffset valueStart = currentOffsetWithLineNumber(remaining_);
     auto maybeCData = consumeContentsUntilEndString("]]>");
     if (!maybeCData) {
       return createParseError("CDATA node does not end with ']]>'");
@@ -864,8 +881,11 @@ private:
     const ChunkedString& cdataStr = maybeCData.value();
 
     XMLNode cdata = XMLNode::CreateCDataNode(document_, cdataStr.toSingleRcString());
+    const FileOffset valueEnd =
+        lineOffsets().fileOffset(valueStart.offset.value() + cdataStr.size());
     cdata.setSourceStartOffset(startOffset);
     cdata.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+    cdata.setValueSourceRange(FileOffsetRange{valueStart, valueEnd});
     return cdata;
   }
 
@@ -1134,6 +1154,8 @@ private:
       return std::optional<ParsedAttribute>(std::nullopt);
     }
 
+    const FileOffset attributeStartOffset = currentOffsetWithLineNumber(remaining_);
+
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
       ParseError err;
@@ -1164,12 +1186,16 @@ private:
     const char quote = maybeQuote.value();
     remaining_.remove_prefix(1);
 
+    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
+
     // Extract attribute value and expand char refs in it
     auto maybeValue = quote == '\'' ? consumeAttributeExpandEntities<'\''>()
                                     : consumeAttributeExpandEntities<'"'>();
     if (maybeValue.hasError()) {
       return std::move(maybeValue.error());
     }
+
+    const FileOffset valueEndOffset = currentOffsetWithLineNumber(remaining_);
 
     // Make sure that end quote is present
     if (!tryConsume(remaining_, std::string_view(&quote, 1))) {
@@ -1180,7 +1206,11 @@ private:
       }
     }
 
-    ParsedAttribute result{name, maybeValue.result().toSingleRcString()};
+    const FileOffset attributeEndOffset = currentOffsetWithLineNumber(remaining_);
+
+    ParsedAttribute result{name, maybeValue.result().toSingleRcString(),
+                           FileOffsetRange{attributeStartOffset, attributeEndOffset},
+                           FileOffsetRange{valueStartOffset, valueEndOffset}};
     return std::make_optional(result);
   }
 
@@ -1200,6 +1230,7 @@ private:
       if (maybeAttribute.result().has_value()) {
         const ParsedAttribute& attribute = maybeAttribute.result().value();
         node.setAttribute(attribute.name, attribute.value);
+        node.addAttributeLocation(attribute.name, attribute.location, attribute.valueLocation);
       } else {
         break;
       }

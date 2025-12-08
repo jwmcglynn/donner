@@ -26,7 +26,20 @@ cc_test(
         "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/core/tests:core_test_utils",
-        "//donner/svg/renderer/tests:renderer_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "SVGPathElement_unit_tests",
+    srcs = [
+        "SVGPathElement_tests.cc",
+    ],
+    deps = [
+        ":parser_test_utils",
+        "//donner/base:base_test_utils",
+        "//donner/svg",
+        "//donner/svg/core/tests:core_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

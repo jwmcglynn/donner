@@ -81,4 +81,16 @@ TEST(SVGPathElementTests, PresentationAttributes) {
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
 }
 
+TEST(SVGPathElementTests, SerializeSplineOverrideToD) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.5, 0.0));
+  spline.lineTo(Vector2d(1.25, -2.5));
+  spline.closePath();
+
+  auto fragment = instantiateSubtreeElementAs<SVGPathElement>("<path />");
+  fragment.element.setSpline(spline);
+
+  EXPECT_EQ(fragment.element.d(), RcString("M 0.5,0 L 1.25,-2.5 Z"));
+}
+
 }  // namespace donner::svg

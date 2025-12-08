@@ -899,6 +899,74 @@ TEST_F(XMLParserTests, GetAttributeLocationInvalidOffset) {
               testing::Eq(std::nullopt));
 }
 
+TEST_F(XMLParserTests, CapturesSourceOffsetsForNodesAndAttributes) {
+  const std::string_view xml = R"(<root attr="one">text<!--c--><![CDATA[raw]]></root>)";
+
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+  auto result = XMLParser::Parse(xml, options);
+  ASSERT_THAT(result, NoParseError());
+
+  XMLDocument document = std::move(result.result());
+  std::optional<XMLNode> root = document.root().firstChild();
+  ASSERT_TRUE(root.has_value());
+
+  auto attributeLocation = root->getAttributeLocation(xml, XMLQualifiedNameRef("", "attr"));
+  ASSERT_TRUE(attributeLocation.has_value());
+  EXPECT_EQ(
+      xml.substr(attributeLocation->start.offset.value(),
+                 attributeLocation->end.offset.value() - attributeLocation->start.offset.value()),
+      R"(attr="one")");
+
+  auto attributeValueLocation = root->getAttributeValueLocation(XMLQualifiedNameRef("", "attr"));
+  ASSERT_TRUE(attributeValueLocation.has_value());
+  EXPECT_EQ(xml.substr(attributeValueLocation->start.offset.value(),
+                       attributeValueLocation->end.offset.value() -
+                           attributeValueLocation->start.offset.value()),
+            "one");
+
+  std::optional<XMLNode> data = root->firstChild();
+  ASSERT_TRUE(data.has_value());
+  EXPECT_EQ(data->type(), XMLNode::Type::Data);
+  auto dataLocation = data->getNodeLocation();
+  ASSERT_TRUE(dataLocation.has_value());
+  EXPECT_EQ(xml.substr(dataLocation->start.offset.value(),
+                       dataLocation->end.offset.value() - dataLocation->start.offset.value()),
+            "text");
+  auto dataValue = data->getValueLocation();
+  ASSERT_TRUE(dataValue.has_value());
+  EXPECT_EQ(xml.substr(dataValue->start.offset.value(),
+                       dataValue->end.offset.value() - dataValue->start.offset.value()),
+            "text");
+
+  std::optional<XMLNode> comment = data->nextSibling();
+  ASSERT_TRUE(comment.has_value());
+  EXPECT_EQ(comment->type(), XMLNode::Type::Comment);
+  auto commentLocation = comment->getNodeLocation();
+  ASSERT_TRUE(commentLocation.has_value());
+  EXPECT_EQ(xml.substr(commentLocation->start.offset.value(),
+                       commentLocation->end.offset.value() - commentLocation->start.offset.value()),
+            "<!--c-->");
+  auto commentValue = comment->getValueLocation();
+  ASSERT_TRUE(commentValue.has_value());
+  EXPECT_EQ(xml.substr(commentValue->start.offset.value(),
+                       commentValue->end.offset.value() - commentValue->start.offset.value()),
+            "c");
+
+  std::optional<XMLNode> cdata = comment->nextSibling();
+  ASSERT_TRUE(cdata.has_value());
+  EXPECT_EQ(cdata->type(), XMLNode::Type::CData);
+  auto cdataLocation = cdata->getNodeLocation();
+  ASSERT_TRUE(cdataLocation.has_value());
+  EXPECT_EQ(xml.substr(cdataLocation->start.offset.value(),
+                       cdataLocation->end.offset.value() - cdataLocation->start.offset.value()),
+            "<![CDATA[raw]]>");
+  auto cdataValue = cdata->getValueLocation();
+  ASSERT_TRUE(cdataValue.has_value());
+  EXPECT_EQ(xml.substr(cdataValue->start.offset.value(),
+                       cdataValue->end.offset.value() - cdataValue->start.offset.value()),
+            "raw");
+}
+
 TEST_F(XMLParserTests, ParameterEntitiesRecursionLimits) {
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [
