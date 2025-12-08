@@ -33,7 +33,8 @@ std::string escapeFilename(std::string filename) {
 }  // namespace
 
 std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTestcase>& info) {
-  std::string name = info.param.svgFilename.stem().string();
+  std::string name = info.param.displayName.empty() ? info.param.svgFilename.stem().string()
+                                                    : info.param.displayName;
 
   // Sanitize the test name, notably replacing '-' with '_'.
   std::transform(name.begin(), name.end(), name.begin(), [](char c) {

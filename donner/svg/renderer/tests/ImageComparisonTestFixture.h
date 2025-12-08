@@ -124,6 +124,7 @@ struct ImageComparisonParams {
  */
 struct ImageComparisonTestcase {
   std::filesystem::path svgFilename;  //!< Path to the SVG file for this test case.
+  std::string displayName;            //!< Friendly test name derived from the suite layout.
   ImageComparisonParams params;       //!< Parameters for this specific test case.
 
   /**
