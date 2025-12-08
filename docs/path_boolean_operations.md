@@ -1,4 +1,4 @@
-# PathSpline Boolean Operations Developer Guide
+# PathSpline Boolean Operations Developer Guide {#PathBooleanOperations}
 
 This guide describes the developer-facing design of the PathSpline Boolean stack now that the
 feature is implemented. It focuses on how the pieces fit together, what guarantees the
