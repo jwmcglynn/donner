@@ -25,6 +25,8 @@ SVGDocument::SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
   components::ResourceManagerContext& resourceCtx =
       registry_->ctx().emplace<components::ResourceManagerContext>(*registry_);
   resourceCtx.setResourceLoader(std::move(settings.resourceLoader));
+  resourceCtx.setExternalFontLoadingEnabled(settings.externalFontLoadingEnabled);
+  resourceCtx.setFontRenderMode(settings.fontRenderMode);
 
   registry_->ctx().emplace<xml::components::XMLNamespaceContext>(*registry_);
 }

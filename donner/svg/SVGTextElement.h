@@ -1,9 +1,12 @@
 #pragma once
 /// @file
 
+#include <optional>
+
 #include "donner/base/Length.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGTextContentElement.h"
+#include "donner/svg/components/text/TextFlowComponent.h"
 #include "donner/svg/SVGTextPositioningElement.h"
 
 namespace donner::svg {
@@ -96,6 +99,22 @@ public:
    */
   static SVGTextElement Create(SVGDocument& document) {
     return CreateOn(CreateEmptyEntity(document));
+  }
+
+  void addFlowRegion(components::FlowRegion region) {
+    handle_.get<components::TextFlowComponent>().regions.push_back(std::move(region));
+  }
+
+  void setFlowAlignment(std::optional<components::FlowAlignment> alignment) {
+    handle_.get<components::TextFlowComponent>().alignment = alignment;
+  }
+
+  void setFlowOverflow(std::optional<Overflow> overflow) {
+    handle_.get<components::TextFlowComponent>().overflow = overflow;
+  }
+
+  const components::TextFlowComponent& flowComponent() const {
+    return handle_.get<components::TextFlowComponent>();
   }
 };
 

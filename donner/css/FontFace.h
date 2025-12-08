@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -39,6 +40,10 @@ struct FontFaceSource {
 struct FontFace {
   RcString familyName;                  ///< font-family descriptor
   std::vector<FontFaceSource> sources;  ///< ordered src list
+  std::optional<RcString> style;        ///< font-style descriptor
+  std::optional<RcString> weight;       ///< font-weight descriptor
+  std::optional<RcString> stretch;      ///< font-stretch descriptor
+  std::optional<RcString> display;      ///< font-display descriptor
 };
 
 }  // namespace donner::css

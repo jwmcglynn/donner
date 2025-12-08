@@ -1,11 +1,17 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
+
+namespace components {
+enum class FontRenderMode : uint8_t;
+}
 
 class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
@@ -35,6 +41,12 @@ public:
   struct Settings {
     /// Resource loader to use for loading external resources.
     std::unique_ptr<ResourceLoaderInterface> resourceLoader;
+
+    /// Whether external font loading is enabled. Defaults to false so embedders must opt in.
+    bool externalFontLoadingEnabled = false;
+
+    /// Rendering policy for fonts: either block until fonts load or allow continuous rendering.
+    components::FontRenderMode fontRenderMode = components::FontRenderMode::kOneShot;
   };
 
 private:

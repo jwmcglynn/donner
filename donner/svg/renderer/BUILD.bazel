@@ -60,6 +60,19 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "typeface_resolver",
+    srcs = ["TypefaceResolver.cc"],
+    hdrs = ["TypefaceResolver.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":skia_deps",
+        "//donner/base",
+        "//donner/svg/core",
+        "//third_party/public-sans",
+    ],
+)
+
+donner_cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
@@ -105,6 +118,7 @@ donner_cc_library(
         ":renderer_image_io",
         ":renderer_utils",
         ":skia_deps",
+        ":typeface_resolver",
         "//donner/base/fonts",
         "//donner/svg",
         "//donner/svg/core",

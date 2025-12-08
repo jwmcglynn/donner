@@ -4,7 +4,9 @@ cc_library(
     name = "components",
     hdrs = [
         "ComputedTextComponent.h",
+        "ComputedTextStyleComponent.h",
         "TextComponent.h",
+        "TextFlowComponent.h",
         "TextPositioningComponent.h",
         "TextRootComponent.h",
     ],
@@ -31,5 +33,18 @@ cc_library(
         ":components",
         "//donner/base",
         "//donner/svg/components:components_core",
+    ],
+)
+
+cc_test(
+    name = "computed_text_style_component_tests",
+    srcs = ["tests/ComputedTextStyleComponent_tests.cc"],
+    deps = [
+        ":components",
+        ":text_system",
+        "//donner/base:base_test_utils",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/parser:parser",
+        "@com_google_gtest//:gtest_main",
     ],
 )

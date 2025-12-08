@@ -52,6 +52,30 @@ std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url
   return std::nullopt;
 }
 
+std::optional<RcString> ExtractSingleValue(const std::vector<ComponentValue>& values) {
+  if (values.empty()) {
+    return std::nullopt;
+  }
+
+  const ComponentValue& first = values.front();
+  if (const Token* token = std::get_if<Token>(&first.value)) {
+    if (token->is<Token::Ident>()) {
+      return token->get<Token::Ident>().value;
+    }
+    if (token->is<Token::String>()) {
+      return token->get<Token::String>().value;
+    }
+    if (token->is<Token::Number>()) {
+      return token->get<Token::Number>().valueString;
+    }
+    if (token->is<Token::Percentage>()) {
+      return token->get<Token::Percentage>().valueString;
+    }
+  }
+
+  return std::nullopt;
+}
+
 }  // namespace
 
 Stylesheet StylesheetParser::Parse(std::string_view str) {
@@ -181,6 +205,14 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
               }
             }
             addSrc(std::move(current));
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-style"))) {
+            fontFace.style = ExtractSingleValue(decl.values);
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-weight"))) {
+            fontFace.weight = ExtractSingleValue(decl.values);
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-stretch"))) {
+            fontFace.stretch = ExtractSingleValue(decl.values);
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-display"))) {
+            fontFace.display = ExtractSingleValue(decl.values);
           }
         }
 

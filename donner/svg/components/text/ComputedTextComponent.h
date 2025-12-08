@@ -4,6 +4,7 @@
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/svg/components/text/ComputedTextStyleComponent.h"
 
 namespace donner::svg::components {
 
@@ -33,6 +34,9 @@ struct ComputedTextComponent {
   struct TextSpan {
     /// Back‑reference to the original text for this span.
     RcString text;
+
+    /// Typography resolved for this span at layout time.
+    ComputedTextStyleComponent style;
 
     /// Byte index (inclusive) of the first code unit of the span within \c text.
     std::size_t start;

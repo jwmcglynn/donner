@@ -12,6 +12,7 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/components/text/TextFlowComponent.h"
 #include "donner/svg/parser/AttributeParser.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
 
@@ -79,6 +80,52 @@ std::optional<ParseError> ParseNodeContents<SVGTextElement>(SVGParserContext& co
       if (auto maybeValue = child->value()) {
         element.appendText(maybeValue.value());
       }
+    } else if (child->type() == XMLNode::Type::Element &&
+               child->qualifiedName() == XMLQualifiedNameRef("flowRegion")) {
+      components::FlowRegion region;
+
+      auto parseLengthAttr = [&](std::string_view attrName, Lengthd& target) -> bool {
+        auto maybeAttr = child->getAttribute(XMLQualifiedNameRef(attrName));
+        if (!maybeAttr) {
+          return false;
+        }
+
+        if (auto length = ParseLengthAttribute(context, maybeAttr.value())) {
+          target = *length;
+          return true;
+        }
+
+        ParseError err;
+        err.reason = "Invalid " + std::string(attrName) + " value '" +
+                     std::string(maybeAttr.value()) + "'";
+        context.addSubparserWarning(std::move(err), context.parserOriginFrom(maybeAttr.value()));
+        return false;
+      };
+
+      const bool hasWidth = parseLengthAttr("width", region.width);
+      const bool hasHeight = parseLengthAttr("height", region.height);
+      parseLengthAttr("x", region.x);
+      parseLengthAttr("y", region.y);
+
+      if (!hasWidth || !hasHeight) {
+        ParseError err;
+        err.reason = "flowRegion missing required width/height";
+        context.addSubparserWarning(std::move(err), context.parserOriginFrom(node));
+        continue;
+      }
+
+      if (auto overflowAttr = child->getAttribute(XMLQualifiedNameRef("flow-overflow"))) {
+        if (auto overflow = ParseFlowOverflow(overflowAttr.value())) {
+          region.overflow = *overflow;
+        } else {
+          ParseError err;
+          err.reason = "Invalid flow-overflow value '" + std::string(overflowAttr.value()) + "'";
+          context.addSubparserWarning(std::move(err),
+                                      context.parserOriginFrom(overflowAttr.value()));
+        }
+      }
+
+      element.addFlowRegion(std::move(region));
     }
   }
   return std::nullopt;

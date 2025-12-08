@@ -42,3 +42,16 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
     ],
 )
+
+cc_test(
+    name = "resource_manager_context_tests",
+    srcs = ["tests/ResourceManagerContext_tests.cc"],
+    data = ["//donner/base/fonts:testdata/valid-001.woff"],
+    deps = [
+        ":resource_manager_context",
+        "//donner/base:base_test_utils",
+        "//donner/css:core",
+        "//donner/svg/resources:resource_loader_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

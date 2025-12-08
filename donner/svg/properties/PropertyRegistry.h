@@ -14,6 +14,7 @@
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/core/Typography.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
@@ -96,6 +97,17 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `marker-start` | \ref markerStart | `none` |
  * | `marker-mid` | \ref markerMid | `none` |
  * | `marker-end` | \ref markerEnd | `none` |
+ * | `font-family` | \ref fontFamily | `serif` |
+ * | `font-style` | \ref fontStyle | `normal` |
+ * | `font-weight` | \ref fontWeight | `normal` |
+ * | `font-stretch` | \ref fontStretch | `normal` |
+ * | `font-variant` | \ref fontVariant | `normal` |
+ * | `font-size` | \ref fontSize | `16px` |
+ * | `letter-spacing` | \ref letterSpacing | `normal` |
+ * | `word-spacing` | \ref wordSpacing | `normal` |
+ * | `text-anchor` | \ref textAnchor | `start` |
+ * | `white-space` | \ref whiteSpace | `normal` |
+ * | `direction` | \ref direction | `ltr` |
  */
 class PropertyRegistry {
 public:
@@ -256,9 +268,45 @@ public:
         return SmallVector<RcString, 1>{RcString("serif")};
       }};
 
+  /// `font-style` property, determining the slant of glyphs. Inherited.
+  Property<FontStyle, PropertyCascade::Inherit> fontStyle{
+      "font-style", []() -> std::optional<FontStyle> { return FontStyle::Normal; }};
+
+  /// `font-weight` property, determining stroke thickness. Inherited.
+  Property<FontWeight, PropertyCascade::Inherit> fontWeight{
+      "font-weight", []() -> std::optional<FontWeight> { return FontWeight::Normal(); }};
+
+  /// `font-stretch` property, determining condensed/expanded faces. Inherited.
+  Property<FontStretch, PropertyCascade::Inherit> fontStretch{
+      "font-stretch", []() -> std::optional<FontStretch> { return FontStretch::Normal; }};
+
+  /// `font-variant` property, e.g. `small-caps`. Inherited.
+  Property<FontVariant, PropertyCascade::Inherit> fontVariant{
+      "font-variant", []() -> std::optional<FontVariant> { return FontVariant::Normal; }};
+
   /// `font-size` property, which determines the font size for text content. Inherited.
   Property<Lengthd, PropertyCascade::Inherit> fontSize{
       "font-size", []() -> std::optional<Lengthd> { return Lengthd(16, Lengthd::Unit::Px); }};
+
+  /// `letter-spacing` property, controlling spacing between glyphs. Inherited.
+  Property<TextSpacing, PropertyCascade::Inherit> letterSpacing{
+      "letter-spacing", []() -> std::optional<TextSpacing> { return TextSpacing::Normal(); }};
+
+  /// `word-spacing` property, controlling spacing between words. Inherited.
+  Property<TextSpacing, PropertyCascade::Inherit> wordSpacing{
+      "word-spacing", []() -> std::optional<TextSpacing> { return TextSpacing::Normal(); }};
+
+  /// `text-anchor` property, controlling alignment of text. Inherited.
+  Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
+      "text-anchor", []() -> std::optional<TextAnchor> { return TextAnchor::Start; }};
+
+  /// `white-space` property, controlling whitespace collapsing. Inherited.
+  Property<WhiteSpace, PropertyCascade::Inherit> whiteSpace{
+      "white-space", []() -> std::optional<WhiteSpace> { return WhiteSpace::Normal; }};
+
+  /// `direction` property, controlling bidi ordering. Inherited.
+  Property<Direction, PropertyCascade::Inherit> direction{
+      "direction", []() -> std::optional<Direction> { return Direction::Ltr; }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
@@ -286,11 +334,12 @@ public:
    * To get the size of the tuple, use \ref numProperties().
    */
   auto allProperties() const {
-    return std::forward_as_tuple(color, display, opacity, visibility, overflow, transformOrigin,
-                                 fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
-                                 strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
-                                 strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
-                                 markerStart, markerMid, markerEnd, fontFamily, fontSize);
+    return std::forward_as_tuple(
+        color, display, opacity, visibility, overflow, transformOrigin, fill, fillRule, fillOpacity,
+        stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
+        strokeDasharray, strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
+        markerStart, markerMid, markerEnd, fontFamily, fontStyle, fontWeight, fontStretch,
+        fontVariant, fontSize, letterSpacing, wordSpacing, textAnchor, whiteSpace, direction);
   }
 
   /**
