@@ -15,7 +15,10 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   - Files use `UpperCamelCase` (matching the main class), with `.cc` for sources,
     `.h` for headers and `_tests.cc` for tests.
 - Headers start with `#pragma once` and a `/// @file` comment.
-- Use Doxygen comments (`/** ... */`, `//!<`) for public APIs.
+- Use Doxygen comments (`/** ... */`, `//!<`) for public APIs; all public methods,
+  functions, and enumeration values must have doc comments. Prefer `///` for
+  single-line comments, `/** */` blocks for multi-line comments, and `//!<` for
+  short trailing snippets when they remain concise.
 - Place all code in the `donner` namespace (and sub-namespaces like `donner::svg`).
 - Never omit curly braces for control structures, even for single-line bodies.
 - Naming conventions:
