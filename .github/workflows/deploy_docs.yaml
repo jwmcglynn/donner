@@ -32,7 +32,7 @@ jobs:
       - name: Install Doxygen
         run: |
           mkdir -p ${{ github.workspace }}/doxygen
-          curl -L https://www.doxygen.nl/files/doxygen-1.15.0.linux.bin.tar.gz | tar xz -C ${{ github.workspace }}/doxygen
+          curl -L https://github.com/doxygen/doxygen/releases/download/Release_1_15_0/doxygen-1.15.0.linux.bin.tar.gz | tar xz -C ${{ github.workspace }}/doxygen
           echo "${{ github.workspace }}/doxygen/doxygen-1.15.0/bin" >> $GITHUB_PATH # Add Doxygen to PATH
 
       - name: Generate Doxygen documentation
