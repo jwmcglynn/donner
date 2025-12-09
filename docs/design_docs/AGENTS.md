@@ -15,13 +15,16 @@ Follow these steps when collaborating on a feature:
 4. **Iterative implementation.** Enter the implementation phase and complete
    the TODO steps one at a time, gathering user feedback after each step and
    updating the plan accordingly.
-5. **Keep design docs current.** During implementation and code review, keep the
+5. **Make it actionable.** Outline the next steps clearly so the sequence of
+   implementation is well known, and collaborators can pick up steps as needed.
+   Always document what's next.
+6. **Keep design docs current.** During implementation and code review, keep the
    design doc in sync with the latest decisions and feedback.
-6. **Finalization.** After all TODO items are complete, finish any remaining
+7. **Finalization.** After all TODO items are complete, finish any remaining
    work to ship the feature. Convert the design doc into developer-facing
    documentation by removing prior-state notes and step-by-step plans. Document
-   the current architecture and the resulting feature set.
-7. **Communicate the next step.** When working step by step, always state the
+   the current architecture and the resulting feature set, switch to present tense where appropriate.
+8. **Communicate the next step.** When working step by step, always state the
    next planned step in the summary so collaborators know what will happen
    next.
 
