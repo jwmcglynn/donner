@@ -11,10 +11,11 @@ Follow these steps when collaborating on a feature:
    it is ready. Only then move on to planning implementation work.
 3. **Implementation plan.** Once the design is approved, write a detailed
    implementation plan plus a Markdown TODO list with the concrete steps needed
-   to deliver the feature.
+   to deliver the feature (e.g. `- [ ] Implement X`, `- [ ] Add tests for Y`). All TODO lists should be markdown.
 4. **Iterative implementation.** Enter the implementation phase and complete
    the TODO steps one at a time, gathering user feedback after each step and
-   updating the plan accordingly.
+   updating the plan accordingly. After finishing a TODO item, update the design
+   doc so it is current and check the relevant boxes to reflect progress.
 5. **Make it actionable.** Outline the next steps clearly so the sequence of
    implementation is well known, and collaborators can pick up steps as needed.
    Always document what's next.
@@ -32,6 +33,13 @@ Quality expectations for this directory:
 
 - Maximize readability, testability, and documentation so the feature is
   production quality.
+- When appropriate, include concise user stories to ground goals and scope.
+- Treat security as a first-class concern: document trust boundaries, validation layers, and fuzzing
+  or negative-testing plans for any externally influenced input or protocol surface.
 - Prefer project utilities (e.g., Transformd, RcString, StringUtils) and avoid
   unnecessary external dependencies.
 - Use gMock for tests, and consider fuzzing strategies when working on parsers.
+- Use the design doc template at `docs/design_docs/template.md` to keep structure consistent.
+- When a feature ships, convert the design doc into a developer guide: drop TODOs, implementation
+  plans, and prior-state notes. Rewrite in present tense to describe the shipped architecture and
+  guarantees. Use `docs/design_docs/developer_template.md` as the reference structure.

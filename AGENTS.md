@@ -48,6 +48,10 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   to a minimum and justify any additions.
 - Optimize for readability and testability. Extract helpers rather than adding
   large inline logic blocks.
+- Documentation: follow `docs/AGENTS.md` for writing user/developer docs, use templates under
+  `docs/design_docs/`, keep lines under 100, and embed SVG/mermaid visuals where they clarify data
+  flow or trust boundaries. Use Doxygen-friendly anchors `{#AnchorId}` and run `tools/doxygen.sh`
+  when needed.
 - Tests:
   - Use gMock with gTest for C++ tests.
   - Add fuzzers for parser-style code paths when practical.
