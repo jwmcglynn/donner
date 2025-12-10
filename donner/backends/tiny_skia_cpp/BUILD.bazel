@@ -1,0 +1,19 @@
+load("//build_defs:rules.bzl", "donner_cc_library")
+
+donner_cc_library(
+    name = "tiny_skia_cpp",
+    srcs = [
+        "Canvas.cc",
+        "Pixmap.cc",
+    ],
+    hdrs = [
+        "Canvas.h",
+        "Color.h",
+        "Pixmap.h",
+        "Transform.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//donner/base",
+    ],
+)

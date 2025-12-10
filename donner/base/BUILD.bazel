@@ -5,6 +5,7 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 donner_cc_library(
     name = "base",
     srcs = [
+        "Color.cc",
         "ParseError.cc",
     ],
     hdrs = [
@@ -15,6 +16,7 @@ donner_cc_library(
         "Length.h",
         "MathUtils.h",
         "OptionalRef.h",
+        "Color.h",
         "ParseError.h",
         "ParseResult.h",
         "RcString.h",

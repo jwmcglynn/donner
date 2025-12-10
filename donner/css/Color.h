@@ -1,62 +1,17 @@
 #pragma once
 /// @file
 
-#include <cstdint>
 #include <optional>
 #include <ostream>
 #include <string_view>
 #include <variant>
 
+#include "donner/base/Color.h"
+
 namespace donner::css {
 
-/**
- * Represents as 32-bit RGBA color, with each component in the range [0, 255].
- *
- * To construct, with an alpha channel:
- * ```
- * RGBA(r, g, b, a);
- * ```
- *
- * With no alpha:
- * ```
- * RGBA::RGB(r, g, b);
- * ```
- */
-struct RGBA {
-  uint8_t r = 0xFF;  ///< Red component, in the range [0, 255].
-  uint8_t g = 0xFF;  ///< Green component, in the range [0, 255].
-  uint8_t b = 0xFF;  ///< Blue component, in the range [0, 255].
-  uint8_t a = 0xFF;  ///< Alpha component, in the range [0, 255].
-
-  /// Default constructor, initializes to fully opaque white.
-  constexpr RGBA() = default;
-
-  /// Constructor, initializes to the given RGBA values.
-  constexpr RGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) : r(r), g(g), b(b), a(a) {}
-
-  /// Constructor, for RGB colors, which are fully opaque.
-  static constexpr RGBA RGB(uint8_t r, uint8_t g, uint8_t b) { return {r, g, b, 0xFF}; }
-
-  /// Equality operator.
-  bool operator==(const RGBA&) const = default;
-
-  /**
-   * Convert the color to a hex string, such as `#ff0000`.
-   *
-   * @returns '#rrggbb' if the color is opaque, or '#rrggbbaa' if the color has an alpha channel.
-   */
-  std::string toHexString() const;
-
-  /**
-   * Ostream output operator.
-   *
-   * Outputs: `rgba(r, g, b, a)`.
-   *
-   * @param os The output stream.
-   * @param color The color to output.
-   */
-  friend std::ostream& operator<<(std::ostream& os, const RGBA& color);
-};
+/// Represents a 32-bit RGBA color shared across Donner.
+using RGBA = donner::RGBA;
 
 /// Represents an HSLA color.
 struct HSLA {
