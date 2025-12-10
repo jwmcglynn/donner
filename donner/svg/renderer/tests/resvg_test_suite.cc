@@ -1,5 +1,12 @@
 #include <gmock/gmock.h>
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <vector>
+
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
@@ -7,31 +14,59 @@ using testing::ValuesIn;
 
 namespace donner::svg {
 
-using Params = ImageComparisonParams;
-
 namespace {
 
-std::vector<ImageComparisonTestcase> getTestsWithPrefix(
-    const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {},
-    ImageComparisonParams defaultParams = {}) {
-  const std::string kSvgDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "svg");
+struct TestDirectoryConfig {
+  std::vector<std::string> relativePaths;
+  std::map<std::string, ImageComparisonParams> overrides;
+  ImageComparisonParams defaultParams;
+};
 
-  // Copy into a vector and sort the tests.
+ImageComparisonParams ensureDefaultCanvas(ImageComparisonParams params) {
+  if (!params.canvasSize) {
+    params.setCanvasSize(500, 500);
+  }
+  return params;
+}
+
+std::string buildDisplayName(const std::filesystem::path& testsDir,
+                             const std::filesystem::path& svgPath) {
+  std::string name = svgPath.lexically_relative(testsDir).generic_string();
+  std::transform(name.begin(), name.end(), name.begin(), [](char c) {
+    if (!isalnum(c)) {
+      return '_';
+    }
+    return c;
+  });
+  return name;
+}
+
+std::vector<ImageComparisonTestcase> collectTests(const std::filesystem::path& testsDir,
+                                                  const TestDirectoryConfig& config) {
   std::vector<ImageComparisonTestcase> testPlan;
-  for (const auto& entry : std::filesystem::directory_iterator(kSvgDir)) {
-    const std::string& filename = entry.path().filename().string();
-    if (filename.find(prefix) == 0) {
-      ImageComparisonTestcase test;
-      test.svgFilename = entry.path();
-      test.params = defaultParams;
 
-      // Set special-case params.
-      if (auto it = overrides.find(filename); it != overrides.end()) {
-        test.params = it->second;
+  for (const auto& relativePath : config.relativePaths) {
+    const std::filesystem::path dirPath = testsDir / relativePath;
+    if (!std::filesystem::exists(dirPath)) {
+      continue;
+    }
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dirPath)) {
+      if (!entry.is_regular_file() || entry.path().extension() != ".svg") {
+        continue;
       }
 
-      // Always set the canvas size to 500x500 for these tests.
-      test.params.setCanvasSize(500, 500);
+      const std::string relativeSvgPath =
+          entry.path().lexically_relative(testsDir).generic_string();
+
+      ImageComparisonTestcase test;
+      test.svgFilename = entry.path();
+      test.displayName = buildDisplayName(testsDir, entry.path());
+      test.params = ensureDefaultCanvas(config.defaultParams);
+
+      if (auto it = config.overrides.find(relativeSvgPath); it != config.overrides.end()) {
+        test.params = ensureDefaultCanvas(it->second);
+      }
 
       testPlan.emplace_back(std::move(test));
     }
@@ -41,434 +76,318 @@ std::vector<ImageComparisonTestcase> getTestsWithPrefix(
   return testPlan;
 }
 
+std::vector<ImageComparisonTestcase> getResvgTests() {
+  const std::filesystem::path testsDir =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "svg");
+
+  std::vector<ImageComparisonTestcase> testPlan;
+
+  // TODO: Add coverage for filters and text once the renderer supports those features.
+
+  const TestDirectoryConfig paintingConfig{
+      .relativePaths =
+          {
+              "painting/color",
+              "painting/display",
+              "painting/fill",
+              "painting/fill-opacity",
+              "painting/marker",
+              "painting/opacity",
+              "painting/overflow",
+              "painting/shape-rendering",
+              "painting/stroke",
+              "painting/stroke-dasharray",
+              "painting/stroke-dashoffset",
+              "painting/stroke-linecap",
+              "painting/stroke-linejoin",
+              "painting/stroke-opacity",
+              "painting/stroke-width",
+              "painting/visibility",
+          },
+      .overrides =
+          {
+              {"painting/display/none-on-tref.svg", ImageComparisonParams::Skip()},
+              // Not impl: <tref>
+              {"painting/display/none-on-tspan-1.svg", ImageComparisonParams::Skip()},
+              // Not impl: <tspan>
+              {"painting/display/none-on-tspan-2.svg", ImageComparisonParams::Skip()},
+              // Not impl: <tspan>
+              {"painting/fill/icc-color.svg", ImageComparisonParams::Skip()},
+              // ICC color
+              {"painting/fill/linear-gradient-on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <text>
+              {"painting/fill/pattern-on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <pattern>, <text>
+              {"painting/fill/radial-gradient-on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <text>
+              {"painting/fill/rgb-int-int-int.svg", ImageComparisonParams::Skip()},
+              // UB: rgb(int int int)
+              {"painting/fill/valid-FuncIRI-with-a-fallback-ICC-color.svg",
+               ImageComparisonParams::Skip()},
+              // Not impl: Fallback with icc-color
+              {"painting/fill-opacity/on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <text>
+              {"painting/fill-opacity/with-pattern.svg", ImageComparisonParams::Skip()},
+              // Not impl: `fill-opacity` affects pattern
+              {"painting/stroke-dasharray/em-units.svg", ImageComparisonParams::Skip()},
+              // Not impl: "em" units
+              {"painting/stroke-dasharray/negative-sum.svg", ImageComparisonParams::Skip()},
+              // UB: Negative sum
+              {"painting/stroke-dasharray/negative-values.svg", ImageComparisonParams::Skip()},
+              // UB: Negative values
+              {"painting/stroke-dasharray/on-a-circle.svg",
+               ImageComparisonParams::WithThreshold(0.13f)},
+              // Larger threshold due to anti-aliasing artifacts
+              {"painting/stroke-dashoffset/em-units.svg", ImageComparisonParams::Skip()},
+              // Not impl: "em" units
+              {"painting/stroke-linejoin/arcs.svg", ImageComparisonParams::Skip()},
+              // UB: `arcs` (SVG 2)
+              {"painting/stroke-linejoin/miter-clip.svg", ImageComparisonParams::Skip()},
+              // UB: `miter-clip` (SVG 2)
+              {"painting/stroke-opacity/on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <text>
+              {"painting/stroke-opacity/with-pattern.svg", ImageComparisonParams::Skip()},
+              // Not impl: <pattern> / stroke interaction
+              {"painting/stroke/pattern-on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <pattern> / <text>
+              {"painting/stroke/radial-gradient-on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <text>
+              {"painting/stroke/linear-gradient-on-text.svg", ImageComparisonParams::Skip()},
+              // Not impl: <text>
+              {"painting/stroke-width/zero.svg", ImageComparisonParams::Skip()},
+              // UB: Nothing should be rendered
+          },
+  };
+
+  const TestDirectoryConfig paintServerConfig{
+      .relativePaths =
+          {
+              "paint-servers/linearGradient",
+              "paint-servers/pattern",
+              "paint-servers/radialGradient",
+              "paint-servers/stop",
+          },
+      .overrides =
+          {
+              {"paint-servers/pattern/'overflow=visible.svg'",
+               ImageComparisonParams::Skip()},  // UB: overflow
+              {"paint-servers/pattern/invalid-patternTransform.svg",
+               ImageComparisonParams::Skip()},  // UB: invalid transform
+              {"paint-servers/pattern/self-recursive.svg", ImageComparisonParams::Skip()},
+              // UB: Self-recursive pattern
+              {"paint-servers/pattern/self-recursive-on-child.svg",
+               ImageComparisonParams::Skip()},
+              // UB: Self-recursive pattern on child
+              {"paint-servers/pattern/recursive.svg", ImageComparisonParams::Skip()},
+              // UB: Recursive pattern
+              {"paint-servers/pattern/recursive-on-child.svg", ImageComparisonParams::Skip()},
+              // UB: Recursive pattern on child
+              {"paint-servers/pattern/tiny-pattern-upscaled.svg",
+               ImageComparisonParams::WithThreshold(0.2f)},  // Anti-aliasing artifacts
+              {"paint-servers/pattern/transform-and-patternTransform.svg",
+               ImageComparisonParams::WithThreshold(0.02f)},  // Anti-aliasing artifacts
+          },
+      .defaultParams = ImageComparisonParams::WithThreshold(0.02f),
+  };
+
+  const TestDirectoryConfig shapesConfig{
+      .relativePaths =
+          {
+              "shapes/circle",
+              "shapes/ellipse",
+              "shapes/line",
+              "shapes/path",
+              "shapes/polygon",
+              "shapes/polyline",
+              "shapes/rect",
+          },
+      .overrides =
+          {
+              {"shapes/rect/ch-values.svg", ImageComparisonParams::Skip()},   // ch units
+              {"shapes/rect/em-values.svg", ImageComparisonParams::Skip()},   // em units
+              {"shapes/rect/ex-values.svg", ImageComparisonParams::Skip()},   // ex units
+              {"shapes/rect/rem-values.svg", ImageComparisonParams::Skip()},  // rem units
+              {"shapes/rect/vmin-and-vmax-values.svg", ImageComparisonParams::Skip()},
+              // Not impl: vmin/vmax units
+              {"shapes/rect/vw-and-vh-values.svg", ImageComparisonParams::Skip()},
+              // Not impl: vw/vh units
+          },
+  };
+
+  const TestDirectoryConfig structureConfig{
+      .relativePaths =
+          {
+              "structure/defs",
+              "structure/g",
+              "structure/style",
+              "structure/style-attribute",
+              "structure/svg",
+              "structure/symbol",
+              "structure/transform",
+              "structure/use",
+          },
+      .overrides =
+          {
+              {"structure/defs/style-inheritance-on-text.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <text>
+              {"structure/style/external-CSS.svg", ImageComparisonParams::Skip()},
+              // Not impl: External CSS import
+              {"structure/style/invalid-type.svg", ImageComparisonParams::Skip()},
+              // UB: Invalid style type
+              {"structure/svg/funcIRI-parsing.svg", ImageComparisonParams::Skip()},
+              // UB: FuncIRI parsing
+              {"structure/svg/funcIRI-with-invalid-characters.svg", ImageComparisonParams::Skip()},
+              // UB: FuncIRI with invalid characters
+              {"structure/svg/invalid-id-attribute-1.svg", ImageComparisonParams::Skip()},
+              // UB: Invalid id attribute
+              {"structure/svg/invalid-id-attribute-2.svg", ImageComparisonParams::Skip()},
+              // UB: Invalid id attribute
+              {"structure/svg/nested-svg-with-overflow-auto.svg", ImageComparisonParams::Skip()},
+              // Not impl: overflow
+              {"structure/svg/nested-svg-with-overflow-visible.svg", ImageComparisonParams::Skip()},
+              // Not impl: overflow
+              {"structure/svg/rect-inside-a-non-SVG-element.svg", ImageComparisonParams::Skip()},
+              // Bug? Rect inside unknown element
+              {"structure/svg/xmlns-validation.svg", ImageComparisonParams::Skip()},
+              // Bug? xmlns validation
+              {"structure/symbol/with-transform.svg", ImageComparisonParams::Skip()},
+              // SVG2: Transform on <symbol>
+              {"structure/symbol/with-transform-on-use.svg", ImageComparisonParams::Skip()},
+              // SVG2: Transform on <symbol> via <use>
+              {"structure/symbol/with-transform-on-use-no-size.svg", ImageComparisonParams::Skip()},
+              // SVG2: Transform on <symbol> via <use>
+          },
+  };
+
+  const TestDirectoryConfig structureImageConfig{
+      .relativePaths =
+          {
+              "structure/image",
+          },
+      .overrides =
+          {
+              {"structure/image/embedded-svg-with-text.svg",
+               ImageComparisonParams::Skip()},  // Not impl: nested SVG with <text>
+              {"structure/image/embedded-svg-without-mime.svg",
+               ImageComparisonParams::Skip()},  // Not impl: embedded SVG mime
+              {"structure/image/embedded-svg.svg", ImageComparisonParams::Skip()},
+              // Not impl: Embedded .svg image
+              {"structure/image/embedded-svgz.svg", ImageComparisonParams::Skip()},
+              // Not impl: Embedded .svgz image
+              {"structure/image/external-svg-with-transform.svg",
+               ImageComparisonParams::Skip()},  // External SVGs
+              {"structure/image/external-svg.svg", ImageComparisonParams::Skip()},
+              // Not impl: External SVG image
+              {"structure/image/external-svgz.svg", ImageComparisonParams::Skip()},
+              // Not impl: External SVGZ image
+              {"structure/image/float-size.svg", ImageComparisonParams::Skip()},
+              // UB: Float sizes
+              {"structure/image/image-with-float-size-scaling.svg",
+               ImageComparisonParams::Skip()},
+              // UB: Float sizes
+              {"structure/image/url-to-svg.svg", ImageComparisonParams::Skip()},
+              // Not impl: External SVG image
+              {"structure/image/with-zero-width-and-height.svg",
+               ImageComparisonParams::Skip()},
+              // UB: Empty size
+          },
+      .defaultParams = ImageComparisonParams::WithThreshold(0.2f).disableDebugSkpOnFailure(),
+  };
+
+  const TestDirectoryConfig maskingConfig{
+      .relativePaths =
+          {
+              "masking/clipPath",
+              "masking/mask",
+          },
+      .overrides =
+          {
+              {"masking/clipPath/clip-path-with-transform-on-text.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <text>
+              {"masking/clipPath/clipping-with-complex-text-1.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <text>
+              {"masking/clipPath/clipping-with-complex-text-2.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <text>
+              {"masking/clipPath/clipping-with-complex-text-and-clip-rule.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <text>
+              {"masking/clipPath/clipping-with-text.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <text>
+              {"masking/clipPath/on-the-root-svg-without-size.svg",
+               ImageComparisonParams::Skip()},  // UB: on root `<svg>` without size
+              {"masking/clipPath/recursive-on-child.svg",
+               ImageComparisonParams::Skip()},  // UB: Recursive on child
+              {"masking/clipPath/recursive-on-self.svg",
+               ImageComparisonParams::Skip()},  // UB: Recursive on self
+              {"masking/clipPath/recursive.svg", ImageComparisonParams::Skip()},  // UB: Recursive
+              {"masking/clipPath/self-recursive.svg",
+               ImageComparisonParams::Skip()},  // UB: Recursive
+              {"masking/clipPath/with-marker-on-clip.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <marker>
+              {"masking/clipPath/with-use-child.svg",
+               ImageComparisonParams::Skip()},  // Not impl: <use> child
+              {"masking/mask/'color-interpolation=linearRGB.svg'",
+               ImageComparisonParams::Skip()},  // Not impl: color-interpolation
+              {"masking/mask/mask-on-child.svg",
+               ImageComparisonParams::Skip()},  // BUG: Mask on child doesn't apply
+              {"masking/mask/mask-on-self.svg",
+               ImageComparisonParams::Skip()},  // BUG: Mask on self, also a bug in browsers
+              {"masking/mask/mask-on-self-with-mixed-mask-type.svg",
+               ImageComparisonParams::Skip()},  // BUG: Rendering issue, mask is clipped. Repros in
+                                                // renderer_tool but not viewer.
+              {"masking/mask/mask-on-self-with-mask-type=alpha.svg",
+               ImageComparisonParams::Skip()},  // BUG: Mask on self, also a bug in browsers
+              {"masking/mask/recursive-on-child.svg",
+               ImageComparisonParams::Skip()},  // UB: Recursive on child
+              {"masking/mask/recursive-on-self.svg",
+               ImageComparisonParams::Skip()},  // UB: Recursive
+              {"masking/mask/recursive.svg",
+               ImageComparisonParams::Skip()},  // BUG: Crashes on serializing the skp
+              {"masking/mask/self-recursive.svg",
+               ImageComparisonParams::Skip()},  // BUG: Crashes on serializing the skp
+          },
+  };
+
+  for (const auto& config : {paintingConfig, paintServerConfig, shapesConfig, structureConfig,
+                             structureImageConfig, maskingConfig}) {
+    auto tests = collectTests(testsDir, config);
+    testPlan.insert(testPlan.end(), std::make_move_iterator(tests.begin()),
+                    std::make_move_iterator(tests.end()));
+  }
+
+  std::sort(testPlan.begin(), testPlan.end());
+  testPlan.erase(std::unique(testPlan.begin(), testPlan.end(),
+                             [](const auto& lhs, const auto& rhs) {
+                               return lhs.svgFilename == rhs.svgFilename;
+                             }),
+                 testPlan.end());
+
+  return testPlan;
+}
+
 }  // namespace
 
 TEST_P(ImageComparisonTestFixture, ResvgTest) {
   const ImageComparisonTestcase& testcase = GetParam();
-  const std::string kGoldenDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "png");
+  const std::filesystem::path testsDir =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "svg");
+  const std::filesystem::path goldenRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "png");
+  const std::filesystem::path testSuiteRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
 
   std::filesystem::path goldenFilename;
   if (testcase.params.overrideGoldenFilename.empty()) {
-    goldenFilename = kGoldenDir / testcase.svgFilename.filename().replace_extension(".png");
+    goldenFilename = goldenRoot / testcase.svgFilename.lexically_relative(testsDir);
+    goldenFilename.replace_extension(".png");
   } else {
-    goldenFilename = testcase.params.overrideGoldenFilename;
+    goldenFilename = goldenRoot / testcase.params.overrideGoldenFilename;
   }
 
-  SVGDocument document = loadSVG(testcase.svgFilename.string().c_str(),
-                                 Runfiles::instance().RlocationExternal("resvg-test-suite", ""));
+  SVGDocument document = loadSVG(testcase.svgFilename.string().c_str(), testSuiteRoot);
   renderAndCompare(document, testcase.svgFilename, goldenFilename.string().c_str());
 }
 
-// TODO(text): a-alignment-baseline
-// TODO(text): a-baseline-shift
-// TODO: a-clip
-
-INSTANTIATE_TEST_SUITE_P(Color, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-color",  //
-                                                     {
-                                                         {"a-color-interpolation-filters-001.svg",
-                                                          Params::Skip()},  // Not impl: Filters
-                                                     })),
+INSTANTIATE_TEST_SUITE_P(Resvg, ImageComparisonTestFixture, ValuesIn(getResvgTests()),
                          TestNameFromFilename);
-
-// TODO: a-direction
-
-INSTANTIATE_TEST_SUITE_P(
-    Display, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-display",  //
-                                {
-                                    {"a-display-005.svg", Params::Skip()},  // Not impl: <tspan>
-                                    {"a-display-006.svg", Params::Skip()},  // Not impl: <tref>
-                                    {"a-display-009.svg", Params::Skip()},  // Not impl: <tspan>
-                                })),
-    TestNameFromFilename);
-
-// TODO: a-dominant-baseline
-// TODO: a-enable-background
-
-INSTANTIATE_TEST_SUITE_P(
-    Fill, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-fill",  //
-        {
-            {"a-fill-010.svg", Params::Skip()},          // UB: rgb(int int int)
-            {"a-fill-015.svg", Params::Skip()},          // UB: ICC color
-            {"a-fill-027.svg", Params::Skip()},          // Not impl: Fallback with icc-color
-            {"a-fill-031.svg", Params::Skip()},          // Not impl: <text>
-            {"a-fill-032.svg", Params::Skip()},          // Not impl: <text>
-            {"a-fill-033.svg", Params::Skip()},          // Not impl: <pattern>, <text>
-            {"a-fill-opacity-004.svg", Params::Skip()},  // Not impl: `fill-opacity` affects pattern
-            {"a-fill-opacity-006.svg", Params::Skip()},  // Not impl: <text>
-        })),
-    TestNameFromFilename);
-
-// TODO(filter): a-filter
-// TODO(filter): a-flood
-// TODO(font): a-font
-// TODO(font): a-glyph-orientation
-// TODO(filter?): a-isolation
-// TODO(text): a-kerning
-// TODO(text): a-lengthAdjust
-// TODO(text): a-letter-spacing
-
-INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-marker")), TestNameFromFilename);
-
-// TODO(filter): a-mark
-// TODO(filter): a-mix-blend-mode
-
-INSTANTIATE_TEST_SUITE_P(
-    Opacity, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-opacity",
-        {
-            {"a-opacity-005.svg",
-             Params::Skip()},  // Changed in css-color-4 to allow percentage in <alpha-value>, see
-                               // https://www.w3.org/TR/css-color/#transparency
-        })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Overflow, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-overflow")), TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Shape, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-shape",
-                                                     {
-                                                         {"a-shape-rendering-005.svg",
-                                                          Params::Skip()},  // Not impl: <text>
-                                                         {"a-shape-rendering-008.svg",
-                                                          Params::Skip()},  // Not impl: <marker>
-                                                     })),
-                         TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(StopAttributes, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-stop")), TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Stroke, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-stroke",
-        {
-            {"a-stroke-007.svg", Params::Skip()},            // Not impl: <text>
-            {"a-stroke-008.svg", Params::Skip()},            // Not impl: <text>
-            {"a-stroke-009.svg", Params::Skip()},            // Not impl: <text>
-            {"a-stroke-dasharray-005.svg", Params::Skip()},  // Not impl: "font-size"? "em" units
-                                                             // (font-size="20" not impl)
-            {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
-            {"a-stroke-dasharray-009.svg", Params::Skip()},  // UB (negative sum)
-            {"a-stroke-dasharray-013.svg",
-             Params::WithThreshold(0.13f)},  // Larger threshold due to anti-aliasing artifacts.
-            {"a-stroke-dashoffset-004.svg", Params::Skip()},  // Not impl: dashoffset "em" units
-            {"a-stroke-linejoin-004.svg",
-             Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
-            {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
-            {"a-stroke-opacity-004.svg",
-             Params::Skip()},  // Not impl: <pattern> / stroke interaction
-            {"a-stroke-opacity-006.svg", Params::Skip()},  // Not impl: <text>
-            {"a-stroke-width-004.svg", Params::Skip()},    // UB: Nothing should be rendered
-        })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Style, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-style",
-        {
-            {"a-style-003.svg",
-             Params::Skip()},  // <svg version="1.1"> disables geometry attributes in style
-        })),
-    TestNameFromFilename);
-
-// TODO: a-systemLanguage
-// TODO(text): a-text
-
-INSTANTIATE_TEST_SUITE_P(
-    Transform, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-transform",
-        {
-            {"a-transform-007.svg",
-             Params::WithThreshold(0.05f)},  // Larger threshold due to anti-aliasing artifacts.
-        })),
-    TestNameFromFilename);
-
-// TODO(text): a-unicode
-
-INSTANTIATE_TEST_SUITE_P(
-    Visibility, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-visibility",  //
-                                {
-                                    {"a-visibility-003.svg", Params::Skip()},  // Not impl: <tspan>
-                                    {"a-visibility-004.svg", Params::Skip()},  // Not impl: <tspan>
-                                    {"a-visibility-007.svg", Params::Skip()},  // Not impl: <text>
-                                })),
-    TestNameFromFilename);
-
-// TODO(text): a-word-spacing
-// TODO(text): a-writing-mode
-
-// TODO: e-a-
-
-INSTANTIATE_TEST_SUITE_P(Circle, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-circle")), TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(ClipPath, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix(
-                             "e-clipPath",
-                             {
-                                 {"e-clipPath-007.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-009.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-010.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-011.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-012.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-042.svg",
-                                  Params::Skip()},  // UB: on root `<svg>` without size
-                                 {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
-                                 {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
-                             })),
-                         TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-defs",
-                                                     {
-                                                         {"e-defs-007.svg",
-                                                          Params::Skip()},  // Not impl: <text>
-                                                     })),
-                         TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-ellipse")), TestNameFromFilename);
-
-// TODO(filter): e-fe
-// TODO(filter): e-filter
-
-INSTANTIATE_TEST_SUITE_P(G, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-g")),
-                         TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Image, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-image",
-                                {
-                                    {"e-image-003.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-006.svg", Params::Skip()},  // Not impl: .svgz image
-                                    {"e-image-007.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-008.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-017.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-018.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-019.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-020.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-021.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-022.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-023.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-024.svg", Params::Skip()},  // Not impl: .svg imageg
-                                    {"e-image-029.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-030.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-031.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-032.svg", Params::Skip()},  // UB: Float size
-                                    {"e-image-033.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-034.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-039.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-040.svg", Params::Skip()},  // Not impl: External URLs
-                                    {"e-image-041.svg", Params::Skip()},  // Not impl: External URLs
-                                },
-                                Params::WithThreshold(0.2f).disableDebugSkpOnFailure())),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Line, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-line-",
-        {
-            {"e-line-001.svg",
-             Params::WithThreshold(0.02f)},  // Larger threshold due to anti-aliasing artifacts with
-                                             // overlapping lines.
-        })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    LinearGradient, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-linearGradient",
-                                {
-                                    {"e-linearGradient-037.svg",
-                                     Params::Skip()},  // UB: Invalid `gradientTransform`
-                                })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Marker, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-marker",
-        {
-            {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
-            {"e-marker-017.svg", Params::Skip()},  // Not impl: `text`
-            {"e-marker-018.svg", Params::Skip()},  // Not impl: `text`
-            {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image
-            {"e-marker-022.svg", Params::Skip()},  // BUG: Nested
-            {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
-            {"e-marker-044.svg", Params::Skip()},  // BUG: Multiple closepaths (M L L Z Z Z)
-            // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
-            {"e-marker-045.svg", Params::WithGoldenOverride(
-                                     "donner/svg/renderer/testdata/golden/resvg-e-marker-045.png")},
-            // BUG? Disagreement about marker direction on cusp
-            {"e-marker-051.svg", Params::WithGoldenOverride(
-                                     "donner/svg/renderer/testdata/golden/resvg-e-marker-051.png")},
-        })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Mask, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-mask",
-        {
-            {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
-            {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
-            {"e-mask-025.svg", Params::Skip()},  // BUG: Rendering issue, mask is clipped. Repros in
-                                                 // renderer_tool but not viewer.
-            {"e-mask-026.svg", Params::Skip()},  // BUG: Mask on self, also a bug in browsers
-            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child doesn't apply
-            {"e-mask-029.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
-            {"e-mask-030.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
-        })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-path")),
-                         TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Pattern, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-pattern",
-        {
-            {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
-            {"e-pattern-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 250)},  // Anti-aliasing artifacts
-            {"e-pattern-010.svg",
-             Params::WithThreshold(kDefaultThreshold, 150)},          // Anti-aliasing artifacts
-            {"e-pattern-018.svg", Params::Skip()},                    // Not impl: <text>
-            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 300)},  // Anti-aliasing artifacts
-            {"e-pattern-021.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-022.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-023.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
-            {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.
-        })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Polygon, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-polygon")), TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(Polyline, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-polyline")), TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    RadialGradient, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-radialGradient",
-        {
-            {"e-radialGradient-031.svg",
-             Params::Skip()},  // Test suite bug? In SVG2 this was changed to draw
-                               // conical gradient instead of correcting focal point.
-            {"e-radialGradient-032.svg", Params::Skip()},  // UB: Negative `r`
-            {"e-radialGradient-039.svg", Params::Skip()},  // UB: Invalid `gradientUnits`
-            {"e-radialGradient-040.svg", Params::Skip()},  // UB: Invalid `gradientTransform`
-            {"e-radialGradient-043.svg", Params::Skip()},  // UB: fr=0.5 (SVG 2)
-            {"e-radialGradient-044.svg", Params::Skip()},  // Test suite bug? fr > default value of
-                                                           // r (0.5) should not
-                                                           //  render.
-            {"e-radialGradient-045.svg", Params::Skip()},  // UB: fr=-1 (SVG 2)
-        })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    Rect, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-rect",
-                                {
-                                    {"e-rect-022.svg", Params::Skip()},  // Not impl: "em" units
-                                    {"e-rect-023.svg", Params::Skip()},  // Not impl: "ex" units
-                                    {"e-rect-029.svg", Params::Skip()},  // Not impl: "rem" units
-                                    {"e-rect-031.svg", Params::Skip()},  // Not impl: "ch" units
-                                    {"e-rect-034.svg", Params::Skip()},  // Bug? vw/vh
-                                    {"e-rect-036.svg", Params::Skip()},  // Bug? vmin/vmax
-                                })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    StopElement, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-stop",
-                                {
-                                    {"e-stop-011.svg",
-                                     Params::Skip()},  // Bug? Strange edge case, stop-color
-                                                       // inherited from <linearGradient>.
-                                })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    StyleElement, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-style",
-                                {
-                                    {"e-style-012.svg",
-                                     Params::Skip()},  // Not impl: <svg version="1.1">
-                                    {"e-style-014.svg", Params::Skip()},  // Not impl: CSS @import
-                                })),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    SvgElement, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-svg",
-        {
-            {"e-svg-002.svg", Params::Skip()},                // Bug? xmlns validation
-            {"e-svg-003.svg", Params::Skip()},                // Bug? mixed namespaces
-            {"e-svg-005.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
-            {"e-svg-007.svg", Params::Skip()},                // Bug/Not impl? Non-UTF8 encoding
-            {"e-svg-008.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-009.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-010.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-011.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-012.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-013.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-014.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-015.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-016.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-017.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-018.svg", Params::Skip()},                // UB: Invalid id attribute
-            {"e-svg-019.svg", Params::Skip()},                // UB: Invalid id attribute
-            {"e-svg-020.svg", Params::Skip()},                // UB: FuncIRI parsing
-            {"e-svg-021.svg", Params::Skip()},                // UB: FuncIRI with invalid chars
-            {"e-svg-028.svg", Params::Skip()},                // Not impl: overflow
-            {"e-svg-029.svg", Params::Skip()},                // Not impl: overflow
-            {"e-svg-031.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
-            {"e-svg-032.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
-            {"e-svg-033.svg", Params::Skip()},                // Bug? Rect inside unknown element
-            {"e-svg-036.svg", Params::Skip()},  // Not impl: Computed bounds from content
-
-        })),
-    TestNameFromFilename);
-
-// TODO: e-switch
-
-INSTANTIATE_TEST_SUITE_P(
-    SymbolElement, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-symbol",
-                                {
-
-                                    {"e-symbol-010.svg",
-                                     Params::Skip()},  // New SVG2 feature, transform on symbol
-
-                                })),
-    TestNameFromFilename);
-
-// TODO(text): e-text-
-// TODO(text): e-textPath
-// TODO(text): e-tspan
-
-INSTANTIATE_TEST_SUITE_P(
-    Use, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-use",
-                                {
-                                    {"e-use-008.svg", Params::Skip()},  // Not impl: External file.
-                                })),
-    TestNameFromFilename);
 
 }  // namespace donner::svg
