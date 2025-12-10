@@ -30,6 +30,8 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
 - Apply `const` generously; mark single‑argument constructors `explicit` unless intended implicit.
 - Use `enum class` and provide `operator<<` for debugging.
 - Assert preconditions using `UTILS_RELEASE_ASSERT` or `assert` for debug builds.
+- Enum value names should not use a `k` prefix; document each public enum value with a brief
+  Doxygen comment.
 
 ## Architecture
 
@@ -82,3 +84,7 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   - Use `tools/doxygen.sh` to generate the docs.
   - The generated docs are in `generated-doxygen/html/`.
 - Use `tools/coverage.sh` to generate code coverage reports (if lcov is installed).
+- The ImGui Transform Inspector lives in `experimental/viewer/TransformInspector.{h,cc}` and is
+  documented for developers in `docs/design_docs/transform_visualizer.md` (now a living guide, not
+  a stepwise plan). Keep dependencies minimal (no WebView or Skia) and prefer existing base
+  utilities like `Transformd` and `PathSpline` when extending it.

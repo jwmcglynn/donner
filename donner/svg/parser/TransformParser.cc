@@ -8,7 +8,8 @@ namespace {
 
 class TransformParserImpl : public donner::parser::ParserBase {
 public:
-  TransformParserImpl(std::string_view str) : ParserBase(str) {}
+  TransformParserImpl(std::string_view str, TransformParser::Options options)
+      : ParserBase(str), options_(options) {}
 
   ParseResult<Transformd> parse() {
     bool allowComma = false;
@@ -95,9 +96,8 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, rotation around origin.
-          transform =
-              Transformd::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
-              transform;
+          transform = Transformd::Rotate(angleToRadians(maybeRotationDegrees.result())) *
+                      transform;
         } else {
           skipCommaWhitespace();
 
@@ -109,7 +109,7 @@ public:
           const Vector2d offset(numbers[0], numbers[1]);
           transform =
               Transformd::Translate(-offset) *
-              Transformd::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
+              Transformd::Rotate(angleToRadians(maybeRotationDegrees.result())) *
               Transformd::Translate(offset) * transform;
         }
 
@@ -119,8 +119,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform =
-            Transformd::SkewX(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
+        transform = Transformd::SkewX(angleToRadians(maybeNumber.result())) * transform;
 
       } else if (func == "skewY") {
         auto maybeNumber = readNumber();
@@ -128,8 +127,7 @@ public:
           return std::move(maybeNumber.error());
         }
 
-        transform =
-            Transformd::SkewY(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
+        transform = Transformd::SkewY(angleToRadians(maybeNumber.result())) * transform;
 
       } else {
         ParseError err;
@@ -157,6 +155,16 @@ public:
   }
 
 private:
+  double angleToRadians(double value) const {
+    if (options_.angleUnit == TransformParser::AngleUnit::Radians) {
+      return value;
+    }
+
+    return value * MathConstants<double>::kDegToRad;
+  }
+
+  TransformParser::Options options_;
+
   ParseResult<std::string_view> readFunction() {
     for (size_t i = 0; i < remaining_.size(); ++i) {
       if (remaining_[i] == '(') {
@@ -191,8 +199,8 @@ private:
 
 }  // namespace
 
-ParseResult<Transformd> TransformParser::Parse(std::string_view str) {
-  TransformParserImpl parser(str);
+ParseResult<Transformd> TransformParser::Parse(std::string_view str, const Options& options) {
+  TransformParserImpl parser(str, options);
   return parser.parse();
 }
 
