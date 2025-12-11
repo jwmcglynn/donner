@@ -9,6 +9,9 @@
 # mermaid) are encouraged for trust boundaries and data flow.
 #
 # Start with Summary, Goals, Non-Goals, then Next Steps and Implementation Plan. Follow with the rest.
+# Build the Implementation Plan in two layers: list high-level milestones first, then when starting a
+# milestone, add indented Markdown checkboxes with single actionable steps to complete when the next
+# task is requested.
 # </instructions>
 
 ## Summary (Required)
@@ -24,8 +27,12 @@
 - Short summary of the immediate next step(s) to start execution (1–3 bullets).
 
 ## Implementation Plan (Required)
-- [ ] Phase breakdown with major steps (keep concise).
-- [ ] Item 2
+- High-level milestones for delivering the feature.
+  - [ ] Milestone 1: <concise milestone>
+    - [ ] Step 1: <single actionable task>
+    - [ ] Step 2: <single actionable task>
+  - [ ] Milestone 2: <concise milestone>
+    - [ ] Step 1: <single actionable task>
 
 ## User Stories (Optional)
 - As a <user>, I want <capability> so that <benefit>.
