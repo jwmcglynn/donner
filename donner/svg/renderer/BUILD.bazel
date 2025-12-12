@@ -40,6 +40,15 @@ config_setting(
 )
 
 donner_cc_library(
+    name = "render_mode",
+    hdrs = ["RenderMode.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],

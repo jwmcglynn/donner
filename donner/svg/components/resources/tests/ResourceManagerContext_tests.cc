@@ -115,8 +115,8 @@ TEST(ResourceManagerContext, ExternalFontLoadingIsOptIn) {
   EXPECT_EQ(warnings.front().reason, "External font loading is disabled");
   EXPECT_EQ(resourceManager.fontLoadTelemetry().blockedByDisabledExternalFonts, 1u);
 
+  // Enable external font loading and retry loading the deferred font.
   resourceManager.setExternalFontLoadingEnabled(true);
-  resourceManager.addFontFaces(std::span<const css::FontFace>(&fontFace, 1));
   warnings.clear();
   resourceManager.loadResources(&warnings);
 

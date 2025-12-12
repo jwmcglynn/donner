@@ -47,10 +47,10 @@ TEST(TextFlowParserTests, ParsesFlowRegionsAndAlignment) {
   EXPECT_THAT(flow->regions[0].height, LengthIs(40.0, Lengthd::Unit::Px));
   EXPECT_EQ(flow->regions[0].overflow, Overflow::Scroll);
 
-  EXPECT_THAT(flow->regions[1].x, LengthIs(0.0, Lengthd::Unit::Number));
-  EXPECT_THAT(flow->regions[1].y, LengthIs(0.0, Lengthd::Unit::Number));
-  EXPECT_THAT(flow->regions[1].width, LengthIs(150.0, Lengthd::Unit::Number));
-  EXPECT_THAT(flow->regions[1].height, LengthIs(25.0, Lengthd::Unit::Number));
+  EXPECT_THAT(flow->regions[1].x, LengthIs(0.0, Lengthd::Unit::None));
+  EXPECT_THAT(flow->regions[1].y, LengthIs(0.0, Lengthd::Unit::None));
+  EXPECT_THAT(flow->regions[1].width, LengthIs(150.0, Lengthd::Unit::None));
+  EXPECT_THAT(flow->regions[1].height, LengthIs(25.0, Lengthd::Unit::None));
   EXPECT_EQ(flow->regions[1].overflow, Overflow::Visible);
 
   ASSERT_TRUE(flow->alignment.has_value());

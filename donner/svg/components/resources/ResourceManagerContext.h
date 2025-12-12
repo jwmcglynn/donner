@@ -13,15 +13,13 @@
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/FontResource.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/renderer/RenderMode.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::components {
 
-/// Rendering policy for font loads.
-enum class FontRenderMode : uint8_t {
-  kOneShot,
-  kContinuous,
-};
+/// Rendering policy for font loads (alias for \ref donner::svg::RenderMode).
+using FontRenderMode = svg::RenderMode;
 
 /// Telemetry about font loading outcomes for diagnostics.
 struct FontLoadTelemetry {

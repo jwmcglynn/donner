@@ -24,10 +24,10 @@ enum class FlowAlignment : uint8_t {
  * text node and will later bound auto-flow layout boxes.
  */
 struct FlowRegion {
-  Lengthd x{0.0, Lengthd::Unit::Number};
-  Lengthd y{0.0, Lengthd::Unit::Number};
-  Lengthd width{0.0, Lengthd::Unit::Number};
-  Lengthd height{0.0, Lengthd::Unit::Number};
+  Lengthd x{0.0, Lengthd::Unit::None};
+  Lengthd y{0.0, Lengthd::Unit::None};
+  Lengthd width{0.0, Lengthd::Unit::None};
+  Lengthd height{0.0, Lengthd::Unit::None};
   Overflow overflow{Overflow::Visible};
 };
 

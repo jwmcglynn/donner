@@ -10,10 +10,36 @@
 #include "include/core/SkString.h"
 #include "include/core/SkTypeface.h"
 
+#ifdef DONNER_USE_CORETEXT
+#include "include/ports/SkFontMgr_mac_ct.h"
+#elif defined(DONNER_USE_FREETYPE)
+#include "include/ports/SkFontMgr_empty.h"
+#elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
+#include "include/ports/SkFontMgr_fontconfig.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#else
+#error \
+    "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
+#endif
+
 namespace donner::svg {
 
+namespace {
+
+sk_sp<SkFontMgr> CreateFontManager() {
+#ifdef DONNER_USE_CORETEXT
+  return SkFontMgr_New_CoreText(nullptr);
+#elif defined(DONNER_USE_FREETYPE)
+  return SkFontMgr_New_Custom_Empty();
+#elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
+  return SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
+}
+
+}  // namespace
+
 TEST(TypefaceResolverTests, PicksCachedTypefaceBeforeFallback) {
-  sk_sp<SkFontMgr> fontManager = SkFontMgr::RefDefault();
+  sk_sp<SkFontMgr> fontManager = CreateFontManager();
   auto cachedTypeface = CreateEmbeddedFallbackTypeface(*fontManager);
   auto fallback = fontManager->matchFamilyStyle(nullptr, SkFontStyle());
   if (!fallback) {
@@ -31,7 +57,7 @@ TEST(TypefaceResolverTests, PicksCachedTypefaceBeforeFallback) {
 }
 
 TEST(TypefaceResolverTests, FallsBackWhenNoFamilyMatches) {
-  sk_sp<SkFontMgr> fontManager = SkFontMgr::RefDefault();
+  sk_sp<SkFontMgr> fontManager = CreateFontManager();
   auto fallback = CreateEmbeddedFallbackTypeface(*fontManager);
 
   std::map<std::string, std::vector<sk_sp<SkTypeface>>> typefaces;
@@ -43,7 +69,7 @@ TEST(TypefaceResolverTests, FallsBackWhenNoFamilyMatches) {
 }
 
 TEST(TypefaceResolverTests, PicksSystemFamilyWhenAvailable) {
-  sk_sp<SkFontMgr> fontManager = SkFontMgr::RefDefault();
+  sk_sp<SkFontMgr> fontManager = CreateFontManager();
   ASSERT_GT(fontManager->countFamilies(), 0);
 
   SkString systemFamily;

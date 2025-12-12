@@ -7,6 +7,7 @@
 
 #include "donner/base/RcString.h"
 #include "donner/base/encoding/Decompress.h"
+#include "donner/base/parser/LengthParser.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -23,6 +24,46 @@ using xml::XMLParser;
 using xml::XMLQualifiedNameRef;
 
 namespace {
+
+// Helper function to parse length attributes for flow regions
+// TODO(jwm): Consolidate with ParseLengthAttribute in AttributeParser.cc
+std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::string_view value) {
+  using donner::parser::LengthParser;
+
+  LengthParser::Options options;
+  options.unitOptional = true;
+
+  auto maybeLengthResult = LengthParser::Parse(value, options);
+  if (maybeLengthResult.hasError()) {
+    context.addSubparserWarning(std::move(maybeLengthResult.error()),
+                                context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  if (maybeLengthResult.result().consumedChars != value.size()) {
+    ParseError err;
+    err.reason = "Unexpected data at end of attribute";
+    err.location = FileOffset::Offset(maybeLengthResult.result().consumedChars);
+    context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    return std::nullopt;
+  }
+
+  return maybeLengthResult.result().length;
+}
+
+// Helper to parse overflow attribute values
+std::optional<Overflow> ParseOverflowValue(std::string_view value) {
+  if (value == "visible") {
+    return Overflow::Visible;
+  } else if (value == "hidden") {
+    return Overflow::Hidden;
+  } else if (value == "scroll") {
+    return Overflow::Scroll;
+  } else if (value == "auto") {
+    return Overflow::Auto;
+  }
+  return std::nullopt;
+}
 
 template <typename T>
 concept HasPathLength =
@@ -81,7 +122,7 @@ std::optional<ParseError> ParseNodeContents<SVGTextElement>(SVGParserContext& co
         element.appendText(maybeValue.value());
       }
     } else if (child->type() == XMLNode::Type::Element &&
-               child->qualifiedName() == XMLQualifiedNameRef("flowRegion")) {
+               child->tagName() == XMLQualifiedNameRef("flowRegion")) {
       components::FlowRegion region;
 
       auto parseLengthAttr = [&](std::string_view attrName, Lengthd& target) -> bool {
@@ -110,12 +151,15 @@ std::optional<ParseError> ParseNodeContents<SVGTextElement>(SVGParserContext& co
       if (!hasWidth || !hasHeight) {
         ParseError err;
         err.reason = "flowRegion missing required width/height";
-        context.addSubparserWarning(std::move(err), context.parserOriginFrom(node));
+        if (auto sourceOffset = child->sourceStartOffset()) {
+          err.location = sourceOffset.value();
+        }
+        context.addSubparserWarning(std::move(err), ParserOrigin{});
         continue;
       }
 
       if (auto overflowAttr = child->getAttribute(XMLQualifiedNameRef("flow-overflow"))) {
-        if (auto overflow = ParseFlowOverflow(overflowAttr.value())) {
+        if (auto overflow = ParseOverflowValue(overflowAttr.value())) {
           region.overflow = *overflow;
         } else {
           ParseError err;
@@ -314,12 +358,12 @@ public:
           continue;
         }
 
-        auto maybeNewElement = createElement(child->tagName(), child.value(), AllSVGElements());
+        auto maybeNewElement = createElement(child->tagName(), *child, AllSVGElements());
         if (maybeNewElement.hasError()) {
           return std::move(maybeNewElement.error());
         }
 
-        if (auto error = walkChildren(maybeNewElement.result(), child.value())) {
+        if (auto error = walkChildren(maybeNewElement.result(), *child)) {
           return error;
         }
       } else {
@@ -353,13 +397,13 @@ public:
 
           document_ = SVGDocument(registry_, std::move(settings_), child->entityHandle());
 
-          auto maybeSvgElement = ParseAttributes(context_, document_->svgElement(), child.value());
+          auto maybeSvgElement = ParseAttributes(context_, document_->svgElement(), *child);
           if (maybeSvgElement.hasError()) {
             return std::move(maybeSvgElement.error());
           }
 
           foundRootSvg = true;
-          if (auto error = walkChildren(maybeSvgElement.result(), child.value())) {
+          if (auto error = walkChildren(maybeSvgElement.result(), *child)) {
             return error;
           }
         } else {

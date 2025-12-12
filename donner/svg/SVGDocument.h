@@ -5,13 +5,10 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/renderer/RenderMode.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
-
-namespace components {
-enum class FontRenderMode : uint8_t;
-}
 
 class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
@@ -46,7 +43,7 @@ public:
     bool externalFontLoadingEnabled = false;
 
     /// Rendering policy for fonts: either block until fonts load or allow continuous rendering.
-    components::FontRenderMode fontRenderMode = components::FontRenderMode::kOneShot;
+    RenderMode renderMode = RenderMode::kOneShot;
   };
 
 private:
@@ -70,13 +67,20 @@ private:
 
 public:
   /**
+   * Constructor to create an empty SVGDocument with default settings.
+   *
+   * To load a document from an SVG file, use \ref donner::svg::parser::SVGParser::ParseSVG.
+   */
+  SVGDocument();
+
+  /**
    * Constructor to create an empty SVGDocument.
    *
    * To load a document from an SVG file, use \ref donner::svg::parser::SVGParser::ParseSVG.
    *
    * @param settings Settings to configure the document.
    */
-  explicit SVGDocument(Settings settings = Settings());
+  explicit SVGDocument(Settings settings);
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() { return *registry_; }
