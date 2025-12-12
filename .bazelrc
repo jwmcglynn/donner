@@ -37,12 +37,22 @@ build --copt=-fno-rtti
 # Disable warning about a 'switch' missing 'default' label, which started triggering in skia on clang 19
 build --copt=-Wno-switch-default
 
+# Disable warning about not eliding copy on return (NRVO), which started triggering in skia on LLVM 21
+build --copt=-Wno-nrvo
+
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 
 # Enable building with the latest llvm toolchain (downloaded on-demand, see MODULE.bazel)
 common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
 common:latest_llvm --//build_defs:llvm_latest=1
+
+# Workaround for LLVM 21 __hash_memory symbol issue on macOS
+# See: https://github.com/llvm/llvm-project/issues/155606
+# Force use of LLVM 21 libc++ instead of system libc++
+build:latest_llvm --linkopt=-nostdlib++
+build:latest_llvm --linkopt=external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++.a
+build:latest_llvm --linkopt=external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++abi.a
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++

@@ -10,7 +10,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
 # Build dependencies
-bazel_dep(name = "apple_support", version = "1.22.1", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
+bazel_dep(name = "apple_support", version = "1.24.5", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
@@ -92,7 +92,7 @@ bazel_dep(name = "rules_python", version = "1.7.0", dev_dependency = True)
 # Toolchain
 #
 
-bazel_dep(name = "toolchains_llvm", version = "1.5.0", dev_dependency = True)
+bazel_dep(name = "toolchains_llvm", version = "1.6.0", dev_dependency = True)
 
 # To use a local copy of the toolchains_llvm repository, uncomment the following.
 # local_path_override(
@@ -104,7 +104,7 @@ llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm", 
 
 llvm.toolchain(
     name = "llvm_toolchain",
-    llvm_version = "20.1.2",
+    llvm_version = "21.1.6",
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 

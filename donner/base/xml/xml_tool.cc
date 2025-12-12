@@ -19,7 +19,9 @@ void DumpTree(const XMLNode& element, int depth) {
   }
 }
 
-extern "C" int main(int argc, char* argv[]) {
+}  // namespace donner::xml
+
+int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::cerr << "Unexpected arg count.\n";
     std::cerr << "USAGE: xml_tool <filename>\n";
@@ -40,7 +42,8 @@ extern "C" int main(int argc, char* argv[]) {
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
-  auto maybeResult = XMLParser::Parse(std::string_view(fileData.data(), fileData.size()));
+  auto maybeResult =
+      donner::xml::XMLParser::Parse(std::string_view(fileData.data(), fileData.size()));
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e << "\n";
@@ -53,5 +56,3 @@ extern "C" int main(int argc, char* argv[]) {
   DumpTree(maybeResult.result().root(), 0);
   return 0;
 }
-
-}  // namespace donner::xml

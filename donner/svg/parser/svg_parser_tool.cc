@@ -24,7 +24,9 @@ void DumpTree(SVGElement element, int depth) {
   }
 }
 
-extern "C" int main(int argc, char* argv[]) {
+}  // namespace donner::svg
+
+int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::cerr << "Unexpected arg count.\n";
     std::cerr << "USAGE: svg_parser_tool <filename>\n";
@@ -45,8 +47,8 @@ extern "C" int main(int argc, char* argv[]) {
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
-  std::vector<ParseError> warnings;
-  auto maybeResult = parser::SVGParser::ParseSVG(fileData, &warnings);
+  std::vector<donner::ParseError> warnings;
+  auto maybeResult = donner::svg::parser::SVGParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e << "\n";
@@ -66,5 +68,3 @@ extern "C" int main(int argc, char* argv[]) {
   DumpTree(maybeResult.result().svgElement(), 0);
   return 0;
 }
-
-}  // namespace donner::svg

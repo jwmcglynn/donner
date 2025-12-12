@@ -125,8 +125,12 @@ void DumpTree(SVGElement element, int depth = 0) {
   }
 }
 
+}  // namespace donner::svg
+
 /// Tool entry point, usage is described in the file header.
-extern "C" int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) {
+  using namespace donner::svg;
+
   // Initialize the symbolizer to get a human-readable stack trace
   absl::InitializeSymbolizer(argv[0]);
 
@@ -192,7 +196,7 @@ extern "C" int main(int argc, char* argv[]) {
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
-  std::vector<ParseError> warnings;
+  std::vector<donner::ParseError> warnings;
   parser::SVGParser::Options svgOptions;
   svgOptions.enableExperimental = experimental;
 
@@ -270,5 +274,3 @@ extern "C" int main(int argc, char* argv[]) {
     return 1;
   }
 }
-
-}  // namespace donner::svg

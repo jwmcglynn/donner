@@ -71,9 +71,28 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
     else:
         corpus_name = corpus
 
+    # Workaround for LLVM 21 issue with __hash_memory symbol on macOS
+    # See: https://github.com/llvm/llvm-project/issues/155606
+    # The fuzzer runtime needs symbols from libc++ 21, but the linker finds the system libc++.
+    # We need to explicitly link against the LLVM 21 libc++ static libraries.
+    fuzzer_linkopts = select({
+        "@platforms//os:macos": [
+            "-fsanitize=fuzzer",
+            # Override libc++ with LLVM 21 version by linking static libraries explicitly
+            "-nostdlib++",
+            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++.a",
+            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++abi.a",
+            # Add rpath for execroot (from bin directory to external/)
+            "-Wl,-rpath,@loader_path/../../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
+            # Add rpath for runfiles directory (without 'external/' prefix)
+            "-Wl,-rpath,@loader_path/../../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
+        ],
+        "//conditions:default": ["-fsanitize=fuzzer"],
+    })
+
     cc_binary(
         name = name + "_bin",
-        linkopts = ["-fsanitize=fuzzer"],
+        linkopts = fuzzer_linkopts,
         linkstatic = 1,
         target_compatible_with = fuzzer_compatible_with(),
         tags = ["fuzz_target"],
@@ -82,7 +101,7 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
 
     cc_test(
         name = name + "_10_seconds",
-        linkopts = ["-fsanitize=fuzzer"],
+        linkopts = fuzzer_linkopts,
         args = [
             "-max_total_time=10",
             "-timeout=2",
@@ -100,7 +119,7 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
 
     cc_test(
         name = name,
-        linkopts = ["-fsanitize=fuzzer"],
+        linkopts = fuzzer_linkopts,
         args = ["$(locations %s)" % corpus_name],
         linkstatic = 1,
         data = [corpus_name] + select({
