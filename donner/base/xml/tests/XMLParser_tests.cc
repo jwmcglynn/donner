@@ -751,6 +751,21 @@ TEST_F(XMLParserTests, EntitiesRecursionLimits) {
   }
 }
 
+TEST_F(XMLParserTests, EntitySubstitutionLimitExceeded) {
+  XMLParser::Options options = optionsCustomEntities();
+  options.maxEntitySubstitutions = 2;
+
+  auto result = XMLParser::Parse(R"(
+    <!DOCTYPE test [
+      <!ENTITY a "A">
+    ]>
+    <node>&a;&a;&a;</node>
+  )",
+                                 options);
+
+  EXPECT_THAT(result, ParseErrorIs("Entity substitution limit exceeded"));
+}
+
 TEST_F(XMLParserTests, EntitiesComposition) {
   // Test entity composition (one entity referencing another)
   auto result = XMLParser::Parse(R"(

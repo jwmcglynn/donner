@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <string_view>
 
 #include "donner/base/ParseResult.h"
@@ -52,7 +53,7 @@ public:
      * Parse custom entities in the XML document, e.g. `<!ENTITY ...>`. If this flag is set to true,
      * custom entities will be parsed and and translated in the document tree.
      */
-     bool parseCustomEntities = false;
+    bool parseCustomEntities = false;
 
     /**
      * Parse processing instructions in the XML document, e.g. `<?php ...>`. If this flag is set to
@@ -66,6 +67,19 @@ public:
      * such as `&amp;` and `&lt;` will not be translated to their respective characters.
      */
     bool disableEntityTranslation = false;
+
+    /**
+     * Maximum nesting depth allowed while expanding entities. Defaults to 64. Failing to stay
+     * under this limit will cause parsing to fail with a resource exhaustion error.
+     */
+    int maxEntityDepth = 64;
+
+    /**
+     * Maximum total entity substitutions allowed for a single document parse. Defaults to 1'000.
+     * Failing to stay under this limit will cause parsing to fail with a resource exhaustion
+     * error.
+     */
+    uint64_t maxEntitySubstitutions = 1'000;
   };
 
   /**
