@@ -38,3 +38,16 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "PathSpline_unit_tests",
+    srcs = [
+        "PathSpline_tests.cc",
+    ],
+    deps = [
+        ":core_test_utils",
+        "//donner/base:base_test_utils",
+        "//donner/svg/core",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
