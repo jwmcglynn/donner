@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <limits>
 #include <string>
+#include <string_view>
 
 #include "donner/base/xml/XMLParser.h"
 
@@ -41,7 +42,7 @@ XMLParser::Options applyEntityLimits(XMLParser::Options options) {
 
 void logLimitHits(const ParseResult<XMLDocument>& result) {
   if (result.hasError()) {
-    const std::string& reason = result.error().reason;
+    const std::string_view reason = result.error().reason;
     if (reason.find("depth exceeded") != std::string::npos) {
       (void)fprintf(stderr, "HIT_DEPTH_CAP\n");
     }
