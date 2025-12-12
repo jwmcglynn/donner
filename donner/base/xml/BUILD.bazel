@@ -1,5 +1,5 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -45,7 +45,7 @@ cc_binary(
     deps = [":xml"],
 )
 
-cc_test(
+donner_cc_test(
     name = "xml_tests",
     srcs = [
         "tests/XMLNode_tests.cc",

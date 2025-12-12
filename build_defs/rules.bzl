@@ -5,6 +5,23 @@ Helper rules, such as for building fuzzers.
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
+def llvm21_macos_workaround_linkopts():
+    """
+    Returns linkopts needed for LLVM 21 __hash_memory symbol workaround on macOS.
+
+    See: https://github.com/llvm/llvm-project/issues/155606
+    The fuzzer runtime and other LLVM 21 compiled code needs symbols from libc++ 21,
+    but the linker finds the system libc++. We explicitly link against LLVM 21's static libraries.
+    """
+    return select({
+        "//build_defs:llvm_latest_macos": [
+            "-nostdlib++",
+            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++.a",
+            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++abi.a",
+        ],
+        "//conditions:default": [],
+    })
+
 def fuzzer_compatible_with():
     """
     Returns a list of labels that the fuzzer rules are compatible with.
@@ -17,6 +34,36 @@ def fuzzer_compatible_with():
         "//build_defs:fuzzers_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     })
+
+def donner_cc_binary(name, linkopts = [], **kwargs):
+    """
+    Create a cc_binary with donner-specific defaults including LLVM 21 workaround.
+
+    Args:
+      name: Rule name.
+      linkopts: List of linker options.
+      **kwargs: Additional arguments, matching the implementation of cc_binary.
+    """
+    cc_binary(
+        name = name,
+        linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        **kwargs
+    )
+
+def donner_cc_test(name, linkopts = [], **kwargs):
+    """
+    Create a cc_test with donner-specific defaults including LLVM 21 workaround.
+
+    Args:
+      name: Rule name.
+      linkopts: List of linker options.
+      **kwargs: Additional arguments, matching the implementation of cc_test.
+    """
+    cc_test(
+        name = name,
+        linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        **kwargs
+    )
 
 def donner_cc_library(name, copts = [], tags = [], visibility = None, **kwargs):
     """
@@ -34,7 +81,7 @@ def donner_cc_library(name, copts = [], tags = [], visibility = None, **kwargs):
     if len(package_path) == 0:
         fail("Invalid package path: " + package_path)
 
-    if package_path[0] != "donner" and package_path[0] != "experimental":
+    if package_path[0] != "" and package_path[0] != "donner" and package_path[0] != "experimental":
         fail("donner_cc_library can only be used in donner or experimental packages")
 
     # Tag experimental libraries
@@ -71,23 +118,15 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
     else:
         corpus_name = corpus
 
-    # Workaround for LLVM 21 issue with __hash_memory symbol on macOS
-    # See: https://github.com/llvm/llvm-project/issues/155606
-    # The fuzzer runtime needs symbols from libc++ 21, but the linker finds the system libc++.
-    # We need to explicitly link against the LLVM 21 libc++ static libraries.
-    fuzzer_linkopts = select({
+    # Build linkopts for fuzzer, including LLVM 21 workaround and runtime paths
+    fuzzer_linkopts = ["-fsanitize=fuzzer"] + llvm21_macos_workaround_linkopts() + select({
         "@platforms//os:macos": [
-            "-fsanitize=fuzzer",
-            # Override libc++ with LLVM 21 version by linking static libraries explicitly
-            "-nostdlib++",
-            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++.a",
-            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++abi.a",
             # Add rpath for execroot (from bin directory to external/)
             "-Wl,-rpath,@loader_path/../../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
             # Add rpath for runfiles directory (without 'external/' prefix)
             "-Wl,-rpath,@loader_path/../../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
         ],
-        "//conditions:default": ["-fsanitize=fuzzer"],
+        "//conditions:default": [],
     })
 
     cc_binary(
@@ -99,7 +138,7 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         **kwargs
     )
 
-    cc_test(
+    donner_cc_test(
         name = name + "_10_seconds",
         linkopts = fuzzer_linkopts,
         args = [
@@ -117,7 +156,7 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         **kwargs
     )
 
-    cc_test(
+    donner_cc_test(
         name = name,
         linkopts = fuzzer_linkopts,
         args = ["$(locations %s)" % corpus_name],

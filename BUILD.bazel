@@ -1,11 +1,12 @@
 ##
 ## Main library
 ##
+load("//build_defs:rules.bzl", "donner_cc_library")
 
 #
 # Donner main library, packages together the SVG library and associated renderer.
 #
-cc_library(
+donner_cc_library(
     name = "donner",
     visibility = ["//visibility:public"],
     deps = [

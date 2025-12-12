@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library")
 
-cc_library(
+donner_cc_library(
     name = "svg_core",
     srcs = [
         "DonnerController.cc",
@@ -93,7 +93,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "element_type",
     srcs = [
         "ElementType.cc",
@@ -109,7 +109,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "svg",
     hdrs = [
         "SVG.h",

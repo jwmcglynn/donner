@@ -1,5 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -29,7 +28,7 @@ donner_cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "element_tests",
     srcs = [
         "tests/ElementTraversalGenerators_tests.cc",

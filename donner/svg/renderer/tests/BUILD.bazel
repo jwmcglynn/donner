@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
-cc_library(
+donner_cc_library(
     name = "renderer_test_utils",
     testonly = 1,
     srcs = [
@@ -18,7 +18,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "image_comparison_test_fixture",
     testonly = 1,
     srcs = [
@@ -38,7 +38,7 @@ cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "renderer_tests",
     srcs = [
         "Renderer_tests.cc",
@@ -56,7 +56,7 @@ cc_test(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "resvg_test_suite",
     srcs = [
         "resvg_test_suite.cc",

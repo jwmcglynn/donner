@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//build_defs:rules.bzl", "donner_cc_binary")
 
-cc_binary(
+donner_cc_binary(
     name = "custom_css_parser",
     testonly = 1,
     srcs = ["custom_css_parser.cc"],
@@ -10,7 +10,7 @@ cc_binary(
     ],
 )
 
-cc_binary(
+donner_cc_binary(
     name = "svg_to_png",
     srcs = ["svg_to_png.cc"],
     deps = [
@@ -18,7 +18,7 @@ cc_binary(
     ],
 )
 
-cc_binary(
+donner_cc_binary(
     name = "svg_tree_interaction",
     srcs = ["svg_tree_interaction.cc"],
     deps = [

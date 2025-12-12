@@ -1,7 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_fuzzer")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
-cc_library(
+donner_cc_library(
     name = "sandboxed_file_resource_loader",
     srcs = ["SandboxedFileResourceLoader.cc"],
     hdrs = ["SandboxedFileResourceLoader.h"],
@@ -12,13 +11,13 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "image_resource",
     hdrs = ["ImageResource.h"],
     visibility = ["//donner/svg:__subpackages__"],
 )
 
-cc_library(
+donner_cc_library(
     name = "resource_loader_interface",
     hdrs = [
         "NullResourceLoader.h",
@@ -27,7 +26,7 @@ cc_library(
     visibility = ["//donner/svg:__subpackages__"],
 )
 
-cc_library(
+donner_cc_library(
     name = "url_loader",
     srcs = [
         "UrlLoader.cc",
@@ -43,7 +42,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "image_loader",
     srcs = [
         "ImageLoader.cc",
@@ -61,7 +60,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "font_loader",
     srcs = ["FontLoader.cc"],
     hdrs = ["FontLoader.h"],
@@ -73,7 +72,7 @@ cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "url_loader_tests",
     srcs = [
         "tests/UrlLoader_tests.cc",
@@ -85,7 +84,7 @@ cc_test(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "resource_loader_tests",
     srcs = [
         "tests/NullResourceLoader_tests.cc",

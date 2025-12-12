@@ -20,7 +20,7 @@ git_override(
 Donner with the default renderer is available through the `@donner` dependency, add to your rule like so:
 
 ```py
-cc_binary(
+donner_cc_binary(
     name = "my_library",
     # ...
     deps = [

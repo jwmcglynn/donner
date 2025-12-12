@@ -1,5 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 #
 # Parses SVG XML files into an SVGDocument.
@@ -21,7 +20,7 @@ donner_cc_library(
 #
 # Tool to parse XML files and output details about its structure.
 #
-cc_binary(
+donner_cc_binary(
     name = "svg_parser_tool",
     srcs = ["svg_parser_tool.cc"],
     deps = [":parser"],
@@ -65,7 +64,7 @@ donner_cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "parser_core",
     srcs = [
         "AngleParser.cc",
@@ -99,7 +98,7 @@ cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "parser_tests",
     srcs = [
         "tests/AngleParser_tests.cc",

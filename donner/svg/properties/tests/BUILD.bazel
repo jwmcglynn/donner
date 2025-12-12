@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_test")
 
-cc_test(
+donner_cc_test(
     name = "properties_tests",
     srcs = [
         "PaintServer_tests.cc",

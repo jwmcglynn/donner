@@ -1,8 +1,7 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_fuzzer")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
-cc_library(
+donner_cc_library(
     name = "base64",
     srcs = [
         "Base64.cc",
@@ -16,7 +15,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "url_decode",
     srcs = [
         "UrlDecode.cc",
@@ -30,7 +29,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "decompress",
     srcs = ["Decompress.cc"],
     hdrs = ["Decompress.h"],
@@ -41,7 +40,7 @@ cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "base64_tests",
     srcs = [
         "tests/Base64_tests.cc",
@@ -53,7 +52,7 @@ cc_test(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "decompress_tests",
     srcs = ["tests/Decompress_tests.cc"],
     deps = [
@@ -63,7 +62,7 @@ cc_test(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "url_decode_tests",
     srcs = [
         "tests/UrlDecode_tests.cc",

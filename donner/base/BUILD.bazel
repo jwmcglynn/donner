@@ -1,5 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -55,7 +54,7 @@ filegroup(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "base_tests",
     srcs = [
         "tests/BaseTestUtils_tests.cc",
@@ -97,7 +96,7 @@ donner_cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "base_tests_ndebug",
     srcs = [
         "tests/Utils_tests.cc",
@@ -111,7 +110,7 @@ cc_test(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "rcstring_tests_with_exceptions",
     srcs = [
         "tests/RcString_tests.cc",

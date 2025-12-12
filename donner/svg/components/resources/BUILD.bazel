@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library")
 
-cc_library(
+donner_cc_library(
     name = "components",
     hdrs = [
         "ImageComponent.h",
@@ -15,14 +15,14 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "font_resource",
     hdrs = ["FontResource.h"],
     visibility = ["//donner/svg:__subpackages__"],
     deps = ["//donner/base/fonts"],
 )
 
-cc_library(
+donner_cc_library(
     name = "resource_manager_context",
     srcs = [
         "ResourceManagerContext.cc",

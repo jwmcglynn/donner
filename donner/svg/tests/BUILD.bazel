@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
-cc_test(
+donner_cc_test(
     name = "svg_tests",
     srcs = [
         "ElementStyle_tests.cc",
@@ -31,7 +31,7 @@ cc_test(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "parser_test_utils",
     testonly = 1,
     srcs = [

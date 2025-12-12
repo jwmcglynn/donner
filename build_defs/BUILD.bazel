@@ -18,3 +18,13 @@ config_setting(
         ":llvm_latest": "0",
     },
 )
+
+config_setting(
+    name = "llvm_latest_macos",
+    constraint_values = [
+        "@platforms//os:macos",
+    ],
+    flag_values = {
+        ":llvm_latest": "1",
+    },
+)

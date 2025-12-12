@@ -1,5 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_test")
-load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "parser",
@@ -38,7 +37,7 @@ donner_cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "parser_tests",
     srcs = [
         "tests/AnbMicrosyntaxParser_tests.cc",
@@ -59,7 +58,7 @@ cc_test(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "css_parsing_tests",
     srcs = [
         "tests/css_parsing_tests.cc",

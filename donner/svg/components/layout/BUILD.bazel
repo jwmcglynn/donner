@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
-cc_library(
+donner_cc_library(
     name = "components",
     hdrs = [
         "SizedElementComponent.h",
@@ -16,7 +16,7 @@ cc_library(
     ],
 )
 
-cc_library(
+donner_cc_library(
     name = "layout_system",
     srcs = [
         "LayoutSystem.cc",
@@ -39,7 +39,7 @@ cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "layout_system_tests",
     srcs = [
         "tests/LayoutSystem_tests.cc",

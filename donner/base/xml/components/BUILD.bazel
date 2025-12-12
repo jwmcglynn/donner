@@ -1,6 +1,6 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
-cc_library(
+donner_cc_library(
     name = "components",
     srcs = [
         "AttributesComponent.cc",
@@ -24,7 +24,7 @@ cc_library(
     ],
 )
 
-cc_test(
+donner_cc_test(
     name = "components_tests",
     srcs = [
         "tests/AttributesComponent_tests.cc",
