@@ -16,6 +16,20 @@ namespace donner::svg::parser {
  */
 class TransformParser {
 public:
+  /// Defines how angle values are interpreted while parsing.
+  enum class AngleUnit {
+    /// Interpret angles in degrees (SVG default).
+    Degrees,
+    /// Interpret angles in radians.
+    Radians,
+  };
+
+  /// Configuration for parsing SVG transform strings.
+  struct Options {
+    /// Angle units used for `rotate`, `skewX`, and `skewY` parameters.
+    AngleUnit angleUnit = AngleUnit::Degrees;
+  };
+
   /**
    * Parse an SVG `transform="..."` attribute.
    *
@@ -44,7 +58,8 @@ public:
    * @param str String corresponding to the SVG transform attribute.
    * @return Parsed transform, or an error.
    */
-  static ParseResult<Transformd> Parse(std::string_view str);
+  static ParseResult<Transformd> Parse(std::string_view str,
+                                       const Options& options = Options());
 };
 
 }  // namespace donner::svg::parser
