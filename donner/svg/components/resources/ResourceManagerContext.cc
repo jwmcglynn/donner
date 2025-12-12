@@ -56,12 +56,44 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
 
   // Iterate over all font faces and load them.
   FontLoader fontLoader(loader);
+  std::vector<css::FontFace> deferredFontFaces;
   for (const auto& fontFace : fontFacesToLoad_) {
+    css::FontFace deferredFontFace;
+    deferredFontFace.familyName = fontFace.familyName;
+    deferredFontFace.style = fontFace.style;
+    deferredFontFace.weight = fontFace.weight;
+    deferredFontFace.stretch = fontFace.stretch;
+    deferredFontFace.display = fontFace.display;
+
     for (const css::FontFaceSource& source : fontFace.sources) {
       if (source.kind == css::FontFaceSource::Kind::Url) {
+        if (!externalFontLoadingEnabled_) {
+          ++fontLoadTelemetry_.blockedByDisabledExternalFonts;
+          if (outWarnings) {
+            ParseError err;
+            err.reason = "External font loading is disabled";
+            outWarnings->emplace_back(err);
+          }
+          deferredFontFace.sources.push_back(source);
+          continue;
+        }
+
+        if (fontRenderMode_ == FontRenderMode::kContinuous) {
+          ++fontLoadTelemetry_.deferredForContinuousRendering;
+          if (outWarnings) {
+            ParseError err;
+            err.reason = "Deferred font load: continuous rendering mode";
+            outWarnings->emplace_back(err);
+          }
+          deferredFontFace.sources.push_back(source);
+          continue;
+        }
+
+        ++fontLoadTelemetry_.scheduledLoads;
         auto maybeFontData = fontLoader.fromUri(std::get<RcString>(source.payload));
 
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
+          ++fontLoadTelemetry_.failedLoads;
           if (outWarnings) {
             ParseError err;
             err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
@@ -69,12 +101,17 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
             outWarnings->emplace_back(err);
           }
         } else {
-          loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
+          ++fontLoadTelemetry_.loadedFonts;
+          FontResource resource = std::get<FontResource>(std::move(maybeFontData));
+          resource.font.familyName = fontFace.familyName.str();
+          loadedFonts_.emplace_back(std::move(resource));
         }
       } else if (source.kind == css::FontFaceSource::Kind::Data) {
+        ++fontLoadTelemetry_.scheduledLoads;
         auto maybeFontData = fontLoader.fromData(std::get<std::vector<uint8_t>>(source.payload));
 
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
+          ++fontLoadTelemetry_.failedLoads;
           if (outWarnings) {
             ParseError err;
             err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
@@ -82,7 +119,10 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
             outWarnings->emplace_back(err);
           }
         } else {
-          loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
+          ++fontLoadTelemetry_.loadedFonts;
+          FontResource resource = std::get<FontResource>(std::move(maybeFontData));
+          resource.font.familyName = fontFace.familyName.str();
+          loadedFonts_.emplace_back(std::move(resource));
         }
       } else {
         if (outWarnings) {
@@ -93,9 +133,13 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
         continue;
       }
     }
+
+    if (!deferredFontFace.sources.empty()) {
+      deferredFontFaces.push_back(std::move(deferredFontFace));
+    }
   }
 
-  fontFacesToLoad_.clear();
+  fontFacesToLoad_ = std::move(deferredFontFaces);
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {

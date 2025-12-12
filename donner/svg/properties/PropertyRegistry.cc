@@ -12,6 +12,7 @@
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/core/Typography.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
@@ -38,6 +39,19 @@ bool SkipWhitespace(std::span<const css::ComponentValue>& components) {
   }
 
   return foundWhitespace;
+}
+
+std::span<const css::ComponentValue> TrimWhitespace(
+    std::span<const css::ComponentValue> components) {
+  while (!components.empty() && components.front().isToken<css::Token::Whitespace>()) {
+    components = components.subspan(1);
+  }
+
+  while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
+    components = components.subspan(0, components.size() - 1);
+  }
+
+  return components;
 }
 
 ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components) {
@@ -142,6 +156,237 @@ ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue> compone
 
   ParseError err;
   err.reason = "Invalid overflow value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<FontStyle> ParseFontStyle(std::span<const css::ComponentValue> components) {
+  components = TrimWhitespace(components);
+
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("normal")) {
+        return FontStyle::Normal;
+      }
+      if (value.equalsLowercase("italic")) {
+        return FontStyle::Italic;
+      }
+      if (value.equalsLowercase("oblique")) {
+        return FontStyle::Oblique;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid font-style";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<FontWeight> ParseFontWeight(std::span<const css::ComponentValue> components) {
+  components = TrimWhitespace(components);
+
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("normal")) {
+        return FontWeight::Normal();
+      }
+      if (value.equalsLowercase("bold")) {
+        return FontWeight::Bold();
+      }
+      if (value.equalsLowercase("bolder")) {
+        return FontWeight::Bolder();
+      }
+      if (value.equalsLowercase("lighter")) {
+        return FontWeight::Lighter();
+      }
+    } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      if (number->type == css::NumberType::Integer && number->value >= 1.0 &&
+          number->value <= 1000.0) {
+        return FontWeight::Number(static_cast<int>(number->value));
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid font-weight";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<FontStretch> ParseFontStretch(std::span<const css::ComponentValue> components) {
+  components = TrimWhitespace(components);
+
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("ultra-condensed")) {
+        return FontStretch::UltraCondensed;
+      }
+      if (value.equalsLowercase("extra-condensed")) {
+        return FontStretch::ExtraCondensed;
+      }
+      if (value.equalsLowercase("condensed")) {
+        return FontStretch::Condensed;
+      }
+      if (value.equalsLowercase("semi-condensed")) {
+        return FontStretch::SemiCondensed;
+      }
+      if (value.equalsLowercase("normal")) {
+        return FontStretch::Normal;
+      }
+      if (value.equalsLowercase("semi-expanded")) {
+        return FontStretch::SemiExpanded;
+      }
+      if (value.equalsLowercase("expanded")) {
+        return FontStretch::Expanded;
+      }
+      if (value.equalsLowercase("extra-expanded")) {
+        return FontStretch::ExtraExpanded;
+      }
+      if (value.equalsLowercase("ultra-expanded")) {
+        return FontStretch::UltraExpanded;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid font-stretch";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<FontVariant> ParseFontVariant(std::span<const css::ComponentValue> components) {
+  components = TrimWhitespace(components);
+
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("normal")) {
+        return FontVariant::Normal;
+      }
+      if (value.equalsLowercase("small-caps")) {
+        return FontVariant::SmallCaps;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid font-variant";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<TextSpacing> ParseTextSpacing(std::span<const css::ComponentValue> components,
+                                          bool allowUserUnits) {
+  components = TrimWhitespace(components);
+
+  if (auto ident = parser::TryGetSingleIdent(components); ident) {
+    if (ident->equalsLowercase("normal")) {
+      return TextSpacing::Normal();
+    }
+  }
+
+  if (components.empty()) {
+    ParseError err;
+    err.reason = "Invalid spacing";
+    return err;
+  }
+
+  return parser::ParseLengthPercentage(components, allowUserUnits)
+      .map<TextSpacing>([](Lengthd length) { return TextSpacing::Length(length); });
+}
+
+ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> components) {
+  components = TrimWhitespace(components);
+
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("start")) {
+        return TextAnchor::Start;
+      }
+      if (value.equalsLowercase("middle")) {
+        return TextAnchor::Middle;
+      }
+      if (value.equalsLowercase("end")) {
+        return TextAnchor::End;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid text-anchor";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<WhiteSpace> ParseWhiteSpace(std::span<const css::ComponentValue> components) {
+  components = TrimWhitespace(components);
+
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("normal")) {
+        return WhiteSpace::Normal;
+      }
+      if (value.equalsLowercase("pre")) {
+        return WhiteSpace::Pre;
+      }
+      if (value.equalsLowercase("nowrap")) {
+        return WhiteSpace::NoWrap;
+      }
+      if (value.equalsLowercase("pre-wrap")) {
+        return WhiteSpace::PreWrap;
+      }
+      if (value.equalsLowercase("pre-line")) {
+        return WhiteSpace::PreLine;
+      }
+      if (value.equalsLowercase("break-spaces")) {
+        return WhiteSpace::BreakSpaces;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid white-space";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<Direction> ParseDirection(std::span<const css::ComponentValue> components) {
+  components = TrimWhitespace(components);
+
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("ltr")) {
+        return Direction::Ltr;
+      }
+      if (value.equalsLowercase("rtl")) {
+        return Direction::Rtl;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid direction";
   err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
@@ -629,372 +874,462 @@ static constexpr frozen::unordered_set<frozen::string, 70> kValidPresentationAtt
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const parser::PropertyParseFnParams& params);
 
-using MapType = frozen::unordered_map<frozen::string, PropertyParseFn, 28>;
+using MapType = frozen::unordered_map<frozen::string, PropertyParseFn, 37>;
 
-static constexpr MapType kProperties = {
-    {"color",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       auto maybeError = Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return css::parser::ColorParser::Parse(params.components());
-           },
-           &registry.color);
-       if (maybeError.has_value()) {
-         return maybeError;
-       }
-
-       // From https://www.w3.org/TR/css-color-3/#currentcolor:
-       // If the 'currentColor' keyword is set on the 'color' property itself, it is treated as
-       // `color: inherit`.
-       if (registry.color.hasValue() && registry.color.getRequired().isCurrentColor()) {
-         registry.color.set(PropertyState::Inherit, registry.color.specificity);
-       }
-
-       return maybeError;
-     }},  //
-    {"font-family",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params)
-               -> ParseResult<SmallVector<RcString, 1>> {
-             auto components = params.components();
-             SmallVector<RcString, 1> families;
-             size_t i = 0;
-             while (i < components.size()) {
-               // Skip commas and whitespace.
-               if (components[i].isToken<css::Token::Comma>() ||
-                   components[i].isToken<css::Token::Whitespace>()) {
-                 ++i;
-                 continue;
+static const MapType
+    kProperties =
+        {
+            {"color",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               auto maybeError = Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return css::parser::ColorParser::Parse(params.components());
+                   },
+                   &registry.color);
+               if (maybeError.has_value()) {
+                 return maybeError;
                }
-               // Collect one family item until the next comma.
-               size_t start = i;
-               while (i < components.size() && !components[i].isToken<css::Token::Comma>()) {
-                 ++i;
+
+               // From https://www.w3.org/TR/css-color-3/#currentcolor:
+               // If the 'currentColor' keyword is set on the 'color' property itself, it is treated
+               // as `color: inherit`.
+               if (registry.color.hasValue() && registry.color.getRequired().isCurrentColor()) {
+                 registry.color.set(PropertyState::Inherit, registry.color.specificity);
                }
-               auto item =
-                   std::span<const css::ComponentValue>(components.data() + start, i - start);
-               // Quoted family name.
-               if (item.size() == 1 && item[0].isToken<css::Token::String>()) {
-                 families.emplace_back(item[0].get<css::Token>().get<css::Token::String>().value);
-               } else if (item.size() == 1 && item[0].is<css::Function>()) {
-                 const auto& func = item[0].get<css::Function>();
-                 if (func.name.equalsLowercase("generic")) {
-                   std::string name;
-                   bool first = true;
-                   for (const auto& cv : func.values) {
-                     if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
-                       if (!first) {
-                         name.push_back(' ');
+
+               return maybeError;
+             }},  //
+            {"font-family",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params)
+                       -> ParseResult<SmallVector<RcString, 1>> {
+                     auto components = params.components();
+                     SmallVector<RcString, 1> families;
+                     size_t i = 0;
+                     while (i < components.size()) {
+                       // Skip commas and whitespace.
+                       if (components[i].isToken<css::Token::Comma>() ||
+                           components[i].isToken<css::Token::Whitespace>()) {
+                         ++i;
+                         continue;
                        }
-                       first = false;
-                       name.append(ident->value);
-                     } else {
-                       ParseError err;
-                       err.reason = "Invalid generic-family";
-                       err.location = cv.sourceOffset();
-                       return err;
+                       // Collect one family item until the next comma.
+                       size_t start = i;
+                       while (i < components.size() &&
+                              !components[i].isToken<css::Token::Comma>()) {
+                         ++i;
+                       }
+                       auto item = std::span<const css::ComponentValue>(components.data() + start,
+                                                                        i - start);
+                       // Quoted family name.
+                       if (item.size() == 1 && item[0].isToken<css::Token::String>()) {
+                         families.emplace_back(
+                             item[0].get<css::Token>().get<css::Token::String>().value);
+                       } else if (item.size() == 1 && item[0].is<css::Function>()) {
+                         const auto& func = item[0].get<css::Function>();
+                         if (func.name.equalsLowercase("generic")) {
+                           std::string name;
+                           bool first = true;
+                           for (const auto& cv : func.values) {
+                             if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
+                               if (!first) {
+                                 name.push_back(' ');
+                               }
+                               first = false;
+                               name.append(ident->value);
+                             } else {
+                               ParseError err;
+                               err.reason = "Invalid generic-family";
+                               err.location = cv.sourceOffset();
+                               return err;
+                             }
+                           }
+                           families.emplace_back(RcString(name));
+                         } else {
+                           ParseError err;
+                           err.reason = "Invalid font-family function";
+                           err.location = item.front().sourceOffset();
+                           return err;
+                         }
+                       } else {
+                         // Unquoted family name (sequence of idents).
+                         std::string name;
+                         bool first = true;
+                         for (const auto& cv : item) {
+                           if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
+                             if (!first) {
+                               name.push_back(' ');
+                             }
+                             first = false;
+                             name.append(ident->value);
+                           } else {
+                             ParseError err;
+                             err.reason = "Invalid font-family";
+                             err.location = cv.sourceOffset();
+                             return err;
+                           }
+                         }
+                         families.emplace_back(RcString(name));
+                       }
                      }
-                   }
-                   families.emplace_back(RcString(name));
-                 } else {
-                   ParseError err;
-                   err.reason = "Invalid font-family function";
-                   err.location = item.front().sourceOffset();
-                   return err;
-                 }
-               } else {
-                 // Unquoted family name (sequence of idents).
-                 std::string name;
-                 bool first = true;
-                 for (const auto& cv : item) {
-                   if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
-                     if (!first) {
-                       name.push_back(' ');
-                     }
-                     first = false;
-                     name.append(ident->value);
-                   } else {
-                     ParseError err;
-                     err.reason = "Invalid font-family";
-                     err.location = cv.sourceOffset();
-                     return err;
-                   }
-                 }
-                 families.emplace_back(RcString(name));
+                     return families;
+                   },
+                   &registry.fontFamily);
+             }},  //
+            {"font-style",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseFontStyle(params.components());
+                   },
+                   &registry.fontStyle);
+             }},  //
+            {"font-weight",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseFontWeight(params.components());
+                   },
+                   &registry.fontWeight);
+             }},  //
+            {"font-stretch",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseFontStretch(params.components());
+                   },
+                   &registry.fontStretch);
+             }},  //
+            {"font-variant",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseFontVariant(params.components());
+                   },
+                   &registry.fontVariant);
+             }},  //
+            {"font-size",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return parser::ParseLengthPercentage(params.components(),
+                                                          params.allowUserUnits());
+                   },
+                   &registry.fontSize);
+             }},  //
+            {"letter-spacing",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseTextSpacing(params.components(), params.allowUserUnits());
+                   },
+                   &registry.letterSpacing);
+             }},  //
+            {"word-spacing",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseTextSpacing(params.components(), params.allowUserUnits());
+                   },
+                   &registry.wordSpacing);
+             }},  //
+            {"display",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseDisplay(params.components());
+                   },
+                   &registry.display);
+             }},  //
+            {"opacity",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return parser::ParseAlphaValue(params.components());
+                   },
+                   &registry.opacity);
+             }},  //
+            {"visibility",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseVisibility(params.components());
+                   },
+                   &registry.visibility);
+             }},  //
+            {"overflow",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseOverflow(params.components());
+                   },
+                   &registry.overflow);
+             }},  //
+            {"direction",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseDirection(params.components());
+                   },
+                   &registry.direction);
+             }},  //
+            {"white-space",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseWhiteSpace(params.components());
+                   },
+                   &registry.whiteSpace);
+             }},  //
+            {"text-anchor",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseTextAnchor(params.components());
+                   },
+                   &registry.textAnchor);
+             }},  //
+            {"transform-origin",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseTransformOrigin(params.components());
+                   },
+                   &registry.transformOrigin);
+             }},  //
+            {"fill",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParsePaintServer(params.components());
+                   },
+                   &registry.fill);
+             }},  //
+            {"fill-rule",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseFillRule(params.components());
+                   },
+                   &registry.fillRule);
+             }},  //
+            {"fill-opacity",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return parser::ParseAlphaValue(params.components());
+                   },
+                   &registry.fillOpacity);
+             }},  //
+            {"stroke",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParsePaintServer(params.components());
+                   },
+                   &registry.stroke);
+             }},  //
+            {"stroke-opacity",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return parser::ParseAlphaValue(params.components());
+                   },
+                   &registry.strokeOpacity);
+             }},  //
+            {"stroke-width",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return parser::ParseLengthPercentage(params.components(),
+                                                          params.allowUserUnits());
+                   },
+                   &registry.strokeWidth);
+             }},  //
+            {"stroke-linecap",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseStrokeLinecap(params.components());
+                   },
+                   &registry.strokeLinecap);
+             }},  //
+            {"stroke-linejoin",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseStrokeLinejoin(params.components());
+                   },
+                   &registry.strokeLinejoin);
+             }},  //
+            {"stroke-miterlimit",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseNumber(params.components());
+                   },
+                   &registry.strokeMiterlimit);
+             }},  //
+            {"stroke-dasharray",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseStrokeDasharray(params.components());
+                   },
+                   &registry.strokeDasharray);
+             }},  //
+            {"stroke-dashoffset",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return parser::ParseLengthPercentage(params.components(),
+                                                          params.allowUserUnits());
+                   },
+                   &registry.strokeDashoffset);
+             }},  //
+            {"clip-path",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseReference("clip-path", params.components());
+                   },
+                   &registry.clipPath);
+             }},  //
+            {"clip-rule",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseClipRule(params.components());
+                   },
+                   &registry.clipRule);
+             }},  //
+            {
+                "mask",
+                [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                  return Parse(
+                      params,
+                      [](const parser::PropertyParseFnParams& params) {
+                        return ParseReference("mask", params.components());
+                      },
+                      &registry.mask);
+                }},  //
+            {
+                "filter",
+                [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                  return Parse(
+                      params,
+                      [](const parser::PropertyParseFnParams& params) {
+                        return ParseFilter(params.components());
+                      },
+                      &registry.filter);
+                }},  //
+            {"pointer-events",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParsePointerEvents(params.components());
+                   },
+                   &registry.pointerEvents);
+             }},  //
+            {"marker-start",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseReference("marker-start", params.components());
+                   },
+                   &registry.markerStart);
+             }},  //
+            {"marker-mid",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseReference("marker-mid", params.components());
+                   },
+                   &registry.markerMid);
+             }},  //
+            {"marker-end",
+             [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+               return Parse(
+                   params,
+                   [](const parser::PropertyParseFnParams& params) {
+                     return ParseReference("marker-end", params.components());
+                   },
+                   &registry.markerEnd);
+             }},  //
+            {"marker",
+             [](PropertyRegistry& registry,
+                const parser::PropertyParseFnParams& params) -> std::optional<ParseError> {
+               // First, parse the shorthand value as a Reference
+               const auto parseResult = ParseReference("marker", params.components());
+               if (!parseResult.hasResult()) {
+                 return parseResult.error();
                }
-             }
-             return families;
-           },
-           &registry.fontFamily);
-     }},  //
-    {"font-size",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
-           },
-           &registry.fontSize);
-     }},  //
-    {"display",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseDisplay(params.components());
-           },
-           &registry.display);
-     }},  //
-    {"opacity",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return parser::ParseAlphaValue(params.components());
-           },
-           &registry.opacity);
-     }},  //
-    {"visibility",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseVisibility(params.components());
-           },
-           &registry.visibility);
-     }},  //
-    {"overflow",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseOverflow(params.components());
-           },
-           &registry.overflow);
-     }},  //
-    {"transform-origin",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseTransformOrigin(params.components());
-           },
-           &registry.transformOrigin);
-     }},  //
-    {"fill",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParsePaintServer(params.components());
-           },
-           &registry.fill);
-     }},  //
-    {"fill-rule",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseFillRule(params.components());
-           },
-           &registry.fillRule);
-     }},  //
-    {"fill-opacity",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return parser::ParseAlphaValue(params.components());
-           },
-           &registry.fillOpacity);
-     }},  //
-    {"stroke",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParsePaintServer(params.components());
-           },
-           &registry.stroke);
-     }},  //
-    {"stroke-opacity",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return parser::ParseAlphaValue(params.components());
-           },
-           &registry.strokeOpacity);
-     }},  //
-    {"stroke-width",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
-           },
-           &registry.strokeWidth);
-     }},  //
-    {"stroke-linecap",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseStrokeLinecap(params.components());
-           },
-           &registry.strokeLinecap);
-     }},  //
-    {"stroke-linejoin",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseStrokeLinejoin(params.components());
-           },
-           &registry.strokeLinejoin);
-     }},  //
-    {"stroke-miterlimit",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseNumber(params.components());
-           },
-           &registry.strokeMiterlimit);
-     }},  //
-    {"stroke-dasharray",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseStrokeDasharray(params.components());
-           },
-           &registry.strokeDasharray);
-     }},  //
-    {"stroke-dashoffset",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
-           },
-           &registry.strokeDashoffset);
-     }},  //
-    {"clip-path",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseReference("clip-path", params.components());
-           },
-           &registry.clipPath);
-     }},  //
-    {"clip-rule",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseClipRule(params.components());
-           },
-           &registry.clipRule);
-     }},  //
-    {"mask",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseReference("mask", params.components());
-           },
-           &registry.mask);
-     }},  //
-    {"filter",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseFilter(params.components());
-           },
-           &registry.filter);
-     }},  //
-    {"pointer-events",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParsePointerEvents(params.components());
-           },
-           &registry.pointerEvents);
-     }},  //
-    {"marker-start",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseReference("marker-start", params.components());
-           },
-           &registry.markerStart);
-     }},  //
-    {"marker-mid",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseReference("marker-mid", params.components());
-           },
-           &registry.markerMid);
-     }},  //
-    {"marker-end",
-     [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-       return Parse(
-           params,
-           [](const parser::PropertyParseFnParams& params) {
-             return ParseReference("marker-end", params.components());
-           },
-           &registry.markerEnd);
-     }},  //
-    {"marker",
-     [](PropertyRegistry& registry,
-        const parser::PropertyParseFnParams& params) -> std::optional<ParseError> {
-       // First, parse the shorthand value as a Reference
-       const auto parseResult = ParseReference("marker", params.components());
-       if (!parseResult.hasResult()) {
-         return parseResult.error();
-       }
 
-       const Reference& markerValue = parseResult.result();
+               const Reference& markerValue = parseResult.result();
 
-       // Now, set marker-start, marker-mid, and marker-end using the Parse function
-       std::optional<ParseError> error;
+               // Now, set marker-start, marker-mid, and marker-end using the Parse function
+               std::optional<ParseError> error;
 
-       // Set marker-start
-       error = Parse(
-           params,
-           [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-               -> ParseResult<Reference> { return markerValue; },
-           &registry.markerStart);
-       assert(!error && "Unexpected error parsing marker shorthand property");
+               // Set marker-start
+               error = Parse(
+                   params,
+                   [markerValue](const parser::PropertyParseFnParams& /*unused*/)
+                       -> ParseResult<Reference> { return markerValue; },
+                   &registry.markerStart);
+               assert(!error && "Unexpected error parsing marker shorthand property");
 
-       // Set marker-mid
-       error = Parse(
-           params,
-           [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-               -> ParseResult<Reference> { return markerValue; },
-           &registry.markerMid);
-       assert(!error && "Unexpected error parsing marker shorthand property");
+               // Set marker-mid
+               error = Parse(
+                   params,
+                   [markerValue](const parser::PropertyParseFnParams& /*unused*/)
+                       -> ParseResult<Reference> { return markerValue; },
+                   &registry.markerMid);
+               assert(!error && "Unexpected error parsing marker shorthand property");
 
-       // Set marker-end
-       error = Parse(
-           params,
-           [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-               -> ParseResult<Reference> { return markerValue; },
-           &registry.markerEnd);
-       assert(!error && "Unexpected error parsing marker shorthand property");
+               // Set marker-end
+               error = Parse(
+                   params,
+                   [markerValue](const parser::PropertyParseFnParams& /*unused*/)
+                       -> ParseResult<Reference> { return markerValue; },
+                   &registry.markerEnd);
+               assert(!error && "Unexpected error parsing marker shorthand property");
 
-       return std::nullopt;  // Parsing succeeded
-     }},                     //
+               return std::nullopt;  // Parsing succeeded
+             }},                     //
 };
 
 }  // namespace

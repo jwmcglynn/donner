@@ -2,6 +2,7 @@
 /// @file
 
 #include <string>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
@@ -145,7 +146,9 @@ private:
   bool verbose_;  //!< If true, print verbose logging.
 
   sk_sp<class SkFontMgr> fontMgr_;  //!< Font manager, may be initialized with custom fonts.
-  std::map<std::string, sk_sp<SkTypeface>> typefaces_;  //!< Cached typefaces by family name.
+  sk_sp<class SkTypeface> fallbackTypeface_;  //!< Default fallback typeface for text.
+  std::map<std::string, std::vector<sk_sp<SkTypeface>>> typefaces_;  //!< Cached typefaces by
+                                                                     //!< family name.
 
   SkBitmap bitmap_;                    //!< The bitmap to render into.
   SkCanvas* rootCanvas_ = nullptr;     //!< The root canvas.

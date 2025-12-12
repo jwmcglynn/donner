@@ -57,6 +57,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "typeface_resolver_tests",
+    srcs = ["TypefaceResolver_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:typeface_resolver",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resvg_test_suite",
     srcs = [
         "resvg_test_suite.cc",

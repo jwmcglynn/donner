@@ -40,6 +40,15 @@ config_setting(
 )
 
 donner_cc_library(
+    name = "render_mode",
+    hdrs = ["RenderMode.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],
@@ -56,6 +65,19 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "typeface_resolver",
+    srcs = ["TypefaceResolver.cc"],
+    hdrs = ["TypefaceResolver.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":skia_deps",
+        "//donner/base",
+        "//donner/svg/core",
+        "//third_party/public-sans",
     ],
 )
 
@@ -105,6 +127,7 @@ donner_cc_library(
         ":renderer_image_io",
         ":renderer_utils",
         ":skia_deps",
+        ":typeface_resolver",
         "//donner/base/fonts",
         "//donner/svg",
         "//donner/svg/core",

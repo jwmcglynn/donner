@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <vector>
@@ -11,9 +13,22 @@
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/FontResource.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/renderer/RenderMode.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::components {
+
+/// Rendering policy for font loads (alias for \ref donner::svg::RenderMode).
+using FontRenderMode = svg::RenderMode;
+
+/// Telemetry about font loading outcomes for diagnostics.
+struct FontLoadTelemetry {
+  size_t scheduledLoads = 0;                   ///< Total font sources queued for loading.
+  size_t loadedFonts = 0;                      ///< Successfully loaded font sources.
+  size_t failedLoads = 0;                      ///< Failed font sources.
+  size_t blockedByDisabledExternalFonts = 0;   ///< Loads blocked because remote fonts are off.
+  size_t deferredForContinuousRendering = 0;   ///< Loads deferred due to continuous render mode.
+};
 
 /**
  * Resource manager, which handles loading resources from URLs and caching results.
@@ -41,6 +56,22 @@ public:
   void setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
     loader_ = std::move(loader);
   }
+
+  /**
+   * Allow or block external font loading from URLs. Defaults to false so embedders must opt-in
+   * before network requests occur.
+   */
+  void setExternalFontLoadingEnabled(bool enabled) { externalFontLoadingEnabled_ = enabled; }
+
+  /**
+   * Set the rendering policy for font loading.
+   */
+  void setFontRenderMode(FontRenderMode mode) { fontRenderMode_ = mode; }
+
+  /**
+   * Inspect font loading telemetry collected during resource fetches.
+   */
+  const FontLoadTelemetry& fontLoadTelemetry() const { return fontLoadTelemetry_; }
 
   /**
    * Get the size of an image resource for an entity, if it has one and successfully loaded.
@@ -80,6 +111,15 @@ private:
 
   /// A list of all font faces that need to be loaded.
   std::vector<css::FontFace> fontFacesToLoad_;
+
+  /// Whether external font downloads are permitted. Defaults to false to avoid unexpected fetches.
+  bool externalFontLoadingEnabled_ = false;
+
+  /// Rendering policy for web fonts (one-shot blocking vs. continuous with deferred loads).
+  FontRenderMode fontRenderMode_ = FontRenderMode::kOneShot;
+
+  /// Telemetry about font loading outcomes.
+  FontLoadTelemetry fontLoadTelemetry_;
 
   /// A list of all successfully loaded fonts.
   std::vector<FontResource> loadedFonts_;

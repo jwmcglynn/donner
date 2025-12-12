@@ -23,6 +23,7 @@ cc_library(
         "PointerEvents.h",
         "PreserveAspectRatio.h",
         "Stroke.h",
+        "Typography.h",
         "TransformOrigin.h",
         "UserAgentStylesheet.h",
         "Visibility.h",

@@ -5,6 +5,7 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/core/Typography.h"
 
 namespace donner::svg {
 
@@ -171,6 +172,26 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
     EXPECT_TRUE(registry.color.hasValue()) << "Comments and whitespace should be ignored";
     EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
   }
+}
+
+TEST(PropertyRegistry, ParseTypographyProperties) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-style: italic; font-weight: 700; font-stretch: semi-condensed; font-variant: "
+      "small-caps; letter-spacing: 2px; word-spacing: 5%; text-anchor: end; white-space: "
+      "pre; direction: rtl");
+
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(FontWeight::Number(700)));
+  EXPECT_THAT(registry.fontStretch.get(), Optional(FontStretch::SemiCondensed));
+  EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+  EXPECT_THAT(registry.letterSpacing.get(),
+              Optional(TextSpacing::Length(Lengthd(2, LengthUnit::Px))));
+  EXPECT_THAT(registry.wordSpacing.get(),
+              Optional(TextSpacing::Length(Lengthd(5, LengthUnit::Percent))));
+  EXPECT_THAT(registry.textAnchor.get(), Optional(TextAnchor::End));
+  EXPECT_THAT(registry.whiteSpace.get(), Optional(WhiteSpace::Pre));
+  EXPECT_THAT(registry.direction.get(), Optional(Direction::Rtl));
 }
 
 TEST(PropertyRegistry, Fill) {

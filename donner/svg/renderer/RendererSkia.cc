@@ -63,10 +63,10 @@
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/renderer/TypefaceResolver.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 // Embedded resources
-#include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
 
@@ -86,6 +86,44 @@ SkMatrix toSkiaMatrix(const Transformd& transform) {
                            NarrowToFloat(transform.data[3]),  // scaleY
                            NarrowToFloat(transform.data[5]),  // transY
                            0, 0, 1);
+}
+
+SkFontStyle::Slant ToSkFontSlant(FontStyle style) {
+  switch (style) {
+    case FontStyle::Normal: return SkFontStyle::Slant::kUpright_Slant;
+    case FontStyle::Italic: return SkFontStyle::Slant::kItalic_Slant;
+    case FontStyle::Oblique: return SkFontStyle::Slant::kOblique_Slant;
+  }
+
+  UTILS_UNREACHABLE();
+}
+
+SkFontStyle::Width ToSkFontWidth(FontStretch stretch) {
+  switch (stretch) {
+    case FontStretch::UltraCondensed: return SkFontStyle::kUltraCondensed_Width;
+    case FontStretch::ExtraCondensed: return SkFontStyle::kExtraCondensed_Width;
+    case FontStretch::Condensed: return SkFontStyle::kCondensed_Width;
+    case FontStretch::SemiCondensed: return SkFontStyle::kSemiCondensed_Width;
+    case FontStretch::Normal: return SkFontStyle::kNormal_Width;
+    case FontStretch::SemiExpanded: return SkFontStyle::kSemiExpanded_Width;
+    case FontStretch::Expanded: return SkFontStyle::kExpanded_Width;
+    case FontStretch::ExtraExpanded: return SkFontStyle::kExtraExpanded_Width;
+    case FontStretch::UltraExpanded: return SkFontStyle::kUltraExpanded_Width;
+  }
+
+  UTILS_UNREACHABLE();
+}
+
+int ToSkFontWeight(const FontWeight& weight) {
+  const int resolved = weight.kind == FontWeight::Kind::Number ? weight.value
+                       : weight.kind == FontWeight::Kind::Bold ? 700
+                                                               : 400;
+  return std::clamp(resolved, 1, 1000);
+}
+
+SkFontStyle ToSkFontStyle(const components::ComputedTextStyleComponent& style) {
+  return SkFontStyle(ToSkFontWeight(style.fontWeight), ToSkFontWidth(style.fontStretch),
+                     ToSkFontSlant(style.fontStyle));
 }
 
 SkM44 toSkia(const Transformd& transform) {
@@ -337,7 +375,8 @@ public:
       auto fontData = CreateInMemoryFont(font.font);
       if (auto typeface = renderer_.fontMgr_->makeFromData(std::move(fontData))) {
         if (font.font.familyName.has_value()) {
-          renderer_.typefaces_[font.font.familyName.value()] = std::move(typeface);
+          auto& familyTypefaces = renderer_.typefaces_[font.font.familyName.value()];
+          familyTypefaces.push_back(std::move(typeface));
         } else {
           // We don't have a family name, so the font will not be usable. Ignore it.
         }
@@ -347,6 +386,8 @@ public:
                   << "\n";
       }
     }
+
+    renderer_.fallbackTypeface_ = CreateEmbeddedFallbackTypeface(*renderer_.fontMgr_);
   }
 
   void drawUntil(Registry& registry, Entity endEntity) {
@@ -1174,7 +1215,7 @@ public:
     renderer_.currentCanvas_->restore();
   }
 
-  // Draws text content using computed spans, font-family, and font-size from style
+  // Draws text content using computed spans and typography resolved per span
   void drawText(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
                 const components::ComputedTextComponent& text, const PropertyRegistry& style,
                 const Boxd& viewBox, const FontMetrics& fontMetrics) {
@@ -1193,31 +1234,22 @@ public:
       return;
     }
 
-    // Determine font size in pixels
-    const Lengthd sizeLen = style.fontSize.getRequired();
-    const SkScalar fontSizePx =
-        static_cast<SkScalar>(sizeLen.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
-
-    // Load typeface by family
-    const SmallVector<RcString, 1>& families = style.fontFamily.getRequiredRef();
-    const std::string familyName = families.empty() ? "" : families[0].str();
-
-    sk_sp<SkTypeface> typeface;
-    // First try to find the typeface in the font face list
-    if (renderer_.typefaces_.find(familyName) != renderer_.typefaces_.end()) {
-      typeface = renderer_.typefaces_[familyName];
-    } else {
-      // If not found, try to match the family style with the font manager
-      typeface = renderer_.fontMgr_->matchFamilyStyle(familyName.c_str(), SkFontStyle());
-      if (!typeface) {
-        typeface = renderer_.fontMgr_->makeFromData(SkData::MakeWithoutCopy(
-            embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));
-      }
-    }
-
-    SkFont font(typeface, fontSizePx);
     // Draw each text span
     for (const auto& span : text.spans) {
+      const auto& spanStyle = span.style;
+
+      // Determine font size in pixels
+      const Lengthd sizeLen = spanStyle.fontSize;
+      const SkScalar fontSizePx =
+          static_cast<SkScalar>(sizeLen.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
+
+      // Load typeface by family and style
+      const SkFontStyle skFontStyle = ToSkFontStyle(spanStyle);
+      const sk_sp<SkTypeface> typeface =
+          ResolveTypeface(spanStyle.fontFamily, skFontStyle, renderer_.typefaces_,
+                          *renderer_.fontMgr_, renderer_.fallbackTypeface_);
+
+      SkFont font(typeface, fontSizePx);
       // Compute positions
       const SkScalar x =
           static_cast<SkScalar>(span.x.toPixels(viewBox, fontMetrics, Lengthd::Extent::X) +

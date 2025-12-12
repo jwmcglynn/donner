@@ -2,27 +2,49 @@
 #include "donner/svg/components/text/TextSystem.h"
 
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/ComputedTextStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::svg::components {
 
 void TextSystem::instantiateAllComputedComponents(Registry& registry,
                                                   std::vector<ParseError>* /*outWarnings*/) {
-  auto view = registry.view<TextRootComponent, TextComponent, TextPositioningComponent>();
+  auto view = registry.view<TextRootComponent, TextComponent, TextPositioningComponent,
+                            ComputedStyleComponent>();
   for (auto entity : view) {
-    auto [textComponent, positioningComponent] = view.get(entity);
+    auto [textComponent, positioningComponent, computedStyle] = view.get(entity);
     auto& computed = registry.get_or_emplace<ComputedTextComponent>(entity);
+    auto& textStyle = registry.get_or_emplace<ComputedTextStyleComponent>(entity);
+
+    if (computedStyle.properties) {
+      const PropertyRegistry& properties = computedStyle.properties.value();
+      textStyle.fontFamily = properties.fontFamily.getRequired();
+      textStyle.fontStyle = properties.fontStyle.getRequired();
+      textStyle.fontWeight = properties.fontWeight.getRequired();
+      textStyle.fontStretch = properties.fontStretch.getRequired();
+      textStyle.fontVariant = properties.fontVariant.getRequired();
+      textStyle.fontSize = properties.fontSize.getRequired();
+      textStyle.letterSpacing = properties.letterSpacing.getRequired();
+      textStyle.wordSpacing = properties.wordSpacing.getRequired();
+      textStyle.textAnchor = properties.textAnchor.getRequired();
+      textStyle.whiteSpace = properties.whiteSpace.getRequired();
+      textStyle.direction = properties.direction.getRequired();
+    }
 
     computed.spans.clear();
 
     auto appendSpan = [&](EntityHandle handle, const TextComponent& text,
-                          const TextPositioningComponent& pos) {
+                          const TextPositioningComponent& pos,
+                          const ComputedTextStyleComponent& spanStyle) {
       ComputedTextComponent::TextSpan span;
       span.text = text.text;
+      span.style = spanStyle;
       span.start = 0;
       span.end = static_cast<std::size_t>(text.text.size());
 
@@ -58,11 +80,31 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
 
     EntityHandle handle(registry, entity);
     donner::components::ForAllChildrenRecursive(handle, [&](EntityHandle cur) {
-      if (!cur.all_of<TextComponent, TextPositioningComponent>()) {
+      if (!cur.all_of<TextComponent, TextPositioningComponent, ComputedStyleComponent>()) {
         return;
       }
 
-      appendSpan(cur, cur.get<TextComponent>(), cur.get<TextPositioningComponent>());
+      const auto& text = cur.get<TextComponent>();
+      const auto& pos = cur.get<TextPositioningComponent>();
+      const auto& childStyle = cur.get<ComputedStyleComponent>();
+      auto& computedTextStyle = registry.get_or_emplace<ComputedTextStyleComponent>(cur.entity());
+
+      if (childStyle.properties) {
+        const PropertyRegistry& properties = childStyle.properties.value();
+        computedTextStyle.fontFamily = properties.fontFamily.getRequired();
+        computedTextStyle.fontStyle = properties.fontStyle.getRequired();
+        computedTextStyle.fontWeight = properties.fontWeight.getRequired();
+        computedTextStyle.fontStretch = properties.fontStretch.getRequired();
+        computedTextStyle.fontVariant = properties.fontVariant.getRequired();
+        computedTextStyle.fontSize = properties.fontSize.getRequired();
+        computedTextStyle.letterSpacing = properties.letterSpacing.getRequired();
+        computedTextStyle.wordSpacing = properties.wordSpacing.getRequired();
+        computedTextStyle.textAnchor = properties.textAnchor.getRequired();
+        computedTextStyle.whiteSpace = properties.whiteSpace.getRequired();
+        computedTextStyle.direction = properties.direction.getRequired();
+      }
+
+      appendSpan(cur, text, pos, computedTextStyle);
     });
   }
 }
