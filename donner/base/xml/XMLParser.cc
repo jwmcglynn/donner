@@ -27,9 +27,6 @@ using donner::ParseResult;
 
 namespace {
 
-/// Maximum recursion limit for entities, to prevent infinite recursion.
-static constexpr int kMaxEntityDepth = 10;
-
 /// The maximum length for a string's entity resolution, to prevent "fork bomb" style attacks like
 /// "Billion Laughs".
 /// @see https://en.wikipedia.org/wiki/Billion_laughs_attack
@@ -218,12 +215,18 @@ private:
   XMLParser::Options options_;
   std::optional<parser::LineOffsets> lineOffsets_;
 
+  const int maxEntityDepth_;
+  const uint64_t maxEntitySubstitutions_;
+  uint64_t entitySubstitutionCount_ = 0;
+
 public:
   explicit XMLParserImpl(std::string_view text, const XMLParser::Options& options)
       : entityCtx_(document_.registry().ctx().emplace<components::EntityDeclarationsContext>()),
         str_(text),
         remaining_(text),
-        options_(options) {}
+        options_(options),
+        maxEntityDepth_(options.maxEntityDepth),
+        maxEntitySubstitutions_(options.maxEntitySubstitutions) {}
 
   bool isWhitespace(char ch) const {
     // Whitespace is defined by multiple specs, but both match.
@@ -378,6 +381,15 @@ private:
     return result;
   }
 
+  [[nodiscard]] std::optional<ParseError> recordEntitySubstitution(const FileOffset& entityOffset) {
+    if (entitySubstitutionCount_ >= maxEntitySubstitutions_) {
+      return createParseError("Entity substitution limit exceeded", entityOffset);
+    }
+
+    ++entitySubstitutionCount_;
+    return std::nullopt;
+  }
+
   /**
    * Insert a decoded unicode character, an integer in the range [0, 0x10FFFF], and inserts Utf8
    * codepoints into the \c it output iterator.
@@ -433,12 +445,11 @@ private:
    * @param out The output string to append the decoded text to.
    * @return true if we successfully parsed a built-in or numeric entity, false otherwise.
    */
-  ParseResult<bool> tryParseBuiltInOrNumericEntity(ChunkedString& sourceString,
+  ParseResult<bool> tryParseBuiltInOrNumericEntity(const FileOffset& entityOffset,
+                                                   ChunkedString& sourceString,
                                                    ChunkedString& out) {
     using std::string_view_literals::operator""sv;
     using parser::IntegerParser;
-
-    const FileOffset entityOffset = currentOffsetWithLineNumber(sourceString);
 
     // Try built-in first
     if (tryConsume(sourceString, "&amp;")) {
@@ -544,13 +555,19 @@ private:
       // Otherwise, next char must be the expected entity prefix, '&' or '%'.
       assert(nextChar == kEntityPrefix[0]);
 
+      const FileOffset entityOffset = currentOffsetWithLineNumber(sourceString);
+
       // 2. Try built-in or numeric
-      auto parseResult = tryParseBuiltInOrNumericEntity(sourceString, decodedText);
+      auto parseResult = tryParseBuiltInOrNumericEntity(entityOffset, sourceString, decodedText);
       if (parseResult.hasError()) {
         return parseResult.error();
       }
 
       if (parseResult.result()) {
+        if (auto maybeErr = recordEntitySubstitution(entityOffset)) {
+          return maybeErr.value();
+        }
+
         // We consumed a built-in or numeric => success, loop again
         continue;
       }
@@ -578,17 +595,31 @@ private:
             if (!decl->second) {
               // A known custom entity => expand
 
+              int newDepth = depth;
               if (previousPrependRemaining) {
-                ++depth;
-              } else if (depth > 0) {
-                --depth;
+                ++newDepth;
+              } else if (newDepth > 0) {
+                --newDepth;
               }
+
+              if (newDepth >= maxEntityDepth_) {
+                decodedText.append(sourceString.substr(0, entPos + 1));
+                sourceString.remove_prefix(entPos + 1);
+                previousPrependRemaining -= Min(previousPrependRemaining, entPos + 1);
+                continue;
+              }
+
+              if (auto maybeErr = recordEntitySubstitution(entityOffset)) {
+                return maybeErr.value();
+              }
+
+              depth = newDepth;
 
               const size_t newTotalSize =
                   decodedText.size() + decl->first.size() + sourceString.size() - entPos - 1;
 
-              if (depth >= kMaxEntityDepth || newTotalSize >= kMaxEntityResolutionLength) {
-                // Detect too much recursion or too long => literal
+              if (newTotalSize >= kMaxEntityResolutionLength) {
+                // Detect too long => literal
                 decodedText.append(sourceString.substr(0, entPos + 1));
                 sourceString.remove_prefix(entPos + 1);  // Remove '&name;' or '%name;'
                 continue;
@@ -931,8 +962,9 @@ private:
     // Resolve parameter entity references
     auto maybePieces = consumeAndExpandEntities<AnyPredicate, NoParameterEntityPredicate>(
         components::EntityType::Parameter, entityValue);
-    assert(!maybePieces.hasError());  // This can only generate errors for numeric entities, which
-    // don't parse for parameter entities
+    if (maybePieces.hasError()) {
+      return maybePieces.error();
+    }
 
     if (!tryConsume(decl, ">")) {
       return createParseError("Expected '>' at end of entity declaration");
