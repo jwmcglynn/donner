@@ -27,12 +27,14 @@
 - Short summary of the immediate next step(s) to start execution (1–3 bullets).
 
 ## Implementation Plan (Required)
-- High-level milestones for delivering the feature.
-  - [ ] Milestone 1: <concise milestone>
-    - [ ] Step 1: <single actionable task>
-    - [ ] Step 2: <single actionable task>
-  - [ ] Milestone 2: <concise milestone>
-    - [ ] Step 1: <single actionable task>
+
+# <instructions>High-level milestones for delivering the feature.</instructions>
+
+- [ ] Milestone 1: <concise milestone>
+  - [ ] Step 1: <single actionable task>
+  - [ ] Step 2: <single actionable task>
+- [ ] Milestone 2: <concise milestone>
+  - [ ] Step 1: <single actionable task>
 
 ## User Stories (Optional)
 - As a <user>, I want <capability> so that <benefit>.
