@@ -3,6 +3,10 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "core",
     srcs = [
+        "PathBooleanCustomEngine.cc",
+        "PathBooleanOps.cc",
+        "PathBooleanReconstructor.cc",
+        "PathBooleanSegmenter.cc",
         "PathSpline.cc",
         "PreserveAspectRatio.cc",
     ],
@@ -18,6 +22,10 @@ cc_library(
         "MarkerUnits.h",
         "MaskUnits.h",
         "Overflow.h",
+        "PathBooleanCustomEngine.h",
+        "PathBooleanOps.h",
+        "PathBooleanReconstructor.h",
+        "PathBooleanSegmenter.h",
         "PathSpline.h",
         "Pattern.h",
         "PointerEvents.h",

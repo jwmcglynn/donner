@@ -11,5 +11,6 @@
 - \subpage BuildingDonner
 - \subpage Maintenance
 - \subpage Devtools
+- \subpage PathBooleanOperations
 - \subpage ReSvgTestSuite
 - \subpage DataFormats

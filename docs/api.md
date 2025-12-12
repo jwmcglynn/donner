@@ -190,6 +190,52 @@ To create an element, use the element-specific `Create` method:
 
 \snippet svg_tree_interaction.cc add_circle
 
+### Path boolean operations
+
+`PathSpline` exposes Boolean operations for combining two filled paths without flattening curves.
+
+- Include `donner/svg/core/PathSpline.h` and provide a `PathBooleanEngine` implementation, such as
+  the provided `PathBooleanCustomEngine` in `donner/svg/core/PathBooleanCustomEngine.h`.
+- Choose per-input fill rules to match SVG behavior: non-zero or even-odd on either operand.
+- Tolerance controls curve segmentation and intersection predicates; the default is `0.25` and can
+  be overridden for higher precision or faster results.
+
+Use the static entry point for full control:
+
+```cpp
+using namespace donner::svg;
+
+PathSpline subject;
+subject.moveTo({0, 0});
+subject.lineTo({100, 0});
+subject.lineTo({100, 100});
+subject.closePath();
+
+PathSpline clip;
+clip.moveTo({50, -10});
+clip.lineTo({110, 50});
+clip.lineTo({50, 110});
+clip.closePath();
+
+PathBooleanCustomEngine engine;
+PathSpline result = PathSpline::BooleanOp(subject, clip, PathBooleanOp::kUnion,
+                                          FillRule::NonZero, FillRule::EvenOdd, engine,
+                                          /*tolerance=*/0.25);
+```
+
+Convenience wrappers are available when the subject/clip fill rules match, for example:
+
+```cpp
+PathSpline unionResult = subject.booleanUnion(clip, FillRule::NonZero, FillRule::NonZero, engine);
+PathSpline differenceResult = subject.booleanDifference(clip, FillRule::NonZero,
+                                                        FillRule::NonZero, engine);
+```
+
+The operations preserve curve segments whenever possible. If either operand is empty, union/xor
+returns the non-empty path, difference returns the subject, reverse difference returns the clip,
+and intersection returns an empty path. Results are reconstructed as closed subpaths suitable for
+fill usage.
+
 ### Rendering
 
 To render an SVG document, use the \ref donner::svg::RendererSkia class.
