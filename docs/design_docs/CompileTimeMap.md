@@ -7,6 +7,17 @@
 - Callers rely on deterministic initialization, pointer-stable storage for keys/values, and
   release assertions on missing keys through `at`.
 
+## Usage
+```cpp
+constexpr auto kMap = makeCompileTimeMap(
+    std::pair{std::string_view{"circle"}, ShapeTag::kCircle},
+    std::pair{std::string_view{"rect"}, ShapeTag::kRect},
+    std::pair{std::string_view{"ellipse"}, ShapeTag::kEllipse});
+
+constexpr ShapeTag const* tag = kMap.map.at("rect");
+static_assert(tag != nullptr && *tag == ShapeTag::kRect);
+```
+
 ## Testing
 - Run core tests with:
   ```bash
@@ -32,16 +43,6 @@
   factories that accept initializer lists or arrays and return the fully wired map object.
 - Diagnostic metadata (status codes, seed attempts, fallback markers) is embedded in the map to
   surface seed-search outcomes in tests and static assertions.
-
-```cpp
-constexpr auto kMap = makeCompileTimeMap(
-    std::pair{std::string_view{"circle"}, ShapeTag::kCircle},
-    std::pair{std::string_view{"rect"}, ShapeTag::kRect},
-    std::pair{std::string_view{"ellipse"}, ShapeTag::kEllipse});
-
-constexpr ShapeTag const* tag = kMap.map.at("rect");
-static_assert(tag != nullptr && *tag == ShapeTag::kRect);
-```
 
 ```mermaid
 flowchart LR
