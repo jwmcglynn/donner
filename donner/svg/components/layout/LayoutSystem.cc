@@ -1,8 +1,9 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 
-#include <frozen/string.h>
-#include <frozen/unordered_map.h>
+#include <array>
+#include <string_view>
 
+#include "donner/base/CompileTimeMap.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -40,8 +41,8 @@ static constexpr int kMaxDimension = 8192;
 using SizedElementPresentationAttributeParseFn = std::optional<ParseError> (*)(
     SizedElementProperties& properties, const parser::PropertyParseFnParams& params);
 
-static constexpr frozen::unordered_map<frozen::string, SizedElementPresentationAttributeParseFn, 4>
-    kProperties = {
+constexpr std::array<std::pair<std::string_view, SizedElementPresentationAttributeParseFn>, 4>
+    kPropertyEntries{{
         {"x",
          [](SizedElementProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -78,7 +79,11 @@ static constexpr frozen::unordered_map<frozen::string, SizedElementPresentationA
                },
                &properties.height);
          }},
-};
+    }};
+
+constexpr auto kPropertiesResult = makeCompileTimeMap(kPropertyEntries);
+static_assert(kPropertiesResult.status == CompileTimeMapStatus::kOk);
+constexpr auto kProperties = kPropertiesResult.map;
 
 Vector2i RoundSize(Vector2f size) {
   return Vector2i(static_cast<int>(Round(size.x)), static_cast<int>(Round(size.y)));
@@ -96,11 +101,12 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
                              std::vector<ParseError>* outWarnings) {
   for (const auto& [name, property] : unparsedProperties) {
-    const auto it = kProperties.find(frozen::string(name));
-    if (it != kProperties.end()) {
-      auto maybeError = it->second(properties, parser::PropertyParseFnParams::Create(
-                                                   property.declaration, property.specificity,
-                                                   parser::PropertyParseBehavior::AllowUserUnits));
+    const SizedElementPresentationAttributeParseFn* parseFn =
+        kProperties.find(static_cast<std::string_view>(name));
+    if (parseFn != nullptr) {
+      auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
+                                        property.declaration, property.specificity,
+                                        parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }
@@ -110,10 +116,10 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
 
 ParseResult<bool> ParseSizedElementPresentationAttribute(
     EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
-  const auto it = kProperties.find(frozen::string(name));
-  if (it != kProperties.end()) {
+  const SizedElementPresentationAttributeParseFn* parseFn = kProperties.find(name);
+  if (parseFn != nullptr) {
     SizedElementProperties& properties = handle.get_or_emplace<SizedElementComponent>().properties;
-    auto maybeError = it->second(properties, params);
+    auto maybeError = (*parseFn)(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
     } else {

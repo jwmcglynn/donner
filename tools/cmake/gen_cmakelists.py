@@ -6,7 +6,7 @@ This script performs three high-level steps:
 
 1.  **generate_root()**
     Creates the project-level `CMakeLists.txt`, declares external
-    dependencies via FetchContent (absl, EnTT, frozen, googletest, …),
+    dependencies via FetchContent (absl, EnTT, googletest, …),
     embeds Skia, and wires up umbrella and convenience libraries.
 
 2.  **generate_all_packages()**
@@ -51,7 +51,6 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@com_google_gtest//:gtest": "gmock",
     "@entt//:entt": "EnTT::EnTT",
     "@entt//src:entt": "EnTT::EnTT",
-    "@frozen//:frozen": "frozen",
     "@nlohmann_json//:json": "nlohmann_json::nlohmann_json",
     "@rules_cc//cc/runfiles:runfiles": "rules_cc_runfiles",
     "@stb//:image_write": "stb_image_write",
@@ -64,7 +63,6 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
 # *not* be auto-generated here.
 SKIPPED_PACKAGES = {
     "",  # root package - handled by generate_root()
-    "third_party/frozen",
     "third_party/stb",
     "pixelmatch-cpp17",
 }
@@ -395,13 +393,6 @@ def generate_root() -> None:
         f.write(
             "set_target_properties(stb_image_write PROPERTIES CXX_STANDARD 20 "
             "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
-        )
-
-        f.write("\n# Frozen library (locally vendored)\n")
-        f.write("add_library(frozen INTERFACE)\n")
-        f.write(
-            "target_include_directories(frozen INTERFACE "
-            "${PROJECT_SOURCE_DIR}/third_party/frozen/include)\n"
         )
 
         # Optional test enable switch

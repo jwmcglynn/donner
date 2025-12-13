@@ -30,7 +30,6 @@ donner_cc_library(
         "//donner/svg/components/layout:components",
         "//donner/svg/graph",
         "//donner/svg/parser:parser_core",
-        "@frozen",
     ],
 )
 
