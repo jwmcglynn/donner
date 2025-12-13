@@ -7,11 +7,17 @@
 - Callers rely on deterministic initialization, pointer-stable storage for keys/values, and
   release assertions on missing keys through `at`.
 
-## Testing and Observability
-- Run core tests with `bazel test //donner/base:base_tests --test_filter=CompileTimeMapTest.*`.
+## Testing
+- Run core tests with:
+  ```bash
+  bazel test //donner/base:base_tests --test_filter=CompileTimeMapTest.*
+  ```
 - Consumer suites (e.g., CSS named colors, SVG property registries, shape/layout components)
-  validate parity through their existing Bazel targets such as `//donner/css:css_tests` and
-  `//donner/svg/properties/tests:properties_tests`.
+  validate parity through their existing Bazel targets such as:
+  ```bash
+  bazel test //donner/css:css_tests
+  bazel test //donner/svg/properties/tests:properties_tests
+  ```
 - Unit tests live in `donner/base/tests/CompileTimeMap_tests.cc`, covering constexpr construction,
   perfect-hash lookups, diagnostics, and fallback behaviors.
 
