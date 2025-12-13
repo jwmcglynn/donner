@@ -1,8 +1,9 @@
 #include "donner/svg/components/shape/EllipseComponent.h"
 
-#include <frozen/string.h>
-#include <frozen/unordered_map.h>
+#include <array>
+#include <string_view>
 
+#include "donner/base/CompileTimeMap.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
@@ -13,8 +14,8 @@ namespace {
 using EllipsePresentationAttributeParseFn = std::optional<ParseError> (*)(
     EllipseProperties& properties, const parser::PropertyParseFnParams& params);
 
-static constexpr frozen::unordered_map<frozen::string, EllipsePresentationAttributeParseFn, 4>
-    kProperties = {
+constexpr std::array<std::pair<std::string_view, EllipsePresentationAttributeParseFn>, 4>
+    kPropertyEntries{{
         {"cx",
          [](EllipseProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -23,7 +24,7 @@ static constexpr frozen::unordered_map<frozen::string, EllipsePresentationAttrib
                  return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cx);
-         }},  //
+         }},
         {"cy",
          [](EllipseProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -32,7 +33,7 @@ static constexpr frozen::unordered_map<frozen::string, EllipsePresentationAttrib
                  return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cy);
-         }},  //
+         }},
         {"rx",
          [](EllipseProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -42,7 +43,7 @@ static constexpr frozen::unordered_map<frozen::string, EllipsePresentationAttrib
                                                             params.allowUserUnits());
                },
                &properties.rx);
-         }},  //
+         }},
         {"ry",
          [](EllipseProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -52,9 +53,12 @@ static constexpr frozen::unordered_map<frozen::string, EllipsePresentationAttrib
                                                             params.allowUserUnits());
                },
                &properties.ry);
-         }}  //
+         }},
+    }};
 
-};
+constexpr auto kPropertiesResult = makeCompileTimeMap(kPropertyEntries);
+static_assert(kPropertiesResult.status == CompileTimeMapStatus::kOk);
+constexpr auto kProperties = kPropertiesResult.map;
 
 }  // namespace
 
@@ -64,9 +68,10 @@ ComputedEllipseComponent::ComputedEllipseComponent(
     std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
-    const auto it = kProperties.find(frozen::string(name));
-    if (it != kProperties.end()) {
-      auto maybeError = it->second(properties, parser::PropertyParseFnParams::Create(
+    const EllipsePresentationAttributeParseFn* parseFn =
+        kProperties.find(static_cast<std::string_view>(name));
+    if (parseFn != nullptr) {
+      auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
                                                    property.declaration, property.specificity,
                                                    parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
@@ -83,11 +88,12 @@ namespace donner::svg::parser {
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Ellipse>(
     EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
-  const auto it = components::kProperties.find(frozen::string(name));
-  if (it != components::kProperties.end()) {
+  const components::EllipsePresentationAttributeParseFn* parseFn =
+      components::kProperties.find(name);
+  if (parseFn != nullptr) {
     components::EllipseProperties& properties =
         handle.get_or_emplace<components::EllipseComponent>().properties;
-    auto maybeError = it->second(properties, params);
+    auto maybeError = (*parseFn)(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
     } else {
