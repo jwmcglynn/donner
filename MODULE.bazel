@@ -46,11 +46,6 @@ git_repository(
     tag = "v3.16.0",
 )
 
-local_repository(
-    name = "frozen",
-    path = "third_party/frozen",
-)
-
 new_local_repository(
     name = "stb",
     build_file = "//third_party:BUILD.stb",
