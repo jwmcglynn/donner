@@ -474,9 +474,11 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-text-",
         {
-            {"e-text-002.svg", Params::Skip()},  // Not impl: Multiple x/y values
-            {"e-text-003.svg", Params::Skip()},  // Not impl: Multiple x/y values
-            {"e-text-004.svg", Params::Skip()},  // Not impl: Multiple x/y values
+            {"e-text-002.svg",
+             Params::WithThreshold(kDefaultThreshold, 115)},  // Font rendering differences
+            {"e-text-003.svg", Params::Skip()},  // Not impl: Multiple x/y values with varying widths
+            {"e-text-004.svg",
+             Params::WithThreshold(kDefaultThreshold, 115)},  // Font rendering differences
             {"e-text-006.svg", Params::Skip()},  // Not impl: `dx` attribute
             {"e-text-007.svg", Params::Skip()},  // Not impl: `dx` attribute
             {"e-text-008.svg", Params::Skip()},  // Not impl: `dx` attribute

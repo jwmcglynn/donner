@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "resvg-test-triage"
+version = "0.1.0"
+description = "MCP server for automated resvg test triage"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=0.9.0",
+]
+
+[project.scripts]
+resvg-test-triage = "server:main"

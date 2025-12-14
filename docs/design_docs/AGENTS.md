@@ -48,3 +48,52 @@ Quality expectations for this directory:
   step to complete when the user requests the next task.
 - Keep this guidance and the design doc templates in sync; update the template whenever these
   instructions change so authors always start from the latest expectations.
+
+## Working with Resvg Test Suite
+
+When working on SVG renderer features, the resvg test suite (`//donner/svg/renderer/tests:resvg_test_suite`) provides comprehensive validation. Follow these guidelines:
+
+### Test-Driven Feature Development
+
+1. **Identify relevant tests early**: Before implementing a feature, check which resvg tests cover it
+2. **Use tests as acceptance criteria**: Tests define correct behavior - passing tests = feature complete
+3. **Triage systematically**: When adding/fixing features, triage all related test failures following [README_resvg_test_suite.md](../../donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures)
+
+### When to Triage Tests
+
+Triage tests when:
+- **After implementing a new feature**: Check if any previously-skipped tests now pass
+- **When tests start failing**: Understand why and document the reason
+- **When adding rendering features**: Ensure all related tests are properly categorized
+- **During code review**: Verify test coverage and skip reasons are appropriate
+
+### Triage Process Summary
+
+For detailed instructions, see [README_resvg_test_suite.md](../../donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures). Quick reference:
+
+```sh
+# Run tests for a feature
+bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=*e_text_*'
+
+# Examine failing test
+cat bazel-donner/external/resvg-test-suite~/svg/e-text-023.svg
+
+# Add skip with comment in resvg_test_suite.cc
+{"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
+```
+
+### Comment Conventions
+
+Use consistent skip reasons:
+- `Not impl: <feature>` - Feature not implemented (e.g., `<tspan>`, `writing-mode`)
+- `UB: <reason>` - Undefined behavior or edge case
+- `Bug: <description>` - Known bug
+- `Larger threshold due to <reason>` - For anti-aliasing differences
+
+### Integration with Design Docs
+
+When writing design docs for renderer features:
+1. **Reference relevant tests**: Link to specific resvg tests that validate the feature
+2. **Include test plan**: List which tests should pass after implementation
+3. **Update test status**: As implementation progresses, note which tests now pass
+4. **Document skip removals**: When removing skips, reference the implementation that fixed them

@@ -115,8 +115,8 @@ For detailed instructions, see [README_resvg_test_suite.md](donner/svg/renderer/
 bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=*e_text_*'
 
 # Examine failing SVG (printed in the output)
-# Then either fix the root cause, or if it is out of scope, add a skip with a comment comment in resvg_test_suite.cc
-{"e-text-002.svg", Params::Skip()},  // Not impl: Multiple x/y values
+# Then either fix the root cause, or if it is out of scope, add a skip with a comment in resvg_test_suite.cc
+{"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
 ```
 
 ### Comment Conventions

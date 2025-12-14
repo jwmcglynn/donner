@@ -1274,13 +1274,26 @@ public:
       font.setEdging(SkFont::Edging::kAntiAlias);
       font.setSubpixel(true);
 
-      // Compute positions
-      const SkScalar x =
-          static_cast<SkScalar>(span.x.toPixels(viewBox, fontMetrics, Lengthd::Extent::X) +
-                                span.dx.toPixels(viewBox, fontMetrics, Lengthd::Extent::X));
-      const SkScalar y =
-          static_cast<SkScalar>(span.y.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y) +
-                                span.dy.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y));
+      // Check if we have per-glyph positioning (multiple x/y values)
+      const bool hasPerGlyphPositioning = span.x.size() > 1 || span.y.size() > 1;
+
+      // Compute base positions (used when no per-glyph positioning)
+      const auto computeX = [&](size_t index = 0) -> SkScalar {
+        const Lengthd xVal = index < span.x.size() ? span.x[index] : (span.x.empty() ? Lengthd() : span.x[0]);
+        const Lengthd dxVal = index < span.dx.size() ? span.dx[index] : (span.dx.empty() ? Lengthd() : span.dx[0]);
+        return static_cast<SkScalar>(xVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::X) +
+                                     dxVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::X));
+      };
+
+      const auto computeY = [&](size_t index = 0) -> SkScalar {
+        const Lengthd yVal = index < span.y.size() ? span.y[index] : (span.y.empty() ? Lengthd() : span.y[0]);
+        const Lengthd dyVal = index < span.dy.size() ? span.dy[index] : (span.dy.empty() ? Lengthd() : span.dy[0]);
+        return static_cast<SkScalar>(yVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y) +
+                                     dyVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y));
+      };
+
+      const SkScalar x = computeX(0);
+      const SkScalar y = computeY(0);
 
       // Apply rotation if specified
       bool rotated = false;
@@ -1306,7 +1319,55 @@ public:
       shaper = SkShapers::HB::ShaperDrivenWrapper(unicode, renderer_.fontMgr_);
 #endif
 
-      if (shaper) {
+      if (shaper && hasPerGlyphPositioning) {
+        // Per-glyph positioning: render each character at its specified position
+        // This implements SVG's multiple x/y values feature
+        const SkScalar baselineOffset = -font.getSpacing() * 0.78f;
+
+        size_t charIndex = 0;
+        size_t byteIndex = 0;
+        while (byteIndex < textStr.size()) {
+          // Find the next UTF-8 character
+          size_t charBytes = 1;
+          unsigned char firstByte = static_cast<unsigned char>(textStr[byteIndex]);
+          if ((firstByte & 0x80) == 0) {
+            charBytes = 1;  // ASCII
+          } else if ((firstByte & 0xE0) == 0xC0) {
+            charBytes = 2;
+          } else if ((firstByte & 0xF0) == 0xE0) {
+            charBytes = 3;
+          } else if ((firstByte & 0xF8) == 0xF0) {
+            charBytes = 4;
+          }
+
+          // Get the character substring
+          std::string_view charStr = textStr.substr(byteIndex, charBytes);
+
+          // Compute position for this character
+          const SkScalar charX = computeX(charIndex);
+          const SkScalar charY = computeY(charIndex);
+
+          // Shape and draw this single character
+          auto fontIter = std::make_unique<SkShaper::TrivialFontRunIterator>(font, charStr.size());
+          auto bidiIter = std::make_unique<SkShaper::TrivialBiDiRunIterator>(0, charStr.size());
+          auto scriptIter = std::make_unique<SkShaper::TrivialScriptRunIterator>(
+              SkSetFourByteTag('L', 'a', 't', 'n'), charStr.size());
+          auto langIter = std::make_unique<SkShaper::TrivialLanguageRunIterator>("en", charStr.size());
+
+          SkTextBlobBuilderRunHandler runHandler(charStr.data(), {0, baselineOffset});
+          shaper->shape(charStr.data(), charStr.size(), *fontIter, *bidiIter, *scriptIter,
+                        *langIter, nullptr, 0, std::numeric_limits<SkScalar>::max(), &runHandler);
+          sk_sp<SkTextBlob> blob = runHandler.makeBlob();
+
+          if (blob) {
+            renderer_.currentCanvas_->drawTextBlob(blob, charX, charY, skPaint);
+          }
+
+          byteIndex += charBytes;
+          charIndex++;
+        }
+      } else if (shaper) {
+        // Normal text flow: shape and render the entire span at once
         // Create simple run iterators for basic text shaping
         auto fontIter = std::make_unique<SkShaper::TrivialFontRunIterator>(font, textStr.size());
         auto bidiIter =

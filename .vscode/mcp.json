@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "resvg-test-triage": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/donner/tools/mcp-servers/resvg-test-triage/server.py"
+      ]
+    },
+  },
+  "inputs": []
+}

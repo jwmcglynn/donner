@@ -96,11 +96,11 @@ When a test fails, the framework provides detailed diagnostic information:
 #### Test Failure Header
 
 ```
-[  COMPARE ] .../svg/e-text-002.svg: FAIL (13766 pixels differ, with 100 max)
+[  COMPARE ] .../svg/e-text-023.svg: FAIL (8234 pixels differ, with 100 max)
 ```
 
 - **FAIL**: Test failed (vs PASS for success)
-- **13766 pixels differ**: Number of pixels that don't match between actual and expected
+- **8234 pixels differ**: Number of pixels that don't match between actual and expected
 - **with 100 max**: Threshold for passing (tests pass if pixel diff ≤ 100)
 
 #### Verbose Rendering Output
@@ -124,12 +124,12 @@ This shows:
 The complete SVG source is printed inline:
 
 ```
-SVG Content for e-text-002.svg:
+SVG Content for e-text-023.svg:
 ---
 <svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"
-     font-family="Noto Sans" font-size="64">
-    <title>`x` and `y` with multiple values</title>
-    <text id="text1" x="30 70 110 150" y="70 100 130 160">Text</text>
+     font-family="Noto Sans" font-size="48">
+    <title>letter-spacing</title>
+    <text id="text1" x="30" y="100" letter-spacing="10">Text</text>
 </svg>
 ---
 ```
@@ -144,9 +144,9 @@ Look for:
 Three files are generated and their paths printed:
 
 ```
-Actual rendering: /var/folders/.../e-text-002.png
-Expected: /path/to/resvg-test-suite/png/e-text-002.png
-Diff: /var/folders/.../diff_e-text-002.png
+Actual rendering: /var/folders/.../e-text-023.png
+Expected: /path/to/resvg-test-suite/png/e-text-023.png
+Diff: /var/folders/.../diff_e-text-023.png
 ```
 
 **Actual rendering** (Donner's output):
@@ -172,7 +172,7 @@ For failed tests, a Skia Picture file is also generated:
 
 ```
 Load this .skp into https://debugger.skia.org/
-=> /var/folders/.../e-text-002.png.skp
+=> /var/folders/.../e-text-023.png.skp
 ```
 
 This file can be uploaded to the Skia debugger for detailed inspection of drawing commands.
@@ -231,7 +231,8 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-text-",
         {
-            {"e-text-002.svg", Params::Skip()},  // Not impl: Multiple x/y values
+            {"e-text-006.svg", Params::Skip()},  // Not impl: `dx` attribute
+            {"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
             {"e-text-027.svg", Params::Skip()},  // Not impl: Color emoji font (Noto Color Emoji)
             {"e-text-042.svg", Params::Skip()},  // Not impl: <textPath>
         })),
@@ -250,12 +251,13 @@ When triaging multiple tests, group them by the missing feature:
 
 ```cpp
 // Text positioning features
-{"e-text-002.svg", Params::Skip()},  // Not impl: Multiple x/y values
-{"e-text-003.svg", Params::Skip()},  // Not impl: Multiple x/y values
 {"e-text-006.svg", Params::Skip()},  // Not impl: `dx` attribute
+{"e-text-007.svg", Params::Skip()},  // Not impl: `dx` attribute
+{"e-text-010.svg", Params::Skip()},  // Not impl: `dy` attribute
 
 // Text styling features
 {"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
+{"e-text-024.svg", Params::Skip()},  // Not impl: `word-spacing`
 {"e-text-028.svg", Params::Skip()},  // Not impl: `font-weight`
 ```
 
@@ -293,3 +295,47 @@ You should see:
 - **Categorize systematically**: Group tests by missing feature for easier tracking
 - **Keep comments concise**: Use the established format from existing tests
 
+
+## MCP Servers
+
+The `resvg-test-triage` MCP server provides automated test analysis. When available, use it to:
+
+**Batch analyze test failures:**
+```python
+# After running tests, pass output to MCP server
+result = await mcp.call_tool("batch_triage_tests", {
+    "test_output": test_output_string
+})
+
+# Server returns:
+# - Categorized failures by feature
+# - Suggested skip comments
+# - Grouping recommendations
+```
+
+**Analyze individual tests:**
+```python
+result = await mcp.call_tool("analyze_test_failure", {
+    "test_name": "e-text-023.svg",
+    "svg_content": svg_source,
+    "pixel_diff": 8234
+})
+
+# Returns feature detection, category, and skip suggestion
+```
+
+**Setup:**
+1. Install: `pip install -e tools/mcp-servers/resvg-test-triage`
+2. Configure in MCP settings:
+   - **Claude Code**: See `tools/mcp-servers/resvg-test-triage/mcp-config-example.json`
+   - **VSCode**: Add to `.vscode/mcp.json` (see README for format)
+3. Use tools during test triage
+
+**Benefits:**
+- Consistent categorization across all tests
+- Auto-detection of SVG features being tested
+- Batch processing of 50+ test failures
+- Properly formatted skip comments
+- Vision model analysis with actual, expected, and diff images
+
+See [resvg-test-triage README](tools/mcp-servers/resvg-test-triage/README.md) for full documentation.

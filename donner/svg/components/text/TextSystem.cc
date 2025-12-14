@@ -48,25 +48,26 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       span.start = 0;
       span.end = static_cast<std::size_t>(text.text.size());
 
+      // Copy all x/y/dx/dy values for per-glyph positioning
       if (!pos.x.empty()) {
-        span.x = pos.x[0];
+        span.x = pos.x;
       } else if (!positioningComponent.x.empty()) {
-        span.x = positioningComponent.x[0];
+        span.x = positioningComponent.x;
       }
       if (!pos.y.empty()) {
-        span.y = pos.y[0];
+        span.y = pos.y;
       } else if (!positioningComponent.y.empty()) {
-        span.y = positioningComponent.y[0];
+        span.y = positioningComponent.y;
       }
       if (!pos.dx.empty()) {
-        span.dx = pos.dx[0];
+        span.dx = pos.dx;
       } else if (!positioningComponent.dx.empty()) {
-        span.dx = positioningComponent.dx[0];
+        span.dx = positioningComponent.dx;
       }
       if (!pos.dy.empty()) {
-        span.dy = pos.dy[0];
+        span.dy = pos.dy;
       } else if (!positioningComponent.dy.empty()) {
-        span.dy = positioningComponent.dy[0];
+        span.dy = positioningComponent.dy;
       }
 
       if (!pos.rotateDegrees.empty()) {
