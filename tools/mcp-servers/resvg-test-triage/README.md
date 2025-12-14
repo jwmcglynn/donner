@@ -60,6 +60,19 @@ Add to your VSCode MCP settings (`.vscode/mcp.json` or global settings). It is a
 }
 ```
 
+### OpenAI Codex
+
+Add to your Codex configuration file at `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.resvg-test-triage]
+command = "python3"
+args = ["tools/mcp-servers/resvg-test-triage/server.py"]
+cwd = "/Users/username/Projects/donner"
+```
+
+See the [Codex MCP Integration docs](https://github.com/openai/codex/blob/main/docs/config.md#mcp-integration) for more configuration options.
+
 ## Available Tools
 
 ### `analyze_test_failure`
