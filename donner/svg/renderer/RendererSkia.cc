@@ -6,6 +6,7 @@
 // Skia
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkFont.h"
+#include "include/core/SkFontMetrics.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
@@ -1353,7 +1354,9 @@ public:
       if (shaper && hasPerGlyphPositioning) {
         // Per-glyph positioning: render each character at its specified position. Missing
         // x/y/dx/dy values keep the current pen position unchanged, matching the SVG spec.
-        const SkScalar baselineOffset = -font.getSpacing() * 0.78f;
+        SkFontMetrics metrics;
+        font.getMetrics(&metrics);
+        const SkScalar baselineOffset = metrics.fAscent;  // Ascent is negative, shifts up to baseline
 
         size_t charIndex = 0;
         size_t byteIndex = 0;
@@ -1435,10 +1438,9 @@ public:
         // SkShaper positions glyphs differently than drawSimpleText - we need to adjust
         // the baseline position. The shaper outputs glyph positions with baseline at y=0,
         // but we need to shift them up so the baseline matches what drawSimpleText would produce.
-        // Use font spacing (ascent + descent) as approximation for baseline adjustment
-        // TODO(jwm): Debug why this baseline shift is required
-        const SkScalar baselineOffset =
-            -font.getSpacing() * 0.78f;  // Shift up by approximate ascent
+        SkFontMetrics metrics;
+        font.getMetrics(&metrics);
+        const SkScalar baselineOffset = metrics.fAscent;  // Ascent is negative, shifts up to baseline
 
         // Use SkTextBlobBuilderRunHandler to shape text into a SkTextBlob
         // Position glyphs with baseline adjustment
