@@ -1271,8 +1271,13 @@ public:
                           *renderer_.fontMgr_, renderer_.fallbackTypeface_);
 
       SkFont font(typeface, fontSizePx);
-      font.setEdging(SkFont::Edging::kAntiAlias);
-      font.setSubpixel(true);
+      if (renderer_.antialias_) {
+        font.setEdging(SkFont::Edging::kAntiAlias);
+        font.setSubpixel(true);
+      } else {
+        font.setEdging(SkFont::Edging::kAlias);
+        font.setSubpixel(false);
+      }
 
       // Check if we have per-glyph positioning (multiple x/y values)
       const bool hasPerGlyphPositioning = span.x.size() > 1 || span.y.size() > 1;
@@ -1307,17 +1312,20 @@ public:
       }
 
       // Shape text using SkShaper for proper kerning, ligatures, and complex text layout
+      // When antialiasing is disabled (e.g., for tests), use simple text rendering for consistency
       const std::string_view textStr = span.text;
       std::unique_ptr<SkShaper> shaper;
 
+      if (renderer_.antialias_) {
 #if defined(SK_SHAPER_CORETEXT_AVAILABLE)
-      // Use CoreText shaper on macOS (no glib dependency needed)
-      shaper = SkShapers::CT::CoreText();
+        // Use CoreText shaper on macOS (no glib dependency needed)
+        shaper = SkShapers::CT::CoreText();
 #elif defined(SK_SHAPER_HARFBUZZ_AVAILABLE)
-      // Use HarfBuzz shaper for proper kerning on Linux
-      sk_sp<SkUnicode> unicode = nullptr;  // No Unicode support needed for basic Latin text
-      shaper = SkShapers::HB::ShaperDrivenWrapper(unicode, renderer_.fontMgr_);
+        // Use HarfBuzz shaper for proper kerning on Linux
+        sk_sp<SkUnicode> unicode = nullptr;  // No Unicode support needed for basic Latin text
+        shaper = SkShapers::HB::ShaperDrivenWrapper(unicode, renderer_.fontMgr_);
 #endif
+      }
 
       if (shaper && hasPerGlyphPositioning) {
         // Per-glyph positioning: render each character at its specified position
