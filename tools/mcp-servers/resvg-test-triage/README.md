@@ -9,6 +9,10 @@ An MCP (Model Context Protocol) server that automates the analysis and categoriz
 - **Skip Comment Generation**: Auto-generate properly formatted skip comments following project conventions
 - **Batch Processing**: Analyze multiple test failures at once and group them by feature category
 - **Vision Model Integration**: Send actual, expected, and diff images to vision models for visual analysis of rendering differences
+- **Implementation Guidance**: Suggest which files to modify and provide hints for implementing missing features
+- **Related Test Discovery**: Find all tests affected by the same missing feature for batch implementation
+- **Feature Progress Reports**: Generate comprehensive reports showing test completion rates by category
+- **Visual Diff Analysis**: Programmatically analyze diff images to categorize failure types (positioning, missing elements, styling, anti-aliasing)
 
 ## Installation
 
@@ -168,6 +172,141 @@ Generate a formatted skip comment.
 }
 ```
 
+### `suggest_implementation_approach`
+
+Suggest which files to modify and provide implementation guidance for a failing test.
+
+**Parameters:**
+- `test_name` (string, required): Test file name (e.g., "e-text-023.svg")
+- `features` (array, required): List of detected feature names
+- `category` (string, required): Feature category (e.g., "text_styling", "text_positioning")
+- `codebase_files` (array, optional): List of relevant files found in codebase
+
+**Returns:**
+```json
+{
+  "test_name": "e-text-023.svg",
+  "category": "text_styling",
+  "primary_feature": "letter_spacing",
+  "likely_files": [
+    "donner/svg/components/text/ComputedTextStyleComponent.h",
+    "donner/svg/properties/PresentationAttribute.h"
+  ],
+  "file_patterns": [
+    "**/ComputedTextStyleComponent.h",
+    "**/SVGTextElement.h"
+  ],
+  "search_keywords": [
+    "letter-spacing",
+    "LetterSpacing",
+    "letterspacing"
+  ],
+  "similar_features": [
+    {
+      "name": "font-size",
+      "files": ["donner/svg/components/text/ComputedTextStyleComponent.h"]
+    }
+  ],
+  "implementation_hints": [
+    "Text styling properties are typically CSS properties that need to be parsed and applied.",
+    "Check PresentationAttribute.h for existing property definitions.",
+    "letter-spacing is a CSS property that adds space between characters."
+  ]
+}
+```
+
+### `find_related_tests`
+
+Find all tests failing for the same feature or reason.
+
+**Parameters:**
+- `feature` (string, required): Feature name to find related tests for
+- `skip_file_content` (string, required): Content of resvg_test_suite.cc with skip entries
+
+**Returns:**
+```json
+{
+  "feature": "letter-spacing",
+  "related_tests": ["e-text-023.svg"],
+  "impact": "1 test affected",
+  "priority": "low",
+  "grouped_by_category": {
+    "e-text": ["e-text-023.svg", "e-text-024.svg"]
+  },
+  "all_missing_features": {
+    "letter-spacing": 2,
+    "dx attribute": 5,
+    "textPath": 3
+  }
+}
+```
+
+### `generate_feature_report`
+
+Generate comprehensive progress report for a feature category.
+
+**Parameters:**
+- `category` (string, required): Category prefix (e.g., "e-text", "a-transform")
+- `test_output` (string, required): Recent test run output from bazel test
+- `skip_file_content` (string, optional): Content of resvg_test_suite.cc for missing feature analysis
+
+**Returns:**
+```json
+{
+  "category": "e-text",
+  "total_tests": 15,
+  "passing": 3,
+  "skipped": 12,
+  "completion_rate": "20%",
+  "implemented_features": [],
+  "missing_features": [
+    "dx attribute",
+    "dy attribute",
+    "letter-spacing"
+  ],
+  "next_priority": "dx attribute (affects 3 tests)",
+  "test_details": [
+    {
+      "name": "e-text-001.svg",
+      "status": "PASSED",
+      "pixel_diff": null
+    }
+  ]
+}
+```
+
+### `analyze_visual_diff`
+
+Programmatically analyze diff images to categorize failure types.
+
+**Parameters:**
+- `diff_image_path` (string, required): Path to diff image PNG
+- `actual_image_path` (string, required): Path to actual rendering PNG
+- `expected_image_path` (string, required): Path to expected rendering PNG
+
+**Returns:**
+```json
+{
+  "difference_type": "positioning",
+  "visual_analysis": {
+    "diff_pixels": 3421,
+    "total_pixels": 65536,
+    "diff_percentage": "5.22%",
+    "diff_regions": 1,
+    "largest_region_pixels": 3421,
+    "is_uniform_offset": true
+  },
+  "likely_cause": "Baseline positioning offset or element placement issue",
+  "confidence": "high"
+}
+```
+
+**Difference Types:**
+- `anti_aliasing`: Minor differences (<100 pixels), likely rendering artifacts
+- `positioning`: Uniform offset detected, element placement issue
+- `missing_element`: Large missing or incorrect element (>30% of image)
+- `styling`: Color, stroke, or fill differences
+
 ## Example Workflows
 
 ### Basic Analysis (Text Only)
@@ -215,6 +354,73 @@ result = await mcp.call_tool("analyze_test_failure", {
 #    - Identify positioning, styling, or rendering issues
 #    - Provide more accurate categorization
 #    - Suggest specific fixes based on visual differences
+```
+
+### Implementation Guidance Workflow
+
+```python
+# 1. Detect what feature is needed
+features = await mcp.call_tool("detect_svg_features", {
+    "svg_content": svg_source
+})
+
+# 2. Get implementation guidance
+guidance = await mcp.call_tool("suggest_implementation_approach", {
+    "test_name": "e-text-023.svg",
+    "features": ["letter_spacing"],
+    "category": "text_styling",
+    "codebase_files": []  # Agent can populate with glob/grep results
+})
+
+# 3. Agent uses guidance to:
+#    - Search for files matching patterns
+#    - Look at similar feature implementations
+#    - Follow implementation hints
+#    - Make targeted code changes
+```
+
+### Feature Progress Tracking
+
+```python
+# 1. Generate progress report for a category
+report = await mcp.call_tool("generate_feature_report", {
+    "category": "e-text",
+    "test_output": bazel_test_output,
+    "skip_file_content": resvg_test_suite_cc_content
+})
+
+# 2. Identify next priority
+# report["next_priority"] = "dx attribute (affects 3 tests)"
+
+# 3. Find all related tests
+related = await mcp.call_tool("find_related_tests", {
+    "feature": "dx attribute",
+    "skip_file_content": resvg_test_suite_cc_content
+})
+
+# 4. Batch implement the feature for all 3 tests at once
+```
+
+### Visual Diff Analysis
+
+```python
+# 1. Analyze diff image programmatically
+analysis = await mcp.call_tool("analyze_visual_diff", {
+    "diff_image_path": "/tmp/diff.png",
+    "actual_image_path": "/tmp/actual.png",
+    "expected_image_path": "/tmp/expected.png"
+})
+
+# 2. Use analysis to categorize failure
+if analysis["difference_type"] == "positioning":
+    # Focus on position-related code
+    # analysis["likely_cause"] = "Baseline positioning offset"
+elif analysis["difference_type"] == "missing_element":
+    # Feature likely not implemented
+    pass
+elif analysis["difference_type"] == "anti_aliasing":
+    # Just needs threshold adjustment
+    pass
 ```
 
 ## Detected Features

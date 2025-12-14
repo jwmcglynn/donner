@@ -324,6 +324,67 @@ result = await mcp.call_tool("analyze_test_failure", {
 # Returns feature detection, category, and skip suggestion
 ```
 
+**Get implementation guidance (NEW):**
+```python
+# Find which files to modify for a missing feature
+result = await mcp.call_tool("suggest_implementation_approach", {
+    "test_name": "e-text-031.svg",
+    "features": ["writing_mode"],
+    "category": "text_layout",
+    "codebase_files": []  # Optionally provide files from glob/grep
+})
+
+# Returns:
+# - Ranked list of files to modify
+# - Search keywords for finding similar features
+# - Implementation hints specific to the feature
+```
+
+**Find related tests for batch implementation (NEW):**
+```python
+# Discover all tests failing for the same feature
+result = await mcp.call_tool("find_related_tests", {
+    "feature": "writing-mode",
+    "skip_file_content": resvg_test_suite_cc_content
+})
+
+# Returns:
+# - List of all tests with this feature (e.g., e-text-031, e-text-033)
+# - Impact assessment and priority (low/medium/high)
+# - Batch implementation opportunity!
+```
+
+**Track feature progress (NEW):**
+```python
+# Generate progress report for a test category
+result = await mcp.call_tool("generate_feature_report", {
+    "category": "e-text",
+    "test_output": bazel_test_output,
+    "skip_file_content": resvg_test_suite_cc_content
+})
+
+# Returns:
+# - Pass/fail/skip counts
+# - Completion rate percentage
+# - Next priority feature by test impact
+# - List of all missing features
+```
+
+**Analyze visual differences (NEW):**
+```python
+# Programmatically analyze diff images
+result = await mcp.call_tool("analyze_visual_diff", {
+    "diff_image_path": "/tmp/diff_e-text-031.png",
+    "actual_image_path": "/tmp/e-text-031.png",
+    "expected_image_path": "/path/to/resvg-test-suite/png/e-text-031.png"
+})
+
+# Returns:
+# - Difference type: positioning/missing_element/styling/anti_aliasing
+# - Visual analysis metrics (pixel counts, regions, offsets)
+# - Likely cause with confidence score
+```
+
 **Setup:**
 1. Install: `pip install -e tools/mcp-servers/resvg-test-triage`
 2. Configure in MCP settings:
@@ -337,5 +398,9 @@ result = await mcp.call_tool("analyze_test_failure", {
 - Batch processing of 50+ test failures
 - Properly formatted skip comments
 - Vision model analysis with actual, expected, and diff images
+- **Implementation guidance** - suggests files to modify
+- **Batch opportunities** - find all tests for same feature
+- **Progress tracking** - monitor feature completion
+- **Visual analysis** - categorize diff types automatically
 
-See [resvg-test-triage README](tools/mcp-servers/resvg-test-triage/README.md) for full documentation.
+See [resvg-test-triage README](../../../tools/mcp-servers/resvg-test-triage/README.md) for full documentation.

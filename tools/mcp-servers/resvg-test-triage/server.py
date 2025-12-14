@@ -16,6 +16,23 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent, ImageContent
+from PIL import Image
+import numpy as np
+
+from codebase_helpers import (
+    get_file_patterns_for_category,
+    get_search_keywords_for_feature,
+    rank_file_suggestions,
+    get_implementation_hints,
+    SimilarFeature,
+)
+from test_output_parser import (
+    parse_test_output,
+    parse_skip_file,
+    group_by_category,
+    identify_missing_features,
+    get_next_priority_feature,
+)
 
 server = Server("resvg-test-triage")
 
@@ -500,6 +517,108 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["svg_content"]
             }
+        ),
+        Tool(
+            name="suggest_implementation_approach",
+            description=(
+                "Given a failing test, suggest which files to modify and provide "
+                "implementation guidance based on similar existing features."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "test_name": {
+                        "type": "string",
+                        "description": "Test file name (e.g., 'e-text-023.svg')"
+                    },
+                    "features": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of detected feature names"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Feature category (e.g., 'text_styling', 'text_positioning')"
+                    },
+                    "codebase_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional: List of relevant files found in codebase"
+                    }
+                },
+                "required": ["test_name", "features", "category"]
+            }
+        ),
+        Tool(
+            name="find_related_tests",
+            description=(
+                "Find all tests failing for the same feature or reason, "
+                "grouped by category for easier batch implementation."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "feature": {
+                        "type": "string",
+                        "description": "Feature name to find related tests for"
+                    },
+                    "skip_file_content": {
+                        "type": "string",
+                        "description": "Content of resvg_test_suite.cc with skip entries"
+                    }
+                },
+                "required": ["feature", "skip_file_content"]
+            }
+        ),
+        Tool(
+            name="generate_feature_report",
+            description=(
+                "Generate comprehensive progress report for a feature category, "
+                "showing pass/fail/skip counts and next priority features."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Category prefix (e.g., 'e-text', 'a-transform')"
+                    },
+                    "test_output": {
+                        "type": "string",
+                        "description": "Recent test run output from bazel test"
+                    },
+                    "skip_file_content": {
+                        "type": "string",
+                        "description": "Optional: Content of resvg_test_suite.cc for missing feature analysis"
+                    }
+                },
+                "required": ["category", "test_output"]
+            }
+        ),
+        Tool(
+            name="analyze_visual_diff",
+            description=(
+                "Programmatically analyze diff images to categorize failure types "
+                "(positioning errors, missing elements, color differences, anti-aliasing)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "diff_image_path": {
+                        "type": "string",
+                        "description": "Path to diff image PNG"
+                    },
+                    "actual_image_path": {
+                        "type": "string",
+                        "description": "Path to actual rendering PNG"
+                    },
+                    "expected_image_path": {
+                        "type": "string",
+                        "description": "Path to expected rendering PNG"
+                    }
+                },
+                "required": ["diff_image_path", "actual_image_path", "expected_image_path"]
+            }
         )
     ]
 
@@ -705,6 +824,271 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             "test_name": test_name,
             "category": category
         }
+
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )]
+
+    elif name == "suggest_implementation_approach":
+        test_name = arguments["test_name"]
+        feature_names = arguments["features"]
+        category = arguments["category"]
+        codebase_files = arguments.get("codebase_files", [])
+
+        # Get file patterns for this category
+        patterns = get_file_patterns_for_category(category)
+
+        # Get search keywords for the primary feature
+        primary_feature = feature_names[0] if feature_names else ""
+        keywords = get_search_keywords_for_feature(primary_feature)
+
+        # Rank provided files or suggest patterns
+        if codebase_files:
+            ranked_files = rank_file_suggestions(codebase_files, primary_feature)
+            likely_files = [f[0] for f in ranked_files[:5]]  # Top 5
+        else:
+            likely_files = []
+
+        # Get implementation hints
+        hints = get_implementation_hints(primary_feature, category)
+
+        # Find similar features (simplified - just return examples)
+        similar_features = []
+        if category == "text_styling":
+            similar_features.append({
+                "name": "font-size",
+                "files": ["donner/svg/components/text/ComputedTextStyleComponent.h"]
+            })
+        elif category == "text_positioning":
+            similar_features.append({
+                "name": "x_attribute",
+                "files": ["donner/svg/SVGTextElement.h"]
+            })
+
+        result = {
+            "test_name": test_name,
+            "category": category,
+            "primary_feature": primary_feature,
+            "likely_files": likely_files,
+            "file_patterns": patterns,
+            "search_keywords": keywords,
+            "similar_features": similar_features,
+            "implementation_hints": hints
+        }
+
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )]
+
+    elif name == "find_related_tests":
+        feature = arguments["feature"]
+        skip_file_content = arguments["skip_file_content"]
+
+        # Parse skip file
+        skip_map = parse_skip_file(skip_file_content)
+
+        # Find tests with this feature
+        related_tests = []
+        for test_name, reason in skip_map.items():
+            if feature.lower() in reason.lower():
+                related_tests.append(test_name)
+
+        # Identify all missing features and group
+        feature_map = identify_missing_features(skip_map)
+
+        # Group related tests by category
+        grouped_by_category = {}
+        for test in related_tests:
+            # Extract category prefix
+            match = re.match(r'^([a-z]+-[a-z]+)-', test)
+            if match:
+                cat = match.group(1)
+            else:
+                cat = "other"
+
+            if cat not in grouped_by_category:
+                grouped_by_category[cat] = []
+            grouped_by_category[cat].append(test)
+
+        # Determine impact and priority
+        impact_count = len(related_tests)
+        if impact_count == 0:
+            priority = "none"
+            impact = "0 tests affected"
+        elif impact_count == 1:
+            priority = "low"
+            impact = "1 test affected"
+        elif impact_count <= 5:
+            priority = "medium"
+            impact = f"{impact_count} tests affected"
+        else:
+            priority = "high"
+            impact = f"{impact_count} tests affected"
+
+        result = {
+            "feature": feature,
+            "related_tests": related_tests,
+            "impact": impact,
+            "priority": priority,
+            "grouped_by_category": grouped_by_category,
+            "all_missing_features": {k: len(v) for k, v in feature_map.items()}
+        }
+
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )]
+
+    elif name == "generate_feature_report":
+        category = arguments["category"]
+        test_output = arguments["test_output"]
+        skip_file_content = arguments.get("skip_file_content", "")
+
+        # Parse test output
+        results, summary = parse_test_output(test_output)
+
+        # Group by category
+        category_reports = group_by_category(results)
+
+        # Get report for requested category
+        if category in category_reports:
+            cat_report = category_reports[category]
+            total = cat_report.total_tests
+            passing = cat_report.passing
+            skipped = cat_report.skipped
+            completion_rate = f"{int(cat_report.completion_rate * 100)}%"
+
+            # Get implemented vs missing features
+            implemented = []
+            missing = []
+
+            if skip_file_content:
+                skip_map = parse_skip_file(skip_file_content)
+                feature_map = identify_missing_features(skip_map, category)
+                missing = list(feature_map.keys())
+                next_priority_info = get_next_priority_feature(feature_map)
+                if next_priority_info:
+                    next_priority = f"{next_priority_info[0]} (affects {next_priority_info[1]} tests)"
+                else:
+                    next_priority = "None - all features implemented!"
+            else:
+                next_priority = "Unknown - no skip file provided"
+
+            result = {
+                "category": category,
+                "total_tests": total,
+                "passing": passing,
+                "skipped": skipped,
+                "completion_rate": completion_rate,
+                "implemented_features": implemented,
+                "missing_features": missing[:10],  # Top 10
+                "next_priority": next_priority,
+                "test_details": [
+                    {
+                        "name": t.test_name,
+                        "status": t.status,
+                        "pixel_diff": t.pixel_diff
+                    }
+                    for t in cat_report.test_results[:20]  # First 20 tests
+                ]
+            }
+        else:
+            result = {
+                "category": category,
+                "error": f"No tests found for category '{category}'",
+                "available_categories": list(category_reports.keys())
+            }
+
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )]
+
+    elif name == "analyze_visual_diff":
+        diff_image_path = arguments["diff_image_path"]
+        actual_image_path = arguments["actual_image_path"]
+        expected_image_path = arguments["expected_image_path"]
+
+        try:
+            # Load images
+            diff_img = Image.open(diff_image_path)
+            actual_img = Image.open(actual_image_path)
+            expected_img = Image.open(expected_image_path)
+
+            # Convert to numpy arrays for analysis
+            diff_array = np.array(diff_img)
+
+            # Analyze diff image
+            # Find non-zero pixels (differences)
+            if len(diff_array.shape) == 3:
+                # RGB or RGBA image
+                diff_mask = np.any(diff_array[:, :, :3] > 0, axis=2)
+            else:
+                # Grayscale
+                diff_mask = diff_array > 0
+
+            diff_pixels = np.sum(diff_mask)
+            total_pixels = diff_mask.size
+
+            # Find bounding boxes of diff regions
+            if diff_pixels > 0:
+                rows = np.any(diff_mask, axis=1)
+                cols = np.any(diff_mask, axis=0)
+                rmin, rmax = np.where(rows)[0][[0, -1]]
+                cmin, cmax = np.where(cols)[0][[0, -1]]
+
+                largest_region_pixels = int((rmax - rmin + 1) * (cmax - cmin + 1))
+
+                # Check for uniform offset (all diffs in one region)
+                is_uniform_offset = diff_pixels > 100 and (largest_region_pixels / diff_pixels) > 0.8
+            else:
+                largest_region_pixels = 0
+                is_uniform_offset = False
+
+            # Determine difference type
+            if diff_pixels < 100:
+                diff_type = "anti_aliasing"
+                likely_cause = "Minor anti-aliasing differences"
+                confidence = "high"
+            elif is_uniform_offset:
+                diff_type = "positioning"
+                likely_cause = "Baseline positioning offset or element placement issue"
+                confidence = "high"
+            elif diff_pixels > total_pixels * 0.3:
+                diff_type = "missing_element"
+                likely_cause = "Large missing or incorrect element"
+                confidence = "medium"
+            else:
+                diff_type = "styling"
+                likely_cause = "Color, stroke, or fill differences"
+                confidence = "medium"
+
+            # Count diff regions (connected components - simplified)
+            diff_region_count = 1 if diff_pixels > 0 else 0
+
+            result = {
+                "difference_type": diff_type,
+                "visual_analysis": {
+                    "diff_pixels": int(diff_pixels),
+                    "total_pixels": int(total_pixels),
+                    "diff_percentage": f"{(diff_pixels / total_pixels * 100):.2f}%",
+                    "diff_regions": diff_region_count,
+                    "largest_region_pixels": largest_region_pixels,
+                    "is_uniform_offset": bool(is_uniform_offset),
+                },
+                "likely_cause": likely_cause,
+                "confidence": confidence
+            }
+
+        except Exception as e:
+            result = {
+                "error": f"Failed to analyze images: {str(e)}",
+                "diff_image_path": diff_image_path,
+                "actual_image_path": actual_image_path,
+                "expected_image_path": expected_image_path
+            }
 
         return [TextContent(
             type="text",
