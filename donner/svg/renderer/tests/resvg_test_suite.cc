@@ -476,7 +476,6 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-text-002.svg",
              Params::WithThreshold(kDefaultThreshold, 115)},  // Font rendering differences
-            {"e-text-003.svg", Params::Skip()},  // Not impl: Multiple x/y values with varying widths
             {"e-text-004.svg",
              Params::WithThreshold(kDefaultThreshold, 115)},  // Font rendering differences
             {"e-text-006.svg", Params::Skip()},  // Not impl: `dx` attribute

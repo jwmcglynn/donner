@@ -1279,26 +1279,49 @@ public:
         font.setSubpixel(false);
       }
 
-      // Check if we have per-glyph positioning (multiple x/y values)
-      const bool hasPerGlyphPositioning = span.x.size() > 1 || span.y.size() > 1;
+      // Check if we have per-glyph positioning (multiple x/y values or per-glyph offsets)
+      const bool hasPerGlyphPositioning =
+          span.x.size() > 1 || span.y.size() > 1 || span.dx.size() > 1 || span.dy.size() > 1;
+
+      // Helpers to resolve optional absolute/relative positioning values.
+      const auto toPixels = [&](const Lengthd& value, Lengthd::Extent extent) -> SkScalar {
+        return static_cast<SkScalar>(value.toPixels(viewBox, fontMetrics, extent));
+      };
+
+      const auto resolveLength = [&](const SmallVector<Lengthd, 1>& values, size_t index,
+                                     Lengthd::Extent extent) -> std::optional<SkScalar> {
+        if (index >= values.size()) {
+          return std::nullopt;
+        }
+        return toPixels(values[index], extent);
+      };
+
+      const auto applyRelative = [&](const SmallVector<Lengthd, 1>& values, size_t index,
+                                     Lengthd::Extent extent, SkScalar& target) {
+        if (index < values.size()) {
+          target += toPixels(values[index], extent);
+        }
+      };
 
       // Compute base positions (used when no per-glyph positioning)
       const auto computeX = [&](size_t index = 0) -> SkScalar {
-        const Lengthd xVal = index < span.x.size() ? span.x[index] : (span.x.empty() ? Lengthd() : span.x[0]);
-        const Lengthd dxVal = index < span.dx.size() ? span.dx[index] : (span.dx.empty() ? Lengthd() : span.dx[0]);
+        const size_t clamped = std::min(index, span.x.empty() ? 0UL : span.x.size() - 1);
+        const Lengthd xVal = span.x.empty() ? Lengthd() : span.x[clamped];
+        const Lengthd dxVal = index < span.dx.size() ? span.dx[index] : Lengthd();
         return static_cast<SkScalar>(xVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::X) +
                                      dxVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::X));
       };
 
       const auto computeY = [&](size_t index = 0) -> SkScalar {
-        const Lengthd yVal = index < span.y.size() ? span.y[index] : (span.y.empty() ? Lengthd() : span.y[0]);
-        const Lengthd dyVal = index < span.dy.size() ? span.dy[index] : (span.dy.empty() ? Lengthd() : span.dy[0]);
+        const size_t clamped = std::min(index, span.y.empty() ? 0UL : span.y.size() - 1);
+        const Lengthd yVal = span.y.empty() ? Lengthd() : span.y[clamped];
+        const Lengthd dyVal = index < span.dy.size() ? span.dy[index] : Lengthd();
         return static_cast<SkScalar>(yVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y) +
                                      dyVal.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y));
       };
 
-      const SkScalar x = computeX(0);
-      const SkScalar y = computeY(0);
+      SkScalar x = computeX(0);
+      SkScalar y = computeY(0);
 
       // Apply rotation if specified
       bool rotated = false;
@@ -1328,16 +1351,17 @@ public:
       }
 
       if (shaper && hasPerGlyphPositioning) {
-        // Per-glyph positioning: render each character at its specified position
-        // This implements SVG's multiple x/y values feature
+        // Per-glyph positioning: render each character at its specified position. Missing
+        // x/y/dx/dy values keep the current pen position unchanged, matching the SVG spec.
         const SkScalar baselineOffset = -font.getSpacing() * 0.78f;
 
         size_t charIndex = 0;
         size_t byteIndex = 0;
+        SkScalar currentX = span.x.empty() ? 0.0f : toPixels(span.x[0], Lengthd::Extent::X);
+        SkScalar currentY = span.y.empty() ? 0.0f : toPixels(span.y[0], Lengthd::Extent::Y);
         while (byteIndex < textStr.size()) {
-          // Find the next UTF-8 character
           size_t charBytes = 1;
-          unsigned char firstByte = static_cast<unsigned char>(textStr[byteIndex]);
+          const unsigned char firstByte = static_cast<unsigned char>(textStr[byteIndex]);
           if ((firstByte & 0x80) == 0) {
             charBytes = 1;  // ASCII
           } else if ((firstByte & 0xE0) == 0xC0) {
@@ -1348,19 +1372,27 @@ public:
             charBytes = 4;
           }
 
-          // Get the character substring
-          std::string_view charStr = textStr.substr(byteIndex, charBytes);
+          const std::string_view charStr = textStr.substr(byteIndex, charBytes);
 
-          // Compute position for this character
-          const SkScalar charX = computeX(charIndex);
-          const SkScalar charY = computeY(charIndex);
+          if (const std::optional<SkScalar> overrideX =
+                  resolveLength(span.x, charIndex, Lengthd::Extent::X)) {
+            currentX = overrideX.value();
+          }
 
-          // Shape and draw this single character
+          if (const std::optional<SkScalar> overrideY =
+                  resolveLength(span.y, charIndex, Lengthd::Extent::Y)) {
+            currentY = overrideY.value();
+          }
+
+          applyRelative(span.dx, charIndex, Lengthd::Extent::X, currentX);
+          applyRelative(span.dy, charIndex, Lengthd::Extent::Y, currentY);
+
           auto fontIter = std::make_unique<SkShaper::TrivialFontRunIterator>(font, charStr.size());
           auto bidiIter = std::make_unique<SkShaper::TrivialBiDiRunIterator>(0, charStr.size());
           auto scriptIter = std::make_unique<SkShaper::TrivialScriptRunIterator>(
               SkSetFourByteTag('L', 'a', 't', 'n'), charStr.size());
-          auto langIter = std::make_unique<SkShaper::TrivialLanguageRunIterator>("en", charStr.size());
+          auto langIter =
+              std::make_unique<SkShaper::TrivialLanguageRunIterator>("en", charStr.size());
 
           SkTextBlobBuilderRunHandler runHandler(charStr.data(), {0, baselineOffset});
           shaper->shape(charStr.data(), charStr.size(), *fontIter, *bidiIter, *scriptIter,
@@ -1368,8 +1400,23 @@ public:
           sk_sp<SkTextBlob> blob = runHandler.makeBlob();
 
           if (blob) {
-            renderer_.currentCanvas_->drawTextBlob(blob, charX, charY, skPaint);
+            if (span.rotateDegrees != 0.0) {
+              renderer_.currentCanvas_->save();
+              renderer_.currentCanvas_->translate(currentX, currentY);
+              renderer_.currentCanvas_->rotate(static_cast<SkScalar>(span.rotateDegrees));
+              renderer_.currentCanvas_->translate(-currentX, -currentY);
+            }
+
+            renderer_.currentCanvas_->drawTextBlob(blob, currentX, currentY, skPaint);
+
+            if (span.rotateDegrees != 0.0) {
+              renderer_.currentCanvas_->restore();
+            }
           }
+
+          SkRect advanceBounds;
+          currentX += font.measureText(charStr.data(), charStr.size(), SkTextEncoding::kUTF8,
+                                       &advanceBounds);
 
           byteIndex += charBytes;
           charIndex++;
