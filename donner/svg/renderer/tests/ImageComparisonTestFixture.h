@@ -4,8 +4,10 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <optional>
 
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/renderer/TerminalImageViewer.h"
 
 namespace donner::svg {
 
@@ -44,6 +46,8 @@ struct ImageComparisonParams {
   bool saveDebugSkpOnFailure = true;
   /// If true, allow updating golden images via an environment variable.
   bool updateGoldenFromEnv = false;
+  /// If true, emit a terminal preview grid when comparisons fail.
+  bool showTerminalPreview = true;
   /// Optional canvas size override, which determines the size of the rendered image.
   std::optional<Vector2i> canvasSize;
   /// Optional filename to use for the golden image, overriding the default.
@@ -150,6 +154,27 @@ struct ImageComparisonTestcase {
  * @return A string suitable for use as a test name.
  */
 std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTestcase>& info);
+
+/**
+ * @brief Terminal preview configuration derived from the environment.
+ */
+struct TerminalPreviewConfig {
+  TerminalPixelMode pixelMode = TerminalPixelMode::kQuarterPixel;  //!< Pixel mode to use.
+  int terminalWidth = 120;                                        //!< Maximum terminal width.
+};
+
+/**
+ * @brief Reads preview configuration and gating flags from the environment.
+ */
+std::optional<TerminalPreviewConfig> PreviewConfigFromEnv(const ImageComparisonParams& params);
+
+/**
+ * @brief Render a 2x2 terminal preview grid for testing.
+ */
+std::string RenderTerminalComparisonGridForTesting(
+    const TerminalImageView& actual, const TerminalImageView& expected,
+    const TerminalImageView& diff, int maxTerminalWidth, TerminalPixelMode pixelMode,
+    const TerminalImageViewerConfig& viewerConfig = {});
 
 /**
  * @brief A Google Test fixture for tests that compare rendered SVG output against golden images.

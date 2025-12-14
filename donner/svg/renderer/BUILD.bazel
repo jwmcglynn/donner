@@ -60,6 +60,16 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "terminal_image_viewer",
+    srcs = ["TerminalImageViewer.cc"],
+    hdrs = ["TerminalImageViewer.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/css:core",
+    ],
+)
+
+donner_cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],

@@ -31,6 +31,7 @@ donner_cc_library(
         ":renderer_test_utils",
         "//donner/svg/parser",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:terminal_image_viewer",
         "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest",
         "@pixelmatch-cpp17",
@@ -57,6 +58,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "terminal_image_viewer_tests",
+    srcs = ["TerminalImageViewer_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:terminal_image_viewer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resvg_test_suite",
     srcs = [
         "resvg_test_suite.cc",
@@ -70,6 +80,18 @@ donner_cc_test(
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "image_comparison_terminal_preview_tests",
+    srcs = [
+        "ImageComparisonTerminalPreview_tests.cc",
+    ],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/svg/renderer:terminal_image_viewer",
         "@com_google_gtest//:gtest_main",
     ],
 )
