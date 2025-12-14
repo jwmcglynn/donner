@@ -53,6 +53,7 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   flow or trust boundaries. Use Doxygen-friendly anchors `{#AnchorId}` and run `tools/doxygen.sh`
   when needed.
 - Tests:
+  - **All code changes should include tests** - When adding new features or methods, write corresponding unit tests.
   - Use gMock with gTest for C++ tests.
   - Add fuzzers for parser-style code paths when practical.
 

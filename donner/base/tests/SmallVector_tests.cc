@@ -626,4 +626,122 @@ TEST(SmallVectorStream, OutputOperatorCustomType) {
   }
 }
 
+/**
+ * Tests the front() method for accessing the first element.
+ */
+TEST(SmallVector, Front) {
+  // Test with int
+  {
+    SmallVector<int, 4> vec = {1, 2, 3, 4};
+    EXPECT_EQ(vec.front(), 1);
+    vec.front() = 10;
+    EXPECT_EQ(vec.front(), 10);
+    EXPECT_EQ(vec[0], 10);
+  }
+
+  // Test with single element
+  {
+    SmallVector<int, 4> vec = {42};
+    EXPECT_EQ(vec.front(), 42);
+  }
+
+  // Test with string (non-trivial type)
+  {
+    SmallVector<std::string, 4> vec = {"hello", "world", "test"};
+    EXPECT_EQ(vec.front(), "hello");
+    vec.front() = "modified";
+    EXPECT_EQ(vec.front(), "modified");
+    EXPECT_EQ(vec[0], "modified");
+  }
+
+  // Test with vector that exceeds small size
+  {
+    SmallVector<int, 2> vec = {1, 2, 3, 4, 5};
+    EXPECT_EQ(vec.front(), 1);
+  }
+}
+
+/**
+ * Tests the front() const method for accessing the first element.
+ */
+TEST(SmallVector, FrontConst) {
+  const SmallVector<int, 4> vec = {1, 2, 3, 4};
+  EXPECT_EQ(vec.front(), 1);
+
+  const SmallVector<std::string, 4> strVec = {"hello", "world"};
+  EXPECT_EQ(strVec.front(), "hello");
+}
+
+/**
+ * Tests the back() method for accessing the last element.
+ */
+TEST(SmallVector, Back) {
+  // Test with int
+  {
+    SmallVector<int, 4> vec = {1, 2, 3, 4};
+    EXPECT_EQ(vec.back(), 4);
+    vec.back() = 40;
+    EXPECT_EQ(vec.back(), 40);
+    EXPECT_EQ(vec[3], 40);
+  }
+
+  // Test with single element
+  {
+    SmallVector<int, 4> vec = {42};
+    EXPECT_EQ(vec.back(), 42);
+    EXPECT_EQ(vec.front(), vec.back());
+  }
+
+  // Test with string (non-trivial type)
+  {
+    SmallVector<std::string, 4> vec = {"hello", "world", "test"};
+    EXPECT_EQ(vec.back(), "test");
+    vec.back() = "modified";
+    EXPECT_EQ(vec.back(), "modified");
+    EXPECT_EQ(vec[2], "modified");
+  }
+
+  // Test with vector that exceeds small size
+  {
+    SmallVector<int, 2> vec = {1, 2, 3, 4, 5};
+    EXPECT_EQ(vec.back(), 5);
+  }
+
+  // Test back() after push_back and pop_back
+  {
+    SmallVector<int, 4> vec = {1, 2, 3};
+    EXPECT_EQ(vec.back(), 3);
+    vec.push_back(4);
+    EXPECT_EQ(vec.back(), 4);
+    vec.pop_back();
+    EXPECT_EQ(vec.back(), 3);
+  }
+}
+
+/**
+ * Tests the back() const method for accessing the last element.
+ */
+TEST(SmallVector, BackConst) {
+  const SmallVector<int, 4> vec = {1, 2, 3, 4};
+  EXPECT_EQ(vec.back(), 4);
+
+  const SmallVector<std::string, 4> strVec = {"hello", "world"};
+  EXPECT_EQ(strVec.back(), "world");
+}
+
+/**
+ * Tests front() and back() together on the same vector.
+ */
+TEST(SmallVector, FrontAndBack) {
+  SmallVector<int, 4> vec = {1, 2, 3, 4, 5};
+  EXPECT_EQ(vec.front(), 1);
+  EXPECT_EQ(vec.back(), 5);
+
+  vec.front() = 10;
+  vec.back() = 50;
+  EXPECT_EQ(vec[0], 10);
+  EXPECT_EQ(vec[4], 50);
+  EXPECT_THAT(vec, ElementsAre(10, 2, 3, 4, 50));
+}
+
 }  // namespace donner

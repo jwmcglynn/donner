@@ -287,6 +287,46 @@ public:
   }
 
   /**
+   * Returns a reference to the first element in the vector.
+   *
+   * @return Reference to the first element.
+   */
+  T& front() noexcept(false) {
+    assert(size_ > 0 && "Cannot call front() on an empty vector");
+    return data()[0];
+  }
+
+  /**
+   * Returns a const reference to the first element in the vector.
+   *
+   * @return Const reference to the first element.
+   */
+  const T& front() const noexcept(false) {
+    assert(size_ > 0 && "Cannot call front() on an empty vector");
+    return data()[0];
+  }
+
+  /**
+   * Returns a reference to the last element in the vector.
+   *
+   * @return Reference to the last element.
+   */
+  T& back() noexcept(false) {
+    assert(size_ > 0 && "Cannot call back() on an empty vector");
+    return data()[size_ - 1];
+  }
+
+  /**
+   * Returns a const reference to the last element in the vector.
+   *
+   * @return Const reference to the last element.
+   */
+  const T& back() const noexcept(false) {
+    assert(size_ > 0 && "Cannot call back() on an empty vector");
+    return data()[size_ - 1];
+  }
+
+  /**
    * Returns an iterator to the beginning of the vector.
    */
   iterator begin() noexcept { return data(); }
