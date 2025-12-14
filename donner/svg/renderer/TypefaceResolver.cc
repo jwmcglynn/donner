@@ -4,6 +4,7 @@
 #include <limits>
 #include <unordered_set>
 
+#include "embed_resources/NotoSansFont.h"
 #include "embed_resources/PublicSansFont.h"
 #include "include/core/SkData.h"
 #include "include/core/SkString.h"
@@ -15,6 +16,12 @@ namespace {
 sk_sp<SkTypeface> CreatePublicSansTypeface(SkFontMgr& fontManager) {
   auto data = SkData::MakeWithoutCopy(embedded::kPublicSansMediumOtf.data(),
                                       embedded::kPublicSansMediumOtf.size());
+  return fontManager.makeFromData(std::move(data));
+}
+
+sk_sp<SkTypeface> CreateNotoSansTypeface(SkFontMgr& fontManager) {
+  auto data = SkData::MakeWithoutCopy(embedded::kNotoSansRegularTtf.data(),
+                                      embedded::kNotoSansRegularTtf.size());
   return fontManager.makeFromData(std::move(data));
 }
 
@@ -90,6 +97,17 @@ sk_sp<SkTypeface> CreateEmbeddedFallbackTypeface(SkFontMgr& fontManager) {
   }
 
   return fontManager.matchFamilyStyle(nullptr, SkFontStyle());
+}
+
+void AddEmbeddedFonts(std::map<std::string, std::vector<sk_sp<SkTypeface>>>& typefaces,
+                      SkFontMgr& fontManager) {
+  if (auto typeface = CreateNotoSansTypeface(fontManager)) {
+    typefaces["Noto Sans"].push_back(std::move(typeface));
+  }
+
+  if (auto typeface = CreatePublicSansTypeface(fontManager)) {
+    typefaces["Public Sans"].push_back(std::move(typeface));
+  }
 }
 
 }  // namespace donner::svg

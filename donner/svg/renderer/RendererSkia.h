@@ -1,7 +1,9 @@
 #pragma once
 /// @file
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -132,6 +134,15 @@ public:
    */
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
+  /**
+   * Override the fallback font family used when no matching typeface is found.
+   *
+   * @param familyName Name of the fallback family to request from the platform font manager.
+   */
+  void setFallbackFontFamily(std::string_view familyName) {
+    fallbackFontFamily_ = std::string(familyName);
+  }
+
 private:
   /// Implementation class.
   class Impl;
@@ -149,6 +160,7 @@ private:
   sk_sp<class SkTypeface> fallbackTypeface_;  //!< Default fallback typeface for text.
   std::map<std::string, std::vector<sk_sp<SkTypeface>>> typefaces_;  //!< Cached typefaces by
                                                                      //!< family name.
+  std::optional<std::string> fallbackFontFamily_;                    //!< Requested fallback family.
 
   SkBitmap bitmap_;                    //!< The bitmap to render into.
   SkCanvas* rootCanvas_ = nullptr;     //!< The root canvas.

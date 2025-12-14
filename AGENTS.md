@@ -86,3 +86,43 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   - Use `tools/doxygen.sh` to generate the docs.
   - The generated docs are in `generated-doxygen/html/`.
 - Use `tools/coverage.sh` to generate code coverage reports (if lcov is installed).
+
+
+## Working with Resvg Test Suite
+
+When working on SVG renderer features, the resvg test suite (`//donner/svg/renderer/tests:resvg_test_suite`) provides comprehensive validation. Follow these guidelines:
+
+### Test-Driven Feature Development
+
+1. **Identify relevant tests early**: Before implementing a feature, check which resvg tests cover it
+2. **Use tests as acceptance criteria**: Tests define correct behavior - passing tests = feature complete
+3. **Triage systematically**: When adding/fixing features, triage all related test failures following [README_resvg_test_suite.md](donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures)
+
+### When to Triage Tests
+
+Triage tests when:
+- **After implementing a new feature**: Check if any previously-skipped tests now pass
+- **When tests start failing**: Understand why and document the reason
+- **When adding rendering features**: Ensure all related tests are properly categorized
+- **During code review**: Verify test coverage and skip reasons are appropriate
+
+### Triage Process Summary
+
+For detailed instructions, see [README_resvg_test_suite.md](donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures). Quick reference:
+
+```sh
+# Run tests for a feature
+bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=*e_text_*'
+
+# Examine failing SVG (printed in the output)
+# Then either fix the root cause, or if it is out of scope, add a skip with a comment comment in resvg_test_suite.cc
+{"e-text-002.svg", Params::Skip()},  // Not impl: Multiple x/y values
+```
+
+### Comment Conventions
+
+Use consistent skip reasons:
+- `Not impl: <feature>` - Feature not implemented (e.g., `<tspan>`, `writing-mode`)
+- `UB: <reason>` - Undefined behavior or edge case
+- `Bug: <description>` - Known bug
+- `Larger threshold due to <reason>` - For anti-aliasing differences

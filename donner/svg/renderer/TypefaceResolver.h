@@ -2,6 +2,7 @@
 /// @file
 
 #include <map>
+#include <string>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -25,5 +26,13 @@ sk_sp<SkTypeface> ResolveTypeface(
  * default if embedding fails.
  */
 sk_sp<SkTypeface> CreateEmbeddedFallbackTypeface(SkFontMgr& fontManager);
+
+/**
+ * Add embedded fonts shipped with Donner to the renderer's cached typefaces.
+ *
+ * Currently registers Noto Sans Regular under the "Noto Sans" family name when available.
+ */
+void AddEmbeddedFonts(std::map<std::string, std::vector<sk_sp<SkTypeface>>>& typefaces,
+                      SkFontMgr& fontManager);
 
 }  // namespace donner::svg

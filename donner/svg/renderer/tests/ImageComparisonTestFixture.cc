@@ -106,6 +106,9 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   }
 
   RendererSkia renderer(/*verbose*/ false);
+  if (params.fallbackFontFamily) {
+    renderer.setFallbackFontFamily(*params.fallbackFontFamily);
+  }
   renderer.draw(document);
 
   const size_t strideInPixels = renderer.width();
@@ -160,6 +163,9 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
       {
         RendererSkia rendererVerbose(/*verbose*/ true);
+        if (params.fallbackFontFamily) {
+          rendererVerbose.setFallbackFontFamily(*params.fallbackFontFamily);
+        }
         sk_sp<SkPicture> picture = rendererVerbose.drawIntoSkPicture(document);
 
         sk_sp<SkData> pictureData = picture->serialize();

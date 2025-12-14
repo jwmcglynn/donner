@@ -22,8 +22,15 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Automatically enable CoreText on macOS (can be overridden with --@donner//donner/svg/renderer:use_coretext=false)
 config_setting(
     name = "macos_coretext",
+    constraint_values = ["@platforms//os:macos"],
+)
+
+# Explicit CoreText flag override
+config_setting(
+    name = "macos_coretext_explicit",
     constraint_values = ["@platforms//os:macos"],
     flag_values = {":use_coretext": "true"},
 )
@@ -77,6 +84,7 @@ donner_cc_library(
         ":skia_deps",
         "//donner/base",
         "//donner/svg/core",
+        "//third_party/noto-sans",
         "//third_party/public-sans",
     ],
 )
@@ -106,7 +114,17 @@ donner_perf_sensitive_cc_library(
     deps = [
         "@skia//:core",
         "@skia//:pathops",
+        "@skia//:skshaper_core",
     ] + select({
+        ":macos_coretext": [
+            # Use CoreText shaper on macOS (no glib dependency)
+            "@skia//:skshaper_coretext",
+        ],
+        "//conditions:default": [
+            # Use HarfBuzz shaper on Linux/other platforms
+            "@skia//:skshaper_harfbuzz",
+        ],
+    }) + select({
         ":macos_coretext": [
             "@skia//:fontmgr_coretext",
         ],

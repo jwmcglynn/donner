@@ -128,6 +128,13 @@ build:clang-tidy --output_groups=report
 build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
 
 ##
+## External dependency overrides
+##
+
+# Enable RTTI for ICU (required by ICU's implementation)
+build --per_file_copt=external/icu\+@-fno-rtti,-frtti
+
+##
 ## Test config
 ##
 

@@ -1,0 +1,29 @@
+load("//build_defs:embed_resources.bzl", "embed_resources")
+
+embed_resources(
+    name = "noto-sans",
+    header_output = "embed_resources/NotoSansFont.h",
+    resources = {
+        "kNotoSansRegularTtf": "NotoSans-Regular.ttf",
+    },
+    visibility = [
+        "//donner:__subpackages__",
+    ],
+)
+
+exports_files(
+    ["NotoSans-Regular.ttf"],
+    visibility = ["//tools:__pkg__"],
+)
+
+filegroup(
+    name = "embedded_header",
+    srcs = [":noto-sans_header_gen"],
+    visibility = ["//tools:__pkg__"],
+)
+
+filegroup(
+    name = "embedded_cpp",
+    srcs = [":noto-sans_embedded_NotoSans_Regular_ttf"],
+    visibility = ["//tools:__pkg__"],
+)

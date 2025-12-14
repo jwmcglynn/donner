@@ -4,6 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
 
 #include "donner/svg/SVGDocument.h"
 
@@ -48,6 +51,8 @@ struct ImageComparisonParams {
   std::optional<Vector2i> canvasSize;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
+  /// Optional fallback font family to request from the platform font manager.
+  std::optional<std::string> fallbackFontFamily;
 
   /**
    * @brief Creates parameters to skip a test.
@@ -84,6 +89,17 @@ struct ImageComparisonParams {
     ImageComparisonParams result;
     result.overrideGoldenFilename = filename;
     return result;
+  }
+
+  /**
+   * @brief Sets the fallback font family to request from the platform.
+   *
+   * @param familyName The fallback font family name.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& setFallbackFontFamily(std::string_view familyName) {
+    fallbackFontFamily = std::string(familyName);
+    return *this;
   }
 
   /**

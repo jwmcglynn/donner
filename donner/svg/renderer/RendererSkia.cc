@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererSkia.h"
 
 #include <algorithm>  // For std::sort
+#include <limits>     // For std::numeric_limits
 
 // Skia
 #include "include/core/SkColorFilter.h"
@@ -11,12 +12,23 @@
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkStream.h"
+#include "include/core/SkTextBlob.h"
 #include "include/core/SkTypeface.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
+#include "modules/skshaper/include/SkShaper.h"
+
+#ifdef SK_SHAPER_HARFBUZZ_AVAILABLE
+#include "modules/skshaper/include/SkShaper_harfbuzz.h"
+#include "modules/skunicode/include/SkUnicode.h"
+#endif
+
+#ifdef SK_SHAPER_CORETEXT_AVAILABLE
+#include "modules/skshaper/include/SkShaper_coretext.h"
+#endif
 
 #ifdef DONNER_USE_CORETEXT
 #include "include/ports/SkFontMgr_mac_ct.h"
@@ -387,7 +399,16 @@ public:
       }
     }
 
-    renderer_.fallbackTypeface_ = CreateEmbeddedFallbackTypeface(*renderer_.fontMgr_);
+    AddEmbeddedFonts(renderer_.typefaces_, *renderer_.fontMgr_);
+
+    if (!renderer_.fallbackTypeface_ && renderer_.fallbackFontFamily_) {
+      renderer_.fallbackTypeface_ = renderer_.fontMgr_->matchFamilyStyle(
+          renderer_.fallbackFontFamily_->c_str(), SkFontStyle());
+    }
+
+    if (!renderer_.fallbackTypeface_) {
+      renderer_.fallbackTypeface_ = CreateEmbeddedFallbackTypeface(*renderer_.fontMgr_);
+    }
   }
 
   void drawUntil(Registry& registry, Entity endEntity) {
@@ -1250,6 +1271,9 @@ public:
                           *renderer_.fontMgr_, renderer_.fallbackTypeface_);
 
       SkFont font(typeface, fontSizePx);
+      font.setEdging(SkFont::Edging::kAntiAlias);
+      font.setSubpixel(true);
+
       // Compute positions
       const SkScalar x =
           static_cast<SkScalar>(span.x.toPixels(viewBox, fontMetrics, Lengthd::Extent::X) +
@@ -1257,6 +1281,7 @@ public:
       const SkScalar y =
           static_cast<SkScalar>(span.y.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y) +
                                 span.dy.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y));
+
       // Apply rotation if specified
       bool rotated = false;
       if (span.rotateDegrees != 0.0) {
@@ -1267,10 +1292,56 @@ public:
         renderer_.currentCanvas_->translate(-x, -y);
         rotated = true;
       }
-      // Draw text as UTF-8
+
+      // Shape text using SkShaper for proper kerning, ligatures, and complex text layout
       const std::string_view textStr = span.text;
-      renderer_.currentCanvas_->drawSimpleText(textStr.data(), textStr.size(),
-                                               SkTextEncoding::kUTF8, x, y, font, skPaint);
+      std::unique_ptr<SkShaper> shaper;
+
+#if defined(SK_SHAPER_CORETEXT_AVAILABLE)
+      // Use CoreText shaper on macOS (no glib dependency needed)
+      shaper = SkShapers::CT::CoreText();
+#elif defined(SK_SHAPER_HARFBUZZ_AVAILABLE)
+      // Use HarfBuzz shaper for proper kerning on Linux
+      sk_sp<SkUnicode> unicode = nullptr;  // No Unicode support needed for basic Latin text
+      shaper = SkShapers::HB::ShaperDrivenWrapper(unicode, renderer_.fontMgr_);
+#endif
+
+      if (shaper) {
+        // Create simple run iterators for basic text shaping
+        auto fontIter = std::make_unique<SkShaper::TrivialFontRunIterator>(font, textStr.size());
+        auto bidiIter =
+            std::make_unique<SkShaper::TrivialBiDiRunIterator>(0 /* LTR */, textStr.size());
+        auto scriptIter = std::make_unique<SkShaper::TrivialScriptRunIterator>(
+            SkSetFourByteTag('L', 'a', 't', 'n'), textStr.size());
+        auto langIter =
+            std::make_unique<SkShaper::TrivialLanguageRunIterator>("en", textStr.size());
+
+        // SkShaper positions glyphs differently than drawSimpleText - we need to adjust
+        // the baseline position. The shaper outputs glyph positions with baseline at y=0,
+        // but we need to shift them up so the baseline matches what drawSimpleText would produce.
+        // Use font spacing (ascent + descent) as approximation for baseline adjustment
+        // TODO(jwm): Debug why this baseline shift is required
+        const SkScalar baselineOffset =
+            -font.getSpacing() * 0.78f;  // Shift up by approximate ascent
+
+        // Use SkTextBlobBuilderRunHandler to shape text into a SkTextBlob
+        // Position glyphs with baseline adjustment
+        SkTextBlobBuilderRunHandler runHandler(textStr.data(), {0, baselineOffset});
+        shaper->shape(textStr.data(), textStr.size(), *fontIter, *bidiIter, *scriptIter, *langIter,
+                      nullptr /* features */, 0 /* featuresSize */,
+                      std::numeric_limits<SkScalar>::max() /* width - no wrapping */, &runHandler);
+        sk_sp<SkTextBlob> blob = runHandler.makeBlob();
+
+        if (blob) {
+          // Draw the blob at the text position (baseline at x, y)
+          renderer_.currentCanvas_->drawTextBlob(blob, x, y, skPaint);
+        }
+      } else {
+        // Fallback to simple text if shaper is not available
+        renderer_.currentCanvas_->drawSimpleText(textStr.data(), textStr.size(),
+                                                 SkTextEncoding::kUTF8, x, y, font, skPaint);
+      }
+
       if (rotated) {
         renderer_.currentCanvas_->restore();
       }

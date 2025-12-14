@@ -11,9 +11,16 @@ using Params = ImageComparisonParams;
 
 namespace {
 
+ImageComparisonParams defaultResvgParams() {
+  ImageComparisonParams params;
+  // TODO(jwm): Debug why font resolution isn't working on some e-text textcases.
+  params.setFallbackFontFamily("Noto Sans");
+  return params;
+}
+
 std::vector<ImageComparisonTestcase> getTestsWithPrefix(
     const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {},
-    ImageComparisonParams defaultParams = {}) {
+    ImageComparisonParams defaultParams = defaultResvgParams()) {
   const std::string kSvgDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "svg");
 
   // Copy into a vector and sort the tests.
@@ -28,6 +35,9 @@ std::vector<ImageComparisonTestcase> getTestsWithPrefix(
       // Set special-case params.
       if (auto it = overrides.find(filename); it != overrides.end()) {
         test.params = it->second;
+        if (!test.params.fallbackFontFamily && defaultParams.fallbackFontFamily) {
+          test.params.fallbackFontFamily = defaultParams.fallbackFontFamily;
+        }
       }
 
       // Always set the canvas size to 500x500 for these tests.
@@ -459,7 +469,46 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-// TODO(text): e-text-
+INSTANTIATE_TEST_SUITE_P(
+    Text, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-text-",
+        {
+            {"e-text-002.svg", Params::Skip()},  // Not impl: Multiple x/y values
+            {"e-text-003.svg", Params::Skip()},  // Not impl: Multiple x/y values
+            {"e-text-004.svg", Params::Skip()},  // Not impl: Multiple x/y values
+            {"e-text-006.svg", Params::Skip()},  // Not impl: `dx` attribute
+            {"e-text-007.svg", Params::Skip()},  // Not impl: `dx` attribute
+            {"e-text-008.svg", Params::Skip()},  // Not impl: `dx` attribute
+            {"e-text-010.svg", Params::Skip()},  // Not impl: `dy` attribute
+            {"e-text-011.svg", Params::Skip()},  // Not impl: `dy` attribute
+            {"e-text-012.svg", Params::Skip()},  // Not impl: `rotate` attribute
+            {"e-text-013.svg", Params::Skip()},  // Not impl: `rotate` attribute
+            {"e-text-014.svg", Params::Skip()},  // Not impl: `rotate` attribute
+            {"e-text-016.svg", Params::Skip()},  // Not impl: `textLength` attribute
+            {"e-text-018.svg", Params::Skip()},  // Not impl: `writing-mode`
+            {"e-text-022.svg", Params::Skip()},  // Not impl: `text-anchor="end"`
+            {"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
+            {"e-text-024.svg", Params::Skip()},  // Not impl: `word-spacing`
+            {"e-text-025.svg", Params::Skip()},  // Not impl: `text-decoration`
+            {"e-text-026.svg", Params::Skip()},  // Not impl: `text-decoration`
+            {"e-text-027.svg", Params::Skip()},  // Not impl: Color emoji font (Noto Color Emoji)
+            {"e-text-028.svg", Params::Skip()},  // Not impl: `font-weight`
+            {"e-text-029.svg", Params::Skip()},  // Not impl: `font-style`
+            {"e-text-030.svg", Params::Skip()},  // Not impl: `font-variant`
+            {"e-text-031.svg", Params::Skip()},  // Not impl: Vertical text / writing-mode
+            {"e-text-033.svg", Params::Skip()},  // Not impl: Vertical text / writing-mode
+            {"e-text-034.svg", Params::Skip()},  // Not impl: `baseline-shift`
+            {"e-text-035.svg", Params::Skip()},  // Not impl: `baseline-shift`
+            {"e-text-036.svg", Params::Skip()},  // Not impl: `alignment-baseline`
+            {"e-text-038.svg", Params::Skip()},  // Not impl: `dominant-baseline`
+            {"e-text-040.svg", Params::Skip()},  // Not impl: <tspan>
+            {"e-text-041.svg", Params::Skip()},  // Not impl: <tspan>
+            {"e-text-042.svg", Params::Skip()},  // Not impl: <textPath>
+            {"e-text-043.svg", Params::Skip()},  // Not impl: <textPath>
+        })),
+    TestNameFromFilename);
+
 // TODO(text): e-textPath
 // TODO(text): e-tspan
 
