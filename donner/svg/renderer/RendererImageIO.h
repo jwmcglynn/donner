@@ -23,6 +23,19 @@ public:
    */
   static bool writeRgbaPixelsToPngFile(const char* filename, std::span<const uint8_t> rgbaPixels,
                                        int width, int height, size_t strideInPixels = 0);
+
+  /**
+   * Write raw RGBA pixel data to a PNG in memory.
+   *
+   * @param rgbaPixels Span containing RGBA-ordered pixel data.
+   * @param width Width of the image.
+   * @param height Height of the image.
+   * @param strideInPixels Stride in pixels. Defaults to 0, which assumes a stride of width.
+   * @returns Vector containing the PNG-encoded data.
+   */
+  static std::vector<uint8_t> writeRgbaPixelsToPngMemory(std::span<const uint8_t> rgbaPixels,
+                                                          int width, int height,
+                                                          size_t strideInPixels = 0);
 };
 
 }  // namespace donner::svg

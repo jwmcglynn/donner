@@ -66,4 +66,27 @@ ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String
   return decodedData;
 }
 
+std::string EncodeBase64Data(std::span<const uint8_t> data) {
+  constexpr std::string_view base64Chars =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+  std::string encoded;
+  encoded.reserve(((data.size() + 2) / 3) * 4);
+
+  for (size_t i = 0; i < data.size(); i += 3) {
+    const uint32_t byte1 = data[i];
+    const uint32_t byte2 = (i + 1 < data.size()) ? data[i + 1] : 0;
+    const uint32_t byte3 = (i + 2 < data.size()) ? data[i + 2] : 0;
+
+    const uint32_t triple = (byte1 << 16) | (byte2 << 8) | byte3;
+
+    encoded.push_back(base64Chars[(triple >> 18) & 0x3F]);
+    encoded.push_back(base64Chars[(triple >> 12) & 0x3F]);
+    encoded.push_back((i + 1 < data.size()) ? base64Chars[(triple >> 6) & 0x3F] : '=');
+    encoded.push_back((i + 2 < data.size()) ? base64Chars[triple & 0x3F] : '=');
+  }
+
+  return encoded;
+}
+
 }  // namespace donner

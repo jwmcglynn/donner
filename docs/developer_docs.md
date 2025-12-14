@@ -11,5 +11,6 @@
 - \subpage BuildingDonner
 - \subpage Maintenance
 - \subpage Devtools
+- \subpage TerminalImageViewerGuide
 - \subpage ReSvgTestSuite
 - \subpage DataFormats

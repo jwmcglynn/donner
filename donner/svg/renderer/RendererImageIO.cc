@@ -37,4 +37,29 @@ bool RendererImageIO::writeRgbaPixelsToPngFile(const char* filename,
   return context.output.good();
 }
 
+std::vector<uint8_t> RendererImageIO::writeRgbaPixelsToPngMemory(
+    std::span<const uint8_t> rgbaPixels, int width, int height, size_t strideInPixels) {
+  struct Context {
+    std::vector<uint8_t> buffer;
+  };
+
+  assert(width > 0);
+  assert(height > 0);
+  assert(strideInPixels <= std::numeric_limits<int>::max() / 4);
+  assert(rgbaPixels.size() == static_cast<size_t>(width) * height * 4);
+
+  Context context;
+
+  stbi_write_png_to_func(
+      [](void* context, void* data, int len) {
+        Context* contextObj = static_cast<Context*>(context);
+        const uint8_t* bytes = static_cast<const uint8_t*>(data);
+        contextObj->buffer.insert(contextObj->buffer.end(), bytes, bytes + len);
+      },
+      &context, width, height, 4, rgbaPixels.data(),
+      /* stride in bytes */ strideInPixels ? static_cast<int>(strideInPixels * 4) : width * 4);
+
+  return context.buffer;
+}
+
 }  // namespace donner::svg
