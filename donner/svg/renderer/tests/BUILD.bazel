@@ -36,6 +36,7 @@ cc_library(
         "@pixelmatch-cpp17",
         "@stb//:image",
     ],
+    visibility = ["//visibility:public"],
 )
 
 cc_test(

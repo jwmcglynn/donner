@@ -1,19 +1,131 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("//build_defs:rules.bzl", "donner_cc_library")
+
+bool_flag(
+    name = "enable_sse2",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
+    name = "enable_avx2",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
+    name = "enable_neon",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "sse2_enabled",
+    flag_values = {":enable_sse2": "true"},
+)
+
+config_setting(
+    name = "avx2_enabled",
+    flag_values = {":enable_avx2": "true"},
+)
+
+config_setting(
+    name = "neon_enabled",
+    flag_values = {":enable_neon": "true"},
+)
 
 donner_cc_library(
     name = "tiny_skia_cpp",
     srcs = [
+        "AlphaRuns.cc",
+        "BlendMode.cc",
         "Canvas.cc",
+        "CpuFeatures.cc",
+        "ImageIO.cc",
+        "Mask.cc",
+        "Paint.cc",
+        "Painter.cc",
+        "PathGeometry.cc",
         "Pixmap.cc",
+        "Rasterizer.cc",
+        "Shader.cc",
+        "Stroke.cc",
+        "Wide.cc",
     ],
     hdrs = [
+        "AlphaRuns.h",
+        "BlendMode.h",
         "Canvas.h",
+        "CpuFeatures.h",
         "Color.h",
+        "Expected.h",
+        "ImageIO.h",
+        "Mask.h",
+        "Paint.h",
+        "Painter.h",
+        "PathGeometry.h",
         "Pixmap.h",
+        "Rasterizer.h",
+        "Shader.h",
+        "Stroke.h",
         "Transform.h",
+        "Wide.h",
     ],
+    copts = select({
+        ":avx2_enabled": ["-mavx2", "-DDONNER_ENABLE_TINY_SKIA_AVX2", "-DDONNER_ENABLE_TINY_SKIA_SSE2"],
+        ":sse2_enabled": ["-msse2", "-DDONNER_ENABLE_TINY_SKIA_SSE2"],
+        ":neon_enabled": ["-DDONNER_ENABLE_TINY_SKIA_NEON"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         "//donner/base",
+        "//donner/svg/core",
+        "@stb//:image",
+        "@stb//:image_write",
     ],
+)
+
+cc_test(
+    name = "tiny_skia_cpp_tests",
+    srcs = [
+        "AlphaRuns_tests.cc",
+        "BlendMode_tests.cc",
+        "Canvas_tests.cc",
+        "CpuFeatures_tests.cc",
+        "Mask_tests.cc",
+        "Paint_tests.cc",
+        "Painter_tests.cc",
+        "PathGeometry_tests.cc",
+        "Rasterizer_tests.cc",
+        "Shader_tests.cc",
+        "Stroke_tests.cc",
+        "Wide_tests.cc",
+    ],
+    deps = [
+        ":tiny_skia_cpp",
+        "//donner/base",
+        "//donner/svg/core",
+        "@bazel_tools//tools/cpp/runfiles",
+        "@com_google_gtest//:gtest_main",
+        "@stb//:image",
+        "@stb//:image_write",
+    ],
+    data = [
+        "//third_party/tiny-skia/tests/images:gradient_goldens",
+        "//third_party/tiny-skia/tests/images:mask_goldens",
+        "//third_party/tiny-skia/tests/images:canvas_goldens",
+        "//third_party/tiny-skia/tests/images:stroke_goldens",
+    ],
+)
+
+cc_binary(
+    name = "tiny_skia_cpp_benchmarks",
+    srcs = ["Benchmarks.cc"],
+    deps = [
+        ":tiny_skia_cpp",
+        "//donner/base",
+        "//donner/svg/core",
+    ],
+    tags = ["manual"],
 )

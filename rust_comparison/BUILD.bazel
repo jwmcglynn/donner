@@ -1,0 +1,40 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_static_library")
+
+rust_static_library(
+    name = "tiny_skia_rust",
+    srcs = ["src/lib.rs"],
+    edition = "2021",
+    deps = [
+        "@crates//:tiny-skia",
+    ],
+)
+
+rust_binary(
+    name = "tiny_skia_rust_png",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    deps = [":tiny_skia_rust"],
+)
+
+cc_library(
+    name = "tiny_skia_rust_ffi",
+    hdrs = ["rust_ffi.h"],
+    deps = [":tiny_skia_rust"],
+    alwayslink = True,
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "tiny_skia_parity_tests",
+    srcs = ["tiny_skia_parity_tests.cc"],
+    copts = ["-std=c++20"],
+    deps = [
+        ":tiny_skia_rust_ffi",
+        "@com_google_gtest//:gtest_main",
+        "@donner//donner/backends/tiny_skia_cpp:tiny_skia_cpp",
+        "@donner//donner/base",
+        "@donner//donner/svg/core",
+        "@donner//donner/svg/renderer/tests:image_comparison_test_fixture",
+    ],
+)
