@@ -1,8 +1,9 @@
 #include "donner/svg/components/shape/CircleComponent.h"
 
-#include <frozen/string.h>
-#include <frozen/unordered_map.h>
+#include <array>
+#include <string_view>
 
+#include "donner/base/CompileTimeMap.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
@@ -13,8 +14,8 @@ namespace {
 using CirclePresentationAttributeParseFn = std::optional<ParseError> (*)(
     CircleProperties& properties, const parser::PropertyParseFnParams& params);
 
-static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttributeParseFn, 3>
-    kProperties = {
+constexpr std::array<std::pair<std::string_view, CirclePresentationAttributeParseFn>, 3>
+    kPropertyEntries{{
         {"cx",
          [](CircleProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -23,7 +24,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
                  return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cx);
-         }},  //
+         }},
         {"cy",
          [](CircleProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -32,7 +33,7 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
                  return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.cy);
-         }},  //
+         }},
         {"r",
          [](CircleProperties& properties, const parser::PropertyParseFnParams& params) {
            return Parse(
@@ -41,9 +42,10 @@ static constexpr frozen::unordered_map<frozen::string, CirclePresentationAttribu
                  return parser::ParseLengthPercentage(params.components(), params.allowUserUnits());
                },
                &properties.r);
-         }}  //
+         }},
+    }};
 
-};
+constexpr auto kProperties = makeCompileTimeMap(kPropertyEntries);
 
 }  // namespace
 
@@ -53,11 +55,13 @@ ComputedCircleComponent::ComputedCircleComponent(
     std::vector<ParseError>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
-    const auto it = kProperties.find(frozen::string(name));
-    if (it != kProperties.end()) {
-      auto maybeError = it->second(properties, parser::PropertyParseFnParams::Create(
-                                                   property.declaration, property.specificity,
-                                                   parser::PropertyParseBehavior::AllowUserUnits));
+    const CirclePresentationAttributeParseFn* parseFn =
+        kProperties.find(static_cast<std::string_view>(name));
+    if (parseFn != nullptr) {
+      auto maybeError =
+          (*parseFn)(properties, parser::PropertyParseFnParams::Create(
+                         property.declaration, property.specificity,
+                         parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError && outWarnings) {
         outWarnings->emplace_back(std::move(maybeError.value()));
       }
@@ -72,11 +76,12 @@ namespace donner::svg::parser {
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  const auto it = components::kProperties.find(frozen::string(name));
-  if (it != components::kProperties.end()) {
+  const components::CirclePresentationAttributeParseFn* parseFn =
+      components::kProperties.find(name);
+  if (parseFn != nullptr) {
     components::CircleProperties& properties =
         handle.get_or_emplace<components::CircleComponent>().properties;
-    auto maybeError = it->second(properties, params);
+    auto maybeError = (*parseFn)(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
     } else {
