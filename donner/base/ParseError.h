@@ -3,6 +3,7 @@
 
 #include <ostream>
 
+#include "donner/base/CompilerConfig.h"
 #include "donner/base/FileOffset.h"
 #include "donner/base/RcString.h"
 

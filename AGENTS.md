@@ -1,6 +1,6 @@
 # AGENT Instructions for Donner Repository
 
-This repository contains the Donner SVG project written in modern C++20.
+This repository contains the Donner SVG project written in modern C++23.
 
 The bulk of the source lives in the `donner/` directory.
 The `.roo/rules` directory provides condensed guidelines on coding style, architecture, and the rendering pipeline.

@@ -10,8 +10,9 @@ namespace donner {
 
 /**
  * Selectors may need to traverse the tree in different ways to match, and this is abstracted away
- * using C++20 coroutines. Each traversal order is a coroutine that yields elements lazily, so that
- * the tree is traversed only as far as necessary.
+ * using coroutines (C++20 in the standard, available in our C++23 baseline). Each traversal order
+ * is a coroutine that yields elements lazily, so that the tree is traversed only as far as
+ * necessary.
  *
  * @see singleElementGenerator
  * @see parentsGenerator

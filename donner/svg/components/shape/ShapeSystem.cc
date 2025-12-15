@@ -1,6 +1,7 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 
 #include <concepts>
+#include <optional>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -305,12 +306,10 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (path.splineOverride) {
     return &handle.emplace_or_replace<ComputedPathComponent>(path.splineOverride.value());
   } else if (actualD.hasValue()) {
-    auto maybePath = parser::PathParser::Parse(actualD.get().value());
-    if (maybePath.hasError()) {
-      // Propagate warnings, which may be set on success too.
-      if (outWarnings) {
-        outWarnings->emplace_back(std::move(maybePath.error()));
-      }
+    std::optional<ParseError> pathWarning;
+    auto maybePath = parser::PathParser::Parse(actualD.get().value(), &pathWarning);
+    if (pathWarning.has_value() && outWarnings != nullptr) {
+      outWarnings->emplace_back(std::move(pathWarning.value()));
     }
 
     if (maybePath.hasResult() && !maybePath.result().empty()) {

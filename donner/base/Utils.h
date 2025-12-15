@@ -4,6 +4,8 @@
 #include <cassert>
 #include <cstdio>
 
+#include "donner/base/CompilerConfig.h"
+
 #ifndef DOXYGEN_SHOULD_SKIP_THIS
 
 #ifndef __has_cpp_attribute

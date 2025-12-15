@@ -1,6 +1,7 @@
 #include "donner/svg/parser/PathParser.h"
 
 #include <array>
+#include <optional>
 #include <span>
 
 #include "donner/base/parser/NumberParser.h"
@@ -22,7 +23,8 @@ public:
    *
    * @param d The string to parse.
    */
-  explicit PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}
+  PathParserImpl(std::string_view d, std::optional<ParseError>* outWarning)
+      : d_(d), remaining_(d), outWarning_(outWarning) {}
 
   /**
    * Parse the path data.
@@ -42,7 +44,7 @@ public:
 
       ParseResult<TokenCommand> maybeCommand = readCommand();
       if (maybeCommand.hasError()) {
-        return ParseResult(std::move(spline_), std::move(maybeCommand.error()));
+        return returnWithError(std::move(maybeCommand.error()));
       }
 
       const TokenCommand command = maybeCommand.result();
@@ -50,11 +52,11 @@ public:
         ParseError err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
         err.location = sourceOffset;
-        return ParseResult(std::move(spline_), std::move(err));
+        return returnWithError(std::move(err));
       }
 
       if (auto error = processUntilNextCommand(command)) {
-        return ParseResult(std::move(spline_), std::move(error.value()));
+        return returnWithError(std::move(error.value()));
       }
       skipWhitespace();
     }
@@ -68,7 +70,7 @@ public:
       const TokenCommand command = maybeCommand.result();
       std::optional<ParseError> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
-        return ParseResult(std::move(spline_), std::move(maybeError.value()));
+        return returnWithError(std::move(maybeError.value()));
       }
     }
 
@@ -478,6 +480,15 @@ private:
     return lastToken_ == Token::QuadCurveTo || lastToken_ == Token::SmoothQuadCurveTo;
   }
 
+  ParseResult<PathSpline> returnWithError(ParseError err) {
+    if (outWarning_ != nullptr) {
+      outWarning_->emplace(std::move(err));
+      return std::move(spline_);
+    }
+
+    return err;
+  }
+
   PathSpline spline_;
 
   std::string_view d_;
@@ -488,12 +499,14 @@ private:
   Vector2d initialPoint_;      //!< Initial point, used for ClosePath operations.
   Vector2d currentPoint_;      //!< Current point.
   Vector2d prevControlPoint_;  //!< Previous curve's control point, for use with smooth curves.
+
+  std::optional<ParseError>* outWarning_;
 };
 
 }  // namespace
 
-ParseResult<PathSpline> PathParser::Parse(std::string_view d) {
-  PathParserImpl parser(d);
+ParseResult<PathSpline> PathParser::Parse(std::string_view d, std::optional<ParseError>* outWarning) {
+  PathParserImpl parser(d, outWarning);
   return parser.parse();
 }
 

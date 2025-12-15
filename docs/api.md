@@ -42,7 +42,7 @@ flowchart TD
 
 - Donner does not use C++ exceptions.
 
-- `std::optional` and \ref donner::ParseResult are used to return values from functions. This allows the caller to check for errors and handle them as needed. `ParseResult` behaves similarly to `std::expected` (new in C++23), and may be replaced with it in the future.
+- `std::optional` and \ref donner::ParseResult are used to return values from functions. This allows the caller to check for errors and handle them as needed. With the C++23 baseline, new code should prefer `std::expected` directly, and `ParseResult` will migrate to it.
 
 - Callers can `if` init-statements to check for success:
 
@@ -52,9 +52,9 @@ flowchart TD
   }
   ```
 
-### C++20 design patterns
+### C++23 design patterns
 
-- Donner uses C++20 features such as concepts when possible to improve usability and readability.
+- Donner uses C++23 features such as concepts and standard vocabulary types to improve usability and readability.
 
 - For example, the \ref donner::ElementLike concept is used to make the CSS library usable without depending on the SVG library, or within a test context with \ref donner::FakeElement.
 
