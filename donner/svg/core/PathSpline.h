@@ -11,6 +11,9 @@
 
 namespace donner::svg {
 
+enum class PathBooleanOp;
+class PathBooleanEngine;
+
 /**
  * Container for a spline, which is a series of points connected by lines and curves.
  *
@@ -307,6 +310,46 @@ public:
    * @param strokeWidth Width of the stroke.
    */
   bool isOnPath(const Vector2d& point, double strokeWidth) const;
+
+  /**
+   * Execute a Boolean operation between two PathSplines using the provided engine.
+   */
+  static PathSpline BooleanOp(const PathSpline& subject, const PathSpline& clip, PathBooleanOp op,
+                              FillRule subjectFillRule, FillRule clipFillRule,
+                              PathBooleanEngine& engine, double tolerance = 0.25);
+
+  /**
+   * Convenience wrapper for union between this path and another.
+   */
+  PathSpline booleanUnion(const PathSpline& other, FillRule subjectFillRule, FillRule clipFillRule,
+                          PathBooleanEngine& engine, double tolerance = 0.25) const;
+
+  /**
+   * Convenience wrapper for intersection between this path and another.
+   */
+  PathSpline booleanIntersection(const PathSpline& other, FillRule subjectFillRule,
+                                 FillRule clipFillRule, PathBooleanEngine& engine,
+                                 double tolerance = 0.25) const;
+
+  /**
+   * Convenience wrapper for subtracting another path from this path.
+   */
+  PathSpline booleanDifference(const PathSpline& other, FillRule subjectFillRule,
+                               FillRule clipFillRule, PathBooleanEngine& engine,
+                               double tolerance = 0.25) const;
+
+  /**
+   * Convenience wrapper for subtracting this path from another path.
+   */
+  PathSpline booleanReverseDifference(const PathSpline& other, FillRule subjectFillRule,
+                                      FillRule clipFillRule, PathBooleanEngine& engine,
+                                      double tolerance = 0.25) const;
+
+  /**
+   * Convenience wrapper for xor between this path and another.
+   */
+  PathSpline booleanXor(const PathSpline& other, FillRule subjectFillRule, FillRule clipFillRule,
+                        PathBooleanEngine& engine, double tolerance = 0.25) const;
 
   /**
    * Ostream output operator, outputs a human-readable representation of the spline.
