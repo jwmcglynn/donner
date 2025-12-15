@@ -83,7 +83,7 @@ The API takes a principled approach, focusing on:
 
 - Minimal memory allocations
 - Clean error propagation (`std::expected`-inspired)
-- High usability with C++20 features such as concepts
+- High usability with C++23 features such as concepts and `std::expected`
 
 See \ref DonnerAPI for more details.
 

@@ -2,7 +2,7 @@
 
 \tableofcontents
 
-Donner is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
+Donner is an under-development modern C++23 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
 
 \htmlonly <style>img[src="donner_splash.svg"]{max-width:800px;}</style> \endhtmlonly
 ![Donner splash image](donner_splash.svg)

@@ -42,14 +42,14 @@ public:
 
       auto maybeX = readNumber();
       if (maybeX.hasError()) {
-        return resultAndError(std::move(maybeX.error()));
+        return std::move(maybeX.error());
       }
 
       skipCommaWhitespace();
 
       auto maybeY = readNumber();
       if (maybeY.hasError()) {
-        return resultAndError(std::move(maybeY.error()));
+        return std::move(maybeY.error());
       }
 
       points_.emplace_back(maybeX.result(), maybeY.result());
@@ -59,10 +59,6 @@ public:
   }
 
 private:
-  ParseResult<std::vector<Vector2d>> resultAndError(ParseError&& error) {
-    return ParseResult<std::vector<Vector2d>>(std::move(points_), std::move(error));
-  }
-
   std::vector<Vector2d> points_;
 };
 

@@ -156,8 +156,8 @@ MATCHER(ParseErrorEndOfString, "") {
 }
 
 /**
- * Matches if a ParseResult contains a result that matches the given value, and that it does not
- * contain an error.
+  * Matches if a ParseResult contains a result that matches the given value, and that it does not
+  * contain an error.
  *
  * @param resultMatcher Value to match with.
  */
@@ -167,22 +167,6 @@ MATCHER_P(ParseResultIs, resultMatcher, "") {
   }
 
   return testing::ExplainMatchResult(resultMatcher, arg.result(), result_listener);
-}
-
-/**
- * Matches if a ParseResult contains a result that matches the given value, and that it does not
- * contain an error.
- *
- * @param resultMatcher Result to match with.
- * @param errorMessageMatcher Parse error message to match with, either a string or a gmock matcher.
- */
-MATCHER_P2(ParseResultAndError, resultMatcher, errorMessageMatcher, "") {
-  if (!arg.hasResult() || !arg.hasError()) {
-    return false;
-  }
-
-  return testing::ExplainMatchResult(resultMatcher, arg.result(), result_listener) &&
-         testing::ExplainMatchResult(errorMessageMatcher, arg.error(), result_listener);
 }
 
 }  // namespace donner

@@ -4,7 +4,7 @@ This document summarizes the main points from the full [Coding Style Guide](../.
 
 ## Core Principles
 
-*   **Baseline:** Follows [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) with modifications for SVG naming conventions and C++20 features.
+*   **Baseline:** Follows [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) with modifications for SVG naming conventions and C++23 features.
 *   **Namespace:** All code resides within the `donner` namespace and its sub-namespaces (e.g., `donner::svg`).
 
 ## File Structure and Naming
