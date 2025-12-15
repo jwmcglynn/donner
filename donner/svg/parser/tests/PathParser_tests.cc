@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
+
+#include "donner/base/ParseError.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/core/tests/PathSplineTestUtils.h"
@@ -73,20 +76,41 @@ TEST(PathParser, MoveTo) {
 TEST(PathParser, ParseErrors) {
   // Comma before a command is a parse error.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M0,0,Z");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0,Z", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Unexpected ',' before command")));
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+
+    EXPECT_THAT(parseWarning, ParseErrorIs("Unexpected ',' before command"));
   }
 
   // Unexpected tokens.
   EXPECT_THAT(PathParser::Parse("b"), ParseErrorIs("Unexpected token 'b' in path data"));
 
   // Until a valid command is received, the next argument is interpreted as a number.
-  EXPECT_THAT(PathParser::Parse("M 0 0 b"),
-              ParseErrorIs("Failed to parse number: Unexpected character"));
+  {
+    std::optional<ParseError> parseWarning;
+    EXPECT_THAT(PathParser::Parse("M 0 0 b", &parseWarning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected character"));
+  }
+}
+
+TEST(PathParser, WarningReturnsPartialPath) {
+  std::optional<ParseError> warning;
+  ParseResult<PathSpline> result = PathParser::Parse("M0,0,Z", &warning);
+
+  ASSERT_TRUE(result.hasResult());
+  ASSERT_TRUE(warning.has_value());
+
+  const PathSpline& spline = result.result();
+  EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero()));
+  EXPECT_THAT(spline.commands(), ElementsAre(Command{CommandType::MoveTo, 0}));
+  EXPECT_THAT(warning, ParseErrorIs("Unexpected ',' before command"));
 }
 
 TEST(PathParser, ClosePath) {
@@ -147,24 +171,28 @@ TEST(PathParser, ClosePath) {
 TEST(PathParser, ClosePathParseErrors) {
   // Comma at end is a parse error.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z,");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z,", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0},
-                                                             Command{CommandType::ClosePath, 0})),
-                            ParseErrorIs("Unexpected ',' at end of string")));
+    EXPECT_THAT(
+        result,
+        ParseResultIs(PointsAndCommandsAre(
+            ElementsAre(Vector2d::Zero()),
+            ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Unexpected ',' at end of string"));
   }
 
   // No numbers at end, there is no implicit command after.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z1");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z1", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0},
-                                                             Command{CommandType::ClosePath, 0})),
-                            ParseErrorIs("Expected command")));
+    EXPECT_THAT(
+        result,
+        ParseResultIs(PointsAndCommandsAre(
+            ElementsAre(Vector2d::Zero()),
+            ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Expected command"));
   }
 }
 
@@ -232,10 +260,32 @@ TEST(PathParser, LineTo) {
 }
 
 TEST(PathParser, LineToImplicit) {
-  EXPECT_THAT(PathParser::Parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::Parse("M0,0 1"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::Parse("M0,0 1,"), ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::Parse("M0,0 1, "), ParseErrorIs(HasSubstr("Failed to parse number")));
+  {
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0 1", &parseWarning);
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs(HasSubstr("Failed to parse number")));
+  }
+
+  {
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0 1,", &parseWarning);
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs(HasSubstr("Failed to parse number")));
+  }
+
+  {
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M0,0 1, ", &parseWarning);
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs(HasSubstr("Failed to parse number")));
+  }
   EXPECT_THAT(PathParser::Parse("M0,0 1,1"), NoParseError());
 
   // Uppercase M -> absolute LineTo
@@ -263,23 +313,27 @@ TEST(PathParser, LineToImplicit) {
 
 TEST(PathParser, LineToPartialParse) {
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3,");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3,", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
-                                                ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
-                                                ElementsAre(Command{CommandType::MoveTo, 0},
-                                                            Command{CommandType::LineTo, 1})),
-                                            ParseErrorIs("Unexpected ',' at end of string")));
+    EXPECT_THAT(
+        result,
+        ParseResultIs(PointsAndCommandsAre(
+            ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
+            ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Unexpected ',' at end of string"));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3, 4,");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3, 4,", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
-                                                ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
-                                                ElementsAre(Command{CommandType::MoveTo, 0},
-                                                            Command{CommandType::LineTo, 1})),
-                                            ParseErrorIs(HasSubstr("Failed to parse number"))));
+    EXPECT_THAT(
+        result,
+        ParseResultIs(PointsAndCommandsAre(
+            ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
+            ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs(HasSubstr("Failed to parse number")));
   }
 }
 
@@ -350,31 +404,35 @@ TEST(PathParser, HorizontalLineTo) {
 
 TEST(PathParser, HorizontalLineToParseError) {
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1 h1,");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M1,1 h1,", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
-                                                ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0)),
-                                                ElementsAre(Command{CommandType::MoveTo, 0},
-                                                            Command{CommandType::LineTo, 1})),
-                                            ParseErrorIs("Unexpected ',' at end of string")));
+    EXPECT_THAT(
+        result,
+        ParseResultIs(PointsAndCommandsAre(
+            ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0)),
+            ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Unexpected ',' at end of string"));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected end of string"));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h,");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h,", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected character"));
   }
 }
 
@@ -402,21 +460,23 @@ TEST(PathParser, VerticalLineTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected end of string"));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v,");
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v,", &parseWarning);
 
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected character")));
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected character"));
   }
 
   // Chain between multiple types.
@@ -478,19 +538,22 @@ TEST(PathParser, CurveTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M100,200 C100");
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M100,200 C100", &parseWarning);
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected end of string"));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M100,200 S100");
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M100,200 S100", &parseWarning);
+
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected end of string"));
   }
 }
 
@@ -511,19 +574,21 @@ TEST(PathParser, QuadCurveTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M200,300 Q400,50 600,");
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M200,300 Q400,50 600,", &parseWarning);
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected end of string"));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M200,300 T400");
-    EXPECT_THAT(result, ParseResultAndError(
-                            PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
-                                                 ElementsAre(Command{CommandType::MoveTo, 0})),
-                            ParseErrorIs("Failed to parse number: Unexpected end of string")));
+    std::optional<ParseError> parseWarning;
+    ParseResult<PathSpline> result = PathParser::Parse("M200,300 T400", &parseWarning);
+    EXPECT_THAT(result,
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(parseWarning, ParseErrorIs("Failed to parse number: Unexpected end of string"));
   }
 }
 
@@ -627,28 +692,68 @@ TEST(PathParser, EllipticalArtOutOfRangeRadii) {
 
 TEST(PathParser, EllipticalArcParsing) {
   // Missing rotation.
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150"),
-              ParseErrorIs(HasSubstr("Failed to parse number")));
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs(HasSubstr("Failed to parse number")));
+  }
 
   // Missing flag.
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0"),
-              ParseErrorIs("Unexpected end of string when parsing flag"));
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0,"),
-              ParseErrorIs("Unexpected end of string when parsing flag"));
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs("Unexpected end of string when parsing flag"));
+  }
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0,", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs("Unexpected end of string when parsing flag"));
+  }
 
   // Invalid flag.
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 a"),
-              ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2"),
-              ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 1 a"),
-              ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 a", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
+  }
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
+  }
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 1 a", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs(HasSubstr("Unexpected character when parsing flag")));
+  }
 
   // Missing end point.
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 0,0"),
-              ParseErrorIs(HasSubstr("Failed to parse number")));
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 0,0 150"),
-              ParseErrorIs(HasSubstr("Failed to parse number")));
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 0,0", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs(HasSubstr("Failed to parse number")));
+  }
+  {
+    std::optional<ParseError> warning;
+    EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 0,0 150", &warning),
+                ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
+                                                   ElementsAre(Command{CommandType::MoveTo, 0}))));
+    EXPECT_THAT(warning, ParseErrorIs(HasSubstr("Failed to parse number")));
+  }
 
   // No whitespace.
   EXPECT_THAT(PathParser::Parse("M0,0 a150,150,0,0,0,150,150"), NoParseError());

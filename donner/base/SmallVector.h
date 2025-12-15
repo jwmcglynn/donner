@@ -362,7 +362,7 @@ private:
    * Union to store the data for the vector.
    */
   union Data {
-    std::array<std::aligned_storage_t<sizeof(T), alignof(T)>, DefaultSize>
+    alignas(T) std::array<std::byte, sizeof(T) * DefaultSize>
         shortData;  //!< Data storage for small vectors.
     T* longData;    //!< Data storage for large vectors.
 

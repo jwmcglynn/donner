@@ -1,47 +1,45 @@
 #pragma once
 /// @file
 
-#include <optional>
+#include <expected>
+#include <utility>
 
+#include "donner/base/CompilerConfig.h"  // IWYU pragma: keep, used for clang version check
 #include "donner/base/ParseError.h"
 #include "donner/base/Utils.h"
 
 namespace donner {
 
 /**
- * A parser result, which may contain a result of type \a T, or an error, or both.
+ * A parser result backed by `std::expected`, containing either a value of type \a T or a
+ * \ref ParseError.
  *
  * @tparam T Result type.
  */
 template <typename T>
 class ParseResult {
 public:
-  /**
-   * Construct from a successful result.
-   */
-  /* implicit */ ParseResult(T&& result) : result_(std::move(result)) {}
+  using ExpectedType = std::expected<T, ParseError>;
 
   /**
    * Construct from a successful result.
    */
-  /* implicit */ ParseResult(const T& result) : result_(result) {}
+  /* implicit */ ParseResult(T&& result) : expected_(std::move(result)) {}
+
+  /**
+   * Construct from a successful result.
+   */
+  /* implicit */ ParseResult(const T& result) : expected_(result) {}
 
   /**
    * Construct from an error.
    */
-  /* implicit */ ParseResult(ParseError&& error) : error_(std::move(error)) {}
+  /* implicit */ ParseResult(ParseError&& error) : expected_(std::unexpected(std::move(error))) {}
 
   /**
    * Construct from an error by value.
    */
-  /* implicit */ ParseResult(const ParseError& error) : error_(error) {}
-
-  /**
-   * Return a result, but also an error. Used in the case where partial parse results may be
-   * returned.
-   */
-  ParseResult(T&& result, ParseError&& error)
-      : result_(std::move(result)), error_(std::move(error)) {}
+  /* implicit */ ParseResult(const ParseError& error) : expected_(std::unexpected(error)) {}
 
   /**
    * Returns the contained result.
@@ -50,7 +48,7 @@ public:
    */
   T& result() & {
     UTILS_RELEASE_ASSERT(hasResult());
-    return result_.value();
+    return expected_.value();
   }
 
   /**
@@ -60,7 +58,7 @@ public:
    */
   T&& result() && {
     UTILS_RELEASE_ASSERT(hasResult());
-    return std::move(result_.value());
+    return std::move(expected_.value());
   }
 
   /**
@@ -70,7 +68,7 @@ public:
    */
   const T& result() const& {
     UTILS_RELEASE_ASSERT(hasResult());
-    return result_.value();
+    return expected_.value();
   }
 
   /**
@@ -80,7 +78,7 @@ public:
    */
   ParseError& error() & {
     UTILS_RELEASE_ASSERT(hasError());
-    return error_.value();
+    return expected_.error();
   }
 
   /**
@@ -90,7 +88,7 @@ public:
    */
   ParseError&& error() && {
     UTILS_RELEASE_ASSERT(hasError());
-    return std::move(error_.value());
+    return std::move(expected_.error());
   }
 
   /**
@@ -100,14 +98,14 @@ public:
    */
   const ParseError& error() const& {
     UTILS_RELEASE_ASSERT(hasError());
-    return error_.value();
+    return expected_.error();
   }
 
   /// Returns true if this ParseResult contains a valid result.
-  bool hasResult() const noexcept { return result_.has_value(); }
+  bool hasResult() const noexcept { return expected_.has_value(); }
 
   /// Returns true if this ParseResult contains an error.
-  bool hasError() const noexcept { return error_.has_value(); }
+  bool hasError() const noexcept { return !expected_.has_value(); }
 
   /**
    * Map the result of this ParseResult to a new type, by transforming the result with the provided
@@ -120,9 +118,11 @@ public:
   template <typename Target, typename Functor>
   ParseResult<Target> map(const Functor& functor) && {
     if (hasResult()) {
-      return ParseResult<Target>(functor(std::move(result_.value())));
+      typename ParseResult<Target>::ExpectedType mapped = std::move(expected_).transform(functor);
+      return mapped.has_value() ? ParseResult<Target>(std::move(mapped).value())
+                                : ParseResult<Target>(std::move(mapped).error());
     } else {
-      return ParseResult<Target>(std::move(error_.value()));
+      return ParseResult<Target>(std::move(expected_).error());
     }
   }
 
@@ -137,15 +137,20 @@ public:
   template <typename Target, typename Functor>
   ParseResult<Target> mapError(const Functor& functor) && {
     if (hasError()) {
-      return ParseResult<Target>(functor(std::move(error_.value())));
+      typename ParseResult<Target>::ExpectedType mapped =
+          std::move(expected_).transform_error(functor);
+      return mapped.has_value() ? ParseResult<Target>(std::move(mapped).value())
+                                : ParseResult<Target>(std::move(mapped).error());
     } else {
-      return ParseResult<Target>(std::move(result_.value()));
+      return ParseResult<Target>(std::move(expected_).value());
     }
   }
 
+  /// Convert this ParseResult to an ExpectedType.
+  [[nodiscard]] ExpectedType toExpected() && { return std::move(expected_); }
+
 private:
-  std::optional<T> result_;
-  std::optional<ParseError> error_;
+  ExpectedType expected_;
 };
 
 }  // namespace donner

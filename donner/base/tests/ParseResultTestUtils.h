@@ -44,9 +44,12 @@ MATCHER(NoParseError, "") {
  * matches the given errorMessageMatcher (string or matcher).
  *
  * Outputs a readable message on mismatch, e.g.:
- *   Expected: parse error is (starts with "Unexpected")
- *   Actual: parse error reason is "Failed to parse number: not finite"
+ *   Expected: has a parse error with matching message
+ *   Actual: ParseResult { result: [...] }, has no error
  *
+ * Or on error mismatch:
+ *   Expected: has a parse error with matching message
+ *   Actual: "Unexpected token", which doesn't match the expected pattern
  *
  * Usage:
  * @code
@@ -57,8 +60,7 @@ MATCHER(NoParseError, "") {
  * @param errorMessageMatcher Matcher to match the error message against, either a string or gmock
  * matcher.
  */
-MATCHER_P(ParseErrorIs, errorMessageMatcher,
-          std::string("parse error is (") + testing::PrintToString(errorMessageMatcher) + ")") {
+MATCHER_P(ParseErrorIs, errorMessageMatcher, "has a parse error with matching message") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
   // Extract the actual error reason from arg, if present.
@@ -85,13 +87,28 @@ MATCHER_P(ParseErrorIs, errorMessageMatcher,
     }
   }
 
-  // If we found no error, fail immediately.
+  // If we found no error, fail immediately and show what was expected.
   if (!hasError) {
-    *result_listener << "which has no error at all";
+    *result_listener << "has no error, expected error message ";
+
+    // Describe what the matcher was looking for
+    std::stringstream expected;
+    testing::SafeMatcherCast<const std::string&>(errorMessageMatcher).DescribeTo(&expected);
+    *result_listener << expected.str();
+
     return false;
   }
 
-  return testing::ExplainMatchResult(errorMessageMatcher, actualReason, result_listener);
+  // Match the error message and provide readable output.
+  // ExplainMatchResult will automatically add details to result_listener on mismatch.
+  bool matches = testing::ExplainMatchResult(errorMessageMatcher, actualReason, result_listener);
+
+  // On mismatch, add what the actual error was if not already added
+  if (!matches && result_listener->stream()) {
+    *result_listener << "\nActual error: \"" << actualReason << "\"";
+  }
+
+  return matches;
 }
 
 /**
@@ -156,8 +173,8 @@ MATCHER(ParseErrorEndOfString, "") {
 }
 
 /**
- * Matches if a ParseResult contains a result that matches the given value, and that it does not
- * contain an error.
+  * Matches if a ParseResult contains a result that matches the given value, and that it does not
+  * contain an error.
  *
  * @param resultMatcher Value to match with.
  */
@@ -167,22 +184,6 @@ MATCHER_P(ParseResultIs, resultMatcher, "") {
   }
 
   return testing::ExplainMatchResult(resultMatcher, arg.result(), result_listener);
-}
-
-/**
- * Matches if a ParseResult contains a result that matches the given value, and that it does not
- * contain an error.
- *
- * @param resultMatcher Result to match with.
- * @param errorMessageMatcher Parse error message to match with, either a string or a gmock matcher.
- */
-MATCHER_P2(ParseResultAndError, resultMatcher, errorMessageMatcher, "") {
-  if (!arg.hasResult() || !arg.hasError()) {
-    return false;
-  }
-
-  return testing::ExplainMatchResult(resultMatcher, arg.result(), result_listener) &&
-         testing::ExplainMatchResult(errorMessageMatcher, arg.error(), result_listener);
 }
 
 }  // namespace donner

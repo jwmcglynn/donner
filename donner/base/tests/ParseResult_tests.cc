@@ -1,5 +1,8 @@
 #include "donner/base/ParseResult.h"
 
+#include <expected>
+#include <utility>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -68,20 +71,6 @@ TEST(ParseResult, Error) {
   EXPECT_EQ(error.reason, "Test error please ignore");
 }
 
-TEST(ParseResult, ResultAndError) {
-  ParseResult<int> result = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    return ParseResult<int>(42, std::move(error));
-  }();
-
-  EXPECT_TRUE(result.hasResult());
-  EXPECT_TRUE(result.hasError());
-
-  EXPECT_EQ(result.result(), 42);
-  EXPECT_EQ(result.error().reason, "Test error please ignore");
-}
-
 TEST(ParseResult, Map) {
   ParseResult<int> withResult = 42;
   EXPECT_THAT(std::move(withResult).map<int>([](int result) { return result * 2; }),
@@ -115,6 +104,21 @@ TEST(ParseResult, MapError) {
   EXPECT_THAT(std::move(withError).mapError<int>(mapFn), ParseErrorIs("Updated message"));
 }
 
+TEST(ParseResult, ToExpected) {
+  ParseError error;
+  error.reason = "error first";
+
+  ParseResult<int> withError = ParseError(error);
+  const auto preservedError = std::move(withError).toExpected();
+  EXPECT_FALSE(preservedError.has_value());
+  EXPECT_EQ(preservedError.error().reason, "error first");
+
+  ParseResult<int> withResult = 99;
+  const auto preservedResult = std::move(withResult).toExpected();
+  EXPECT_TRUE(preservedResult.has_value());
+  EXPECT_EQ(preservedResult.value(), 99);
+}
+
 TEST(ParseResultTestUtils, PrintTo) {
   ParseResult<int> withResult = 42;
   EXPECT_EQ(testing::PrintToString(withResult), "ParseResult { result: 42 }");
@@ -126,14 +130,6 @@ TEST(ParseResultTestUtils, PrintTo) {
   }();
   EXPECT_EQ(testing::PrintToString(withError),
             "ParseResult { error: Parse error at 0:0: Test error please ignore }");
-
-  ParseResult<int> withBoth = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    return ParseResult<int>(42, std::move(error));
-  }();
-  EXPECT_EQ(testing::PrintToString(withBoth),
-            "ParseResult { result: 42 error: Parse error at 0:0: Test error please ignore }");
 }
 
 TEST(ParseResultTestUtils, ErrorMatchers) {
@@ -169,23 +165,6 @@ TEST(ParseResultTestUtils, ResultMatchers) {
   EXPECT_THAT(withError, Not(ParseResultIs(42)));
 
   EXPECT_THAT(withResult, ParseResultIs(_));
-}
-
-TEST(ParseResultTestUtils, ResultAndErrorMatcher) {
-  ParseResult<int> withBoth = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    return ParseResult<int>(42, std::move(error));
-  }();
-
-  EXPECT_THAT(withBoth, ParseResultAndError(42, ParseErrorIs("Test error please ignore")));
-  EXPECT_THAT(withBoth, ParseResultAndError(_, _));
-
-  ParseResult<int> withResult = 42;
-  ParseResult<int> withError = ParseError();
-
-  EXPECT_THAT(withResult, Not(ParseResultAndError(_, _)));
-  EXPECT_THAT(withError, Not(ParseResultAndError(_, _)));
 }
 
 }  // namespace donner::parser

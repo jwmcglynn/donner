@@ -376,7 +376,6 @@
     "whitesmoke",
     "yellowgreen"
   ],
-  "sourcegraph.url": "http://127.0.0.1:3080",
   "cSpell.ignorePaths": [
     "package-lock.json",
     "node_modules",
@@ -393,6 +392,6 @@
     "examples/**/*",
     "tools/**/*",
   ],
-  "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.default.cppStandard": "c++23",
   "C_Cpp.codeAnalysis.clangTidy.enabled": true,
 }

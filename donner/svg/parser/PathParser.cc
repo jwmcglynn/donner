@@ -1,6 +1,7 @@
 #include "donner/svg/parser/PathParser.h"
 
 #include <array>
+#include <optional>
 #include <span>
 
 #include "donner/base/parser/NumberParser.h"
@@ -21,8 +22,17 @@ public:
    * Construct a PathParserImpl.
    *
    * @param d The string to parse.
+   * @param outWarning Optional destination for a warning emitted when parsing stops early due to
+   *                   non-critical errors. When provided, the warning message is captured here.
+   *
+   * Error handling:
+   * - **Critical errors** (e.g., invalid commands, malformed path data with no parseable content):
+   *   Returns ParseError with no result.
+   * - **Non-critical errors** (e.g., trailing invalid data after valid path commands): Returns
+   *   partial result. If `outWarning` is provided, the error details are captured there.
    */
-  explicit PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}
+  PathParserImpl(std::string_view d, std::optional<ParseError>* outWarning)
+      : d_(d), remaining_(d), outWarning_(outWarning) {}
 
   /**
    * Parse the path data.
@@ -42,7 +52,7 @@ public:
 
       ParseResult<TokenCommand> maybeCommand = readCommand();
       if (maybeCommand.hasError()) {
-        return ParseResult(std::move(spline_), std::move(maybeCommand.error()));
+        return returnEarlyWithWarning(std::move(maybeCommand.error()));
       }
 
       const TokenCommand command = maybeCommand.result();
@@ -50,11 +60,11 @@ public:
         ParseError err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
         err.location = sourceOffset;
-        return ParseResult(std::move(spline_), std::move(err));
+        return err;
       }
 
       if (auto error = processUntilNextCommand(command)) {
-        return ParseResult(std::move(spline_), std::move(error.value()));
+        return returnEarlyWithWarning(std::move(error.value()));
       }
       skipWhitespace();
     }
@@ -68,7 +78,7 @@ public:
       const TokenCommand command = maybeCommand.result();
       std::optional<ParseError> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
-        return ParseResult(std::move(spline_), std::move(maybeError.value()));
+        return returnEarlyWithWarning(std::move(maybeError.value()));
       }
     }
 
@@ -478,6 +488,26 @@ private:
     return lastToken_ == Token::QuadCurveTo || lastToken_ == Token::SmoothQuadCurveTo;
   }
 
+  /**
+   * Handle a non-critical parse error by returning the partial path data and capturing the warning.
+   * If the path spline is empty this is considered a critical error and the warning is upgraded.
+   */
+  ParseResult<PathSpline> returnEarlyWithWarning(ParseError&& warning) {
+    if (spline_.empty()) {
+      // Critical error: We have no path data.
+      return std::move(warning);
+    }
+
+    // Non-critical error: We have partial path data
+    if (outWarning_) {
+      outWarning_->emplace(std::move(warning));
+    }
+
+    // IMPORTANT: We only want one return statement here, and it should be the result to avoid
+    // having different behavior if outWarnings_ is null or not.
+    return std::move(spline_);
+  }
+
   PathSpline spline_;
 
   std::string_view d_;
@@ -488,12 +518,15 @@ private:
   Vector2d initialPoint_;      //!< Initial point, used for ClosePath operations.
   Vector2d currentPoint_;      //!< Current point.
   Vector2d prevControlPoint_;  //!< Previous curve's control point, for use with smooth curves.
+
+  std::optional<ParseError>* outWarning_;
 };
 
 }  // namespace
 
-ParseResult<PathSpline> PathParser::Parse(std::string_view d) {
-  PathParserImpl parser(d);
+ParseResult<PathSpline> PathParser::Parse(std::string_view d,
+                                          std::optional<ParseError>* outWarning) {
+  PathParserImpl parser(d, outWarning);
   return parser.parse();
 }
 

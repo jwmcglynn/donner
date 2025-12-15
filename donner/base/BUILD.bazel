@@ -10,6 +10,7 @@ donner_cc_library(
         "Box.h",
         "ChunkedString.h",
         "CompileTimeMap.h",
+        "CompilerConfig.h",
         "EcsRegistry.h",
         "FileOffset.h",
         "Length.h",
@@ -62,6 +63,7 @@ donner_cc_test(
         "tests/Box_tests.cc",
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
+        "tests/CompilerFeatureProbe_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
         "tests/OptionalRef_tests.cc",
@@ -91,6 +93,7 @@ donner_cc_test(
 donner_cc_library(
     name = "base_utils_h_ndebug",
     hdrs = [
+        "CompilerConfig.h",
         "Utils.h",
     ],
     defines = [

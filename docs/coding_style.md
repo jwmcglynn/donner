@@ -2,7 +2,7 @@
 
 \tableofcontents
 
-As a baseline, Donner SVG aligns with the [Google C++ coding style](https://google.github.io/styleguide/cppguide.html), with modifications to more closely align with naming conventions in the SVG standard. Additionally, since Donner SVG is designed as an experiment in C++20, coding standards that exist to support backward compatibility with older standards may be replaced.
+As a baseline, Donner SVG aligns with the [Google C++ coding style](https://google.github.io/styleguide/cppguide.html), with modifications to more closely align with naming conventions in the SVG standard. Donner targets C++23 and prefers the standard vocabulary types (`std::expected`, `std::to_underlying`, `std::string::contains`) instead of custom shims or older compatibility patterns.
 
 ## Files
 
@@ -465,7 +465,7 @@ for (std::string_view part : StringUtils::Split("a,b,c", ',')) {
 
 #### Use of operator<=> When Possible
 
-- Use the C++20 spaceship operator (`operator<=>`) when possible for automatic generation of comparison operators.
+- Use the C++23 baseline spaceship operator (`operator<=>`) when possible for automatic generation of comparison operators.
 - Be aware that `operator<=>` may not work as intended with pointers or when custom comparison logic is needed.
 - **Note**: Due to a bug in `gtest`, `operator==` must also be supplied when using `operator<=>`.
 

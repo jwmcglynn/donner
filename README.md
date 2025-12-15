@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC) [![Code coverage %](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner) ![Product lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.svg) ![Test lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc-tests.svg)
 ![Comments %](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/comments.svg)
 
-Donner SVG is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
+Donner SVG is an under-development modern C++23 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
 
 Donner's v0.1.0 release provides core static SVG functionality (without text or filter support). Text, filter, and animation support are on the roadmap. [Try it out online!](https://jwmcglynn.github.io/donner-editor/)
 
@@ -23,6 +23,28 @@ renderer.draw(maybeDocument.result());
 
 const bool success = renderer.save("output.png");
 ```
+
+## Toolchain requirements
+
+- Minimum compiler: Clang 17 with libc++ on macOS 26 and Ubuntu 24.04.
+- macOS: the system toolchain on macOS 26 ships Clang 17. To install a newer
+  version via Homebrew, run:
+
+  ```sh
+  brew install llvm@18
+  echo 'export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"' >> ~/.zshrc
+  ```
+
+- Ubuntu 24.04: install LLVM 18+ from the official apt repository:
+
+  ```sh
+  sudo bash -c 'curl -fsSL https://apt.llvm.org/llvm.sh | bash -s -- 18'
+  sudo apt-get install -y clang-18 lld-18 libc++-18-dev libc++abi-18-dev
+  ```
+
+- Bazel builds default to `-std=c++23` via the repository `.bazelrc`. If you
+  have multiple Clang versions installed, set `CC`/`CXX` to the desired
+  compiler before invoking Bazel or CMake.
 
 ## Why Donner?
 

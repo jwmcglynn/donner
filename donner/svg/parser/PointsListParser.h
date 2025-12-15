@@ -58,9 +58,19 @@ public:
    * determine what has been returned.
    *
    * @param str a points list, optionally separated by spaces and/or a comma.
+   * @param outWarning Optional destination for a warning emitted when parsing stops early due to
+   *                   non-critical errors. When provided, the warning message is captured here.
+   *
+   * Error handling:
+   * - **Critical errors** (e.g., invalid input with no parseable data): Returns ParseError with no
+   *   result.
+   * - **Non-critical errors** (e.g., trailing comma after valid points): Returns partial result.
+   *   If `outWarning` is provided, the error details are captured there.
+   *
    * @return Parsed Points list and/or an error.
    */
-  static ParseResult<std::vector<Vector2d>> Parse(std::string_view str);
+  static ParseResult<std::vector<Vector2d>> Parse(std::string_view str,
+                                                  std::optional<ParseError>* outWarning = nullptr);
 };
 
 }  // namespace donner::svg::parser

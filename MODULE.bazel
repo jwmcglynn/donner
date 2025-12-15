@@ -1,4 +1,4 @@
-"""Donner is a modern C++20 SVG rendering library which intends to provide easily
+"""Donner is a modern C++23 SVG rendering library which intends to provide easily
 embeddable SVG support into apps and games, enabling browser-level functionalit
  without the browser."""
 
@@ -44,11 +44,6 @@ git_repository(
     name = "entt",
     remote = "https://github.com/skypjack/entt",
     tag = "v3.16.0",
-)
-
-local_repository(
-    name = "frozen",
-    path = "third_party/frozen",
 )
 
 new_local_repository(

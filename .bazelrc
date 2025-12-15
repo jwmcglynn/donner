@@ -51,11 +51,11 @@ build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
 build:libc++ --action_env=LDFLAGS=-stdlib=libc++
 build:libc++ --define force_libcpp=enabled
 
-# C++20
-build:c++20 --cxxopt=-std=c++20
+# C++23
+build:c++23 --cxxopt=-std=c++23
 
 # Host toolchain using libstdc++ instead of libc++, for libclang support
-build:host_libstdc++ --host_cxxopt=-std=c++20 --host_cxxopt=-stdlib=libstdc++ --host_linkopt=-lstdc++
+build:host_libstdc++ --host_cxxopt=-std=c++23 --host_cxxopt=-stdlib=libstdc++ --host_linkopt=-lstdc++
 
 build:linux --config=host_libstdc++ --copt=-fno-modules
 
@@ -68,7 +68,7 @@ build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
 build:macos-binary-size --copt=-gline-tables-only
 build:macos-binary-size --linkopt=-dead_strip
 
-build --config=libc++ --config=c++20 --define absl=1
+build --config=libc++ --config=c++23 --define absl=1
 
 # Debug builds
 build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone

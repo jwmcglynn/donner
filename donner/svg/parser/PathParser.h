@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <optional>
 #include <string_view>
 
 #include "donner/base/ParseResult.h"
@@ -46,14 +47,20 @@ public:
   /**
    * Parse an SVG path "d"-string, see \ref path_data.
    *
-   * Note that this parser may return both an error and a partial path, since path parsing will
-   * return anything that it has parsed before it encountered the error. The caller should use both
-   * `ParseResult::hasResult()` and `ParseResult::hasError()` to determine what has been returned.
-   *
    * @param d String corresponding to the SVG `<path d="...">` parameter.
-   * @return Parsed PathSpline and/or an error.
+   * @param outWarning Optional destination for a warning emitted when parsing stops early due to
+   *                   non-critical errors. When provided, the warning message is captured here.
+   *
+   * Error handling:
+   * - **Critical errors** (e.g., invalid commands, malformed path data with no parseable content):
+   *   Returns ParseError with no result.
+   * - **Non-critical errors** (e.g., trailing invalid data after valid path commands): Returns
+   *   partial result. If `outWarning` is provided, the error details are captured there.
+   *
+   * @return Parsed PathSpline or an error.
    */
-  static ParseResult<PathSpline> Parse(std::string_view d);
+  static ParseResult<PathSpline> Parse(std::string_view d,
+                                       std::optional<ParseError>* outWarning = nullptr);
 };
 
 }  // namespace donner::svg::parser
