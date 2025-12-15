@@ -1,0 +1,27 @@
+name: tiny-skia-cpp-performance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  perf:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-
+
+      - name: Check tiny_skia_cpp performance
+        run: |
+          python3 tools/perf/check_tiny_skia_cpp.py \
+            --tolerance 1.50 \
+            --bazel-arg=--//donner/backends/tiny_skia_cpp:enable_avx2

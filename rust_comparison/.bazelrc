@@ -1,0 +1,5 @@
+build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
+build --copt=-Wno-switch-default
+build --cxxopt=-Wno-switch-default
+build --cxxopt=-Wno-error=switch

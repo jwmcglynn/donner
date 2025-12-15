@@ -3,7 +3,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <filesystem>
+#include <string_view>
+#include <vector>
 
 #include "donner/svg/SVGDocument.h"
 
@@ -195,6 +198,23 @@ protected:
    */
   void renderAndCompare(SVGDocument& document, const std::filesystem::path& svgFilename,
                         const char* goldenImageFilename, const ImageComparisonParams& params);
+
+  /**
+   * @brief Compares two RGBA buffers using pixelmatch and saves debug PNGs on failure.
+   *
+   * @param expected Buffer containing expected RGBA pixel data.
+   * @param expectedStrideBytes Stride of the expected buffer in bytes.
+   * @param actual Buffer containing actual RGBA pixel data.
+   * @param actualStrideBytes Stride of the actual buffer in bytes.
+   * @param width Image width in pixels.
+   * @param height Image height in pixels.
+   * @param debugName Name used when writing debug images on failure.
+   * @param params Comparison parameters controlling thresholds and debug output.
+   */
+  void compareRgbaImages(const std::vector<uint8_t>& expected, size_t expectedStrideBytes,
+                         const std::vector<uint8_t>& actual, size_t actualStrideBytes, int width,
+                         int height, std::string_view debugName,
+                         const ImageComparisonParams& params = ImageComparisonParams());
 };
 
 }  // namespace donner::svg

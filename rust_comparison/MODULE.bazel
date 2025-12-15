@@ -1,0 +1,35 @@
+"""Workspace for Rust/tiny-skia parity checks without impacting the main Donner module."""
+
+module(name = "donner_rust_comparison", version = "0.0.1")
+
+bazel_dep(name = "donner", version = "0.0.0")
+local_path_override(module_name = "donner", path = "..")
+
+bazel_dep(name = "rules_cc", version = "0.2.14")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.17.0.bcr.2",
+          dev_dependency = True)
+bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3")
+
+bazel_dep(name = "rules_rust", version = "0.68.1")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.82.0"],
+)
+
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+
+crate.from_cargo(
+    name = "crates",
+    manifests = ["//:Cargo.toml"],
+    cargo_lockfile = "//:Cargo.lock",
+)
+
+use_repo(crate, "crates")

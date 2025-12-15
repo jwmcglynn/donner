@@ -213,4 +213,62 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   }
 }
 
+void ImageComparisonTestFixture::compareRgbaImages(const std::vector<uint8_t>& expected,
+                                                   size_t expectedStrideBytes,
+                                                   const std::vector<uint8_t>& actual,
+                                                   size_t actualStrideBytes, int width, int height,
+                                                   std::string_view debugName,
+                                                   const ImageComparisonParams& params) {
+  const size_t expectedBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  ASSERT_EQ(expectedBytes, expected.size());
+  ASSERT_EQ(expectedBytes, actual.size());
+  ASSERT_EQ(expectedStrideBytes % 4, 0u);
+  ASSERT_EQ(actualStrideBytes % 4, 0u);
+
+  const int expectedStridePixels = static_cast<int>(expectedStrideBytes / 4);
+  const int actualStridePixels = static_cast<int>(actualStrideBytes / 4);
+  ASSERT_EQ(expectedStridePixels, actualStridePixels);
+  ASSERT_EQ(expectedStridePixels, width);
+
+  std::cout << "[  COMPARE ] " << debugName << ": ";
+
+  std::vector<uint8_t> diffImage(expectedBytes, 0);
+  pixelmatch::Options options;
+  options.threshold = params.threshold;
+  const int mismatchedPixels =
+      pixelmatch::pixelmatch(expected, actual, diffImage, width, height, expectedStridePixels,
+                             options);
+
+  if (mismatchedPixels > params.maxMismatchedPixels) {
+    std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
+              << params.maxMismatchedPixels << " max)\n";
+
+    const std::string sanitizedName = escapeFilename(std::string(debugName));
+    const auto tempDir = std::filesystem::temp_directory_path();
+    const auto expectedPath = tempDir / (sanitizedName + "_expected.png");
+    const auto actualPath = tempDir / (sanitizedName + "_actual.png");
+    const auto diffPath = tempDir / (sanitizedName + "_diff.png");
+
+    if (params.saveDebugSkpOnFailure) {
+      RendererImageIO::writeRgbaPixelsToPngFile(expectedPath.string().c_str(), expected, width,
+                                                height, expectedStridePixels);
+      RendererImageIO::writeRgbaPixelsToPngFile(actualPath.string().c_str(), actual, width, height,
+                                                expectedStridePixels);
+      RendererImageIO::writeRgbaPixelsToPngFile(diffPath.string().c_str(), diffImage, width, height,
+                                                expectedStridePixels);
+    }
+
+    ADD_FAILURE() << mismatchedPixels << " pixels different. Expected: "
+                  << expectedPath.string() << " Actual: " << actualPath.string()
+                  << " Diff: " << diffPath.string();
+  } else {
+    std::cout << "PASS";
+    if (mismatchedPixels != 0) {
+      std::cout << " (" << mismatchedPixels << " pixels differ, out of "
+                << params.maxMismatchedPixels << " max)";
+    }
+    std::cout << "\n";
+  }
+}
+
 }  // namespace donner::svg

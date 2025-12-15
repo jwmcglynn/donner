@@ -30,6 +30,8 @@ cc_library(
     visibility = [
         "//donner/svg:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
+        "//donner/backends:__subpackages__",
+        "//visibility:public",
     ],
     deps = [
         "//donner/base",

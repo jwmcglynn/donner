@@ -1,0 +1,35 @@
+filegroup(
+    name = "gradient_goldens",
+    srcs = [
+        "gradients/two-stops-linear-pad-lq.png",
+        "gradients/two-stops-linear-reflect-lq.png",
+        "gradients/two-stops-linear-repeat-lq.png",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "stroke_goldens",
+    srcs = [
+        "stroke/round-caps-and-large-scale.png",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "canvas_goldens",
+    srcs = [
+        "canvas/draw-pixmap.png",
+        "canvas/draw-pixmap-opacity.png",
+        "canvas/draw-pixmap-ts.png",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "mask_goldens",
+    srcs = [
+        "mask/rect.png",
+    ],
+    visibility = ["//visibility:public"],
+)
