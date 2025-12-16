@@ -1,6 +1,7 @@
 #include "donner/base/xml/XMLNode.h"
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/SmallVector.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -28,9 +29,16 @@ private:
 };
 
 // TODO: Move to its own header
+struct AttributeSourceOffset {
+  FileOffsetRange fullRange;
+  FileOffsetRange valueRange;
+};
+
 struct SourceOffsetComponent {
   std::optional<FileOffset> startOffset;
   std::optional<FileOffset> endOffset;
+  std::optional<FileOffsetRange> valueRange;
+  SmallVector<std::pair<XMLQualifiedName, AttributeSourceOffset>, 8> attributeOffsets;
 };
 
 }  // namespace
@@ -128,6 +136,18 @@ void XMLNode::setValue(const RcStringOrRef& value) {
   handle_.get_or_emplace<components::XMLValueComponent>().value = RcString(value);
 }
 
+std::optional<EditOperation> XMLNode::setValuePreserveSource(const RcStringOrRef& value) {
+  setValue(value);
+
+  if (const auto* offsets = handle_.try_get<SourceOffsetComponent>()) {
+    if (offsets->valueRange.has_value()) {
+      return EditOperation::ReplaceValue(*offsets->valueRange, RcString(value));
+    }
+  }
+
+  return std::nullopt;
+}
+
 bool XMLNode::hasAttribute(const XMLQualifiedNameRef& name) const {
   return handle_.get_or_emplace<AttributesComponent>().hasAttribute(name);
 }
@@ -149,6 +169,12 @@ std::optional<FileOffsetRange> XMLNode::getNodeLocation() const {
 std::optional<FileOffsetRange> XMLNode::getAttributeLocation(
     std::string_view xmlInput, const XMLQualifiedNameRef& name) const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
+    for (const auto& [storedName, location] : offset->attributeOffsets) {
+      if (storedName == name) {
+        return location.fullRange;
+      }
+    }
+
     if (offset->startOffset) {
       if (auto maybeLocation =
               XMLParser::GetAttributeLocation(xmlInput, offset->startOffset.value(), name)) {
@@ -158,6 +184,41 @@ std::optional<FileOffsetRange> XMLNode::getAttributeLocation(
   }
 
   return std::nullopt;
+}
+
+std::optional<FileOffsetRange> XMLNode::getValueLocation() const {
+  if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
+    return offset->valueRange;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<FileOffsetRange> XMLNode::getAttributeValueLocation(
+    const XMLQualifiedNameRef& name) const {
+  if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
+    for (const auto& [storedName, storedLocation] : offset->attributeOffsets) {
+      if (storedName == name) {
+        return storedLocation.valueRange;
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
+void XMLNode::addAttributeLocation(const XMLQualifiedNameRef& name, FileOffsetRange location,
+                                   FileOffsetRange valueRange) {
+  auto& offsets = handle_.get_or_emplace<SourceOffsetComponent>().attributeOffsets;
+  for (auto& [storedName, storedLocation] : offsets) {
+    if (storedName == name) {
+      storedLocation = AttributeSourceOffset{location, valueRange};
+      return;
+    }
+  }
+
+  offsets.emplace_back(XMLQualifiedName(name.namespacePrefix, name.name),
+                       AttributeSourceOffset{location, valueRange});
 }
 
 SmallVector<XMLQualifiedNameRef, 10> XMLNode::attributes() const {
@@ -172,6 +233,17 @@ std::optional<RcString> XMLNode::getNamespaceUri(const RcString& prefix) const {
 void XMLNode::setAttribute(const XMLQualifiedNameRef& name, std::string_view value) {
   return handle_.get_or_emplace<AttributesComponent>().setAttribute(*handle_.registry(), name,
                                                                     RcString(value));
+}
+
+std::optional<EditOperation> XMLNode::setAttributePreserveSource(const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
+  setAttribute(name, value);
+
+  if (auto valueLocation = getAttributeValueLocation(name)) {
+    return EditOperation::ReplaceValue(*valueLocation, RcString(value));
+  }
+
+  return std::nullopt;
 }
 
 void XMLNode::removeAttribute(const XMLQualifiedNameRef& name) {
@@ -255,6 +327,10 @@ std::optional<FileOffset> XMLNode::sourceEndOffset() const {
 
 void XMLNode::setSourceEndOffset(FileOffset offset) {
   handle_.get_or_emplace<SourceOffsetComponent>().endOffset = offset;
+}
+
+void XMLNode::setValueSourceRange(FileOffsetRange range) {
+  handle_.get_or_emplace<SourceOffsetComponent>().valueRange = range;
 }
 
 Entity XMLNode::CreateEntity(Registry& registry, Type type, const XMLQualifiedNameRef& tagName) {

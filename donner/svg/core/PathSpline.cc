@@ -2,8 +2,10 @@
 
 #include <cassert>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <optional>
+#include <sstream>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utils.h"
@@ -22,6 +24,47 @@ constexpr int kMaxRecursionDepth = 10;
 
 /// Used as a sentinel value for the moveToPointIndex_ when no MoveTo command has been issued.
 constexpr size_t kNPos = ~size_t(0);
+
+std::string FormatNumber(double value, const PathSpline::PathFormatOptions& options) {
+  // Normalize negative zero results that can appear from trig operations.
+  if (Abs(value) < 1e-12) {
+    value = 0.0;
+  }
+
+  std::ostringstream stream;
+  stream.setf(std::ios::fmtflags(0), std::ios::floatfield);
+  stream << std::setprecision(options.precision) << value;
+
+  std::string text = stream.str();
+
+  // Trim trailing zeros for readability and compactness.
+  if (text.find('.') != std::string::npos) {
+    while (!text.empty() && text.back() == '0') {
+      text.pop_back();
+    }
+    if (!text.empty() && text.back() == '.') {
+      text.pop_back();
+    }
+  }
+
+  if (options.mode == PathSpline::PathFormatOptions::Mode::SizeOptimized) {
+    // Drop leading zero for fractional values to save space (e.g., 0.5 -> .5).
+    if (text.size() >= 2 && text[0] == '0' && text[1] == '.') {
+      text.erase(text.begin());
+    } else if (text.size() >= 3 && text[0] == '-' && text[1] == '0' && text[2] == '.') {
+      text.erase(text.begin() + 1);
+    }
+  }
+
+  return text;
+}
+
+void AppendPoint(std::string* out, const Vector2d& point,
+                 const PathSpline::PathFormatOptions& options) {
+  out->append(FormatNumber(point.x, options));
+  out->push_back(',');
+  out->append(FormatNumber(point.y, options));
+}
 
 // B.2.5. Correction of out-of-range radii
 // https://www.w3.org/TR/SVG/implnote.html#ArcCorrectionOutOfRangeRadii
@@ -1026,6 +1069,82 @@ bool PathSpline::isOnPath(const Vector2d& point, double strokeWidth) const {
   }
 
   return false;
+}
+
+std::string PathSpline::ToString() const {
+  return ToString(PathFormatOptions());
+}
+
+std::string PathSpline::ToString(const PathFormatOptions& options) const {
+  if (commands_.empty()) {
+    return "";
+  }
+
+  const bool compact = options.mode == PathFormatOptions::Mode::SizeOptimized;
+  const char pointSeparator = compact ? ',' : ' ';
+
+  std::string result;
+  result.reserve(commands_.size() * 16);
+
+  const auto appendCommandSpacing = [&]() {
+    if (!result.empty() && !compact) {
+      result.push_back(' ');
+    }
+  };
+
+  const auto appendPoints = [&](std::initializer_list<Vector2d> points) {
+    bool first = true;
+    for (const Vector2d& point : points) {
+      if (!first) {
+        result.push_back(pointSeparator);
+      }
+      AppendPoint(&result, point, options);
+      first = false;
+    }
+  };
+
+  for (const Command& command : commands_) {
+    switch (command.type) {
+      case CommandType::MoveTo: {
+        appendCommandSpacing();
+        result.push_back('M');
+        if (!compact) {
+          result.push_back(' ');
+        }
+        AppendPoint(&result, points_[command.pointIndex], options);
+        break;
+      }
+
+      case CommandType::LineTo: {
+        appendCommandSpacing();
+        result.push_back('L');
+        if (!compact) {
+          result.push_back(' ');
+        }
+        AppendPoint(&result, points_[command.pointIndex], options);
+        break;
+      }
+
+      case CommandType::CurveTo: {
+        appendCommandSpacing();
+        result.push_back('C');
+        if (!compact) {
+          result.push_back(' ');
+        }
+        appendPoints({points_[command.pointIndex], points_[command.pointIndex + 1],
+                      points_[command.pointIndex + 2]});
+        break;
+      }
+
+      case CommandType::ClosePath: {
+        appendCommandSpacing();
+        result.push_back('Z');
+        break;
+      }
+    }
+  }
+
+  return result;
 }
 
 std::ostream& operator<<(std::ostream& os, const PathSpline& spline) {

@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -24,6 +25,23 @@ namespace donner::svg {
  */
 class PathSpline {
 public:
+  /**
+   * Formatting options for serializing a PathSpline back to SVG path data.
+   */
+  struct PathFormatOptions {
+    /** Supported output styles. */
+    enum class Mode {
+      Readable,      ///< Space-separated parameters for human readability.
+      SizeOptimized  ///< Minimize output size by stripping whitespace.
+    };
+
+    /// Preferred output style, defaults to Mode::Readable.
+    Mode mode = Mode::Readable;
+
+    /// Significant digits to emit when formatting coordinates.
+    int precision = 6;
+  };
+
   /**
    * Type of command to connect the points.
    *
@@ -307,6 +325,16 @@ public:
    * @param strokeWidth Width of the stroke.
    */
   bool isOnPath(const Vector2d& point, double strokeWidth) const;
+
+  /**
+   * Serialize the spline into SVG path data using readable defaults.
+   */
+  std::string ToString() const;
+
+  /**
+   * Serialize the spline into SVG path data using custom formatting.
+   */
+  std::string ToString(const PathFormatOptions& options) const;
 
   /**
    * Ostream output operator, outputs a human-readable representation of the spline.

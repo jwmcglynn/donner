@@ -343,4 +343,41 @@ TEST_F(XMLNodeTests, GetAttributeLocationInvalid) {
   EXPECT_THAT(node.getAttributeLocation(mismatchedXml, "attr"), Eq(std::nullopt));
 }
 
+TEST_F(XMLNodeTests, AttributeEditOperationTargetsValueSpan) {
+  std::string_view xml = R"(<child attr="Hello, world!"></child>)";
+
+  auto maybeChild = parseAndGetFirstNode(xml);
+  ASSERT_TRUE(maybeChild.has_value());
+
+  XMLNode child = std::move(maybeChild.value());
+
+  auto edit = child.setAttributePreserveSource("attr", "Updated");
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->type, EditOperation::Type::ReplaceValue);
+  const size_t start = edit->targetRange.start.offset.value();
+  const size_t end = edit->targetRange.end.offset.value();
+  EXPECT_EQ(xml.substr(start, end - start), "Hello, world!");
+  EXPECT_THAT(child.getAttribute("attr"), Optional(Eq(RcString("Updated"))));
+}
+
+TEST_F(XMLNodeTests, ValueEditOperationTargetsDataRange) {
+  std::string_view xml = R"(<root>text</root>)";
+
+  auto maybeRoot = parseAndGetFirstNode(xml);
+  ASSERT_TRUE(maybeRoot.has_value());
+  XMLNode root = std::move(maybeRoot.value());
+
+  auto data = root.firstChild();
+  ASSERT_TRUE(data.has_value());
+  ASSERT_EQ(data->type(), XMLNode::Type::Data);
+
+  auto edit = data->setValuePreserveSource("replacement");
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->type, EditOperation::Type::ReplaceValue);
+  const size_t start = edit->targetRange.start.offset.value();
+  const size_t end = edit->targetRange.end.offset.value();
+  EXPECT_EQ(xml.substr(start, end - start), "text");
+  EXPECT_THAT(data->value(), Optional(Eq(RcString("replacement"))));
+}
+
 }  // namespace donner::xml
