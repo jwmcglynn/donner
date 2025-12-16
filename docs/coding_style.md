@@ -63,6 +63,7 @@ namespace donner::svg {
 2. **Member Documentation**:
 
    - Use `//!<` for inline member documentation, or `/**` for long descriptions.
+   - All public members and enum values are required, private/protected members are recommended.
    - For struct members, either provide brief single-line descriptions or detailed explanations if relevant.
 
    ```cpp
@@ -138,10 +139,11 @@ STL and third-party dependencies do not use this, and use angle brackets:
 - **Classes**: `UpperCamelCase`, matching the filename. This matches the SVG standard for DOM object naming.
 - **Class Methods**: `lowerCamelCase`, aligning with the SVG standard.
   - Constructors and constructor-like static methods continue to use `UpperCamelCase`.
-- **Free Functions**: `UpperCamelCase`.
+- **Free Functions and Static Methods**: `UpperCamelCase`.
 - **Member Variables**: `lowerCamelCaseWithTrailingUnderscore_`.
 - **Parameters and Local Variables**: `lowerCamelCase`.
 - **Constants**: Use the `k` prefix, and then `UpperCamelCase`: `kExampleConstant`.
+- **Enum Class Values**: `UpperCamelCase`, no `k` prefix (e.g. `MyEnum::Value`).
 
 For variables that hold values with units, such as milliseconds, either use a strongly-typed container or include the unit in the variable name:
 

@@ -16,16 +16,18 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
     `.h` for headers and `_tests.cc` for tests.
 - Headers start with `#pragma once` and a `/// @file` comment.
 - Use Doxygen comments (`/** ... */`, `//!<`) for public APIs; all public methods,
-  functions, and enumeration values must have doc comments. Prefer `///` for
+  functions, members, and enumeration values must have doc comments. Prefer `///` for
   single-line comments, `/** */` blocks for multi-line comments, and `//!<` for
-  short trailing snippets when they remain concise.
+  short trailing snippets when they remain concise. Add `@param` for all parameters.
 - Place all code in the `donner` namespace (and sub-namespaces like `donner::svg`).
 - Never omit curly braces for control structures, even for single-line bodies.
 - Naming conventions:
   - Classes/Structs: `UpperCamelCase`.
   - Methods: `lowerCamelCase`.
+  - Static methods and global functions: `UpperCamelCase`.
   - Member variables: `lowerCamelCaseWithTrailingUnderscore_`.
   - Constants: `kUpperCamelCase`.
+  - Enum Class Values: `UpperCamelCase`.
 - Use `std::string_view` for non-owning string parameters and prefer `constexpr` where possible.
 - Apply `const` generously; mark single‑argument constructors `explicit` unless intended implicit.
 - Use `enum class` and provide `operator<<` for debugging.
