@@ -1,8 +1,14 @@
+#include <algorithm>
+#include <cfloat>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
+#include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 #include "glad/glad.h"
 
 extern "C" {
@@ -16,6 +22,7 @@ extern "C" {
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and SVGParser
 #include "donner/svg/renderer/RendererSkia.h"
+#include "experimental/viewer/TransformInspector.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -24,7 +31,7 @@ extern "C" {
 
 using namespace donner;
 using namespace donner::svg;
-using namespace donner::svg::parser;
+using donner::experimental::TransformInspector;
 
 static void glfw_error_callback(int error, const char* description) {
   std::cerr << "Glfw Error " << error << ": " << description << std::endl;
@@ -212,6 +219,7 @@ int main(int argc, char** argv) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   SVGState state;
+  TransformInspector inspector;
   std::string svgString = loadFile(argv[1]);
 
   state.loadSVG(svgString);
@@ -269,6 +277,17 @@ int main(int argc, char** argv) {
 
     ImGui::PopStyleVar(2);
 
+    if (ImGui::BeginMenuBar()) {
+      if (ImGui::BeginMenu("Tools")) {
+        bool inspectorVisible = inspector.isVisible();
+        if (ImGui::MenuItem("Transform Inspector", nullptr, &inspectorVisible)) {
+          inspector.setVisible(inspectorVisible);
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::EndMenuBar();
+    }
+
     // DockSpace
     ImGuiID dockspaceId = ImGui::GetID("EditorDockspace");
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), dockspaceFlags);
@@ -283,11 +302,15 @@ int main(int argc, char** argv) {
 
       ImGuiID dockIdLeft = dockspaceId;
       ImGuiID dockIdRight;
+      ImGuiID dockIdInspector;
 
       ImGui::DockBuilderSplitNode(dockIdLeft, ImGuiDir_Right, 0.5f, &dockIdRight, &dockIdLeft);
+      ImGui::DockBuilderSplitNode(dockIdRight, ImGuiDir_Down, 0.35f, &dockIdInspector,
+                                  &dockIdRight);
 
       ImGui::DockBuilderDockWindow("Code", dockIdLeft);
       ImGui::DockBuilderDockWindow("Drawing", dockIdRight);
+      ImGui::DockBuilderDockWindow("Transform Inspector", dockIdInspector);
 
       ImGui::DockBuilderFinish(dockspaceId);
     }
@@ -348,6 +371,8 @@ int main(int argc, char** argv) {
     ImGui::Image(static_cast<ImTextureID>(texture), ImVec2(renderer.width(), renderer.height()));
 
     ImGui::End();  // End of Drawing Window
+
+    inspector.render();
     ImGui::End();  // End of MainWindow
 
     // Rendering
