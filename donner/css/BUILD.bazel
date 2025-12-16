@@ -21,6 +21,7 @@ donner_cc_library(
 donner_cc_library(
     name = "core",
     srcs = [
+        "ColorProfile.cc",
         "Color.cc",
         "ComponentValue.cc",
         "Declaration.cc",
@@ -30,6 +31,7 @@ donner_cc_library(
         "selectors/PseudoClassSelector.cc",
     ],
     hdrs = [
+        "ColorProfile.h",
         "Color.h",
         "ComponentValue.h",
         "Declaration.h",
