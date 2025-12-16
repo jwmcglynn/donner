@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace donner::svg {
 
@@ -34,8 +35,8 @@ public:
    * @returns Vector containing the PNG-encoded data.
    */
   static std::vector<uint8_t> writeRgbaPixelsToPngMemory(std::span<const uint8_t> rgbaPixels,
-                                                          int width, int height,
-                                                          size_t strideInPixels = 0);
+                                                         int width, int height,
+                                                         size_t strideInPixels = 0);
 };
 
 }  // namespace donner::svg
