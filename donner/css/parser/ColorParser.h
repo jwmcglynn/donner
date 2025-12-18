@@ -25,7 +25,7 @@ public:
   };
 
   /**
-   * Parse a CSS color, per https://www.w3.org/TR/2021/WD-css-color-4-20210601/
+   * Parse a CSS color, per https://www.w3.org/TR/2025/CRD-css-color-4-20250424/
    *
    * Supports named colors, hex colors, and color functions such as rgb().
    *
@@ -37,7 +37,7 @@ public:
                                   const Options& options = Options());
 
   /**
-   * Parse a CSS color from a string, per https://www.w3.org/TR/2021/WD-css-color-4-20210601/
+   * Parse a CSS color from a string, per https://www.w3.org/TR/2025/CRD-css-color-4-20250424/
    *
    * Supports named colors, hex colors, and color functions such as rgb().
    *

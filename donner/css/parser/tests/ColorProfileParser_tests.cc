@@ -2,25 +2,41 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <vector>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/css/parser/RuleParser.h"
 
 using testing::Optional;
 
 namespace donner::css::parser {
 
 TEST(ColorProfileParser, ParsesNamedProfileSrc) {
-  ColorProfileRegistry registry =
-      ColorProfileParser::ParseStylesheet("@color-profile --brand { src: display-p3; }");
+  std::vector<Rule> rules =
+      RuleParser::ParseStylesheet("@color-profile --brand { src: display-p3; }");
+  ColorProfileRegistry registry;
+  for (const auto& rule : rules) {
+    const auto* atRule = std::get_if<AtRule>(&rule.value);
+    if (atRule) {
+      ColorProfileParser::ParseIntoRegistry(*atRule, registry);
+    }
+  }
 
   EXPECT_EQ(registry.size(), 1u);
   EXPECT_THAT(registry.resolve("--brand"), Optional(ColorSpaceId::DisplayP3));
 }
 
 TEST(ColorProfileParser, ParsesColorFunctionSrc) {
-  ColorProfileRegistry registry =
-      ColorProfileParser::ParseStylesheet("@color-profile --hdr { src: color(rec2020 0 0 0); }");
+  std::vector<Rule> rules =
+      RuleParser::ParseStylesheet("@color-profile --hdr { src: color(rec2020 0 0 0); }");
+  ColorProfileRegistry registry;
+  for (const auto& rule : rules) {
+    const auto* atRule = std::get_if<AtRule>(&rule.value);
+    if (atRule) {
+      ColorProfileParser::ParseIntoRegistry(*atRule, registry);
+    }
+  }
 
   EXPECT_THAT(registry.resolve("--hdr"), Optional(ColorSpaceId::Rec2020));
 }

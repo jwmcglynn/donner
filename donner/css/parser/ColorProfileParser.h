@@ -1,25 +1,24 @@
 #pragma once
 /// @file
 
-#include <span>
-#include <string_view>
-
 #include "donner/css/ColorProfile.h"
 #include "donner/css/Rule.h"
 
 namespace donner::css::parser {
 
 /**
- * Parse `@color-profile` rules from a stylesheet and produce a registry of profile aliases mapped
- * to the SVG2 color spaces that Donner supports.
+ * Utilities for registering CSS `@color-profile` definitions onto a shared registry.
  */
 class ColorProfileParser {
 public:
-  /// Parse a list of rules that may contain `@color-profile` definitions.
-  static ColorProfileRegistry Parse(std::span<const Rule> rules);
-
-  /// Parse `@color-profile` definitions directly from a stylesheet string.
-  static ColorProfileRegistry ParseStylesheet(std::string_view stylesheet);
+  /**
+   * Parse a single at-rule and register its color profile definition if present.
+   *
+   * @param atRule At-rule to inspect.
+   * @param registry Registry to populate when parsing succeeds.
+   * @return \c true when an @color-profile rule was parsed and registered.
+   */
+  static bool ParseIntoRegistry(const AtRule& atRule, ColorProfileRegistry& registry);
 };
 
 }  // namespace donner::css::parser

@@ -3,7 +3,6 @@
 #include <algorithm>
 
 #include "donner/css/parser/DeclarationListParser.h"
-#include "donner/css/parser/RuleParser.h"
 
 namespace donner::css::parser {
 
@@ -70,57 +69,41 @@ std::optional<std::string> parseProfileName(const AtRule& rule) {
   return profileIdent(rule.prelude);
 }
 
-ColorProfileRegistry parseRules(std::span<const Rule> rules) {
-  ColorProfileRegistry registry;
-
-  for (const Rule& rule : rules) {
-    const auto* atRule = std::get_if<AtRule>(&rule.value);
-    if (!atRule || !atRule->name.equalsLowercase("color-profile")) {
-      continue;
-    }
-
-    auto profileName = parseProfileName(*atRule);
-    if (!profileName || !atRule->block) {
-      continue;
-    }
-
-    std::vector<ComponentValue> blockValues(atRule->block->values.begin(),
-                                            atRule->block->values.end());
-    std::vector<Declaration> declarations =
-        DeclarationListParser::ParseRuleDeclarations(blockValues);
-
-    for (const Declaration& decl : declarations) {
-      std::string declName = decl.name.str();
-      std::transform(declName.begin(), declName.end(), declName.begin(),
-                     [](unsigned char c) { return std::tolower(c); });
-      if (declName != "src") {
-        continue;
-      }
-
-      auto srcName = parseSrcProfile(decl.values);
-      if (!srcName) {
-        continue;
-      }
-
-      if (auto spaceId = ColorSpaceIdFromString(*srcName)) {
-        registry.registerProfile(*profileName, *spaceId);
-      }
-      break;
-    }
-  }
-
-  return registry;
-}
-
 }  // namespace
 
-ColorProfileRegistry ColorProfileParser::Parse(std::span<const Rule> rules) {
-  return parseRules(rules);
-}
+bool ColorProfileParser::ParseIntoRegistry(const AtRule& atRule, ColorProfileRegistry& registry) {
+  if (!atRule.name.equalsLowercase("color-profile")) {
+    return false;
+  }
 
-ColorProfileRegistry ColorProfileParser::ParseStylesheet(std::string_view stylesheet) {
-  std::vector<Rule> rules = RuleParser::ParseStylesheet(stylesheet);
-  return parseRules(rules);
+  auto profileName = parseProfileName(atRule);
+  if (!profileName || !atRule.block) {
+    return false;
+  }
+
+  std::vector<ComponentValue> blockValues(atRule.block->values.begin(), atRule.block->values.end());
+  std::vector<Declaration> declarations = DeclarationListParser::ParseRuleDeclarations(blockValues);
+
+  for (const Declaration& decl : declarations) {
+    std::string declName = decl.name.str();
+    std::transform(declName.begin(), declName.end(), declName.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (declName != "src") {
+      continue;
+    }
+
+    auto srcName = parseSrcProfile(decl.values);
+    if (!srcName) {
+      continue;
+    }
+
+    if (auto spaceId = ColorSpaceIdFromString(*srcName)) {
+      registry.registerProfile(*profileName, *spaceId);
+    }
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace donner::css::parser

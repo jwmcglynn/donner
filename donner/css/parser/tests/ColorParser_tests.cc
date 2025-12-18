@@ -115,10 +115,6 @@ TEST(ColorParser, Block) {
               ParseErrorIs("Unexpected block when parsing color"));
 }
 
-TEST(ColorParser, FunctionNotImplemented) {
-  EXPECT_THAT(ColorParser::ParseString("device-cmyk(1,2,3)"), ParseErrorIs("Not implemented"));
-}
-
 TEST(ColorParser, FunctionError) {
   EXPECT_THAT(ColorParser::ParseString("not-supported(1,2,3)"),
               ParseErrorIs("Unsupported color function 'not-supported'"));
@@ -139,6 +135,20 @@ TEST(ColorParser, TrySkipSlash) {
               ParseErrorIs("Missing delimiter for alpha when parsing function 'rgb'"));
   EXPECT_THAT(ColorParser::ParseString("rgb(20% 10% 5% ;)"),
               ParseErrorIs("Missing delimiter for alpha when parsing function 'rgb'"));
+}
+
+TEST(ColorParser, DeviceCmyk) {
+  EXPECT_THAT(ColorParser::ParseString("device-cmyk(0% 0% 0% 0%)"),
+              ParseResultIs(Color(RGBA(255, 255, 255, 255))));
+
+  EXPECT_THAT(ColorParser::ParseString("device-cmyk(0% 100% 100% 0% / 60%)"),
+              ParseResultIs(Color(RGBA(255, 0, 0, 153))));
+
+  EXPECT_THAT(ColorParser::ParseString("device-cmyk(0.5 0.25 0 0.5 / 25%)"),
+              ParseResultIs(Color(RGBA(0, 64, 128, 64))));
+
+  EXPECT_THAT(ColorParser::ParseString("device-cmyk(0 0 0 1, rgb(10 20 30 / 0.5))"),
+              ParseResultIs(Color(RGBA(10, 20, 30, 128))));
 }
 
 TEST(ColorParser, Rgb) {
@@ -185,6 +195,53 @@ TEST(ColorParser, Rgb) {
               ParseResultIs(Color(RGBA(3, 26, 77, 204))));
   EXPECT_THAT(ColorParser::ParseString("rgb(20%10%5%/50%)"),
               ParseResultIs(Color(RGBA(51, 26, 13, 127))));
+}
+
+TEST(ColorParser, RelativeRgb) {
+  EXPECT_THAT(ColorParser::ParseString("rgb(from rgb(10 20 30) r g b)"),
+              ParseResultIs(Color(RGBA(10, 20, 30, 255))));
+
+  EXPECT_THAT(ColorParser::ParseString("rgb(from rgba(1 2 3 / 0.5) 100% 0 0 / alpha)"),
+              ParseResultIs(Color(RGBA(255, 0, 0, 128))));
+}
+
+TEST(ColorParser, RelativeColorFunction) {
+  auto result = ColorParser::ParseString("color(from rgb(255 0 0) srgb g b r / alpha)");
+  ASSERT_TRUE(result.hasResult());
+  ASSERT_TRUE(std::holds_alternative<ColorSpaceValue>(result.result().value));
+
+  const auto& value = std::get<ColorSpaceValue>(result.result().value);
+  EXPECT_EQ(value.id, ColorSpaceId::SRGB);
+  EXPECT_NEAR(value.c1, 0.0, 1e-6);
+  EXPECT_NEAR(value.c2, 0.0, 1e-6);
+  EXPECT_NEAR(value.c3, 1.0, 1e-6);
+  EXPECT_EQ(value.alpha, 255);
+
+  EXPECT_THAT(result.result(), ColorHasRGBA(RGBA(0, 0, 255, 255)));
+}
+
+TEST(ColorParser, RelativeColorSpaceReuse) {
+  auto result = ColorParser::ParseString(
+      "color(from color(display-p3 0.25 0.5 0.75 / 0.5) display-p3 r g b / alpha)");
+  ASSERT_TRUE(result.hasResult());
+  ASSERT_TRUE(std::holds_alternative<ColorSpaceValue>(result.result().value));
+
+  const auto& value = std::get<ColorSpaceValue>(result.result().value);
+  EXPECT_EQ(value.id, ColorSpaceId::DisplayP3);
+  EXPECT_NEAR(value.c1, 0.25, 1e-6);
+  EXPECT_NEAR(value.c2, 0.5, 1e-6);
+  EXPECT_NEAR(value.c3, 0.75, 1e-6);
+  EXPECT_EQ(value.alpha, 128);
+}
+
+TEST(ColorParser, RelativeColorXyzConversion) {
+  EXPECT_THAT(ColorParser::ParseString("color(from rgb(255 0 0) xyz-d65 x y z)"),
+              ParseResultIs(ColorHasRGBA(RGBA(255, 0, 0, 255))));
+}
+
+TEST(ColorParser, RelativeColorErrors) {
+  EXPECT_THAT(ColorParser::ParseString("rgb(from)"),
+              ParseErrorIs("Missing base color for relative color function"));
 }
 
 TEST(ColorParser, RgbErrors) {
@@ -244,6 +301,19 @@ TEST(ColorParser, Hsl) {
   // Space after 'deg' is required to separate the token.
   EXPECT_THAT(ColorParser::ParseString("hsla(5deg 6%7%/8%)"),
               ParseResultIs(Color(HSLA(5.0f, 0.06f, 0.07f, 20))));
+}
+
+TEST(ColorParser, RelativeHslAndHwb) {
+  EXPECT_THAT(ColorParser::ParseString("hsl(from rgb(255 0 0) h s l / 50%)"),
+              ParseResultIs(Color(HSLA(0.0f, 1.0f, 0.5f, 127))));
+
+  ColorSpaceValue hwb;
+  hwb.id = ColorSpaceId::Hwb;
+  hwb.c1 = 0.0;
+  hwb.c2 = 0.0;
+  hwb.c3 = 0.0;
+  EXPECT_THAT(ColorParser::ParseString("hwb(from rgb(255 0 0) h w b)"),
+              ParseResultIs(Color(hwb)));
 }
 
 TEST(ColorParser, HslHues) {
@@ -406,6 +476,28 @@ TEST(ColorParser, LabErrors) {
   // Invalid alpha value
   EXPECT_THAT(ColorParser::ParseString("lab(50% 0 0 / invalid)"),
               ParseErrorIs("Unexpected alpha value"));
+}
+
+TEST(ColorParser, RelativeLabAndOklch) {
+  ColorSpaceValue lab;
+  lab.id = ColorSpaceId::Lab;
+  lab.c1 = 55.0;
+  lab.c2 = 10.0;
+  lab.c3 = 20.0;
+  lab.alpha = 204;
+
+  EXPECT_THAT(ColorParser::ParseString("lab(from lab(55% 10 20 / 80%) l a b / alpha)"),
+              ParseResultIs(Color(lab)));
+
+  ColorSpaceValue oklch;
+  oklch.id = ColorSpaceId::Oklch;
+  oklch.c1 = 0.6;
+  oklch.c2 = 0.1;
+  oklch.c3 = 90.0;
+  oklch.alpha = 255;
+
+  EXPECT_THAT(ColorParser::ParseString("oklch(from oklch(0.6 0.1 90) l c h)"),
+              ParseResultIs(Color(oklch)));
 }
 
 TEST(ColorParser, Lch) {

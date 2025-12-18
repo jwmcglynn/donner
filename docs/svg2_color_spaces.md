@@ -2,12 +2,13 @@
 
 ## Overview
 
-SVG2 and CSS Color 4 standardize richer color spaces beyond sRGB. Earlier revisions of Donner
-resolved most CSS color functions directly to sRGB and only recognized `color()` arguments for
-`srgb` and `srgb-linear`. This document outlines how we extended the color model, parser, and
-conversion pipeline to cover additional SVG2 color spaces while keeping color management
-centralized in the `Color` class and downstream render backends. The implementation is complete
-end-to-end; future work is limited to optional ICC profile loading and HDR tone-mapping research.
+SVG2 and CSS Color 4 (CRD 2025-04-24) standardize richer color spaces beyond sRGB. Earlier
+revisions of Donner resolved most CSS color functions directly to sRGB and only recognized
+`color()` arguments for `srgb` and `srgb-linear`. This document describes the shipped color model,
+parser, and conversion pipeline that now cover the CSS Color 4 functions and named profiles while
+keeping color management centralized in the `Color` class and downstream render backends. Inter-
+and intra-space interpolation remain delegated to renderers. Deterministic sRGB conversion acts as
+the default fallback.
 
 ## Tracking
 
@@ -29,6 +30,37 @@ end-to-end; future work is limited to optional ICC profile loading and HDR tone-
 - Add HDR tone mapping or gamut-clipping heuristics beyond simple clipping.
 - Modify rendering backends; backends may still receive sRGB after conversion.
 
+## Spec coverage (CSS Color 4 CRD 2025-04-24)
+
+Reference: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| [rgb()][css-rgb] | Complete | Modern alpha syntax; comma or space separators. |
+| [rgba()][css-rgb] | Complete | Legacy alias parsed alongside `rgb()`. |
+| [hsl()][css-hsl] | Complete | Modern alpha syntax; comma or space separators. |
+| [hwb()][css-hwb] | Complete | Modern alpha syntax; comma or space separators. |
+| [lab()][css-lab] | Complete | Deferred conversion; channels checked on resolve. |
+| [lch()][css-lab] | Complete | Deferred conversion; channels checked on resolve. |
+| [oklab()][css-oklab] | Complete | Deferred conversion; channels checked on resolve. |
+| [oklch()][css-oklab] | Complete | Deferred conversion; channels checked on resolve. |
+| [color() profiles][css-color-fn] | Complete | Supports sRGB/P3/A98/ProPhoto/Rec2020/XYZ D50/D65. |
+| [Profile aliases][css-changes] | Complete | Stylesheet aliases for profiles (Color 5 log). |
+| [device-cmyk()][css-device-cmyk] | Complete | Parses CMYK with optional alpha or RGB fallback. |
+| [Relative colors][css-relative] | Complete | Parses `from` syntax across supported functions. |
+| [Interpolation][css-interpolation] | Partial | sRGB fallback; backends interpolate. |
+
+[css-rgb]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#rgb-functions
+[css-hsl]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#the-hsl-notation
+[css-hwb]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#the-hwb-notation
+[css-lab]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#cie-lab
+[css-oklab]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#ok-lab
+[css-color-fn]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#color-function
+[css-changes]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#changes-from-20240213
+[css-device-cmyk]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#device-cmyk
+[css-relative]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#relative-colors
+[css-interpolation]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#interpolation
+
 ## Current capabilities
 
 - `Color` retains authored color spaces through `ColorSpaceValue` and defers conversion until
@@ -38,6 +70,8 @@ end-to-end; future work is limited to optional ICC profile loading and HDR tone-
 - `@color-profile` rules can alias the supported profiles to custom names consumed by `color()`.
 - `hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`, and `oklch()` preserve authored values and rely on
   the shared conversion helpers when resolving to sRGB.
+- Relative color parsing reuses base color components across color spaces, including the `color()`
+  function.
 - Conversion helpers encode/decode channels, perform RGB↔XYZ transforms, and apply Bradford
   adaptation when necessary.
 
@@ -75,20 +109,6 @@ the color-function conversions through `Color::asRGBA()`. The test matrix explic
 CSS Color 4 functions that prompted [issue #6](https://github.com/jwmcglynn/donner/issues/6),
 verifying `hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`, and `color()` against spec
 reference values. Parser tests run under Bazel via `//donner/css/parser:parser_tests`.
-
-## Issue #6 verification
-
-| Checklist item | Status |
-| --- | --- |
-| Implement `hsl()` with deferred conversion in `Color` | Complete |
-| Implement `hwb()` | Complete |
-| Implement `lab()` | Complete |
-| Implement `lch()` | Complete |
-| Implement `oklab()` | Complete |
-| Implement `oklch()` | Complete |
-| Implement `color()` with SVG2 profiles and aliasing | Complete |
-| Parse `@color-profile` and bind aliases to supported profiles | Complete |
-| Validate color-function conversions against CSS Color 4 references | Complete |
 
 ## Future work
 
