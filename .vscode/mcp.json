@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "resvg-test-triage": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/tools/mcp-servers/resvg-test-triage/.venv/bin/python",
+      "args": [
+        "${workspaceFolder}/tools/mcp-servers/resvg-test-triage/server.py"
+      ]
+    },
+  },
+  "inputs": []
+}

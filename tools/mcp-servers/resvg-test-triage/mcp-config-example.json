@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "resvg-test-triage": {
+      "command": "python3",
+      "args": [
+        "${workspaceDir}/donner/tools/mcp-servers/resvg-test-triage/server.py"
+      ],
+      "env": {}
+    }
+  }
+}

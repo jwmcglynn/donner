@@ -20,7 +20,7 @@ Follow these steps when collaborating on a feature:
    implementation is well known, and collaborators can pick up steps as needed.
    Always document what's next.
 6. **Keep design docs current.** During implementation and code review, keep the
-   design doc in sync with the latest decisions and feedback.
+   design doc in sync with the latest decisions and feedback, and check boxes to reflect progress.
 7. **Finalization.** After all TODO items are complete, finish any remaining
    work to ship the feature. Convert the design doc into developer-facing
    documentation by removing prior-state notes and step-by-step plans. Document
@@ -48,3 +48,11 @@ Quality expectations for this directory:
   step to complete when the user requests the next task.
 - Keep this guidance and the design doc templates in sync; update the template whenever these
   instructions change so authors always start from the latest expectations.
+
+### Resvg Test Integration with Design Docs
+
+When writing design docs for renderer features:
+1. **Reference relevant tests**: Link to specific resvg tests that validate the feature
+2. **Include test plan**: List which tests should pass after implementation
+3. **Update test status**: As implementation progresses, note which tests now pass
+4. **Document skip removals**: When removing skips, reference the implementation that fixed them

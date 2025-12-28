@@ -55,6 +55,7 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   flow or trust boundaries. Use Doxygen-friendly anchors `{#AnchorId}` and run `tools/doxygen.sh`
   when needed.
 - Tests:
+  - **All code changes should include tests** - When adding new features or methods, write corresponding unit tests.
   - Use gMock with gTest for C++ tests.
   - Add fuzzers for parser-style code paths when practical.
 
@@ -88,3 +89,110 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   - Use `tools/doxygen.sh` to generate the docs.
   - The generated docs are in `generated-doxygen/html/`.
 - Use `tools/coverage.sh` to generate code coverage reports (if lcov is installed).
+
+
+## Working with Resvg Test Suite
+
+When working on SVG renderer features, the resvg test suite (`//donner/svg/renderer/tests:resvg_test_suite`) provides comprehensive validation. Follow these guidelines:
+
+### Test-Driven Feature Development
+
+1. **Identify relevant tests early**: Before implementing a feature, check which resvg tests cover it
+2. **Use tests as acceptance criteria**: Tests define correct behavior - passing tests = feature complete
+3. **Triage systematically**: When adding/fixing features, triage all related test failures following [README_resvg_test_suite.md](donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures)
+
+### When to Triage Tests
+
+Triage tests when:
+- **After implementing a new feature**: Check if any previously-skipped tests now pass
+- **When tests start failing**: Understand why and document the reason
+- **When adding rendering features**: Ensure all related tests are properly categorized
+- **During code review**: Verify test coverage and skip reasons are appropriate
+
+### Resvg Test Triage Process Summary
+
+For detailed instructions, see [README_resvg_test_suite.md](donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures). Quick reference:
+
+```sh
+# Run tests for a feature
+bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=*e_text_*'
+
+# Examine failing SVG (printed in the output)
+# Then either fix the root cause, or if it is out of scope, add a skip with a comment in resvg_test_suite.cc
+{"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
+```
+
+#### Resvg Test Failure Comment Conventions
+
+Use consistent skip reasons:
+- `Not impl: <feature>` - Feature not implemented (e.g., `<tspan>`, `writing-mode`)
+- `UB: <reason>` - Undefined behavior or edge case
+- `Bug: <description>` - Known bug
+- `Larger threshold due to <reason>` - For anti-aliasing differences
+
+
+### Comment Conventions
+
+Use consistent skip reasons:
+- `Not impl: <feature>` - Feature not implemented (e.g., `<tspan>`, `writing-mode`)
+- `UB: <reason>` - Undefined behavior or edge case
+- `Bug: <description>` - Known bug
+- `Larger threshold due to <reason>` - For anti-aliasing differences
+
+### MCP Test Triage Server (Automated Assistance)
+
+The `resvg-test-triage` MCP server provides 8 AI-assisted tools for automated test analysis. It accelerates test triage and feature implementation.
+
+**Tools:**
+1. **analyze_test_failure** - Analyzes a single test failure with feature detection and categorization
+2. **batch_triage_tests** - Processes multiple test failures from test output, grouping by feature
+3. **detect_svg_features** - Parses SVG content to identify which advanced features are being tested
+4. **suggest_skip_comment** - Generates properly formatted skip comments for resvg_test_suite.cc
+5. **suggest_implementation_approach** - Suggests which files to modify and provides implementation hints
+6. **find_related_tests** - Finds all tests failing for the same feature (batch implementation opportunities)
+7. **generate_feature_report** - Shows progress reports by category (e.g., e-text, a-transform)
+8. **analyze_visual_diff** - Programmatically analyzes diff images to categorize failure types
+
+**Example Workflow:**
+
+When triaging a failing test like `e-text-031.svg`:
+
+1. **Analyze the failure**:
+   ```
+   Tool: analyze_test_failure
+   Input: { "test_name": "e-text-031.svg", "svg_content": "...", "pixel_diff": 8234 }
+   Output: Features detected: [writing_mode], category: not_implemented
+   ```
+
+2. **Find related tests** (batch opportunity):
+   ```
+   Tool: find_related_tests
+   Input: { "feature": "writing-mode", "skip_file_content": "..." }
+   Output: Found 2 tests (e-text-031, e-text-033) - implement once, fix both!
+   ```
+
+3. **Get implementation guidance**:
+   ```
+   Tool: suggest_implementation_approach
+   Input: { "test_name": "e-text-031.svg", "features": ["writing_mode"], "category": "text_layout" }
+   Output:
+   - Top files: ComputedTextStyleComponent.h, TextFlowComponent.h
+   - Search keywords: "writing-mode", "WritingMode"
+   - Hints: "Layout properties affect text positioning..."
+   ```
+
+4. **Track progress**:
+   ```
+   Tool: generate_feature_report
+   Input: { "category": "e-text", "test_output": "..." }
+   Output: 11 missing features identified, writing-mode affects 2 tests (medium priority)
+   ```
+
+5. **Analyze visual differences**:
+   ```
+   Tool: analyze_visual_diff
+   Input: { "diff_image_path": "...", "actual_image_path": "...", "expected_image_path": "..." }
+   Output: Type: positioning, Cause: "Baseline positioning offset", Confidence: high
+   ```
+
+For setup and detailed tool documentation, see [tools/mcp-servers/resvg-test-triage/README.md](tools/mcp-servers/resvg-test-triage/README.md)
