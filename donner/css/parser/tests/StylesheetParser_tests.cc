@@ -3,10 +3,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/css/ColorProfile.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
 #include "donner/css/tests/SelectorTestUtils.h"
 
 using testing::ElementsAre;
+using testing::Optional;
 
 namespace donner::css::parser {
 
@@ -61,6 +63,17 @@ TEST(StylesheetParser, FontFaceDataUrl) {
   EXPECT_EQ(sheet.fontFaces()[0].sources[0].kind, FontFaceSource::Kind::Data);
   EXPECT_THAT(std::get<std::vector<uint8_t>>(sheet.fontFaces()[0].sources[0].payload),
               testing::ElementsAre('t', 'e', 's', 't'));
+}
+
+TEST(StylesheetParser, ColorProfiles) {
+  Stylesheet sheet = StylesheetParser::Parse(R"(
+    @color-profile --brand { src: display-p3; }
+    @color-profile --hdr { src: color(rec2020 0 0 0); }
+    svg { fill: red; }
+  )");
+
+  EXPECT_THAT(sheet.colorProfiles().resolve("--brand"), Optional(ColorSpaceId::DisplayP3));
+  EXPECT_THAT(sheet.colorProfiles().resolve("--hdr"), Optional(ColorSpaceId::Rec2020));
 }
 
 }  // namespace donner::css::parser
