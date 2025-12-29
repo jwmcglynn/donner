@@ -35,6 +35,9 @@ constexpr std::array<const char*, 16> kQuarterBlockGlyphs = {
     " ", "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
 };
 
+constexpr css::RGBA kCheckerboardLight = css::RGBA::RGB(0xCC, 0xCC, 0xCC);
+constexpr css::RGBA kCheckerboardDark = css::RGBA::RGB(0x88, 0x88, 0x88);
+
 css::RGBA combineSamples(uint64_t weightedR, uint64_t weightedG, uint64_t weightedB,
                          uint64_t totalAlpha, int pixelCount) {
   if (pixelCount == 0 || totalAlpha == 0) {
@@ -100,6 +103,27 @@ bool containsIgnoreCase(std::string_view haystack, std::string_view needle) {
   }();
 
   return lowerHaystack.find(lowerNeedle) != std::string::npos;
+}
+
+css::RGBA checkerboardColor(int column, int row) {
+  const bool isLight = ((column + row) % 2) == 0;
+  return isLight ? kCheckerboardLight : kCheckerboardDark;
+}
+
+css::RGBA compositeOverBackground(const css::RGBA& color, const css::RGBA& background) {
+  if (color.a == 0xFF) {
+    return color;
+  }
+
+  const uint16_t alpha = color.a;
+  const uint16_t inverse = 0xFFu - alpha;
+
+  auto blend = [&](uint8_t channel, uint8_t backgroundChannel) {
+    return static_cast<uint8_t>((channel * alpha + backgroundChannel * inverse + 127) / 255);
+  };
+
+  return css::RGBA(blend(color.r, background.r), blend(color.g, background.g),
+                   blend(color.b, background.b), 0xFF);
 }
 
 void writeTrueColor(std::ostream& output, int selector, const css::RGBA& color) {
@@ -182,6 +206,32 @@ double medianLuminance(const QuarterBlock& block) {
 
 bool envMatchesValue(std::string_view value, std::string_view expectation) {
   return !value.empty() && containsIgnoreCase(value, expectation);
+}
+
+std::optional<bool> parseOptionalBoolEnv(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+
+  std::string lower(value);
+  std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+
+  if (lower == "0" || lower == "false" || lower == "off") {
+    return false;
+  }
+
+  if (lower == "1" || lower == "true" || lower == "on") {
+    return true;
+  }
+
+  return std::nullopt;
+}
+
+bool isInteractiveTerminal() {
+  return isatty(STDOUT_FILENO) != 0 || isatty(STDERR_FILENO) != 0 || isatty(STDIN_FILENO) != 0;
 }
 
 std::optional<winsize> tryGetWindowSize() {
@@ -324,6 +374,13 @@ TerminalImageViewerConfig TerminalImageViewer::DetectConfigFromEnvironment() {
   const TerminalCapabilities capabilities = detectCapabilitiesFromEnvironment();
 
   TerminalImageViewerConfig config;
+  if (const std::optional<bool> enableOutput =
+          parseOptionalBoolEnv("DONNER_ENABLE_TERMINAL_IMAGES");
+      enableOutput.has_value()) {
+    config.enableRendering = *enableOutput;
+  } else {
+    config.enableRendering = isInteractiveTerminal();
+  }
   config.useTrueColor = capabilities.supportsTrueColor;
   config.enableITermInlineImages = capabilities.supportsITermInlineImages;
   return config;
@@ -445,6 +502,10 @@ css::RGBA TerminalImageViewer::sampleRegion(const TerminalImageView& image, int 
 
 void TerminalImageViewer::render(const TerminalImageView& image, std::ostream& output,
                                  const TerminalImageViewerConfig& config) const {
+  if (!config.enableRendering) {
+    return;
+  }
+
   if (config.enableITermInlineImages) {
     renderITermInlineImage(image, output, config);
   } else {
@@ -457,6 +518,7 @@ void TerminalImageViewer::renderSampled(const TerminalImage& sampledImage, std::
   for (int row = 0; row < sampledImage.rows; ++row) {
     for (int column = 0; column < sampledImage.columns; ++column) {
       const TerminalCell& cell = sampledImage.cellAt(column, row);
+      const css::RGBA checkerColor = checkerboardColor(column, row);
 
       auto writeColor = [&](int selector, const css::RGBA& color) {
         if (config.useTrueColor) {
@@ -514,12 +576,14 @@ void TerminalImageViewer::renderSampled(const TerminalImage& sampledImage, std::
         const css::RGBA fgColor = averageColors(foregroundSamples);
         const css::RGBA bgColor = averageColors(backgroundSamples);
 
-        writeColor(38, fgColor);
-        writeColor(48, bgColor);
+        writeColor(38, compositeOverBackground(fgColor, checkerColor));
+        writeColor(48, compositeOverBackground(bgColor, checkerColor));
         output << kQuarterBlockGlyphs[mask];
       } else {
-        const css::RGBA fgColor = cell.half.upper;
-        const css::RGBA bgColor = cell.half.lower;
+        const css::RGBA upperChecker = checkerboardColor(column, row * 2);
+        const css::RGBA lowerChecker = checkerboardColor(column, row * 2 + 1);
+        const css::RGBA fgColor = compositeOverBackground(cell.half.upper, upperChecker);
+        const css::RGBA bgColor = compositeOverBackground(cell.half.lower, lowerChecker);
 
         writeColor(38, fgColor);
         writeColor(48, bgColor);

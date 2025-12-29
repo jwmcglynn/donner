@@ -188,6 +188,40 @@ TEST(TerminalImageViewerRenderTest, WritesHalfPixelANSISequences) {
   EXPECT_EQ(stream.str(), "\x1b[38;2;16;32;48m\x1b[48;2;160;176;192m▀\x1b[0m\n");
 }
 
+TEST(TerminalImageViewerRenderTest, RendersCheckerboardForTransparentPixels) {
+  std::vector<uint8_t> pixels;
+  pixels.reserve(1 * 2 * 4);
+
+  appendPixel(pixels, makeColor(0x00, 0x00, 0x00, 0x00));
+  appendPixel(pixels, makeColor(0x00, 0x00, 0x00, 0x00));
+
+  const TerminalImageView view{pixels, 1, 2, 1};
+
+  TerminalImageViewer viewer;
+  std::ostringstream stream;
+  viewer.render(view, stream, {.pixelMode = TerminalPixelMode::kHalfPixel, .scale = 1.0});
+
+  EXPECT_EQ(stream.str(), "\x1b[38;2;204;204;204m\x1b[48;2;136;136;136m▀\x1b[0m\n");
+}
+
+TEST(TerminalImageViewerRenderTest, SuppressesOutputWhenDisabled) {
+  std::vector<uint8_t> pixels;
+  pixels.reserve(1 * 2 * 4);
+
+  appendPixel(pixels, makeColor(0x10, 0x20, 0x30));
+  appendPixel(pixels, makeColor(0xA0, 0xB0, 0xC0));
+
+  const TerminalImageView view{pixels, 1, 2, 1};
+
+  TerminalImageViewer viewer;
+  std::ostringstream stream;
+  viewer.render(
+      view, stream,
+      {.pixelMode = TerminalPixelMode::kHalfPixel, .scale = 1.0, .enableRendering = false});
+
+  EXPECT_TRUE(stream.str().empty());
+}
+
 TEST(TerminalImageViewerRenderTest, WritesHalfPixelWith256ColorFallback) {
   std::vector<uint8_t> pixels;
   pixels.reserve(1 * 2 * 4);
@@ -305,9 +339,10 @@ TEST(TerminalImageViewerCapabilityDetectionTest, AutoDetectionInfluencesRenderin
   ScopedEnvVar colorTerm("COLORTERM", "");
   ScopedEnvVar termProgram("TERM_PROGRAM", "xterm");
   ScopedEnvVar term("TERM", "xterm-256color");
+  ScopedEnvVar enableImages("DONNER_ENABLE_TERMINAL_IMAGES", "1");
 
   std::vector<uint8_t> pixels;
-  pixels.reserve(1 * 2 * 4);
+  pixels.reserve(1ull * 2 * 4);
 
   appendPixel(pixels, makeColor(0x10, 0x20, 0x30));
   appendPixel(pixels, makeColor(0xA0, 0xB0, 0xC0));

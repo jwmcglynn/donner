@@ -1,6 +1,13 @@
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
+exports_files(
+    [
+        "testdata/valid-001.woff",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 donner_cc_library(
     name = "fonts",
     srcs = [

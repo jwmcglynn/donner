@@ -383,5 +383,19 @@
         "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/base/fonts/fonts_tests.runfiles"
       },
     },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "resource_manager_context_tests",
+      "program": "${workspaceFolder}/bazel-bin/donner/svg/components/resources/resource_manager_context_tests",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      },
+      "env": {
+        "TEST_SRCDIR": "${workspaceFolder}/bazel-bin/donner/svg/components/resources/resource_manager_context_tests.runfiles"
+      },
+    },
   ]
 }

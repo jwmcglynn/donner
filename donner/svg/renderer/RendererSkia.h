@@ -1,7 +1,11 @@
 #pragma once
 /// @file
 
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
@@ -131,6 +135,25 @@ public:
    */
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
+  /**
+   * Register an additional font file to be used for the given family.
+   *
+   * @param familyName Name of the family the font belongs to.
+   * @param path Filesystem path to a font file.
+   */
+  void addFontFile(std::string_view familyName, const std::filesystem::path& path) {
+    customFontFiles_.emplace_back(std::string(familyName), path);
+  }
+
+  /**
+   * Override the fallback font family used when no matching typeface is found.
+   *
+   * @param familyName Name of the fallback family to request from the platform font manager.
+   */
+  void setFallbackFontFamily(std::string_view familyName) {
+    fallbackFontFamily_ = std::string(familyName);
+  }
+
 private:
   /// Implementation class.
   class Impl;
@@ -145,7 +168,11 @@ private:
   bool verbose_;  //!< If true, print verbose logging.
 
   sk_sp<class SkFontMgr> fontMgr_;  //!< Font manager, may be initialized with custom fonts.
-  std::map<std::string, sk_sp<SkTypeface>> typefaces_;  //!< Cached typefaces by family name.
+  sk_sp<class SkTypeface> fallbackTypeface_;  //!< Default fallback typeface for text.
+  std::map<std::string, std::vector<sk_sp<SkTypeface>>> typefaces_;  //!< Cached typefaces by
+                                                                     //!< family name.
+  std::optional<std::string> fallbackFontFamily_;                    //!< Requested fallback family.
+  std::vector<std::pair<std::string, std::filesystem::path>> customFontFiles_;  //!< Custom fonts.
 
   SkBitmap bitmap_;                    //!< The bitmap to render into.
   SkCanvas* rootCanvas_ = nullptr;     //!< The root canvas.

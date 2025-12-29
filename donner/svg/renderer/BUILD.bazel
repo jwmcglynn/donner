@@ -22,8 +22,15 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Automatically enable CoreText on macOS (can be overridden with --@donner//donner/svg/renderer:use_coretext=false)
 config_setting(
     name = "macos_coretext",
+    constraint_values = ["@platforms//os:macos"],
+)
+
+# Explicit CoreText flag override
+config_setting(
+    name = "macos_coretext_explicit",
     constraint_values = ["@platforms//os:macos"],
     flag_values = {":use_coretext": "true"},
 )
@@ -37,6 +44,15 @@ config_setting(
 config_setting(
     name = "config_skia_debug",
     flag_values = {":skia_debug": "true"},
+)
+
+donner_cc_library(
+    name = "render_mode",
+    hdrs = ["RenderMode.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
 )
 
 donner_cc_library(
@@ -72,6 +88,19 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "typeface_resolver",
+    srcs = ["TypefaceResolver.cc"],
+    hdrs = ["TypefaceResolver.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":skia_deps",
+        "//donner/base",
+        "//donner/svg/core",
+        "//third_party/public-sans",
+    ],
+)
+
+donner_cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
@@ -96,7 +125,17 @@ donner_perf_sensitive_cc_library(
     deps = [
         "@skia//:core",
         "@skia//:pathops",
+        "@skia//:skshaper_core",
     ] + select({
+        ":macos_coretext": [
+            # Use CoreText shaper on macOS (no glib dependency)
+            "@skia//:skshaper_coretext",
+        ],
+        "//conditions:default": [
+            # Use HarfBuzz shaper on Linux/other platforms
+            "@skia//:skshaper_harfbuzz",
+        ],
+    }) + select({
         ":macos_coretext": [
             "@skia//:fontmgr_coretext",
         ],
@@ -117,6 +156,7 @@ donner_cc_library(
         ":renderer_image_io",
         ":renderer_utils",
         ":skia_deps",
+        ":typeface_resolver",
         "//donner/base/fonts",
         "//donner/svg",
         "//donner/svg/core",

@@ -422,7 +422,7 @@ struct Token {
      * Create a Percentage token.
      *
      * @param value The percentage multiplied by 100, 100% -> 100.0
-     * @param valueString The original string value.
+     * @param valueString The original string value, without the '%' character.
      * @param type The type of number, either integer or floating point.
      */
     Percentage(double value, RcString valueString, NumberType type)
@@ -439,7 +439,7 @@ struct Token {
      *
      * Example output:
      * ```
-     * Percentage(100, str='100%', integer)
+     * Percentage(100, str='100', integer)
      * ```
      *
      * @param os Output stream.
@@ -451,7 +451,7 @@ struct Token {
     }
 
     double value;          ///< The percentage multiplied by 100, 100% -> 100.0
-    RcString valueString;  ///< The original string value.
+    RcString valueString;  ///< The original string value, without the '%' character.
     NumberType type;       ///< The type of number, either integer or floating point.
   };
 

@@ -1,5 +1,8 @@
 #include "donner/css/parser/StylesheetParser.h"
 
+#include <algorithm>
+#include <string>
+
 #include "donner/base/StringUtils.h"
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/parser/DataUrlParser.h"
@@ -16,7 +19,7 @@ namespace {
  * Try to parse a `url()` function into either a data URL or an external URL.
  *
  * @param url The URL to parse.
- * @return \ref FontFaceSource if the URL is a data URL, otherwise \c std::nullopt.
+ * @return \ref FontFaceSource for the URL.
  */
 std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url) {
   using donner::parser::DataUrlParser;
@@ -30,7 +33,11 @@ std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url
       DataUrlParser::Parse(url);
 
   if (std::holds_alternative<DataUrlParserError>(maybeParsedUrl)) {
-    return std::nullopt;
+    // If parsing fails, treat it as a regular external URL
+    FontFaceSource source;
+    source.kind = FontFaceSource::Kind::Url;
+    source.payload = RcString(url);
+    return source;
   }
 
   DataUrlParser::Result& parsedUrl = std::get<DataUrlParser::Result>(maybeParsedUrl);
@@ -44,9 +51,34 @@ std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url
   } else if (parsedUrl.kind == DataUrlParser::Result::Kind::ExternalUrl) {
     FontFaceSource source;
     source.kind = FontFaceSource::Kind::Url;
-    source.payload = parsedUrl.payload;
+    source.payload = std::get<RcString>(parsedUrl.payload);
 
     return source;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<RcString> ExtractSingleValue(const std::vector<ComponentValue>& values) {
+  if (values.empty()) {
+    return std::nullopt;
+  }
+
+  const ComponentValue& first = values.front();
+  if (const Token* token = std::get_if<Token>(&first.value)) {
+    if (token->is<Token::Ident>()) {
+      return token->get<Token::Ident>().value;
+    }
+    if (token->is<Token::String>()) {
+      return token->get<Token::String>().value;
+    }
+    if (token->is<Token::Number>()) {
+      return token->get<Token::Number>().valueString;
+    }
+    if (token->is<Token::Percentage>()) {
+      // Percentage.valueString does not include the '%' suffix.
+      return RcString(token->get<Token::Percentage>().valueString + "%");
+    }
   }
 
   return std::nullopt;
@@ -83,13 +115,24 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
         FontFace fontFace;
 
         auto addSrc = [&](std::vector<ComponentValue> items) {
-          if (items.empty()) {
-            return;
-          }
-
           std::optional<FontFaceSource> source;
 
-          const ComponentValue& first = items.front();
+          // Skip leading whitespace to find the first function (local() or url())
+          size_t firstNonWhitespace = 0;
+          while (firstNonWhitespace < items.size()) {
+            if (const Token* t = std::get_if<Token>(&items[firstNonWhitespace].value);
+                t && t->is<Token::Whitespace>()) {
+              ++firstNonWhitespace;
+            } else {
+              break;
+            }
+          }
+
+          if (firstNonWhitespace >= items.size()) {
+            return;  // Only whitespace
+          }
+
+          const ComponentValue& first = items[firstNonWhitespace];
           if (const Function* func = std::get_if<Function>(&first.value)) {
             if (func->name.equalsLowercase("local") && !func->values.empty()) {
               if (const Token* t = std::get_if<Token>(&func->values.front().value)) {
@@ -130,7 +173,7 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
 
           if (source) {
             // parse additional format() or tech() hints
-            for (size_t i = 1; i < items.size(); ++i) {
+            for (size_t i = firstNonWhitespace + 1; i < items.size(); ++i) {
               const ComponentValue& cv = items[i];
               if (const Function* f = std::get_if<Function>(&cv.value)) {
                 if (f->name.equalsLowercase("format") && !f->values.empty()) {
@@ -181,6 +224,14 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
               }
             }
             addSrc(std::move(current));
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-style"))) {
+            fontFace.style = ExtractSingleValue(decl.values);
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-weight"))) {
+            fontFace.weight = ExtractSingleValue(decl.values);
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-stretch"))) {
+            fontFace.stretch = ExtractSingleValue(decl.values);
+          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-display"))) {
+            fontFace.display = ExtractSingleValue(decl.values);
           }
         }
 

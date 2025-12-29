@@ -11,9 +11,23 @@ using Params = ImageComparisonParams;
 
 namespace {
 
+ImageComparisonParams defaultResvgParams() {
+  ImageComparisonParams params;
+  const std::filesystem::path fontsDir =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "fonts");
+  params.addFontFile("Noto Sans", fontsDir / "NotoSans-Regular.ttf");
+  params.addFontFile("Noto Sans", fontsDir / "NotoSans-Bold.ttf");
+  params.addFontFile("Noto Sans", fontsDir / "NotoSans-Italic.ttf");
+  params.addFontFile("Amiri", fontsDir / "Amiri-Regular.ttf");
+  params.addFontFile("Noto Color Emoji", fontsDir / "NotoColorEmoji.ttf");
+
+  params.setFallbackFontFamily("Noto Sans");
+  return params;
+}
+
 std::vector<ImageComparisonTestcase> getTestsWithPrefix(
     const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {},
-    ImageComparisonParams defaultParams = {}) {
+    ImageComparisonParams defaultParams = defaultResvgParams()) {
   const std::string kSvgDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "svg");
 
   // Copy into a vector and sort the tests.
@@ -28,6 +42,12 @@ std::vector<ImageComparisonTestcase> getTestsWithPrefix(
       // Set special-case params.
       if (auto it = overrides.find(filename); it != overrides.end()) {
         test.params = it->second;
+        if (test.params.fontFiles.empty()) {
+          test.params.fontFiles = defaultParams.fontFiles;
+        }
+        if (!test.params.fallbackFontFamily && defaultParams.fallbackFontFamily) {
+          test.params.fallbackFontFamily = defaultParams.fallbackFontFamily;
+        }
       }
 
       // Always set the canvas size to 500x500 for these tests.
@@ -459,7 +479,32 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-// TODO(text): e-text-
+INSTANTIATE_TEST_SUITE_P(
+    Text, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-text-",
+        {
+            {"e-text-018.svg", Params::Skip()},  // Not impl: `writing-mode`
+            {"e-text-022.svg", Params::Skip()},  // Not impl: `text-anchor="end"`
+            {"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
+            {"e-text-024.svg", Params::Skip()},  // Not impl: `word-spacing`
+            {"e-text-026.svg", Params::Skip()},  // Not impl: `text-decoration`
+            {"e-text-027.svg", Params::Skip()},  // Bug: CoreText can't load Noto Color Emoji
+            {"e-text-028.svg", Params::Skip()},  // Bug: CoreText can't load Noto Color Emoji
+            {"e-text-029.svg", Params::Skip()},  // Not impl: `font-style`
+            {"e-text-030.svg", Params::Skip()},  // Not impl: `font-variant`
+            {"e-text-031.svg", Params::Skip()},  // Not impl: Vertical text / writing-mode
+            {"e-text-033.svg", Params::Skip()},  // Not impl: Vertical text / writing-mode
+            {"e-text-034.svg", Params::Skip()},  // Not impl: `baseline-shift`
+            {"e-text-035.svg", Params::Skip()},  // Not impl: `baseline-shift`
+            {"e-text-036.svg", Params::Skip()},  // Not impl: `alignment-baseline`
+            {"e-text-038.svg", Params::Skip()},  // Not impl: `dominant-baseline`
+            {"e-text-041.svg", Params::Skip()},  // Not impl: <tspan>
+            {"e-text-042.svg", Params::Skip()},  // Not impl: <textPath>
+            {"e-text-043.svg", Params::Skip()},  // Not impl: <textPath>
+        })),
+    TestNameFromFilename);
+
 // TODO(text): e-textPath
 // TODO(text): e-tspan
 

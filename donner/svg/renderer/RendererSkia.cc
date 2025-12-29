@@ -1,22 +1,36 @@
 #include "donner/svg/renderer/RendererSkia.h"
 
 #include <algorithm>  // For std::sort
+#include <filesystem>
+#include <limits>  // For std::numeric_limits
 
 // Skia
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkFont.h"
+#include "include/core/SkFontMetrics.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkStream.h"
+#include "include/core/SkTextBlob.h"
 #include "include/core/SkTypeface.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/pathops/SkPathOps.h"
+#include "modules/skshaper/include/SkShaper.h"
+
+#ifdef SK_SHAPER_HARFBUZZ_AVAILABLE
+#include "modules/skshaper/include/SkShaper_harfbuzz.h"
+#include "modules/skunicode/include/SkUnicode.h"
+#endif
+
+#ifdef SK_SHAPER_CORETEXT_AVAILABLE
+#include "modules/skshaper/include/SkShaper_coretext.h"
+#endif
 
 #ifdef DONNER_USE_CORETEXT
 #include "include/ports/SkFontMgr_mac_ct.h"
@@ -63,10 +77,10 @@
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/renderer/TypefaceResolver.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 // Embedded resources
-#include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
 
@@ -86,6 +100,44 @@ SkMatrix toSkiaMatrix(const Transformd& transform) {
                            NarrowToFloat(transform.data[3]),  // scaleY
                            NarrowToFloat(transform.data[5]),  // transY
                            0, 0, 1);
+}
+
+SkFontStyle::Slant ToSkFontSlant(FontStyle style) {
+  switch (style) {
+    case FontStyle::Normal: return SkFontStyle::Slant::kUpright_Slant;
+    case FontStyle::Italic: return SkFontStyle::Slant::kItalic_Slant;
+    case FontStyle::Oblique: return SkFontStyle::Slant::kOblique_Slant;
+  }
+
+  UTILS_UNREACHABLE();
+}
+
+SkFontStyle::Width ToSkFontWidth(FontStretch stretch) {
+  switch (stretch) {
+    case FontStretch::UltraCondensed: return SkFontStyle::kUltraCondensed_Width;
+    case FontStretch::ExtraCondensed: return SkFontStyle::kExtraCondensed_Width;
+    case FontStretch::Condensed: return SkFontStyle::kCondensed_Width;
+    case FontStretch::SemiCondensed: return SkFontStyle::kSemiCondensed_Width;
+    case FontStretch::Normal: return SkFontStyle::kNormal_Width;
+    case FontStretch::SemiExpanded: return SkFontStyle::kSemiExpanded_Width;
+    case FontStretch::Expanded: return SkFontStyle::kExpanded_Width;
+    case FontStretch::ExtraExpanded: return SkFontStyle::kExtraExpanded_Width;
+    case FontStretch::UltraExpanded: return SkFontStyle::kUltraExpanded_Width;
+  }
+
+  UTILS_UNREACHABLE();
+}
+
+int ToSkFontWeight(const FontWeight& weight) {
+  const int resolved = weight.kind == FontWeight::Kind::Number ? weight.value
+                       : weight.kind == FontWeight::Kind::Bold ? 700
+                                                               : 400;
+  return std::clamp(resolved, 1, 1000);
+}
+
+SkFontStyle ToSkFontStyle(const components::ComputedTextStyleComponent& style) {
+  return SkFontStyle(ToSkFontWeight(style.fontWeight), ToSkFontWidth(style.fontStretch),
+                     ToSkFontSlant(style.fontStyle));
 }
 
 SkM44 toSkia(const Transformd& transform) {
@@ -328,6 +380,23 @@ public:
 #endif
     }
 
+    for (const auto& [family, path] : renderer_.customFontFiles_) {
+      if (!std::filesystem::exists(path)) {
+        continue;
+      }
+
+      if (renderer_.verbose_) {
+        std::cout << "Loading custom font: " << family << " from " << path.string() << "\n";
+      }
+      const std::string pathString = path.string();
+      sk_sp<SkTypeface> typeface = renderer_.fontMgr_->makeFromFile(pathString.c_str());
+      if (typeface) {
+        renderer_.typefaces_[family].push_back(std::move(typeface));
+      } else if (renderer_.verbose_) {
+        std::cout << "Failed to load custom font: " << family << "\n";
+      }
+    }
+
     // If we have custom fonts, load them into a font manager.
     auto& resourceManager = registry.ctx().get<components::ResourceManagerContext>();
 
@@ -337,7 +406,8 @@ public:
       auto fontData = CreateInMemoryFont(font.font);
       if (auto typeface = renderer_.fontMgr_->makeFromData(std::move(fontData))) {
         if (font.font.familyName.has_value()) {
-          renderer_.typefaces_[font.font.familyName.value()] = std::move(typeface);
+          auto& familyTypefaces = renderer_.typefaces_[font.font.familyName.value()];
+          familyTypefaces.push_back(std::move(typeface));
         } else {
           // We don't have a family name, so the font will not be usable. Ignore it.
         }
@@ -346,6 +416,24 @@ public:
                   << (font.font.familyName.has_value() ? font.font.familyName.value() : "unknown")
                   << "\n";
       }
+    }
+
+    AddEmbeddedFonts(renderer_.typefaces_, *renderer_.fontMgr_);
+
+    if (!renderer_.fallbackTypeface_ && renderer_.fallbackFontFamily_) {
+      SmallVector<RcString, 1> families{RcString(renderer_.fallbackFontFamily_.value())};
+      renderer_.fallbackTypeface_ =
+          ResolveTypeface(families, SkFontStyle(), renderer_.typefaces_, *renderer_.fontMgr_,
+                          /*fallbackTypeface=*/nullptr);
+    }
+
+    if (!renderer_.fallbackTypeface_ && renderer_.fallbackFontFamily_) {
+      renderer_.fallbackTypeface_ = renderer_.fontMgr_->matchFamilyStyle(
+          renderer_.fallbackFontFamily_->c_str(), SkFontStyle());
+    }
+
+    if (!renderer_.fallbackTypeface_) {
+      renderer_.fallbackTypeface_ = CreateEmbeddedFallbackTypeface(*renderer_.fontMgr_);
     }
   }
 
@@ -1174,7 +1262,7 @@ public:
     renderer_.currentCanvas_->restore();
   }
 
-  // Draws text content using computed spans, font-family, and font-size from style
+  // Draws text content using computed spans and typography resolved per span
   void drawText(EntityHandle dataHandle, const components::RenderingInstanceComponent& instance,
                 const components::ComputedTextComponent& text, const PropertyRegistry& style,
                 const Boxd& viewBox, const FontMetrics& fontMetrics) {
@@ -1193,54 +1281,351 @@ public:
       return;
     }
 
-    // Determine font size in pixels
-    const Lengthd sizeLen = style.fontSize.getRequired();
-    const SkScalar fontSizePx =
-        static_cast<SkScalar>(sizeLen.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
-
-    // Load typeface by family
-    const SmallVector<RcString, 1>& families = style.fontFamily.getRequiredRef();
-    const std::string familyName = families.empty() ? "" : families[0].str();
-
-    sk_sp<SkTypeface> typeface;
-    // First try to find the typeface in the font face list
-    if (renderer_.typefaces_.find(familyName) != renderer_.typefaces_.end()) {
-      typeface = renderer_.typefaces_[familyName];
-    } else {
-      // If not found, try to match the family style with the font manager
-      typeface = renderer_.fontMgr_->matchFamilyStyle(familyName.c_str(), SkFontStyle());
-      if (!typeface) {
-        typeface = renderer_.fontMgr_->makeFromData(SkData::MakeWithoutCopy(
-            embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));
-      }
-    }
-
-    SkFont font(typeface, fontSizePx);
     // Draw each text span
     for (const auto& span : text.spans) {
-      // Compute positions
-      const SkScalar x =
-          static_cast<SkScalar>(span.x.toPixels(viewBox, fontMetrics, Lengthd::Extent::X) +
-                                span.dx.toPixels(viewBox, fontMetrics, Lengthd::Extent::X));
-      const SkScalar y =
-          static_cast<SkScalar>(span.y.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y) +
-                                span.dy.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y));
-      // Apply rotation if specified
-      bool rotated = false;
-      if (span.rotateDegrees != 0.0) {
-        const SkScalar angle = static_cast<SkScalar>(span.rotateDegrees);
-        renderer_.currentCanvas_->save();
-        renderer_.currentCanvas_->translate(x, y);
-        renderer_.currentCanvas_->rotate(angle);
-        renderer_.currentCanvas_->translate(-x, -y);
-        rotated = true;
+      const auto& spanStyle = span.style;
+
+      // Determine font size in pixels
+      const Lengthd sizeLen = spanStyle.fontSize;
+      const SkScalar fontSizePx =
+          static_cast<SkScalar>(sizeLen.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
+
+      // Load typeface by family and style
+      const SkFontStyle skFontStyle = ToSkFontStyle(spanStyle);
+      const sk_sp<SkTypeface> typeface =
+          ResolveTypeface(spanStyle.fontFamily, skFontStyle, renderer_.typefaces_,
+                          *renderer_.fontMgr_, renderer_.fallbackTypeface_);
+
+      SkFont font(typeface, fontSizePx);
+      if (renderer_.antialias_) {
+        font.setEdging(SkFont::Edging::kAntiAlias);
+        font.setSubpixel(true);
+      } else {
+        font.setEdging(SkFont::Edging::kAlias);
+        font.setSubpixel(false);
       }
-      // Draw text as UTF-8
+
+      if (renderer_.verbose_) {
+        std::cout << "Text span font families: ";
+        bool firstFamily = true;
+        for (const auto& family : spanStyle.fontFamily) {
+          if (!firstFamily) {
+            std::cout << ", ";
+          }
+          firstFamily = false;
+          std::cout << family.str();
+        }
+        SkString resolvedFamily;
+        if (typeface) {
+          typeface->getFamilyName(&resolvedFamily);
+        }
+        std::cout << " => resolved: " << (typeface ? resolvedFamily.c_str() : "none")
+                  << " size=" << fontSizePx << "\n";
+      }
+
+      // Use the resolved font metrics for relative length conversions (em/ex/ch).
+      FontMetrics lengthMetrics = fontMetrics;
+      if (fontSizePx > 0) {
+        lengthMetrics.fontSize = fontSizePx;
+        if (lengthMetrics.rootFontSize <= 0.0) {
+          lengthMetrics.rootFontSize = fontSizePx;
+        }
+      }
+
+      SkFontMetrics fontMetricsSk;
+      font.getMetrics(&fontMetricsSk);
+      SkScalar zeroWidthPx = 0.0f;
+      if (fontSizePx > 0) {
+        const SkScalar fontXHeightPx = fontMetricsSk.fXHeight;
+        if (fontXHeightPx > 0.0f) {
+          const SkScalar exUnitInEm = fontXHeightPx / fontSizePx;
+          if (exUnitInEm > 0.0f && exUnitInEm < lengthMetrics.exUnitInEm) {
+            lengthMetrics.exUnitInEm = exUnitInEm;
+          }
+        }
+
+        zeroWidthPx = font.measureText("0", 1, SkTextEncoding::kUTF8, nullptr, nullptr);
+        if (zeroWidthPx > 0.0f) {
+          lengthMetrics.chUnitInEm = zeroWidthPx / fontSizePx;
+        }
+      }
+
+      // Helpers to resolve optional absolute/relative positioning values.
+      const auto toPixels = [&](const Lengthd& value, Lengthd::Extent extent) -> SkScalar {
+        return static_cast<SkScalar>(value.toPixels(viewBox, lengthMetrics, extent));
+      };
+
+      const auto resolveLength = [&](const SmallVector<Lengthd, 1>& values, size_t index,
+                                     Lengthd::Extent extent) -> std::optional<SkScalar> {
+        if (index >= values.size()) {
+          return std::nullopt;
+        }
+        return toPixels(values[index], extent);
+      };
+
+      const auto applyRelative = [&](const SmallVector<Lengthd, 1>& values, size_t index,
+                                     Lengthd::Extent extent, SkScalar& target) {
+        if (index < values.size()) {
+          target += toPixels(values[index], extent);
+        }
+      };
+
+      const auto resolveRotateDegrees = [&](size_t index) -> SkScalar {
+        if (span.rotateDegrees.empty()) {
+          return 0.0f;
+        }
+        const size_t clamped = std::min(index, span.rotateDegrees.size() - 1);
+        return static_cast<SkScalar>(span.rotateDegrees[clamped]);
+      };
+
+      // Compute base positions (used when no per-glyph positioning)
+      const auto computeX = [&](size_t index = 0) -> SkScalar {
+        const size_t clamped = std::min(index, span.x.empty() ? 0UL : span.x.size() - 1);
+        const Lengthd xVal = span.x.empty() ? Lengthd() : span.x[clamped];
+        const Lengthd dxVal = index < span.dx.size() ? span.dx[index] : Lengthd();
+        return toPixels(xVal, Lengthd::Extent::X) + toPixels(dxVal, Lengthd::Extent::X);
+      };
+
+      const auto computeY = [&](size_t index = 0) -> SkScalar {
+        const size_t clamped = std::min(index, span.y.empty() ? 0UL : span.y.size() - 1);
+        const Lengthd yVal = span.y.empty() ? Lengthd() : span.y[clamped];
+        const Lengthd dyVal = index < span.dy.size() ? span.dy[index] : Lengthd();
+        return toPixels(yVal, Lengthd::Extent::Y) + toPixels(dyVal, Lengthd::Extent::Y);
+      };
+
+      SkScalar x = computeX(0);
+      SkScalar y = computeY(0);
       const std::string_view textStr = span.text;
-      renderer_.currentCanvas_->drawSimpleText(textStr.data(), textStr.size(),
-                                               SkTextEncoding::kUTF8, x, y, font, skPaint);
-      if (rotated) {
-        renderer_.currentCanvas_->restore();
+      const double rotateDegrees = span.rotateDegrees.empty() ? 0.0 : span.rotateDegrees.front();
+      bool hasRotate = false;
+      for (double rotateValue : span.rotateDegrees) {
+        if (rotateValue != 0.0) {
+          hasRotate = true;
+          break;
+        }
+      }
+
+      const bool hasPerGlyphPositioning = span.x.size() > 1 || span.y.size() > 1 ||
+                                          span.dx.size() > 1 || span.dy.size() > 1 || hasRotate;
+      // Shape text using SkShaper for proper kerning, ligatures, and complex text layout
+      // When antialiasing is disabled (e.g., for tests), use simple text rendering for consistency
+      std::unique_ptr<SkShaper> shaper;
+
+      if (renderer_.antialias_) {
+#if defined(SK_SHAPER_CORETEXT_AVAILABLE)
+        // Use CoreText shaper on macOS (no glib dependency needed)
+        shaper = SkShapers::CT::CoreText();
+#elif defined(SK_SHAPER_HARFBUZZ_AVAILABLE)
+        // Use HarfBuzz shaper for proper kerning on Linux
+        sk_sp<SkUnicode> unicode = nullptr;  // No Unicode support needed for basic Latin text
+        shaper = SkShapers::HB::ShaperDrivenWrapper(unicode, renderer_.fontMgr_);
+#endif
+      }
+
+      if (shaper && hasPerGlyphPositioning) {
+        // Per-glyph positioning: render each character at its specified position. Missing
+        // x/y/dx/dy values keep the current pen position unchanged, matching the SVG spec.
+        const SkScalar baselineOffset =
+            fontMetricsSk.fAscent;  // Ascent is negative, shifts up to baseline
+        const bool useShaperAdvances = hasRotate || !span.dx.empty() || !span.dy.empty();
+        const int glyphCount =
+            font.countText(textStr.data(), textStr.size(), SkTextEncoding::kUTF8);
+        std::vector<SkGlyphID> glyphs;
+        std::vector<SkScalar> advances;
+        if (glyphCount > 0) {
+          glyphs.resize(glyphCount);
+          advances.resize(glyphCount);
+          font.textToGlyphs(textStr.data(), textStr.size(), SkTextEncoding::kUTF8, glyphs.data(),
+                            glyphCount);
+          font.getWidths(glyphs.data(), glyphCount, advances.data());
+          struct GlyphAdvanceRunHandler final : public SkShaper::RunHandler {
+            SkPoint currentPos{0.0f, 0.0f};
+            SkPoint offset{0.0f, 0.0f};
+            SkScalar maxRunAscent = 0.0f;
+            std::vector<SkPoint> positions;
+            std::vector<SkGlyphID> runGlyphs;
+            std::vector<SkPoint> runPositions;
+            std::vector<uint32_t> runClusters;
+            int clusterOffset = 0;
+            int runGlyphCount = 0;
+
+            void beginLine() override {
+              currentPos = offset;
+              maxRunAscent = 0.0f;
+            }
+
+            void runInfo(const RunInfo& info) override {
+              SkFontMetrics metrics;
+              info.fFont.getMetrics(&metrics);
+              maxRunAscent = std::min(maxRunAscent, metrics.fAscent);
+            }
+
+            void commitRunInfo() override { currentPos.fY -= maxRunAscent; }
+
+            Buffer runBuffer(const RunInfo& info) override {
+              runGlyphCount = static_cast<int>(info.glyphCount);
+              runGlyphs.resize(static_cast<size_t>(runGlyphCount));
+              runPositions.resize(static_cast<size_t>(runGlyphCount));
+              runClusters.resize(static_cast<size_t>(runGlyphCount));
+              clusterOffset = static_cast<int>(info.utf8Range.begin());
+              return {runGlyphs.data(), runPositions.data(), nullptr, runClusters.data(),
+                      currentPos};
+            }
+
+            void commitRunBuffer(const RunInfo& info) override {
+              for (int i = 0; i < runGlyphCount; ++i) {
+                runClusters[static_cast<size_t>(i)] -= static_cast<uint32_t>(clusterOffset);
+                positions.push_back(runPositions[static_cast<size_t>(i)]);
+              }
+              currentPos += info.fAdvance;
+            }
+
+            void commitLine() override {}
+          };
+
+          if (useShaperAdvances) {
+            GlyphAdvanceRunHandler advanceHandler;
+            auto fontIter =
+                std::make_unique<SkShaper::TrivialFontRunIterator>(font, textStr.size());
+            auto bidiIter =
+                std::make_unique<SkShaper::TrivialBiDiRunIterator>(0 /* LTR */, textStr.size());
+            auto scriptIter = std::make_unique<SkShaper::TrivialScriptRunIterator>(
+                SkSetFourByteTag('L', 'a', 't', 'n'), textStr.size());
+            auto langIter =
+                std::make_unique<SkShaper::TrivialLanguageRunIterator>("en", textStr.size());
+            shaper->shape(textStr.data(), textStr.size(), *fontIter, *bidiIter, *scriptIter,
+                          *langIter, nullptr /* features */, 0 /* featuresSize */,
+                          std::numeric_limits<SkScalar>::max(), &advanceHandler);
+            if (advanceHandler.positions.size() == static_cast<size_t>(glyphCount)) {
+              for (int i = 0; i < glyphCount - 1; ++i) {
+                const SkScalar nextX = advanceHandler.positions[static_cast<size_t>(i + 1)].x();
+                const SkScalar curX = advanceHandler.positions[static_cast<size_t>(i)].x();
+                advances[static_cast<size_t>(i)] = nextX - curX;
+              }
+            }
+          }
+        }
+
+        size_t charIndex = 0;
+        size_t byteIndex = 0;
+        SkScalar currentX = span.x.empty() ? 0.0f : toPixels(span.x[0], Lengthd::Extent::X);
+        SkScalar currentY = span.y.empty() ? 0.0f : toPixels(span.y[0], Lengthd::Extent::Y);
+        while (byteIndex < textStr.size()) {
+          size_t charBytes = 1;
+          const unsigned char firstByte = static_cast<unsigned char>(textStr[byteIndex]);
+          if ((firstByte & 0x80) == 0) {
+            charBytes = 1;  // ASCII
+          } else if ((firstByte & 0xE0) == 0xC0) {
+            charBytes = 2;
+          } else if ((firstByte & 0xF0) == 0xE0) {
+            charBytes = 3;
+          } else if ((firstByte & 0xF8) == 0xF0) {
+            charBytes = 4;
+          }
+
+          const std::string_view charStr = textStr.substr(byteIndex, charBytes);
+
+          if (const std::optional<SkScalar> overrideX =
+                  resolveLength(span.x, charIndex, Lengthd::Extent::X)) {
+            currentX = overrideX.value();
+          }
+
+          if (const std::optional<SkScalar> overrideY =
+                  resolveLength(span.y, charIndex, Lengthd::Extent::Y)) {
+            currentY = overrideY.value();
+          }
+
+          applyRelative(span.dx, charIndex, Lengthd::Extent::X, currentX);
+          applyRelative(span.dy, charIndex, Lengthd::Extent::Y, currentY);
+
+          auto fontIter = std::make_unique<SkShaper::TrivialFontRunIterator>(font, charStr.size());
+          auto bidiIter = std::make_unique<SkShaper::TrivialBiDiRunIterator>(0, charStr.size());
+          auto scriptIter = std::make_unique<SkShaper::TrivialScriptRunIterator>(
+              SkSetFourByteTag('L', 'a', 't', 'n'), charStr.size());
+          auto langIter =
+              std::make_unique<SkShaper::TrivialLanguageRunIterator>("en", charStr.size());
+
+          SkTextBlobBuilderRunHandler runHandler(charStr.data(), {0, baselineOffset});
+          shaper->shape(charStr.data(), charStr.size(), *fontIter, *bidiIter, *scriptIter,
+                        *langIter, nullptr, 0, std::numeric_limits<SkScalar>::max(), &runHandler);
+          sk_sp<SkTextBlob> blob = runHandler.makeBlob();
+
+          if (blob) {
+            const SkScalar glyphRotateDegrees = resolveRotateDegrees(charIndex);
+            if (glyphRotateDegrees != 0.0f) {
+              renderer_.currentCanvas_->save();
+              renderer_.currentCanvas_->translate(currentX, currentY);
+              renderer_.currentCanvas_->rotate(glyphRotateDegrees);
+              renderer_.currentCanvas_->translate(-currentX, -currentY);
+            }
+            renderer_.currentCanvas_->drawTextBlob(blob, currentX, currentY, skPaint);
+            if (glyphRotateDegrees != 0.0f) {
+              renderer_.currentCanvas_->restore();
+            }
+          }
+
+          if (charIndex < advances.size()) {
+            currentX += advances[charIndex];
+          } else {
+            SkRect advanceBounds;
+            currentX += font.measureText(charStr.data(), charStr.size(), SkTextEncoding::kUTF8,
+                                         &advanceBounds);
+          }
+
+          byteIndex += charBytes;
+          charIndex++;
+        }
+      } else if (shaper) {
+        // Normal text flow: shape and render the entire span at once
+        // Create simple run iterators for basic text shaping
+        auto fontIter = std::make_unique<SkShaper::TrivialFontRunIterator>(font, textStr.size());
+        auto bidiIter =
+            std::make_unique<SkShaper::TrivialBiDiRunIterator>(0 /* LTR */, textStr.size());
+        auto scriptIter = std::make_unique<SkShaper::TrivialScriptRunIterator>(
+            SkSetFourByteTag('L', 'a', 't', 'n'), textStr.size());
+        auto langIter =
+            std::make_unique<SkShaper::TrivialLanguageRunIterator>("en", textStr.size());
+
+        // SkShaper positions glyphs differently than drawSimpleText - we need to adjust
+        // the baseline position. The shaper outputs glyph positions with baseline at y=0,
+        // but we need to shift them up so the baseline matches what drawSimpleText would produce.
+        const SkScalar baselineOffset =
+            fontMetricsSk.fAscent;  // Ascent is negative, shifts up to baseline
+
+        // Use SkTextBlobBuilderRunHandler to shape text into a SkTextBlob
+        // Position glyphs with baseline adjustment
+        SkTextBlobBuilderRunHandler runHandler(textStr.data(), {0, baselineOffset});
+        shaper->shape(textStr.data(), textStr.size(), *fontIter, *bidiIter, *scriptIter, *langIter,
+                      nullptr /* features */, 0 /* featuresSize */,
+                      std::numeric_limits<SkScalar>::max() /* width - no wrapping */, &runHandler);
+        sk_sp<SkTextBlob> blob = runHandler.makeBlob();
+
+        if (blob) {
+          // Draw the blob at the text position (baseline at x, y)
+          if (rotateDegrees != 0.0) {
+            renderer_.currentCanvas_->save();
+            renderer_.currentCanvas_->translate(x, y);
+            renderer_.currentCanvas_->rotate(static_cast<SkScalar>(rotateDegrees));
+            renderer_.currentCanvas_->translate(-x, -y);
+          }
+          renderer_.currentCanvas_->drawTextBlob(blob, x, y, skPaint);
+          if (rotateDegrees != 0.0) {
+            renderer_.currentCanvas_->restore();
+          }
+        }
+      } else {
+        // Fallback to simple text if shaper is not available
+        if (rotateDegrees != 0.0) {
+          renderer_.currentCanvas_->save();
+          renderer_.currentCanvas_->translate(x, y);
+          renderer_.currentCanvas_->rotate(static_cast<SkScalar>(rotateDegrees));
+          renderer_.currentCanvas_->translate(-x, -y);
+        }
+        renderer_.currentCanvas_->drawSimpleText(textStr.data(), textStr.size(),
+                                                 SkTextEncoding::kUTF8, x, y, font, skPaint);
+        if (rotateDegrees != 0.0) {
+          renderer_.currentCanvas_->restore();
+        }
       }
     }
   }

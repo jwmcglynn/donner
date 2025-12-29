@@ -29,6 +29,7 @@ donner_cc_library(
     ],
     deps = [
         ":renderer_test_utils",
+        "//donner/base:base_test_utils",
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:terminal_image_viewer",
@@ -67,12 +68,22 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "typeface_resolver_tests",
+    srcs = ["TypefaceResolver_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:typeface_resolver",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resvg_test_suite",
     srcs = [
         "resvg_test_suite.cc",
     ],
     data = [
         "//donner/svg/renderer/testdata",
+        "@resvg-test-suite//:fonts",
         "@resvg-test-suite//:images",
         "@resvg-test-suite//:png",
         "@resvg-test-suite//:svg",

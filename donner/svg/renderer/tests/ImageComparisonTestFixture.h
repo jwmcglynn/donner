@@ -5,6 +5,9 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
@@ -36,6 +39,14 @@ static constexpr float kDefaultThreshold = 0.01f;
  * such as error thresholds, skipping tests, and overriding golden image filenames.
  */
 struct ImageComparisonParams {
+  /**
+   * @brief Describes a font file to load before rendering.
+   */
+  struct FontFile {
+    std::string familyName;        //!< Font family name for the file.
+    std::filesystem::path path;    //!< Filesystem path to the font file.
+  };
+
   /// Maximum allowed difference per pixel (0.0 to 1.0).
   float threshold = kDefaultThreshold;
   /// Maximum number of pixels that can exceed the threshold.
@@ -52,6 +63,10 @@ struct ImageComparisonParams {
   std::optional<Vector2i> canvasSize;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
+  /// Optional fallback font family to request from the platform font manager.
+  std::optional<std::string> fallbackFontFamily;
+  /// Optional font files to register before rendering.
+  std::vector<FontFile> fontFiles;
 
   /**
    * @brief Creates parameters to skip a test.
@@ -88,6 +103,30 @@ struct ImageComparisonParams {
     ImageComparisonParams result;
     result.overrideGoldenFilename = filename;
     return result;
+  }
+
+  /**
+   * @brief Sets the fallback font family to request from the platform.
+   *
+   * @param familyName The fallback font family name.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& setFallbackFontFamily(std::string_view familyName) {
+    fallbackFontFamily = std::string(familyName);
+    return *this;
+  }
+
+  /**
+   * @brief Registers a font file to load before rendering.
+   *
+   * @param familyName Font family name for the file.
+   * @param path Filesystem path to the font file.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& addFontFile(std::string_view familyName,
+                                     const std::filesystem::path& path) {
+    fontFiles.push_back(FontFile{std::string(familyName), path});
+    return *this;
   }
 
   /**
@@ -160,7 +199,7 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
  */
 struct TerminalPreviewConfig {
   TerminalPixelMode pixelMode = TerminalPixelMode::kQuarterPixel;  //!< Pixel mode to use.
-  int terminalWidth = 120;                                        //!< Maximum terminal width.
+  int terminalWidth = 120;                                         //!< Maximum terminal width.
 };
 
 /**

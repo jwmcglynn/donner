@@ -51,6 +51,7 @@ struct TerminalImageViewerConfig {
   TerminalPixelMode pixelMode = TerminalPixelMode::kQuarterPixel;  //!< Pixel granularity.
   bool useTrueColor = true;  //!< Emit 24-bit ANSI sequences when true, fallback to 256-color when
                              //!< false.
+  bool enableRendering = true;  //!< When false, suppress all terminal rendering output.
   bool enableITermInlineImages = false;  //!< Use iTerm2 inline image protocol (supported by
                                          //!< iTerm2, VSCode, WezTerm, and others).
   bool autoScale = false;  //!< Automatically calculate scale based on terminal size. When true,

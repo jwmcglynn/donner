@@ -2,6 +2,8 @@
 /// @file
 
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/Length.h"
+#include "donner/svg/core/Overflow.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
 
 namespace donner::svg::parser {
@@ -24,5 +26,9 @@ public:
                                                         const xml::XMLQualifiedNameRef& name,
                                                         std::string_view value) noexcept;
 };
+
+std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::string_view value);
+
+std::optional<Overflow> ParseFlowOverflow(std::string_view value);
 
 }  // namespace donner::svg::parser

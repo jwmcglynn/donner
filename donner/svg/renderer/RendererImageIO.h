@@ -3,7 +3,6 @@
 
 #include <cstdint>
 #include <span>
-#include <vector>
 
 namespace donner::svg {
 

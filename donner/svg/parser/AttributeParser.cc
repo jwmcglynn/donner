@@ -18,6 +18,7 @@
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
+#include "donner/svg/components/text/TextFlowComponent.h"
 #include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/parser/AngleParser.h"
 #include "donner/svg/parser/ListParser.h"
@@ -31,29 +32,21 @@ namespace donner::svg::parser {
 
 using xml::XMLQualifiedNameRef;
 
-namespace {
-
-template <typename T>
-concept HasPathLength =
-    requires(T element, std::optional<double> value) { element.setPathLength(value); };
-
-bool IsAlwaysGenericAttribute(const XMLQualifiedNameRef& name) {
-  return name == XMLQualifiedNameRef("id") || name == XMLQualifiedNameRef("class") ||
-         name == XMLQualifiedNameRef("style");
-}
-
-std::optional<double> ParseNumberNoSuffix(std::string_view str) {
-  const auto maybeResult = donner::parser::NumberParser::Parse(str);
-  if (maybeResult.hasResult()) {
-    if (maybeResult.result().consumedChars != str.size()) {
-      // We had extra characters, treat as invalid.
-      return std::nullopt;
-    }
-
-    return maybeResult.result().number;
-  } else {
-    return std::nullopt;
+std::optional<Overflow> ParseFlowOverflow(std::string_view value) {
+  if (value == "visible") {
+    return Overflow::Visible;
   }
+  if (value == "hidden") {
+    return Overflow::Hidden;
+  }
+  if (value == "scroll") {
+    return Overflow::Scroll;
+  }
+  if (value == "auto") {
+    return Overflow::Auto;
+  }
+
+  return std::nullopt;
 }
 
 std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::string_view value) {
@@ -78,6 +71,48 @@ std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::stri
   }
 
   return maybeLengthResult.result().length;
+}
+
+namespace {
+
+template <typename T>
+concept HasPathLength =
+    requires(T element, std::optional<double> value) { element.setPathLength(value); };
+
+std::optional<components::FlowAlignment> ParseFlowAlignment(std::string_view value) {
+  if (value == "start") {
+    return components::FlowAlignment::Start;
+  }
+  if (value == "center") {
+    return components::FlowAlignment::Center;
+  }
+  if (value == "end") {
+    return components::FlowAlignment::End;
+  }
+  if (value == "justify") {
+    return components::FlowAlignment::Justify;
+  }
+
+  return std::nullopt;
+}
+
+bool IsAlwaysGenericAttribute(const XMLQualifiedNameRef& name) {
+  return name == XMLQualifiedNameRef("id") || name == XMLQualifiedNameRef("class") ||
+         name == XMLQualifiedNameRef("style");
+}
+
+std::optional<double> ParseNumberNoSuffix(std::string_view str) {
+  const auto maybeResult = donner::parser::NumberParser::Parse(str);
+  if (maybeResult.hasResult()) {
+    if (maybeResult.result().consumedChars != str.size()) {
+      // We had extra characters, treat as invalid.
+      return std::nullopt;
+    }
+
+    return maybeResult.result().number;
+  } else {
+    return std::nullopt;
+  }
 }
 
 std::optional<float> ParseStopOffset(SVGParserContext& context, std::string_view value) {
@@ -903,6 +938,22 @@ std::optional<ParseError> ParseAttribute<SVGTextElement>(SVGParserContext& conte
       context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
     }
     element.setRotateList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("flow-align")) {
+    if (auto alignment = ParseFlowAlignment(value)) {
+      element.setFlowAlignment(alignment);
+    } else {
+      ParseError err;
+      err.reason = "Invalid flow-align value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("flow-overflow")) {
+    if (auto overflow = ParseFlowOverflow(value)) {
+      element.setFlowOverflow(overflow);
+    } else {
+      ParseError err;
+      err.reason = "Invalid flow-overflow value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

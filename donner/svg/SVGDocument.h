@@ -1,8 +1,11 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/renderer/RenderMode.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
@@ -35,6 +38,14 @@ public:
   struct Settings {
     /// Resource loader to use for loading external resources.
     std::unique_ptr<ResourceLoaderInterface> resourceLoader;
+
+    /// Whether external font loading is enabled. Defaults to false so embedders must opt in.
+    bool externalFontLoadingEnabled = false;
+
+    /// Rendering policy for external resources like fonts: either block until resources load (with
+    /// OneShot, for rendering an SVG to a static image), or render immediately with fallbacks and
+    /// re-render as resources load (with Continuous, for interactive rendering).
+    RenderMode renderMode = RenderMode::OneShot;
   };
 
 private:
@@ -58,13 +69,21 @@ private:
 
 public:
   /**
+   * Default construtor for an empty SVGDocument.
+   *
+   * To load a document from an SVG file, use \ref donner::svg::parser::SVGParser::ParseSVG. To
+   * specify settings, see the other constructor which takes a settings parameter.
+   */
+  SVGDocument();
+
+  /**
    * Constructor to create an empty SVGDocument.
    *
    * To load a document from an SVG file, use \ref donner::svg::parser::SVGParser::ParseSVG.
    *
    * @param settings Settings to configure the document.
    */
-  explicit SVGDocument(Settings settings = Settings());
+  SVGDocument(Settings settings);
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() { return *registry_; }

@@ -4,6 +4,7 @@
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/svg/components/text/ComputedTextStyleComponent.h"
 
 namespace donner::svg::components {
 
@@ -34,20 +35,24 @@ struct ComputedTextComponent {
     /// Back‑reference to the original text for this span.
     RcString text;
 
+    /// Typography resolved for this span at layout time.
+    ComputedTextStyleComponent style;
+
     /// Byte index (inclusive) of the first code unit of the span within \c text.
     std::size_t start;
     /// Byte index (exclusive) one past the last code unit of the span within \c text.
     std::size_t end;
-    /// Absolute X position for the first glyph of the span.
-    Lengthd x;
-    /// Absolute Y baseline position for the span.
-    Lengthd y;
-    /// Relative X shift applied to the span.
-    Lengthd dx;
-    /// Relative Y shift applied to the span.
-    Lengthd dy;
-    /// Rotation applied to each glyph in the span (degrees).
-    double rotateDegrees = 0.0;
+    /// Absolute X positions (per-glyph positioning). If empty, use default flow.
+    SmallVector<Lengthd, 1> x;
+    /// Absolute Y baseline positions (per-glyph positioning). If empty, use default flow.
+    SmallVector<Lengthd, 1> y;
+    /// Relative X shifts (per-glyph). If empty, no relative shift.
+    SmallVector<Lengthd, 1> dx;
+    /// Relative Y shifts (per-glyph). If empty, no relative shift.
+    SmallVector<Lengthd, 1> dy;
+    /// Rotation applied to each glyph in the span (degrees). If shorter than the
+    /// text, the last value repeats for remaining glyphs.
+    SmallVector<double, 1> rotateDegrees;
   };
 
   // Computed spans with positioning data for rendering.
