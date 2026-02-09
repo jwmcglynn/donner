@@ -101,6 +101,37 @@ struct HSLA {
   friend std::ostream& operator<<(std::ostream& os, const HSLA& color);
 };
 
+/// Identifies authored color spaces preserved prior to conversion to RGBA.
+enum class ColorSpaceId {
+  SRGB,         ///< sRGB color space.
+  SRGBLinear,   ///< Linear sRGB color space.
+  DisplayP3,    ///< Display P3 color space.
+  A98Rgb,       ///< Adobe RGB (1998) color space.
+  ProPhotoRgb,  ///< ProPhoto RGB color space.
+  Rec2020,      ///< Rec. 2020 color space.
+  XyzD65,       ///< XYZ color space with D65 white point.
+  XyzD50,       ///< XYZ color space with D50 white point.
+  Hwb,          ///< HWB color space.
+  Lab,          ///< Lab color space.
+  Lch,          ///< LCH color space.
+  Oklab,        ///< Oklab color space.
+  Oklch,        ///< Oklch color space.
+};
+
+/// Parse a color space name into a \ref ColorSpaceId.
+std::optional<ColorSpaceId> ColorSpaceIdFromString(std::string_view name);
+
+/// Represents a color stored in its authored color space.
+struct ColorSpaceValue {
+  ColorSpaceId id = ColorSpaceId::SRGB;
+  double c1 = 0.0;
+  double c2 = 0.0;
+  double c3 = 0.0;
+  uint8_t alpha = 0xFF;
+
+  bool operator==(const ColorSpaceValue&) const = default;
+};
+
 /**
  * Represents a CSS color value, like a \ref RGBA color from a `#rrggbb` or `#rgb` hex value, or the
  * `currentcolor` keyword.
@@ -123,7 +154,7 @@ struct Color {
   };
 
   /// A variant for supported color types.
-  using Type = std::variant<RGBA, CurrentColor, HSLA>;
+  using Type = std::variant<RGBA, CurrentColor, HSLA, ColorSpaceValue>;
 
   /// The color value.
   Type value;
