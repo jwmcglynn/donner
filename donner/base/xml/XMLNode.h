@@ -12,6 +12,18 @@
 
 namespace donner::xml {
 
+struct EditOperation {
+  enum class Type { ReplaceValue };
+
+  static EditOperation ReplaceValue(FileOffsetRange range, const RcStringOrRef& replacement) {
+    return EditOperation{Type::ReplaceValue, range, RcString(replacement)};
+  }
+
+  Type type;
+  FileOffsetRange targetRange;
+  RcString replacement;
+};
+
 // Forward declaration, #include "donner/base/xml/XMLDocument.h"
 class XMLDocument;
 
@@ -227,6 +239,11 @@ public:
   void setValue(const RcStringOrRef& value);
 
   /**
+   * Set the value of this node and emit an EditOperation if a source span is available.
+   */
+  std::optional<EditOperation> setValuePreserveSource(const RcStringOrRef& value);
+
+  /**
    * Returns true if the element has an attribute with the given name.
    *
    * @param name Name of the attribute to check.
@@ -281,6 +298,26 @@ public:
   std::optional<FileOffsetRange> getAttributeLocation(std::string_view xmlInput,
                                                       const XMLQualifiedNameRef& name) const;
 
+  /**
+   * Get the source span for this node's value content, if tracked.
+   */
+  std::optional<FileOffsetRange> getValueLocation() const;
+
+  /**
+   * Get the source span of an attribute's value, if tracked.
+   */
+  std::optional<FileOffsetRange> getAttributeValueLocation(const XMLQualifiedNameRef& name) const;
+
+  /**
+   * Record the source range of an attribute during parsing.
+   *
+   * @param name Name of the attribute.
+   * @param location Byte range covering the full attribute text, including name, equals, quotes,
+   * and value.
+   */
+  void addAttributeLocation(const XMLQualifiedNameRef& name, FileOffsetRange location,
+                            FileOffsetRange valueRange);
+
   /// Get the list of attributes for this element.
   SmallVector<XMLQualifiedNameRef, 10> attributes() const;
 
@@ -304,6 +341,12 @@ public:
    * @param value New value to set.
    */
   void setAttribute(const XMLQualifiedNameRef& name, std::string_view value);
+
+  /**
+   * Set the attribute value and emit an EditOperation when the attribute spans are known.
+   */
+  std::optional<EditOperation> setAttributePreserveSource(const XMLQualifiedNameRef& name,
+                                                          std::string_view value);
 
   /**
    * Remove an attribute, which may be either a presentation attribute or custom user-provided
@@ -425,6 +468,11 @@ public:
    * @param offset Offset in the source document, in characters from the start.
    */
   void setSourceEndOffset(FileOffset offset);
+
+  /**
+   * Set the source offsets that cover just the node's value payload (excluding delimiters).
+   */
+  void setValueSourceRange(FileOffsetRange range);
 
   /**
    * Returns true if the two XMLNode handles reference the same underlying document.
