@@ -62,3 +62,5 @@ This document summarizes the main points from the full [Coding Style Guide](../.
 *   **Operators:** Prefer `operator<=>` where possible (requires explicit `operator==` due to gtest bug). Provide `operator<<` for debugging.
 *   **`constexpr`:** Use when possible.
 *   **Preconditions:** Assert using `UTILS_RELEASE_ASSERT`.
+*   **Language Restrictions:** Avoid user-defined literals and `long long`. Prefer `alignas(T)`
+    byte buffers over `std::aligned_storage`/`std::aligned_union`.

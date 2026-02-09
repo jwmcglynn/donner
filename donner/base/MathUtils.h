@@ -49,8 +49,8 @@ struct AddUnsigned<long> {
   typedef unsigned long type;
 };
 template <>
-struct AddUnsigned<long long> {
-  typedef unsigned long long type;
+struct AddUnsigned<std::int64_t> {
+  typedef std::uint64_t type;
 };
 
 // Don't define these, these don't have an unsigned counterpart.

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <cstddef>
 #include <initializer_list>
@@ -100,10 +99,9 @@ public:
       other.data_.longData = nullptr;
     } else {
       for (size_t i = 0; i < size_; ++i) {
-        new (reinterpret_cast<T*>(&data_.shortData[i]))
-            T(std::move(*reinterpret_cast<T*>(&other.data_.shortData[i])));
+        new (shortDataPtr(i)) T(std::move(*other.shortDataPtr(i)));
         if constexpr (!std::is_trivially_destructible_v<T>) {
-          reinterpret_cast<T*>(&other.data_.shortData[i])->~T();
+          other.shortDataPtr(i)->~T();
         }
       }
     }
@@ -133,10 +131,9 @@ public:
         other.data_.longData = nullptr;
       } else {
         for (size_t i = 0; i < size_; ++i) {
-          new (reinterpret_cast<T*>(&data_.shortData[i]))
-              T(std::move(*reinterpret_cast<T*>(&other.data_.shortData[i])));
+          new (shortDataPtr(i)) T(std::move(*other.shortDataPtr(i)));
           if constexpr (!std::is_trivially_destructible_v<T>) {
-            reinterpret_cast<T*>(&other.data_.shortData[i])->~T();
+            other.shortDataPtr(i)->~T();
           }
         }
       }
@@ -237,14 +234,14 @@ public:
    * Gets the data stored in the vector.
    */
   T* data() noexcept {
-    return isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data());
+    return isLong_ ? data_.longData : shortDataPtr(0);
   }
 
   /**
    * Gets the data stored in the vector (const version).
    */
   const T* data() const noexcept {
-    return isLong_ ? data_.longData : reinterpret_cast<const T*>(data_.shortData.data());
+    return isLong_ ? data_.longData : shortDataPtr(0);
   }
 
   /**
@@ -363,6 +360,14 @@ public:
   }
 
 private:
+  T* shortDataPtr(std::size_t index) {
+    return reinterpret_cast<T*>(data_.shortData.data + (index * sizeof(T)));
+  }
+
+  const T* shortDataPtr(std::size_t index) const {
+    return reinterpret_cast<const T*>(data_.shortData.data + (index * sizeof(T)));
+  }
+
   /**
    * Ensures that the vector has enough capacity to store the specified number of elements.
    *
@@ -376,7 +381,7 @@ private:
     std::size_t newCapacityAdjusted = std::max(capacity_ * 2, newCapacity);
     T* newData = reinterpret_cast<T*>(::operator new(newCapacityAdjusted * sizeof(T)));
 
-    T* oldData = isLong_ ? data_.longData : reinterpret_cast<T*>(data_.shortData.data());
+    T* oldData = isLong_ ? data_.longData : shortDataPtr(0);
     for (std::size_t i = 0; i < size_; ++i) {
       new (newData + i) T(std::move(oldData[i]));
 
@@ -402,8 +407,9 @@ private:
    * Union to store the data for the vector.
    */
   union Data {
-    std::array<std::aligned_storage_t<sizeof(T), alignof(T)>, DefaultSize>
-        shortData;  //!< Data storage for small vectors.
+    struct ShortData {
+      alignas(T) std::byte data[sizeof(T) * DefaultSize];
+    } shortData;  //!< Data storage for small vectors.
     T* longData;    //!< Data storage for large vectors.
 
     Data() : longData(nullptr) {}
