@@ -30,9 +30,10 @@ the default fallback.
 - Add HDR tone mapping or gamut-clipping heuristics beyond simple clipping.
 - Modify rendering backends; backends may still receive sRGB after conversion.
 
-## Spec coverage (CSS Color 4 CRD 2025-04-24)
+## Spec coverage (SVG2 + CSS Color 4/5)
 
-Reference: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/
+Reference: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/ and
+https://www.w3.org/TR/css-color-5/
 
 | Area | Status | Notes |
 | --- | --- | --- |
@@ -57,9 +58,164 @@ Reference: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/
 [css-oklab]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#ok-lab
 [css-color-fn]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#color-function
 [css-changes]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#changes-from-20240213
-[css-device-cmyk]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#device-cmyk
-[css-relative]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#relative-colors
+[css-device-cmyk]: https://www.w3.org/TR/css-color-5/#device-cmyk
+[css-relative]: https://www.w3.org/TR/css-color-5/#relative-colors
 [css-interpolation]: https://www.w3.org/TR/2025/CRD-css-color-4-20250424/#interpolation
+
+## Parser syntax references {#Svg2ColorSyntax}
+
+SVG2 reuses CSS Color syntax for `<color>` and functional notations. The excerpts below are
+lifted verbatim from the CSS Color 4 CRD and CSS Color 5 specs so the parser expectations are
+explicit and auditable. See the spec links in the coverage table for full context.
+
+### CSS Color 4 functional syntax (baseline SVG2) {#Svg2ColorSyntaxCssColor4}
+
+```
+<color> = <color-base> | currentColor | <system-color>
+
+<color-base> = <hex-color> | <color-function> | <named-color> | transparent
+<color-function> = <rgb()> | <rgba()> |
+              <hsl()> | <hsla()> | <hwb()> |
+              <lab()> | <lch()> | <oklab()> | <oklch()> |
+              <color()>
+
+rgb() = [ <legacy-rgb-syntax> | <modern-rgb-syntax> ]
+rgba() = [ <legacy-rgba-syntax> | <modern-rgba-syntax> ]
+<legacy-rgb-syntax> =   rgb( <percentage>#{3} , <alpha-value>? ) |
+                  rgb( <number>#{3} , <alpha-value>? )
+<legacy-rgba-syntax> = rgba( <percentage>#{3} , <alpha-value>? ) |
+                  rgba( <number>#{3} , <alpha-value>? )
+<modern-rgb-syntax> = rgb(
+  [ <number> | <percentage> | none]{3}
+  [ / [<alpha-value> | none] ]?  )
+<modern-rgba-syntax> = rgba(
+  [ <number> | <percentage> | none]{3}
+  [ / [<alpha-value> | none] ]?  )
+
+hsl() = [ <legacy-hsl-syntax> | <modern-hsl-syntax> ]
+hsla() = [ <legacy-hsla-syntax> | <modern-hsla-syntax> ]
+<modern-hsl-syntax> = hsl(
+    [<hue> | none]
+    [<percentage> | <number> | none]
+    [<percentage> | <number> | none]
+    [ / [<alpha-value> | none] ]? )
+<modern-hsla-syntax> = hsla(
+    [<hue> | none]
+    [<percentage> | <number> | none]
+    [<percentage> | <number> | none]
+    [ / [<alpha-value> | none] ]? )
+<legacy-hsl-syntax> = hsl( <hue>, <percentage>, <percentage>, <alpha-value>? )
+<legacy-hsla-syntax> = hsla( <hue>, <percentage>, <percentage>, <alpha-value>? )
+
+hwb() = hwb(
+  [<hue> | none]
+  [<percentage> | <number> | none]
+  [<percentage> | <number> | none]
+  [ / [<alpha-value> | none] ]? )
+
+lab() = lab( [<percentage> | <number> | none]
+      [ <percentage> | <number> | none]
+      [ <percentage> | <number> | none]
+      [ / [<alpha-value> | none] ]? )
+
+lch() = lch( [<percentage> | <number> | none]
+      [ <percentage> | <number> | none]
+      [ <hue> | none]
+      [ / [<alpha-value> | none] ]? )
+
+oklab() = oklab( [ <percentage> | <number> | none]
+    [ <percentage> | <number> | none]
+    [ <percentage> | <number> | none]
+    [ / [<alpha-value> | none] ]? )
+
+oklch() = oklch( [ <percentage> | <number> | none]
+      [ <percentage> | <number> | none]
+      [ <hue> | none]
+      [ / [<alpha-value> | none] ]? )
+
+color() = color( <colorspace-params> [ / [ <alpha-value> | none ] ]? )
+<colorspace-params> = [ <predefined-rgb-params> | <xyz-params>]
+<predefined-rgb-params> = <predefined-rgb> [ <number> | <percentage> | none ]{3}
+<predefined-rgb> = srgb | srgb-linear | display-p3 | a98-rgb | prophoto-rgb | rec2020
+<xyz-params> = <xyz-space> [ <number> | <percentage> | none ]{3}
+<xyz-space> = xyz | xyz-d50 | xyz-d65
+```
+
+### CSS Color 5 relative syntax and CMYK {#Svg2ColorSyntaxCssColor5}
+
+```
+<modern-rgb-syntax> = rgb( [ from <color> ]?
+        [ <number> | <percentage> | none]{3}
+        [ / [<alpha-value> | none] ]?  )
+<modern-rgba-syntax> = rgba( [ from <color> ]?
+        [ <number> | <percentage> | none]{3}
+        [ / [<alpha-value> | none] ]?  )
+
+<modern-hsl-syntax> = hsl([from <color>]?
+          [<hue> | none]
+          [<percentage> | <number> | none]
+          [<percentage> | <number> | none]
+          [ / [<alpha-value> | none] ]? )
+<modern-hsla-syntax> = hsla([from <color>]?
+        [<hue> | none]
+        [<percentage> | <number> | none]
+        [<percentage> | <number> | none]
+        [ / [<alpha-value> | none] ]? )
+
+hwb() = hwb([from <color>]?
+        [<hue> | none]
+        [<percentage> | <number> | none]
+        [<percentage> | <number> | none]
+        [ / [<alpha-value> | none] ]? )
+
+lab() = lab([from <color>]?
+        [<percentage> | <number> | none]
+        [<percentage> | <number> | none]
+        [<percentage> | <number> | none]
+        [ / [<alpha-value> | none] ]? )
+
+oklab() = oklab([from <color>]?
+          [<percentage> | <number> | none]
+          [<percentage> | <number> | none]
+          [<percentage> | <number> | none]
+          [ / [<alpha-value> | none] ]? )
+
+lch() = lch([from <color>]?
+        [<percentage> | <number> | none]
+        [<percentage> | <number> | none]
+        [<hue> | none]
+        [ / [<alpha-value> | none] ]? )
+
+oklch() = oklch([from <color>]?
+          [<percentage> | <number> | none]
+          [<percentage> | <number> | none]
+          [<hue> | none]
+          [ / [<alpha-value> | none] ]? )
+
+color() = color( [from <color>]? <colorspace-params> [ / [ <alpha-value> | none ] ]? )
+<colorspace-params> = [<custom-params> | <predefined-rgb-params> | <xyz-params>]
+<custom-params> = <dashed-ident> [ <number> | <percentage> | none ]+
+<predefined-rgb-params> = <predefined-rgb> [ <number> | <percentage> | none ]{3}
+<predefined-rgb> = srgb | srgb-linear | display-p3 | a98-rgb | prophoto-rgb | rec2020
+<xyz-params> = <xyz-space> [ <number> | <percentage> | none ]{3}
+
+device-cmyk() = <legacy-device-cmyk-syntax> | <modern-device-cmyk-syntax>
+<legacy-device-cmyk-syntax> = device-cmyk( <number>#{4} )
+<modern-device-cmyk-syntax> =
+  device-cmyk( <cmyk-component>{4} [ / [ <alpha-value> | none ] ]? )
+<cmyk-component> = <number> | <percentage> | none
+```
+
+## Parser conformance notes {#Svg2ColorConformance}
+
+- The parser accepts legacy comma-separated syntax for `rgb()`/`rgba()`/`hsl()`/`hsla()` and the
+  modern space-separated syntax, but it does not yet accept `none` components.
+- `rgb()`/`rgba()` currently require all three components to use the same unit type (all numbers
+  or all percentages); mixed units are rejected even though the spec allows mixing.
+- `hsl()`/`hwb()` currently require percentage values for saturation/lightness/whiteness/
+  blackness and do not accept numeric forms.
+- `color()` does not accept custom color spaces (`<dashed-ident>` in CSS Color 5); only the
+  predefined RGB and XYZ spaces listed above are supported.
 
 ## Current capabilities
 
