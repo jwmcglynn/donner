@@ -1,23 +1,30 @@
 filegroup(
-    name = "svg",
+    name = "fonts",
     srcs = glob([
-        "svg/*.svg",
-    ]),
+        "fonts/**",
+    ],
+        allow_empty = False,
+    ),
     visibility = ["//visibility:public"],
 )
 
 filegroup(
-    name = "png",
+    name = "resources",
     srcs = glob([
-        "png/*.png",
-    ]),
+        "resources/**",
+    ],
+        allow_empty = False,
+    ),
     visibility = ["//visibility:public"],
 )
 
 filegroup(
-    name = "images",
+    name = "tests",
     srcs = glob([
-        "images/*.*",
-    ]),
+        "tests/**/*.png",
+        "tests/**/*.svg",
+    ],
+        allow_empty = False,
+    ),
     visibility = ["//visibility:public"],
 )
