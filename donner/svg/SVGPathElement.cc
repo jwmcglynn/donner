@@ -19,6 +19,10 @@ RcString SVGPathElement::d() const {
     if (auto maybeD = path->d.get()) {
       return maybeD.value();
     }
+
+    if (path->splineOverride) {
+      return RcString(path->splineOverride->ToString());
+    }
   }
 
   return "";
