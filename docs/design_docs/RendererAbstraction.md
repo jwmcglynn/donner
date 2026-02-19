@@ -60,22 +60,40 @@ the ~800 lines of tree-traversal and paint-resolution logic that currently live 
   - [ ] Create `donner/svg/renderer/Recording.h` with the `Recording` base class and
         `RecordingHandle` typedef.
   - [ ] Add BUILD target `//donner/svg/renderer:renderer_interface` with no Skia dependency.
-- [ ] **Milestone 2: Extract `RendererDriver`**
+- [ ] **Milestone 2: Path boolean operations (`PathBooleanOps`)**
+  - [ ] Add `PathSpline::transformed(const Transformd&)` method that returns a new PathSpline
+        with all points transformed.
+  - [ ] Add `PathSpline::toPolyline(double tolerance)` method that flattens all cubic Bézier
+        segments into line segments using De Casteljau subdivision (infrastructure already exists
+        in `PathSpline.cc`).
+  - [ ] Integrate Clipper2 as a Bazel dependency (`MODULE.bazel`, third-party BUILD file).
+  - [ ] Create `donner/svg/core/PathBooleanOps.h/.cc` with `pathUnion()` and
+        `pathIntersection()` functions using Clipper2.
+  - [ ] Create `combineClipPaths()` utility that implements the layered union/intersect strategy
+        currently in `RendererSkia::Impl` (union within layers, intersect between layers).
+  - [ ] Unit tests: rectangle union/intersect, overlapping curves, fill rule handling,
+        edge cases (empty paths, identical paths, non-overlapping paths).
+  - [ ] Integration test: verify clip-path golden tests produce identical output when using
+        `PathBooleanOps` instead of `SkPathOps`.
+- [ ] **Milestone 3: Extract `RendererDriver`**
   - [ ] Create `donner/svg/renderer/RendererDriver.h/.cc`.
   - [ ] Move tree-traversal logic from `RendererSkia::Impl::drawUntil` into
         `RendererDriver::renderUntil`.
   - [ ] Move paint resolution (`instantiateGradient`, `instantiatePattern`,
         `instantiatePaintReference`) into `RendererDriver`, translating resolved ECS components
         into the Donner-native paint types.
-  - [ ] Move mask, clip-path, filter, marker, and subtree management into `RendererDriver`.
+  - [ ] Move mask, filter, marker, and subtree management into `RendererDriver`.
+  - [ ] Move clip-path combination into `RendererDriver` using `PathBooleanOps` (from
+        Milestone 2) instead of `SkPathOps`. Driver computes combined clip path, then calls
+        `renderer.clipPath()` with the result.
   - [ ] The driver calls `RendererInterface` methods exclusively.
-- [ ] **Milestone 3: Implement `RendererSkia` against `RendererInterface`**
+- [ ] **Milestone 4: Implement `RendererSkia` against `RendererInterface`**
   - [ ] Refactor `RendererSkia` to implement `RendererInterface`.
   - [ ] Move Skia-specific conversion helpers (`toSkia(...)`, `toSkiaMatrix(...)`) into
         `RendererSkia.cc` as private utilities.
   - [ ] Font management stays in `RendererSkia` (backend-specific).
   - [ ] `RendererSkia::draw(SVGDocument&)` creates a `RendererDriver` internally.
-- [ ] **Milestone 4: Validation**
+- [ ] **Milestone 5: Validation**
   - [ ] All existing renderer golden tests pass with identical output.
   - [ ] Add a `MockRenderer : RendererInterface` for unit-testing `RendererDriver` in isolation.
   - [ ] Test that an empty/no-op `RendererInterface` implementation compiles and links.
@@ -625,7 +643,7 @@ The following table shows where each block of logic in `RendererSkia::Impl` move
 | `drawUntil()`: `setMatrix(entityFromCanvas)` | `RendererDriver` → calls `renderer.setTransform()` | Driver computes `entityFromCanvas = layerBase * entityFromWorld` |
 | `drawUntil()`: opacity layer | `RendererDriver` → calls `renderer.saveLayer({}, {.opacity = ...})` | |
 | `drawUntil()`: filter layer | `RendererDriver` → resolves filter chain → calls `renderer.saveLayer({}, {.imageFilter = ...})` | |
-| `drawUntil()`: clip-path computation | `RendererDriver` → computes unified clip path from `ComputedClipPathsComponent` → calls `renderer.clipPath()` | Path boolean ops (union/intersect) move to driver since they use `PathSpline` ops, not Skia path ops. Requires adding path boolean ops to `PathSpline` or a utility. |
+| `drawUntil()`: clip-path computation | `RendererDriver` → calls `combineClipPaths()` from `PathBooleanOps` (Clipper2-backed) → calls `renderer.clipPath()` with combined result | Replaces `SkPathOps` union/intersect with Donner-native implementation. Paths are flattened to polylines before boolean ops. |
 | `drawUntil()`: mask setup | `RendererDriver` → calls `renderer.saveLayer({.lumaToAlpha = true})`, renders mask, then `renderer.saveLayer({.blendMode = SrcIn})` | |
 | `drawPath()` | `RendererDriver` → dispatches to `fillPath()` / `strokePath()` / `drawMarkers()` | |
 | `drawPathFill()` + `drawPathFillWithSkPaint()` | `RendererDriver` resolves paint → calls `renderer.fillPath(path, fillStyle)` | |
@@ -663,34 +681,151 @@ methods (`createSolidPaint(...)`, `createGradientPaint(...)`, etc.). We rejected
 - **Pattern recording is the exception**, handled via `RecordingHandle` (shared_ptr) inside the
   `PatternPaint` variant member.
 
-### Why does the driver handle path boolean ops for clip-paths?
+### Path boolean ops: Clipper2 with curve flattening
 
-The current code uses `SkPathOps` (Skia path boolean operations) to union/intersect clip paths.
-This is problematic for backend independence. Options:
+The current code uses `SkPathOps` (Skia path boolean operations) to union/intersect clip paths in
+`RendererSkia::Impl`. This creates a hard Skia dependency in what should be backend-neutral
+clip-path logic.
 
-1. **Add path boolean ops to `PathSpline`** — requires implementing or wrapping a path ops
-   library. Clean but significant work.
-2. **Pass individual clip paths to the renderer** — the renderer applies them sequentially with
-   intersect. Simpler but may not match Skia's behavior for layered clip-path unions.
-3. **Expose a `pathOps()` method on `RendererInterface`** — backends provide their own path ops
-   implementation. Pragmatic.
+**Approach:** Integrate [Clipper2](https://github.com/AngusJohnson/Clipper2) (Boost Software
+License, permissive) and flatten cubic Bézier curves to polylines before performing boolean ops.
 
-Recommended: **Option 3** initially, with a `clipPathCombined()` method on `RendererInterface`
-that takes a list of `(PathSpline, FillRule, Transformd)` tuples and the backend computes the
-combined clip. This pushes the path-ops requirement to the backend, where it's likely already
-available (Skia has it; other backends typically do too).
+**Why flattening is acceptable for clip paths:**
+
+- Clip paths define a clipping *region* — they are rasterized at pixel resolution. Sub-pixel
+  flattening tolerance (default: 0.25 user units) produces visually identical results.
+- SkPathOps internally subdivides cubics at intersection points and works on monotone segments,
+  which is conceptually similar to flattening.
+- The flattened result path (all `LineTo` commands) is slightly larger in vertex count but
+  functionally equivalent for clipping.
+- PathSpline already has the required De Casteljau subdivision and flatness-testing infrastructure
+  (`SubdivideAndMeasureCubic`, `IsCurveFlatEnough` in `PathSpline.cc`).
+
+**Why Clipper2 over alternatives:**
+
+| Library | Cubic Bézier support | License | Maturity |
+|---------|---------------------|---------|----------|
+| **Clipper2** | Polygons only (flatten first) | Boost (permissive) | Mature, widely used |
+| contourklip | Native cubics | GPL-3.0 (**incompatible** with Donner's ISC) | Early stage |
+| SkPathOps | Native cubics | BSD (part of Skia) | Battle-tested, but creates Skia dependency |
+| Custom impl | N/A | N/A | ~2000+ lines, high risk |
+
+Clipper2 is the only viable option that is both permissively licensed and production-quality.
+The curve flattening tradeoff is acceptable given the clip-path use case.
+
+**API design:**
+
+Path boolean ops live in a separate utility module (`donner/svg/core/PathBooleanOps.h`), keeping
+`PathSpline` itself free of the Clipper2 dependency. The driver uses these utilities to combine
+clip paths before passing the result to `renderer.clipPath()`.
 
 ```cpp
-struct ClipPathEntry {
-  PathSpline path;
-  FillRule clipRule;
-  Transformd transform;
-  int layer;  ///< Nesting depth for intersect grouping.
-};
+// donner/svg/core/PathBooleanOps.h
+namespace donner::svg {
 
-/// Apply a combined clip path (union within layers, intersect between layers).
-virtual void clipPathCombined(std::span<const ClipPathEntry> entries,
-                              bool antialias = true) = 0;
+/// Compute the union of two paths. Both paths are flattened to polylines
+/// at the given tolerance before the boolean operation.
+///
+/// @param a         First path.
+/// @param ruleA     Fill rule for path a (NonZero or EvenOdd).
+/// @param b         Second path.
+/// @param ruleB     Fill rule for path b (NonZero or EvenOdd).
+/// @param tolerance Curve flattening tolerance in user units (default: 0.25).
+/// @return          Union path (polyline, all LineTo commands).
+PathSpline pathUnion(const PathSpline& a, FillRule ruleA,
+                     const PathSpline& b, FillRule ruleB,
+                     double tolerance = 0.25);
+
+/// Compute the intersection of two paths.
+PathSpline pathIntersection(const PathSpline& a, FillRule ruleA,
+                            const PathSpline& b, FillRule ruleB,
+                            double tolerance = 0.25);
+
+/// Combine clip paths using the layered union/intersect strategy from
+/// ComputedClipPathsComponent:
+///   - Paths within the same layer are UNIONed.
+///   - When layer decreases, the combined path is INTERSECTed with
+///     the next path.
+///
+/// Each ClipPathEntry's path is first transformed by its transform,
+/// then flattened.
+///
+/// @param entries    Clip path entries with paths, transforms, rules, and layers.
+/// @param tolerance  Curve flattening tolerance (default: 0.25).
+/// @return           Combined clip path (polyline).
+PathSpline combineClipPaths(
+    std::span<const ComputedClipPathsComponent::ClipPath> entries,
+    const Transformd& userSpaceFromClipPathContent = Transformd(),
+    double tolerance = 0.25);
+
+}  // namespace donner::svg
+```
+
+**Required `PathSpline` additions:**
+
+```cpp
+// In PathSpline.h — new methods
+
+/// Return a copy of this path with all points transformed.
+PathSpline transformed(const Transformd& transform) const;
+
+/// Flatten all cubic Bézier segments into line segments using
+/// recursive De Casteljau subdivision.
+///
+/// @param tolerance  Maximum distance from the chord to control points
+///                   before a curve is subdivided further.
+/// @return           A new PathSpline with only MoveTo, LineTo, and
+///                   ClosePath commands.
+PathSpline toPolyline(double tolerance = 0.25) const;
+```
+
+**Implementation sketch for `toPolyline()`:**
+
+```cpp
+PathSpline PathSpline::toPolyline(double tolerance) const {
+  PathSpline result;
+  for (const Command& cmd : commands_) {
+    switch (cmd.type) {
+      case CommandType::MoveTo:
+        result.moveTo(points_[cmd.pointIndex]);
+        break;
+      case CommandType::LineTo:
+        result.lineTo(points_[cmd.pointIndex]);
+        break;
+      case CommandType::CurveTo:
+        // Recursively subdivide until flat enough, emitting lineTo
+        flattenCubic(result,
+                     startPoint(/*index from cmd*/),
+                     points_[cmd.pointIndex],
+                     points_[cmd.pointIndex + 1],
+                     points_[cmd.pointIndex + 2],
+                     tolerance);
+        break;
+      case CommandType::ClosePath:
+        result.closePath();
+        break;
+    }
+  }
+  return result;
+}
+```
+
+**Clipper2 integration data flow:**
+
+```
+PathSpline (with cubics)
+    │
+    ▼ toPolyline(tolerance)
+PathSpline (LineTo only)
+    │
+    ▼ convert to Clipper2::PathD
+Clipper2::PathD (vector<PointD>)
+    │
+    ▼ Clipper2::Union() or Clipper2::Intersect()
+Clipper2::PathsD (result polygons)
+    │
+    ▼ convert back to PathSpline
+PathSpline (LineTo only, combined result)
 ```
 
 ### Font and text rendering strategy
@@ -714,7 +849,7 @@ This keeps the interface clean at the cost of requiring each backend to handle f
 - **No breaking changes** to the public `RendererSkia` API. The convenience methods (`draw`,
   `save`, `pixelData`, `drawIntoAscii`) must continue to work.
 - **Bazel build**: `RendererInterface` and `RendererDriver` must not depend on the Skia build
-  target. `RendererSkia` depends on both.
+  target. `RendererSkia` depends on both. `PathBooleanOps` depends on Clipper2 but not Skia.
 
 ## Performance
 
@@ -728,6 +863,14 @@ The refactoring is expected to be performance-neutral:
 - The `toSkia(PathSpline)` conversion in `RendererSkia` reconstructs the SkPath each time, same
   as today. Future optimization: cache the SkPath alongside the PathSpline.
 
+## Dependencies
+
+- **Clipper2** ([github.com/AngusJohnson/Clipper2](https://github.com/AngusJohnson/Clipper2)) —
+  Boost Software License 1.0. Polygon clipping library for path boolean operations. Header-only
+  option available. Used by `PathBooleanOps` for union/intersect of flattened paths. Clipper2 is
+  widely used (6k+ stars), actively maintained, and supports both integer and floating-point
+  coordinates (`Clipper2::PathsD`).
+
 ## Testing and Validation
 
 - **Golden tests**: The existing renderer test suite compares output against reference PNGs. These
@@ -739,6 +882,26 @@ The refactoring is expected to be performance-neutral:
   methods as empty bodies. Verifies the interface compiles without Skia.
 - **Pattern/mask/clip-path integration tests**: Specific SVGs exercising each complex feature,
   verified through golden comparison.
+
+### Path boolean ops testing
+
+- **`PathSpline::toPolyline()` tests**: Verify that flattened output closely approximates the
+  original curve. Test with varying tolerances (0.01, 0.25, 1.0). Verify that the flattened path
+  produces the same winding number results as the original for a grid of sample points.
+- **`PathSpline::transformed()` tests**: Verify identity transform is a no-op, verify translate,
+  scale, rotate produce correct point positions.
+- **`pathUnion()` / `pathIntersection()` unit tests**:
+  - Two overlapping rectangles → expected combined/intersected rectangle.
+  - Two non-overlapping paths → union is both paths, intersection is empty.
+  - Paths with holes (EvenOdd fill rule).
+  - Coincident edges and shared vertices (degenerate cases).
+- **`combineClipPaths()` integration tests**:
+  - Single-layer clip path (just union).
+  - Two-layer nested clip paths (union within each layer, intersect between layers).
+  - Compare rendered output (via `RendererSkia`) against golden images from the existing
+    `SkPathOps`-based implementation to verify visual equivalence.
+  - Test with `clipPathUnits="objectBoundingBox"` (coordinates in [0,1] range) to validate
+    tolerance scaling.
 
 ## Alternatives Considered
 
@@ -764,9 +927,11 @@ abstraction. The whole point is that backends only need to understand simple dra
 
 ## Open Questions
 
-1. **Path boolean operations**: Should `PathSpline` gain native boolean ops (union, intersect),
-   or should the `clipPathCombined` approach described above be used? If PathSpline grows boolean
-   ops, which library should back it (Clipper2, custom implementation)?
+1. **Flattening tolerance tuning**: The default tolerance of 0.25 user units for curve flattening
+   in `PathBooleanOps` should produce sub-pixel accuracy at typical SVG scales. Need to validate
+   this against the clip-path golden test suite and tune if any regressions appear at small scales
+   or with `clipPathUnits="objectBoundingBox"` (where coordinates are in [0,1] range — tolerance
+   may need to scale with the bounding box).
 
 2. **Font registration**: Should `RendererInterface` have a `registerFont(data)` method so the
    driver can pass loaded WOFF/OTF data to backends? Currently font loading is entirely in
@@ -775,6 +940,11 @@ abstraction. The whole point is that backends only need to understand simple dra
 3. **Filter extensibility**: When the full SVG filter graph is implemented (feColorMatrix,
    feComposite, feMerge, etc.), should filters become a separate `FilterInterface`, or should
    `RendererInterface::saveLayer` grow to accept a filter graph description?
+
+4. **Path boolean ops beyond clip-path**: If future SVG features (e.g., `clip-path` with
+   `<text>` content, or CSS `shape-outside`) need path boolean ops on visible geometry (not just
+   clipping), the polyline flattening approach may introduce visible artifacts. At that point,
+   evaluate whether to upgrade to a native-cubic boolean ops implementation.
 
 ## Future Work
 
