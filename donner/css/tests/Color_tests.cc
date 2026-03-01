@@ -173,28 +173,22 @@ TEST(Color, Resolve) {
   }
 }
 
-/// @test String literal operators \c _rgb and \c _rgba
-TEST(Color, StringLiterals) {
-  using string_literals::operator""_rgb;
-  using string_literals::operator""_rgba;
-
-  // 0xFF0000_rgb => red (opaque)
-  EXPECT_EQ(0xFF0000_rgb, RGBA(255, 0, 0, 255));
-  // 0x0000FF_rgb => blue (opaque)
-  EXPECT_EQ(0x0000FF_rgb, RGBA(0, 0, 255, 255));
-  // 0x00FF00FF_rgba => green at 0xFF alpha (fully opaque green)
-  EXPECT_EQ(0x00FF00FF_rgba, RGBA(0, 255, 0, 255));
-  // 0xFF000080_rgba => red at half alpha
-  EXPECT_EQ(0xFF000080_rgba, RGBA(255, 0, 0, 128));
-  // 0x11223344_rgba => direct channel check
-  EXPECT_EQ(0x11223344_rgba, RGBA(0x11, 0x22, 0x33, 0x44));
+/// @test Hex helper functions for constructing \ref Color.
+TEST(Color, HexHelpers) {
+  // RgbHex(0xFF0000) => red (opaque)
+  EXPECT_EQ(RgbHex(0xFF0000), RGBA(255, 0, 0, 255));
+  // RgbHex(0x0000FF) => blue (opaque)
+  EXPECT_EQ(RgbHex(0x0000FF), RGBA(0, 0, 255, 255));
+  // RgbaHex(0x00FF00FF) => green at 0xFF alpha (fully opaque green)
+  EXPECT_EQ(RgbaHex(0x00FF00FF), RGBA(0, 255, 0, 255));
+  // RgbaHex(0xFF000080) => red at half alpha
+  EXPECT_EQ(RgbaHex(0xFF000080), RGBA(255, 0, 0, 128));
+  // RgbaHex(0x11223344) => direct channel check
+  EXPECT_EQ(RgbaHex(0x11223344), RGBA(0x11, 0x22, 0x33, 0x44));
 }
 
 /// @test Ostream output \c operator<< for \ref Color.
 TEST(Color, OstreamOutput) {
-  using string_literals::operator""_rgb;
-  using string_literals::operator""_rgba;
-
   EXPECT_THAT(Color(RGBA()), ToStringIs("rgba(255, 255, 255, 255)"));
   EXPECT_THAT(Color(RGBA(0, 0, 0, 0)), ToStringIs("rgba(0, 0, 0, 0)"));
   EXPECT_THAT(Color(RGBA(0, 0, 0, 255)), ToStringIs("rgba(0, 0, 0, 255)"));
@@ -210,13 +204,13 @@ TEST(Color, OstreamOutput) {
   // Test HSLA
   EXPECT_THAT(Color(HSLA::HSL(240, 1.0f, 0.5f)), ToStringIs("hsla(240, 100%, 50%, 255)"));
 
-  EXPECT_THAT(0xFFFFFF_rgb, ToStringIs("rgba(255, 255, 255, 255)"));
-  EXPECT_THAT(0x000000_rgb, ToStringIs("rgba(0, 0, 0, 255)"));
-  EXPECT_THAT(0x123456_rgb, ToStringIs("rgba(18, 52, 86, 255)"));
+  EXPECT_THAT(RgbHex(0xFFFFFF), ToStringIs("rgba(255, 255, 255, 255)"));
+  EXPECT_THAT(RgbHex(0x000000), ToStringIs("rgba(0, 0, 0, 255)"));
+  EXPECT_THAT(RgbHex(0x123456), ToStringIs("rgba(18, 52, 86, 255)"));
 
-  EXPECT_THAT(0xFFFFFF00_rgba, ToStringIs("rgba(255, 255, 255, 0)"));
-  EXPECT_THAT(0x000000CC_rgba, ToStringIs("rgba(0, 0, 0, 204)"));
-  EXPECT_THAT(0x12345678_rgba, ToStringIs("rgba(18, 52, 86, 120)"));
+  EXPECT_THAT(RgbaHex(0xFFFFFF00), ToStringIs("rgba(255, 255, 255, 0)"));
+  EXPECT_THAT(RgbaHex(0x000000CC), ToStringIs("rgba(0, 0, 0, 204)"));
+  EXPECT_THAT(RgbaHex(0x12345678), ToStringIs("rgba(18, 52, 86, 120)"));
 }
 
 }  // namespace donner::css

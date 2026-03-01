@@ -191,6 +191,17 @@ The column limit is set at **100 characters**.
 
 The `.clang-format` file in the repository root is the source of truth for formatting.
 
+## Language and Library Features
+
+Donner follows the Google C++ Style Guide defaults with a few explicit restrictions that keep the
+codebase consistent and portable.
+
+- **No user-defined literals**: prefer named helpers (for example, `RgbHex(0xFF0000)`) over
+  `_rgb`-style suffixes.
+- **Avoid `long long`**: use fixed-width integers such as `std::int64_t` or `std::uint64_t`.
+- **Avoid `std::aligned_storage`/`std::aligned_union`**: prefer `alignas(T)` on a byte buffer for
+  inline storage.
+
 ## Tests
 
 Tests are placed in a `tests/` directory near the file they are testing. Test files should have the suffix of `_tests.cc`.

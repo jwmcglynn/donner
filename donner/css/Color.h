@@ -227,37 +227,33 @@ struct Color {
   friend std::ostream& operator<<(std::ostream& os, const Color& color);
 };
 
-namespace string_literals {
-
 /**
- * String literal operator for constructing a \ref donner::css::Color from hex values.
+ * Construct a \ref donner::css::Color from a 24-bit RGB hex literal.
  *
  * For example:
  * ```
- * const Color red = 0xFF0000_rgb;
+ * const Color red = RgbHex(0xFF0000);
  * ```
  *
- * @param value Integer representation of the color value (without alpha, 24-bits used).
+ * @param value Integer representation of the color value (0xRRGGBB).
  */
-constexpr Color operator""_rgb(unsigned long long value) {
+constexpr Color RgbHex(uint32_t value) {
   return Color(RGBA::RGB((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF));
 }
 
 /**
- * String literal operator for constructing a \ref donner::css::Color from hex values, with an alpha
- * channel.
+ * Construct a \ref donner::css::Color from a 32-bit RGBA hex literal.
  *
  * For example, for 50% opacity red:
  * ```
- * const Color red = 0xFF000080_rgba;
+ * const Color red = RgbaHex(0xFF000080);
  * ```
  *
- * @param value Integer representation of the color value.
+ * @param value Integer representation of the color value (0xRRGGBBAA).
  */
-constexpr Color operator""_rgba(unsigned long long value) {
-  return Color(RGBA((value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF));
+constexpr Color RgbaHex(uint32_t value) {
+  return Color(
+      RGBA((value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF));
 }
-
-}  // namespace string_literals
 
 }  // namespace donner::css
