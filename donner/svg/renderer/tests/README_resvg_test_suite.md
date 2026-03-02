@@ -1,9 +1,9 @@
 # Resvg Test Suite Instructions {#ReSvgTestSuite}
 
 `//donner/svg/renderer/tests:resvg_test_suite` uses https://github.com/RazrFalcon/resvg-test-suite
-to validate Donner's rendering end-to-end. The test suite provides `.svg` files that can be
-rendered with the static subset of SVG (and some SVG2), and resvg's golden images to compare
-against.
+to validate Donner's rendering end-to-end. The test suite now ships its SVG and PNG files inside a
+`tests/` directory (with assets under `resources/` and fonts under `fonts/`), and the Bazel target
+bundles those directories so they can be used as runfiles.
 
 To validate against this suite continuously, https://github.com/jwmcglynn/pixelmatch-cpp17 is used
 to perceptually difference the images and wrap it in a gtest. Execution is single-threaded but it's
@@ -27,34 +27,39 @@ Since this is a gtest, it will also be run as part of any bazel test targeting t
 bazel test //...
 ```
 
-To run as part of gtest, a parameter-driven test is automatically created by grabbing scanning the
-directory, wildcard-matching the filenames, and then generating a unique test for each filename
-being tested.
+The parameter-driven test scans a curated list of directories under `tests/` and instantiates a
+test for every `.svg` file it finds. Test names are derived from the relative path inside
+`tests/` and sanitized so that repeated file names in different directories remain unique. Every
+test also uses a 500x500 canvas size by default to mirror the original suite expectations.
 
-Some tests require more lenient matching, or must be skipped entirely due to incomplete Donner
-functionality. To do this per-test params may be specified. Combined together, a test
-registration appears as:
+The harness also supports per-test configuration to allow more lenient matching or to skip tests
+that exercise unsupported features. Each override is keyed by the relative path under `tests/`
+and can set thresholds, mark tests as skipped, or point at alternate goldens. For example, the
+resvg layout now contains `painting/stroke-dasharray/em-units.svg` (a case Donner does not yet
+support), which is mapped to `ImageComparisonParams::Skip()` in
+`resvg_test_suite.cc`. To lower the acceptable pixel count for a noisy test instead, use
+`ImageComparisonParams::WithThreshold` with the desired values.
+
+Extending the suite means updating the directory lists and overrides in
+`donner/svg/renderer/tests/resvg_test_suite.cc`. A typical override block looks like:
 
 ```cpp
-INSTANTIATE_TEST_SUITE_P(
-    Transform, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-transform",
-        {
-            {"a-transform-007.svg",
-            Params::WithThreshold(0.05f)},  // Larger threshold due to anti-aliasing artifacts.
-        })),
-    TestNameFromFilename);
+const TestDirectoryConfig paintServerConfig{
+    .relativePaths = {
+        "paint-servers/pattern",
+    },
+    .overrides = {
+        {"paint-servers/pattern/tiny-pattern-upscaled.svg",
+         ImageComparisonParams::WithThreshold(0.2f)},  // Anti-aliasing artifacts
+    },
+    .defaultParams = ImageComparisonParams::WithThreshold(0.02f),
+};
 ```
 
-The Resvg test suite files all start with a letter, either "a-" for attribute, or "e-" for element,
-followed by a dash-delimited name, and then a zero-prefixed number. So "a-transform" will match
-all tests like "a-transform-007.svg" or "a-transform-origin-001.svg" (hypothetically).
+With the new layout, a test name is generated from the sanitized relative path. For the above
+example, the test would be named:
 
-The test name is generated based on the test suite name, "Transform" above and the sanitized
-filename. For the above example, an example test would be named:
-
-`Transform/ImageComparisonTestFixture.ResvgTest/a_transform_001`
+`Resvg/ImageComparisonTestFixture.ResvgTest/paint_servers_pattern_tiny_pattern_upscaled_svg`
 
 To run a test with only one test:
 
