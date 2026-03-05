@@ -25,6 +25,7 @@
 #include "absl/debugging/symbolize.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVG.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -256,11 +257,12 @@ int main(int argc, char* argv[]) {
 
   Trace traceCreateRenderer("Create Renderer");
   RendererSkia renderer(verbose);
+  RendererDriver driver(renderer, verbose);
   traceCreateRenderer.stop();
 
   {
     Trace traceRender("Render");
-    renderer.draw(document);
+    driver.draw(document);
   }
 
   std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << "\n";

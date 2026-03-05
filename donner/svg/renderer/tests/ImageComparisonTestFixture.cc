@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -422,6 +423,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   const size_t strideInPixels = renderer.width();
   const int width = renderer.width();
   const int height = renderer.height();
+  ASSERT_GT(width, 0);
+  ASSERT_GT(height, 0);
 
   if (params.updateGoldenFromEnv) {
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");

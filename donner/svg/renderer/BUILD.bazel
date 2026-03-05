@@ -40,6 +40,34 @@ config_setting(
 )
 
 donner_cc_library(
+    name = "renderer_interface",
+    hdrs = ["RendererInterface.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/svg/components",
+        "//donner/svg/core",
+        "//donner/svg/resources:image_resource",
+    ],
+)
+
+donner_cc_library(
+    name = "renderer_driver",
+    srcs = ["RendererDriver.cc"],
+    hdrs = ["RendererDriver.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_interface",
+        ":renderer_utils",
+        ":rendering_context",
+        "//donner/svg/renderer/common",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],
@@ -115,6 +143,8 @@ donner_cc_library(
     hdrs = ["RendererSkia.h"],
     deps = [
         ":renderer_image_io",
+        ":renderer_driver",
+        ":renderer_interface",
         ":renderer_utils",
         ":skia_deps",
         "//donner/base/fonts",
@@ -128,7 +158,11 @@ donner_cc_library(
 donner_cc_library(
     name = "renderer",
     visibility = ["//visibility:public"],
-    deps = [":renderer_skia"],
+    deps = [
+        ":renderer_driver",
+        ":renderer_interface",
+        ":renderer_skia",
+    ],
 )
 
 donner_cc_binary(
