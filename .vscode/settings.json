@@ -396,4 +396,5 @@
   "C_Cpp.default.cppStandard": "c++20",
   "C_Cpp.codeAnalysis.clangTidy.enabled": true,
   "terminal.integrated.enableImages": true,
+  "cmake.ignoreCMakeListsMissing": true,
 }
