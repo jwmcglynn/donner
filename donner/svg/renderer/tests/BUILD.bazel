@@ -57,6 +57,20 @@ cc_test(
 )
 
 cc_test(
+    name = "renderer_driver_tests",
+    srcs = [
+        "RendererDriver_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_utils",
+        "//donner/svg/renderer:rendering_context",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "resvg_test_suite",
     srcs = [
         "resvg_test_suite.cc",

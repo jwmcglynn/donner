@@ -4,13 +4,17 @@
 
 // Skia
 #include "include/core/SkColorFilter.h"
+#include "include/core/SkData.h"
 #include "include/core/SkFont.h"
 #include "include/core/SkFontMgr.h"
+#include "include/core/SkImage.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkPictureRecorder.h"
+#include "include/core/SkSamplingOptions.h"
 #include "include/core/SkStream.h"
+#include "include/core/SkSurface.h"
 #include "include/core/SkTypeface.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
@@ -30,6 +34,8 @@
     "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
 #endif
 // Donner
+#include "donner/base/Length.h"
+#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/fonts/WoffFont.h"
 #include "donner/base/xml/components/TreeComponent.h"  // ForAllChildren
 #include "donner/svg/SVGMarkerElement.h"
@@ -61,6 +67,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/graph/Reference.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
@@ -115,6 +122,155 @@ SkRect toSkia(const Boxd& box) {
 
 SkColor toSkia(const css::RGBA rgba) {
   return SkColorSetARGB(rgba.a, rgba.r, rgba.g, rgba.b);
+}
+
+SkTileMode toSkia(GradientSpreadMethod spreadMethod);
+
+inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
+  if (!numbersArePercent) {
+    return value;
+  }
+
+  if (value.unit == Lengthd::Unit::None) {
+    value.value *= 100.0;
+    value.unit = Lengthd::Unit::Percent;
+  }
+
+  return value;
+}
+
+inline SkScalar resolveGradientCoord(Lengthd value, const Boxd& viewBox, bool numbersArePercent) {
+  return NarrowToFloat(toPercent(value, numbersArePercent).toPixels(viewBox, FontMetrics()));
+}
+
+Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewBox, bool numbersArePercent) {
+  return Vector2d(
+      toPercent(x, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::X),
+      toPercent(y, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y));
+}
+
+Transformd resolveGradientTransform(
+    const components::ComputedLocalTransformComponent* maybeTransformComponent, const Boxd& viewBox) {
+  if (maybeTransformComponent == nullptr) {
+    return Transformd();
+  }
+
+  const Vector2d origin = maybeTransformComponent->transformOrigin;
+  const Transformd entityFromParent =
+      maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
+  return Transformd::Translate(origin) * entityFromParent * Transformd::Translate(-origin);
+}
+
+std::optional<SkPaint> instantiateGradientPaint(const components::PaintResolvedReference& ref,
+                                                const Boxd& pathBounds, const Boxd& viewBox,
+                                                const css::RGBA currentColor, float opacity,
+                                                bool antialias) {
+  const EntityHandle handle = ref.reference.handle;
+  if (!handle) {
+    return std::nullopt;
+  }
+
+  const auto* computedGradient = handle.try_get<components::ComputedGradientComponent>();
+  if (computedGradient == nullptr || !computedGradient->initialized) {
+    return std::nullopt;
+  }
+
+  const bool objectBoundingBox = computedGradient->gradientUnits == GradientUnits::ObjectBoundingBox;
+  const bool numbersArePercent = objectBoundingBox;
+
+  if (objectBoundingBox && (NearZero(pathBounds.width()) || NearZero(pathBounds.height()))) {
+    return std::nullopt;
+  }
+
+  Transformd gradientFromGradientUnits;
+  if (objectBoundingBox) {
+    gradientFromGradientUnits = resolveGradientTransform(
+        handle.try_get<components::ComputedLocalTransformComponent>(), kUnitPathBounds);
+
+    const Transformd objectBoundingBoxFromUnitBox =
+        Transformd::Scale(pathBounds.size()) * Transformd::Translate(pathBounds.topLeft);
+    gradientFromGradientUnits = gradientFromGradientUnits * objectBoundingBoxFromUnitBox;
+  } else {
+    gradientFromGradientUnits = resolveGradientTransform(
+        handle.try_get<components::ComputedLocalTransformComponent>(), viewBox);
+  }
+
+  const Boxd& bounds = objectBoundingBox ? kUnitPathBounds : viewBox;
+
+  std::vector<SkScalar> positions;
+  std::vector<SkColor> colors;
+  positions.reserve(computedGradient->stops.size());
+  colors.reserve(computedGradient->stops.size());
+  for (const GradientStop& stop : computedGradient->stops) {
+    positions.push_back(stop.offset);
+    colors.push_back(toSkia(stop.color.resolve(currentColor, stop.opacity * opacity)));
+  }
+
+  if (positions.size() < 2) {
+    return std::nullopt;
+  }
+
+  const SkMatrix skGradientFromGradientUnits = toSkiaMatrix(gradientFromGradientUnits);
+
+  SkPaint paint;
+  paint.setAntiAlias(antialias);
+
+  if (const auto* linear = handle.try_get<components::ComputedLinearGradientComponent>()) {
+    const Vector2d start = resolveGradientCoords(linear->x1, linear->y1, bounds, numbersArePercent);
+    const Vector2d end = resolveGradientCoords(linear->x2, linear->y2, bounds, numbersArePercent);
+
+    const SkPoint points[] = {toSkia(start), toSkia(end)};
+    paint.setShader(SkGradientShader::MakeLinear(points, colors.data(), positions.data(),
+                                                 static_cast<int>(positions.size()),
+                                                 toSkia(computedGradient->spreadMethod), 0,
+                                                 &skGradientFromGradientUnits));
+    return paint;
+  }
+
+  if (const auto* radial = handle.try_get<components::ComputedRadialGradientComponent>()) {
+    const double radius = resolveGradientCoord(radial->r, bounds, numbersArePercent);
+    const Vector2d center = resolveGradientCoords(radial->cx, radial->cy, bounds, numbersArePercent);
+    const double focalRadius = resolveGradientCoord(radial->fr, bounds, numbersArePercent);
+    const Vector2d focalCenter = resolveGradientCoords(radial->fx.value_or(radial->cx),
+                                                      radial->fy.value_or(radial->cy), bounds,
+                                                      numbersArePercent);
+
+    if (radius <= 0.0) {
+      return std::nullopt;
+    }
+
+    const float skRadius = static_cast<float>(radius);
+    if (NearZero(focalRadius) && NearZero((focalCenter - center).length())) {
+      paint.setShader(SkGradientShader::MakeRadial(
+          toSkia(center), skRadius, colors.data(), positions.data(),
+          static_cast<int>(positions.size()), toSkia(computedGradient->spreadMethod), 0,
+          &skGradientFromGradientUnits));
+    } else {
+      paint.setShader(SkGradientShader::MakeTwoPointConical(
+          toSkia(focalCenter), static_cast<SkScalar>(focalRadius), toSkia(center), skRadius,
+          colors.data(), positions.data(), static_cast<int>(positions.size()),
+          toSkia(computedGradient->spreadMethod), 0, &skGradientFromGradientUnits));
+    }
+    return paint;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<css::RGBA> resolveSolidPaint(const components::ResolvedPaintServer& paint,
+                                           const css::Color& currentColor, double opacity) {
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&paint)) {
+    return solid->color.resolve(currentColor.rgba(), NarrowToFloat(opacity));
+  }
+
+  return std::nullopt;
+}
+
+SkPaint basePaint(bool antialias, double opacity) {
+  SkPaint paint;
+  paint.setAntiAlias(antialias);
+  paint.setAlphaf(NarrowToFloat(opacity));
+  return paint;
 }
 
 SkPaint::Cap toSkia(StrokeLinecap lineCap) {
@@ -1439,116 +1595,377 @@ private:
   Transformd layerBaseTransform_ = Transformd();
 };
 
-RendererSkia::RendererSkia(bool verbose) : verbose_(verbose) {}
+RendererSkia::RendererSkia(bool verbose) : verbose_(verbose) {
+#if defined(DONNER_USE_CORETEXT)
+  fontMgr_ = SkFontMgr_New_CoreText();
+#elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
+  fontMgr_ = SkFontMgr_New_FontConfig(SkFontScanner_FT::Make().release());
+#elif defined(DONNER_USE_FREETYPE)
+  fontMgr_ = SkFontMgr_New_Custom_Empty();
+#endif
+}
 
 RendererSkia::~RendererSkia() {}
 
 RendererSkia::RendererSkia(RendererSkia&&) noexcept = default;
 RendererSkia& RendererSkia::operator=(RendererSkia&&) noexcept = default;
 
-void RendererSkia::draw(SVGDocument& document) {
-  // TODO(jwmcglynn): Plumb outWarnings.
-  std::vector<ParseError> warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, verbose_ ? &warnings : nullptr);
+void RendererSkia::beginFrame(const RenderViewport& viewport) {
+  viewport_ = viewport;
+  const int pixelWidth = static_cast<int>(viewport.size.x * viewport.devicePixelRatio);
+  const int pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
 
-  if (!warnings.empty()) {
-    for (const ParseError& warning : warnings) {
-      std::cerr << warning << '\n';
+  bitmap_.allocPixels(SkImageInfo::Make(pixelWidth, pixelHeight,
+                                        SkColorType::kRGBA_8888_SkColorType,
+                                        SkAlphaType::kPremul_SkAlphaType));
+  bitmap_.eraseARGB(0, 0, 0, 0);
+
+  surface_ = SkSurfaces::WrapPixels(bitmap_.pixmap());
+  currentCanvas_ = externalCanvas_ != nullptr ? externalCanvas_ : surface_->getCanvas();
+
+  currentCanvas_->save();
+  currentCanvas_->scale(NarrowToFloat(viewport.devicePixelRatio),
+                        NarrowToFloat(viewport.devicePixelRatio));
+  transformDepth_ = 0;
+  clipDepth_ = 0;
+}
+
+void RendererSkia::endFrame() {
+  for (; clipDepth_ > 0; --clipDepth_) {
+    currentCanvas_->restore();
+  }
+  for (; transformDepth_ > 0; --transformDepth_) {
+    currentCanvas_->restore();
+  }
+
+  currentCanvas_->restore();
+
+  currentCanvas_ = nullptr;
+  externalCanvas_ = nullptr;
+}
+
+void RendererSkia::pushTransform(const Transformd& transform) {
+  if (currentCanvas_ == nullptr) {
+    return;
+  }
+
+  currentCanvas_->save();
+  currentCanvas_->concat(toSkiaMatrix(transform));
+  ++transformDepth_;
+}
+
+void RendererSkia::popTransform() {
+  if (currentCanvas_ == nullptr || transformDepth_ <= 0) {
+    return;
+  }
+
+  currentCanvas_->restore();
+  --transformDepth_;
+}
+
+void RendererSkia::pushClip(const ResolvedClip& clip) {
+  if (currentCanvas_ == nullptr) {
+    return;
+  }
+
+  currentCanvas_->save();
+  if (clip.clipRect.has_value()) {
+    currentCanvas_->clipRect(toSkia(*clip.clipRect));
+  }
+
+  for (const PathShape& path : clip.clipPaths) {
+    SkPath skPath = toSkia(path.path);
+    if (path.fillRule == FillRule::EvenOdd) {
+      skPath.setFillType(SkPathFillType::kEvenOdd);
+    }
+    currentCanvas_->clipPath(skPath, SkClipOp::kIntersect, true);
+  }
+
+  ++clipDepth_;
+}
+
+void RendererSkia::popClip() {
+  if (currentCanvas_ == nullptr || clipDepth_ <= 0) {
+    return;
+  }
+
+  currentCanvas_->restore();
+  --clipDepth_;
+}
+
+std::optional<SkPaint> RendererSkia::makeFillPaint(const Boxd& bounds) {
+  if (std::holds_alternative<PaintServer::None>(paint_.fill)) {
+    return std::nullopt;
+  }
+
+  const css::RGBA currentColor = paint_.currentColor.rgba();
+  const float fillOpacity = NarrowToFloat(paint_.fillOpacity);
+  const float globalOpacity = NarrowToFloat(paint_.opacity);
+
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&paint_.fill)) {
+    SkPaint paint = basePaint(antialias_, globalOpacity);
+    paint.setStyle(SkPaint::Style::kFill_Style);
+    paint.setColor(toSkia(solid->color.resolve(currentColor, fillOpacity)));
+    return paint;
+  }
+
+  if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint_.fill)) {
+    if (std::optional<SkPaint> gradient = instantiateGradientPaint(
+            *ref, bounds, paint_.viewBox, currentColor,
+            NarrowToFloat(paint_.opacity * paint_.fillOpacity), antialias_)) {
+      gradient->setStyle(SkPaint::Style::kFill_Style);
+      return gradient;
+    }
+
+    if (ref->fallback) {
+      SkPaint paint = basePaint(antialias_, globalOpacity);
+      paint.setStyle(SkPaint::Style::kFill_Style);
+      paint.setColor(toSkia(ref->fallback->resolve(currentColor, fillOpacity)));
+      return paint;
     }
   }
 
-  const Vector2i renderingSize = document.canvasSize();
+  return std::nullopt;
+}
 
-  bitmap_.allocPixels(
-      SkImageInfo::MakeN32(renderingSize.x, renderingSize.y, SkAlphaType::kUnpremul_SkAlphaType));
-  SkCanvas canvas(bitmap_);
-  rootCanvas_ = &canvas;
-  currentCanvas_ = &canvas;
+std::optional<SkPaint> RendererSkia::makeStrokePaint(const Boxd& bounds,
+                                                     const StrokeParams& stroke) {
+  if (std::holds_alternative<PaintServer::None>(paint_.stroke) || stroke.strokeWidth <= 0.0) {
+    return std::nullopt;
+  }
 
-  draw(document.registry());
+  const css::RGBA currentColor = paint_.currentColor.rgba();
+  const float strokeOpacity = NarrowToFloat(paint_.strokeOpacity);
+  const float globalOpacity = NarrowToFloat(paint_.opacity);
 
-  rootCanvas_ = currentCanvas_ = nullptr;
+  auto configureStroke = [&](SkPaint& paint) {
+    paint.setStyle(SkPaint::Style::kStroke_Style);
+    paint.setStrokeWidth(static_cast<SkScalar>(stroke.strokeWidth));
+    paint.setStrokeCap(toSkia(stroke.lineCap));
+    paint.setStrokeJoin(toSkia(stroke.lineJoin));
+    paint.setStrokeMiter(static_cast<SkScalar>(stroke.miterLimit));
+
+    if (!stroke.dashArray.empty()) {
+      std::vector<SkScalar> dashes;
+      dashes.reserve(stroke.dashArray.size());
+      for (double dash : stroke.dashArray) {
+        dashes.push_back(static_cast<SkScalar>(dash));
+      }
+
+      paint.setPathEffect(SkDashPathEffect::Make(dashes.data(), static_cast<int>(dashes.size()),
+                                                 static_cast<SkScalar>(stroke.dashOffset)));
+    }
+  };
+
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&paint_.stroke)) {
+    SkPaint paint = basePaint(antialias_, globalOpacity);
+    configureStroke(paint);
+    paint.setColor(toSkia(solid->color.resolve(currentColor, strokeOpacity)));
+    return paint;
+  }
+
+  if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint_.stroke)) {
+    if (std::optional<SkPaint> gradient = instantiateGradientPaint(
+            *ref, bounds, paint_.viewBox, currentColor,
+            NarrowToFloat(paint_.opacity * paint_.strokeOpacity), antialias_)) {
+      configureStroke(*gradient);
+      return gradient;
+    }
+
+    if (ref->fallback) {
+      SkPaint paint = basePaint(antialias_, globalOpacity);
+      configureStroke(paint);
+      paint.setColor(toSkia(ref->fallback->resolve(currentColor, strokeOpacity)));
+      return paint;
+    }
+  }
+
+  return std::nullopt;
+}
+
+void RendererSkia::setPaint(const PaintParams& paint) {
+  paint_ = paint;
+  paintOpacity_ = paint.opacity;
+}
+
+void RendererSkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
+  if (currentCanvas_ == nullptr) {
+    return;
+  }
+
+  SkPath skPath = toSkia(path.path);
+  if (path.fillRule == FillRule::EvenOdd) {
+    skPath.setFillType(SkPathFillType::kEvenOdd);
+  }
+
+  if (std::optional<SkPaint> fillPaint = makeFillPaint(path.path.bounds())) {
+    currentCanvas_->drawPath(skPath, *fillPaint);
+  }
+
+  if (std::optional<SkPaint> strokePaint = makeStrokePaint(path.path.bounds(), stroke)) {
+    currentCanvas_->drawPath(skPath, *strokePaint);
+  }
+}
+
+void RendererSkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
+  const SkRect skRect = toSkia(rect);
+  if (std::optional<SkPaint> fillPaint = makeFillPaint(rect)) {
+    currentCanvas_->drawRect(skRect, *fillPaint);
+  }
+
+  if (std::optional<SkPaint> strokePaint = makeStrokePaint(rect, stroke)) {
+    currentCanvas_->drawRect(skRect, *strokePaint);
+  }
+}
+
+void RendererSkia::drawEllipse(const Boxd& bounds, const StrokeParams& stroke) {
+  SkPath ellipse;
+  ellipse.addOval(toSkia(bounds));
+  if (std::optional<SkPaint> fillPaint = makeFillPaint(bounds)) {
+    currentCanvas_->drawPath(ellipse, *fillPaint);
+  }
+
+  if (std::optional<SkPaint> strokePaint = makeStrokePaint(bounds, stroke)) {
+    currentCanvas_->drawPath(ellipse, *strokePaint);
+  }
+}
+
+void RendererSkia::drawImage(const ImageResource& image, const ImageParams& params) {
+  if (currentCanvas_ == nullptr || image.data.empty()) {
+    return;
+  }
+
+  SkImageInfo info =
+      SkImageInfo::Make(image.width, image.height, SkColorType::kRGBA_8888_SkColorType,
+                        SkAlphaType::kPremul_SkAlphaType);
+  const SkPixmap pixmap(info, image.data.data(), static_cast<size_t>(image.width * 4));
+  sk_sp<SkImage> skImage = SkImages::RasterFromPixmapCopy(pixmap);
+  if (skImage == nullptr) {
+    return;
+  }
+
+  SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
+  const SkSamplingOptions sampling(params.imageRenderingPixelated ? SkFilterMode::kNearest
+                                                                  : SkFilterMode::kLinear);
+
+  currentCanvas_->drawImageRect(skImage, toSkia(params.targetRect), sampling, &paint);
+}
+
+void RendererSkia::drawText(const components::ComputedTextComponent& text,
+                            const TextParams& params) {
+  if (currentCanvas_ == nullptr) {
+    return;
+  }
+
+  SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
+  paint.setColor(toSkia(params.fillColor.rgba()));
+
+  const SmallVector<RcString, 1>& families = params.fontFamilies;
+  const std::string familyName = families.empty() ? "" : families[0].str();
+  sk_sp<SkTypeface> typeface = fontMgr_->matchFamilyStyle(familyName.c_str(), SkFontStyle());
+  if (!typeface) {
+    typeface = fontMgr_->makeFromData(SkData::MakeWithoutCopy(
+        embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));
+  }
+
+  const SkScalar fontSizePx = static_cast<SkScalar>(
+      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+
+  SkFont font(typeface, fontSizePx);
+  font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+
+  for (const auto& span : text.spans) {
+    const SkScalar x = static_cast<SkScalar>(
+        span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
+        span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
+    const SkScalar y = static_cast<SkScalar>(
+        span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
+        span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y));
+    currentCanvas_->drawSimpleText(span.text.data(), span.text.size(), SkTextEncoding::kUTF8, x, y,
+                                   font, paint);
+  }
+}
+
+RendererBitmap RendererSkia::takeSnapshot() const {
+  RendererBitmap snapshot;
+  snapshot.dimensions = Vector2i(bitmap_.width(), bitmap_.height());
+  snapshot.rowBytes = bitmap_.rowBytes();
+
+  if (bitmap_.empty()) {
+    return snapshot;
+  }
+
+  const size_t size = bitmap_.computeByteSize();
+  snapshot.pixels.resize(size);
+  const bool copied =
+      bitmap_.readPixels(bitmap_.info(), snapshot.pixels.data(), snapshot.rowBytes, 0, 0);
+  if (!copied) {
+    snapshot.pixels.clear();
+    snapshot.dimensions = Vector2i::Zero();
+    snapshot.rowBytes = 0;
+  }
+
+  return snapshot;
+}
+
+void RendererSkia::draw(SVGDocument& document) {
+  RendererDriver driver(*this, verbose_);
+  driver.draw(document);
 }
 
 std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
-  // TODO(jwmcglynn): Plumb outWarnings.
-  RendererUtils::prepareDocumentForRendering(document, verbose_, nullptr);
-
-  const Vector2i renderingSize = document.canvasSize();
-
-  assert(renderingSize.x <= 64 && renderingSize.y <= 64 &&
-         "Rendering size must be less than or equal to 64x64");
-
-  bitmap_.allocPixels(SkImageInfo::Make(renderingSize.x, renderingSize.y, kGray_8_SkColorType,
-                                        kOpaque_SkAlphaType));
-  SkCanvas canvas(bitmap_);
-  rootCanvas_ = &canvas;
-  currentCanvas_ = &canvas;
-
-  draw(document.registry());
-
-  rootCanvas_ = currentCanvas_ = nullptr;
+  draw(document);
+  const RendererBitmap snapshot = takeSnapshot();
+  if (snapshot.empty()) {
+    return {};
+  }
 
   std::string asciiArt;
-  asciiArt.reserve(renderingSize.x * renderingSize.y +
-                   renderingSize.y);  // Reserve space including newlines
+  asciiArt.reserve(static_cast<size_t>(snapshot.dimensions.x * snapshot.dimensions.y));
 
   static const std::array<char, 10> grayscaleTable = {'.', ',', ':', '-', '=',
                                                       '+', '*', '#', '%', '@'};
 
-  for (int y = 0; y < renderingSize.y; ++y) {
-    for (int x = 0; x < renderingSize.x; ++x) {
-      const uint8_t pixel = *bitmap_.getAddr8(x, y);
-      size_t index = pixel / static_cast<size_t>(256 / grayscaleTable.size());
-      if (index >= grayscaleTable.size()) {
-        index = grayscaleTable.size() - 1;
-      }
+  for (int y = 0; y < snapshot.dimensions.y; ++y) {
+    const uint8_t* row = snapshot.pixels.data() + y * snapshot.rowBytes;
+    for (int x = 0; x < snapshot.dimensions.x; ++x) {
+      const uint8_t r = row[x * 4 + 0];
+      const uint8_t g = row[x * 4 + 1];
+      const uint8_t b = row[x * 4 + 2];
+      const uint8_t luminance = static_cast<uint8_t>(0.299 * r + 0.587 * g + 0.114 * b);
+      size_t index = luminance / static_cast<size_t>(256 / grayscaleTable.size());
+      index = std::min(index, grayscaleTable.size() - 1);
       asciiArt += grayscaleTable.at(index);
     }
-
     asciiArt += '\n';
   }
-
-  bitmap_.reset();
 
   return asciiArt;
 }
 
 sk_sp<SkPicture> RendererSkia::drawIntoSkPicture(SVGDocument& document) {
-  Registry& registry = document.registry();
-
-  // TODO(jwmcglynn): Plumb outWarnings.
-  RendererUtils::prepareDocumentForRendering(document, verbose_);
-
-  const Vector2i renderingSize = components::LayoutSystem().calculateCanvasScaledDocumentSize(
-      registry, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
-
   SkPictureRecorder recorder;
-  rootCanvas_ = recorder.beginRecording(toSkia(Boxd::WithSize(renderingSize)));
-  currentCanvas_ = rootCanvas_;
-
-  draw(registry);
-
-  rootCanvas_ = currentCanvas_ = nullptr;
-
+  const Vector2i renderingSize = document.canvasSize();
+  externalCanvas_ = recorder.beginRecording(SkRect::MakeWH(static_cast<SkScalar>(renderingSize.x),
+                                                           static_cast<SkScalar>(renderingSize.y)));
+  draw(document);
   return recorder.finishRecordingAsPicture();
 }
 
 bool RendererSkia::save(const char* filename) {
-  assert(bitmap_.colorType() == kRGBA_8888_SkColorType);
-  return RendererImageIO::writeRgbaPixelsToPngFile(filename, pixelData(), bitmap_.width(),
-                                                   bitmap_.height());
+  const RendererBitmap snapshot = takeSnapshot();
+  if (snapshot.empty()) {
+    return false;
+  }
+
+  return RendererImageIO::writeRgbaPixelsToPngFile(filename, snapshot.pixels, snapshot.dimensions.x,
+                                                   snapshot.dimensions.y);
 }
 
 std::span<const uint8_t> RendererSkia::pixelData() const {
-  return std::span<const uint8_t>(static_cast<const uint8_t*>(bitmap_.getPixels()),
-                                  bitmap_.computeByteSize());
-}
-
-void RendererSkia::draw(Registry& registry) {
-  Impl impl(*this, RenderingInstanceView{registry});
-  impl.initialize(registry);
-  impl.drawUntil(registry, entt::null);
+  return std::span<const uint8_t>(
+      bitmap_.computeByteSize() == 0 ? nullptr : static_cast<const uint8_t*>(bitmap_.getPixels()),
+      bitmap_.computeByteSize());
 }
 
 }  // namespace donner::svg

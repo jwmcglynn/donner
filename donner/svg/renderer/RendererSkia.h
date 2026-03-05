@@ -5,6 +5,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkFontMgr.h"
@@ -26,7 +27,7 @@ namespace donner::svg {
  * This is a prototype-quality implementation, and is subject to refactoring in the future to
  * provide a cleaner API boundary between Donner and the rendering backend.
  */
-class RendererSkia {
+class RendererSkia : public RendererInterface {
 public:
   /**
    * Create the Skia renderer.
@@ -53,6 +54,71 @@ public:
    * @param document The SVG document to render.
    */
   void draw(SVGDocument& document);
+
+  /**
+   * Begins a render pass for the given viewport.
+   */
+  void beginFrame(const RenderViewport& viewport) override;
+
+  /**
+   * Completes the current render pass, flushing any buffered work.
+   */
+  void endFrame() override;
+
+  /**
+   * Pushes a transform onto the Skia canvas stack.
+   */
+  void pushTransform(const Transformd& transform) override;
+
+  /**
+   * Pops the most recently applied transform.
+   */
+  void popTransform() override;
+
+  /**
+   * Pushes a clip rect or path mask onto the Skia canvas stack.
+   */
+  void pushClip(const ResolvedClip& clip) override;
+
+  /**
+   * Pops the most recently applied clip.
+   */
+  void popClip() override;
+
+  /**
+   * Sets the current paint state for subsequent draw calls.
+   */
+  void setPaint(const PaintParams& paint) override;
+
+  /**
+   * Draws a path with fill and stroke derived from the current paint.
+   */
+  void drawPath(const PathShape& path, const StrokeParams& stroke) override;
+
+  /**
+   * Draws a rectangle convenience primitive.
+   */
+  void drawRect(const Boxd& rect, const StrokeParams& stroke) override;
+
+  /**
+   * Draws an ellipse convenience primitive.
+   */
+  void drawEllipse(const Boxd& bounds, const StrokeParams& stroke) override;
+
+  /**
+   * Draws an image resource.
+   */
+  void drawImage(const ImageResource& image, const ImageParams& params) override;
+
+  /**
+   * Draws text runs.
+   */
+  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override;
+
+  /**
+   * Captures a CPU-readable snapshot of the last-rendered frame.
+   */
+  [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
   /**
    * Render the given \ref SVGDocument into ASCII art. The generated image is of given size, and has
@@ -135,13 +201,6 @@ private:
   /// Implementation class.
   class Impl;
 
-  /**
-   * Internal helper to draw the given entity.
-   *
-   * @param registry Registry to use for drawing.
-   */
-  void draw(Registry& registry);
-
   bool verbose_;  //!< If true, print verbose logging.
 
   sk_sp<class SkFontMgr> fontMgr_;  //!< Font manager, may be initialized with custom fonts.
@@ -151,6 +210,17 @@ private:
   SkCanvas* rootCanvas_ = nullptr;     //!< The root canvas.
   SkCanvas* currentCanvas_ = nullptr;  //!< The current canvas.
   bool antialias_ = true;              //!< Whether to antialias.
+
+  RenderViewport viewport_;
+  PaintParams paint_;
+  double paintOpacity_ = 1.0;
+  int transformDepth_ = 0;
+  int clipDepth_ = 0;
+  SkCanvas* externalCanvas_ = nullptr;
+  sk_sp<SkSurface> surface_;
+
+  std::optional<SkPaint> makeFillPaint(const Boxd& bounds);
+  std::optional<SkPaint> makeStrokePaint(const Boxd& bounds, const StrokeParams& stroke);
 };
 
 }  // namespace donner::svg

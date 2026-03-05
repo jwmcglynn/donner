@@ -2,11 +2,13 @@
 
 #include <pixelmatch/pixelmatch.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -106,11 +108,18 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   }
 
   RendererSkia renderer(/*verbose*/ false);
-  renderer.draw(document);
+  RendererDriver driver(renderer);
+  driver.draw(document);
 
-  const size_t strideInPixels = renderer.width();
-  const int width = renderer.width();
-  const int height = renderer.height();
+  const RendererBitmap snapshot = driver.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+
+  const int width = snapshot.dimensions.x;
+  const int height = snapshot.dimensions.y;
+  const size_t strideInPixels = snapshot.rowBytes == 0
+                                    ? static_cast<size_t>(width)
+                                    : snapshot.rowBytes / sizeof(uint32_t);
+  ASSERT_EQ(snapshot.pixels.size(), strideInPixels * static_cast<size_t>(height) * 4);
 
   if (params.updateGoldenFromEnv) {
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
@@ -118,7 +127,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       const std::filesystem::path goldenImagePath =
           std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
       RendererImageIO::writeRgbaPixelsToPngFile(
-          goldenImagePath.string().c_str(), renderer.pixelData(), width, height, strideInPixels);
+          goldenImagePath.string().c_str(), snapshot.pixels, width, height, strideInPixels);
       std::cout << "Updated golden image: " << goldenImagePath.string() << "\n";
       return;
     }
@@ -131,7 +140,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   ASSERT_EQ(goldenImage.width, width);
   ASSERT_EQ(goldenImage.height, height);
   ASSERT_EQ(goldenImage.strideInPixels, strideInPixels);
-  ASSERT_EQ(goldenImage.data.size(), renderer.pixelData().size());
+  ASSERT_EQ(goldenImage.data.size(), snapshot.pixels.size());
 
   std::vector<uint8_t> diffImage;
   diffImage.resize(strideInPixels * height * 4);
@@ -139,7 +148,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   pixelmatch::Options options;
   options.threshold = params.threshold;
   const int mismatchedPixels = pixelmatch::pixelmatch(
-      goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
+      goldenImage.data, snapshot.pixels, diffImage, width, height, strideInPixels, options);
 
   if (mismatchedPixels > params.maxMismatchedPixels) {
     std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
@@ -148,7 +157,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     const std::filesystem::path actualImagePath =
         std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(),
-                                              renderer.pixelData(), width, height, strideInPixels);
+                                              snapshot.pixels, width, height, strideInPixels);
 
     const std::filesystem::path diffFilePath =
         std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));

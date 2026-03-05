@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "donner/svg/SVG.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererSkia.h"
 
 /**
@@ -95,7 +96,8 @@ int main(int argc, char* argv[]) {
   //! [render]
   // Draw the document, store the image in-memory.
   RendererSkia renderer;
-  renderer.draw(document);
+  RendererDriver driver(renderer);
+  driver.draw(document);
 
   std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << "\n";
 
