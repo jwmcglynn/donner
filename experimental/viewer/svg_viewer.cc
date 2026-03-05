@@ -14,6 +14,7 @@ extern "C" {
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and SVGParser
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererSkia.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -212,6 +213,7 @@ int main(int argc, char** argv) {
   state.loadSVG(svgString);
 
   RendererSkia renderer;
+  RendererDriver driver(renderer);
 
   bool svgChanged = false;
 
@@ -334,7 +336,7 @@ int main(int argc, char** argv) {
     }
 
     if (state.valid) {
-      renderer.draw(state.document);
+      driver.draw(state.document);
       const SkBitmap& bitmap = renderer.bitmap();
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.width(), bitmap.height(), 0, GL_RGBA,
                    GL_UNSIGNED_BYTE, bitmap.getPixels());

@@ -5,10 +5,12 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkGraphics.h"
+#include "include/core/SkPictureRecorder.h"
 
 namespace donner::svg {
 
@@ -19,14 +21,9 @@ namespace donner::svg {
  * supports all functionality required to implement SVG (as many of these projects also support
  * SVG).
  *
- * Skia is used as the reference renderer while implementing Donner, but long-term Donner would like
- * to support other rendering backends, so dependencies on Skia should be kept to a minimum and
- * isolated to RendererSkia.
- *
- * This is a prototype-quality implementation, and is subject to refactoring in the future to
- * provide a cleaner API boundary between Donner and the rendering backend.
+ * Skia is used as the reference renderer while implementing Donner.
  */
-class RendererSkia {
+class RendererSkia : public RendererInterface {
 public:
   /**
    * Create the Skia renderer.
@@ -52,7 +49,104 @@ public:
    *
    * @param document The SVG document to render.
    */
-  void draw(SVGDocument& document);
+  void draw(SVGDocument& document) override;
+
+  /**
+   * Begins a render pass for the given viewport.
+   */
+  void beginFrame(const RenderViewport& viewport) override;
+
+  /**
+   * Completes the current render pass, flushing any buffered work.
+   */
+  void endFrame() override;
+
+  /**
+   * Sets the absolute transform, replacing the current matrix.
+   */
+  void setTransform(const Transformd& transform) override;
+
+  /**
+   * Pushes a transform onto the Skia canvas stack.
+   */
+  void pushTransform(const Transformd& transform) override;
+
+  /**
+   * Pops the most recently applied transform.
+   */
+  void popTransform() override;
+
+  /**
+   * Pushes a clip rect or path mask onto the Skia canvas stack.
+   */
+  void pushClip(const ResolvedClip& clip) override;
+
+  /**
+   * Pops the most recently applied clip.
+   */
+  void popClip() override;
+
+  /**
+   * Pushes an isolated compositing layer with the given opacity.
+   */
+  void pushIsolatedLayer(double opacity) override;
+
+  /**
+   * Pops the most recent isolated layer.
+   */
+  void popIsolatedLayer() override;
+
+  /**
+   * Pushes a filter layer that applies the given effect chain.
+   */
+  void pushFilterLayer(std::span<const FilterEffect> effects) override;
+
+  /**
+   * Pops the most recent filter layer.
+   */
+  void popFilterLayer() override;
+
+  void pushMask(const std::optional<Boxd>& maskBounds) override;
+  void transitionMaskToContent() override;
+  void popMask() override;
+
+  void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) override;
+  void endPatternTile(bool forStroke) override;
+
+  /**
+   * Sets the current paint state for subsequent draw calls.
+   */
+  void setPaint(const PaintParams& paint) override;
+
+  /**
+   * Draws a path with fill and stroke derived from the current paint.
+   */
+  void drawPath(const PathShape& path, const StrokeParams& stroke) override;
+
+  /**
+   * Draws a rectangle convenience primitive.
+   */
+  void drawRect(const Boxd& rect, const StrokeParams& stroke) override;
+
+  /**
+   * Draws an ellipse convenience primitive.
+   */
+  void drawEllipse(const Boxd& bounds, const StrokeParams& stroke) override;
+
+  /**
+   * Draws an image resource.
+   */
+  void drawImage(const ImageResource& image, const ImageParams& params) override;
+
+  /**
+   * Draws text runs.
+   */
+  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override;
+
+  /**
+   * Captures a CPU-readable snapshot of the last-rendered frame.
+   */
+  [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
   /**
    * Render the given \ref SVGDocument into ASCII art. The generated image is of given size, and has
@@ -116,10 +210,10 @@ public:
   std::span<const uint8_t> pixelData() const;
 
   /// Get the width of the rendered image in pixels.
-  int width() const { return bitmap_.width(); }
+  int width() const override { return bitmap_.width(); }
 
   /// Get the height of the rendered image in pixels.
-  int height() const { return bitmap_.height(); }
+  int height() const override { return bitmap_.height(); }
 
   /// Get the SkBitmap of the rendered image.
   const SkBitmap& bitmap() const { return bitmap_; }
@@ -135,22 +229,35 @@ private:
   /// Implementation class.
   class Impl;
 
-  /**
-   * Internal helper to draw the given entity.
-   *
-   * @param registry Registry to use for drawing.
-   */
-  void draw(Registry& registry);
-
   bool verbose_;  //!< If true, print verbose logging.
 
   sk_sp<class SkFontMgr> fontMgr_;  //!< Font manager, may be initialized with custom fonts.
   std::map<std::string, sk_sp<SkTypeface>> typefaces_;  //!< Cached typefaces by family name.
 
-  SkBitmap bitmap_;                    //!< The bitmap to render into.
-  SkCanvas* rootCanvas_ = nullptr;     //!< The root canvas.
-  SkCanvas* currentCanvas_ = nullptr;  //!< The current canvas.
-  bool antialias_ = true;              //!< Whether to antialias.
+  SkBitmap bitmap_;                         //!< The bitmap to render into.
+  std::unique_ptr<SkCanvas> bitmapCanvas_;  //!< Direct canvas from bitmap.
+  SkCanvas* currentCanvas_ = nullptr;       //!< The current canvas.
+  bool antialias_ = true;                   //!< Whether to antialias.
+
+  RenderViewport viewport_;
+  PaintParams paint_;
+  double paintOpacity_ = 1.0;
+  int transformDepth_ = 0;
+  int clipDepth_ = 0;
+  SkCanvas* externalCanvas_ = nullptr;
+
+  // Pattern recording state, stacked for nested patterns.
+  struct PatternState {
+    std::unique_ptr<SkPictureRecorder> recorder;
+    SkCanvas* savedCanvas = nullptr;
+    Transformd patternToTarget;
+  };
+  std::vector<PatternState> patternStack_;
+  std::optional<SkPaint> patternFillPaint_;
+  std::optional<SkPaint> patternStrokePaint_;
+
+  std::optional<SkPaint> makeFillPaint(const Boxd& bounds);
+  std::optional<SkPaint> makeStrokePaint(const Boxd& bounds, const StrokeParams& stroke);
 };
 
 }  // namespace donner::svg
