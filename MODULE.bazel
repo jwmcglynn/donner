@@ -20,6 +20,12 @@ bazel_dep(name = "platforms", version = "1.0.0")
 ## Third-party dependencies
 ##
 
+# Tiny-skia dependencies
+local_repository(
+    name = "tiny-skia-cpp",
+    path = "third_party/tiny-skia-cpp",
+)
+
 # Skia dependencies
 bazel_dep(name = "rules_license", version = "1.0.0")
 

@@ -2,6 +2,9 @@
 examples/bazel-examples
 tools/python
 
+# Consumed via local_repository in MODULE.bazel; ignore to avoid double-loading
+third_party/tiny-skia-cpp
+
 # Ignore CMake-generated files
 build
 CMakeFiles
