@@ -1,0 +1,29 @@
+"""Aggregate tiny_skia_cpp library."""
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//:bazel/simd_transition.bzl", "simd_mode_dep")
+
+cc_library(
+    name = "tiny_skia_lib",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/tiny_skia:tiny_skia_core",
+        "//src/tiny_skia:tiny_skia_painter",
+        "//src/tiny_skia/scan:tiny_skia_scan",
+        "//src/tiny_skia/wide:tiny_skia_wide",
+    ],
+)
+
+simd_mode_dep(
+    name = "tiny_skia_lib_native",
+    dep = ":tiny_skia_lib",
+    simd_mode = "native",
+    visibility = ["//visibility:public"],
+)
+
+simd_mode_dep(
+    name = "tiny_skia_lib_scalar",
+    dep = ":tiny_skia_lib",
+    simd_mode = "scalar",
+    visibility = ["//visibility:public"],
+)

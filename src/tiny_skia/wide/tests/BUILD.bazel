@@ -1,0 +1,26 @@
+"""Tests for src/tiny_skia/wide module."""
+
+load("//:bazel/simd_test.bzl", "tiny_skia_dual_mode_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+tiny_skia_dual_mode_cc_test(
+    name = "tiny_skia_wide_tests",
+    srcs = [
+        "F32x4TTest.cpp",
+        "F32x8TTest.cpp",
+        "I32x4TTest.cpp",
+        "I32x8TTest.cpp",
+        "ModTest.cpp",
+        "SimdModeTest.cpp",
+        "U16x16TTest.cpp",
+        "U32x4TTest.cpp",
+        "U32x8TTest.cpp",
+    ],
+    copts = ["-std=c++20"],
+    deps = [
+        "//src:tiny_skia_lib",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)

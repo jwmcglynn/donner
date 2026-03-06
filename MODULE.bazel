@@ -1,0 +1,42 @@
+module(name = "tiny-skia-cpp")
+
+###############################################################################
+# Bazel now uses Bzlmod by default to manage external dependencies.
+###############################################################################
+
+bazel_dep(name = "rules_cc", version = "0.2.14")
+bazel_dep(name = "rules_shell", version = "0.3.0")
+bazel_dep(name = "googletest", version = "1.14.0")
+bazel_dep(name = "google_benchmark", version = "1.9.5")
+bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3")
+bazel_dep(name = "zlib", version = "1.3.1.bcr.4")
+
+single_version_override(
+    module_name = "googletest",
+    patch_strip = 1,
+    patches = ["//:googletest.patch"],
+    version = "1.14.0",
+)
+
+###############################################################################
+# Rust toolchain & crate_universe – used for cross-validation tests that
+# render scenes through the original Rust tiny-skia and compare pixel output
+# against the C++ port.
+###############################################################################
+
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "rules_rust", version = "0.56.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(edition = "2021")
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//tests/rust_ffi:Cargo.lock",
+    manifests = ["//tests/rust_ffi:Cargo.toml"],
+)
+use_repo(crate, "crates")

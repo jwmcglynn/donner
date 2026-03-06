@@ -1,0 +1,60 @@
+"""tiny_skia wide sources."""
+
+load("//:bazel/defs.bzl", "tiny_skia_cc_library")
+
+_SIMD_MODE_DEFINES = select({
+    "//bazel/config:simd_native": ["TINYSKIA_CFG_IF_SIMD_NATIVE=1"],
+    "//bazel/config:simd_scalar": ["TINYSKIA_CFG_IF_SIMD_SCALAR=1"],
+    "//conditions:default": [],
+})
+
+tiny_skia_cc_library(
+    name = "tiny_skia_wide",
+    srcs = [
+        "F32x16T.cpp",
+        "F32x4T.cpp",
+        "F32x8T.cpp",
+        "I32x4T.cpp",
+        "I32x8T.cpp",
+        "Wide.cpp",
+        "U16x16T.cpp",
+        "U32x4T.cpp",
+        "U32x8T.cpp",
+    ],
+    hdrs = [
+        "F32x16T.h",
+        "F32x4T.h",
+        "F32x8T.h",
+        "I32x4T.h",
+        "I32x8T.h",
+        "Wide.h",
+        "U16x16T.h",
+        "U32x4T.h",
+        "U32x8T.h",
+        "backend/Aarch64NeonF32x4T.h",
+        "backend/Aarch64NeonF32x8T.h",
+        "backend/Aarch64NeonI32x4T.h",
+        "backend/Aarch64NeonU16x16T.h",
+        "backend/Aarch64NeonU32x4T.h",
+        "backend/BackendConfig.h",
+        "backend/ScalarF32x16T.h",
+        "backend/ScalarF32x4T.h",
+        "backend/ScalarF32x8T.h",
+        "backend/ScalarI32x4T.h",
+        "backend/ScalarI32x8T.h",
+        "backend/ScalarMath.h",
+        "backend/ScalarU16x16T.h",
+        "backend/ScalarU32x4T.h",
+        "backend/ScalarU32x8T.h",
+        "backend/X86Avx2FmaF32x4T.h",
+        "backend/X86Avx2FmaF32x8T.h",
+        "backend/X86Avx2FmaI32x4T.h",
+        "backend/X86Avx2FmaI32x8T.h",
+        "backend/X86Avx2FmaU16x16T.h",
+        "backend/X86Avx2FmaU32x8T.h",
+    ],
+    defines = _SIMD_MODE_DEFINES,
+    include_prefix = "tiny_skia/wide",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+)

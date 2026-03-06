@@ -1,0 +1,100 @@
+"""Executable examples demonstrating the tiny-skia-cpp API."""
+
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+_COMMON_COPTS = ["-std=c++20"]
+
+_COMMON_DEPS = [
+    "//src:tiny_skia_lib",
+    "@zlib",
+]
+
+cc_binary(
+    name = "fill",
+    srcs = [
+        "PngEncoder.h",
+        "fill.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "stroke",
+    srcs = [
+        "PngEncoder.h",
+        "stroke.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "hairline",
+    srcs = [
+        "PngEncoder.h",
+        "hairline.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "linear_gradient",
+    srcs = [
+        "PngEncoder.h",
+        "linear_gradient.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "mask",
+    srcs = [
+        "PngEncoder.h",
+        "mask.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "pattern",
+    srcs = [
+        "PngEncoder.h",
+        "pattern.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "gamma",
+    srcs = [
+        "PngEncoder.h",
+        "gamma.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "image_on_image",
+    srcs = [
+        "PngEncoder.h",
+        "image_on_image.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)
+
+cc_binary(
+    name = "large_image",
+    srcs = [
+        "PngEncoder.h",
+        "large_image.cpp",
+    ],
+    copts = _COMMON_COPTS,
+    deps = _COMMON_DEPS,
+)

@@ -1,0 +1,22 @@
+# Bazel artifacts
+/bazel-*/
+/bazel-out
+/bazel-bin
+/bazel-testlogs
+/bazel-genfiles
+/bazel-common
+/bazel-tiny-skia-cpp
+
+# Bzlmod lockfile
+MODULE.bazel.lock
+
+# Cargo build artifacts (Rust FFI crate)
+tests/rust_ffi/target/
+
+# CMake build directories
+/build*/
+
+# Benchmark generated artifacts
+.benchmarks/
+callgrind*.out
+callgrind.out.*
