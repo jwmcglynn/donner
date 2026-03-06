@@ -229,6 +229,7 @@ private:
     Transformd maskBoundsTransform;
     std::optional<tiny_skia::Mask> maskAlpha;
     Transformd patternToTarget;
+    Transformd patternRasterFromTile;
     Transformd savedTransform;
     std::vector<Transformd> savedTransformStack;
     std::optional<tiny_skia::Mask> savedClipMask;

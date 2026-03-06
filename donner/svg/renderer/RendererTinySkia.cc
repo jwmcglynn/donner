@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <utility>
@@ -286,9 +287,50 @@ void intersectMaskInPlace(tiny_skia::Mask& dst, const tiny_skia::Mask& src) {
   std::span<std::uint8_t> dstData = dst.data();
   std::span<const std::uint8_t> srcData = src.data();
   for (std::size_t i = 0; i < dstData.size(); ++i) {
-    dstData[i] = static_cast<std::uint8_t>(
-        (static_cast<unsigned>(dstData[i]) * static_cast<unsigned>(srcData[i]) + 127u) / 255u);
+    dstData[i] = std::min(dstData[i], srcData[i]);
   }
+}
+
+void unionMaskInPlace(tiny_skia::Mask& dst, const tiny_skia::Mask& src) {
+  if (dst.size() != src.size()) {
+    return;
+  }
+
+  std::span<std::uint8_t> dstData = dst.data();
+  std::span<const std::uint8_t> srcData = src.data();
+  for (std::size_t i = 0; i < dstData.size(); ++i) {
+    dstData[i] = std::max(dstData[i], srcData[i]);
+  }
+}
+
+Vector2d patternRasterScaleForTransform(const Transformd& deviceFromPattern) {
+  const double scaleX =
+      std::max(1.0, deviceFromPattern.transformVector(Vector2d(1.0, 0.0)).length());
+  const double scaleY =
+      std::max(1.0, deviceFromPattern.transformVector(Vector2d(0.0, 1.0)).length());
+  constexpr double kPatternSupersampleScale = 2.0;
+  return Vector2d(scaleX * kPatternSupersampleScale, scaleY * kPatternSupersampleScale);
+}
+
+Vector2d effectivePatternRasterScale(const Boxd& tileRect, int pixelWidth, int pixelHeight,
+                                     const Vector2d& fallbackScale) {
+  const double scaleX =
+      NearZero(tileRect.width()) ? fallbackScale.x : static_cast<double>(pixelWidth) / tileRect.width();
+  const double scaleY = NearZero(tileRect.height())
+                            ? fallbackScale.y
+                            : static_cast<double>(pixelHeight) / tileRect.height();
+  return Vector2d(scaleX, scaleY);
+}
+
+Transformd scaleTransformOutput(const Transformd& transform, const Vector2d& scale) {
+  Transformd result = transform;
+  result.data[0] *= scale.x;
+  result.data[2] *= scale.x;
+  result.data[4] *= scale.x;
+  result.data[1] *= scale.y;
+  result.data[3] *= scale.y;
+  result.data[5] *= scale.y;
+  return result;
 }
 
 void drawRectIntoMask(tiny_skia::Mask& mask, const Boxd& rect, const Transformd& transform,
@@ -448,7 +490,13 @@ void RendererTinySkia::endFrame() {
 }
 
 void RendererTinySkia::setTransform(const Transformd& transform) {
-  currentTransform_ = transform;
+  if (!surfaceStack_.empty() && surfaceStack_.back().kind == SurfaceKind::PatternTile) {
+    const Transformd& rasterFromTile = surfaceStack_.back().patternRasterFromTile;
+    currentTransform_ =
+        scaleTransformOutput(transform, Vector2d(rasterFromTile.data[0], rasterFromTile.data[3]));
+  } else {
+    currentTransform_ = transform;
+  }
 }
 
 void RendererTinySkia::pushTransform(const Transformd& transform) {
@@ -579,18 +627,29 @@ void RendererTinySkia::popMask() {
 void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::PatternTile;
-  frame.patternToTarget = patternToTarget;
   frame.savedTransform = currentTransform_;
   frame.savedTransformStack = transformStack_;
   frame.savedClipMask = currentClipMask_;
   frame.savedClipStack = clipStack_;
-  frame.pixmap =
-      createTransparentPixmap(std::max(1, static_cast<int>(std::ceil(tileRect.width()))),
-                              std::max(1, static_cast<int>(std::ceil(tileRect.height()))));
+  const Transformd deviceFromPattern = frame.savedTransform * patternToTarget;
+  const Vector2d requestedRasterScale = patternRasterScaleForTransform(deviceFromPattern);
+  const int pixelWidth =
+      std::max(1, static_cast<int>(std::ceil(tileRect.width() * requestedRasterScale.x)));
+  const int pixelHeight =
+      std::max(1, static_cast<int>(std::ceil(tileRect.height() * requestedRasterScale.y)));
+  const Vector2d rasterScale =
+      effectivePatternRasterScale(tileRect, pixelWidth, pixelHeight, requestedRasterScale);
+  frame.patternRasterFromTile = Transformd::Scale(rasterScale);
+  frame.patternToTarget = patternToTarget;
+  frame.patternToTarget.data[4] *= rasterScale.x;
+  frame.patternToTarget.data[5] *= rasterScale.y;
+  frame.patternToTarget =
+      frame.patternToTarget * Transformd::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
+  frame.pixmap = createTransparentPixmap(pixelWidth, pixelHeight);
 
   surfaceStack_.push_back(std::move(frame));
 
-  currentTransform_ = Transformd();
+  currentTransform_ = surfaceStack_.back().patternRasterFromTile;
   transformStack_.clear();
   currentClipMask_.reset();
   clipStack_.clear();
@@ -608,7 +667,6 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
   transformStack_ = std::move(frame.savedTransformStack);
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
-
   PatternPaintState state{std::move(frame.pixmap), frame.patternToTarget};
   if (forStroke) {
     patternStrokePaint_ = std::move(state);
@@ -630,10 +688,14 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   const tiny_skia::Path tinyPath = toTinyPath(path.path);
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
+  const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(path.path.bounds())) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint, toTinyFillRule(path.fillRule),
                                  toTinyTransform(currentTransform_), mask);
+    if (usedPatternFill) {
+      patternFillPaint_.reset();
+    }
   }
 
   StrokeParams adjustedStroke = stroke;
@@ -647,6 +709,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     adjustedStroke.dashOffset *= dashUnitsScale;
   }
 
+  const bool usedPatternStroke = patternStrokePaint_.has_value();
   if (std::optional<tiny_skia::Paint> strokePaint =
           makeStrokePaint(path.path.bounds(), adjustedStroke)) {
     tiny_skia::Stroke tinyStroke;
@@ -672,6 +735,9 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, tinyPath, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (usedPatternStroke) {
+      patternStrokePaint_.reset();
+    }
   }
 }
 
@@ -686,12 +752,17 @@ void RendererTinySkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
     return;
   }
 
+  const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(rect)) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillRect(pixmapView, *tinyRect, *fillPaint,
                                  toTinyTransform(currentTransform_), mask);
+    if (usedPatternFill) {
+      patternFillPaint_.reset();
+    }
   }
 
+  const bool usedPatternStroke = patternStrokePaint_.has_value();
   if (std::optional<tiny_skia::Paint> strokePaint = makeStrokePaint(rect, stroke)) {
     const tiny_skia::Path path = tiny_skia::Path::fromRect(*tinyRect);
     tiny_skia::Stroke tinyStroke;
@@ -703,6 +774,9 @@ void RendererTinySkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, path, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (usedPatternStroke) {
+      patternStrokePaint_.reset();
+    }
   }
 }
 
@@ -720,12 +794,17 @@ void RendererTinySkia::drawEllipse(const Boxd& bounds, const StrokeParams& strok
   }
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(bounds)) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, path, *fillPaint, tiny_skia::FillRule::Winding,
                                  toTinyTransform(currentTransform_), mask);
+    if (usedPatternFill) {
+      patternFillPaint_.reset();
+    }
   }
 
+  const bool usedPatternStroke = patternStrokePaint_.has_value();
   if (std::optional<tiny_skia::Paint> strokePaint = makeStrokePaint(bounds, stroke)) {
     tiny_skia::Stroke tinyStroke;
     tinyStroke.width = NarrowToFloat(stroke.strokeWidth);
@@ -736,6 +815,9 @@ void RendererTinySkia::drawEllipse(const Boxd& bounds, const StrokeParams& strok
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, path, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (usedPatternStroke) {
+      patternStrokePaint_.reset();
+    }
   }
 }
 
@@ -837,8 +919,25 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
     return std::nullopt;
   }
 
+  if (verbose_) {
+    std::cout << "[TinySkia::buildClipMask] clipRect=";
+    if (clip.clipRect.has_value()) {
+      std::cout << *clip.clipRect;
+    } else {
+      std::cout << "none";
+    }
+    std::cout << " clipPaths=" << clip.clipPaths.size()
+              << "\n  currentTransform=" << currentTransform_
+              << "  clipPathUnitsTransform=" << clip.clipPathUnitsTransform;
+  }
+
   const auto createMask = [&]() {
-    return createMaskForSize(currentPixmap().width(), currentPixmap().height());
+    std::optional<tiny_skia::Mask> mask =
+        createMaskForSize(currentPixmap().width(), currentPixmap().height());
+    if (mask.has_value()) {
+      std::fill(mask->data().begin(), mask->data().end(), 0);
+    }
+    return mask;
   };
 
   std::optional<tiny_skia::Mask> rectMask;
@@ -849,46 +948,70 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
     }
   }
 
-  std::optional<tiny_skia::Mask> pathMask;
-  std::optional<tiny_skia::Mask> currentLayerMask;
-  std::optional<int> currentLayer;
-
-  const auto commitLayer = [&]() {
-    if (!currentLayerMask.has_value()) {
-      return;
-    }
-
-    if (!pathMask.has_value()) {
-      pathMask = std::move(currentLayerMask);
-    } else {
-      intersectMaskInPlace(*pathMask, *currentLayerMask);
-    }
-
-    currentLayerMask.reset();
-  };
-
-  for (const PathShape& shape : clip.clipPaths) {
-    if (!currentLayer.has_value() || *currentLayer != shape.layer) {
-      commitLayer();
-      currentLayer = shape.layer;
-      currentLayerMask = createMask();
-    }
-
-    if (!currentLayerMask.has_value()) {
-      continue;
+  const auto renderShapeMask = [&](const PathShape& shape) -> std::optional<tiny_skia::Mask> {
+    std::optional<tiny_skia::Mask> shapeMask = createMask();
+    if (!shapeMask.has_value()) {
+      return std::nullopt;
     }
 
     const tiny_skia::Path path = toTinyPath(shape.path);
     if (path.empty()) {
-      continue;
+      if (verbose_) {
+        std::cout << "\n  shape layer=" << shape.layer << " empty path";
+      }
+      return shapeMask;
     }
 
     const Transformd clipPathTransform =
-        shape.entityFromParent * clip.clipPathUnitsTransform * currentTransform_;
-    currentLayerMask->fillPath(path, toTinyFillRule(shape.fillRule), antialias_,
-                               toTinyTransform(clipPathTransform));
+        clip.clipPathUnitsTransform * shape.entityFromParent * currentTransform_;
+    if (verbose_) {
+      const Boxd pathBounds = shape.path.bounds();
+      std::cout << "\n  shape layer=" << shape.layer << " bounds=" << pathBounds
+                << "\n    entityFromParent=" << shape.entityFromParent
+                << "    combinedTransform=" << clipPathTransform
+                << "    transformedBounds=" << clipPathTransform.transformBox(pathBounds);
+    }
+    shapeMask->fillPath(path, toTinyFillRule(shape.fillRule), antialias_,
+                        toTinyTransform(clipPathTransform));
+    return shapeMask;
+  };
+
+  std::optional<tiny_skia::Mask> pathMask;
+  if (!clip.clipPaths.empty()) {
+    std::ptrdiff_t index = static_cast<std::ptrdiff_t>(clip.clipPaths.size()) - 1;
+
+    std::function<std::optional<tiny_skia::Mask>(int)> buildLayerMask =
+        [&](int layer) -> std::optional<tiny_skia::Mask> {
+      std::optional<tiny_skia::Mask> layerMask;
+      while (index >= 0 && clip.clipPaths[static_cast<std::size_t>(index)].layer == layer) {
+        const PathShape& shape = clip.clipPaths[static_cast<std::size_t>(index)];
+        std::optional<tiny_skia::Mask> shapeMask = renderShapeMask(shape);
+        --index;
+
+        if (shapeMask.has_value() && index >= 0 &&
+            clip.clipPaths[static_cast<std::size_t>(index)].layer > layer) {
+          std::optional<tiny_skia::Mask> nestedMask =
+              buildLayerMask(clip.clipPaths[static_cast<std::size_t>(index)].layer);
+          if (nestedMask.has_value()) {
+            intersectMaskInPlace(*shapeMask, *nestedMask);
+          }
+        }
+
+        if (!shapeMask.has_value()) {
+          continue;
+        }
+
+        if (!layerMask.has_value()) {
+          layerMask = std::move(shapeMask);
+        } else {
+          unionMaskInPlace(*layerMask, *shapeMask);
+        }
+      }
+      return layerMask;
+    };
+
+    pathMask = buildLayerMask(clip.clipPaths.back().layer);
   }
-  commitLayer();
 
   std::optional<tiny_skia::Mask> result;
   if (rectMask.has_value()) {
@@ -900,6 +1023,10 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
     } else {
       result = std::move(pathMask);
     }
+  }
+
+  if (verbose_) {
+    std::cout << "\n";
   }
 
   return result;

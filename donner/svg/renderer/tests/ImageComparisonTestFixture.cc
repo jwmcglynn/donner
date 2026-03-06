@@ -559,8 +559,13 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       } else {
         std::cout << "=> Failed to create debug .skp at " << skpFilePath.string() << "\n";
       }
-    } else if (params.saveDebugSkpOnFailure) {
-      std::cout << "=> Debug .skp capture is only available for the Skia backend\n";
+    } else {
+      if (params.saveDebugSkpOnFailure) {
+        std::cout << "=> Debug .skp capture is only available for the Skia backend\n";
+      }
+
+      std::cout << "=> Re-rendering with verbose backend output\n";
+      (void)RenderDocumentWithActiveBackend(document, /*verbose=*/true);
     }
 
     ADD_FAILURE() << mismatchedPixels << " pixels different.";
