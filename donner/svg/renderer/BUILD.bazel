@@ -1,5 +1,5 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library", "renderer_backend_compatible_with")
 
 # Enable CoreText font rendering on macOS. Set with --@donner//donner/svg/renderer:use_coretext=true
 bool_flag(
@@ -192,9 +192,22 @@ donner_cc_library(
 
 donner_cc_library(
     name = "renderer",
+    srcs = [
+        "Renderer.cc",
+        "RendererInternal.h",
+    ] + select({
+        ":renderer_backend_tiny_skia": [
+            "RendererTinySkiaBackend.cc",
+        ],
+        "//conditions:default": [
+            "RendererSkiaBackend.cc",
+        ],
+    }),
+    hdrs = ["Renderer.h"],
     visibility = ["//visibility:public"],
     deps = [
         ":renderer_driver",
+        ":renderer_image_io",
         ":renderer_interface",
     ] + select({
         ":renderer_backend_tiny_skia": [":renderer_tiny_skia"],
@@ -205,6 +218,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "renderer_tool",
     srcs = ["renderer_tool.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         ":renderer_skia",
         "//donner/svg/parser",

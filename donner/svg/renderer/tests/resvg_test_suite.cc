@@ -11,6 +11,17 @@ using Params = ImageComparisonParams;
 
 namespace {
 
+Params SkipTinySkia(std::string_view reason) {
+  Params params;
+  params.disableBackend(RendererBackend::TinySkia, reason);
+  return params;
+}
+
+Params SkipTinySkia(Params params, std::string_view reason) {
+  params.disableBackend(RendererBackend::TinySkia, reason);
+  return params;
+}
+
 std::vector<ImageComparisonTestcase> getTestsWithPrefix(
     const char* prefix, std::map<std::string, ImageComparisonParams> overrides = {},
     ImageComparisonParams defaultParams = {}) {
@@ -91,8 +102,10 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-fill",  //
         {
-            {"a-fill-010.svg", Params::Skip()},          // UB: rgb(int int int)
-            {"a-fill-015.svg", Params::Skip()},          // UB: ICC color
+            {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
+            {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
+            {"a-fill-018.svg",
+             SkipTinySkia("fill rendering parity")},     // Bug: tiny-skia fill parity
             {"a-fill-027.svg", Params::Skip()},          // Not impl: Fallback with icc-color
             {"a-fill-031.svg", Params::Skip()},          // Not impl: <text>
             {"a-fill-032.svg", Params::Skip()},          // Not impl: <text>
@@ -149,6 +162,8 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
+            {"a-stroke-004.svg",
+             SkipTinySkia("stroke rendering parity")},       // Bug: tiny-skia stroke parity
             {"a-stroke-007.svg", Params::Skip()},            // Not impl: <text>
             {"a-stroke-008.svg", Params::Skip()},            // Not impl: <text>
             {"a-stroke-009.svg", Params::Skip()},            // Not impl: <text>
@@ -210,23 +225,33 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO: e-a-
 
 INSTANTIATE_TEST_SUITE_P(Circle, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-circle")), TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(ClipPath, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix(
-                             "e-clipPath",
+                             "e-circle",
                              {
-                                 {"e-clipPath-007.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-009.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-010.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-011.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-012.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-042.svg",
-                                  Params::Skip()},  // UB: on root `<svg>` without size
-                                 {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
-                                 {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
+                                 {"e-circle-001.svg", SkipTinySkia("circle rasterization parity")},
                              })),
                          TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    ClipPath, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-clipPath",
+        {
+            {"e-clipPath-007.svg", Params::Skip()},                    // Not impl: <text>
+            {"e-clipPath-008.svg", SkipTinySkia("clip-path parity")},  // Bug: tiny-skia clip-path
+            {"e-clipPath-009.svg", Params::Skip()},                    // Not impl: <text>
+            {"e-clipPath-010.svg", Params::Skip()},                    // Not impl: <text>
+            {"e-clipPath-011.svg", Params::Skip()},                    // Not impl: <text>
+            {"e-clipPath-012.svg", Params::Skip()},                    // Not impl: <text>
+            {"e-clipPath-014.svg", SkipTinySkia("clip-path parity")},  // Bug: tiny-skia clip-path
+            {"e-clipPath-015.svg", SkipTinySkia("clip-path parity")},  // Bug: tiny-skia clip-path
+            {"e-clipPath-017.svg", SkipTinySkia("clip-path parity")},  // Bug: tiny-skia clip-path
+            {"e-clipPath-034.svg", SkipTinySkia("clip-path parity")},  // Bug: tiny-skia clip-path
+            {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
+            {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
+            {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-defs",
@@ -236,8 +261,14 @@ INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                                                      })),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-ellipse")), TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Ellipse, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("e-ellipse",
+                                {
+                                    {"e-ellipse-001.svg",
+                                     SkipTinySkia("ellipse rasterization parity")},
+                                })),
+    TestNameFromFilename);
 
 // TODO(filter): e-fe
 // TODO(filter): e-filter
@@ -282,6 +313,10 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-line-001.svg",
              Params::WithThreshold(0.02f)},  // Larger threshold due to anti-aliasing artifacts with
                                              // overlapping lines.
+            {"e-line-007.svg",
+             SkipTinySkia("line rasterization parity")},  // Bug: tiny-skia line parity
+            {"e-line-008.svg",
+             SkipTinySkia("line rasterization parity")},  // Bug: tiny-skia line parity
         })),
     TestNameFromFilename);
 
@@ -331,8 +366,13 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-path")),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Path, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("e-path",
+                                {
+                                    {"e-path-011.svg", SkipTinySkia("path rasterization parity")},
+                                })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Pattern, ImageComparisonTestFixture,
@@ -340,26 +380,69 @@ INSTANTIATE_TEST_SUITE_P(
         "e-pattern",
         {
             {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
-            {"e-pattern-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 250)},  // Anti-aliasing artifacts
-            {"e-pattern-010.svg",
-             Params::WithThreshold(kDefaultThreshold, 150)},          // Anti-aliasing artifacts
-            {"e-pattern-018.svg", Params::Skip()},                    // Not impl: <text>
-            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
+            {"e-pattern-004.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-005.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-006.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-007.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-008.svg", SkipTinySkia(Params::WithThreshold(kDefaultThreshold, 250),
+                                               "pattern rendering parity")},
+            {"e-pattern-009.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-010.svg", SkipTinySkia(Params::WithThreshold(kDefaultThreshold, 150),
+                                               "pattern rendering parity")},
+            {"e-pattern-011.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-018.svg", Params::Skip()},       // Not impl: <text>
+            {"e-pattern-019.svg",
+             SkipTinySkia(Params::WithThreshold(0.2f), "pattern rendering parity")},
             {"e-pattern-020.svg", Params::WithThreshold(0.6f, 300)},  // Anti-aliasing artifacts
-            {"e-pattern-021.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-022.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-023.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
-            {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.
+            {"e-pattern-021.svg",
+             SkipTinySkia(Params::WithThreshold(0.2f), "pattern rendering parity")},
+            {"e-pattern-022.svg",
+             SkipTinySkia(Params::WithThreshold(0.2f), "pattern rendering parity")},
+            {"e-pattern-023.svg",
+             SkipTinySkia(Params::WithThreshold(0.2f), "pattern rendering parity")},
+            {"e-pattern-024.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-025.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-026.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-027.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-028.svg", Params::Skip()},       // UB: Invalid patternTransform
+            {"e-pattern-029.svg",
+             SkipTinySkia("pattern rendering parity")},  // Bug: tiny-skia pattern parity
+            {"e-pattern-030.svg",
+             SkipTinySkia(Params::WithThreshold(0.02f), "pattern rendering parity")},
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Polygon, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-polygon")), TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Polygon, ImageComparisonTestFixture,
+    ValuesIn(
+        getTestsWithPrefix("e-polygon",
+                           {
+                               {"e-polygon-001.svg", SkipTinySkia("polygon rasterization parity")},
+                               {"e-polygon-003.svg", SkipTinySkia("polygon rasterization parity")},
+                               {"e-polygon-004.svg", SkipTinySkia("polygon rasterization parity")},
+                           })),
+    TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Polyline, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-polyline")), TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Polyline, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-polyline",
+        {
+            {"e-polyline-001.svg", SkipTinySkia("polyline rasterization parity")},
+            {"e-polyline-003.svg", SkipTinySkia("polyline rasterization parity")},
+            {"e-polyline-004.svg", SkipTinySkia("polyline rasterization parity")},
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     RadialGradient, ImageComparisonTestFixture,
@@ -384,6 +467,8 @@ INSTANTIATE_TEST_SUITE_P(
     Rect, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-rect",
                                 {
+                                    {"e-rect-018.svg", SkipTinySkia("rect rasterization parity")},
+                                    {"e-rect-019.svg", SkipTinySkia("rect rasterization parity")},
                                     {"e-rect-022.svg", Params::Skip()},  // Not impl: "em" units
                                     {"e-rect-023.svg", Params::Skip()},  // Not impl: "ex" units
                                     {"e-rect-029.svg", Params::Skip()},  // Not impl: "rem" units

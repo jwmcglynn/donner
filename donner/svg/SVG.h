@@ -48,11 +48,11 @@ namespace donner {
  * }
  * ```
  *
- * The SVG file can be rendered using \ref donner::svg::RendererSkia
+ * The SVG file can be rendered using \ref donner::svg::Renderer
  * ```
- * #include "donner/svg/renderer/RendererSkia.h"
+ * #include "donner/svg/renderer/Renderer.h"
  *
- * RendererSkia renderer;
+ * Renderer renderer;
  * renderer.draw(document);
  *
  * if (renderer.save("output.png")) {

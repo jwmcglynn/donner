@@ -87,6 +87,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "renderer_public_api_tests",
+    srcs = [
+        "RendererPublicApi_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_ascii_tests",
     srcs = [
         "RendererAscii_tests.cc",
