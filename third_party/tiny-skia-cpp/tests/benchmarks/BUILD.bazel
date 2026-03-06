@@ -1,0 +1,42 @@
+"""Performance benchmarks for SIMD/scalar/Rust comparison."""
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//:bazel/defs.bzl", "tiny_skia_cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+_COMMON_DEPS = [
+    "//tests/rust_ffi:tiny_skia_ffi",
+    "@google_benchmark//:benchmark_main",
+]
+
+tiny_skia_cc_binary(
+    name = "render_perf_bench_native",
+    srcs = ["RenderPerfBench.cpp"],
+    deps = _COMMON_DEPS + ["//src:tiny_skia_lib_native"],
+)
+
+tiny_skia_cc_binary(
+    name = "render_perf_bench_scalar",
+    srcs = ["RenderPerfBench.cpp"],
+    deps = _COMMON_DEPS + ["//src:tiny_skia_lib_scalar"],
+)
+
+sh_test(
+    name = "render_perf_regression_test",
+    size = "large",
+    srcs = ["run_render_perf_regression_test.sh"],
+    args = [
+        "$(COMPILATION_MODE)",
+        "$(location :render_perf_bench_native)",
+        "$(location :render_perf_bench_scalar)",
+    ],
+    data = [
+        ":render_perf_bench_native",
+        ":render_perf_bench_scalar",
+    ],
+    tags = [
+        "exclusive",
+        "perf_regression",
+    ],
+)

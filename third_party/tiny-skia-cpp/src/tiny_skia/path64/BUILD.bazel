@@ -1,0 +1,29 @@
+"""tiny_skia path64 sources."""
+
+load("//:bazel/defs.bzl", "tiny_skia_cc_library")
+
+tiny_skia_cc_library(
+    name = "tiny_skia_path64",
+    srcs = [
+        "Cubic64.cpp",
+        "LineCubicIntersections.cpp",
+        "Path64.cpp",
+        "Point64.cpp",
+        "Quad64.cpp",
+        "Scalar64.cpp",
+    ],
+    hdrs = [
+        "Cubic64.h",
+        "LineCubicIntersections.h",
+        "Path64.h",
+        "Point64.h",
+        "Quad64.h",
+        "Scalar64.h",
+    ],
+    include_prefix = "tiny_skia/path64",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/tiny_skia:tiny_skia_point",
+    ],
+)

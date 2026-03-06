@@ -1,0 +1,27 @@
+"""tiny_skia scan sources."""
+
+load("//:bazel/defs.bzl", "tiny_skia_cc_library")
+
+tiny_skia_cc_library(
+    name = "tiny_skia_scan",
+    srcs = [
+        "Hairline.cpp",
+        "HairlineAa.cpp",
+        "Scan.cpp",
+        "Path.cpp",
+        "PathAa.cpp",
+    ],
+    hdrs = [
+        "Hairline.h",
+        "HairlineAa.h",
+        "Scan.h",
+        "Path.h",
+        "PathAa.h",
+    ],
+    include_prefix = "tiny_skia/scan",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/tiny_skia:tiny_skia_core",
+    ],
+)
