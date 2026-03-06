@@ -1,18 +1,21 @@
 # Design: Renderer Interface and Multi-Backend Support
 
-**Status:** In Progress (Phase 1 shipped, Phase 2-4 planned)
+**Status:** In Progress (Phases 1-2a shipped, Phase 2b-4 planned)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-05
 
 ## Summary
 
 The renderer interface decouples SVG document traversal from backend-specific drawing, enabling
-multiple rendering backends behind a consistent API. Phase 1 (shipped) extracted a
-backend-agnostic `RendererDriver` and `RendererInterface` from the monolithic `RendererSkia`,
-achieving full resvg test suite parity. Subsequent phases add a lightweight `tiny-skia-cpp`
-backend, a recording backend for draw-call serialization and replay, a GMock-integrated backend
-for structural rendering assertions, and a Bazel/CMake backend selection mechanism for downstream
-consumers.
+multiple rendering backends behind a consistent API. Phase 1 extracted a backend-agnostic
+`RendererDriver` and `RendererInterface` from the monolithic `RendererSkia`, preserving Skia
+behavior and resvg parity. Phase 2a shipped a lightweight `tiny-skia-cpp` backend, Bazel backend
+selection, and a single-backend test architecture so normal test runs compile exactly one renderer
+backend at a time.
+
+The remaining work is focused on Phase 2b parity and developer ergonomics: completing TinySkia's
+unsupported features, running the broader renderer suites under `--config=tiny-skia`, adding CMake
+backend selection, and then implementing the recording and structural-test backends.
 
 ## Goals
 
@@ -33,9 +36,13 @@ consumers.
 
 ## Next Steps
 
-- Land the tiny-skia-cpp subtree and create `RendererTinySkia` implementing `RendererInterface`.
-- Add Bazel `string_flag` and CMake `option()` for backend selection.
-- Implement `RendererRecorder` with protobuf-based serialization.
+- Run the broader renderer suites, especially `resvg_test_suite`, under `--config=tiny-skia` and
+  document the remaining parity gaps.
+- Decide whether TinySkia should grow text support, broader filter support, or remain an explicitly
+  reduced-feature backend.
+- Add CMake backend selection matching the shipped Bazel mechanism.
+- Implement `RendererRecorder` and `MockRendererInterface` once backend selection and parity are
+  stable.
 
 ## Implementation Plan
 
@@ -51,23 +58,29 @@ consumers.
 - [x] Achieve full resvg test suite parity (660 tests, 0 regressions).
 
 ### Phase 2: tiny-skia-cpp backend
-- [ ] Land `third_party/tiny-skia-cpp` subtree and add Bazel `cc_library` target.
-- [ ] Create `RendererTinySkia` implementing `RendererInterface`.
-  - [ ] Implement frame control: allocate pixel buffer, clear background.
-  - [ ] Implement transform stack using `tiny_skia::Transform`.
-  - [ ] Implement clip stack (rect clips and path clips via `tiny_skia::ClipPath`).
-  - [ ] Implement `drawPath`/`drawRect`/`drawEllipse` with fill and stroke.
-  - [ ] Implement gradient resolution (linear, radial) using `tiny_skia::Shader`.
-  - [ ] Implement `pushIsolatedLayer`/`popIsolatedLayer` for opacity compositing.
-  - [ ] Implement pattern tile recording and shader creation.
-  - [ ] Implement mask compositing (3-layer technique adapted to tiny-skia API).
-  - [ ] Implement filter layers (Gaussian blur via manual convolution or tiny-skia primitives).
-  - [ ] Implement `drawImage` and `drawText` (text may require an external shaping library).
-  - [ ] Implement `takeSnapshot` returning `RendererBitmap` from the pixel buffer.
-- [ ] Add Bazel backend selection flag and CMake option
-  (see [Backend Selection](#backend-selection)).
-- [ ] Run resvg test suite against `RendererTinySkia` and document parity gaps.
-- [ ] Add tiny-skia-specific smoke tests.
+- [x] Land `third_party/tiny-skia-cpp` and add the Bazel `cc_library` target.
+- [x] Create `RendererTinySkia` implementing `RendererInterface`.
+  - [x] Implement frame control: allocate pixel buffer, clear background.
+  - [x] Implement transform stack.
+  - [x] Implement clip stack.
+  - [x] Implement `drawPath`/`drawRect`/`drawEllipse` with fill and stroke.
+  - [x] Implement gradient resolution.
+  - [x] Implement `pushIsolatedLayer`/`popIsolatedLayer` for opacity compositing.
+  - [x] Implement pattern tile recording and tiled replay.
+  - [x] Implement mask compositing.
+  - [x] Implement `drawImage`.
+  - [x] Implement `takeSnapshot` returning `RendererBitmap` from the pixel buffer.
+  - [ ] Implement `drawText`.
+  - [ ] Implement full filter-effect parity. The current backend only supports a limited subset and
+        emits verbose warnings for unsupported cases.
+- [x] Add Bazel backend selection and make `//donner/svg/renderer:renderer` resolve to exactly one
+  concrete backend per build (see [Backend Selection](#backend-selection)).
+- [x] Refactor renderer tests to run one backend per build using shared goldens instead of direct
+  backend-vs-backend comparison.
+- [x] Split Skia-only ASCII snapshot tests into backend-incompatible Bazel targets so
+  `bazel test --config=tiny-skia //...` does not build Skia just for those tests.
+- [ ] Add CMake backend selection.
+- [ ] Run `resvg_test_suite` against `RendererTinySkia` and document parity gaps.
 
 ### Phase 3: Recording backend
 - [ ] Implement `RendererRecorder` wrapping another `RendererInterface` (tee pattern).
@@ -210,17 +223,17 @@ implementation details:
 - Clip path boolean operations via Skia `Op()` with layered intersection/union and
   `entityFromParent` transform on layer pop.
 
-### RendererTinySkia (planned)
+### RendererTinySkia (shipped, parity incomplete)
 
 Implements `RendererInterface` using `tiny-skia-cpp`. Lightweight alternative (~2MB vs ~50MB for
 Skia) suitable for applications that do not need text shaping or advanced font rendering:
 
 - Software rasterization only (no GPU acceleration).
-- Path rendering via `tiny_skia::Pixmap` and `tiny_skia::Paint`.
-- Gradient support via `tiny_skia::LinearGradient`/`tiny_skia::RadialGradient`.
-- Pattern support via offscreen `Pixmap` rendering and tiled blitting.
-- Mask compositing using manual pixel-level alpha operations.
-- Text rendering is limited; consumers needing full text support should use the Skia backend.
+- Supports path, rect, ellipse, image, gradient, clip, opacity-layer, mask, and pattern rendering.
+- Exposes `takeSnapshot()` and PNG output for golden-based tests and tooling.
+- Emits verbose warnings for unsupported text and filter operations rather than silently crashing.
+- Does not currently provide text rendering.
+- Does not currently provide full filter-effect parity.
 
 ### RendererRecorder (planned)
 
@@ -273,16 +286,20 @@ A `string_flag` controls which backend the `:renderer` target depends on:
 ```python
 # donner/svg/renderer/BUILD.bazel
 string_flag(
-    name = "rendering_backend",
+    name = "renderer_backend",
     build_setting_default = "skia",
-    values = ["skia", "tiny_skia"],
     visibility = ["//visibility:public"],
 )
 
-config_setting(name = "backend_skia",
-    flag_values = {":rendering_backend": "skia"})
-config_setting(name = "backend_tiny_skia",
-    flag_values = {":rendering_backend": "tiny_skia"})
+config_setting(
+    name = "renderer_backend_skia",
+    flag_values = {":renderer_backend": "skia"},
+)
+
+config_setting(
+    name = "renderer_backend_tiny_skia",
+    flag_values = {":renderer_backend": "tiny_skia"},
+)
 
 donner_cc_library(
     name = "renderer",
@@ -291,35 +308,46 @@ donner_cc_library(
         ":renderer_driver",
         ":renderer_interface",
     ] + select({
-        ":backend_skia": [":renderer_skia"],
-        ":backend_tiny_skia": [":renderer_tiny_skia"],
+        ":renderer_backend_tiny_skia": [":renderer_tiny_skia"],
+        "//conditions:default": [":renderer_skia"],
     }),
 )
 ```
 
-Consumers select the backend with:
+The repository also defines `.bazelrc` aliases:
+
 ```sh
-bazel build //my:target --@donner//donner/svg/renderer:rendering_backend=tiny_skia
+bazel test //...
+bazel test --config=tiny-skia //...
 ```
 
-#### CMake
+In Phase 2a, Bazel test targets also use `target_compatible_with` to exclude Skia-only suites such
+as ASCII snapshot tests from `--config=tiny-skia`. Shared image-comparison suites use a selected
+test backend shim and runtime feature checks so they still compile exactly one renderer backend per
+build.
 
-A CMake `option()` controls the backend:
+#### CMake (planned)
 
-```cmake
-set(DONNER_RENDERING_BACKEND "skia" CACHE STRING "Rendering backend (skia, tiny_skia)")
-set_property(CACHE DONNER_RENDERING_BACKEND PROPERTY STRINGS skia tiny_skia)
+CMake backend selection is still planned. The intended shape remains a cache variable selecting
+Skia vs TinySkia at configure time, matching Bazel's build-time selection model.
 
-if(DONNER_RENDERING_BACKEND STREQUAL "skia")
-  target_link_libraries(donner_renderer PUBLIC donner_renderer_skia)
-elseif(DONNER_RENDERING_BACKEND STREQUAL "tiny_skia")
-  target_link_libraries(donner_renderer PUBLIC donner_renderer_tiny_skia)
-endif()
-```
+## Current Test Architecture
 
-Both backends export the same public headers (`RendererInterface.h`, `RendererDriver.h`) and
-a concrete renderer class with a `draw(SVGDocument&)` entry point, so consumer code does not
-need conditional compilation.
+Phase 2a changed renderer testing to build only one backend at a time:
+
+- `//donner/svg/renderer/tests:renderer_tests` renders the active backend and compares against
+  shared checked-in goldens.
+- `//donner/svg/renderer/tests:resvg_test_suite` now depends on the same image-comparison fixture
+  and can render whichever backend Bazel selects.
+- `ImageComparisonParams` declares backend restrictions and required backend features such as
+  `Text`, `FilterEffects`, `AsciiSnapshot`, and `SkpDebug`.
+- `renderer_test_backend` provides the active backend name, feature support, snapshot rendering,
+  and optional Skia `.skp` capture without forcing both concrete backends into one test binary.
+- Direct TinySkia-vs-Skia pixel comparison is removed from normal tests because it forced both
+  backends to build and undermined the `bazel test //...` build-time goal.
+- Skia-only ASCII snapshot tests now live in separate Bazel targets:
+  `//donner/svg/renderer/tests:renderer_ascii_tests` and
+  `//donner/svg/tests:svg_renderer_ascii_tests`.
 
 ## Testing and Validation
 
@@ -331,10 +359,21 @@ need conditional compilation.
   `//donner/svg/renderer/tests:resvg_test_suite` (660 tests) verify pixel-level correctness.
 - **Golden images:** Ghostscript Tiger and donner splash are golden-tested.
 
-### Phase 2 (planned)
+### Phase 2a (shipped)
+- **Backend-selected image comparison:** `renderer_tests` renders only the active backend selected
+  by Bazel and compares against shared goldens.
+- **Feature-gated skips:** tests that depend on text or filter support declare this through
+  `ImageComparisonParams` instead of hard-coding dual-backend typed tests.
+- **Skia-only ASCII coverage:** `renderer_ascii_tests` and `svg_renderer_ascii_tests` are marked
+  incompatible with TinySkia builds.
+- **TinySkia config validation:** `bazel test --config=tiny-skia`
+  `//donner/svg/renderer/tests:renderer_tests` and `bazel test --config=tiny-skia`
+  `//donner/svg/tests/...` verify that TinySkia builds and that Skia-only targets are skipped
+  rather than compiled.
+
+### Phase 2b (planned)
 - Run the full resvg test suite against `RendererTinySkia` and document parity gaps.
-- Add tiny-skia-specific smoke tests for gradient, pattern, mask, and filter edge cases.
-- Compare pixel output between Skia and tiny-skia for a representative subset.
+- Add targeted golden-backed TinySkia regression cases for remaining edge cases as needed.
 
 ### Phase 3 (planned)
 - Round-trip tests: render with Skia, record, replay against Skia, compare bitmaps.
@@ -349,9 +388,9 @@ need conditional compilation.
 
 ## Dependencies
 
-- **Skia** (existing): Full-featured 2D graphics library. ~50MB binary size contribution.
-- **tiny-skia-cpp** (planned): Lightweight C++ 2D rasterizer at
-  `github.com/jwmcglynn/tiny-skia-cpp`. ~2MB binary size. Added as a git subtree under
+- **Skia** (existing): Full-featured 2D graphics library and current default backend.
+- **tiny-skia-cpp** (shipped): Lightweight C++ 2D rasterizer at
+  `github.com/jwmcglynn/tiny-skia-cpp`. ~200kb binary size. Added as a git subtree under
   `third_party/tiny-skia-cpp`.
 - Phase 3 recording backend uses in-memory `std::variant` storage with no external
   serialization dependency. File-based serialization (protobuf/FlatBuffers) is future work.
@@ -361,6 +400,9 @@ need conditional compilation.
 - **Runtime backend switching via factory function:** Rejected in favor of build-time selection
   to avoid vtable overhead on every draw call in hot paths and to allow link-time dead-code
   elimination of unused backends.
+- **Direct backend-vs-backend parity tests in normal suites:** Rejected because they force both
+  concrete backends to compile into one test binary and make `bazel test //...` pay the Skia build
+  cost even when validating TinySkia.
 - **Single `RendererSkia` with compile-time `#ifdef` for tiny-skia:** Rejected because it would
   pollute the Skia backend with conditional compilation and prevent clean separation of concerns.
 - **Protobuf/FlatBuffers recording format:** Deferred; in-memory recording with text output
@@ -369,6 +411,7 @@ need conditional compilation.
 
 ## Open Questions
 
+- When TinySkia parity improves, should the default Bazel backend flip from Skia to TinySkia?
 - How should resource lifetimes (fonts, images) be managed across backends--via shared caches in
   the driver or per-backend ownership?
 - If file-based recording is added later, should the format be versioned independently?
@@ -383,3 +426,4 @@ need conditional compilation.
 - [ ] Streaming renderer that emits draw calls over IPC for out-of-process rendering.
 - [ ] Animation timeline integration with the recording backend for frame-by-frame capture.
 - [ ] Backend performance benchmarks comparing Skia vs tiny-skia for the resvg test corpus.
+- [ ] Flip the default backend to TinySkia once parity and downstream ergonomics are acceptable.

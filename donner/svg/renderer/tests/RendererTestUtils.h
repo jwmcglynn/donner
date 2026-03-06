@@ -1,9 +1,12 @@
+/// @file
 #pragma once
 
-#include <gtest/gtest.h>
-
-#include <optional>
-#include <vector>
+#include <algorithm>
+#include <cctype>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <string_view>
 
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
@@ -11,19 +14,6 @@
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
-
-/**
- * Stores an uncompressed RGBA-format image.
- *
- * Loaded by \ref RendererTestUtils::readRgbaImageFromPngFile.
- */
-struct Image {
-  int width;                  //!< Image width in pixels.
-  int height;                 //!< Image height in pixels.
-  size_t strideInPixels;      //!< The stride of \ref data, in pixels.
-  std::vector<uint8_t> data;  //!< Pixel data, in RGBA format. Rows are are \ref strideInPixels long
-                              //!< (byte length is `strideInPixels * 4`).
-};
 
 /**
  * Stores an ASCII representation of a rendered image, and supports diffing it to another image.
@@ -123,13 +113,6 @@ struct AsciiImage {
  */
 class RendererTestUtils {
 public:
-  /**
-   * Read an RGBA image from a PNG file.
-   *
-   * @param filename Path to a PNG file to load.
-   */
-  static std::optional<Image> readRgbaImageFromPngFile(const char* filename);
-
   /**
    * Render the given SVG fragment into ASCII art. The generated image is of the given size, and has
    * a black background.

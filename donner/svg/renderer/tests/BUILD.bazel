@@ -1,20 +1,52 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "renderer_backend_compatible_with")
+
+donner_cc_library(
+    name = "renderer_image_test_utils",
+    testonly = 1,
+    srcs = [
+        "RendererImageTestUtils.cc",
+    ],
+    hdrs = [
+        "RendererImageTestUtils.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "@com_google_gtest//:gtest",
+        "@stb//:image",
+    ],
+)
 
 donner_cc_library(
     name = "renderer_test_utils",
     testonly = 1,
-    srcs = [
-        "RendererTestUtils.cc",
-    ],
     hdrs = [
         "RendererTestUtils.h",
     ],
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         "//donner/svg/renderer",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest",
-        "@stb//:image",
+    ],
+)
+
+donner_cc_library(
+    name = "renderer_test_backend",
+    testonly = 1,
+    srcs = select({
+        "//donner/svg/renderer:renderer_backend_skia": [
+            "RendererTestBackendSkia.cc",
+        ],
+        "//conditions:default": [
+            "RendererTestBackendTinySkia.cc",
+        ],
+    }),
+    hdrs = [
+        "RendererTestBackend.h",
+    ],
+    deps = [
+        "//donner/svg/renderer",
     ],
 )
 
@@ -28,14 +60,14 @@ donner_cc_library(
         "ImageComparisonTestFixture.h",
     ],
     deps = [
-        ":renderer_test_utils",
+        ":renderer_image_test_utils",
+        ":renderer_test_backend",
         "//donner/svg/parser",
         "//donner/svg/renderer",
-        "//donner/svg/renderer:terminal_image_viewer",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:terminal_image_viewer",
         "@com_google_gtest//:gtest",
         "@pixelmatch-cpp17",
-        "@stb//:image",
     ],
 )
 
@@ -49,10 +81,19 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
-        ":renderer_test_utils",
         "//donner/svg/parser",
-        "//donner/svg/renderer",
-        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_ascii_tests",
+    srcs = [
+        "RendererAscii_tests.cc",
+    ],
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
+    deps = [
+        ":renderer_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

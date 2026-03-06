@@ -1,4 +1,4 @@
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library")
 
 # Enable CoreText font rendering on macOS. Set with --@donner//donner/svg/renderer:use_coretext=true
@@ -22,6 +22,14 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Renderer backend used by //donner/svg/renderer:renderer. Set with
+# --//donner/svg/renderer:renderer_backend=<skia|tiny_skia>
+string_flag(
+    name = "renderer_backend",
+    build_setting_default = "skia",
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "macos_coretext",
     constraint_values = ["@platforms//os:macos"],
@@ -37,6 +45,18 @@ config_setting(
 config_setting(
     name = "config_skia_debug",
     flag_values = {":skia_debug": "true"},
+)
+
+config_setting(
+    name = "renderer_backend_skia",
+    flag_values = {":renderer_backend": "skia"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "renderer_backend_tiny_skia",
+    flag_values = {":renderer_backend": "tiny_skia"},
+    visibility = ["//visibility:public"],
 )
 
 donner_cc_library(
@@ -61,9 +81,9 @@ donner_cc_library(
         ":renderer_interface",
         ":renderer_utils",
         ":rendering_context",
-        "//donner/svg/renderer/common",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/renderer/common",
     ],
 )
 
@@ -142,8 +162,8 @@ donner_cc_library(
     srcs = ["RendererSkia.cc"],
     hdrs = ["RendererSkia.h"],
     deps = [
-        ":renderer_image_io",
         ":renderer_driver",
+        ":renderer_image_io",
         ":renderer_interface",
         ":renderer_utils",
         ":skia_deps",
@@ -156,13 +176,30 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "renderer_tiny_skia",
+    srcs = ["RendererTinySkia.cc"],
+    hdrs = ["RendererTinySkia.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_driver",
+        ":renderer_image_io",
+        ":renderer_interface",
+        "//donner/base",
+        "//donner/svg",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+    ],
+)
+
+donner_cc_library(
     name = "renderer",
     visibility = ["//visibility:public"],
     deps = [
         ":renderer_driver",
         ":renderer_interface",
-        ":renderer_skia",
-    ],
+    ] + select({
+        ":renderer_backend_tiny_skia": [":renderer_tiny_skia"],
+        "//conditions:default": [":renderer_skia"],
+    }),
 )
 
 donner_cc_binary(
