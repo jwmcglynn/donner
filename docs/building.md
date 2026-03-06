@@ -6,12 +6,14 @@ Donner is intended as a hobby project with the latest C++ spec, so it is likely 
 
 - Bazel
 - On macOS: A working Xcode installation
-- CMake builds on Linux: pkg-config and development libraries for Fontconfig and Freetype.
-  For Debian/Ubuntu:
+- CMake builds on Linux with the **Skia backend**: pkg-config and development libraries for
+  Fontconfig and Freetype. For Debian/Ubuntu:
 
   ```sh
   sudo apt-get install pkg-config libfontconfig1-dev libfreetype6-dev
   ```
+
+  These are not required for the TinySkia backend (the default).
 
 ### Installing Bazel
 
@@ -35,10 +37,50 @@ bazel build //donner/...
 
 All other dependencies will be downloaded on-demand.
 
-The first build is slow since it downloads LLVM and other external dependencies (a few GB), and builds all dependencies from source, including Skia. After dependencies are downloaded, clean build times are:
+The first build is slow since it downloads LLVM and other external dependencies (a few GB) and builds all dependencies from source. The Skia backend is significantly larger than TinySkia. After dependencies are downloaded, clean build times are:
 
 - **Apple Silicon M1**: 2 minutes
 - **GitHub Codespaces (4-core)**: 10 minutes
+
+## Renderer backend selection
+
+Donner supports two rendering backends, selected at build time:
+
+| Backend | Description | Default |
+|---------|-------------|---------|
+| **tiny_skia** | Lightweight software rasterizer. | Yes |
+| **skia** | Full-featured 2D graphics via Google Skia, used as the reference renderer. | No |
+
+### Bazel
+
+```sh
+bazel build //...                     # default (tiny_skia)
+bazel build --config=skia //...       # Skia backend
+bazel build --config=tiny-skia //...  # explicit tiny_skia
+```
+
+### CMake
+
+```sh
+cmake -S . -B build                                        # default (tiny_skia)
+cmake -S . -B build -DDONNER_RENDERER_BACKEND=skia         # Skia backend
+cmake -S . -B build -DDONNER_RENDERER_BACKEND=tiny_skia    # explicit tiny_skia
+```
+
+Or use CMake presets:
+
+```sh
+cmake --preset default    # tiny_skia
+cmake --preset skia       # Skia
+```
+
+Downstream projects including Donner via `add_subdirectory()` or `FetchContent` can override the
+default by setting `DONNER_RENDERER_BACKEND` before including Donner:
+
+```cmake
+set(DONNER_RENDERER_BACKEND "skia" CACHE STRING "")
+add_subdirectory(donner)
+```
 
 ## Running tests
 
@@ -56,7 +98,7 @@ bazel test //...
 
 ## Build reports
 
-See the latest [Build report](./build_report.md).
+See the latest [Build Report](./build_report.md).
 
 To generate a build report locally:
 
@@ -78,13 +120,22 @@ python3 tools/generate_build_report.py --all --save docs/build_report.md
 
 ## CMake build (experimental) {#cmake-build-experimental}
 
-Bazel is the primary build system, but CMake support is also available through an exerimental Bazel-to-CMake converter. This is for users who want to integrate Donner into their CMake-based projects.
+Bazel is the primary build system, but CMake support is also available through an experimental Bazel-to-CMake converter. This is for users who want to integrate Donner into their CMake-based projects.
 
 ```sh
 python3 tools/cmake/gen_cmakelists.py
-cmake -S . -B build
+cmake -S . -B build                    # uses default backend (tiny_skia)
 cmake --build build -j$(nproc)
 ```
+
+To select the Skia backend instead:
+
+```sh
+cmake -S . -B build -DDONNER_RENDERER_BACKEND=skia
+```
+
+See [Renderer backend selection](#renderer-backend-selection) above for the full set of options
+and downstream override instructions.
 
 To run tests, they must be enabled during the CMake configuration step:
 

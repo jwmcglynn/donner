@@ -35,6 +35,33 @@ def fuzzer_compatible_with():
         "//conditions:default": ["@platforms//:incompatible"],
     })
 
+def renderer_backend_compatible_with(backends):
+    """
+    Returns compatibility constraints for renderer backend-specific targets.
+
+    Args:
+      backends: List of supported backend names. Valid values are "skia" and "tiny_skia".
+    """
+    conditions = {}
+    remaining = list(backends)
+
+    if "skia" in remaining:
+        conditions["//donner/svg/renderer:renderer_backend_skia"] = []
+        remaining.remove("skia")
+
+    if "tiny_skia" in remaining:
+        conditions["//donner/svg/renderer:renderer_backend_tiny_skia"] = []
+        remaining.remove("tiny_skia")
+
+    if remaining:
+        fail("Unknown renderer backend(s): " + ", ".join(remaining))
+
+    if not conditions:
+        fail("renderer_backend_compatible_with requires at least one backend")
+
+    conditions["//conditions:default"] = ["@platforms//:incompatible"]
+    return select(conditions)
+
 def donner_cc_binary(name, linkopts = [], **kwargs):
     """
     Create a cc_binary with donner-specific defaults including LLVM 21 workaround.

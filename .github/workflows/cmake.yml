@@ -9,26 +9,33 @@ on:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        backend: [tiny_skia, skia]
     steps:
       - uses: actions/checkout@v6
 
       - name: Install fontconfig and freetype
+        if: matrix.backend == 'skia'
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
 
-      - name: Build with CMake
+      - name: Build with CMake (${{ matrix.backend }})
         run: |
           python3 tools/cmake/gen_cmakelists.py
-          cmake -S . -B build
+          cmake -S . -B build -DDONNER_RENDERER_BACKEND=${{ matrix.backend }}
           cmake --build build -j$(nproc)
 
   macos:
     runs-on: macos-15
+    strategy:
+      matrix:
+        backend: [tiny_skia, skia]
     steps:
       - uses: actions/checkout@v6
-      - name: Build with CMake
+      - name: Build with CMake (${{ matrix.backend }})
         run: |
           python3 tools/cmake/gen_cmakelists.py
-          cmake -S . -B build
+          cmake -S . -B build -DDONNER_RENDERER_BACKEND=${{ matrix.backend }}
           cmake --build build -j$(sysctl -n hw.logicalcpu)

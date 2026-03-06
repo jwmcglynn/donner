@@ -89,6 +89,17 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   - Use `tools/doxygen.sh` to generate the docs.
   - The generated docs are in `generated-doxygen/html/`.
 - Use `tools/coverage.sh` to generate code coverage reports (if lcov is installed).
+- Renderer image-comparison failures support an LLM quiet mode.
+  - When `LLM=1`, `ImageComparisonTestFixture` suppresses verbose backend rerender logs, pixel
+    dumps, terminal previews, and echoed SVG contents.
+  - The repo `.bazelrc` forwards `LLM` and `DONNER_RENDERER_TEST_VERBOSE` into `bazel test`, so
+    command-line prefixes like `LLM=1 bazel test ...` and
+    `LLM=1 DONNER_RENDERER_TEST_VERBOSE=1 bazel test ...` reach the test binary.
+  - To re-enable the full failure dump for one command, prefix
+    `DONNER_RENDERER_TEST_VERBOSE=1`, for example:
+    `LLM=1 DONNER_RENDERER_TEST_VERBOSE=1 bazel test <target> --test_output=errors`
+  - The in-repo Claude and Codex settings set `LLM=1` by default. Plumb the same env var through
+    any other agent runner config if you want the quieter test output there too.
 
 
 ## Working with Resvg Test Suite

@@ -6,7 +6,6 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPolygonElement.h"
 #include "donner/svg/SVGPolylineElement.h"
-#include "donner/svg/renderer/RendererSkia.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 

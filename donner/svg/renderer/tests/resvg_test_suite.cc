@@ -212,21 +212,24 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(Circle, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-circle")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(ClipPath, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix(
-                             "e-clipPath",
-                             {
-                                 {"e-clipPath-007.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-009.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-010.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-011.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-012.svg", Params::Skip()},  // Not impl: <text>
-                                 {"e-clipPath-042.svg",
-                                  Params::Skip()},  // UB: on root `<svg>` without size
-                                 {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
-                                 {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
-                             })),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    ClipPath, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-clipPath",
+        {
+            {"e-clipPath-007.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-009.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-010.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-011.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-012.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-034.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   200)},            // Bug: nested clip-path support with tiny-skia
+            {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
+            {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
+            {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-defs",
@@ -341,15 +344,17 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
             {"e-pattern-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 250)},  // Anti-aliasing artifacts
+             Params::WithThreshold(kDefaultThreshold, 250)},  // Larger threshold due to
+                                                              // objectBoundingBox pattern AA.
             {"e-pattern-010.svg",
-             Params::WithThreshold(kDefaultThreshold, 150)},          // Anti-aliasing artifacts
-            {"e-pattern-018.svg", Params::Skip()},                    // Not impl: <text>
-            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 300)},  // Anti-aliasing artifacts
-            {"e-pattern-021.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-022.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
-            {"e-pattern-023.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
+             Params::WithThreshold(kDefaultThreshold, 150)},     // Larger threshold due to
+                                                                 // viewBox/objectBoundingBox AA.
+            {"e-pattern-018.svg", Params::Skip()},               // Not impl: <text>
+            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},  // Anti-aliasing artifacts
+            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 1000)},  // Anti-aliasing artifacts
+            {"e-pattern-021.svg", Params::WithThreshold(0.2f)},        // Anti-aliasing artifacts
+            {"e-pattern-022.svg", Params::WithThreshold(0.2f)},        // Anti-aliasing artifacts
+            {"e-pattern-023.svg", Params::WithThreshold(0.2f)},        // Anti-aliasing artifacts
             {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
             {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.
         })),

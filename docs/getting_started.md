@@ -66,25 +66,30 @@ Computed style: PropertyRegistry {
 
 ## Rendering an SVG
 
-To render the SVG using the Skia renderer, include the renderer header and invoke it like so
+Use the backend-agnostic `Renderer` class, which resolves to the active build backend:
 
 ```cpp
-donner::svg::RendererSkia renderer;
+#include "donner/svg/renderer/Renderer.h"
+
+donner::svg::Renderer renderer;
 renderer.draw(document);
 ```
 
-Outputs can be saved to a PNG file
+Outputs can be saved to a PNG file:
 
 ```cpp
 const bool success = renderer.save("output.png");
 ```
 
-Or pixel data can be accessed directly
+Or pixel data can be accessed via snapshot:
 
 ```cpp
-std::span<const uint8_t> data = renderer.pixelData();
+donner::svg::RendererBitmap snapshot = renderer.takeSnapshot();
 std::cout << "Size: " << renderer.width() << "x" << renderer.height() << "\n";
 ```
+
+The backend is selected at build time. See \ref BuildingDonner for details on choosing between
+TinySkia (lightweight default) and Skia (full-featured).
 
 <div class="section_buttons">
 

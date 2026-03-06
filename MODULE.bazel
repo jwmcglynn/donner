@@ -51,6 +51,11 @@ local_repository(
     path = "third_party/frozen",
 )
 
+local_repository(
+    name = "tiny-skia-cpp",
+    path = "third_party/tiny-skia-cpp",
+)
+
 new_local_repository(
     name = "stb",
     build_file = "//third_party:BUILD.stb",

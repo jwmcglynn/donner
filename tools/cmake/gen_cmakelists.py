@@ -55,6 +55,8 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@stb//:image": "stb_image",
     "@pixelmatch-cpp17//:pixelmatch-cpp17": "pixelmatch-cpp17",
     "@zlib//:z": "zlib",
+    "@tiny-skia-cpp//src:tiny_skia_lib_native": "tiny_skia",
+    "@tiny-skia-cpp//src:tiny_skia_lib": "tiny_skia",
 }
 
 # Packages whose CMake build is provided manually or by FetchContent and must
@@ -322,6 +324,8 @@ def generate_root() -> None:
         f.write("set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n")
         f.write("include(FetchContent)\n")
         f.write("option(DONNER_BUILD_TESTS \"Build Donner tests\" OFF)\n\n")
+        f.write("set(DONNER_RENDERER_BACKEND \"tiny_skia\" CACHE STRING \"Renderer backend: skia or tiny_skia\")\n")
+        f.write("set_property(CACHE DONNER_RENDERER_BACKEND PROPERTY STRINGS skia tiny_skia)\n\n")
         f.write("set(BUILD_GMOCK ON CACHE BOOL \"\" FORCE)\n\n")
 
         # External dependencies via FetchContent
@@ -338,31 +342,38 @@ def generate_root() -> None:
             f.write(f"  GIT_TAG        {tag}\n)\n")
             f.write(f"FetchContent_MakeAvailable({name})\n\n")
 
-        # Skia (large; requires GN-to-CMake conversion)
-        f.write("FetchContent_Declare(\n")
-        f.write("  skia\n")
-        f.write("  GIT_REPOSITORY https://github.com/google/skia.git\n")
-        f.write("  GIT_TAG        d945cbcbbb5834245256e883803c2704f3a32e18\n")
-        f.write(")\n")
-        f.write("FetchContent_MakeAvailable(skia)\n")
+        # Skia backend (large; requires GN-to-CMake conversion)
+        f.write("if(DONNER_RENDERER_BACKEND STREQUAL \"skia\")\n")
+        f.write("  FetchContent_Declare(\n")
+        f.write("    skia\n")
+        f.write("    GIT_REPOSITORY https://github.com/google/skia.git\n")
+        f.write("    GIT_TAG        d945cbcbbb5834245256e883803c2704f3a32e18\n")
+        f.write("  )\n")
+        f.write("  FetchContent_MakeAvailable(skia)\n")
         f.write(
-            "execute_process(COMMAND python3 bin/fetch-gn "
+            "  execute_process(COMMAND python3 bin/fetch-gn "
             "WORKING_DIRECTORY ${skia_SOURCE_DIR})\n"
         )
         f.write(
-            "execute_process(COMMAND python3 tools/git-sync-deps "
+            "  execute_process(COMMAND python3 tools/git-sync-deps "
             "WORKING_DIRECTORY ${skia_SOURCE_DIR})\n"
         )
         f.write(
-            "execute_process(\n"
-            "  COMMAND ${skia_SOURCE_DIR}/bin/gn gen ${skia_SOURCE_DIR}/out/cmake\n"
-            "    --ide=json\n"
-            "    --json-ide-script=${skia_SOURCE_DIR}/gn/gn_to_cmake.py\n"
-            "    \"--args=skia_use_gl=false skia_enable_tools=false\"\n"
-            "  WORKING_DIRECTORY ${skia_SOURCE_DIR}\n"
-            ")\n"
+            "  execute_process(\n"
+            "    COMMAND ${skia_SOURCE_DIR}/bin/gn gen ${skia_SOURCE_DIR}/out/cmake\n"
+            "      --ide=json\n"
+            "      --json-ide-script=${skia_SOURCE_DIR}/gn/gn_to_cmake.py\n"
+            "      \"--args=skia_use_gl=false skia_enable_tools=false\"\n"
+            "    WORKING_DIRECTORY ${skia_SOURCE_DIR}\n"
+            "  )\n"
         )
-        f.write("add_subdirectory(${skia_SOURCE_DIR}/out/cmake skia)\n")
+        f.write("  add_subdirectory(${skia_SOURCE_DIR}/out/cmake skia)\n")
+        f.write("endif()\n\n")
+
+        # TinySkia backend
+        f.write("if(DONNER_RENDERER_BACKEND STREQUAL \"tiny_skia\")\n")
+        f.write("  add_subdirectory(third_party/tiny-skia-cpp)\n")
+        f.write("endif()\n")
 
         # Build / install rules for STB (header-only + impl)
         f.write("# STB libraries (locally vendored)\n")
@@ -523,6 +534,21 @@ def generate_all_packages() -> None:
                     print(f"Skipping fuzzer {bazel_label}")
                     continue
 
+                # Backend-specific targets: wrap in conditionals or skip
+                _SKIA_ONLY_TARGETS = {
+                    "donner_svg_renderer_renderer_skia",
+                    "donner_svg_renderer_skia_deps",
+                    "donner_svg_renderer_skia_deps_opt",
+                    "donner_svg_renderer_skia_deps_unconfigured",
+                }
+                _TINY_SKIA_ONLY_TARGETS = {
+                    "donner_svg_renderer_renderer_tiny_skia",
+                }
+                if cmake_name in _SKIA_ONLY_TARGETS:
+                    f.write(f'if(DONNER_RENDERER_BACKEND STREQUAL "skia")\n')
+                elif cmake_name in _TINY_SKIA_ONLY_TARGETS:
+                    f.write(f'if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")\n')
+
                 if kind == "embed_resources":
                     print(
                         "Adding target:",
@@ -540,6 +566,11 @@ def generate_all_packages() -> None:
                 srcs = target_info.srcs
                 copts = target_info.copts
                 includes = target_info.includes
+
+                # Strip backend-specific sources from the renderer target;
+                # they are added conditionally via target_sources() below.
+                if cmake_name == "donner_svg_renderer_renderer":
+                    srcs = [s for s in srcs if "Backend" not in s]
 
                 print(
                     "Adding target:",
@@ -607,6 +638,14 @@ def generate_all_packages() -> None:
                             )
 
                 # Link dependencies
+                _BACKEND_SPECIFIC_DEPS = {
+                    "donner_svg_renderer_renderer_skia",
+                    "donner_svg_renderer_renderer_tiny_skia",
+                    "donner_svg_renderer_skia_deps",
+                    "donner_svg_renderer_skia_deps_opt",
+                    "donner_svg_renderer_skia_deps_unconfigured",
+                    "tiny_skia",
+                }
                 deps: List[str] = []
                 for dep in query_deps(bazel_label):
                     mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
@@ -614,6 +653,10 @@ def generate_all_packages() -> None:
                         p, n = dep.removeprefix("//").split(":", 1)
                         mapped = cmake_target_name(p, n)
                     if mapped and mapped != cmake_name:
+                        # Strip backend-specific deps from the renderer target;
+                        # they are added conditionally below.
+                        if cmake_name == "donner_svg_renderer_renderer" and mapped in _BACKEND_SPECIFIC_DEPS:
+                            continue
                         deps.append(mapped)
 
                 if deps:
@@ -655,6 +698,23 @@ def generate_all_packages() -> None:
                             f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
                             "DONNER_USE_FREETYPE)\n"
                         )
+
+                # Override the renderer target to select backend at configure time
+                if cmake_name == "donner_svg_renderer_renderer":
+                    f.write(
+                        "# Backend selection: replace auto-generated sources/deps\n"
+                        "if(DONNER_RENDERER_BACKEND STREQUAL \"tiny_skia\")\n"
+                        "  target_sources(donner_svg_renderer_renderer PRIVATE RendererTinySkiaBackend.cc)\n"
+                        "  target_link_libraries(donner_svg_renderer_renderer LINK_PUBLIC donner_svg_renderer_renderer_tiny_skia)\n"
+                        "else()\n"
+                        "  target_sources(donner_svg_renderer_renderer PRIVATE RendererSkiaBackend.cc)\n"
+                        "  target_link_libraries(donner_svg_renderer_renderer LINK_PUBLIC donner_svg_renderer_renderer_skia)\n"
+                        "endif()\n"
+                    )
+
+                # Close backend-conditional guards
+                if cmake_name in _SKIA_ONLY_TARGETS or cmake_name in _TINY_SKIA_ONLY_TARGETS:
+                    f.write("endif()\n\n")
 
     # Umbrella INTERFACE target mirroring //:donner
     root = Path("CMakeLists.txt")

@@ -18,7 +18,7 @@ if (maybeDocument.hasError()) {
   std::abort();
 }
 
-RendererSkia renderer;
+Renderer renderer;
 renderer.draw(maybeDocument.result());
 
 const bool success = renderer.save("output.png");
@@ -40,7 +40,11 @@ Donner supports:
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering
 
-Donner renders with Skia, which provides the same high-quality rendering used by Chromium.
+Donner supports two rendering backends, selected at build time:
+- **TinySkia** (default): Lightweight software rasterizer. Fast builds, no system dependencies.
+- **Skia**: Full-featured rendering via Google Skia. Text, filters, and GPU support.
+
+See [Building Donner](https://jwmcglynn.github.io/donner/BuildingDonner.html) for backend selection instructions.
 
 ### Limitations
 
@@ -131,7 +135,7 @@ if (maybeDocument.hasError()) {
   std::abort();
 }
 
-RendererSkia renderer;
+Renderer renderer;
 renderer.draw(maybeDocument.result());
 
 const bool success = renderer.save("output.png");

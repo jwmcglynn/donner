@@ -15,7 +15,11 @@ Currently, Donner includes:
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory.
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
 
-Donner currently renders with Skia as core functionality is being implemented. While Skia is powerful, it adds a lot of code size so alternative approaches may be considered in the future.
+Donner supports two rendering backends, selected at build time:
+- **TinySkia** (default): A lightweight software rasterizer for fast builds with no system dependencies.
+- **Skia**: Full-featured rendering via Google Skia, used as a reference renderer.
+
+See the \ref BuildingDonner instructions for backend selection.
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
@@ -24,8 +28,6 @@ Donner focuses on security and performance, which is validated with code coverag
 ```sh
 bazel run --run_under="cd $PWD &&" //examples:svg_to_png -- donner_splash.svg
 ```
-
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jwmcglynn/donner)
 
 How it works: \ref svg_to_png.cc
 
@@ -51,8 +53,8 @@ Detailed docs: \ref svg_tree_interaction.cc
 
 ## Status
 
-- [Project status](https://github.com/jwmcglynn/donner/issues/149) (github)
-- [Build report](build_report.md)
+- [Project Status](https://github.com/jwmcglynn/donner/issues/149) (github)
+- [Build Report](build_report.md)
 
 ## Building
 
@@ -64,6 +66,6 @@ See more details in the \ref BuildingDonner instructions.
 
 | Previous |                                   Next |
 | :------- | -------------------------------------: |
-|          | [Getting started](GettingStarted.html) |
+|          | [Getting Started](GettingStarted.html) |
 
 </div>

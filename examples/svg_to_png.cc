@@ -1,7 +1,7 @@
 /**
  * @example svg_to_png.cc Render SVG to PNG
- * @details This example demonstrates how to parse an SVG file and render it to a PNG file using the
- * Skia rendering backend.
+ * @details This example demonstrates how to parse an SVG file and render it to a PNG file using
+ * the active rendering backend.
  *
  * To run:
  *
@@ -18,8 +18,7 @@
 #include <vector>
 
 #include "donner/svg/SVG.h"
-#include "donner/svg/renderer/RendererDriver.h"
-#include "donner/svg/renderer/RendererSkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 /**
  * Main function, usage: svg_to_png <filename>
@@ -95,9 +94,8 @@ int main(int argc, char* argv[]) {
 
   //! [render]
   // Draw the document, store the image in-memory.
-  RendererSkia renderer;
-  RendererDriver driver(renderer);
-  driver.draw(document);
+  Renderer renderer;
+  renderer.draw(document);
 
   std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << "\n";
 
