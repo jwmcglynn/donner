@@ -147,9 +147,11 @@ pub enum Stage {
     GammaExpandSrgb,
     GammaExpandDestinationSrgb,
     GammaCompressSrgb,
+    Unpremultiply,
+    PremultiplyDestination,
 }
 
-pub const STAGES_COUNT: usize = Stage::GammaCompressSrgb as usize + 1;
+pub const STAGES_COUNT: usize = Stage::PremultiplyDestination as usize + 1;
 
 impl PixmapRef<'_> {
     #[inline(always)]

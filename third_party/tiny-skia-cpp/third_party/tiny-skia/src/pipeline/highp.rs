@@ -136,6 +136,8 @@ pub const STAGES: &[StageFn; super::STAGES_COUNT] = &[
     gamma_expand_srgb,
     gamma_expand_dst_srgb,
     gamma_compress_srgb,
+    unpremultiply,
+    premultiply_destination,
 ];
 
 pub fn fn_ptr(f: StageFn) -> *const () {
@@ -1218,6 +1220,26 @@ fn gamma_compress_srgb(p: &mut Pipeline) {
     p.r = srgb_compress(p.r);
     p.g = srgb_compress(p.g);
     p.b = srgb_compress(p.b);
+
+    p.next_stage();
+}
+
+fn unpremultiply(p: &mut Pipeline) {
+    // Divide r,g,b by a in float space. When a == 0, output is 0.
+    let valid = p.a.cmp_gt(f32x8::splat(0.0));
+    let inv_a = valid & (f32x8::splat(1.0) / p.a);
+    p.r = p.r * inv_a;
+    p.g = p.g * inv_a;
+    p.b = p.b * inv_a;
+
+    p.next_stage();
+}
+
+fn premultiply_destination(p: &mut Pipeline) {
+    // Multiply dr,dg,db by da in float space.
+    p.dr = p.dr * p.da;
+    p.dg = p.dg * p.da;
+    p.db = p.db * p.da;
 
     p.next_stage();
 }

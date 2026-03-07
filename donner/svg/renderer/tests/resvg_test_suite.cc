@@ -397,7 +397,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-pattern-027.svg", Params()},
             {"e-pattern-028.svg", Params::Skip()},  // UB: Invalid patternTransform
             {"e-pattern-029.svg", Params()},
-            {"e-pattern-030.svg", Params()},
+            {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.
         })),
     TestNameFromFilename);
 

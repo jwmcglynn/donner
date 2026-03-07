@@ -151,6 +151,8 @@ pub const STAGES: &[StageFn; super::STAGES_COUNT] = &[
     null_fn, // GammaExpandSrgb
     null_fn, // GammaExpandDestinationSrgb
     null_fn, // GammaCompressSrgb
+    null_fn, // Unpremultiply
+    null_fn, // PremultiplyDestination
 ];
 
 pub fn fn_ptr(f: StageFn) -> *const () {
@@ -847,10 +849,12 @@ fn load_8(data: &[u8; STAGE_WIDTH], a: &mut u16x16) {
 
 #[inline(always)]
 fn div255(v: u16x16) -> u16x16 {
-    // Skia uses `vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8)` here when NEON is available,
-    // but it doesn't affect performance much and breaks reproducible result. Ignore it.
-    // NOTE: the compiler does not replace the division with a shift.
-    (v + u16x16::splat(255)) >> u16x16::splat(8) // / u16x16::splat(256)
+    // Exact rounding division by 255, matching Skia's SkMulDiv255Round.
+    // Formula: (v + 128 + ((v + 128) >> 8)) >> 8
+    // The previous formula (v + 255) >> 8 produced ceiling-like rounding,
+    // causing 1-bit differences vs Skia in blend operations.
+    let biased = v + u16x16::splat(128);
+    (biased + (biased >> u16x16::splat(8))) >> u16x16::splat(8)
 }
 
 #[inline(always)]
