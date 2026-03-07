@@ -45,6 +45,8 @@ struct ImageComparisonParams {
   float threshold = kDefaultThreshold;
   /// Maximum number of pixels that can exceed the threshold.
   int maxMismatchedPixels = kDefaultMismatchedPixels;
+  /// If true, count anti-aliased pixels as mismatches instead of suppressing them.
+  bool includeAntiAliasing = false;
   /// If true, skip this test case.
   bool skip = false;
   /// If true, save a .skp file for debugging when a test fails.
@@ -109,6 +111,15 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& disableDebugSkpOnFailure() {
     saveDebugSkpOnFailure = false;
+    return *this;
+  }
+
+  /**
+   * @brief Counts anti-aliased pixel differences as mismatches.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& includeAntiAliasingDifferences() {
+    includeAntiAliasing = true;
     return *this;
   }
 

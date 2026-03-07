@@ -13,8 +13,8 @@ std::string_view ActiveRendererBackendName() {
 
 bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   switch (feature) {
+    case RendererBackendFeature::FilterEffects: return true;
     case RendererBackendFeature::Text:
-    case RendererBackendFeature::FilterEffects:
     case RendererBackendFeature::AsciiSnapshot:
     case RendererBackendFeature::SkpDebug: return false;
   }

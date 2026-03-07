@@ -401,39 +401,13 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Polygon, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-polygon",
-        {
-            {"e-polygon-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 750)},  // Larger threshold due to
-                                                              // rasterization artifacts.
-            {"e-polygon-003.svg",
-             Params::WithThreshold(kDefaultThreshold, 400)},  // Larger threshold due to
-                                                              // rasterization artifacts.
-            {"e-polygon-004.svg",
-             Params::WithThreshold(kDefaultThreshold, 400)},  // Larger threshold due to
-                                                              // rasterization artifacts.
-        })),
-    TestNameFromFilename);
+// TinySkia tolerance: stroked polygon/polyline edges have sub-pixel AA differences between
+// tiny-skia v0.6 (resvg golden images) and v0.12 (our C++ port base).
+INSTANTIATE_TEST_SUITE_P(Polygon, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-polygon")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Polyline, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-polyline",
-        {
-            {"e-polyline-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 750)},  // Larger threshold due to
-                                                              // rasterization artifacts.
-            {"e-polyline-003.svg",
-             Params::WithThreshold(kDefaultThreshold, 750)},  // Larger threshold due to
-                                                              // rasterization artifacts.
-            {"e-polyline-004.svg",
-             Params::WithThreshold(kDefaultThreshold, 750)},  // Larger threshold due to
-                                                              // rasterization artifacts.
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Polyline, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-polyline")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     RadialGradient, ImageComparisonTestFixture,
@@ -456,26 +430,15 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     Rect, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-rect",
-        {
-            {"e-rect-018.svg", Params::WithThreshold(kDefaultThreshold, 150)},  // Larger
-                                                                                // threshold
-                                                                                // due to
-                                                                                // rasterization
-                                                                                // artifacts.
-            {"e-rect-019.svg", Params::WithThreshold(kDefaultThreshold, 150)},  // Larger
-                                                                                // threshold
-                                                                                // due to
-                                                                                // rasterization
-                                                                                // artifacts.
-            {"e-rect-022.svg", Params::Skip()},  // Not impl: "em" units
-            {"e-rect-023.svg", Params::Skip()},  // Not impl: "ex" units
-            {"e-rect-029.svg", Params::Skip()},  // Not impl: "rem" units
-            {"e-rect-031.svg", Params::Skip()},  // Not impl: "ch" units
-            {"e-rect-034.svg", Params::Skip()},  // Bug? vw/vh
-            {"e-rect-036.svg", Params::Skip()},  // Bug? vmin/vmax
-        })),
+    ValuesIn(getTestsWithPrefix("e-rect",
+                                {
+                                    {"e-rect-022.svg", Params::Skip()},  // Not impl: "em" units
+                                    {"e-rect-023.svg", Params::Skip()},  // Not impl: "ex" units
+                                    {"e-rect-029.svg", Params::Skip()},  // Not impl: "rem" units
+                                    {"e-rect-031.svg", Params::Skip()},  // Not impl: "ch" units
+                                    {"e-rect-034.svg", Params::Skip()},  // Bug? vw/vh
+                                    {"e-rect-036.svg", Params::Skip()},  // Bug? vmin/vmax
+                                })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(

@@ -83,6 +83,9 @@ build:binary-size -c opt --copt=-Os --copt=-g --strip=never
 # For test coverage install the failure signal handler
 test --test_env="GTEST_INSTALL_FAILURE_SIGNAL_HANDLER=1"
 
+test --test_env=LLM
+test --test_env=DONNER_RENDERER_TEST_VERBOSE
+
 # Coverage builds
 coverage --config=coverage
 coverage --combined_report=lcov

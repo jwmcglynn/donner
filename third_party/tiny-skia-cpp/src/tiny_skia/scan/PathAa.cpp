@@ -13,7 +13,7 @@ namespace tiny_skia {
 
 namespace {
 
-constexpr std::uint32_t kSuperSampleShift = 2;
+constexpr std::uint32_t kSuperSampleShift = 4;
 constexpr std::uint32_t kScale = 1u << kSuperSampleShift;
 constexpr std::uint32_t kMask = kScale - 1;
 
@@ -118,6 +118,10 @@ struct SuperBlitter final : public Blitter {
       }
     }
 
+    // Distribute 255 total coverage across the supersample rows. At 16x this
+    // produces fifteen rows weighted 16 and one weighted 15, which avoids the
+    // original 4x phase artifact without biasing partially covered pixels
+    // upward by one alpha value.
     const auto maxValue = static_cast<AlphaU8>((1 << (8 - kSuperSampleShift)) -
                                                (((y & kMask) + 1) >> kSuperSampleShift));
     offsetX_ =

@@ -44,6 +44,21 @@ bool isEnabledFromEnv(const char* name, bool defaultValue) {
   return defaultValue;
 }
 
+bool suppressVerboseFailureOutputForLlm() {
+  return isEnabledFromEnv("LLM", false) && !isEnabledFromEnv("DONNER_RENDERER_TEST_VERBOSE", false);
+}
+
+void printVerboseFailureOutputOverrideHint() {
+  if (!suppressVerboseFailureOutputForLlm()) {
+    return;
+  }
+
+  std::cout << "=> Verbose renderer failure output suppressed because LLM=1\n"
+            << "=> To re-enable backend logs, pixel dumps, terminal preview, and SVG contents,\n"
+            << "=> rerun with DONNER_RENDERER_TEST_VERBOSE=1, e.g.:\n"
+            << "=>   DONNER_RENDERER_TEST_VERBOSE=1 bazel test <target> --test_output=errors\n\n";
+}
+
 TerminalPixelMode pixelModeFromEnv() {
   const char* mode = std::getenv("DONNER_TERMINAL_PIXEL_MODE");
   if (mode == nullptr) {
@@ -530,6 +545,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
   pixelmatch::Options options;
   options.threshold = params.threshold;
+  options.includeAA = params.includeAntiAliasing;
   const int mismatchedPixels = pixelmatch::pixelmatch(goldenImage.data, snapshot.pixels, diffImage,
                                                       width, height, strideInPixels, options);
 
@@ -547,38 +563,70 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
-    if (params.saveDebugSkpOnFailure &&
-        ActiveRendererSupportsFeature(RendererBackendFeature::SkpDebug)) {
-      std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
+    const bool suppressVerboseOutput = suppressVerboseFailureOutputForLlm();
+    if (!suppressVerboseOutput) {
+      if (params.saveDebugSkpOnFailure &&
+          ActiveRendererSupportsFeature(RendererBackendFeature::SkpDebug)) {
+        std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
 
-      const std::filesystem::path skpFilePath =
-          std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
-      if (WriteActiveRendererDebugSkp(document, skpFilePath)) {
-        std::cout << "Load this .skp into https://debugger.skia.org/\n"
-                  << "=> " << skpFilePath.string() << "\n\n";
+        const std::filesystem::path skpFilePath =
+            std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
+        if (WriteActiveRendererDebugSkp(document, skpFilePath)) {
+          std::cout << "Load this .skp into https://debugger.skia.org/\n"
+                    << "=> " << skpFilePath.string() << "\n\n";
+        } else {
+          std::cout << "=> Failed to create debug .skp at " << skpFilePath.string() << "\n";
+        }
       } else {
-        std::cout << "=> Failed to create debug .skp at " << skpFilePath.string() << "\n";
+        if (params.saveDebugSkpOnFailure) {
+          std::cout << "=> Debug .skp capture is only available for the Skia backend\n";
+        }
+
+        std::cout << "=> Re-rendering with verbose backend output\n";
+        (void)RenderDocumentWithActiveBackend(document, /*verbose=*/true);
       }
     } else {
-      if (params.saveDebugSkpOnFailure) {
-        std::cout << "=> Debug .skp capture is only available for the Skia backend\n";
-      }
+      printVerboseFailureOutputOverrideHint();
+    }
 
-      std::cout << "=> Re-rendering with verbose backend output\n";
-      (void)RenderDocumentWithActiveBackend(document, /*verbose=*/true);
+    // TODO: Remove this debug output once the root causes of AA test failures are addressed
+    if (!suppressVerboseOutput) {
+      // Dump first 30 mismatched pixels with actual values for debugging.
+      {
+        int dumped = 0;
+        for (int y = 0; y < height && dumped < 30; y++) {
+          for (int x = 0; x < width && dumped < 30; x++) {
+            const size_t idx = (static_cast<size_t>(y) * strideInPixels + x) * 4;
+            if (snapshot.pixels[idx] != goldenImage.data[idx] ||
+                snapshot.pixels[idx + 1] != goldenImage.data[idx + 1] ||
+                snapshot.pixels[idx + 2] != goldenImage.data[idx + 2] ||
+                snapshot.pixels[idx + 3] != goldenImage.data[idx + 3]) {
+              std::cout << "  pixel(" << x << "," << y << "): actual=(" << (int)snapshot.pixels[idx]
+                        << "," << (int)snapshot.pixels[idx + 1] << ","
+                        << (int)snapshot.pixels[idx + 2] << "," << (int)snapshot.pixels[idx + 3]
+                        << ") expected=(" << (int)goldenImage.data[idx] << ","
+                        << (int)goldenImage.data[idx + 1] << "," << (int)goldenImage.data[idx + 2]
+                        << "," << (int)goldenImage.data[idx + 3] << ")\n";
+              dumped++;
+            }
+          }
+        }
+      }
     }
 
     ADD_FAILURE() << mismatchedPixels << " pixels different.";
 
-    // Output the SVG content for easier debugging
-    std::cout << "\n\nSVG Content for " << svgFilename.filename().string() << ":\n---\n";
-    std::ifstream svgFile(svgFilename);
-    if (svgFile) {
-      std::string svgContent((std::istreambuf_iterator<char>(svgFile)),
-                             std::istreambuf_iterator<char>());
-      std::cout << svgContent << "\n---\n";
-    } else {
-      std::cout << "Could not read SVG file: " << svgFilename << "\n---\n";
+    if (!suppressVerboseOutput) {
+      // Output the SVG content for easier debugging
+      std::cout << "\n\nSVG Content for " << svgFilename.filename().string() << ":\n---\n";
+      std::ifstream svgFile(svgFilename);
+      if (svgFile) {
+        std::string svgContent((std::istreambuf_iterator<char>(svgFile)),
+                               std::istreambuf_iterator<char>());
+        std::cout << svgContent << "\n---\n";
+      } else {
+        std::cout << "Could not read SVG file: " << svgFilename << "\n---\n";
+      }
     }
 
     std::cout << "Actual rendering: " << actualImagePath.string() << "\n";

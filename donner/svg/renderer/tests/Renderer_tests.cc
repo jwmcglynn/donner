@@ -89,9 +89,7 @@ TEST_F(RendererTests, SizeTooLarge) {
 TEST_F(RendererTests, NestedSvgAspectRatio) {
   this->compareWithGolden("donner/svg/renderer/testdata/nested-svg-aspectratio.svg",
                           "donner/svg/renderer/testdata/golden/nested-svg-aspectratio.png",
-                          parser::SVGParser::Options(),
-                          ImageComparisonParams::WithThreshold(0.1f).requireFeature(
-                              RendererBackendFeature::Text, "text rendering"));
+                          parser::SVGParser::Options(), ImageComparisonParams::WithThreshold(0.1f));
 }
 
 TEST_F(RendererTests, RadialFr1) {
@@ -188,6 +186,32 @@ TEST_F(RendererTests, QuadBezier) {
                           "donner/svg/renderer/testdata/golden/quadbezier1.png");
 }
 
+TEST_F(RendererTests, MinimalClosedCubic2x2) {
+  this->compareWithGolden("donner/svg/renderer/testdata/minimal_closed_cubic_2x2.svg",
+                          "donner/svg/renderer/testdata/golden/minimal_closed_cubic_2x2.png",
+                          parser::SVGParser::Options(),
+                          ImageComparisonParams::WithThreshold(0.0f, 0)
+                              .includeAntiAliasingDifferences()
+                              .setCanvasSize(10, 10));
+}
+
+TEST_F(RendererTests, MinimalClosedCubic5x3) {
+  this->compareWithGolden("donner/svg/renderer/testdata/minimal_closed_cubic_5x3.svg",
+                          "donner/svg/renderer/testdata/golden/minimal_closed_cubic_5x3.png",
+                          parser::SVGParser::Options(),
+                          ImageComparisonParams::WithThreshold(0.0f, 0)
+                              .includeAntiAliasingDifferences()
+                              .setCanvasSize(10, 6));
+}
+
+TEST_F(RendererTests, BigLightningGlowNoFilterCrop) {
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/big_lightning_glow_no_filter_crop.svg",
+      "donner/svg/renderer/testdata/golden/big_lightning_glow_no_filter_crop.png",
+      parser::SVGParser::Options(),
+      ImageComparisonParams::WithThreshold(0.0f, 0).includeAntiAliasingDifferences());
+}
+
 TEST_F(RendererTests, DonnerIcon) {
   this->compareWithGolden("donner_icon.svg", "donner/svg/renderer/testdata/golden/donner_icon.png");
 }
@@ -203,9 +227,7 @@ TEST_F(RendererTests, DonnerSplash) {
 TEST_F(RendererTests, DonnerSplashNoExperimental) {
   this->compareWithGolden("donner_splash.svg",
                           "donner/svg/renderer/testdata/golden/donner_splash_no_experimental.png",
-                          parser::SVGParser::Options(),
-                          ImageComparisonParams::WithThreshold(0.1f).disableBackend(
-                              RendererBackend::TinySkia, "filter-heavy artwork"));
+                          parser::SVGParser::Options(), ImageComparisonParams::WithThreshold(0.1f));
 }
 
 TEST_F(RendererTests, SVG2_e_use_001) {

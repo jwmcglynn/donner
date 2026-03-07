@@ -1,0 +1,14 @@
+{
+  "env": {
+    "LLM": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(bazel test:*)",
+      "Bash(bazel build:*)",
+      "Bash(bazel run:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
