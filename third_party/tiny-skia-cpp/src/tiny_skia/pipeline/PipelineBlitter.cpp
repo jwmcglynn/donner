@@ -187,8 +187,10 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
   }
 
   // When drawing a constant color in Source mode with no mask, use memset.
+  // Disable memset when unpremulStore: the stored format is straight alpha, not premultiplied.
   std::optional<PremultipliedColorU8> memsetColor;
-  if (paint.isSolidColor() && blendMode == BlendMode::Source && !mask.has_value()) {
+  if (!paint.unpremulStore && paint.isSolidColor() && blendMode == BlendMode::Source &&
+      !mask.has_value()) {
     const auto& color = std::get<Color>(paint.shader);
     memsetColor = color.premultiply().toColorU8();
   }
@@ -196,8 +198,12 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
   // Clear is just a transparent color memset (when not anti-aliased and no mask).
   if (blendMode == BlendMode::Clear && !paint.antiAlias && !mask.has_value()) {
     blendMode = BlendMode::Source;
-    memsetColor = PremultipliedColorU8::fromRgbaUnchecked(0, 0, 0, 0);
+    if (!paint.unpremulStore) {
+      memsetColor = PremultipliedColorU8::fromRgbaUnchecked(0, 0, 0, 0);
+    }
   }
+
+  const bool unpremul = paint.unpremulStore;
 
   // Build blit_anti_h pipeline.
   auto blitAntiHRp = [&]() -> std::optional<RasterPipeline> {
@@ -212,6 +218,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     if (shouldPreScaleCoverage(blendMode)) {
       p.push(Stage::Scale1Float);
       p.push(Stage::LoadDestination);
+      if (unpremul) {
+        p.push(Stage::PremultiplyDestination);
+      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -220,6 +229,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
       }
     } else {
       p.push(Stage::LoadDestination);
+      if (unpremul) {
+        p.push(Stage::PremultiplyDestination);
+      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -230,6 +242,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     }
     if (const auto stage = compressStage(paint.colorspace)) {
       p.push(*stage);
+    }
+    if (unpremul) {
+      p.push(Stage::Unpremultiply);
     }
     p.push(Stage::Store);
     return p.compile();
@@ -248,7 +263,8 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     if (mask.has_value()) {
       p.push(Stage::MaskU8);
     }
-    if (blendMode == BlendMode::SourceOver && !mask.has_value()) {
+    // SourceOverRgba is a combined lowp fast path; skip it when unpremulStore is set.
+    if (blendMode == BlendMode::SourceOver && !mask.has_value() && !unpremul) {
       if (const auto stage = compressStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -256,6 +272,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     } else {
       if (blendMode != BlendMode::Source) {
         p.push(Stage::LoadDestination);
+        if (unpremul) {
+          p.push(Stage::PremultiplyDestination);
+        }
         if (const auto blendStage = toStage(blendMode)) {
           if (const auto stage = expandDestStage(paint.colorspace)) {
             p.push(*stage);
@@ -265,6 +284,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
       }
       if (const auto stage = compressStage(paint.colorspace)) {
         p.push(*stage);
+      }
+      if (unpremul) {
+        p.push(Stage::Unpremultiply);
       }
       p.push(Stage::Store);
     }
@@ -287,6 +309,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     if (shouldPreScaleCoverage(blendMode)) {
       p.push(Stage::ScaleU8);
       p.push(Stage::LoadDestination);
+      if (unpremul) {
+        p.push(Stage::PremultiplyDestination);
+      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -295,6 +320,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
       }
     } else {
       p.push(Stage::LoadDestination);
+      if (unpremul) {
+        p.push(Stage::PremultiplyDestination);
+      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -305,6 +333,9 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     }
     if (const auto stage = compressStage(paint.colorspace)) {
       p.push(*stage);
+    }
+    if (unpremul) {
+      p.push(Stage::Unpremultiply);
     }
     p.push(Stage::Store);
     return p.compile();

@@ -22,6 +22,7 @@ struct PixmapPaint {
   float opacity = 1.0f;                          ///< Opacity [0,1].
   BlendMode blendMode = BlendMode::SourceOver;    ///< Blend mode.
   FilterQuality quality = FilterQuality::Nearest; ///< Sampling filter.
+  bool unpremulStore = false;                     ///< Store as straight alpha.
 };
 
 /// Pixmap-based pattern shader.

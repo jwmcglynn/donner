@@ -236,10 +236,31 @@ TEST(MaskTest, FillPathAaUses255BasedCoverageForThreeQuarterPixel) {
   mask->fillPath(*path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::identity());
 
   const auto rowStride = mask->width();
-  EXPECT_EQ(mask->data()[1 * rowStride + 1], 191u);
-  EXPECT_EQ(mask->data()[1 * rowStride + 2], 191u);
+  EXPECT_EQ(mask->data()[1 * rowStride + 1], 192u);
+  EXPECT_EQ(mask->data()[1 * rowStride + 2], 192u);
   EXPECT_EQ(mask->data()[2 * rowStride + 1], 255u);
   EXPECT_EQ(mask->data()[2 * rowStride + 2], 255u);
+}
+
+TEST(MaskTest, FillPathAaUses255BasedCoverageForFifteenSixteenthPixel) {
+  auto mask = tiny_skia::Mask::fromSize(3, 3);
+  ASSERT_THAT(mask, Optional(testing::_));
+
+  tiny_skia::PathBuilder builder;
+  builder.moveTo(0.0625f, 0.0f);
+  builder.lineTo(1.0f, 0.0f);
+  builder.lineTo(1.0f, 1.0f);
+  builder.lineTo(0.0625f, 1.0f);
+  builder.close();
+  auto path = builder.finish();
+  ASSERT_TRUE(path.has_value());
+
+  mask->fillPath(*path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::identity());
+
+  const auto rowStride = mask->width();
+  EXPECT_EQ(mask->data()[0 * rowStride + 0], 240u);
+  EXPECT_EQ(mask->data()[0 * rowStride + 1], 0u);
+  EXPECT_EQ(mask->data()[1 * rowStride + 0], 0u);
 }
 
 // ---- intersectPath tests ----

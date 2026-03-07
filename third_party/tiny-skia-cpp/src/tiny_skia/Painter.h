@@ -109,7 +109,7 @@ class Painter {
                          const Mask* mask = nullptr);
 
   /// Applies a mask to already-drawn content.
-  static void applyMask(MutablePixmapView& pixmap, const Mask& mask);
+  static void applyMask(MutablePixmapView& pixmap, const Mask& mask, bool unpremulStore = false);
 
   /// Strokes a path with the given stroke settings.
   static void strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,

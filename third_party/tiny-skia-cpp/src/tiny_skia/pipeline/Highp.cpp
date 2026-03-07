@@ -115,6 +115,28 @@ void premultiply(Pipeline& pipeline) {
   pipeline.nextStage();
 }
 
+void unpremultiply(Pipeline& pipeline) {
+  for (std::size_t i = 0; i < kStageWidth; ++i) {
+    const float a = pipeline.a[i];
+    if (a > 0.0f) {
+      const float invA = 1.0f / a;
+      pipeline.r[i] *= invA;
+      pipeline.g[i] *= invA;
+      pipeline.b[i] *= invA;
+    }
+  }
+  pipeline.nextStage();
+}
+
+void premultiplyDestination(Pipeline& pipeline) {
+  for (std::size_t i = 0; i < kStageWidth; ++i) {
+    pipeline.dr[i] *= pipeline.da[i];
+    pipeline.dg[i] *= pipeline.da[i];
+    pipeline.db[i] *= pipeline.da[i];
+  }
+  pipeline.nextStage();
+}
+
 void uniformColor(Pipeline& pipeline) {
   const auto& u = pipeline.ctx->uniformColor;
   for (std::size_t i = 0; i < kStageWidth; ++i) {
@@ -1439,6 +1461,8 @@ const std::array<StageFn, kStagesCount> STAGES = {
     gammaExpandSrgb,
     gammaExpandDstSrgb,
     gammaCompressSrgb,
+    unpremultiply,
+    premultiplyDestination,
 };
 
 }  // namespace tiny_skia::pipeline::highp

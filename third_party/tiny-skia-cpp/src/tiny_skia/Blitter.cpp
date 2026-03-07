@@ -46,6 +46,19 @@ void Blitter::blitAntiV2(std::uint32_t x, std::uint32_t y, AlphaU8 alpha0, Alpha
   unreachable();
 }
 
+void Blitter::blitAntiRect(std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height,
+                           AlphaU8 leftAlpha, AlphaU8 rightAlpha) {
+  while (--height >= 0) {
+    blitV(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), 1, leftAlpha);
+    if (width > 0) {
+      blitH(static_cast<std::uint32_t>(x + 1), static_cast<std::uint32_t>(y),
+            static_cast<LengthU32>(width));
+    }
+    blitV(static_cast<std::uint32_t>(x + 1 + width), static_cast<std::uint32_t>(y), 1, rightAlpha);
+    ++y;
+  }
+}
+
 void Blitter::blitRect(const ScreenIntRect& rect) {
   (void)rect;
   unreachable();

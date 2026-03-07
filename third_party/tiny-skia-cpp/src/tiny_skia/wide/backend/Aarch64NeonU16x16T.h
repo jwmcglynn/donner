@@ -16,7 +16,8 @@ namespace tiny_skia::wide::backend::aarch64_neon {
 namespace {
 
 [[nodiscard]] inline uint16x8_t div255Lo(uint16x8_t v) {
-  return vshrq_n_u16(vaddq_u16(v, vdupq_n_u16(255)), 8);
+  const uint16x8_t v128 = vaddq_u16(v, vdupq_n_u16(128));
+  return vshrq_n_u16(vaddq_u16(v128, vshrq_n_u16(v128, 8)), 8);
 }
 
 }  // namespace
@@ -131,7 +132,9 @@ namespace {
 }
 
 [[maybe_unused]] [[nodiscard]] inline U16x16T u16x16Div255(const U16x16T& value) {
-  return scalar::u16x16Shr(scalar::u16x16Add(value, U16x16T::splat(255)), U16x16T::splat(8));
+  const auto v128 = scalar::u16x16Add(value, U16x16T::splat(128));
+  return scalar::u16x16Shr(scalar::u16x16Add(v128, scalar::u16x16Shr(v128, U16x16T::splat(8))),
+                            U16x16T::splat(8));
 }
 
 [[maybe_unused]] [[nodiscard]] inline U16x16T u16x16MulDiv255(const U16x16T& lhs,

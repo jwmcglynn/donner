@@ -9,7 +9,7 @@
 
 namespace tiny_skia::pipeline {
 
-static_assert(kStagesCount == 79);
+static_assert(kStagesCount == 81);
 static_assert(sizeof(GradientColor) == sizeof(float) * 4);
 
 namespace {
@@ -52,6 +52,8 @@ namespace {
     case Stage::GammaExpandSrgb:
     case Stage::GammaExpandDestinationSrgb:
     case Stage::GammaCompressSrgb:
+    case Stage::Unpremultiply:
+    case Stage::PremultiplyDestination:
       return false;
     case Stage::MoveSourceToDestination:
     case Stage::MoveDestinationToSource:

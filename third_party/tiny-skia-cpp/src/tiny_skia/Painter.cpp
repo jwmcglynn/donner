@@ -194,11 +194,12 @@ void Painter::drawPixmap(MutablePixmapView& pixmap, std::int32_t x, std::int32_t
   paint.antiAlias = false;
   paint.forceHqPipeline = false;
   paint.colorspace = ColorSpace::Linear;
+  paint.unpremulStore = ppaint.unpremulStore;
 
   Painter::fillRect(pixmap, rect, paint, transform, mask);
 }
 
-void Painter::applyMask(MutablePixmapView& pixmap, const Mask& mask) {
+void Painter::applyMask(MutablePixmapView& pixmap, const Mask& mask, bool unpremulStore) {
   if (pixmap.size() != mask.size()) {
     return;
   }
@@ -212,7 +213,13 @@ void Painter::applyMask(MutablePixmapView& pixmap, const Mask& mask) {
   pipeline::RasterPipelineBuilder p;
   p.push(pipeline::Stage::LoadMaskU8);
   p.push(pipeline::Stage::LoadDestination);
+  if (unpremulStore) {
+    p.push(pipeline::Stage::PremultiplyDestination);
+  }
   p.push(pipeline::Stage::DestinationIn);
+  if (unpremulStore) {
+    p.push(pipeline::Stage::Unpremultiply);
+  }
   p.push(pipeline::Stage::Store);
   auto rp = p.compile();
 

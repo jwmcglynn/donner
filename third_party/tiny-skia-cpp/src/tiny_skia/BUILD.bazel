@@ -23,6 +23,7 @@ tiny_skia_cc_library(
     name = "tiny_skia_core",
     srcs = [
         "AlphaRuns.cpp",
+        "AnalyticEdge.cpp",
         "BlendMode.cpp",
         "Blitter.cpp",
         "Color.cpp",
@@ -48,6 +49,7 @@ tiny_skia_cc_library(
     ],
     hdrs = [
         "AlphaRuns.h",
+        "AnalyticEdge.h",
         "BlendMode.h",
         "Canvas.h",
         "Blitter.h",

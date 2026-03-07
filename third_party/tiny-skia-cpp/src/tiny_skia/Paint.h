@@ -28,6 +28,12 @@ struct Paint {
   /// Force the high-quality (highp) rendering pipeline. Default: false.
   bool forceHqPipeline = false;
 
+  /// Store output as unpremultiplied (straight) alpha. Default: false.
+  /// When true, the pipeline unpremultiplies in float space before storing to u8,
+  /// and re-premultiplies loaded destination pixels for correct blending.
+  /// This preserves color precision at low alpha values.
+  bool unpremulStore = false;
+
   /// Sets the shader to a solid color.
   void setColor(const Color& color) { shader = color; }
 

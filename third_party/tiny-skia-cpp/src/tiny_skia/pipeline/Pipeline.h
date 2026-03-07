@@ -123,10 +123,13 @@ enum class Stage : std::uint8_t {
   GammaExpandSrgb,
   GammaExpandDestinationSrgb,
   GammaCompressSrgb,
+  // Highp-only stages for unpremultiplied output (matching Skia's kUnpremul output).
+  Unpremultiply,             ///< Divides source r,g,b by source a (float).
+  PremultiplyDestination,    ///< Multiplies dest r,g,b by dest a (float).
 };
 
 /// @internal
-inline constexpr std::size_t kStagesCount = 1 + static_cast<std::size_t>(Stage::GammaCompressSrgb);
+inline constexpr std::size_t kStagesCount = 1 + static_cast<std::size_t>(Stage::PremultiplyDestination);
 /// @internal
 inline constexpr std::size_t kMaxStages = 32;
 

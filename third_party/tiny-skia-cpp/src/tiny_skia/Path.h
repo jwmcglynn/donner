@@ -97,7 +97,68 @@ class Path {
   }
 
   /// @internal
-  [[nodiscard]] bool isConvex() const { return true; }
+  /// Returns true if the path is convex. Checks the control polygon: all cross products of
+  /// consecutive edge vectors must have the same sign, AND no edges self-intersect.
+  [[nodiscard]] bool isConvex() const {
+    if (points_.size() < 3) return false;
+
+    // Must be a single closed contour.
+    int moveCount = 0;
+    bool hasClosed = false;
+    for (auto v : verbs_) {
+      if (v == PathVerb::Move) moveCount++;
+      if (v == PathVerb::Close) hasClosed = true;
+    }
+    if (moveCount != 1 || !hasClosed) return false;
+
+    const auto n = points_.size();
+
+    // Check cross products of consecutive direction vectors on the control polygon.
+    int sign = 0;  // 0 = unknown, 1 = positive, -1 = negative
+    for (std::size_t i = 0; i < n; i++) {
+      const auto& p0 = points_[i];
+      const auto& p1 = points_[(i + 1) % n];
+      const auto& p2 = points_[(i + 2) % n];
+
+      float dx1 = p1.x - p0.x;
+      float dy1 = p1.y - p0.y;
+      float dx2 = p2.x - p1.x;
+      float dy2 = p2.y - p1.y;
+
+      float cross = dx1 * dy2 - dy1 * dx2;
+      if (cross > 0.0f) {
+        if (sign < 0) return false;
+        sign = 1;
+      } else if (cross < 0.0f) {
+        if (sign > 0) return false;
+        sign = -1;
+      }
+    }
+    if (sign == 0) return false;
+
+    // Check no non-adjacent edges intersect (simple polygon check).
+    // Stroked path outlines can be self-intersecting single contours that pass the
+    // cross-product check above; this O(n²) check catches them.
+    for (std::size_t i = 0; i < n; i++) {
+      const auto& a = points_[i];
+      const auto& b = points_[(i + 1) % n];
+      for (std::size_t j = i + 2; j < n; j++) {
+        if (i == 0 && j == n - 1) continue;  // Adjacent via wrap-around.
+        const auto& c = points_[j];
+        const auto& d = points_[(j + 1) % n];
+        // Check proper intersection using orientation tests.
+        float d1 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        float d2 = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
+        float d3 = (d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x);
+        float d4 = (d.x - c.x) * (b.y - c.y) - (d.y - c.y) * (b.x - c.x);
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
 
   /// Axis-aligned bounding box (control-point bounds).
   [[nodiscard]] Rect bounds() const {

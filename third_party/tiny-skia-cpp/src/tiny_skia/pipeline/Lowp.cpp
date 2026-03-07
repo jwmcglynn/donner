@@ -143,7 +143,9 @@ inline F32x16T join(const U16x16T& lo, const U16x16T& hi) {
   return F32x16T(F32x8T(loF), F32x8T(hiF));
 }
 
-// div255: (v + 255) >> 8
+// div255: exact integer division by 255, equivalent to ((v + 128) * 257) >> 16.
+// Uses the two-step formula: v128 = v + 128; result = (v128 + (v128 >> 8)) >> 8.
+// This matches Skia's SkMul16ShiftRound with shift=8.
 inline U16x16T div255(U16x16T v) {
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__aarch64__) && defined(__ARM_NEON)
   return wide::backend::aarch64_neon::u16x16Div255(v);
@@ -151,7 +153,8 @@ inline U16x16T div255(U16x16T v) {
     (defined(__x86_64__) || defined(__i386__))
   return wide::backend::x86_avx2_fma::u16x16Div255(v);
 #else
-  return (v + U16x16T::splat(255)) >> U16x16T::splat(8);
+  const auto v128 = v + U16x16T::splat(128);
+  return (v128 + (v128 >> U16x16T::splat(8))) >> U16x16T::splat(8);
 #endif
 }
 
@@ -1246,6 +1249,8 @@ const std::array<StageFn, kStagesCount> STAGES = {
     nullFn,
     nullFn,
     nullFn,
+    nullFn,  // Unpremultiply (highp only)
+    nullFn,  // PremultiplyDestination (highp only)
 };
 
 const std::array<StageFn, kStagesCount> STAGES_TAIL = [] {

@@ -37,8 +37,8 @@ namespace tiny_skia::wide::backend::x86_avx2_fma {
 }
 
 [[nodiscard]] inline __m256i div255Avx2(__m256i value) {
-  const __m256i bias = _mm256_set1_epi16(255);
-  return _mm256_srli_epi16(_mm256_add_epi16(value, bias), 8);
+  const __m256i v128 = _mm256_add_epi16(value, _mm256_set1_epi16(128));
+  return _mm256_srli_epi16(_mm256_add_epi16(v128, _mm256_srli_epi16(v128, 8)), 8);
 }
 
 [[nodiscard]] inline U16x16T u16x16Min(const U16x16T& lhs, const U16x16T& rhs) {
@@ -166,7 +166,9 @@ namespace tiny_skia::wide::backend::x86_avx2_fma {
 }
 
 [[nodiscard]] inline U16x16T u16x16Div255(const U16x16T& value) {
-  return scalar::u16x16Shr(scalar::u16x16Add(value, U16x16T::splat(255)), U16x16T::splat(8));
+  const auto v128 = scalar::u16x16Add(value, U16x16T::splat(128));
+  return scalar::u16x16Shr(scalar::u16x16Add(v128, scalar::u16x16Shr(v128, U16x16T::splat(8))),
+                            U16x16T::splat(8));
 }
 
 [[nodiscard]] inline U16x16T u16x16MulDiv255(const U16x16T& lhs, const U16x16T& rhs) {
