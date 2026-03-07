@@ -26,7 +26,7 @@ bool_flag(
 # --//donner/svg/renderer:renderer_backend=<skia|tiny_skia>
 string_flag(
     name = "renderer_backend",
-    build_setting_default = "skia",
+    build_setting_default = "tiny_skia",
     visibility = ["//visibility:public"],
 )
 
