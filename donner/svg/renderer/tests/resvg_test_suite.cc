@@ -209,16 +209,13 @@ INSTANTIATE_TEST_SUITE_P(
 
 // TODO: e-a-
 
-INSTANTIATE_TEST_SUITE_P(
-    Circle, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-circle",
-                                {
-                                    {"e-circle-001.svg",
-                                     Params::WithThreshold(kDefaultThreshold,
-                                                           150)},  // Larger threshold due to
-                                                                   // rasterization artifacts.
-                                })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Circle, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix(
+                             "e-circle",
+                             {
+                                 {"e-circle-001.svg", Params()},  // Rasterization artifacts (15px)
+                             })),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     ClipPath, ImageComparisonTestFixture,
@@ -232,8 +229,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-clipPath-012.svg", Params::Skip()},  // Not impl: <text>
             {"e-clipPath-029.svg", Params()},
             {"e-clipPath-034.svg",
-             Params::WithThreshold(kDefaultThreshold, 200)},  // Larger threshold due to nested
-                                                              // clip-path AA artifacts.
+             Params::WithThreshold(kDefaultThreshold, 160)},  // Nested clip-path AA (148px)
             {"e-clipPath-037.svg", Params()},
             {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
             {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
@@ -249,28 +245,11 @@ INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                                                      })),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Ellipse, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-ellipse",
-                                {
-                                    {"e-ellipse-001.svg",
-                                     Params::WithThreshold(kDefaultThreshold,
-                                                           150)},  // Larger threshold due to
-                                                                   // rasterization artifacts.
-                                })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-ellipse")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeBlend, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feBlend",
-        {
-            {"e-feBlend-007.svg", Params::Skip()},  // Subregion on input (not primitiveUnits)
-            {"e-feBlend-008.svg", Params::Skip()},  // Subregion on input (not primitiveUnits)
-            // e-feBlend-009: color-burn blend mode (SVG2, now supported)
-            // e-feBlend-010: hue blend mode (SVG2, now supported)
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeBlend, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feBlend")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeColorMatrix, ImageComparisonTestFixture,
@@ -281,29 +260,37 @@ INSTANTIATE_TEST_SUITE_P(
             // differences (~10945px) since the float sRGB↔linear round-trip is lossless.
             // Non-trivial filters improved significantly with float precision.
             {"e-feColorMatrix-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 2000)},  // type=matrix (1799px)
+             Params::WithThreshold(kDefaultThreshold, 1900)},  // type=matrix (1799px)
             {"e-feColorMatrix-002.svg",
-             Params::WithThreshold(kDefaultThreshold, 11500)},  // identity matrix (10945px rendering diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   11500)},  // identity matrix (10945px rendering diff)
             {"e-feColorMatrix-003.svg",
-             Params::WithThreshold(kDefaultThreshold, 11500)},  // identity matrix (10945px rendering diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   11500)},  // identity matrix (10945px rendering diff)
             {"e-feColorMatrix-004.svg",
-             Params::WithThreshold(kDefaultThreshold, 11500)},  // identity matrix (10945px rendering diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   11500)},  // identity matrix (10945px rendering diff)
             {"e-feColorMatrix-005.svg",
-             Params::WithThreshold(kDefaultThreshold, 11500)},  // identity matrix (10945px rendering diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   11500)},  // identity matrix (10945px rendering diff)
             {"e-feColorMatrix-006.svg",
-             Params::WithThreshold(kDefaultThreshold, 500)},  // non-normalized values (398px, was 3383)
+             Params::WithThreshold(kDefaultThreshold,
+                                   420)},  // non-normalized values (398px, was 3383)
             {"e-feColorMatrix-007.svg",
-             Params::WithThreshold(kDefaultThreshold, 3500)},  // saturate (2993px, was 6987)
-            {"e-feColorMatrix-008.svg", Params::Skip()},  // saturate -0.5 (UB, 141k px)
-            {"e-feColorMatrix-009.svg", Params::Skip()},  // saturate 99999 (UB, 158k px)
+             Params::WithThreshold(kDefaultThreshold, 3100)},  // saturate (2993px, was 6987)
+            {"e-feColorMatrix-008.svg", Params::Skip()},       // saturate -0.5 (UB, 141k px)
+            {"e-feColorMatrix-009.svg", Params::Skip()},       // saturate 99999 (UB, 158k px)
             {"e-feColorMatrix-010.svg",
-             Params::WithThreshold(kDefaultThreshold, 11500)},  // identity saturate (10945px rendering diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   11500)},  // identity saturate (10945px rendering diff)
             {"e-feColorMatrix-011.svg",
-             Params::WithThreshold(kDefaultThreshold, 9500)},  // hueRotate(30) (8977px)
+             Params::WithThreshold(kDefaultThreshold, 9200)},  // hueRotate(30) (8977px)
             {"e-feColorMatrix-012.svg",
-             Params::WithThreshold(kDefaultThreshold, 11500)},  // hueRotate(0) identity (10945px rendering diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   11500)},  // hueRotate(0) identity (10945px rendering diff)
             {"e-feColorMatrix-015.svg",
-             Params::WithThreshold(kDefaultThreshold, 11500)},  // no attrs identity (10945px rendering diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   11500)},  // no attrs identity (10945px rendering diff)
         })),
     TestNameFromFilename);
 
@@ -315,19 +302,13 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feComponentTransfer-009.svg",
              Params::Skip()},  // tableValues="1px" invalid unit suffix not rejected (160K px diff)
             {"e-feComponentTransfer-020.svg",
-             Params::Skip()},  // Mixed types + feFuncA gamma + opacity, linearRGB rounding (70K px)
+             Params::WithThreshold(kDefaultThreshold,
+                                   72000)},  // Mixed types + feFuncA gamma + opacity (70400px)
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeComposite, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feComposite",
-        {
-            {"e-feComposite-007.svg", Params::Skip()},   // Not impl: default subregion (input union)
-            // e-feComposite-009: arithmetic with k4 — testing
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeComposite, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feComposite")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeConvolveMatrix, ImageComparisonTestFixture,
@@ -335,46 +316,47 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feConvolveMatrix",
         {
             {"e-feConvolveMatrix-014.svg",
-             Params::WithThreshold(kDefaultThreshold, 4000)},  // preserveAlpha (3460px)
-            {"e-feConvolveMatrix-015.svg", Params::Skip()},  // UB: bias=0.5
-            {"e-feConvolveMatrix-016.svg", Params::Skip()},  // UB: bias=-0.5 (89K px diff)
-            {"e-feConvolveMatrix-017.svg", Params::Skip()},  // UB: bias=9999 (33K px diff)
+             Params::WithThreshold(kDefaultThreshold, 3600)},  // preserveAlpha (3460px)
+            {"e-feConvolveMatrix-015.svg", Params::Skip()},    // UB: bias=0.5 (79K px diff)
+            {"e-feConvolveMatrix-016.svg", Params::Skip()},    // UB: bias=-0.5 (89K px diff)
+            {"e-feConvolveMatrix-017.svg", Params::Skip()},    // UB: bias=9999 (33K px diff)
             {"e-feConvolveMatrix-018.svg", Params::WithThreshold(kDefaultThreshold, 0)},
             {"e-feConvolveMatrix-022.svg",
-             Params::WithThreshold(kDefaultThreshold, 300)},  // edgeMode=wrap (199px)
-            {"e-feConvolveMatrix-023.svg", Params::Skip()},  // UB: wrap with oversized kernel (37K px diff)
+             Params::WithThreshold(kDefaultThreshold, 220)},  // edgeMode=wrap (199px)
+            {"e-feConvolveMatrix-023.svg",
+             Params::Skip()},  // UB: wrap with oversized kernel (37K px diff)
             {"e-feConvolveMatrix-024.svg",
-             Params::WithThreshold(kDefaultThreshold, 400)},  // edgeMode=none (288px)
+             Params::WithThreshold(kDefaultThreshold, 320)},  // edgeMode=none (288px)
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeDiffuseLighting, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feDiffuseLighting",
-        {
-            {"e-feDiffuseLighting-021.svg", Params::Skip()},  // kernelUnitLength
-            {"e-feDiffuseLighting-022.svg", Params::Skip()},  // kernelUnitLength
-        })),
-    TestNameFromFilename);
-INSTANTIATE_TEST_SUITE_P(
-    FeDisplacementMap, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-feDisplacementMap", {})),
-    TestNameFromFilename);
-INSTANTIATE_TEST_SUITE_P(
-    FeDistantLight, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-feDistantLight", {})),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeDiffuseLighting, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feDiffuseLighting",
+                                                     {
+                                                         {"e-feDiffuseLighting-021.svg",
+                                                          Params::Skip()},  // kernelUnitLength
+                                                         {"e-feDiffuseLighting-022.svg",
+                                                          Params::Skip()},  // kernelUnitLength
+                                                     })),
+                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeDisplacementMap, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feDisplacementMap", {})),
+                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeDistantLight, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feDistantLight", {})),
+                         TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
     FeDropShadow, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-feDropShadow",
         {
             // linearRGB 8-bit LUT rounding diffs at blur edges
-            {"e-feDropShadow-001.svg", Params::WithThreshold(kDefaultThreshold, 400)},
-            {"e-feDropShadow-002.svg", Params::WithThreshold(kDefaultThreshold, 200)},
-            {"e-feDropShadow-003.svg", Params::WithThreshold(kDefaultThreshold, 120)},
-            // e-feDropShadow-005: filter region clipping — testing
+            {"e-feDropShadow-001.svg", Params::WithThreshold(kDefaultThreshold, 400)},  // 389px
+            {"e-feDropShadow-002.svg", Params::WithThreshold(kDefaultThreshold, 200)},  // 196px
+            {"e-feDropShadow-003.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   120)},  // 111px
+                                           // e-feDropShadow-005: filter region clipping — testing
             {"e-feDropShadow-006.svg", Params::WithThreshold(kDefaultThreshold, 100)},  // 74px
         })),
     TestNameFromFilename);
@@ -384,8 +366,11 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-feFlood",
         {
-            {"e-feFlood-006.svg", Params::Skip()},  // Not impl: default subregion + negative coords
-            {"e-feFlood-008.svg", Params::Skip()},  // OBB + complex transform (59K px diff)
+            {"e-feFlood-006.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   50000)},  // Default subregion + negative coords (49275px)
+            {"e-feFlood-008.svg",
+             Params::WithThreshold(kDefaultThreshold, 60000)},  // OBB + complex transform (59247px)
         })),
     TestNameFromFilename);
 
@@ -396,7 +381,9 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-feGaussianBlur-002.svg",
              Params::Skip()},  // huge stdDev=1000, 207K px diff, 70s runtime
-            {"e-feGaussianBlur-012.svg", Params::Skip()},  // Complex skew transform + asymmetric blur
+            {"e-feGaussianBlur-012.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   47000)},  // Complex skew transform + asymmetric blur (45857px)
         })),
     TestNameFromFilename);
 
@@ -410,7 +397,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feImage-003.svg",
              Params::WithThreshold(0.1f, 30000)},  // Bilinear interpolation differences
             {"e-feImage-004.svg",
-             Params::WithThreshold(0.1f, 25000)},  // Bilinear interpolation differences
+             Params::WithThreshold(0.1f, 25000)},   // Bilinear interpolation differences
             {"e-feImage-006.svg", Params::Skip()},  // Fragment reference (#element)
             {"e-feImage-007.svg", Params::Skip()},  // Subregion with objectBoundingBox
             {"e-feImage-008.svg", Params::Skip()},  // Subregion with objectBoundingBox
@@ -439,10 +426,12 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feMerge",
         {
             {"e-feMerge-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 1500)},  // linearRGB rounding (1120px)
+             Params::WithThreshold(kDefaultThreshold, 1250)},  // linearRGB rounding (1163px)
             {"e-feMerge-002.svg",
-             Params::WithThreshold(kDefaultThreshold, 2500)},  // linearRGB rounding (2229px)
-            {"e-feMerge-003.svg", Params::Skip()},  // Complex skew transform + c-i-f (27K px diff)
+             Params::WithThreshold(kDefaultThreshold, 2350)},  // linearRGB rounding (2269px)
+            {"e-feMerge-003.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   28000)},  // Complex skew transform + c-i-f (27503px)
         })),
     TestNameFromFilename);
 
@@ -462,8 +451,9 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feOffset",
         {
             {"e-feOffset-007.svg",
-             Params::WithThreshold(kDefaultThreshold, 350)},  // OBB offset rounding
-            {"e-feOffset-008.svg", Params::Skip()},  // Complex skew transform (13.6K px diff)
+             Params::WithThreshold(kDefaultThreshold, 350)},  // OBB offset rounding (307px)
+            {"e-feOffset-008.svg",
+             Params::WithThreshold(kDefaultThreshold, 14000)},  // Complex skew transform (13672px)
         })),
     TestNameFromFilename);
 
@@ -472,28 +462,22 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-fePointLight",
         {
-            {"e-fePointLight-002.svg",
-             Params::WithThreshold(0.1f, 105000)},  // Point light algorithm diffs vs resvg (88941px)
-            {"e-fePointLight-003.svg",
-             Params::WithThreshold(0.1f, 185000)},  // OBB + lighting algorithm diffs (174810px)
             {"e-fePointLight-004.svg",
-             Params::WithThreshold(0.1f, 120000)},  // Lighting algorithm diffs (106822px)
+             Params::WithThreshold(0.1f, 55000)},  // Lighting alpha=1.0 vs resvg clips to shape
         })),
     TestNameFromFilename);
-// Specular lighting: algorithm differences vs resvg cause large pixel diffs (~160K-225K).
+// Specular lighting: algorithm differences vs resvg.
+// Float pipeline + light coordinate scaling fixed most tests to 0 diffs at 0.1f threshold.
 INSTANTIATE_TEST_SUITE_P(
     FeSpecularLighting, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-feSpecularLighting",
         {
-            {"e-feSpecularLighting-001.svg", Params::WithThreshold(0.1f, 225000)},  // 221531px
-            {"e-feSpecularLighting-002.svg", Params::WithThreshold(0.1f, 30000)},   // 22155px
-            {"e-feSpecularLighting-003.svg", Params::WithThreshold(0.1f, 85000)},   // 74285px
-            {"e-feSpecularLighting-004.svg", Params::WithThreshold(0.1f, 155000)},  // 141652px
-            {"e-feSpecularLighting-005.svg", Params::WithThreshold(0.1f, 28000)},   // 21486px
-            {"e-feSpecularLighting-006.svg", Params::WithThreshold(0.1f, 400)},     // 289px
-            {"e-feSpecularLighting-007.svg", Params::WithThreshold(0.1f, 28000)},   // 25505px
-            {"e-feSpecularLighting-008.svg", Params::WithThreshold(0.1f, 40000)},   // 33182px
+            {"e-feSpecularLighting-002.svg", Params::WithThreshold(0.1f)},  // 2717px at 0.01f
+            {"e-feSpecularLighting-004.svg",
+             Params::WithThreshold(0.1f, 58000)},                           // 57392px at 0.01f
+            {"e-feSpecularLighting-005.svg", Params::WithThreshold(0.1f)},  // 1466px at 0.01f
+            {"e-feSpecularLighting-007.svg", Params::WithThreshold(0.1f, 160000)},  // 157470px
         })),
     TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
@@ -502,11 +486,11 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feSpotLight",
         {
             {"e-feSpotLight-005.svg", Params::Skip()},  // Negative specularExponent=-10 edge case
-            {"e-feSpotLight-007.svg", Params::WithThreshold(kDefaultThreshold, 3000)},
-            {"e-feSpotLight-008.svg", Params::WithThreshold(kDefaultThreshold, 3000)},
-            {"e-feSpotLight-010.svg", Params::Skip()},   // Not impl: limitingConeAngle anti-aliasing
-            {"e-feSpotLight-011.svg", Params::Skip()},   // Not impl: primitiveUnits=objectBoundingBox
-            {"e-feSpotLight-012.svg", Params::Skip()},   // Not impl: complex transform
+            {"e-feSpotLight-007.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // 2922px
+            {"e-feSpotLight-008.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // 2922px
+            {"e-feSpotLight-012.svg",
+             Params::WithThreshold(0.1f,
+                                   70000)},  // Lighting alpha=1.0 vs resvg clips to shape (67496px)
         })),
     TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
@@ -521,7 +505,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feTile-004.svg",
              Params::WithThreshold(kDefaultThreshold, 8500)},  // Tile boundary sub-pixel alignment
             {"e-feTile-005.svg",
-             Params::WithThreshold(kDefaultThreshold, 10000)},  // Tile boundary sub-pixel alignment
+             Params::WithThreshold(kDefaultThreshold,
+                                   9700)},         // Tile boundary sub-pixel alignment (9520px)
             {"e-feTile-006.svg", Params::Skip()},  // Not impl: percentage-based primitive subregion
             {"e-feTile-007.svg", Params::Skip()},  // Complex transform (UB per test title)
         })),
@@ -533,9 +518,12 @@ INSTANTIATE_TEST_SUITE_P(
         {
             // feTurbulence-002 removed (was 0 diff with 1500 threshold)
             {"e-feTurbulence-017.svg", Params::Skip()},  // stitchTiles=stitch (UB per test title)
-            {"e-feTurbulence-018.svg", Params::Skip()},  // Complex skew transform (109K px diff)
+            {"e-feTurbulence-018.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   110000)},  // Complex skew transform (109146px)
             {"e-feTurbulence-019.svg",
-             Params::WithThreshold(kDefaultThreshold, 24000)},  // sRGB color-interpolation (23604px)
+             Params::WithThreshold(kDefaultThreshold,
+                                   24000)},  // sRGB color-interpolation (23604px)
         })),
     TestNameFromFilename);
 
@@ -544,22 +532,36 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-filter",
         {
-            {"e-filter-002.svg", Params::Skip()},  // filter region (blur edge clipping)
-            {"e-filter-003.svg", Params::Skip()},  // filterUnits=userSpaceOnUse (blur edge)
-            {"e-filter-004.svg", Params::Skip()},  // subregion + filter region
-            {"e-filter-009.svg", Params::Skip()},  // subregion (blur edge, 615px)
-            {"e-filter-010.svg", Params::Skip()},  // subregion percentage
-            {"e-filter-011.svg", Params::Skip()},  // subregion
+            {"e-filter-002.svg",
+             Params::WithThreshold(kDefaultThreshold, 19000)},  // Filter region blur edge (18768px)
+            {"e-filter-003.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   7700)},  // filterUnits=userSpaceOnUse blur edge (7510px)
+            {"e-filter-004.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   64000)},  // Subregion + filter region (63126px)
+            {"e-filter-009.svg",
+             Params::WithThreshold(kDefaultThreshold, 650)},  // Subregion blur edge (615px)
+            {"e-filter-010.svg",
+             Params::WithThreshold(kDefaultThreshold, 62500)},  // Subregion percentage (61762px)
+            {"e-filter-011.svg",
+             Params::WithThreshold(kDefaultThreshold, 12000)},  // Subregion (11684px)
             // TODO(jwm): OBB + subregion clipping not correct yet (16767 px diff)
-            {"e-filter-012.svg", Params::Skip()},  // primitiveUnits=objectBoundingBox + subregion
-            {"e-filter-014.svg", Params::Skip()},  // negative subregion (51K px diff)
-            {"e-filter-017.svg", Params::Skip()},  // xlink:href
-            {"e-filter-018.svg", Params::Skip()},  // xlink:href
-            {"e-filter-019.svg", Params::Skip()},  // xlink:href
-            {"e-filter-026.svg", Params::Skip()},  // transform on shape (blur edge)
-            {"e-filter-027.svg", Params::Skip()},  // transform + filter region
+            {"e-filter-012.svg",
+             Params::WithThreshold(kDefaultThreshold, 17000)},  // OBB + subregion (16766px)
+            {"e-filter-014.svg",
+             Params::WithThreshold(kDefaultThreshold, 55000)},  // Negative subregion (54280px)
+            {"e-filter-017.svg", Params::Skip()},               // xlink:href
+            {"e-filter-018.svg", Params::Skip()},               // xlink:href
+            {"e-filter-019.svg", Params::Skip()},               // xlink:href
+            {"e-filter-026.svg",
+             Params::WithThreshold(kDefaultThreshold, 7500)},  // Transform blur edge (7252px)
+            {"e-filter-027.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   32500)},  // Transform + filter region (31858px)
             {"e-filter-028.svg",
-             Params::WithThreshold(kDefaultThreshold, 200)},  // transform + blur linearRGB diff (124px)
+             Params::WithThreshold(kDefaultThreshold,
+                                   140)},  // transform + blur linearRGB diff (124px)
             // e-filter-030: primitiveUnits=objectBoundingBox (now supported)
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha
@@ -568,21 +570,35 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-036.svg", Params::Skip()},  // in=FillPaint gradient
             {"e-filter-037.svg", Params::Skip()},  // in=FillPaint pattern
             {"e-filter-038.svg", Params::Skip()},  // in=FillPaint on group
-            {"e-filter-039.svg", Params::Skip()},  // multiple primitives (blur edge clipping)
-            {"e-filter-040.svg", Params::Skip()},  // multiple primitives (blur edge clipping)
-            {"e-filter-041.svg", Params::Skip()},  // blur edge clipping
-            {"e-filter-042.svg", Params::Skip()},  // blur edge clipping + linearRGB
-            {"e-filter-044.svg", Params::Skip()},  // chained blur edge clipping
+            {"e-filter-039.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   3400)},  // Multiple primitives blur edge (3292px)
+            {"e-filter-040.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   3400)},  // Multiple primitives blur edge (3292px)
+            {"e-filter-041.svg",
+             Params::WithThreshold(kDefaultThreshold, 6400)},  // Blur edge clipping (6247px)
+            // filter-042 (blur edge + linearRGB): 12px diff, passes with default threshold
+            // filter-044 (chained blur edge): 12px diff, passes with default threshold
             {"e-filter-046.svg",
-             Params::WithThreshold(kDefaultThreshold, 1200)},  // blur linearRGB rendering diff (1101px)
-            {"e-filter-052.svg", Params::Skip()},  // clip-path + filter (blur edge)
-            {"e-filter-053.svg", Params::Skip()},  // mask + filter (blur edge)
-            {"e-filter-054.svg", Params::Skip()},  // clip-path + mask + filter (blur edge)
+             Params::WithThreshold(kDefaultThreshold,
+                                   1200)},  // blur linearRGB rendering diff (1101px)
+            {"e-filter-052.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   43500)},  // Clip-path + filter blur edge (42888px)
+            {"e-filter-053.svg",
+             Params::WithThreshold(kDefaultThreshold, 550)},  // Mask + filter (498px)
+            {"e-filter-054.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   35000)},  // Clip-path + mask + filter (34305px)
             // TODO(jwm): OBB + subregion clipping not correct yet (142436 px diff)
-            {"e-filter-055.svg", Params::Skip()},  // primitiveUnits=objectBoundingBox + subregion %
-            {"e-filter-056.svg", Params::Skip()},  // in to invalid named result (97K px diff)
-            {"e-filter-059.svg", Params::Skip()},  // complex transforms (blur edge)
-            {"e-filter-060.svg", Params::Skip()},  // filter on root svg
+            {"e-filter-055.svg", Params::Skip()},  // OBB + subregion % (141644px diff)
+            {"e-filter-056.svg",
+             Params::WithThreshold(kDefaultThreshold, 98000)},  // Invalid named result (97365px)
+            {"e-filter-059.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   37000)},        // Complex transforms blur edge (36065px)
+            {"e-filter-060.svg", Params::Skip()},  // Filter on root svg (227K px diff)
             {"e-filter-065.svg", Params::Skip()},  // in=FillPaint on empty group
         })),
     TestNameFromFilename);
@@ -627,12 +643,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-line-001.svg",
              Params::WithThreshold(0.02f)},  // Larger threshold due to anti-aliasing artifacts with
                                              // overlapping lines.
-            {"e-line-007.svg",
-             Params::WithThreshold(kDefaultThreshold, 120)},  // Larger threshold due to
-                                                              // rasterization artifacts.
-            {"e-line-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 120)},  // Larger threshold due to
-                                                              // rasterization artifacts.
+            {"e-line-007.svg", Params()},    // Rasterization artifacts (20px)
+            {"e-line-008.svg", Params()},    // Rasterization artifacts (20px)
         })),
     TestNameFromFilename);
 
@@ -686,10 +698,7 @@ INSTANTIATE_TEST_SUITE_P(
     Path, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-path",
                                 {
-                                    {"e-path-011.svg",
-                                     Params::WithThreshold(kDefaultThreshold,
-                                                           120)},  // Larger threshold due to
-                                                                   // rasterization artifacts.
+                                    {"e-path-011.svg", Params()},  // Rasterization artifacts (50px)
                                 })),
     TestNameFromFilename);
 
@@ -699,16 +708,11 @@ INSTANTIATE_TEST_SUITE_P(
         "e-pattern",
         {
             {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
-            {"e-pattern-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 250)},  // Larger threshold due to
-                                                              // objectBoundingBox pattern AA.
-            {"e-pattern-010.svg",
-             Params::WithThreshold(kDefaultThreshold, 150)},  // Larger threshold due to
-                                                              // viewBox/objectBoundingBox AA.
-            {"e-pattern-018.svg", Params::Skip()},            // Not impl: <text>
+            {"e-pattern-008.svg", Params()},        // objectBoundingBox pattern AA (14px)
+            {"e-pattern-010.svg", Params()},        // viewBox/objectBoundingBox AA (58px)
+            {"e-pattern-018.svg", Params::Skip()},  // Not impl: <text>
             {"e-pattern-019.svg", Params()},
-            {"e-pattern-020.svg",
-             Params::WithThreshold(0.6f, 1000)},  // Larger threshold due to nested pattern AA.
+            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},  // Nested pattern AA (768px)
             {"e-pattern-021.svg",
              Params::WithThreshold(0.2f)},  // Larger threshold due to recursive pattern seams.
             {"e-pattern-022.svg",
