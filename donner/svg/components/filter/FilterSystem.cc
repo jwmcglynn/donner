@@ -3,6 +3,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
@@ -28,7 +29,8 @@ FilterInput toFilterInput2(const FilterPrimitiveComponent& primitive) {
 
 /// Populate the common FilterNode fields from the primitive's standard attributes.
 /// For single-input primitives.
-FilterNode makeFilterNode(FilterPrimitive primitive, const FilterPrimitiveComponent& attrs) {
+FilterNode makeFilterNode(FilterPrimitive primitive, const FilterPrimitiveComponent& attrs,
+                          std::optional<ColorInterpolationFilters> cif = std::nullopt) {
   FilterNode node;
   node.primitive = std::move(primitive);
   node.inputs.push_back(toFilterInput(attrs));
@@ -37,11 +39,13 @@ FilterNode makeFilterNode(FilterPrimitive primitive, const FilterPrimitiveCompon
   node.y = attrs.y;
   node.width = attrs.width;
   node.height = attrs.height;
+  node.colorInterpolationFilters = cif;
   return node;
 }
 
 /// Populate the common FilterNode fields for two-input primitives (in + in2).
-FilterNode makeFilterNode2(FilterPrimitive primitive, const FilterPrimitiveComponent& attrs) {
+FilterNode makeFilterNode2(FilterPrimitive primitive, const FilterPrimitiveComponent& attrs,
+                           std::optional<ColorInterpolationFilters> cif = std::nullopt) {
   FilterNode node;
   node.primitive = std::move(primitive);
   node.inputs.push_back(toFilterInput(attrs));
@@ -51,6 +55,7 @@ FilterNode makeFilterNode2(FilterPrimitive primitive, const FilterPrimitiveCompo
   node.y = attrs.y;
   node.width = attrs.width;
   node.height = attrs.height;
+  node.colorInterpolationFilters = cif;
   return node;
 }
 
@@ -117,6 +122,84 @@ filter_primitive::Flood resolveFloodProperties(const Registry& registry, entt::e
   return flood;
 }
 
+/// Resolve lighting-color from a lighting component's Property, overlaid with CSS unparsed
+/// properties, following the same pattern as resolveFloodProperties for flood-color.
+template <typename LightingComponent>
+css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
+                                std::vector<ParseError>* outWarnings) {
+  // Start with values from the component (set via XML presentation attributes).
+  Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
+    return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
+  }};
+  if (const auto* comp = registry.try_get<LightingComponent>(cur)) {
+    lightingColor = comp->lightingColor;
+  }
+
+  // Overlay CSS unparsed properties (from style="" or stylesheet rules).
+  if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
+    if (style->properties.has_value()) {
+      for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
+        if (name == "lighting-color") {
+          const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
+              unparsedProperty.declaration, unparsedProperty.specificity,
+              parser::PropertyParseBehavior::AllowUserUnits);
+
+          if (auto maybeError = Parse(
+                  params,
+                  [](const parser::PropertyParseFnParams& params) {
+                    return css::parser::ColorParser::Parse(params.components());
+                  },
+                  &lightingColor)) {
+            if (outWarnings) {
+              outWarnings->emplace_back(std::move(maybeError.value()));
+            }
+          }
+        }
+      }
+    }
+
+    // Resolve currentColor.
+    if (lightingColor.hasValue() && lightingColor.getRequired().isCurrentColor()) {
+      const auto& currentColor = style->properties->color;
+      lightingColor.set(currentColor.getRequired(), currentColor.specificity);
+    }
+  }
+
+  return lightingColor.getRequired();
+}
+
+/// Resolve color-interpolation-filters on an individual filter primitive entity.
+/// Returns the per-primitive value if explicitly set, or std::nullopt if the filter-level
+/// default should be used.
+std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(
+    const Registry& registry, entt::entity cur) {
+  // Check CSS unparsed properties (from presentation attribute or style="").
+  if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
+    if (style->properties.has_value()) {
+      for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
+        if (name == "color-interpolation-filters") {
+          const auto& decl = unparsedProperty.declaration;
+          // Parse the simple keyword value.
+          for (const auto& component : decl.values) {
+            if (const auto* token = std::get_if<css::Token>(&component.value)) {
+              if (token->is<css::Token::Ident>()) {
+                const auto& ident = token->get<css::Token::Ident>().value;
+                if (ident == "sRGB") {
+                  return ColorInterpolationFilters::SRGB;
+                }
+                if (ident == "linearRGB") {
+                  return ColorInterpolationFilters::LinearRGB;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 void FilterSystem::createComputedFilter(EntityHandle handle, const FilterComponent& component,
@@ -134,6 +217,9 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     if (!primitive) {
       continue;
     }
+
+    // Resolve per-primitive color-interpolation-filters (overrides filter-level default).
+    const auto primitiveCIF = resolveColorInterpolationFilters(registry, cur);
 
     // Determine which filter primitive we have.
     if (const auto* blur = registry.try_get<FEGaussianBlurComponent>(cur)) {
@@ -153,7 +239,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
           *primitive));
     } else if (registry.try_get<FEFloodComponent>(cur)) {
       filterGraph.nodes.push_back(
-          makeFilterNode(resolveFloodProperties(registry, cur, outWarnings), *primitive));
+          makeFilterNode(resolveFloodProperties(registry, cur, outWarnings), *primitive, primitiveCIF));
     } else if (const auto* offset = registry.try_get<FEOffsetComponent>(cur)) {
       filterGraph.nodes.push_back(makeFilterNode(
           filter_primitive::Offset{
@@ -168,16 +254,16 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.k2 = comp->k2;
       prim.k3 = comp->k3;
       prim.k4 = comp->k4;
-      filterGraph.nodes.push_back(makeFilterNode2(std::move(prim), *primitive));
+      filterGraph.nodes.push_back(makeFilterNode2(std::move(prim), *primitive, primitiveCIF));
     } else if (const auto* colorMatrix = registry.try_get<FEColorMatrixComponent>(cur)) {
       filter_primitive::ColorMatrix prim;
       prim.type = static_cast<filter_primitive::ColorMatrix::Type>(colorMatrix->type);
       prim.values = colorMatrix->values;
-      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive, primitiveCIF));
     } else if (const auto* blend = registry.try_get<FEBlendComponent>(cur)) {
       filter_primitive::Blend prim;
       prim.mode = static_cast<filter_primitive::Blend::Mode>(blend->mode);
-      filterGraph.nodes.push_back(makeFilterNode2(std::move(prim), *primitive));
+      filterGraph.nodes.push_back(makeFilterNode2(std::move(prim), *primitive, primitiveCIF));
     } else if (registry.try_get<FEComponentTransferComponent>(cur)) {
       // feComponentTransfer: collect feFuncR/G/B/A children.
       filter_primitive::ComponentTransfer prim;
@@ -211,7 +297,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         }
       }
 
-      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive, primitiveCIF));
     } else if (registry.try_get<FEMergeComponent>(cur)) {
       // feMerge: collect inputs from feMergeNode children.
       FilterNode node;
@@ -221,6 +307,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       node.y = primitive->y;
       node.width = primitive->width;
       node.height = primitive->height;
+      node.colorInterpolationFilters = primitiveCIF;
 
       // Walk feMergeNode children to collect inputs.
       const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
@@ -293,13 +380,13 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         prim.floodOpacity = props.floodOpacity.getRequired();
       }
 
-      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));
     } else if (const auto* morph = registry.try_get<FEMorphologyComponent>(cur)) {
       filter_primitive::Morphology prim;
       prim.op = static_cast<filter_primitive::Morphology::Operator>(morph->op);
       prim.radiusX = morph->radiusX;
       prim.radiusY = morph->radiusY;
-      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));
     } else if (const auto* convolve = registry.try_get<FEConvolveMatrixComponent>(cur)) {
       filter_primitive::ConvolveMatrix prim;
       prim.orderX = convolve->orderX;
@@ -311,9 +398,9 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.targetY = convolve->targetY;
       prim.edgeMode = static_cast<filter_primitive::ConvolveMatrix::EdgeMode>(convolve->edgeMode);
       prim.preserveAlpha = convolve->preserveAlpha;
-      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));
     } else if (registry.try_get<FETileComponent>(cur)) {
-      filterGraph.nodes.push_back(makeFilterNode(filter_primitive::Tile{}, *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(filter_primitive::Tile{}, *primitive, primitiveCIF));
     } else if (const auto* turbulence = registry.try_get<FETurbulenceComponent>(cur)) {
       filter_primitive::Turbulence prim;
       prim.type = static_cast<filter_primitive::Turbulence::Type>(turbulence->type);
@@ -322,7 +409,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.numOctaves = turbulence->numOctaves;
       prim.seed = turbulence->seed;
       prim.stitchTiles = turbulence->stitchTiles;
-      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));
     } else if (const auto* displace = registry.try_get<FEDisplacementMapComponent>(cur)) {
       filter_primitive::DisplacementMap prim;
       prim.scale = displace->scale;
@@ -330,12 +417,13 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
           static_cast<filter_primitive::DisplacementMap::Channel>(displace->xChannelSelector);
       prim.yChannelSelector =
           static_cast<filter_primitive::DisplacementMap::Channel>(displace->yChannelSelector);
-      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));
     } else if (const auto* diffuse = registry.try_get<FEDiffuseLightingComponent>(cur)) {
       filter_primitive::DiffuseLighting prim;
       prim.surfaceScale = diffuse->surfaceScale;
       prim.diffuseConstant = diffuse->diffuseConstant;
-      // TODO(jwmcglynn): Resolve lighting-color from CSS properties.
+      prim.lightingColor =
+          resolveLightingColor<FEDiffuseLightingComponent>(registry, cur, outWarnings);
 
       // Find light source child element.
       const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
@@ -360,13 +448,14 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         }
       }
 
-      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive, primitiveCIF));
     } else if (const auto* specular = registry.try_get<FESpecularLightingComponent>(cur)) {
       filter_primitive::SpecularLighting prim;
       prim.surfaceScale = specular->surfaceScale;
       prim.specularConstant = specular->specularConstant;
       prim.specularExponent = specular->specularExponent;
-      // TODO(jwmcglynn): Resolve lighting-color from CSS properties.
+      prim.lightingColor =
+          resolveLightingColor<FESpecularLightingComponent>(registry, cur, outWarnings);
 
       // Find light source child element.
       const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
@@ -391,10 +480,20 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         }
       }
 
-      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive, primitiveCIF));
     } else if (const auto* feImage = registry.try_get<FEImageComponent>(cur)) {
       filter_primitive::Image prim;
       prim.href = feImage->href;
+      prim.preserveAspectRatio = feImage->preserveAspectRatio;
+
+      // Load the referenced image if available.
+      if (const auto* loaded = registry.try_get<LoadedImageComponent>(cur);
+          loaded && loaded->image.has_value()) {
+        prim.imageData = loaded->image->data;
+        prim.imageWidth = loaded->image->width;
+        prim.imageHeight = loaded->image->height;
+      }
+
       // feImage has no standard input (it generates its own content).
       FilterNode node;
       node.primitive = std::move(prim);
@@ -403,6 +502,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       node.y = primitive->y;
       node.width = primitive->width;
       node.height = primitive->height;
+      node.colorInterpolationFilters = primitiveCIF;
       filterGraph.nodes.push_back(std::move(node));
     }
   }
@@ -419,6 +519,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     computed.primitiveUnits = component.primitiveUnits;
     computed.colorInterpolationFilters = component.colorInterpolationFilters;
     computed.filterGraph.colorInterpolationFilters = component.colorInterpolationFilters;
+    computed.filterGraph.primitiveUnits = component.primitiveUnits;
   } else {
     handle.remove<ComputedFilterComponent>();
   }

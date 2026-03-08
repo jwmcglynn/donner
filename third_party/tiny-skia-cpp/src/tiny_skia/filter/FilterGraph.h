@@ -196,8 +196,15 @@ struct DropShadow {
   double sigmaY = 0.0;  ///< Blur standard deviation Y in pixels.
 };
 
-/// Placeholder for feImage (outputs transparent; image loading is external).
-struct Image {};
+/// Parameters for feImage. Image data is pre-loaded by the caller and stored here as premultiplied
+/// RGBA pixels.
+struct Image {
+  std::vector<std::uint8_t> pixels;  ///< Premultiplied RGBA pixel data.
+  int width = 0;                     ///< Image width in pixels.
+  int height = 0;                    ///< Image height in pixels.
+  /// Target rectangle within the filter output (pixel space). If empty, uses the full output.
+  std::optional<PixelRect> targetRect;
+};
 
 }  // namespace graph_primitive
 
@@ -220,6 +227,10 @@ struct GraphNode {
   std::vector<NodeInput> inputs;          ///< Input reference(s).
   std::optional<std::string> result;      ///< Named output (for `result` attribute).
   std::optional<PixelRect> subregion;     ///< Pixel-space primitive subregion (for clipping).
+
+  /// Per-node color space override. When set, overrides the graph-level `useLinearRGB`.
+  /// true = linearRGB, false = sRGB.
+  std::optional<bool> useLinearRGB;
 };
 
 /// Complete filter graph specification ready for execution.

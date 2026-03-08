@@ -116,11 +116,7 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FeConvolveMatrix>(
   return false;
 }
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::FeDiffuseLighting>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return false;
-}
+// FeDiffuseLighting: specialization in FilterPrimitiveComponent.cc (lighting-color).
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeDistantLight>(
@@ -134,11 +130,7 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FePointLight>(
   return false;
 }
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::FeSpecularLighting>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return false;
-}
+// FeSpecularLighting: specialization in FilterPrimitiveComponent.cc (lighting-color).
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeSpotLight>(

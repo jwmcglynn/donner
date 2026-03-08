@@ -150,4 +150,80 @@ void linearToSrgb(Pixmap& pixmap) {
   }
 }
 
+void srgbToLinear(FloatPixmap& pixmap) {
+  auto data = pixmap.data();
+  const std::size_t pixelCount = data.size() / 4;
+
+  for (std::size_t i = 0; i < pixelCount; ++i) {
+    const std::size_t off = i * 4;
+    const float a = data[off + 3];
+
+    if (a <= 0.0f) {
+      continue;
+    }
+
+    // sRGB transfer function (inverse gamma).
+    auto srgbToLinearChannel = [](float s) -> float {
+      if (s <= 0.04045f) {
+        return s / 12.92f;
+      }
+      return static_cast<float>(std::pow((s + 0.055) / 1.055, 2.4));
+    };
+
+    if (a >= 1.0f) {
+      // Fully opaque: direct conversion.
+      data[off + 0] = srgbToLinearChannel(data[off + 0]);
+      data[off + 1] = srgbToLinearChannel(data[off + 1]);
+      data[off + 2] = srgbToLinearChannel(data[off + 2]);
+    } else {
+      // Unpremultiply, convert, re-premultiply.
+      const float invAlpha = 1.0f / a;
+      const float sr = std::clamp(data[off + 0] * invAlpha, 0.0f, 1.0f);
+      const float sg = std::clamp(data[off + 1] * invAlpha, 0.0f, 1.0f);
+      const float sb = std::clamp(data[off + 2] * invAlpha, 0.0f, 1.0f);
+
+      data[off + 0] = srgbToLinearChannel(sr) * a;
+      data[off + 1] = srgbToLinearChannel(sg) * a;
+      data[off + 2] = srgbToLinearChannel(sb) * a;
+    }
+  }
+}
+
+void linearToSrgb(FloatPixmap& pixmap) {
+  auto data = pixmap.data();
+  const std::size_t pixelCount = data.size() / 4;
+
+  for (std::size_t i = 0; i < pixelCount; ++i) {
+    const std::size_t off = i * 4;
+    const float a = data[off + 3];
+
+    if (a <= 0.0f) {
+      continue;
+    }
+
+    // sRGB transfer function (apply gamma).
+    auto linearToSrgbChannel = [](float l) -> float {
+      if (l <= 0.0031308f) {
+        return 12.92f * l;
+      }
+      return static_cast<float>(1.055 * std::pow(l, 1.0 / 2.4) - 0.055);
+    };
+
+    if (a >= 1.0f) {
+      data[off + 0] = linearToSrgbChannel(std::clamp(data[off + 0], 0.0f, 1.0f));
+      data[off + 1] = linearToSrgbChannel(std::clamp(data[off + 1], 0.0f, 1.0f));
+      data[off + 2] = linearToSrgbChannel(std::clamp(data[off + 2], 0.0f, 1.0f));
+    } else {
+      const float invAlpha = 1.0f / a;
+      const float lr = std::clamp(data[off + 0] * invAlpha, 0.0f, 1.0f);
+      const float lg = std::clamp(data[off + 1] * invAlpha, 0.0f, 1.0f);
+      const float lb = std::clamp(data[off + 2] * invAlpha, 0.0f, 1.0f);
+
+      data[off + 0] = linearToSrgbChannel(lr) * a;
+      data[off + 1] = linearToSrgbChannel(lg) * a;
+      data[off + 2] = linearToSrgbChannel(lb) * a;
+    }
+  }
+}
+
 }  // namespace tiny_skia::filter

@@ -138,4 +138,101 @@ void componentTransfer(Pixmap& pixmap, const TransferFunc& funcR, const Transfer
   }
 }
 
+namespace {
+
+/// Evaluate a transfer function directly for a float value in [0,1].
+double evalTransferFunc(const TransferFunc& func, double c) {
+  double result = c;
+
+  switch (func.type) {
+    case TransferFuncType::Identity:
+      result = c;
+      break;
+    case TransferFuncType::Table: {
+      const std::size_t n = func.tableValues.size();
+      if (n == 0) {
+        result = c;
+      } else if (n == 1) {
+        result = func.tableValues[0];
+      } else {
+        const double pos = c * static_cast<double>(n - 1);
+        const std::size_t k = static_cast<std::size_t>(std::floor(pos));
+        const std::size_t kClamped = std::min(k, n - 2);
+        const double frac = pos - static_cast<double>(kClamped);
+        result = func.tableValues[kClamped] * (1.0 - frac) + func.tableValues[kClamped + 1] * frac;
+      }
+      break;
+    }
+    case TransferFuncType::Discrete: {
+      const std::size_t n = func.tableValues.size();
+      if (n == 0) {
+        result = c;
+      } else {
+        const std::size_t k =
+            std::min(static_cast<std::size_t>(std::floor(c * static_cast<double>(n))), n - 1);
+        result = func.tableValues[k];
+      }
+      break;
+    }
+    case TransferFuncType::Linear:
+      result = func.slope * c + func.intercept;
+      break;
+    case TransferFuncType::Gamma:
+      result = func.amplitude * std::pow(c, func.exponent) + func.offset;
+      break;
+  }
+
+  return std::clamp(result, 0.0, 1.0);
+}
+
+}  // namespace
+
+void componentTransfer(FloatPixmap& pixmap, const TransferFunc& funcR, const TransferFunc& funcG,
+                       const TransferFunc& funcB, const TransferFunc& funcA) {
+  auto data = pixmap.data();
+  const std::size_t pixelCount = data.size() / 4;
+
+  for (std::size_t i = 0; i < pixelCount; ++i) {
+    const std::size_t off = i * 4;
+    const float a = data[off + 3];
+
+    if (a == 0.0f) {
+      // Transparent pixel: apply alpha func (may produce non-zero alpha).
+      const double newA = evalTransferFunc(funcA, 0.0);
+      if (newA != 0.0) {
+        data[off + 0] = 0.0f;
+        data[off + 1] = 0.0f;
+        data[off + 2] = 0.0f;
+        data[off + 3] = static_cast<float>(newA);
+      }
+      continue;
+    }
+
+    // Unpremultiply.
+    const double invAlpha = 1.0 / static_cast<double>(a);
+    const double r = std::min(1.0, static_cast<double>(data[off + 0]) * invAlpha);
+    const double g = std::min(1.0, static_cast<double>(data[off + 1]) * invAlpha);
+    const double b = std::min(1.0, static_cast<double>(data[off + 2]) * invAlpha);
+
+    // Apply transfer functions directly.
+    const double newR = evalTransferFunc(funcR, r);
+    const double newG = evalTransferFunc(funcG, g);
+    const double newB = evalTransferFunc(funcB, b);
+    const double newA = evalTransferFunc(funcA, static_cast<double>(a));
+
+    // Re-premultiply.
+    if (newA == 0.0) {
+      data[off + 0] = 0.0f;
+      data[off + 1] = 0.0f;
+      data[off + 2] = 0.0f;
+      data[off + 3] = 0.0f;
+    } else {
+      data[off + 0] = static_cast<float>(std::clamp(newR * newA, 0.0, 1.0));
+      data[off + 1] = static_cast<float>(std::clamp(newG * newA, 0.0, 1.0));
+      data[off + 2] = static_cast<float>(std::clamp(newB * newA, 0.0, 1.0));
+      data[off + 3] = static_cast<float>(newA);
+    }
+  }
+}
+
 }  // namespace tiny_skia::filter

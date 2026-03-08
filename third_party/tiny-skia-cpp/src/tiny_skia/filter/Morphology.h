@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -24,5 +25,9 @@ enum class MorphologyOp {
 /// @param radiusX Horizontal radius in pixels.
 /// @param radiusY Vertical radius in pixels.
 void morphology(const Pixmap& src, Pixmap& dst, MorphologyOp op, int radiusX, int radiusY);
+
+/// Float-precision version of morphology.
+void morphology(const FloatPixmap& src, FloatPixmap& dst, MorphologyOp op, int radiusX,
+                int radiusY);
 
 }  // namespace tiny_skia::filter

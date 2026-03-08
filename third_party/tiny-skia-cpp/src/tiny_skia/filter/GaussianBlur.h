@@ -4,6 +4,7 @@
 /// @brief Gaussian blur filter operation on Pixmap buffers.
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -24,6 +25,10 @@ enum class BlurEdgeMode {
 /// @param sigmaY Standard deviation of the blur in the Y direction. 0 = no vertical blur.
 /// @param edgeMode Edge handling mode. Default is None (transparent black).
 void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY,
+                  BlurEdgeMode edgeMode = BlurEdgeMode::None);
+
+/// Float-precision version of gaussianBlur.
+void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY,
                   BlurEdgeMode edgeMode = BlurEdgeMode::None);
 
 }  // namespace tiny_skia::filter

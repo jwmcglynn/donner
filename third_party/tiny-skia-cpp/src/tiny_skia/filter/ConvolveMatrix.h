@@ -3,6 +3,7 @@
 #include <span>
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -40,5 +41,8 @@ struct ConvolveParams {
 /// @param dst Destination pixmap (must be same size as src).
 /// @param params Convolution parameters.
 void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params);
+
+/// Float-precision version of convolveMatrix.
+void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolveParams& params);
 
 }  // namespace tiny_skia::filter

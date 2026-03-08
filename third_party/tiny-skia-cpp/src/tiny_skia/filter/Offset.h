@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -12,5 +13,8 @@ namespace tiny_skia::filter {
 /// @param dx Horizontal offset in pixels.
 /// @param dy Vertical offset in pixels.
 void offset(const Pixmap& src, Pixmap& dst, int dx, int dy);
+
+/// Float-precision version of offset.
+void offset(const FloatPixmap& src, FloatPixmap& dst, int dx, int dy);
 
 }  // namespace tiny_skia::filter

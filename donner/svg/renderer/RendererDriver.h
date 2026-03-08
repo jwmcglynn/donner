@@ -66,6 +66,7 @@ private:
   bool verbose_ = false;
   std::vector<DeferredPop> subtreeMarkers_;
   Transformd layerBaseTransform_;
+  Vector2i renderingSize_;  ///< Canvas size in pixels, set during draw().
 };
 
 }  // namespace donner::svg

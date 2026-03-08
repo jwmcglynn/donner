@@ -257,7 +257,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
     params.strokeParams = toStrokeParams(registry, instance, style);
   }
 
-  params.fontFamilies = properties.fontFamily.getRequiredRef();
+  params.fontFamilies = properties.fontFamily.getRequired();
   params.fontSize = properties.fontSize.getRequired();
   params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   params.fontMetrics = FontMetrics();
@@ -301,9 +301,9 @@ void RendererDriver::draw(SVGDocument& document) {
     }
   }
 
-  const Vector2i renderingSize = document.canvasSize();
+  renderingSize_ = document.canvasSize();
   RenderViewport viewport;
-  viewport.size = Vector2d(renderingSize.x, renderingSize.y);
+  viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
   viewport.devicePixelRatio = 1.0;
 
   renderer_.beginFrame(viewport);
@@ -354,7 +354,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity);
     }
 
-    const std::optional<components::FilterGraph> filterGraph =
+    std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
             ? resolveFilterGraph(registry, instance.resolvedFilter.value())
             : std::nullopt;
@@ -362,6 +362,21 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         instance.resolvedFilter.has_value()
             ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
             : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      // Compute the user-space to pixel-space scale factor from the viewBox and canvas dimensions.
+      // Lighting filters need this to transform light positions from SVG attribute values to the
+      // pixel-space pixmap coordinates.
+      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+      if (viewBox.width() > 0 && viewBox.height() > 0) {
+        filterGraph->userToPixelScale =
+            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      }
+    }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
     // Per SVG spec, an empty or invalid filter reference makes the element invisible.
     const bool filterHidesElement =
@@ -555,7 +570,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity);
     }
 
-    const std::optional<components::FilterGraph> filterGraph =
+    std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
             ? resolveFilterGraph(registry, instance.resolvedFilter.value())
             : std::nullopt;
@@ -563,6 +578,18 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         instance.resolvedFilter.has_value()
             ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
             : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+      if (viewBox.width() > 0 && viewBox.height() > 0) {
+        filterGraph->userToPixelScale =
+            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      }
+    }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
     const bool filterHidesElement =
         instance.resolvedFilter.has_value() && !hasFilterLayer;

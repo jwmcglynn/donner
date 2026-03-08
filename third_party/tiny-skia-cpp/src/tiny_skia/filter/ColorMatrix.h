@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -19,6 +20,10 @@ namespace tiny_skia::filter {
 /// @param pixmap Pixmap to transform (in-place).
 /// @param matrix 20-element color matrix in row-major order.
 void colorMatrix(Pixmap& pixmap, const std::array<double, 20>& matrix);
+
+/// Float-precision version of colorMatrix.
+/// Operates on [0,1] values. Translation components are in 0-1 range per SVG spec.
+void colorMatrix(FloatPixmap& pixmap, const std::array<double, 20>& matrix);
 
 /// Build a saturate color matrix (ITU-R BT.709 luminance weights).
 /// @param s Saturation coefficient. 0 = grayscale, 1 = identity.

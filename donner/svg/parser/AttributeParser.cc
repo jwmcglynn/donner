@@ -18,6 +18,7 @@
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/filter/FilterUnits.h"
@@ -549,6 +550,28 @@ std::optional<ParseError> ParseAttribute<SVGFEBlendElement>(SVGParserContext& co
       comp.mode = components::FEBlendComponent::Mode::Darken;
     } else if (value == "lighten") {
       comp.mode = components::FEBlendComponent::Mode::Lighten;
+    } else if (value == "overlay") {
+      comp.mode = components::FEBlendComponent::Mode::Overlay;
+    } else if (value == "color-dodge") {
+      comp.mode = components::FEBlendComponent::Mode::ColorDodge;
+    } else if (value == "color-burn") {
+      comp.mode = components::FEBlendComponent::Mode::ColorBurn;
+    } else if (value == "hard-light") {
+      comp.mode = components::FEBlendComponent::Mode::HardLight;
+    } else if (value == "soft-light") {
+      comp.mode = components::FEBlendComponent::Mode::SoftLight;
+    } else if (value == "difference") {
+      comp.mode = components::FEBlendComponent::Mode::Difference;
+    } else if (value == "exclusion") {
+      comp.mode = components::FEBlendComponent::Mode::Exclusion;
+    } else if (value == "hue") {
+      comp.mode = components::FEBlendComponent::Mode::Hue;
+    } else if (value == "saturation") {
+      comp.mode = components::FEBlendComponent::Mode::Saturation;
+    } else if (value == "color") {
+      comp.mode = components::FEBlendComponent::Mode::Color;
+    } else if (value == "luminosity") {
+      comp.mode = components::FEBlendComponent::Mode::Luminosity;
     }
   } else {
     return ParseCommonAttribute(context, element, name, value);
@@ -938,6 +961,14 @@ std::optional<ParseError> ParseAttribute<SVGFEImageElement>(
   } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     auto& comp = element.entityHandle().get<components::FEImageComponent>();
     comp.href = RcString(value);
+    // Also set on ImageComponent so ResourceManagerContext loads the image.
+    element.entityHandle().get_or_emplace<components::ImageComponent>().href = RcString(value);
+  } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
+    auto& comp = element.entityHandle().get<components::FEImageComponent>();
+    auto maybeResult = parser::PreserveAspectRatioParser::Parse(value);
+    if (maybeResult.hasResult()) {
+      comp.preserveAspectRatio = maybeResult.result();
+    }
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

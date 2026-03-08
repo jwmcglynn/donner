@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -34,6 +35,10 @@ enum class CompositeOp : std::uint8_t {
 /// @param k3 Arithmetic coefficient.
 /// @param k4 Arithmetic coefficient.
 void composite(const Pixmap& in1, const Pixmap& in2, Pixmap& dst, CompositeOp op,
+               double k1 = 0.0, double k2 = 0.0, double k3 = 0.0, double k4 = 0.0);
+
+/// Float-precision version of composite.
+void composite(const FloatPixmap& in1, const FloatPixmap& in2, FloatPixmap& dst, CompositeOp op,
                double k1 = 0.0, double k2 = 0.0, double k3 = 0.0, double k4 = 0.0);
 
 }  // namespace tiny_skia::filter

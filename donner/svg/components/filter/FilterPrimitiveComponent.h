@@ -7,6 +7,7 @@
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/properties/Property.h"
 
 namespace donner::svg::components {
@@ -121,6 +122,17 @@ struct FEBlendComponent {
     Screen,
     Darken,
     Lighten,
+    Overlay,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
   };
 
   Mode mode = Mode::Normal;  ///< Blend mode.
@@ -237,7 +249,8 @@ struct FETileComponent {
  */
 struct FEImageComponent {
   RcString href;  ///< Image URL or fragment reference.
-  // TODO(jwmcglynn): preserveAspectRatio.
+  PreserveAspectRatio preserveAspectRatio =
+      PreserveAspectRatio::Default();  ///< How to fit the image.
 };
 
 /**
@@ -324,6 +337,11 @@ struct LightSourceComponent {
 struct FEDiffuseLightingComponent {
   double surfaceScale = 1.0;      ///< Height of surface when alpha=1.
   double diffuseConstant = 1.0;   ///< Diffuse reflection constant (kd).
+
+  /// `lighting-color` property, specifying the color of the light source (default: white).
+  Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
+    return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
+  }};
 };
 
 /**
@@ -333,6 +351,11 @@ struct FESpecularLightingComponent {
   double surfaceScale = 1.0;       ///< Height of surface when alpha=1.
   double specularConstant = 1.0;   ///< Specular reflection constant (ks).
   double specularExponent = 1.0;   ///< Specular exponent (1..128).
+
+  /// `lighting-color` property, specifying the color of the light source (default: white).
+  Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
+    return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
+  }};
 };
 
 }  // namespace donner::svg::components

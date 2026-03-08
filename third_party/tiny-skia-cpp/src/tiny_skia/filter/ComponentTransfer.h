@@ -5,6 +5,7 @@
 #include <span>
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -41,6 +42,11 @@ struct TransferFunc {
  * @param funcA Transfer function for the alpha channel.
  */
 void componentTransfer(Pixmap& pixmap, const TransferFunc& funcR, const TransferFunc& funcG,
+                       const TransferFunc& funcB, const TransferFunc& funcA);
+
+/// Float-precision version of componentTransfer.
+/// Evaluates transfer functions directly on float values (no LUT needed).
+void componentTransfer(FloatPixmap& pixmap, const TransferFunc& funcR, const TransferFunc& funcG,
                        const TransferFunc& funcB, const TransferFunc& funcA);
 
 }  // namespace tiny_skia::filter

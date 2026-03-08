@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -37,5 +38,8 @@ struct TurbulenceParams {
  * @param params Turbulence parameters.
  */
 void turbulence(Pixmap& dst, const TurbulenceParams& params);
+
+/// Float-precision version of turbulence.
+void turbulence(FloatPixmap& dst, const TurbulenceParams& params);
 
 }  // namespace tiny_skia::filter

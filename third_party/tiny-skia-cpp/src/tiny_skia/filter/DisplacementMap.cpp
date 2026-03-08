@@ -109,4 +109,97 @@ void displacementMap(const Pixmap& src, const Pixmap& map, Pixmap& dst, double s
   }
 }
 
+namespace {
+
+// Extract a channel value from a premultiplied float RGBA pixel.
+// For displacement, we need the unpremultiplied channel value.
+double getChannelUnpremultipliedFloat(const float* pixel, DisplacementChannel ch) {
+  const int idx = static_cast<int>(ch);  // R=0, G=1, B=2, A=3
+  if (ch == DisplacementChannel::A) {
+    // Alpha is not premultiplied.
+    return static_cast<double>(pixel[3]);
+  }
+  const float a = pixel[3];
+  if (a == 0.0f) {
+    return 0.0;
+  }
+  // Unpremultiply: channel = stored / alpha.
+  return std::min(1.0, static_cast<double>(pixel[idx]) / static_cast<double>(a));
+}
+
+// Bilinear sample from a premultiplied float RGBA pixmap at floating-point coordinates.
+void sampleBilinearFloat(const FloatPixmap& src, double fx, double fy, float* out) {
+  const int w = src.width();
+  const int h = src.height();
+
+  const int x0 = static_cast<int>(std::floor(fx));
+  const int y0 = static_cast<int>(std::floor(fy));
+  const int x1 = x0 + 1;
+  const int y1 = y0 + 1;
+
+  const double fracX = fx - x0;
+  const double fracY = fy - y0;
+
+  auto data = src.data();
+
+  auto fetch = [&](int x, int y) -> const float* {
+    static const float kTransparent[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (x < 0 || x >= w || y < 0 || y >= h) {
+      return kTransparent;
+    }
+    return data.data() + (y * w + x) * 4;
+  };
+
+  const float* p00 = fetch(x0, y0);
+  const float* p10 = fetch(x1, y0);
+  const float* p01 = fetch(x0, y1);
+  const float* p11 = fetch(x1, y1);
+
+  for (int c = 0; c < 4; c++) {
+    const double top = p00[c] + fracX * (p10[c] - p00[c]);
+    const double bot = p01[c] + fracX * (p11[c] - p01[c]);
+    const double val = top + fracY * (bot - top);
+    out[c] = static_cast<float>(std::clamp(val, 0.0, 1.0));
+  }
+}
+
+}  // namespace
+
+void displacementMap(const FloatPixmap& src, const FloatPixmap& map, FloatPixmap& dst, double scale,
+                     DisplacementChannel xCh, DisplacementChannel yCh) {
+  const int w = dst.width();
+  const int h = dst.height();
+
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  // If scale is 0, the output is just the source image.
+  if (scale == 0.0) {
+    std::memcpy(dst.data().data(), src.data().data(), dst.data().size() * sizeof(float));
+    return;
+  }
+
+  auto mapData = map.data();
+  auto dstData = dst.data();
+
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      const int mapOff = (y * w + x) * 4;
+      const float* mapPixel = mapData.data() + mapOff;
+
+      // Get displacement from the map's selected channels (unpremultiplied).
+      const double dx = scale * (getChannelUnpremultipliedFloat(mapPixel, xCh) - 0.5);
+      const double dy = scale * (getChannelUnpremultipliedFloat(mapPixel, yCh) - 0.5);
+
+      // Sample the source image at the displaced position.
+      const double srcX = static_cast<double>(x) + dx;
+      const double srcY = static_cast<double>(y) + dy;
+
+      const int dstOff = (y * w + x) * 4;
+      sampleBilinearFloat(src, srcX, srcY, dstData.data() + dstOff);
+    }
+  }
+}
+
 }  // namespace tiny_skia::filter

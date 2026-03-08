@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -62,5 +63,12 @@ void diffuseLighting(const Pixmap& src, Pixmap& dst, const DiffuseLightingParams
 /// Apply specular lighting to the input pixmap's alpha channel as a bump map.
 /// Output is written to dst (which must be same size as src).
 void specularLighting(const Pixmap& src, Pixmap& dst, const SpecularLightingParams& params);
+
+/// Float-precision version of diffuseLighting.
+void diffuseLighting(const FloatPixmap& src, FloatPixmap& dst, const DiffuseLightingParams& params);
+
+/// Float-precision version of specularLighting.
+void specularLighting(const FloatPixmap& src, FloatPixmap& dst,
+                      const SpecularLightingParams& params);
 
 }  // namespace tiny_skia::filter

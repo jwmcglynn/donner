@@ -6,10 +6,12 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterUnits.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg::components {
 
@@ -246,7 +248,12 @@ struct Turbulence {
 /// Parameters for \c feImage.
 struct Image {
   RcString href;  ///< Image URL or fragment reference.
-  // TODO(jwmcglynn): preserveAspectRatio.
+  PreserveAspectRatio preserveAspectRatio = PreserveAspectRatio::Default();
+
+  /// Loaded image data (RGBA, straight alpha). Empty if loading failed or href is a fragment.
+  std::vector<uint8_t> imageData;
+  int imageWidth = 0;   ///< Width of loaded image in pixels.
+  int imageHeight = 0;  ///< Height of loaded image in pixels.
 };
 
 /// Parameters for \c feDisplacementMap.
@@ -339,6 +346,9 @@ struct FilterNode {
   std::optional<Lengthd> y;           ///< Primitive subregion Y.
   std::optional<Lengthd> width;       ///< Primitive subregion width.
   std::optional<Lengthd> height;      ///< Primitive subregion height.
+
+  /// Per-primitive color-interpolation-filters. When set, overrides the graph-level default.
+  std::optional<ColorInterpolationFilters> colorInterpolationFilters;
 };
 
 /**
@@ -352,6 +362,21 @@ struct FilterGraph {
 
   /// Color space for filter operations (linearRGB or sRGB).
   ColorInterpolationFilters colorInterpolationFilters = ColorInterpolationFilters::Default;
+
+  /// Coordinate system for primitive subregion and primitive-specific length attributes.
+  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;
+
+  /// Bounding box of the referencing element, used when primitiveUnits=objectBoundingBox.
+  /// Set by the renderer driver before passing to the renderer.
+  std::optional<Boxd> elementBoundingBox;
+
+  /// The filter region in user-space coordinates.
+  std::optional<Boxd> filterRegion;
+
+  /// Scale factor from SVG user-space coordinates to pixel-space coordinates.
+  /// Needed by lighting filters to transform light positions from user space to the pixel-space
+  /// pixmap. Set by the renderer driver from the viewBox and canvas dimensions.
+  Vector2d userToPixelScale = Vector2d(1.0, 1.0);
 
   /// Returns true if the graph has no nodes.
   [[nodiscard]] bool empty() const { return nodes.empty(); }

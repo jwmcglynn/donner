@@ -163,19 +163,29 @@ double spotLightFactor(const LightSourceParams& light, double lx, double ly, dou
   // -L is direction from surface to light, so we use the negative.
   const double cosAngle = -(lx * sx + ly * sy + lz * sz);
 
-  if (light.limitingConeAngle.has_value()) {
-    const double cosLimit =
-        std::cos(*light.limitingConeAngle * std::numbers::pi / 180.0);
-    if (cosAngle < cosLimit) {
-      return 0.0;  // Outside the cone.
-    }
-  }
-
   if (cosAngle <= 0.0) {
     return 0.0;
   }
 
-  return std::pow(cosAngle, light.spotExponent);
+  double coneFactor = 1.0;
+  if (light.limitingConeAngle.has_value()) {
+    const double cosOuter =
+        std::cos(*light.limitingConeAngle * std::numbers::pi / 180.0);
+    // Apply smooth anti-aliased transition at the cone boundary (~1 degree ramp),
+    // per SVG spec recommendation: "User agents should apply a smoothing technique
+    // such as anti-aliasing at the boundary of the cone."
+    constexpr double kAntiAliasThreshold = 0.016;  // ~1 degree in cosine space
+    const double cosInner = cosOuter + kAntiAliasThreshold;
+    if (cosAngle < cosOuter) {
+      return 0.0;  // Fully outside the cone.
+    }
+    if (cosAngle < cosInner) {
+      // Smooth linear ramp at the cone edge.
+      coneFactor = (cosAngle - cosOuter) / kAntiAliasThreshold;
+    }
+  }
+
+  return std::pow(cosAngle, light.spotExponent) * coneFactor;
 }
 
 }  // namespace
@@ -311,11 +321,239 @@ void specularLighting(const Pixmap& src, Pixmap& dst, const SpecularLightingPara
       const double a = std::max({r, g, b});
 
       const std::size_t idx = static_cast<std::size_t>((y * w + x) * 4);
-      // Premultiplied RGBA.
-      dstData[idx + 0] = static_cast<std::uint8_t>(std::round(r * a * 255.0));
-      dstData[idx + 1] = static_cast<std::uint8_t>(std::round(g * a * 255.0));
-      dstData[idx + 2] = static_cast<std::uint8_t>(std::round(b * a * 255.0));
+      // Spec output (Sr, Sg, Sb, max(Sr,Sg,Sb)) is already premultiplied.
+      dstData[idx + 0] = static_cast<std::uint8_t>(std::round(r * 255.0));
+      dstData[idx + 1] = static_cast<std::uint8_t>(std::round(g * 255.0));
+      dstData[idx + 2] = static_cast<std::uint8_t>(std::round(b * 255.0));
       dstData[idx + 3] = static_cast<std::uint8_t>(std::round(a * 255.0));
+    }
+  }
+}
+
+namespace {
+
+/// Get the alpha value at (x, y) from a premultiplied float RGBA pixmap, with edge clamping.
+double getAlphaFloat(const FloatPixmap& pixmap, int x, int y) {
+  const int w = static_cast<int>(pixmap.width());
+  const int h = static_cast<int>(pixmap.height());
+  x = std::clamp(x, 0, w - 1);
+  y = std::clamp(y, 0, h - 1);
+  const auto& data = pixmap.data();
+  return static_cast<double>(data[static_cast<std::size_t>((y * w + x) * 4 + 3)]);
+}
+
+/// Compute the surface normal at (x, y) for a float pixmap.
+void computeNormalFloat(const FloatPixmap& pixmap, int x, int y, double surfaceScale, double& nx,
+                        double& ny, double& nz) {
+  const int w = static_cast<int>(pixmap.width());
+  const int h = static_cast<int>(pixmap.height());
+
+  if (x == 0) {
+    const double right = getAlphaFloat(pixmap, x + 1, y);
+    const double topRight = (y > 0) ? getAlphaFloat(pixmap, x + 1, y - 1) : right;
+    const double bottomRight = (y < h - 1) ? getAlphaFloat(pixmap, x + 1, y + 1) : right;
+    const double center = getAlphaFloat(pixmap, x, y);
+    const double top = (y > 0) ? getAlphaFloat(pixmap, x, y - 1) : center;
+    const double bottom = (y < h - 1) ? getAlphaFloat(pixmap, x, y + 1) : center;
+
+    if (y == 0) {
+      nx = -surfaceScale * (2.0 * (right - center) + (bottomRight - bottom)) / 3.0;
+      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomRight - right)) / 3.0;
+    } else if (y == h - 1) {
+      nx = -surfaceScale * (2.0 * (right - center) + (topRight - top)) / 3.0;
+      ny = -surfaceScale * (2.0 * (center - top) + (right - topRight)) / 3.0;
+    } else {
+      nx = -surfaceScale * (2.0 * (right - center) + (topRight - top) + (bottomRight - bottom)) /
+           4.0;
+      ny = -surfaceScale * (2.0 * (bottom - top) + (bottomRight - topRight)) / 4.0;
+    }
+  } else if (x == w - 1) {
+    const double left = getAlphaFloat(pixmap, x - 1, y);
+    const double topLeft = (y > 0) ? getAlphaFloat(pixmap, x - 1, y - 1) : left;
+    const double bottomLeft = (y < h - 1) ? getAlphaFloat(pixmap, x - 1, y + 1) : left;
+    const double center = getAlphaFloat(pixmap, x, y);
+    const double top = (y > 0) ? getAlphaFloat(pixmap, x, y - 1) : center;
+    const double bottom = (y < h - 1) ? getAlphaFloat(pixmap, x, y + 1) : center;
+
+    if (y == 0) {
+      nx = -surfaceScale * (2.0 * (center - left) + (bottom - bottomLeft)) / 3.0;
+      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomLeft - left)) / 3.0;
+    } else if (y == h - 1) {
+      nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft)) / 3.0;
+      ny = -surfaceScale * (2.0 * (center - top) + (left - topLeft)) / 3.0;
+    } else {
+      nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft) + (bottom - bottomLeft)) /
+           4.0;
+      ny = -surfaceScale * (2.0 * (bottom - top) + (bottomLeft - topLeft)) / 4.0;
+    }
+  } else {
+    const double left = getAlphaFloat(pixmap, x - 1, y);
+    const double right = getAlphaFloat(pixmap, x + 1, y);
+    const double center = getAlphaFloat(pixmap, x, y);
+
+    if (y == 0) {
+      const double bottomLeft = getAlphaFloat(pixmap, x - 1, y + 1);
+      const double bottom = getAlphaFloat(pixmap, x, y + 1);
+      const double bottomRight = getAlphaFloat(pixmap, x + 1, y + 1);
+      nx = -surfaceScale * (2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
+      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomRight - right) +
+                            (bottomLeft - left)) /
+           4.0;
+    } else if (y == h - 1) {
+      const double topLeft = getAlphaFloat(pixmap, x - 1, y - 1);
+      const double top = getAlphaFloat(pixmap, x, y - 1);
+      const double topRight = getAlphaFloat(pixmap, x + 1, y - 1);
+      nx = -surfaceScale * (2.0 * (right - left) + (topRight - topLeft)) / 4.0;
+      ny = -surfaceScale * (2.0 * (center - top) + (right - topRight) + (left - topLeft)) / 4.0;
+    } else {
+      const double topLeft = getAlphaFloat(pixmap, x - 1, y - 1);
+      const double top = getAlphaFloat(pixmap, x, y - 1);
+      const double topRight = getAlphaFloat(pixmap, x + 1, y - 1);
+      const double bottomLeft = getAlphaFloat(pixmap, x - 1, y + 1);
+      const double bottom = getAlphaFloat(pixmap, x, y + 1);
+      const double bottomRight = getAlphaFloat(pixmap, x + 1, y + 1);
+
+      nx = -surfaceScale *
+           ((topRight - topLeft) + 2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
+      ny = -surfaceScale *
+           ((bottomLeft - topLeft) + 2.0 * (bottom - top) + (bottomRight - topRight)) / 4.0;
+    }
+  }
+
+  nz = 1.0;
+}
+
+}  // namespace
+
+void diffuseLighting(const FloatPixmap& src, FloatPixmap& dst,
+                     const DiffuseLightingParams& params) {
+  const int w = static_cast<int>(src.width());
+  const int h = static_cast<int>(src.height());
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  auto dstData = dst.data();
+
+  double distLx = 0, distLy = 0, distLz = 1;
+  if (params.light.type == LightType::Distant) {
+    distantLightDirection(params.light, distLx, distLy, distLz);
+  }
+
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      double nx, ny, nz;
+      computeNormalFloat(src, x, y, params.surfaceScale, nx, ny, nz);
+      normalize3(nx, ny, nz);
+
+      double lx, ly, lz;
+      double spotFactor = 1.0;
+
+      switch (params.light.type) {
+        case LightType::Distant:
+          lx = distLx;
+          ly = distLy;
+          lz = distLz;
+          break;
+        case LightType::Point: {
+          const double pz = params.surfaceScale * getAlphaFloat(src, x, y);
+          pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
+                              ly, lz);
+          break;
+        }
+        case LightType::Spot: {
+          const double pz = params.surfaceScale * getAlphaFloat(src, x, y);
+          pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
+                              ly, lz);
+          spotFactor = spotLightFactor(params.light, lx, ly, lz);
+          break;
+        }
+      }
+
+      const double nDotL = std::max(0.0, nx * lx + ny * ly + nz * lz);
+      const double diffuse = params.diffuseConstant * nDotL * spotFactor;
+
+      const double r = std::clamp(diffuse * params.lightR, 0.0, 1.0);
+      const double g = std::clamp(diffuse * params.lightG, 0.0, 1.0);
+      const double b = std::clamp(diffuse * params.lightB, 0.0, 1.0);
+
+      const std::size_t idx = static_cast<std::size_t>((y * w + x) * 4);
+      // Premultiplied RGBA with alpha = 1.0.
+      dstData[idx + 0] = static_cast<float>(r);
+      dstData[idx + 1] = static_cast<float>(g);
+      dstData[idx + 2] = static_cast<float>(b);
+      dstData[idx + 3] = 1.0f;
+    }
+  }
+}
+
+void specularLighting(const FloatPixmap& src, FloatPixmap& dst,
+                      const SpecularLightingParams& params) {
+  const int w = static_cast<int>(src.width());
+  const int h = static_cast<int>(src.height());
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  auto dstData = dst.data();
+
+  double distLx = 0, distLy = 0, distLz = 1;
+  if (params.light.type == LightType::Distant) {
+    distantLightDirection(params.light, distLx, distLy, distLz);
+  }
+
+  const double ex = 0.0, ey = 0.0, ez = 1.0;
+
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      double nx, ny, nz;
+      computeNormalFloat(src, x, y, params.surfaceScale, nx, ny, nz);
+      normalize3(nx, ny, nz);
+
+      double lx, ly, lz;
+      double spotFactor = 1.0;
+
+      switch (params.light.type) {
+        case LightType::Distant:
+          lx = distLx;
+          ly = distLy;
+          lz = distLz;
+          break;
+        case LightType::Point: {
+          const double pz = params.surfaceScale * getAlphaFloat(src, x, y);
+          pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
+                              ly, lz);
+          break;
+        }
+        case LightType::Spot: {
+          const double pz = params.surfaceScale * getAlphaFloat(src, x, y);
+          pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
+                              ly, lz);
+          spotFactor = spotLightFactor(params.light, lx, ly, lz);
+          break;
+        }
+      }
+
+      double hx = lx + ex;
+      double hy = ly + ey;
+      double hz = lz + ez;
+      normalize3(hx, hy, hz);
+
+      const double nDotH = std::max(0.0, nx * hx + ny * hy + nz * hz);
+      const double specular =
+          params.specularConstant * std::pow(nDotH, params.specularExponent) * spotFactor;
+
+      const double r = std::clamp(specular * params.lightR, 0.0, 1.0);
+      const double g = std::clamp(specular * params.lightG, 0.0, 1.0);
+      const double b = std::clamp(specular * params.lightB, 0.0, 1.0);
+      const double a = std::max({r, g, b});
+
+      const std::size_t idx = static_cast<std::size_t>((y * w + x) * 4);
+      // Spec output (Sr, Sg, Sb, max(Sr,Sg,Sb)) is already premultiplied.
+      dstData[idx + 0] = static_cast<float>(r);
+      dstData[idx + 1] = static_cast<float>(g);
+      dstData[idx + 2] = static_cast<float>(b);
+      dstData[idx + 3] = static_cast<float>(a);
     }
   }
 }

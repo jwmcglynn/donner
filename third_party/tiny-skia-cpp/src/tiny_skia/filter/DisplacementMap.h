@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -27,6 +28,10 @@ enum class DisplacementChannel : std::uint8_t { R, G, B, A };
  * @param yCh Channel from map to use for Y displacement.
  */
 void displacementMap(const Pixmap& src, const Pixmap& map, Pixmap& dst, double scale,
+                     DisplacementChannel xCh, DisplacementChannel yCh);
+
+/// Float-precision version of displacementMap.
+void displacementMap(const FloatPixmap& src, const FloatPixmap& map, FloatPixmap& dst, double scale,
                      DisplacementChannel xCh, DisplacementChannel yCh);
 
 }  // namespace tiny_skia::filter

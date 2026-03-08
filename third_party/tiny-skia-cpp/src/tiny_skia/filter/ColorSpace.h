@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -23,5 +24,13 @@ void srgbToLinear(Pixmap& pixmap);
 ///
 /// @param pixmap Pixmap to convert in-place.
 void linearToSrgb(Pixmap& pixmap);
+
+/// Float-precision sRGB to linear RGB conversion.
+/// Operates on premultiplied float data in [0,1] range.
+void srgbToLinear(FloatPixmap& pixmap);
+
+/// Float-precision linear RGB to sRGB conversion.
+/// Operates on premultiplied float data in [0,1] range.
+void linearToSrgb(FloatPixmap& pixmap);
 
 }  // namespace tiny_skia::filter

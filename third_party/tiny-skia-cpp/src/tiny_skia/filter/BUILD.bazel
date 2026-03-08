@@ -26,6 +26,7 @@ tiny_skia_cc_library(
         "Blend.h",
         "ColorMatrix.h",
         "ColorSpace.h",
+        "FloatPixmap.h",
         "ComponentTransfer.h",
         "Composite.h",
         "ConvolveMatrix.h",

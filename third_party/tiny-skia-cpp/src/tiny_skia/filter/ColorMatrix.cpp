@@ -69,6 +69,61 @@ void colorMatrix(Pixmap& pixmap, const std::array<double, 20>& matrix) {
   }
 }
 
+void colorMatrix(FloatPixmap& pixmap, const std::array<double, 20>& matrix) {
+  auto data = pixmap.data();
+  const std::size_t pixelCount = data.size() / 4;
+
+  for (std::size_t i = 0; i < pixelCount; ++i) {
+    const std::size_t offset = i * 4;
+    const double pa = data[offset + 3];
+
+    if (pa == 0.0) {
+      // Fully transparent: only the translation components can produce non-zero output.
+      // Apply matrix to [0,0,0,0,1]. Translation components are in [0,1] range.
+      const double nr = matrix[4];
+      const double ng = matrix[9];
+      const double nb = matrix[14];
+      const double na = matrix[19];
+
+      const double ca = std::clamp(na, 0.0, 1.0);
+      if (ca == 0.0) {
+        continue;  // Still transparent.
+      }
+      data[offset + 0] = static_cast<float>(std::clamp(nr * ca, 0.0, 1.0));
+      data[offset + 1] = static_cast<float>(std::clamp(ng * ca, 0.0, 1.0));
+      data[offset + 2] = static_cast<float>(std::clamp(nb * ca, 0.0, 1.0));
+      data[offset + 3] = static_cast<float>(ca);
+      continue;
+    }
+
+    // Unpremultiply: values are in [0,1] premultiplied, so unpremultiplied = premultiplied / alpha.
+    const double invAlpha = 1.0 / pa;
+    const double r = data[offset + 0] * invAlpha;
+    const double g = data[offset + 1] * invAlpha;
+    const double b = data[offset + 2] * invAlpha;
+    const double a = pa;
+
+    // Apply 5x4 matrix: [R,G,B,A,1] -> [R',G',B',A']
+    // Translation components (matrix[4], [9], [14], [19]) are in 0-1 range per SVG spec.
+    const double nr = matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4];
+    const double ng = matrix[5] * r + matrix[6] * g + matrix[7] * b + matrix[8] * a + matrix[9];
+    const double nb =
+        matrix[10] * r + matrix[11] * g + matrix[12] * b + matrix[13] * a + matrix[14];
+    const double na =
+        matrix[15] * r + matrix[16] * g + matrix[17] * b + matrix[18] * a + matrix[19];
+
+    // Clamp and re-premultiply.
+    const double ca = std::clamp(na, 0.0, 1.0);
+    data[offset + 0] =
+        static_cast<float>(std::clamp(std::clamp(nr, 0.0, 1.0) * ca, 0.0, 1.0));
+    data[offset + 1] =
+        static_cast<float>(std::clamp(std::clamp(ng, 0.0, 1.0) * ca, 0.0, 1.0));
+    data[offset + 2] =
+        static_cast<float>(std::clamp(std::clamp(nb, 0.0, 1.0) * ca, 0.0, 1.0));
+    data[offset + 3] = static_cast<float>(ca);
+  }
+}
+
 std::array<double, 20> saturateMatrix(double s) {
   // clang-format off
   return {

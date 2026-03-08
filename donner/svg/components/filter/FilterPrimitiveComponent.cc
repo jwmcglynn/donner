@@ -62,4 +62,40 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FeDropShadow>(
   return false;
 }
 
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeDiffuseLighting>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  if (name == "lighting-color") {
+    auto& comp = handle.get_or_emplace<components::FEDiffuseLightingComponent>();
+    if (auto maybeError = Parse(
+            params,
+            [](const PropertyParseFnParams& params) {
+              return css::parser::ColorParser::Parse(params.components());
+            },
+            &comp.lightingColor)) {
+      return std::move(maybeError.value());
+    }
+    return true;
+  }
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeSpecularLighting>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  if (name == "lighting-color") {
+    auto& comp = handle.get_or_emplace<components::FESpecularLightingComponent>();
+    if (auto maybeError = Parse(
+            params,
+            [](const PropertyParseFnParams& params) {
+              return css::parser::ColorParser::Parse(params.components());
+            },
+            &comp.lightingColor)) {
+      return std::move(maybeError.value());
+    }
+    return true;
+  }
+  return false;
+}
+
 }  // namespace donner::svg::parser

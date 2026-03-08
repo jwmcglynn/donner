@@ -290,4 +290,119 @@ void turbulence(Pixmap& dst, const TurbulenceParams& params) {
   }
 }
 
+void turbulence(FloatPixmap& dst, const TurbulenceParams& params) {
+  const int w = dst.width();
+  const int h = dst.height();
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  // Negative baseFrequency produces transparent black output (resvg behavior).
+  if (params.baseFrequencyX < 0.0 || params.baseFrequencyY < 0.0) {
+    dst.clear();
+    return;
+  }
+
+  // numOctaves <= 0: output is transparent black for turbulence,
+  // gray (0.5) for fractalNoise per resvg behavior.
+  if (params.numOctaves <= 0) {
+    if (params.type == TurbulenceType::FractalNoise) {
+      auto data = dst.data();
+      const float gray = 128.0f / 255.0f;  // ~0.502, matching uint8 rounding.
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          const int off = (y * w + x) * 4;
+          data[off + 0] = gray;
+          data[off + 1] = gray;
+          data[off + 2] = gray;
+          data[off + 3] = gray;
+        }
+      }
+    } else {
+      dst.clear();
+    }
+    return;
+  }
+
+  TurbulenceGenerator gen(params.seed);
+
+  const int numOctaves = std::min(params.numOctaves, 24);
+
+  auto data = dst.data();
+
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      double pixel[4] = {0, 0, 0, 0};
+
+      const double ux = static_cast<double>(x) / params.scaleX;
+      const double uy = static_cast<double>(y) / params.scaleY;
+
+      double freqX = params.baseFrequencyX;
+      double freqY = params.baseFrequencyY;
+      double ratio = 1.0;
+
+      for (int octave = 0; octave < numOctaves; octave++) {
+        const double nx = ux * freqX;
+        const double ny = uy * freqY;
+
+        StitchInfo stitch;
+        StitchInfo* stitchPtr = nullptr;
+        if (params.stitchTiles) {
+          stitch.width = static_cast<int>(static_cast<double>(params.tileWidth) * freqX);
+          stitch.height = static_cast<int>(static_cast<double>(params.tileHeight) * freqY);
+          if (stitch.width < 1) {
+            stitch.width = 1;
+          }
+          if (stitch.height < 1) {
+            stitch.height = 1;
+          }
+          stitch.wrapX = stitch.width + kPerlinN;
+          stitch.wrapY = stitch.height + kPerlinN;
+          stitchPtr = &stitch;
+        }
+
+        for (int channel = 0; channel < 4; channel++) {
+          const double n = gen.noise2(channel, nx, ny, stitchPtr);
+
+          if (params.type == TurbulenceType::FractalNoise) {
+            pixel[channel] += n / ratio;
+          } else {
+            pixel[channel] += std::abs(n) / ratio;
+          }
+        }
+
+        freqX *= 2.0;
+        freqY *= 2.0;
+        ratio *= 2.0;
+      }
+
+      // Map noise to [0,1] values:
+      // fractalNoise: (sum + 1) / 2
+      // turbulence: sum (already [0, 1])
+      float rgba[4];
+      for (int c = 0; c < 4; c++) {
+        double val;
+        if (params.type == TurbulenceType::FractalNoise) {
+          val = (pixel[c] + 1.0) / 2.0;
+        } else {
+          val = pixel[c];
+        }
+        rgba[c] = static_cast<float>(std::clamp(val, 0.0, 1.0));
+      }
+
+      // Output is unpremultiplied in resvg, but our pixmaps are premultiplied.
+      const float a = rgba[3];
+      const float r = rgba[0] * a;
+      const float g = rgba[1] * a;
+      const float b = rgba[2] * a;
+
+      const int off = (y * w + x) * 4;
+      data[off + 0] = r;
+      data[off + 1] = g;
+      data[off + 2] = b;
+      data[off + 3] = a;
+    }
+  }
+}
+
 }  // namespace tiny_skia::filter

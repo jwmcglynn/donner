@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -19,5 +20,8 @@ namespace tiny_skia::filter {
  * @param tileH Height of the tile rectangle in pixels.
  */
 void tile(const Pixmap& src, Pixmap& dst, int tileX, int tileY, int tileW, int tileH);
+
+/// Float-precision version of tile.
+void tile(const FloatPixmap& src, FloatPixmap& dst, int tileX, int tileY, int tileW, int tileH);
 
 }  // namespace tiny_skia::filter

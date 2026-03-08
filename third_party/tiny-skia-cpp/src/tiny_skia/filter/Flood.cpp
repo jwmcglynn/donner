@@ -14,4 +14,9 @@ void flood(Pixmap& pixmap, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::
   }
 }
 
+void flood(FloatPixmap& pixmap, float r, float g, float b, float a) {
+  // Values are already premultiplied (from floodToPremul in the renderer).
+  pixmap.fill(r, g, b, a);
+}
+
 }  // namespace tiny_skia::filter

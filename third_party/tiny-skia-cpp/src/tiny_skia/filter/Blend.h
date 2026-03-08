@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 
 namespace tiny_skia::filter {
 
@@ -13,6 +14,17 @@ enum class BlendMode : std::uint8_t {
   Screen,
   Darken,
   Lighten,
+  Overlay,
+  ColorDodge,
+  ColorBurn,
+  HardLight,
+  SoftLight,
+  Difference,
+  Exclusion,
+  Hue,
+  Saturation,
+  Color,
+  Luminosity,
 };
 
 /// Blends two pixmaps using the specified CSS blend mode.
@@ -28,5 +40,8 @@ enum class BlendMode : std::uint8_t {
 /// @param dst Output pixmap (must be same dimensions as bg/fg).
 /// @param mode Blend mode.
 void blend(const Pixmap& bg, const Pixmap& fg, Pixmap& dst, BlendMode mode);
+
+/// Float-precision version of blend.
+void blend(const FloatPixmap& bg, const FloatPixmap& fg, FloatPixmap& dst, BlendMode mode);
 
 }  // namespace tiny_skia::filter
