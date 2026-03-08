@@ -167,6 +167,49 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.k3 = comp->k3;
       prim.k4 = comp->k4;
       filterGraph.nodes.push_back(makeFilterNode2(std::move(prim), *primitive));
+    } else if (const auto* colorMatrix = registry.try_get<FEColorMatrixComponent>(cur)) {
+      filter_primitive::ColorMatrix prim;
+      prim.type = static_cast<filter_primitive::ColorMatrix::Type>(colorMatrix->type);
+      prim.values = colorMatrix->values;
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
+    } else if (const auto* blend = registry.try_get<FEBlendComponent>(cur)) {
+      filter_primitive::Blend prim;
+      prim.mode = static_cast<filter_primitive::Blend::Mode>(blend->mode);
+      filterGraph.nodes.push_back(makeFilterNode2(std::move(prim), *primitive));
+    } else if (registry.try_get<FEComponentTransferComponent>(cur)) {
+      // feComponentTransfer: collect feFuncR/G/B/A children.
+      filter_primitive::ComponentTransfer prim;
+
+      const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
+      for (auto child = curTree.firstChild(); child != entt::null;
+           child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+        const auto* func = registry.try_get<FEFuncComponent>(child);
+        if (!func) {
+          continue;
+        }
+
+        auto toFuncType = [](FEFuncComponent::FuncType t) {
+          return static_cast<filter_primitive::ComponentTransfer::FuncType>(t);
+        };
+
+        filter_primitive::ComponentTransfer::Func f;
+        f.type = toFuncType(func->type);
+        f.tableValues = func->tableValues;
+        f.slope = func->slope;
+        f.intercept = func->intercept;
+        f.amplitude = func->amplitude;
+        f.exponent = func->exponent;
+        f.offset = func->offset;
+
+        switch (func->channel) {
+          case FEFuncComponent::Channel::R: prim.funcR = std::move(f); break;
+          case FEFuncComponent::Channel::G: prim.funcG = std::move(f); break;
+          case FEFuncComponent::Channel::B: prim.funcB = std::move(f); break;
+          case FEFuncComponent::Channel::A: prim.funcA = std::move(f); break;
+        }
+      }
+
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
     } else if (registry.try_get<FEMergeComponent>(cur)) {
       // feMerge: collect inputs from feMergeNode children.
       FilterNode node;
@@ -192,6 +235,92 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       }
 
       filterGraph.nodes.push_back(std::move(node));
+    } else if (const auto* dropShadow = registry.try_get<FEDropShadowComponent>(cur)) {
+      filter_primitive::DropShadow prim;
+      prim.dx = dropShadow->dx;
+      prim.dy = dropShadow->dy;
+      prim.stdDeviationX = dropShadow->stdDeviationX;
+      prim.stdDeviationY = dropShadow->stdDeviationY;
+
+      // Resolve flood-color and flood-opacity from component + CSS properties.
+      FEDropShadowComponent props = *dropShadow;
+      if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
+        if (style->properties.has_value()) {
+          for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
+            const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
+                unparsedProperty.declaration, unparsedProperty.specificity,
+                parser::PropertyParseBehavior::AllowUserUnits);
+
+            if (name == "flood-color") {
+              if (auto maybeError = Parse(
+                      params,
+                      [](const parser::PropertyParseFnParams& params) {
+                        return css::parser::ColorParser::Parse(params.components());
+                      },
+                      &props.floodColor)) {
+                if (outWarnings) {
+                  outWarnings->emplace_back(std::move(maybeError.value()));
+                }
+              }
+            } else if (name == "flood-opacity") {
+              if (auto maybeError = Parse(
+                      params,
+                      [](const parser::PropertyParseFnParams& params) {
+                        return parser::ParseAlphaValue(params.components());
+                      },
+                      &props.floodOpacity)) {
+                if (outWarnings) {
+                  outWarnings->emplace_back(std::move(maybeError.value()));
+                }
+              }
+            }
+          }
+        }
+
+        // Resolve currentColor.
+        if (props.floodColor.hasValue() && props.floodColor.getRequired().isCurrentColor()) {
+          const auto& currentColor = style->properties->color;
+          props.floodColor.set(currentColor.getRequired(), currentColor.specificity);
+        }
+      }
+
+      if (props.floodColor.hasValue()) {
+        prim.floodColor = props.floodColor.getRequired();
+      }
+      if (props.floodOpacity.hasValue()) {
+        prim.floodOpacity = props.floodOpacity.getRequired();
+      }
+
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+    } else if (const auto* morph = registry.try_get<FEMorphologyComponent>(cur)) {
+      filter_primitive::Morphology prim;
+      prim.op = static_cast<filter_primitive::Morphology::Operator>(morph->op);
+      prim.radiusX = morph->radiusX;
+      prim.radiusY = morph->radiusY;
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+    } else if (const auto* convolve = registry.try_get<FEConvolveMatrixComponent>(cur)) {
+      filter_primitive::ConvolveMatrix prim;
+      prim.orderX = convolve->orderX;
+      prim.orderY = convolve->orderY;
+      prim.kernelMatrix = convolve->kernelMatrix;
+      prim.divisor = convolve->divisor;
+      prim.bias = convolve->bias;
+      prim.targetX = convolve->targetX;
+      prim.targetY = convolve->targetY;
+      prim.edgeMode = static_cast<filter_primitive::ConvolveMatrix::EdgeMode>(convolve->edgeMode);
+      prim.preserveAlpha = convolve->preserveAlpha;
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+    } else if (registry.try_get<FETileComponent>(cur)) {
+      filterGraph.nodes.push_back(makeFilterNode(filter_primitive::Tile{}, *primitive));
+    } else if (const auto* turbulence = registry.try_get<FETurbulenceComponent>(cur)) {
+      filter_primitive::Turbulence prim;
+      prim.type = static_cast<filter_primitive::Turbulence::Type>(turbulence->type);
+      prim.baseFrequencyX = turbulence->baseFrequencyX;
+      prim.baseFrequencyY = turbulence->baseFrequencyY;
+      prim.numOctaves = turbulence->numOctaves;
+      prim.seed = turbulence->seed;
+      prim.stitchTiles = turbulence->stitchTiles;
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
     }
   }
 
@@ -205,6 +334,8 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     computed.height = component.height.value_or(computed.height);
     computed.filterUnits = component.filterUnits;
     computed.primitiveUnits = component.primitiveUnits;
+    computed.colorInterpolationFilters = component.colorInterpolationFilters;
+    computed.filterGraph.colorInterpolationFilters = component.colorInterpolationFilters;
   } else {
     handle.remove<ComputedFilterComponent>();
   }

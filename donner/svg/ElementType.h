@@ -15,12 +15,24 @@ enum class ElementType : uint8_t {
   ClipPath,        //!< \ref xml_clipPath
   Defs,            //!< \ref xml_defs
   Ellipse,         //!< \ref xml_ellipse
-  FeComposite,     //!< \ref xml_feComposite
-  FeFlood,         //!< \ref xml_feFlood
+  FeBlend,         //!< \ref xml_feBlend
+  FeColorMatrix,   //!< \ref xml_feColorMatrix
+  FeComponentTransfer,  //!< \ref xml_feComponentTransfer
+  FeComposite,          //!< \ref xml_feComposite
+  FeConvolveMatrix,     //!< \ref xml_feConvolveMatrix
+  FeDropShadow,         //!< \ref xml_feDropShadow
+  FeFlood,              //!< \ref xml_feFlood
+  FeFuncA,              //!< \ref xml_feFuncA
+  FeFuncB,              //!< \ref xml_feFuncB
+  FeFuncG,              //!< \ref xml_feFuncG
+  FeFuncR,              //!< \ref xml_feFuncR
   FeGaussianBlur,  //!< \ref xml_feGaussianBlur
   FeMerge,         //!< \ref xml_feMerge
   FeMergeNode,     //!< \ref xml_feMergeNode
+  FeMorphology,    //!< \ref xml_feMorphology
   FeOffset,        //!< \ref xml_feOffset
+  FeTile,          //!< \ref xml_feTile
+  FeTurbulence,    //!< \ref xml_feTurbulence
   Filter,          //!< \ref xml_filter
   G,               //!< \ref xml_g
   Image,           //!< \ref xml_image
@@ -89,18 +101,42 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
     case ElementType::Ellipse:
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
+    case ElementType::FeBlend:
+      return fn(std::integral_constant<ElementType, ElementType::FeBlend>());
+    case ElementType::FeColorMatrix:
+      return fn(std::integral_constant<ElementType, ElementType::FeColorMatrix>());
+    case ElementType::FeComponentTransfer:
+      return fn(std::integral_constant<ElementType, ElementType::FeComponentTransfer>());
     case ElementType::FeComposite:
       return fn(std::integral_constant<ElementType, ElementType::FeComposite>());
+    case ElementType::FeConvolveMatrix:
+      return fn(std::integral_constant<ElementType, ElementType::FeConvolveMatrix>());
+    case ElementType::FeDropShadow:
+      return fn(std::integral_constant<ElementType, ElementType::FeDropShadow>());
     case ElementType::FeFlood:
       return fn(std::integral_constant<ElementType, ElementType::FeFlood>());
+    case ElementType::FeFuncA:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncA>());
+    case ElementType::FeFuncB:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncB>());
+    case ElementType::FeFuncG:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncG>());
+    case ElementType::FeFuncR:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncR>());
     case ElementType::FeGaussianBlur:
       return fn(std::integral_constant<ElementType, ElementType::FeGaussianBlur>());
     case ElementType::FeMerge:
       return fn(std::integral_constant<ElementType, ElementType::FeMerge>());
     case ElementType::FeMergeNode:
       return fn(std::integral_constant<ElementType, ElementType::FeMergeNode>());
+    case ElementType::FeMorphology:
+      return fn(std::integral_constant<ElementType, ElementType::FeMorphology>());
     case ElementType::FeOffset:
       return fn(std::integral_constant<ElementType, ElementType::FeOffset>());
+    case ElementType::FeTile:
+      return fn(std::integral_constant<ElementType, ElementType::FeTile>());
+    case ElementType::FeTurbulence:
+      return fn(std::integral_constant<ElementType, ElementType::FeTurbulence>());
     case donner::svg::ElementType::Filter:
       return fn(std::integral_constant<ElementType, ElementType::Filter>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());

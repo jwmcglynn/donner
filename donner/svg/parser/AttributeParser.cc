@@ -17,6 +17,7 @@
 #include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGMarkerElement.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/filter/FilterUnits.h"
@@ -469,6 +470,13 @@ std::optional<ParseError> ParseAttribute<SVGFilterElement>(SVGParserContext& con
       err.reason = "Invalid primitiveUnits value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
+  } else if (name == XMLQualifiedNameRef("color-interpolation-filters")) {
+    auto& comp = element.entityHandle().get<components::FilterComponent>();
+    if (value == "sRGB") {
+      comp.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+    } else if (value == "linearRGB") {
+      comp.colorInterpolationFilters = ColorInterpolationFilters::LinearRGB;
+    }
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }
@@ -503,6 +511,201 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserCont
       ParseError err;
       err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEBlendElement>(SVGParserContext& context,
+                                                             SVGFEBlendElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("mode")) {
+    auto& comp = element.entityHandle().get<components::FEBlendComponent>();
+    if (value == "normal") {
+      comp.mode = components::FEBlendComponent::Mode::Normal;
+    } else if (value == "multiply") {
+      comp.mode = components::FEBlendComponent::Mode::Multiply;
+    } else if (value == "screen") {
+      comp.mode = components::FEBlendComponent::Mode::Screen;
+    } else if (value == "darken") {
+      comp.mode = components::FEBlendComponent::Mode::Darken;
+    } else if (value == "lighten") {
+      comp.mode = components::FEBlendComponent::Mode::Lighten;
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEComponentTransferElement>(
+    SVGParserContext& context, SVGFEComponentTransferElement element,
+    const XMLQualifiedNameRef& name, std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+namespace {
+
+/// Parse the shared attributes for feFuncR/G/B/A elements.
+void ParseFuncAttributes(components::FEFuncComponent& comp, const XMLQualifiedNameRef& name,
+                         std::string_view value) {
+  if (name == XMLQualifiedNameRef("type")) {
+    if (value == "identity") {
+      comp.type = components::FEFuncComponent::FuncType::Identity;
+    } else if (value == "table") {
+      comp.type = components::FEFuncComponent::FuncType::Table;
+    } else if (value == "discrete") {
+      comp.type = components::FEFuncComponent::FuncType::Discrete;
+    } else if (value == "linear") {
+      comp.type = components::FEFuncComponent::FuncType::Linear;
+    } else if (value == "gamma") {
+      comp.type = components::FEFuncComponent::FuncType::Gamma;
+    }
+  } else if (name == XMLQualifiedNameRef("tableValues")) {
+    comp.tableValues.clear();
+    std::string_view remaining = value;
+    while (!remaining.empty()) {
+      while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',' ||
+                                     remaining.front() == '\t' || remaining.front() == '\n' ||
+                                     remaining.front() == '\r')) {
+        remaining.remove_prefix(1);
+      }
+      if (remaining.empty()) {
+        break;
+      }
+      const auto maybeNumber = donner::parser::NumberParser::Parse(remaining);
+      if (maybeNumber.hasResult()) {
+        comp.tableValues.push_back(maybeNumber.result().number);
+        remaining.remove_prefix(maybeNumber.result().consumedChars);
+      } else {
+        break;
+      }
+    }
+  } else if (name == XMLQualifiedNameRef("slope")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.slope = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("intercept")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.intercept = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("amplitude")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.amplitude = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("exponent")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.exponent = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("offset")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.offset = *n;
+    }
+  }
+}
+
+}  // namespace
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEFuncRElement>(SVGParserContext& context,
+                                                             SVGFEFuncRElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  auto& comp = element.entityHandle().get<components::FEFuncComponent>();
+  ParseFuncAttributes(comp, name, value);
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEFuncGElement>(SVGParserContext& context,
+                                                             SVGFEFuncGElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  auto& comp = element.entityHandle().get<components::FEFuncComponent>();
+  ParseFuncAttributes(comp, name, value);
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEFuncBElement>(SVGParserContext& context,
+                                                             SVGFEFuncBElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  auto& comp = element.entityHandle().get<components::FEFuncComponent>();
+  ParseFuncAttributes(comp, name, value);
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEFuncAElement>(SVGParserContext& context,
+                                                             SVGFEFuncAElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  auto& comp = element.entityHandle().get<components::FEFuncComponent>();
+  ParseFuncAttributes(comp, name, value);
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEColorMatrixElement>(
+    SVGParserContext& context, SVGFEColorMatrixElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("type")) {
+    auto& comp = element.entityHandle().get<components::FEColorMatrixComponent>();
+    if (value == "matrix") {
+      comp.type = components::FEColorMatrixComponent::Type::Matrix;
+    } else if (value == "saturate") {
+      comp.type = components::FEColorMatrixComponent::Type::Saturate;
+    } else if (value == "hueRotate") {
+      comp.type = components::FEColorMatrixComponent::Type::HueRotate;
+    } else if (value == "luminanceToAlpha") {
+      comp.type = components::FEColorMatrixComponent::Type::LuminanceToAlpha;
+    }
+  } else if (name == XMLQualifiedNameRef("values")) {
+    auto& comp = element.entityHandle().get<components::FEColorMatrixComponent>();
+    comp.values.clear();
+    // Parse space/comma-separated list of numbers.
+    std::string_view remaining = value;
+    while (!remaining.empty()) {
+      // Skip whitespace and commas.
+      while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',' ||
+                                     remaining.front() == '\t' || remaining.front() == '\n' ||
+                                     remaining.front() == '\r')) {
+        remaining.remove_prefix(1);
+      }
+      if (remaining.empty()) {
+        break;
+      }
+      const auto maybeNumber = donner::parser::NumberParser::Parse(remaining);
+      if (maybeNumber.hasResult()) {
+        comp.values.push_back(maybeNumber.result().number);
+        remaining.remove_prefix(maybeNumber.result().consumedChars);
+      } else {
+        break;
+      }
     }
   } else {
     return ParseCommonAttribute(context, element, name, value);
@@ -561,6 +764,49 @@ std::optional<ParseError> ParseAttribute<SVGFECompositeElement>(SVGParserContext
 }
 
 template <>
+std::optional<ParseError> ParseAttribute<SVGFEDropShadowElement>(
+    SVGParserContext& context, SVGFEDropShadowElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  }
+
+  auto& comp = element.entityHandle().get<components::FEDropShadowComponent>();
+  if (name == XMLQualifiedNameRef("dx")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.dx = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("dy")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.dy = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("stdDeviation")) {
+    // Parse one or two numbers: "sigmaX" or "sigmaX sigmaY".
+    const auto firstNumber = donner::parser::NumberParser::Parse(value);
+    if (firstNumber.hasResult()) {
+      comp.stdDeviationX = firstNumber.result().number;
+      comp.stdDeviationY = firstNumber.result().number;
+      std::string_view remaining = value.substr(firstNumber.result().consumedChars);
+      while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',')) {
+        remaining.remove_prefix(1);
+      }
+      if (!remaining.empty()) {
+        const auto secondNumber = donner::parser::NumberParser::Parse(remaining);
+        if (secondNumber.hasResult()) {
+          comp.stdDeviationY = secondNumber.result().number;
+        }
+      }
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
 std::optional<ParseError> ParseAttribute<SVGFEFloodElement>(SVGParserContext& context,
                                                              SVGFEFloodElement element,
                                                              const XMLQualifiedNameRef& name,
@@ -571,6 +817,220 @@ std::optional<ParseError> ParseAttribute<SVGFEFloodElement>(SVGParserContext& co
     return std::nullopt;
   } else {
     // flood-color and flood-opacity are presentation attributes handled by the CSS property system.
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEMorphologyElement>(
+    SVGParserContext& context, SVGFEMorphologyElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("operator")) {
+    auto& comp = element.entityHandle().get<components::FEMorphologyComponent>();
+    if (value == "erode") {
+      comp.op = components::FEMorphologyComponent::Operator::Erode;
+    } else if (value == "dilate") {
+      comp.op = components::FEMorphologyComponent::Operator::Dilate;
+    }
+  } else if (name == XMLQualifiedNameRef("radius")) {
+    auto& comp = element.entityHandle().get<components::FEMorphologyComponent>();
+    // Parse one or two numbers: "r" or "rX rY". Extra values invalidate the attribute.
+    const auto firstNumber = donner::parser::NumberParser::Parse(value);
+    if (firstNumber.hasResult()) {
+      double rx = firstNumber.result().number;
+      double ry = rx;
+      bool valid = true;
+      std::string_view remaining = value.substr(firstNumber.result().consumedChars);
+      while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',')) {
+        remaining.remove_prefix(1);
+      }
+      if (!remaining.empty()) {
+        const auto secondNumber = donner::parser::NumberParser::Parse(remaining);
+        if (secondNumber.hasResult()) {
+          ry = secondNumber.result().number;
+          // Check for trailing data (too many values).
+          remaining = remaining.substr(secondNumber.result().consumedChars);
+          while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',')) {
+            remaining.remove_prefix(1);
+          }
+          if (!remaining.empty()) {
+            valid = false;
+          }
+        }
+      }
+      if (valid) {
+        comp.radiusX = rx;
+        comp.radiusY = ry;
+      }
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEConvolveMatrixElement>(
+    SVGParserContext& context, SVGFEConvolveMatrixElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("order")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    const auto firstNumber = donner::parser::NumberParser::Parse(value);
+    if (firstNumber.hasResult()) {
+      int orderX = static_cast<int>(firstNumber.result().number);
+      int orderY = orderX;
+      std::string_view remaining = value.substr(firstNumber.result().consumedChars);
+      while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',')) {
+        remaining.remove_prefix(1);
+      }
+      if (!remaining.empty()) {
+        const auto secondNumber = donner::parser::NumberParser::Parse(remaining);
+        if (secondNumber.hasResult()) {
+          orderY = static_cast<int>(secondNumber.result().number);
+        }
+      }
+      comp.orderX = orderX;
+      comp.orderY = orderY;
+    }
+  } else if (name == XMLQualifiedNameRef("kernelMatrix")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    comp.kernelMatrix.clear();
+    std::string_view remaining = value;
+    while (!remaining.empty()) {
+      while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',' ||
+                                    remaining.front() == '\n' || remaining.front() == '\r' ||
+                                    remaining.front() == '\t')) {
+        remaining.remove_prefix(1);
+      }
+      if (remaining.empty()) {
+        break;
+      }
+      const auto maybeNumber = donner::parser::NumberParser::Parse(remaining);
+      if (maybeNumber.hasResult()) {
+        comp.kernelMatrix.push_back(maybeNumber.result().number);
+        remaining = remaining.substr(maybeNumber.result().consumedChars);
+      } else {
+        break;
+      }
+    }
+  } else if (name == XMLQualifiedNameRef("divisor")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    const auto maybeNumber = donner::parser::NumberParser::Parse(value);
+    if (maybeNumber.hasResult()) {
+      comp.divisor = maybeNumber.result().number;
+    }
+  } else if (name == XMLQualifiedNameRef("bias")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    const auto maybeNumber = donner::parser::NumberParser::Parse(value);
+    if (maybeNumber.hasResult()) {
+      comp.bias = maybeNumber.result().number;
+    }
+  } else if (name == XMLQualifiedNameRef("targetX")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    const auto maybeNumber = donner::parser::NumberParser::Parse(value);
+    if (maybeNumber.hasResult()) {
+      comp.targetX = static_cast<int>(maybeNumber.result().number);
+    }
+  } else if (name == XMLQualifiedNameRef("targetY")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    const auto maybeNumber = donner::parser::NumberParser::Parse(value);
+    if (maybeNumber.hasResult()) {
+      comp.targetY = static_cast<int>(maybeNumber.result().number);
+    }
+  } else if (name == XMLQualifiedNameRef("edgeMode")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    if (value == "duplicate") {
+      comp.edgeMode = components::FEConvolveMatrixComponent::EdgeMode::Duplicate;
+    } else if (value == "wrap") {
+      comp.edgeMode = components::FEConvolveMatrixComponent::EdgeMode::Wrap;
+    } else if (value == "none") {
+      comp.edgeMode = components::FEConvolveMatrixComponent::EdgeMode::None;
+    }
+  } else if (name == XMLQualifiedNameRef("preserveAlpha")) {
+    auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    comp.preserveAlpha = (value == "true");
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFETurbulenceElement>(SVGParserContext& context,
+                                                                  SVGFETurbulenceElement element,
+                                                                  const XMLQualifiedNameRef& name,
+                                                                  std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("baseFrequency")) {
+    auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();
+    const auto firstNumber = donner::parser::NumberParser::Parse(value);
+    if (firstNumber.hasResult()) {
+      comp.baseFrequencyX = firstNumber.result().number;
+      comp.baseFrequencyY = comp.baseFrequencyX;
+      std::string_view remaining = value.substr(firstNumber.result().consumedChars);
+      while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',')) {
+        remaining.remove_prefix(1);
+      }
+      if (!remaining.empty()) {
+        const auto secondNumber = donner::parser::NumberParser::Parse(remaining);
+        if (secondNumber.hasResult()) {
+          comp.baseFrequencyY = secondNumber.result().number;
+        }
+      }
+    }
+  } else if (name == XMLQualifiedNameRef("numOctaves")) {
+    auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      comp.numOctaves = static_cast<int>(*maybeNumber);
+    }
+  } else if (name == XMLQualifiedNameRef("seed")) {
+    auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      comp.seed = *maybeNumber;
+    }
+  } else if (name == XMLQualifiedNameRef("type")) {
+    auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();
+    if (value == "fractalNoise") {
+      comp.type = components::FETurbulenceComponent::Type::FractalNoise;
+    } else if (value == "turbulence") {
+      comp.type = components::FETurbulenceComponent::Type::Turbulence;
+    }
+    // Invalid values: keep default (turbulence).
+  } else if (name == XMLQualifiedNameRef("stitchTiles")) {
+    auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();
+    comp.stitchTiles = (value == "stitch");
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFETileElement>(SVGParserContext& context,
+                                                            SVGFETileElement element,
+                                                            const XMLQualifiedNameRef& name,
+                                                            std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else {
     return ParseCommonAttribute(context, element, name, value);
   }
 

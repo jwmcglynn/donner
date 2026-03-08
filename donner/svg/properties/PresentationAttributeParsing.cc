@@ -30,12 +30,55 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Filter>(
 }
 
 template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeBlend>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeComponentTransfer>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeFuncA>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeFuncB>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeFuncG>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeFuncR>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeColorMatrix>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeComposite>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return false;
 }
 
 // ParsePresentationAttribute<FeFlood> is defined in FilterPrimitiveComponent.cc.
+// ParsePresentationAttribute<FeDropShadow> is defined in FilterPrimitiveComponent.cc.
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeGaussianBlur>(
@@ -51,6 +94,30 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FeMerge>(
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeMergeNode>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeMorphology>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeConvolveMatrix>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeTile>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeTurbulence>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return false;
 }

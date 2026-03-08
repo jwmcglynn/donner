@@ -89,6 +89,162 @@ struct FECompositeComponent {
 };
 
 /**
+ * Parameters for \ref SVGFEColorMatrixElement.
+ */
+struct FEColorMatrixComponent {
+  /// Matrix type.
+  enum class Type : std::uint8_t {
+    Matrix,            ///< 5x4 color matrix (20 values).
+    Saturate,          ///< Single value 0..1.
+    HueRotate,         ///< Angle in degrees.
+    LuminanceToAlpha,  ///< No values.
+  };
+
+  Type type = Type::Matrix;      ///< Matrix type.
+  std::vector<double> values;    ///< Matrix values (interpretation depends on type).
+};
+
+/**
+ * Parameters for \ref SVGFEBlendElement.
+ */
+struct FEBlendComponent {
+  /// Blend mode values.
+  enum class Mode : std::uint8_t {
+    Normal,
+    Multiply,
+    Screen,
+    Darken,
+    Lighten,
+  };
+
+  Mode mode = Mode::Normal;  ///< Blend mode.
+};
+
+/**
+ * Parameters for \ref SVGFEDropShadowElement.
+ */
+struct FEDropShadowComponent {
+  double dx = 2.0;               ///< Horizontal offset.
+  double dy = 2.0;               ///< Vertical offset.
+  double stdDeviationX = 2.0;    ///< Blur standard deviation in X.
+  double stdDeviationY = 2.0;    ///< Blur standard deviation in Y.
+
+  /// The flood fill color, defaults to black.
+  Property<css::Color> floodColor{"flood-color", []() -> std::optional<css::Color> {
+                                    return css::Color(css::RGBA(0, 0, 0, 0xFF));
+                                  }};
+
+  /// The flood fill opacity, defaults to 1.
+  Property<double> floodOpacity{"flood-opacity",
+                                []() -> std::optional<double> { return 1.0; }};
+};
+
+/**
+ * Marker component for \ref SVGFEComponentTransferElement.
+ *
+ * The element itself has no parameters; its children (feFuncR/G/B/A) define the transfer
+ * functions for each channel.
+ */
+struct FEComponentTransferComponent {
+  int placeholder = 0;  ///< Placeholder to avoid empty struct issues with entt.
+};
+
+/**
+ * Parameters for a feFuncR/G/B/A child element within feComponentTransfer.
+ *
+ * Each func element defines a transfer function for one RGBA channel.
+ */
+struct FEFuncComponent {
+  /// Which channel this function applies to.
+  enum class Channel : std::uint8_t { R, G, B, A };
+
+  /// Transfer function type.
+  enum class FuncType : std::uint8_t {
+    Identity,   ///< No change.
+    Table,      ///< Piecewise linear lookup.
+    Discrete,   ///< Step function lookup.
+    Linear,     ///< slope * C + intercept.
+    Gamma,      ///< amplitude * pow(C, exponent) + offset.
+  };
+
+  Channel channel;                       ///< Which channel this applies to.
+  FuncType type = FuncType::Identity;    ///< Transfer function type.
+  std::vector<double> tableValues;       ///< Values for table/discrete types.
+  double slope = 1.0;                    ///< Slope for linear type.
+  double intercept = 0.0;               ///< Intercept for linear type.
+  double amplitude = 1.0;               ///< Amplitude for gamma type.
+  double exponent = 1.0;                ///< Exponent for gamma type.
+  double offset = 0.0;                  ///< Offset for gamma type.
+
+  explicit FEFuncComponent(Channel ch) : channel(ch) {}
+};
+
+/**
+ * Parameters for \ref SVGFEConvolveMatrixElement.
+ */
+struct FEConvolveMatrixComponent {
+  /// Edge mode for out-of-bounds pixels.
+  enum class EdgeMode : std::uint8_t {
+    Duplicate,  ///< Clamp to nearest edge pixel.
+    Wrap,       ///< Wrap around (modular arithmetic).
+    None,       ///< Treat as transparent black.
+  };
+
+  int orderX = 3;                            ///< Kernel width.
+  int orderY = 3;                            ///< Kernel height.
+  std::vector<double> kernelMatrix;          ///< Kernel values (orderX * orderY).
+  std::optional<double> divisor;               ///< Divisor (nullopt = sum of kernel values).
+  double bias = 0.0;                         ///< Bias added to result.
+  std::optional<int> targetX;                ///< Target X (nullopt = floor(orderX/2)).
+  std::optional<int> targetY;                ///< Target Y (nullopt = floor(orderY/2)).
+  EdgeMode edgeMode = EdgeMode::Duplicate;   ///< Edge handling mode.
+  bool preserveAlpha = false;                ///< If true, only filter RGB channels.
+};
+
+/**
+ * Parameters for \ref SVGFEMorphologyElement.
+ */
+struct FEMorphologyComponent {
+  /// Morphology operator.
+  enum class Operator : std::uint8_t {
+    Erode,   ///< Per-channel minimum in the window.
+    Dilate,  ///< Per-channel maximum in the window.
+  };
+
+  Operator op = Operator::Erode;  ///< Erode or dilate.
+  double radiusX = 0.0;           ///< Horizontal radius.
+  double radiusY = 0.0;           ///< Vertical radius.
+};
+
+/**
+ * Marker component for \ref SVGFETileElement.
+ *
+ * The feTile element has no element-specific parameters. It tiles its input's content
+ * (within the input's primitive subregion) across its own primitive subregion.
+ */
+struct FETileComponent {
+  int placeholder = 0;  ///< Placeholder to avoid empty struct issues with entt.
+};
+
+/**
+ * Parameters for \ref SVGFETurbulenceElement.
+ */
+struct FETurbulenceComponent {
+  /// Noise type.
+  enum class Type : std::uint8_t {
+    FractalNoise,  ///< Fractal Brownian motion.
+    Turbulence,    ///< Turbulence (absolute value noise).
+  };
+
+  Type type = Type::Turbulence;     ///< Noise type.
+  double baseFrequencyX = 0.0;     ///< Base frequency X.
+  double baseFrequencyY = 0.0;     ///< Base frequency Y.
+  int numOctaves = 1;              ///< Number of octaves.
+  double seed = 0.0;               ///< Random seed.
+  bool stitchTiles = false;        ///< Whether to stitch tiles.
+};
+
+/**
  * Marker component for \ref SVGFEMergeElement.
  *
  * The merge element itself has no parameters; its children (feMergeNode) specify the inputs.

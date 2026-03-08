@@ -260,9 +260,53 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-// TODO(filter): e-feBlend (not implemented)
-// TODO(filter): e-feColorMatrix (not implemented)
-// TODO(filter): e-feComponentTransfer (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeBlend, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feBlend",
+        {
+            {"e-feBlend-007.svg", Params::Skip()},  // Not impl: primitiveUnits subregion
+            {"e-feBlend-008.svg", Params::Skip()},  // Not impl: primitiveUnits subregion
+            {"e-feBlend-009.svg", Params::Skip()},  // Not impl: color-burn blend mode (SVG2)
+            {"e-feBlend-010.svg", Params::Skip()},  // Not impl: hue blend mode (SVG2)
+        })),
+    TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    FeColorMatrix, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feColorMatrix",
+        {
+            // TODO(filter): All linearRGB rounding diffs are due to 8-bit intermediate
+            // quantization in sRGB<->linear LUT conversion. Fix by processing filters in
+            // float precision.
+            {"e-feColorMatrix-001.svg", Params::Skip()},  // linearRGB rounding (597px)
+            {"e-feColorMatrix-002.svg", Params::Skip()},  // linearRGB rounding (identity)
+            {"e-feColorMatrix-003.svg", Params::Skip()},  // linearRGB rounding (identity)
+            {"e-feColorMatrix-004.svg", Params::Skip()},  // linearRGB rounding (identity)
+            {"e-feColorMatrix-005.svg", Params::Skip()},  // linearRGB rounding (identity)
+            {"e-feColorMatrix-006.svg", Params::Skip()},  // linearRGB rounding (3383px)
+            {"e-feColorMatrix-007.svg", Params::Skip()},  // linearRGB rounding (saturate)
+            {"e-feColorMatrix-008.svg", Params::Skip()},  // saturate -0.5 (UB, 141k px)
+            {"e-feColorMatrix-009.svg", Params::Skip()},  // saturate 99999 (UB, 158k px)
+            {"e-feColorMatrix-010.svg", Params::Skip()},  // linearRGB rounding (identity)
+            {"e-feColorMatrix-011.svg", Params::Skip()},  // linearRGB rounding (hueRotate)
+            {"e-feColorMatrix-012.svg", Params::Skip()},  // hueRotate(0) rounding diff
+            {"e-feColorMatrix-015.svg", Params::Skip()},  // linearRGB rounding (identity)
+        })),
+    TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    FeComponentTransfer, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feComponentTransfer",
+        {
+            {"e-feComponentTransfer-009.svg",
+             Params::Skip()},  // tableValues="1px" invalid unit suffix not rejected
+            {"e-feComponentTransfer-020.svg",
+             Params::Skip()},  // Mixed types with feFuncA gamma + opacity, linearRGB rounding
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeComposite, ImageComparisonTestFixture,
@@ -271,17 +315,58 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-feComposite-007.svg", Params::Skip()},   // Not impl: default subregion
             {"e-feComposite-009.svg", Params::Skip()},   // filter region (k4 nonzero)
-            {"e-feComposite-012.svg", Params::Skip()},   // Not impl: linearRGB color space
-            {"e-feComposite-017.svg", Params::Skip()},   // Not impl: linearRGB color space
-            {"e-feComposite-018.svg", Params::Skip()},   // Not impl: linearRGB color space
         })),
     TestNameFromFilename);
 
-// TODO(filter): e-feConvolveMatrix (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeConvolveMatrix, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feConvolveMatrix",
+        {
+            {"e-feConvolveMatrix-001.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-002.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-003.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-004.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-005.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-006.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-007.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-008.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-009.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-010.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-011.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-012.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-013.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-014.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-015.svg", Params::Skip()},  // UB: bias=0.5
+            {"e-feConvolveMatrix-016.svg", Params::Skip()},  // UB: bias=-0.5
+            {"e-feConvolveMatrix-017.svg", Params::Skip()},  // UB: bias=9999
+            {"e-feConvolveMatrix-018.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-019.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-020.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-021.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-022.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-023.svg", Params::Skip()},  // UB: wrap with oversized kernel
+            {"e-feConvolveMatrix-024.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+            {"e-feConvolveMatrix-025.svg", Params::WithThreshold(kDefaultThreshold, 5000)},
+        })),
+    TestNameFromFilename);
+
 // TODO(filter): e-feDiffuseLighting (not implemented)
 // TODO(filter): e-feDisplacementMap (not implemented)
 // TODO(filter): e-feDistantLight (not implemented)
-// TODO(filter): e-feDropShadow (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeDropShadow, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feDropShadow",
+        {
+            // linearRGB 8-bit LUT rounding diffs at blur edges
+            {"e-feDropShadow-001.svg", Params::WithThreshold(kDefaultThreshold, 400)},
+            {"e-feDropShadow-002.svg", Params::WithThreshold(kDefaultThreshold, 200)},
+            {"e-feDropShadow-003.svg", Params::WithThreshold(kDefaultThreshold, 120)},
+            {"e-feDropShadow-005.svg", Params::Skip()},  // Not impl: default filter region clipping
+            {"e-feDropShadow-006.svg", Params::WithThreshold(kDefaultThreshold, 200)},
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeFlood, ImageComparisonTestFixture,
@@ -317,7 +402,15 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-// TODO(filter): e-feMorphology (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeMorphology, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feMorphology",
+        {
+            {"e-feMorphology-007.svg", Params::Skip()},  // Not impl: primitiveUnits=objectBoundingBox
+            {"e-feMorphology-012.svg", Params::Skip()},  // Perf: radius=9999, O(n*r^2) too slow
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeOffset, ImageComparisonTestFixture,
@@ -332,8 +425,49 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(filter): e-fePointLight (not implemented)
 // TODO(filter): e-feSpecularLighting (not implemented)
 // TODO(filter): e-feSpotLight (not implemented)
-// TODO(filter): e-feTile (not implemented)
-// TODO(filter): e-feTurbulence (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeTile, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feTile",
+        {
+            {"e-feTile-001.svg",
+             Params::WithThreshold(kDefaultThreshold, 5000)},  // linearRGB rounding + tile boundary
+            {"e-feTile-002.svg",
+             Params::WithThreshold(kDefaultThreshold, 2500)},  // linearRGB rounding + tile boundary
+            {"e-feTile-004.svg",
+             Params::WithThreshold(kDefaultThreshold, 8500)},  // Tile boundary sub-pixel alignment
+            {"e-feTile-005.svg",
+             Params::WithThreshold(kDefaultThreshold, 10000)},  // Tile boundary sub-pixel alignment
+            {"e-feTile-006.svg", Params::Skip()},  // Not impl: percentage-based primitive subregion
+            {"e-feTile-007.svg", Params::Skip()},  // Complex transform (UB per test title)
+        })),
+    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FeTurbulence, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feTurbulence",
+        {
+            {"e-feTurbulence-002.svg",
+             Params::WithThreshold(kDefaultThreshold, 1500)},  // Boundary rounding
+            {"e-feTurbulence-004.svg",
+             Params::WithThreshold(kDefaultThreshold, 1500)},  // Boundary rounding
+            {"e-feTurbulence-005.svg",
+             Params::WithThreshold(kDefaultThreshold, 1500)},  // Boundary rounding
+            {"e-feTurbulence-008.svg", Params::Skip()},  // Not impl: primitiveUnits=objectBoundingBox
+            {"e-feTurbulence-013.svg",
+             Params::WithThreshold(kDefaultThreshold, 1500)},  // Boundary rounding (invalid type)
+            {"e-feTurbulence-014.svg",
+             Params::WithThreshold(kDefaultThreshold, 1500)},  // Boundary rounding (seed=20)
+            {"e-feTurbulence-015.svg",
+             Params::WithThreshold(kDefaultThreshold, 1500)},  // Boundary rounding (seed=-20)
+            {"e-feTurbulence-016.svg",
+             Params::WithThreshold(kDefaultThreshold, 1500)},  // Boundary rounding (seed=1.5)
+            {"e-feTurbulence-017.svg", Params::Skip()},  // stitchTiles=stitch (UB per test title)
+            {"e-feTurbulence-018.svg", Params::Skip()},  // Complex skew transform
+            {"e-feTurbulence-019.svg",
+             Params::WithThreshold(kDefaultThreshold, 25000)},  // sRGB color-interpolation
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Filter, ImageComparisonTestFixture,
@@ -364,7 +498,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-039.svg", Params::Skip()},  // multiple primitives (blur edge clipping)
             {"e-filter-040.svg", Params::Skip()},  // multiple primitives (blur edge clipping)
             {"e-filter-041.svg", Params::Skip()},  // blur edge clipping
-            {"e-filter-042.svg", Params::Skip()},  // feBlend not implemented
+            {"e-filter-042.svg", Params::Skip()},  // blur edge clipping + linearRGB
             {"e-filter-044.svg", Params::Skip()},  // chained blur edge clipping
             {"e-filter-046.svg", Params::Skip()},  // color-interpolation-filters
             {"e-filter-052.svg", Params::Skip()},  // clip-path + filter (blur edge)

@@ -9,6 +9,7 @@
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
+#include "donner/svg/components/filter/FilterUnits.h"
 
 namespace donner::svg::components {
 
@@ -150,7 +151,8 @@ struct DropShadow {
   double dy = 2.0;              ///< Vertical offset.
   double stdDeviationX = 2.0;   ///< Blur standard deviation X.
   double stdDeviationY = 2.0;   ///< Blur standard deviation Y.
-  // TODO(jwmcglynn): floodColor, floodOpacity.
+  css::Color floodColor{css::RGBA(0, 0, 0, 0xFF)};  ///< Shadow color (default: black).
+  double floodOpacity = 1.0;    ///< Shadow opacity (default: 1).
 };
 
 /// Parameters for \c feComponentTransfer.
@@ -193,10 +195,10 @@ struct ConvolveMatrix {
   int orderX = 3;                        ///< Kernel width.
   int orderY = 3;                        ///< Kernel height.
   std::vector<double> kernelMatrix;      ///< Kernel values (orderX * orderY).
-  double divisor = 0.0;                  ///< Divisor (0 = sum of kernel values).
+  std::optional<double> divisor;          ///< Divisor (nullopt = sum of kernel values).
   double bias = 0.0;                     ///< Bias added to result.
-  int targetX = -1;                      ///< Target X (-1 = floor(orderX/2)).
-  int targetY = -1;                      ///< Target Y (-1 = floor(orderY/2)).
+  std::optional<int> targetX;            ///< Target X (nullopt = floor(orderX/2)).
+  std::optional<int> targetY;            ///< Target Y (nullopt = floor(orderY/2)).
   EdgeMode edgeMode = EdgeMode::Duplicate;  ///< Edge handling mode.
   bool preserveAlpha = false;            ///< If true, only filter RGB channels.
 };
@@ -313,6 +315,9 @@ struct FilterNode {
  */
 struct FilterGraph {
   std::vector<FilterNode> nodes;  ///< Nodes in document (execution) order.
+
+  /// Color space for filter operations (linearRGB or sRGB).
+  ColorInterpolationFilters colorInterpolationFilters = ColorInterpolationFilters::Default;
 
   /// Returns true if the graph has no nodes.
   [[nodiscard]] bool empty() const { return nodes.empty(); }

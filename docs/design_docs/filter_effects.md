@@ -1,13 +1,14 @@
 # Design: SVG Filter Effects
 
-**Status:** Design
+**Status:** In Progress (Milestones 1-2 complete, Milestone 3 in progress)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-07
+**Last Updated:** 2026-03-07
 **Tracking:** [#151](https://github.com/jwmcglynn/donner/issues/151)
 
 ## Summary
 
-Implement full SVG filter support aligned with the [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec. Today Donner supports only `feGaussianBlur` behind an experimental flag; this design adds the remaining 16 filter primitives, the filter graph execution model, `in`/`result` routing, CSS shorthand filter functions, and both Skia and TinySkia backend implementations.
+Implement full SVG filter support aligned with the [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec (referenced by [SVG2 §11](https://www.w3.org/TR/SVG2/render.html#FilteringPaintedRegions)). Donner currently supports 14 of 17 filter primitives with a working filter graph execution model, `in`/`result` routing, and `SourceGraphic`/`SourceAlpha` standard inputs on the TinySkia backend. All filter pixel operations are implemented natively in the `tiny-skia-cpp` library (`third_party/tiny-skia-cpp/src/tiny_skia/filter/`), keeping the renderer thin (graph routing only). This design covers the remaining 6 primitives, CSS shorthand filter functions, color space handling, and the Skia backend.
 
 Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at least drop shadows or blur; icon sets and data visualizations use color matrix transforms and compositing. Without filter support these render as unfiltered content, which is visually wrong.
 
@@ -27,11 +28,33 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - GPU-accelerated filter pipelines (future optimization).
 - Animation of filter parameters (separate animation milestone).
 
+## Current State
+
+**Implemented (TinySkia backend):**
+- Filter graph execution model with named buffer routing (`in`/`result`)
+- Standard inputs: `SourceGraphic`, `SourceAlpha`
+- Filter region computation with `objectBoundingBox` and `userSpaceOnUse` `filterUnits`
+- Filter region clipping on output
+- Primitive subregion computation (explicit attributes; TODO: union-of-inputs default)
+- `color-interpolation-filters` property (linearRGB/sRGB conversion via LUT)
+- 13/17 primitives: `feGaussianBlur`, `feFlood`, `feOffset`, `feComposite`, `feMerge`, `feColorMatrix`, `feBlend`, `feComponentTransfer`, `feDropShadow`, `feMorphology`, `feTile`, `feConvolveMatrix`
+- Native tiny-skia-cpp filter library with all implemented operations
+
+**Known gaps:**
+- `primitiveUnits` coordinate space handling
+- linearRGB LUT operates at 8-bit precision (should be float for accuracy)
+- Blur edge clipping: blur operates on full pixmap then clips, causing edge differences
+- 4 remaining primitives not yet rendered
+- Skia backend not yet updated for filter graph model
+
 ## Next Steps
 
-- Implement the filter graph execution model (Milestone 1) — this is the foundational plumbing that all subsequent primitives depend on.
-- Add the first tranche of high-frequency primitives: `feColorMatrix`, `feFlood`, `feOffset`, `feMerge`, `feComposite`, `feBlend`.
-- Expand the resvg test suite to enable filter test cases.
+- Continue Milestone 3: implement `feDisplacementMap`.
+- Begin Milestone 4: implement lighting primitives (`feDiffuseLighting`, `feSpecularLighting`, light sources).
+- Add `primitiveUnits` coordinate space handling.
+- Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).
+- Fix blur edge clipping to match spec behavior.
+- Implement `feImage` (requires re-entrant rendering for fragment references).
 
 ## Implementation Plan
 
@@ -45,11 +68,11 @@ Replace the current `std::vector<FilterEffect>` linear chain with a proper filte
 - [x] Replace `pushFilterLayer`/`popFilterLayer` interface with graph-aware execution (`FilterGraph` passed through interface)
 - [x] Move Gaussian blur to native tiny-skia-cpp filter library (`tiny_skia::filter::gaussianBlur`)
 - [x] Add `in2` attribute parsing for two-input primitives
-- [x] Implement standard input resolution (`SourceGraphic`) with multi-buffer routing (TODO: `SourceAlpha`, `FillPaint`, `StrokePaint`)
+- [x] Implement standard input resolution (`SourceGraphic`, `SourceAlpha`) with multi-buffer routing (TODO: `FillPaint`, `StrokePaint`)
 - [x] Implement filter region clipping (x/y/width/height on `<filter>`, with objectBoundingBox defaults)
 - [x] Implement primitive subregion computation (explicit x/y/width/height on each primitive; TODO: union-of-inputs default)
 - [ ] Add `primitiveUnits` coordinate space handling (`userSpaceOnUse` vs `objectBoundingBox`)
-- [ ] Add `color-interpolation-filters` property support (`linearRGB` default vs `sRGB`)
+- [x] Add `color-interpolation-filters` property support (`linearRGB` default vs `sRGB`)
 - [ ] Remove legacy `effectChain` from `ComputedFilterComponent`
 
 ### Milestone 2: High-frequency primitives (Tranche 1)
@@ -59,20 +82,20 @@ The most commonly used filter primitives in real-world SVG content.
 - [x] `feFlood` — solid color fill (trivial; foundation for drop shadows)
 - [x] `feOffset` — translate an image buffer by dx/dy
 - [x] `feMerge` / `feMergeNode` — layer multiple buffers with Source Over compositing
-- [ ] `feColorMatrix` — 5x4 matrix, saturate, hueRotate, luminanceToAlpha modes
+- [x] `feColorMatrix` — 5x4 matrix, saturate, hueRotate, luminanceToAlpha modes
 - [x] `feComposite` — Porter-Duff operators (over/in/out/atop/xor/lighter) + arithmetic mode
-- [ ] `feBlend` — CSS blend modes (normal, multiply, screen, overlay, darken, lighten, etc.)
-- [ ] `feDropShadow` — convenience primitive (blur + offset + flood + composite + merge)
-- [ ] `feComponentTransfer` / `feFuncR/G/B/A` — per-channel transfer functions (identity, table, discrete, linear, gamma)
+- [x] `feBlend` — CSS blend modes (normal, multiply, screen, darken, lighten)
+- [x] `feDropShadow` — convenience primitive (blur + offset + flood + composite + merge)
+- [x] `feComponentTransfer` / `feFuncR/G/B/A` — per-channel transfer functions (identity, table, discrete, linear, gamma)
 
 ### Milestone 3: Spatial and generative primitives (Tranche 2)
 
 Less common but required for full spec compliance.
 
-- [ ] `feConvolveMatrix` — arbitrary convolution kernel with edgeMode handling
-- [ ] `feMorphology` — erode/dilate operations
-- [ ] `feTile` — tile input to fill primitive subregion
-- [ ] `feTurbulence` — Perlin/fractal noise generation
+- [x] `feConvolveMatrix` — arbitrary convolution kernel with edgeMode handling
+- [x] `feMorphology` — erode/dilate operations
+- [x] `feTile` — tile input to fill primitive subregion
+- [x] `feTurbulence` — Perlin/fractal noise generation
 - [ ] `feImage` — external image or SVG fragment as filter input
 - [ ] `feDisplacementMap` — spatial displacement using a channel map
 - [ ] `feGaussianBlur` — add `edgeMode` attribute (currently missing)
@@ -207,35 +230,78 @@ CSS shorthand filter functions always operate in sRGB regardless of this propert
 
 ### TinySkia Native Filter Library
 
-Filter primitive operations are implemented natively inside `third_party/tiny-skia-cpp` as a
-reusable library that operates on `tiny_skia::Pixmap` buffers. This keeps filter algorithms
-self-contained, testable independently of the SVG renderer, and available to any tiny-skia
-consumer.
+All filter pixel operations are implemented natively inside `third_party/tiny-skia-cpp` as a
+reusable library that operates on `tiny_skia::Pixmap` buffers. This architecture provides:
+
+1. **Separation of concerns:** The SVG renderer handles graph execution (buffer allocation, input
+   resolution, subregion clipping, coordinate transforms) while the library handles pure pixel
+   math. The renderer never manipulates pixel data directly — it delegates every operation to a
+   library function.
+
+2. **Independent testability:** Each filter function can be unit-tested with synthetic pixmaps
+   without requiring SVG parsing or a render pipeline. Tests live in
+   `third_party/tiny-skia-cpp/src/tiny_skia/tests/`.
+
+3. **Reusability:** The library is not SVG-specific. Any application using `tiny_skia::Pixmap`
+   can use the filter functions for image processing.
 
 **Location:** `third_party/tiny-skia-cpp/src/tiny_skia/filter/`
 
-The existing Gaussian blur (`filter::gaussianBlur`) has already been moved into this library.
+Each filter primitive maps to the library in one of three ways:
+
+- **Direct 1:1 mapping:** Most primitives have a single library function that performs the entire
+  operation (e.g., `filter::gaussianBlur`, `filter::colorMatrix`, `filter::morphology`). The
+  renderer calls the function with the resolved inputs and transform-adjusted parameters.
+
+- **Decomposition into existing functions:** Some primitives are syntactic sugar over a pipeline
+  of simpler operations. `feDropShadow` decomposes into `flood()` → `composite(in)` → `offset()`
+  → `gaussianBlur()` → `merge()` entirely within the renderer's graph executor. No dedicated
+  library function is needed.
+
+- **Renderer-only operations:** `feImage` requires access to the SVG document and image loading
+  infrastructure, so it is handled entirely in the renderer layer. The library provides no
+  function for it.
 
 #### API Summary
 
-| Operation | tiny-skia-cpp API | Description |
+| Operation | tiny-skia-cpp API | Status |
 |---|---|---|
-| Blur | `filter::gaussianBlur(pixmap, sigmaX, sigmaY)` | Separable convolution (done) |
-| Flood | `filter::flood(dst, color)` | Fill with solid RGBA |
-| Offset | `filter::offset(src, dst, dx, dy)` | Translate pixels |
-| ColorMatrix | `filter::colorMatrix(pixmap, matrix)` | 5x4 matrix transform |
-| ComponentTransfer | `filter::componentTransfer(pixmap, funcs)` | Per-channel LUT/function |
-| Blend | `filter::blend(bg, fg, dst, mode)` | CSS blend modes |
-| Composite | `filter::composite(in1, in2, dst, op, k1-k4)` | Porter-Duff + arithmetic |
-| Merge | `filter::merge(layers, dst)` | Layer with Source Over |
-| ConvolveMatrix | `filter::convolveMatrix(src, dst, params)` | Arbitrary convolution |
-| Morphology | `filter::morphology(src, dst, op, rx, ry)` | Erode/dilate |
-| Tile | `filter::tile(src, dst, tileRect)` | Repeat pattern |
-| Turbulence | `filter::turbulence(dst, params)` | Perlin/fractal noise |
-| DisplacementMap | `filter::displacementMap(src, map, dst, scale, xCh, yCh)` | Pixel displacement |
-| DiffuseLighting | `filter::diffuseLighting(src, dst, light, params)` | Diffuse reflection |
-| SpecularLighting | `filter::specularLighting(src, dst, light, params)` | Specular highlights |
-| ColorSpace | `filter::srgbToLinear(pixmap)` / `filter::linearToSrgb(pixmap)` | Color space conversion |
+| Blur | `filter::gaussianBlur(pixmap, sigmaX, sigmaY)` | Done |
+| Flood | `filter::flood(dst, r, g, b, a)` | Done |
+| Offset | `filter::offset(src, dst, dx, dy)` | Done |
+| ColorMatrix | `filter::colorMatrix(pixmap, matrix)` | Done |
+| ColorMatrix helpers | `filter::saturateMatrix(s)`, `hueRotateMatrix(deg)`, `luminanceToAlphaMatrix()`, `identityMatrix()` | Done |
+| ComponentTransfer | `filter::componentTransfer(pixmap, funcR, funcG, funcB, funcA)` | Done |
+| Blend | `filter::blend(bg, fg, dst, mode)` | Done |
+| Composite | `filter::composite(in1, in2, dst, op, k1-k4)` | Done |
+| Merge | `filter::merge(layers, dst)` | Done |
+| ColorSpace | `filter::srgbToLinear(pixmap)` / `filter::linearToSrgb(pixmap)` | Done |
+| ConvolveMatrix | `filter::convolveMatrix(src, dst, params)` | Done |
+| Morphology | `filter::morphology(src, dst, op, rx, ry)` | Done |
+| Tile | `filter::tile(src, dst, tileX, tileY, tileW, tileH)` | Done |
+| Turbulence | `filter::turbulence(dst, params)` | Done |
+| DisplacementMap | `filter::displacementMap(src, map, dst, scale, xCh, yCh)` | Planned |
+| DiffuseLighting | `filter::diffuseLighting(src, dst, light, params)` | Planned |
+| SpecularLighting | `filter::specularLighting(src, dst, light, params)` | Planned |
+| DropShadow | *(decomposed in renderer: flood+composite+offset+blur+merge)* | Done |
+
+**Remaining library work (2 functions):**
+
+The 2 planned functions fall into two categories:
+
+1. **Pure pixel operations (straightforward):**
+   `displacementMap` — a self-contained image processing function with no dependencies
+   on the SVG model. Takes source/destination pixmaps and numeric parameters.
+
+2. **Surface normal + lighting model:** `diffuseLighting`, `specularLighting` — these share a
+   common infrastructure for computing surface normals from the alpha channel and evaluating
+   light sources. The light source (distant/point/spot) is passed as a parameter struct. Both
+   functions share the same normal computation code; they differ only in the reflection model
+   (Lambertian diffuse vs. Phong specular).
+
+All 6 functions are stateless, operate on premultiplied RGBA pixmaps, and have no side effects.
+They can be implemented and tested incrementally without changes to the library's existing API
+surface.
 
 #### Graph Executor (`RendererTinySkia`)
 
@@ -447,19 +513,27 @@ struct ConvolveParams { int orderX, orderY; std::span<const double> kernel; doub
 void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params);
 ```
 
-##### feMorphology
+##### feMorphology (done)
 
 **Algorithm:** For each pixel, examine a rectangular window of radius (rx, ry):
 - **erode:** Output is the per-channel minimum of all pixels in the window.
 - **dilate:** Output is the per-channel maximum.
 
-The window is `(2*ceil(rx)+1) x (2*ceil(ry)+1)` pixels. Operates on premultiplied values.
+The window is `(2*rx+1) x (2*ry+1)` pixels. Operates on premultiplied values.
 
-**Optimization:** Separable min/max filter using a sliding window with a deque for O(w*h) total
-work regardless of radius (van Herk/Gil-Werman algorithm).
+**Edge cases:**
+- Negative radius (either axis): transparent black output (per SVG spec).
+- Both radii zero: transparent black output.
+- One radius zero, other positive: apply 1D filter in the non-zero direction (zero radius means
+  a 1-pixel window, so no change in that direction).
+- Radius capped to image dimensions to prevent O(w*h*r²) perf blowup on extreme values.
+
+**Future optimization:** Separable min/max filter using a sliding window with a deque for O(w*h)
+total work regardless of radius (van Herk/Gil-Werman algorithm). The current implementation is
+O(w*h*rx*ry).
 
 ```cpp
-void morphology(const Pixmap& src, Pixmap& dst, MorphologyOp op, double radiusX, double radiusY);
+void morphology(const Pixmap& src, Pixmap& dst, MorphologyOp op, int radiusX, int radiusY);
 ```
 
 ##### feTile

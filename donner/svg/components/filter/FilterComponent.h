@@ -33,6 +33,10 @@ struct FilterComponent {
   /// The parsed value of the "primitiveUnits" attribute, which defines the coordinate system for
   /// the various attributes of the filter effects.
   PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;
+
+  /// The parsed value of the "color-interpolation-filters" property, which specifies the color
+  /// space for filter operations.
+  ColorInterpolationFilters colorInterpolationFilters = ColorInterpolationFilters::Default;
 };
 
 /**
@@ -47,6 +51,8 @@ struct ComputedFilterComponent {
 
   FilterUnits filterUnits = FilterUnits::Default;           ///< The computed filter units.
   PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;  ///< The computed primitive units.
+  /// The computed color interpolation mode for filter operations.
+  ColorInterpolationFilters colorInterpolationFilters = ColorInterpolationFilters::Default;
 
   /// The filter graph built from child filter primitives.
   FilterGraph filterGraph;

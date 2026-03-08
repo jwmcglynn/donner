@@ -12,12 +12,24 @@
 #include "donner/svg/SVGClipPathElement.h"        // IWYU pragma: export
 #include "donner/svg/SVGDefsElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGEllipseElement.h"         // IWYU pragma: export
-#include "donner/svg/SVGFECompositeElement.h"     // IWYU pragma: export
-#include "donner/svg/SVGFEFloodElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGFEBlendElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGFEColorMatrixElement.h"    // IWYU pragma: export
+#include "donner/svg/SVGFEComponentTransferElement.h"  // IWYU pragma: export
+#include "donner/svg/SVGFECompositeElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGFEConvolveMatrixElement.h"     // IWYU pragma: export
+#include "donner/svg/SVGFEDropShadowElement.h"         // IWYU pragma: export
+#include "donner/svg/SVGFEFloodElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGFEFuncAElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGFEFuncBElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGFEFuncGElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGFEFuncRElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGFEGaussianBlurElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGFEMergeElement.h"         // IWYU pragma: export
 #include "donner/svg/SVGFEMergeNodeElement.h"     // IWYU pragma: export
+#include "donner/svg/SVGFEMorphologyElement.h"    // IWYU pragma: export
 #include "donner/svg/SVGFEOffsetElement.h"        // IWYU pragma: export
+#include "donner/svg/SVGFETileElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGFETurbulenceElement.h"    // IWYU pragma: export
 #include "donner/svg/SVGFilterElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGGElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGImageElement.h"           // IWYU pragma: export
@@ -54,12 +66,24 @@ using AllSVGElements = entt::type_list<  //
     SVGClipPathElement,                  //
     SVGDefsElement,                      //
     SVGEllipseElement,                   //
+    SVGFEBlendElement,                   //
+    SVGFEColorMatrixElement,             //
+    SVGFEComponentTransferElement,       //
     SVGFECompositeElement,               //
+    SVGFEConvolveMatrixElement,          //
+    SVGFEDropShadowElement,              //
     SVGFEFloodElement,                   //
+    SVGFEFuncAElement,                   //
+    SVGFEFuncBElement,                   //
+    SVGFEFuncGElement,                   //
+    SVGFEFuncRElement,                   //
     SVGFEGaussianBlurElement,            //
     SVGFEMergeElement,                   //
     SVGFEMergeNodeElement,               //
+    SVGFEMorphologyElement,              //
     SVGFEOffsetElement,                  //
+    SVGFETileElement,                    //
+    SVGFETurbulenceElement,              //
     SVGFilterElement,                    //
     SVGGElement,                         //
     SVGImageElement,                     //
