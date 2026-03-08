@@ -34,6 +34,17 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "failure_signal_handler",
+    srcs = [
+        "FailureSignalHandler.cc",
+    ],
+    hdrs = [
+        "FailureSignalHandler.h",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+donner_cc_library(
     name = "base_test_utils",
     testonly = 1,
     hdrs = [

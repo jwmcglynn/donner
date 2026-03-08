@@ -12,9 +12,8 @@ cc_binary(
         ],
     }),
     deps = [
-        "@com_google_absl//absl/debugging:failure_signal_handler",
-        "@com_google_absl//absl/debugging:symbolize",
         "@donner",
+        "@donner//donner/base:failure_signal_handler",
         "@donner//third_party/glad",
         "@glfw",
         "@imgui",

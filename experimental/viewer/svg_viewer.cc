@@ -10,8 +10,7 @@ extern "C" {
 #include "GLFW/glfw3native.h"
 }
 
-#include "absl/debugging/failure_signal_handler.h"
-#include "absl/debugging/symbolize.h"
+#include "donner/base/FailureSignalHandler.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and SVGParser
@@ -150,11 +149,7 @@ struct SVGState {
 };
 
 int main(int argc, char** argv) {
-  // Initialize the symbolizer to get a human-readable stack trace
-  absl::InitializeSymbolizer(argv[0]);
-
-  absl::FailureSignalHandlerOptions options;
-  absl::InstallFailureSignalHandler(options);
+  donner::InstallFailureSignalHandler();
 
   if (argc != 2) {
     std::cerr << "Usage: svg_viewer <filename>" << std::endl;

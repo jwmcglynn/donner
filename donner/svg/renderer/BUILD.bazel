@@ -222,8 +222,7 @@ donner_cc_binary(
     target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         ":renderer_skia",
+        "//donner/base:failure_signal_handler",
         "//donner/svg/parser",
-        "@com_google_absl//absl/debugging:failure_signal_handler",
-        "@com_google_absl//absl/debugging:symbolize",
     ],
 )

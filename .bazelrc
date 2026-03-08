@@ -72,7 +72,7 @@ build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
 build:macos-binary-size --copt=-gline-tables-only
 build:macos-binary-size --linkopt=-dead_strip
 
-build --config=libc++ --config=c++20 --define absl=1
+build --config=libc++ --config=c++20
 
 # Debug builds
 build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone
