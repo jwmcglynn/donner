@@ -321,6 +321,14 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.seed = turbulence->seed;
       prim.stitchTiles = turbulence->stitchTiles;
       filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+    } else if (const auto* displace = registry.try_get<FEDisplacementMapComponent>(cur)) {
+      filter_primitive::DisplacementMap prim;
+      prim.scale = displace->scale;
+      prim.xChannelSelector =
+          static_cast<filter_primitive::DisplacementMap::Channel>(displace->xChannelSelector);
+      prim.yChannelSelector =
+          static_cast<filter_primitive::DisplacementMap::Channel>(displace->yChannelSelector);
+      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
     }
   }
 

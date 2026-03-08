@@ -17,6 +17,7 @@
 #include "donner/svg/SVGFEComponentTransferElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGFECompositeElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGFEConvolveMatrixElement.h"     // IWYU pragma: export
+#include "donner/svg/SVGFEDisplacementMapElement.h"    // IWYU pragma: export
 #include "donner/svg/SVGFEDropShadowElement.h"         // IWYU pragma: export
 #include "donner/svg/SVGFEFloodElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGFEFuncAElement.h"              // IWYU pragma: export
@@ -71,6 +72,7 @@ using AllSVGElements = entt::type_list<  //
     SVGFEComponentTransferElement,       //
     SVGFECompositeElement,               //
     SVGFEConvolveMatrixElement,          //
+    SVGFEDisplacementMapElement,         //
     SVGFEDropShadowElement,              //
     SVGFEFloodElement,                   //
     SVGFEFuncAElement,                   //

@@ -877,6 +877,48 @@ std::optional<ParseError> ParseAttribute<SVGFEMorphologyElement>(
 }
 
 template <>
+std::optional<ParseError> ParseAttribute<SVGFEDisplacementMapElement>(
+    SVGParserContext& context, SVGFEDisplacementMapElement element,
+    const XMLQualifiedNameRef& name, std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("scale")) {
+    auto& comp = element.entityHandle().get<components::FEDisplacementMapComponent>();
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      comp.scale = *maybeNumber;
+    }
+  } else if (name == XMLQualifiedNameRef("xChannelSelector")) {
+    auto& comp = element.entityHandle().get<components::FEDisplacementMapComponent>();
+    if (value == "R") {
+      comp.xChannelSelector = components::FEDisplacementMapComponent::Channel::R;
+    } else if (value == "G") {
+      comp.xChannelSelector = components::FEDisplacementMapComponent::Channel::G;
+    } else if (value == "B") {
+      comp.xChannelSelector = components::FEDisplacementMapComponent::Channel::B;
+    } else if (value == "A") {
+      comp.xChannelSelector = components::FEDisplacementMapComponent::Channel::A;
+    }
+  } else if (name == XMLQualifiedNameRef("yChannelSelector")) {
+    auto& comp = element.entityHandle().get<components::FEDisplacementMapComponent>();
+    if (value == "R") {
+      comp.yChannelSelector = components::FEDisplacementMapComponent::Channel::R;
+    } else if (value == "G") {
+      comp.yChannelSelector = components::FEDisplacementMapComponent::Channel::G;
+    } else if (value == "B") {
+      comp.yChannelSelector = components::FEDisplacementMapComponent::Channel::B;
+    } else if (value == "A") {
+      comp.yChannelSelector = components::FEDisplacementMapComponent::Channel::A;
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
 std::optional<ParseError> ParseAttribute<SVGFEConvolveMatrixElement>(
     SVGParserContext& context, SVGFEConvolveMatrixElement element, const XMLQualifiedNameRef& name,
     std::string_view value) {

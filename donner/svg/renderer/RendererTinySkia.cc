@@ -27,6 +27,7 @@
 #include "tiny_skia/filter/ColorSpace.h"
 #include "tiny_skia/filter/Composite.h"
 #include "tiny_skia/filter/ConvolveMatrix.h"
+#include "tiny_skia/filter/DisplacementMap.h"
 #include "tiny_skia/filter/Flood.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 #include "tiny_skia/filter/Merge.h"
@@ -1489,6 +1490,20 @@ void RendererTinySkia::applyFilterGraph(tiny_skia::Pixmap& pixmap,
             if (turbParams.scaleX < 1e-10) turbParams.scaleX = 1.0;
             if (turbParams.scaleY < 1e-10) turbParams.scaleY = 1.0;
             tiny_skia::filter::turbulence(*output, turbParams);
+          } else if constexpr (std::is_same_v<T, DisplacementMap>) {
+            tiny_skia::Pixmap* input2 =
+                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : sourceGraphic;
+            output = createTransparentPixmap(w, h);
+            static constexpr tiny_skia::filter::DisplacementChannel kChMap[] = {
+                tiny_skia::filter::DisplacementChannel::R,
+                tiny_skia::filter::DisplacementChannel::G,
+                tiny_skia::filter::DisplacementChannel::B,
+                tiny_skia::filter::DisplacementChannel::A,
+            };
+            const auto xCh = kChMap[static_cast<int>(primitive.xChannelSelector)];
+            const auto yCh = kChMap[static_cast<int>(primitive.yChannelSelector)];
+            tiny_skia::filter::displacementMap(*input, *input2, *output, primitive.scale, xCh,
+                                               yCh);
           } else {
             maybeWarnUnsupportedFilter();
           }

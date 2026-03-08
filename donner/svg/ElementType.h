@@ -20,6 +20,7 @@ enum class ElementType : uint8_t {
   FeComponentTransfer,  //!< \ref xml_feComponentTransfer
   FeComposite,          //!< \ref xml_feComposite
   FeConvolveMatrix,     //!< \ref xml_feConvolveMatrix
+  FeDisplacementMap,    //!< \ref xml_feDisplacementMap
   FeDropShadow,         //!< \ref xml_feDropShadow
   FeFlood,              //!< \ref xml_feFlood
   FeFuncA,              //!< \ref xml_feFuncA
@@ -111,6 +112,8 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
       return fn(std::integral_constant<ElementType, ElementType::FeComposite>());
     case ElementType::FeConvolveMatrix:
       return fn(std::integral_constant<ElementType, ElementType::FeConvolveMatrix>());
+    case ElementType::FeDisplacementMap:
+      return fn(std::integral_constant<ElementType, ElementType::FeDisplacementMap>());
     case ElementType::FeDropShadow:
       return fn(std::integral_constant<ElementType, ElementType::FeDropShadow>());
     case ElementType::FeFlood:

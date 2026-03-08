@@ -8,7 +8,7 @@
 
 ## Summary
 
-Implement full SVG filter support aligned with the [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec (referenced by [SVG2 §11](https://www.w3.org/TR/SVG2/render.html#FilteringPaintedRegions)). Donner currently supports 14 of 17 filter primitives with a working filter graph execution model, `in`/`result` routing, and `SourceGraphic`/`SourceAlpha` standard inputs on the TinySkia backend. All filter pixel operations are implemented natively in the `tiny-skia-cpp` library (`third_party/tiny-skia-cpp/src/tiny_skia/filter/`), keeping the renderer thin (graph routing only). This design covers the remaining 6 primitives, CSS shorthand filter functions, color space handling, and the Skia backend.
+Implement full SVG filter support aligned with the [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec (referenced by [SVG2 §11](https://www.w3.org/TR/SVG2/render.html#FilteringPaintedRegions)). Donner currently supports 15 of 17 filter primitives with a working filter graph execution model, `in`/`result` routing, and `SourceGraphic`/`SourceAlpha` standard inputs on the TinySkia backend. All filter pixel operations are implemented natively in the `tiny-skia-cpp` library (`third_party/tiny-skia-cpp/src/tiny_skia/filter/`), keeping the renderer thin (graph routing only). This design covers the remaining 6 primitives, CSS shorthand filter functions, color space handling, and the Skia backend.
 
 Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at least drop shadows or blur; icon sets and data visualizations use color matrix transforms and compositing. Without filter support these render as unfiltered content, which is visually wrong.
 
@@ -49,7 +49,7 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 
 ## Next Steps
 
-- Continue Milestone 3: implement `feDisplacementMap`.
+- Complete Milestone 3: implement `feImage`, add `edgeMode` to `feGaussianBlur`.
 - Begin Milestone 4: implement lighting primitives (`feDiffuseLighting`, `feSpecularLighting`, light sources).
 - Add `primitiveUnits` coordinate space handling.
 - Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).
@@ -97,7 +97,7 @@ Less common but required for full spec compliance.
 - [x] `feTile` — tile input to fill primitive subregion
 - [x] `feTurbulence` — Perlin/fractal noise generation
 - [ ] `feImage` — external image or SVG fragment as filter input
-- [ ] `feDisplacementMap` — spatial displacement using a channel map
+- [x] `feDisplacementMap` — spatial displacement using a channel map
 - [ ] `feGaussianBlur` — add `edgeMode` attribute (currently missing)
 
 ### Milestone 4: Lighting primitives
@@ -280,20 +280,16 @@ Each filter primitive maps to the library in one of three ways:
 | Morphology | `filter::morphology(src, dst, op, rx, ry)` | Done |
 | Tile | `filter::tile(src, dst, tileX, tileY, tileW, tileH)` | Done |
 | Turbulence | `filter::turbulence(dst, params)` | Done |
-| DisplacementMap | `filter::displacementMap(src, map, dst, scale, xCh, yCh)` | Planned |
+| DisplacementMap | `filter::displacementMap(src, map, dst, scale, xCh, yCh)` | Done |
 | DiffuseLighting | `filter::diffuseLighting(src, dst, light, params)` | Planned |
 | SpecularLighting | `filter::specularLighting(src, dst, light, params)` | Planned |
 | DropShadow | *(decomposed in renderer: flood+composite+offset+blur+merge)* | Done |
 
 **Remaining library work (2 functions):**
 
-The 2 planned functions fall into two categories:
+The 2 remaining planned functions are both lighting primitives:
 
-1. **Pure pixel operations (straightforward):**
-   `displacementMap` — a self-contained image processing function with no dependencies
-   on the SVG model. Takes source/destination pixmaps and numeric parameters.
-
-2. **Surface normal + lighting model:** `diffuseLighting`, `specularLighting` — these share a
+1. **Surface normal + lighting model:** `diffuseLighting`, `specularLighting` — these share a
    common infrastructure for computing surface normals from the alpha channel and evaluating
    light sources. The light source (distant/point/spot) is passed as a parameter struct. Both
    functions share the same normal computation code; they differ only in the reflection model

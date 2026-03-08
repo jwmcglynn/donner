@@ -105,6 +105,12 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FeMorphology>(
 }
 
 template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeDisplacementMap>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeConvolveMatrix>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return false;

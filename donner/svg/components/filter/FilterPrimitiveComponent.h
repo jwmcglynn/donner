@@ -227,6 +227,18 @@ struct FETileComponent {
 };
 
 /**
+ * Parameters for \ref SVGFEDisplacementMapElement.
+ */
+struct FEDisplacementMapComponent {
+  /// Channel selector.
+  enum class Channel : std::uint8_t { R, G, B, A };
+
+  double scale = 0.0;                     ///< Displacement scale factor.
+  Channel xChannelSelector = Channel::A;  ///< Channel to use for X displacement.
+  Channel yChannelSelector = Channel::A;  ///< Channel to use for Y displacement.
+};
+
+/**
  * Parameters for \ref SVGFETurbulenceElement.
  */
 struct FETurbulenceComponent {

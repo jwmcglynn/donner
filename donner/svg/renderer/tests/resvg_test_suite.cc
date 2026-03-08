@@ -352,7 +352,10 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 
 // TODO(filter): e-feDiffuseLighting (not implemented)
-// TODO(filter): e-feDisplacementMap (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeDisplacementMap, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("e-feDisplacementMap", {})),
+    TestNameFromFilename);
 // TODO(filter): e-feDistantLight (not implemented)
 INSTANTIATE_TEST_SUITE_P(
     FeDropShadow, ImageComparisonTestFixture,

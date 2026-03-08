@@ -15,6 +15,7 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::FeComponentTransfer: return os << "FeComponentTransfer";
     case ElementType::FeComposite: return os << "FeComposite";
     case ElementType::FeConvolveMatrix: return os << "FeConvolveMatrix";
+    case ElementType::FeDisplacementMap: return os << "FeDisplacementMap";
     case ElementType::FeDropShadow: return os << "FeDropShadow";
     case ElementType::FeFlood: return os << "FeFlood";
     case ElementType::FeFuncA: return os << "FeFuncA";
