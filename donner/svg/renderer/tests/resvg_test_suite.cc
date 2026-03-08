@@ -474,16 +474,12 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-feSpotLight",
         {
-            {"e-feSpotLight-002.svg", Params::Skip()},   // lighting-color CSS
-            {"e-feSpotLight-003.svg", Params::Skip()},   // lighting-color CSS
-            {"e-feSpotLight-004.svg", Params::Skip()},   // lighting-color CSS
-            {"e-feSpotLight-005.svg", Params::Skip()},   // lighting-color CSS
-            {"e-feSpotLight-006.svg", Params::Skip()},   // lighting-color CSS
-            {"e-feSpotLight-007.svg", Params::Skip()},   // lighting-color CSS
-            {"e-feSpotLight-008.svg", Params::Skip()},   // lighting-color CSS
-            {"e-feSpotLight-010.svg", Params::Skip()},   // Complex spot + specular
-            {"e-feSpotLight-011.svg", Params::Skip()},   // Complex spot + specular
-            {"e-feSpotLight-012.svg", Params::Skip()},   // Complex spot + specular
+            {"e-feSpotLight-005.svg", Params::Skip()},  // Negative specularExponent=-10 edge case
+            {"e-feSpotLight-007.svg", Params::WithThreshold(kDefaultThreshold, 3000)},
+            {"e-feSpotLight-008.svg", Params::WithThreshold(kDefaultThreshold, 3000)},
+            {"e-feSpotLight-010.svg", Params::Skip()},   // Not impl: limitingConeAngle anti-aliasing
+            {"e-feSpotLight-011.svg", Params::Skip()},   // Not impl: primitiveUnits=objectBoundingBox
+            {"e-feSpotLight-012.svg", Params::Skip()},   // Not impl: complex transform
         })),
     TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(

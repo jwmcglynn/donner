@@ -1153,19 +1153,37 @@ void RendererTinySkia::applyFilterGraph(tiny_skia::Pixmap& pixmap,
             static_cast<uint8_t>(std::round(alpha * 255.0))};
   };
 
+  // Compute the uniform scale factor from user space to pixel space. This is needed to transform
+  // light coordinates and surfaceScale for filters running at canvas resolution.
+  const double pixelScale = [&]() -> double {
+    const Vector2d sx = currentTransform_.transformPosition(Vector2d(1, 0)) -
+                        currentTransform_.transformPosition(Vector2d(0, 0));
+    const Vector2d sy = currentTransform_.transformPosition(Vector2d(0, 1)) -
+                        currentTransform_.transformPosition(Vector2d(0, 0));
+    return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
+  }();
+
   // Helper: convert a donner LightSource to tiny-skia LightSourceParams.
+  // All coordinates (x, y, z, pointsAt) are scaled from user space to pixel space since the
+  // lighting algorithm iterates over pixel coordinates.
   auto convertLightSource =
-      [](const filter_primitive::LightSource& ls) -> tiny_skia::filter::LightSourceParams {
+      [&](const filter_primitive::LightSource& ls) -> tiny_skia::filter::LightSourceParams {
     tiny_skia::filter::LightSourceParams lp;
     lp.type = static_cast<tiny_skia::filter::LightType>(ls.type);
     lp.azimuth = ls.azimuth;
     lp.elevation = ls.elevation;
-    lp.x = ls.x;
-    lp.y = ls.y;
-    lp.z = ls.z;
-    lp.pointsAtX = ls.pointsAtX;
-    lp.pointsAtY = ls.pointsAtY;
-    lp.pointsAtZ = ls.pointsAtZ;
+
+    // Transform all light coordinates from user space to pixel space.
+    const Vector2d lightPixel = currentTransform_.transformPosition(Vector2d(ls.x, ls.y));
+    const Vector2d pointsAtPixel =
+        currentTransform_.transformPosition(Vector2d(ls.pointsAtX, ls.pointsAtY));
+    lp.x = lightPixel.x;
+    lp.y = lightPixel.y;
+    lp.z = ls.z * pixelScale;
+    lp.pointsAtX = pointsAtPixel.x;
+    lp.pointsAtY = pointsAtPixel.y;
+    lp.pointsAtZ = ls.pointsAtZ * pixelScale;
+
     lp.spotExponent = ls.spotExponent;
     lp.limitingConeAngle = ls.limitingConeAngle;
     return lp;

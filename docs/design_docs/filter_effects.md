@@ -1,9 +1,9 @@
 # Design: SVG Filter Effects
 
-**Status:** In Progress (Milestones 1-2 complete, Milestone 3 in progress)
+**Status:** In Progress (Milestones 1-4 complete, Milestone 5 next)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-07
-**Last Updated:** 2026-03-07
+**Last Updated:** 2026-03-08
 **Tracking:** [#151](https://github.com/jwmcglynn/donner/issues/151)
 
 ## Summary
@@ -37,24 +37,25 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - Filter region clipping on output
 - Primitive subregion computation (explicit attributes; TODO: union-of-inputs default)
 - `color-interpolation-filters` property (linearRGB/sRGB conversion via LUT)
-- 15/17 primitives: `feGaussianBlur`, `feFlood`, `feOffset`, `feComposite`, `feMerge`, `feColorMatrix`, `feBlend`, `feComponentTransfer`, `feDropShadow`, `feMorphology`, `feTile`, `feConvolveMatrix`, `feTurbulence`, `feDisplacementMap`
-- `feImage` — element parsing wired up, rendering outputs transparent (needs image loading in filter context)
+- All 17 primitives: `feGaussianBlur`, `feFlood`, `feOffset`, `feComposite`, `feMerge`, `feColorMatrix`, `feBlend`, `feComponentTransfer`, `feDropShadow`, `feMorphology`, `feTile`, `feConvolveMatrix`, `feTurbulence`, `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`, `feImage`
+- Light sources: `feDistantLight`, `fePointLight`, `feSpotLight` with coordinate scaling for non-1:1 viewBox/canvas ratios
 - Native tiny-skia-cpp filter library with all implemented operations
 
 **Known gaps:**
 - `primitiveUnits` coordinate space handling
 - linearRGB LUT operates at 8-bit precision (should be float for accuracy)
 - Blur edge clipping: blur operates on full pixmap then clips, causing edge differences
-- 2 remaining primitives not yet rendered (`feDiffuseLighting`, `feSpecularLighting`)
 - Skia backend not yet updated for filter graph model
+- `feImage` fragment references (`href="#elementId"`) — deferred to future work, depends on nested SVG rendering (e.g. `<use>` element support)
+- Light coordinate scaling: z and surfaceScale interaction at non-1:1 pixel density causes minor diffs for some spot light configurations (~3K pixels for cone-boundary cases)
 
 ## Next Steps
 
-- Complete Milestone 3: implement `feImage` rendering (currently parses but outputs transparent); `edgeMode` for `feGaussianBlur` is done.
-- Begin Milestone 4: implement lighting primitives (`feDiffuseLighting`, `feSpecularLighting`, light sources).
+- Begin Milestone 5: CSS shorthand filter functions (`blur()`, `brightness()`, etc.).
 - Add `primitiveUnits` coordinate space handling.
 - Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).
 - Fix blur edge clipping to match spec behavior.
+- Improve `feImage` external image rendering (subregion/OBB tests).
 
 ## Implementation Plan
 
@@ -96,17 +97,18 @@ Less common but required for full spec compliance.
 - [x] `feMorphology` — erode/dilate operations
 - [x] `feTile` — tile input to fill primitive subregion
 - [x] `feTurbulence` — Perlin/fractal noise generation
-- [x] `feImage` — parsing and graph wiring complete; rendering outputs transparent (TODO: image loading in filter context, fragment references)
+- [x] `feImage` — external image rendering complete; fragment references (`href="#elementId"`) deferred to future work (depends on nested SVG/`<use>` support)
 - [x] `feDisplacementMap` — spatial displacement using a channel map
 - [x] `feGaussianBlur` — `edgeMode` attribute (none/duplicate/wrap)
 
 ### Milestone 4: Lighting primitives
 
-- [ ] `feDiffuseLighting` — diffuse reflection using bump map from alpha channel
-- [ ] `feSpecularLighting` — specular highlights using bump map
-- [ ] `feDistantLight` — directional light source (child of lighting primitives)
-- [ ] `fePointLight` — point light source
-- [ ] `feSpotLight` — spotlight source
+- [x] `feDiffuseLighting` — diffuse reflection using bump map from alpha channel
+- [x] `feSpecularLighting` — specular highlights using bump map
+- [x] `feDistantLight` — directional light source (child of lighting primitives)
+- [x] `fePointLight` — point light source
+- [x] `feSpotLight` — spotlight source with coordinate scaling (x/y/z scaled to pixel space)
+- [x] `lighting-color` CSS property parsing and resolution
 
 ### Milestone 5: CSS shorthand filter functions
 
@@ -281,23 +283,23 @@ Each filter primitive maps to the library in one of three ways:
 | Tile | `filter::tile(src, dst, tileX, tileY, tileW, tileH)` | Done |
 | Turbulence | `filter::turbulence(dst, params)` | Done |
 | DisplacementMap | `filter::displacementMap(src, map, dst, scale, xCh, yCh)` | Done |
-| DiffuseLighting | `filter::diffuseLighting(src, dst, light, params)` | Planned |
-| SpecularLighting | `filter::specularLighting(src, dst, light, params)` | Planned |
+| DiffuseLighting | `filter::diffuseLighting(src, dst, params)` | Done |
+| SpecularLighting | `filter::specularLighting(src, dst, params)` | Done |
 | DropShadow | *(decomposed in renderer: flood+composite+offset+blur+merge)* | Done |
 
-**Remaining library work (2 functions):**
+**All library functions are implemented.** The lighting primitives (`diffuseLighting`,
+`specularLighting`) share a common infrastructure for computing surface normals from the alpha
+channel (Sobel-like kernels per SVG spec) and evaluating light sources. The light source
+(distant/point/spot) is passed as a `LightSourceParams` struct. Both functions share the same
+normal computation code; they differ only in the reflection model (Lambertian diffuse vs. Phong
+specular).
 
-The 2 remaining planned functions are both lighting primitives:
-
-1. **Surface normal + lighting model:** `diffuseLighting`, `specularLighting` — these share a
-   common infrastructure for computing surface normals from the alpha channel and evaluating
-   light sources. The light source (distant/point/spot) is passed as a parameter struct. Both
-   functions share the same normal computation code; they differ only in the reflection model
-   (Lambertian diffuse vs. Phong specular).
-
-All 6 functions are stateless, operate on premultiplied RGBA pixmaps, and have no side effects.
-They can be implemented and tested incrementally without changes to the library's existing API
-surface.
+**Light coordinate scaling:** When the canvas resolution differs from the SVG user space (e.g.,
+viewBox="0 0 200 200" rendered at 500x500), point/spot light coordinates (x, y, z, pointsAtX/Y/Z)
+are transformed from user space to pixel space using `currentTransform_`. The z coordinates are
+scaled by the uniform pixel scale factor (RMS of transform scale factors) to preserve correct 3D
+light direction vectors. `surfaceScale` is NOT scaled — it controls bump map height which works
+correctly at any pixel density since the Sobel kernel already adapts to the pixel grid.
 
 #### Graph Executor (`RendererTinySkia`)
 
@@ -570,11 +572,11 @@ void turbulence(Pixmap& dst, const TurbulenceParams& params);
 
 **Algorithm:** Render an external image or SVG fragment reference into the filter output buffer.
 Two cases:
-1. **External image URL:** Load via existing `ImageResource` pipeline, draw into the output buffer
-   with `preserveAspectRatio` scaling.
-2. **Fragment reference (`#elementId`):** Requires re-entrant rendering of the referenced element
-   subtree into a temporary pixmap. The referenced element is rendered with its own styles but
-   positioned within the filter primitive subregion.
+1. **External image URL (implemented):** Load via existing `ImageResource` pipeline, draw into the
+   output buffer with `preserveAspectRatio` scaling.
+2. **Fragment reference (`#elementId`) (future work):** Requires re-entrant rendering of the
+   referenced element subtree into a temporary pixmap. This depends on nested SVG rendering
+   infrastructure (similar to `<use>` element support) and is deferred to future work.
 
 This primitive is handled in the renderer layer (not the tiny-skia-cpp filter library) because it
 requires access to the SVG document and image loading infrastructure.
@@ -745,6 +747,7 @@ CSS filter functions (`blur()`, `brightness()`, etc.) cover common use cases and
 
 ## Future Work
 
+- [ ] `feImage` fragment references (`href="#elementId"`) — requires re-entrant rendering of referenced element subtrees into pixmaps; depends on nested SVG rendering infrastructure (e.g. `<use>` element)
 - [ ] `BackgroundImage` / `BackgroundAlpha` standard inputs via CSS isolation groups
 - [ ] GPU-accelerated filter execution for large filter regions
 - [ ] Filter parameter animation support
