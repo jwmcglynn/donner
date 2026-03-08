@@ -103,16 +103,32 @@ ConvolutionKernel makeBlurKernel(double sigma) {
   return makeBoxApproximationKernel(sigma);
 }
 
+/// Resolve an out-of-bounds coordinate based on edge mode.
+/// Returns the resolved coordinate, or -1 if the pixel should be treated as transparent black.
+int resolveEdge(int coord, int size, BlurEdgeMode edgeMode) {
+  if (coord >= 0 && coord < size) {
+    return coord;
+  }
+  switch (edgeMode) {
+    case BlurEdgeMode::Duplicate: return std::clamp(coord, 0, size - 1);
+    case BlurEdgeMode::Wrap: return ((coord % size) + size) % size;
+    case BlurEdgeMode::None: return -1;  // transparent black
+  }
+  return -1;
+}
+
 void convolveHorizontal(const std::vector<std::uint8_t>& src, std::vector<std::uint8_t>& dst,
-                        int width, int height, const ConvolutionKernel& kernel) {
+                        int width, int height, const ConvolutionKernel& kernel,
+                        BlurEdgeMode edgeMode) {
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       for (int channel = 0; channel < 4; ++channel) {
         if (!kernel.numerators.empty()) {
           std::uint64_t sum = 0;
           for (std::size_t kernelIndex = 0; kernelIndex < kernel.numerators.size(); ++kernelIndex) {
-            const int sampleX = x + static_cast<int>(kernelIndex) - kernel.origin;
-            if (sampleX < 0 || sampleX >= width) {
+            const int sampleX =
+                resolveEdge(x + static_cast<int>(kernelIndex) - kernel.origin, width, edgeMode);
+            if (sampleX < 0) {
               continue;
             }
 
@@ -129,8 +145,9 @@ void convolveHorizontal(const std::vector<std::uint8_t>& src, std::vector<std::u
 
         float sum = 0.0f;
         for (std::size_t kernelIndex = 0; kernelIndex < kernel.weights.size(); ++kernelIndex) {
-          const int sampleX = x + static_cast<int>(kernelIndex) - kernel.origin;
-          if (sampleX < 0 || sampleX >= width) {
+          const int sampleX =
+              resolveEdge(x + static_cast<int>(kernelIndex) - kernel.origin, width, edgeMode);
+          if (sampleX < 0) {
             continue;
           }
 
@@ -147,15 +164,17 @@ void convolveHorizontal(const std::vector<std::uint8_t>& src, std::vector<std::u
 }
 
 void convolveVertical(const std::vector<std::uint8_t>& src, std::vector<std::uint8_t>& dst,
-                      int width, int height, const ConvolutionKernel& kernel) {
+                      int width, int height, const ConvolutionKernel& kernel,
+                      BlurEdgeMode edgeMode) {
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       for (int channel = 0; channel < 4; ++channel) {
         if (!kernel.numerators.empty()) {
           std::uint64_t sum = 0;
           for (std::size_t kernelIndex = 0; kernelIndex < kernel.numerators.size(); ++kernelIndex) {
-            const int sampleY = y + static_cast<int>(kernelIndex) - kernel.origin;
-            if (sampleY < 0 || sampleY >= height) {
+            const int sampleY =
+                resolveEdge(y + static_cast<int>(kernelIndex) - kernel.origin, height, edgeMode);
+            if (sampleY < 0) {
               continue;
             }
 
@@ -172,8 +191,9 @@ void convolveVertical(const std::vector<std::uint8_t>& src, std::vector<std::uin
 
         float sum = 0.0f;
         for (std::size_t kernelIndex = 0; kernelIndex < kernel.weights.size(); ++kernelIndex) {
-          const int sampleY = y + static_cast<int>(kernelIndex) - kernel.origin;
-          if (sampleY < 0 || sampleY >= height) {
+          const int sampleY =
+              resolveEdge(y + static_cast<int>(kernelIndex) - kernel.origin, height, edgeMode);
+          if (sampleY < 0) {
             continue;
           }
 
@@ -191,7 +211,7 @@ void convolveVertical(const std::vector<std::uint8_t>& src, std::vector<std::uin
 
 }  // namespace
 
-void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY) {
+void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edgeMode) {
   const int width = static_cast<int>(pixmap.width());
   const int height = static_cast<int>(pixmap.height());
   if (width <= 0 || height <= 0) {
@@ -203,13 +223,13 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY) {
 
   if (sigmaX > 0.0) {
     const ConvolutionKernel kernel = makeBlurKernel(sigmaX);
-    convolveHorizontal(buffer, scratch, width, height, kernel);
+    convolveHorizontal(buffer, scratch, width, height, kernel, edgeMode);
     buffer.swap(scratch);
   }
 
   if (sigmaY > 0.0) {
     const ConvolutionKernel kernel = makeBlurKernel(sigmaY);
-    convolveVertical(buffer, scratch, width, height, kernel);
+    convolveVertical(buffer, scratch, width, height, kernel, edgeMode);
     buffer.swap(scratch);
   }
 

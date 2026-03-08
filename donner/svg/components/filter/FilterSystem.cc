@@ -147,6 +147,8 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
           filter_primitive::GaussianBlur{
               .stdDeviationX = blur->stdDeviationX,
               .stdDeviationY = blur->stdDeviationY,
+              .edgeMode =
+                  static_cast<filter_primitive::GaussianBlur::EdgeMode>(blur->edgeMode),
           },
           *primitive));
     } else if (registry.try_get<FEFloodComponent>(cur)) {
@@ -329,6 +331,79 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.yChannelSelector =
           static_cast<filter_primitive::DisplacementMap::Channel>(displace->yChannelSelector);
       filterGraph.nodes.push_back(makeFilterNode(prim, *primitive));
+    } else if (const auto* diffuse = registry.try_get<FEDiffuseLightingComponent>(cur)) {
+      filter_primitive::DiffuseLighting prim;
+      prim.surfaceScale = diffuse->surfaceScale;
+      prim.diffuseConstant = diffuse->diffuseConstant;
+      // TODO(jwmcglynn): Resolve lighting-color from CSS properties.
+
+      // Find light source child element.
+      const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
+      for (auto child = curTree.firstChild(); child != entt::null;
+           child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+        const auto* lightComp = registry.try_get<LightSourceComponent>(child);
+        if (lightComp) {
+          filter_primitive::LightSource light;
+          light.type = static_cast<filter_primitive::LightSource::Type>(lightComp->type);
+          light.azimuth = lightComp->azimuth;
+          light.elevation = lightComp->elevation;
+          light.x = lightComp->x;
+          light.y = lightComp->y;
+          light.z = lightComp->z;
+          light.pointsAtX = lightComp->pointsAtX;
+          light.pointsAtY = lightComp->pointsAtY;
+          light.pointsAtZ = lightComp->pointsAtZ;
+          light.spotExponent = lightComp->spotExponent;
+          light.limitingConeAngle = lightComp->limitingConeAngle;
+          prim.light = light;
+          break;  // Only first light source is used.
+        }
+      }
+
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
+    } else if (const auto* specular = registry.try_get<FESpecularLightingComponent>(cur)) {
+      filter_primitive::SpecularLighting prim;
+      prim.surfaceScale = specular->surfaceScale;
+      prim.specularConstant = specular->specularConstant;
+      prim.specularExponent = specular->specularExponent;
+      // TODO(jwmcglynn): Resolve lighting-color from CSS properties.
+
+      // Find light source child element.
+      const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
+      for (auto child = curTree.firstChild(); child != entt::null;
+           child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+        const auto* lightComp = registry.try_get<LightSourceComponent>(child);
+        if (lightComp) {
+          filter_primitive::LightSource light;
+          light.type = static_cast<filter_primitive::LightSource::Type>(lightComp->type);
+          light.azimuth = lightComp->azimuth;
+          light.elevation = lightComp->elevation;
+          light.x = lightComp->x;
+          light.y = lightComp->y;
+          light.z = lightComp->z;
+          light.pointsAtX = lightComp->pointsAtX;
+          light.pointsAtY = lightComp->pointsAtY;
+          light.pointsAtZ = lightComp->pointsAtZ;
+          light.spotExponent = lightComp->spotExponent;
+          light.limitingConeAngle = lightComp->limitingConeAngle;
+          prim.light = light;
+          break;
+        }
+      }
+
+      filterGraph.nodes.push_back(makeFilterNode(std::move(prim), *primitive));
+    } else if (const auto* feImage = registry.try_get<FEImageComponent>(cur)) {
+      filter_primitive::Image prim;
+      prim.href = feImage->href;
+      // feImage has no standard input (it generates its own content).
+      FilterNode node;
+      node.primitive = std::move(prim);
+      node.result = primitive->result;
+      node.x = primitive->x;
+      node.y = primitive->y;
+      node.width = primitive->width;
+      node.height = primitive->height;
+      filterGraph.nodes.push_back(std::move(node));
     }
   }
 

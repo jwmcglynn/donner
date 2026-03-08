@@ -17,7 +17,9 @@
 #include "donner/svg/SVGFEComponentTransferElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGFECompositeElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGFEConvolveMatrixElement.h"     // IWYU pragma: export
+#include "donner/svg/SVGFEDiffuseLightingElement.h"    // IWYU pragma: export
 #include "donner/svg/SVGFEDisplacementMapElement.h"    // IWYU pragma: export
+#include "donner/svg/SVGFEDistantLightElement.h"       // IWYU pragma: export
 #include "donner/svg/SVGFEDropShadowElement.h"         // IWYU pragma: export
 #include "donner/svg/SVGFEFloodElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGFEFuncAElement.h"              // IWYU pragma: export
@@ -25,10 +27,14 @@
 #include "donner/svg/SVGFEFuncGElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGFEFuncRElement.h"              // IWYU pragma: export
 #include "donner/svg/SVGFEGaussianBlurElement.h"  // IWYU pragma: export
+#include "donner/svg/SVGFEImageElement.h"         // IWYU pragma: export
 #include "donner/svg/SVGFEMergeElement.h"         // IWYU pragma: export
 #include "donner/svg/SVGFEMergeNodeElement.h"     // IWYU pragma: export
 #include "donner/svg/SVGFEMorphologyElement.h"    // IWYU pragma: export
 #include "donner/svg/SVGFEOffsetElement.h"        // IWYU pragma: export
+#include "donner/svg/SVGFEPointLightElement.h"    // IWYU pragma: export
+#include "donner/svg/SVGFESpecularLightingElement.h"  // IWYU pragma: export
+#include "donner/svg/SVGFESpotLightElement.h"     // IWYU pragma: export
 #include "donner/svg/SVGFETileElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGFETurbulenceElement.h"    // IWYU pragma: export
 #include "donner/svg/SVGFilterElement.h"          // IWYU pragma: export
@@ -72,7 +78,9 @@ using AllSVGElements = entt::type_list<  //
     SVGFEComponentTransferElement,       //
     SVGFECompositeElement,               //
     SVGFEConvolveMatrixElement,          //
+    SVGFEDiffuseLightingElement,         //
     SVGFEDisplacementMapElement,         //
+    SVGFEDistantLightElement,            //
     SVGFEDropShadowElement,              //
     SVGFEFloodElement,                   //
     SVGFEFuncAElement,                   //
@@ -80,10 +88,14 @@ using AllSVGElements = entt::type_list<  //
     SVGFEFuncGElement,                   //
     SVGFEFuncRElement,                   //
     SVGFEGaussianBlurElement,            //
+    SVGFEImageElement,                   //
     SVGFEMergeElement,                   //
     SVGFEMergeNodeElement,               //
     SVGFEMorphologyElement,              //
     SVGFEOffsetElement,                  //
+    SVGFEPointLightElement,              //
+    SVGFESpecularLightingElement,        //
+    SVGFESpotLightElement,               //
     SVGFETileElement,                    //
     SVGFETurbulenceElement,              //
     SVGFilterElement,                    //

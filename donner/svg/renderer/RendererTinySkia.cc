@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
-#include <map>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -21,20 +20,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/PathBuilder.h"
-#include "tiny_skia/filter/Blend.h"
-#include "tiny_skia/filter/ColorMatrix.h"
-#include "tiny_skia/filter/ComponentTransfer.h"
-#include "tiny_skia/filter/ColorSpace.h"
-#include "tiny_skia/filter/Composite.h"
-#include "tiny_skia/filter/ConvolveMatrix.h"
-#include "tiny_skia/filter/DisplacementMap.h"
-#include "tiny_skia/filter/Flood.h"
-#include "tiny_skia/filter/GaussianBlur.h"
-#include "tiny_skia/filter/Merge.h"
-#include "tiny_skia/filter/Morphology.h"
-#include "tiny_skia/filter/Tile.h"
-#include "tiny_skia/filter/Turbulence.h"
-#include "tiny_skia/filter/Offset.h"
+#include "tiny_skia/filter/FilterGraph.h"
 #include "tiny_skia/shaders/Shaders.h"
 
 namespace donner::svg {
@@ -1112,500 +1098,324 @@ void RendererTinySkia::applyFilterGraph(tiny_skia::Pixmap& pixmap,
                                         const std::optional<Boxd>& filterRegion) {
   using namespace components;
   using namespace components::filter_primitive;
+  namespace gp = tiny_skia::filter::graph_primitive;
 
   const int w = static_cast<int>(pixmap.width());
   const int h = static_cast<int>(pixmap.height());
 
-  // Convert SourceGraphic from sRGB to linearRGB for filter processing.
-  // Per spec, color-interpolation-filters defaults to linearRGB.
-  const bool useLinearRGB =
+  // Helper: convert user-space length to pixel-space via the current transform.
+  const Vector2d origin = currentTransform_.transformPosition(Vector2d(0, 0));
+  auto toPixelX = [&](double userX) -> double {
+    return std::abs((currentTransform_.transformPosition(Vector2d(userX, 0)) - origin).x);
+  };
+  auto toPixelY = [&](double userY) -> double {
+    return std::abs((currentTransform_.transformPosition(Vector2d(0, userY)) - origin).y);
+  };
+  auto toPixelOffsetX = [&](double userX) -> int {
+    return static_cast<int>(
+        (currentTransform_.transformPosition(Vector2d(userX, 0)) - origin).x);
+  };
+  auto toPixelOffsetY = [&](double userY) -> int {
+    return static_cast<int>(
+        (currentTransform_.transformPosition(Vector2d(0, userY)) - origin).y);
+  };
+
+  // Helper: convert a donner FilterInput to a tiny-skia NodeInput.
+  auto convertInput = [](const FilterInput& fi) -> tiny_skia::filter::NodeInput {
+    return std::visit(
+        [](const auto& v) -> tiny_skia::filter::NodeInput {
+          using V = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<V, FilterInput::Previous>) {
+            return tiny_skia::filter::NodeInput();
+          } else if constexpr (std::is_same_v<V, FilterStandardInput>) {
+            return tiny_skia::filter::NodeInput(
+                static_cast<tiny_skia::filter::StandardInput>(v));
+          } else if constexpr (std::is_same_v<V, FilterInput::Named>) {
+            return tiny_skia::filter::NodeInput(
+                tiny_skia::filter::NodeInput::Named{std::string(v.name)});
+          } else {
+            return tiny_skia::filter::NodeInput();
+          }
+        },
+        fi.value);
+  };
+
+  // Helper: convert flood color from css::Color + opacity to premultiplied sRGB RGBA.
+  struct PremulRGBA {
+    uint8_t r, g, b, a;
+  };
+  auto floodToPremul = [](const css::Color& color, double opacity) -> PremulRGBA {
+    const css::RGBA rgba = color.asRGBA();
+    const double alpha = (rgba.a / 255.0) * opacity;
+    return {static_cast<uint8_t>(std::round(rgba.r * alpha)),
+            static_cast<uint8_t>(std::round(rgba.g * alpha)),
+            static_cast<uint8_t>(std::round(rgba.b * alpha)),
+            static_cast<uint8_t>(std::round(alpha * 255.0))};
+  };
+
+  // Helper: convert a donner LightSource to tiny-skia LightSourceParams.
+  auto convertLightSource =
+      [](const filter_primitive::LightSource& ls) -> tiny_skia::filter::LightSourceParams {
+    tiny_skia::filter::LightSourceParams lp;
+    lp.type = static_cast<tiny_skia::filter::LightType>(ls.type);
+    lp.azimuth = ls.azimuth;
+    lp.elevation = ls.elevation;
+    lp.x = ls.x;
+    lp.y = ls.y;
+    lp.z = ls.z;
+    lp.pointsAtX = ls.pointsAtX;
+    lp.pointsAtY = ls.pointsAtY;
+    lp.pointsAtZ = ls.pointsAtZ;
+    lp.spotExponent = ls.spotExponent;
+    lp.limitingConeAngle = ls.limitingConeAngle;
+    return lp;
+  };
+
+  // Build the tiny-skia filter graph by converting each donner FilterNode.
+  tiny_skia::filter::FilterGraph graph;
+  graph.useLinearRGB =
       filterGraph.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
-  if (useLinearRGB) {
-    tiny_skia::filter::srgbToLinear(pixmap);
+
+  if (filterRegion.has_value()) {
+    const Boxd pr = currentTransform_.transformBox(*filterRegion);
+    graph.filterRegion = tiny_skia::filter::PixelRect{pr.topLeft.x, pr.topLeft.y,
+                                                      pr.bottomRight.x - pr.topLeft.x,
+                                                      pr.bottomRight.y - pr.topLeft.y};
   }
 
-  // Buffer management: sourceGraphic is the captured content, previousOutput tracks implicit
-  // chaining, and namedBuffers stores explicitly named results.
-  tiny_skia::Pixmap* sourceGraphic = &pixmap;
-  std::optional<tiny_skia::Pixmap> sourceAlpha;
-  std::optional<tiny_skia::Pixmap> previousOutput;
-  std::map<RcString, tiny_skia::Pixmap> namedBuffers;
-
-  // Per CSS Filter Effects spec, the default primitive subregion is the tightest fitting
-  // bounding box of the referenced input. Track each node's effective pixel-space subregion
-  // for feTile (which tiles based on the input's subregion).
-  const Boxd fullRegion = Boxd::FromXYWH(0, 0, w, h);
-  // Filter region in pixel space, used to clip primitive subregions.
-  const Boxd filterRegionPixel =
-      filterRegion.has_value() ? currentTransform_.transformBox(*filterRegion) : fullRegion;
-  Boxd previousOutputSubregion = fullRegion;
-  std::map<RcString, Boxd> namedSubregions;
-
-
-  // Lazily create SourceAlpha: same as SourceGraphic but with RGB=0, keeping only alpha.
-  auto getSourceAlpha = [&]() -> tiny_skia::Pixmap* {
-    if (!sourceAlpha.has_value()) {
-      sourceAlpha = *sourceGraphic;
-      auto data = sourceAlpha->data();
-      for (int i = 0; i < w * h; ++i) {
-        // Premultiplied RGBA: set R, G, B to 0, keep A.
-        data[i * 4 + 0] = 0;
-        data[i * 4 + 1] = 0;
-        data[i * 4 + 2] = 0;
-      }
-    }
-    return &sourceAlpha.value();
-  };
-
-  auto resolveInput = [&](const FilterInput& input) -> tiny_skia::Pixmap* {
-    return std::visit(
-        [&](const auto& v) -> tiny_skia::Pixmap* {
-          using V = std::decay_t<decltype(v)>;
-          if constexpr (std::is_same_v<V, FilterInput::Previous>) {
-            return previousOutput.has_value() ? &previousOutput.value() : sourceGraphic;
-          } else if constexpr (std::is_same_v<V, FilterStandardInput>) {
-            if (v == FilterStandardInput::SourceGraphic) {
-              return sourceGraphic;
-            }
-            if (v == FilterStandardInput::SourceAlpha) {
-              return getSourceAlpha();
-            }
-            // TODO: FillPaint, StrokePaint
-            return sourceGraphic;
-          } else if constexpr (std::is_same_v<V, FilterInput::Named>) {
-            auto it = namedBuffers.find(v.name);
-            if (it != namedBuffers.end()) {
-              return &it->second;
-            }
-            return sourceGraphic;
-          } else {
-            return sourceGraphic;
-          }
-        },
-        input.value);
-  };
-
-  auto resolveInputSubregion = [&](const FilterInput& input) -> Boxd {
-    return std::visit(
-        [&](const auto& v) -> Boxd {
-          using V = std::decay_t<decltype(v)>;
-          if constexpr (std::is_same_v<V, FilterInput::Previous>) {
-            return previousOutputSubregion;
-          } else if constexpr (std::is_same_v<V, FilterInput::Named>) {
-            auto it = namedSubregions.find(v.name);
-            if (it != namedSubregions.end()) {
-              return it->second;
-            }
-            return fullRegion;
-          } else {
-            return fullRegion;
-          }
-        },
-        input.value);
-  };
-
   for (const FilterNode& node : filterGraph.nodes) {
-    tiny_skia::Pixmap* input =
-        node.inputs.empty() ? sourceGraphic : resolveInput(node.inputs[0]);
+    tiny_skia::filter::GraphNode gn;
 
-    std::optional<tiny_skia::Pixmap> output;
+    // Convert inputs.
+    for (const auto& fi : node.inputs) {
+      gn.inputs.push_back(convertInput(fi));
+    }
 
+    // Convert named result.
+    if (node.result.has_value()) {
+      gn.result = std::string(*node.result);
+    }
+
+    // Convert subregion from user space to pixel space.
+    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+        node.height.has_value()) {
+      const double ux = node.x.has_value() ? node.x->value : 0.0;
+      const double uy = node.y.has_value() ? node.y->value : 0.0;
+      const double uw = node.width.has_value() ? node.width->value : w;
+      const double uh = node.height.has_value() ? node.height->value : h;
+      const Boxd pixelRegion =
+          currentTransform_.transformBox(Boxd::FromXYWH(ux, uy, uw, uh));
+      gn.subregion = tiny_skia::filter::PixelRect{
+          pixelRegion.topLeft.x, pixelRegion.topLeft.y,
+          pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
+          pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+    }
+
+    // Convert the primitive, mapping enums and converting user-space to pixel-space.
     std::visit(
         [&](const auto& primitive) {
           using T = std::decay_t<decltype(primitive)>;
-          if constexpr (std::is_same_v<T, GaussianBlur>) {
-            // Gaussian blur operates in-place on a copy of the input.
-            // Scale stdDeviation from user space to pixel space.
-            const Vector2d origin = currentTransform_.transformPosition(Vector2d(0, 0));
-            const Vector2d scaleX =
-                currentTransform_.transformPosition(Vector2d(primitive.stdDeviationX, 0)) - origin;
-            const Vector2d scaleY =
-                currentTransform_.transformPosition(Vector2d(0, primitive.stdDeviationY)) - origin;
-            // Negative stdDeviation means no blur (per SVG spec).
-            const double pixelSigmaX =
-                primitive.stdDeviationX >= 0 ? std::abs(scaleX.x) : 0.0;
-            const double pixelSigmaY =
-                primitive.stdDeviationY >= 0 ? std::abs(scaleY.y) : 0.0;
-            output = *input;
-            tiny_skia::filter::gaussianBlur(*output, pixelSigmaX, pixelSigmaY);
-          } else if constexpr (std::is_same_v<T, Flood>) {
-            output = createTransparentPixmap(w, h);
-            const css::RGBA rgba = primitive.floodColor.asRGBA();
-            const double alpha = (rgba.a / 255.0) * primitive.floodOpacity;
-            const uint8_t pa = static_cast<uint8_t>(std::round(alpha * 255.0));
-            const uint8_t pr = static_cast<uint8_t>(std::round(rgba.r * alpha));
-            const uint8_t pg = static_cast<uint8_t>(std::round(rgba.g * alpha));
-            const uint8_t pb = static_cast<uint8_t>(std::round(rgba.b * alpha));
-            tiny_skia::filter::flood(*output, pr, pg, pb, pa);
-            // Convert flood color from sRGB to linearRGB to match the filter pipeline.
-            if (useLinearRGB) {
-              tiny_skia::filter::srgbToLinear(*output);
-            }
-          } else if constexpr (std::is_same_v<T, Offset>) {
-            output = createTransparentPixmap(w, h);
-            // Transform offset from user space to pixel space.
-            const Vector2d origin = currentTransform_.transformPosition(Vector2d(0, 0));
-            const Vector2d offsetPoint =
-                currentTransform_.transformPosition(Vector2d(primitive.dx, primitive.dy));
-            const Vector2d pixelOffset = offsetPoint - origin;
-            tiny_skia::filter::offset(*input, *output, static_cast<int>(pixelOffset.x),
-                                      static_cast<int>(pixelOffset.y));
-          } else if constexpr (std::is_same_v<T, Composite>) {
-            tiny_skia::Pixmap* input2 =
-                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : sourceGraphic;
-            output = createTransparentPixmap(w, h);
 
-            // Map FilterGraph Composite::Operator to tiny_skia::filter::CompositeOp.
-            static constexpr tiny_skia::filter::CompositeOp kOpMap[] = {
-                tiny_skia::filter::CompositeOp::Over,
-                tiny_skia::filter::CompositeOp::In,
-                tiny_skia::filter::CompositeOp::Out,
-                tiny_skia::filter::CompositeOp::Atop,
-                tiny_skia::filter::CompositeOp::Xor,
-                tiny_skia::filter::CompositeOp::Lighter,
-                tiny_skia::filter::CompositeOp::Arithmetic,
-            };
-            const auto op = kOpMap[static_cast<int>(primitive.op)];
-            tiny_skia::filter::composite(*input, *input2, *output, op, primitive.k1, primitive.k2,
-                                         primitive.k3, primitive.k4);
+          if constexpr (std::is_same_v<T, GaussianBlur>) {
+            gp::GaussianBlur gb;
+            gb.sigmaX = primitive.stdDeviationX >= 0 ? toPixelX(primitive.stdDeviationX) : 0.0;
+            gb.sigmaY = primitive.stdDeviationY >= 0 ? toPixelY(primitive.stdDeviationY) : 0.0;
+            gb.edgeMode = static_cast<tiny_skia::filter::BlurEdgeMode>(primitive.edgeMode);
+            gn.primitive = gb;
+
+          } else if constexpr (std::is_same_v<T, Flood>) {
+            auto pm = floodToPremul(primitive.floodColor, primitive.floodOpacity);
+            gn.primitive = gp::Flood{pm.r, pm.g, pm.b, pm.a};
+
+          } else if constexpr (std::is_same_v<T, Offset>) {
+            gn.primitive = gp::Offset{toPixelOffsetX(primitive.dx), toPixelOffsetY(primitive.dy)};
+
+          } else if constexpr (std::is_same_v<T, Composite>) {
+            gp::Composite c;
+            c.op = static_cast<tiny_skia::filter::CompositeOp>(primitive.op);
+            c.k1 = primitive.k1;
+            c.k2 = primitive.k2;
+            c.k3 = primitive.k3;
+            c.k4 = primitive.k4;
+            gn.primitive = c;
+
+          } else if constexpr (std::is_same_v<T, Blend>) {
+            gp::Blend b;
+            b.mode = static_cast<tiny_skia::filter::BlendMode>(primitive.mode);
+            gn.primitive = b;
+
           } else if constexpr (std::is_same_v<T, Merge>) {
-            // Collect all input layer pointers.
-            std::vector<const tiny_skia::Pixmap*> layers;
-            for (const auto& mergeInput : node.inputs) {
-              layers.push_back(resolveInput(mergeInput));
-            }
-            output = createTransparentPixmap(w, h);
-            tiny_skia::filter::merge(layers, *output);
+            gn.primitive = gp::Merge{};
+
           } else if constexpr (std::is_same_v<T, ColorMatrix>) {
-            output = *input;
-            std::array<double, 20> matrix;
+            gp::ColorMatrix cm;
             if (primitive.type == ColorMatrix::Type::Matrix) {
               if (primitive.values.size() == 20) {
                 for (size_t j = 0; j < 20; ++j) {
-                  matrix[j] = primitive.values[j];
+                  cm.matrix[j] = primitive.values[j];
                 }
               } else {
-                matrix = tiny_skia::filter::identityMatrix();
+                cm.matrix = tiny_skia::filter::identityMatrix();
               }
             } else if (primitive.type == ColorMatrix::Type::Saturate) {
               const double s = primitive.values.empty() ? 1.0 : primitive.values[0];
-              matrix = tiny_skia::filter::saturateMatrix(s);
+              cm.matrix = tiny_skia::filter::saturateMatrix(s);
             } else if (primitive.type == ColorMatrix::Type::HueRotate) {
               const double angle = primitive.values.empty() ? 0.0 : primitive.values[0];
-              matrix = tiny_skia::filter::hueRotateMatrix(angle);
+              cm.matrix = tiny_skia::filter::hueRotateMatrix(angle);
             } else if (primitive.type == ColorMatrix::Type::LuminanceToAlpha) {
-              matrix = tiny_skia::filter::luminanceToAlphaMatrix();
+              cm.matrix = tiny_skia::filter::luminanceToAlphaMatrix();
             } else {
-              matrix = tiny_skia::filter::identityMatrix();
+              cm.matrix = tiny_skia::filter::identityMatrix();
             }
-            tiny_skia::filter::colorMatrix(*output, matrix);
-          } else if constexpr (std::is_same_v<T, Blend>) {
-            tiny_skia::Pixmap* input2 =
-                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : sourceGraphic;
-            output = createTransparentPixmap(w, h);
-            // Map FilterGraph Blend::Mode to tiny_skia::filter::BlendMode.
-            static constexpr tiny_skia::filter::BlendMode kModeMap[] = {
-                tiny_skia::filter::BlendMode::Normal,
-                tiny_skia::filter::BlendMode::Multiply,
-                tiny_skia::filter::BlendMode::Screen,
-                tiny_skia::filter::BlendMode::Darken,
-                tiny_skia::filter::BlendMode::Lighten,
-            };
-            const auto blendMode = kModeMap[static_cast<int>(primitive.mode)];
-            // SVG: in=foreground (Cs), in2=background (Cb).
-            tiny_skia::filter::blend(*input2, *input, *output, blendMode);
+            gn.primitive = cm;
+
           } else if constexpr (std::is_same_v<T, ComponentTransfer>) {
-            output = *input;
-            auto toFunc = [](const ComponentTransfer::Func& f) {
-              tiny_skia::filter::TransferFunc tf;
-              tf.type = static_cast<tiny_skia::filter::TransferFuncType>(f.type);
-              tf.tableValues = f.tableValues;
-              tf.slope = f.slope;
-              tf.intercept = f.intercept;
-              tf.amplitude = f.amplitude;
-              tf.exponent = f.exponent;
-              tf.offset = f.offset;
-              return tf;
+            gp::ComponentTransfer ct;
+            auto convertFunc = [](const ComponentTransfer::Func& f) {
+              gp::ComponentTransfer::Func gf;
+              gf.type = static_cast<tiny_skia::filter::TransferFuncType>(f.type);
+              gf.tableValues = f.tableValues;
+              gf.slope = f.slope;
+              gf.intercept = f.intercept;
+              gf.amplitude = f.amplitude;
+              gf.exponent = f.exponent;
+              gf.offset = f.offset;
+              return gf;
             };
-            tiny_skia::filter::componentTransfer(*output, toFunc(primitive.funcR),
-                                                  toFunc(primitive.funcG), toFunc(primitive.funcB),
-                                                  toFunc(primitive.funcA));
+            ct.funcR = convertFunc(primitive.funcR);
+            ct.funcG = convertFunc(primitive.funcG);
+            ct.funcB = convertFunc(primitive.funcB);
+            ct.funcA = convertFunc(primitive.funcA);
+            gn.primitive = ct;
+
           } else if constexpr (std::is_same_v<T, DropShadow>) {
-            // feDropShadow decomposes into:
-            //   flood(shadowColor) → composite(in, SourceAlpha) → offset(dx,dy)
-            //   → gaussianBlur(stdDev) → merge(blurredShadow, input)
-            const css::RGBA rgba = primitive.floodColor.asRGBA();
-            const double alpha = (rgba.a / 255.0) * primitive.floodOpacity;
-            const uint8_t pa = static_cast<uint8_t>(std::round(alpha * 255.0));
-            const uint8_t pr = static_cast<uint8_t>(std::round(rgba.r * alpha));
-            const uint8_t pg = static_cast<uint8_t>(std::round(rgba.g * alpha));
-            const uint8_t pb = static_cast<uint8_t>(std::round(rgba.b * alpha));
+            auto pm = floodToPremul(primitive.floodColor, primitive.floodOpacity);
+            gp::DropShadow ds;
+            ds.r = pm.r;
+            ds.g = pm.g;
+            ds.b = pm.b;
+            ds.a = pm.a;
+            ds.dx = toPixelOffsetX(primitive.dx);
+            ds.dy = toPixelOffsetY(primitive.dy);
+            ds.sigmaX = primitive.stdDeviationX >= 0 ? toPixelX(primitive.stdDeviationX) : 0.0;
+            ds.sigmaY = primitive.stdDeviationY >= 0 ? toPixelY(primitive.stdDeviationY) : 0.0;
+            gn.primitive = ds;
 
-            // 1. Create flood-filled buffer with the shadow color.
-            auto floodBuf = createTransparentPixmap(w, h);
-            tiny_skia::filter::flood(floodBuf, pr, pg, pb, pa);
-            if (useLinearRGB) {
-              tiny_skia::filter::srgbToLinear(floodBuf);
-            }
-
-            // 2. Composite flood with SourceAlpha (extract shape of the input).
-            auto compositeBuf = createTransparentPixmap(w, h);
-            tiny_skia::Pixmap* srcAlpha = getSourceAlpha();
-            tiny_skia::filter::composite(floodBuf, *srcAlpha, compositeBuf,
-                                         tiny_skia::filter::CompositeOp::In, 0, 0, 0, 0);
-
-            // 3. Offset by (dx, dy).
-            const Vector2d origin = currentTransform_.transformPosition(Vector2d(0, 0));
-            const Vector2d offsetPoint =
-                currentTransform_.transformPosition(Vector2d(primitive.dx, primitive.dy));
-            const Vector2d pixelOffset = offsetPoint - origin;
-            auto offsetBuf = createTransparentPixmap(w, h);
-            tiny_skia::filter::offset(compositeBuf, offsetBuf, static_cast<int>(pixelOffset.x),
-                                      static_cast<int>(pixelOffset.y));
-
-            // 4. Gaussian blur.
-            const Vector2d scaleX =
-                currentTransform_.transformPosition(Vector2d(primitive.stdDeviationX, 0)) - origin;
-            const Vector2d scaleY =
-                currentTransform_.transformPosition(Vector2d(0, primitive.stdDeviationY)) - origin;
-            const double pixelSigmaX =
-                primitive.stdDeviationX >= 0 ? std::abs(scaleX.x) : 0.0;
-            const double pixelSigmaY =
-                primitive.stdDeviationY >= 0 ? std::abs(scaleY.y) : 0.0;
-            tiny_skia::filter::gaussianBlur(offsetBuf, pixelSigmaX, pixelSigmaY);
-
-            // 5. Merge blurred shadow behind the input.
-            output = createTransparentPixmap(w, h);
-            std::vector<const tiny_skia::Pixmap*> layers = {&offsetBuf, input};
-            tiny_skia::filter::merge(layers, *output);
           } else if constexpr (std::is_same_v<T, Morphology>) {
-            output = createTransparentPixmap(w, h);
-            // Per SVG spec: negative radius → transparent black. Both zero → transparent.
-            // One zero + one positive → apply in the positive direction (0 = 1px window).
+            gp::Morphology m;
             if (primitive.radiusX < 0 || primitive.radiusY < 0 ||
                 (primitive.radiusX == 0 && primitive.radiusY == 0)) {
-              // output stays transparent
+              // Invalid radius — executor will output transparent.
+              m.radiusX = 0;
+              m.radiusY = 0;
             } else {
-              const Vector2d origin = currentTransform_.transformPosition(Vector2d(0, 0));
-              const Vector2d scaleX =
-                  currentTransform_.transformPosition(Vector2d(primitive.radiusX, 0)) - origin;
-              const Vector2d scaleY =
-                  currentTransform_.transformPosition(Vector2d(0, primitive.radiusY)) - origin;
-              const int pixelRadiusX = static_cast<int>(std::round(std::abs(scaleX.x)));
-              const int pixelRadiusY = static_cast<int>(std::round(std::abs(scaleY.y)));
-              const auto op = primitive.op == Morphology::Operator::Erode
-                                  ? tiny_skia::filter::MorphologyOp::Erode
-                                  : tiny_skia::filter::MorphologyOp::Dilate;
-              tiny_skia::filter::morphology(*input, *output, op, pixelRadiusX, pixelRadiusY);
+              m.op = primitive.op == Morphology::Operator::Erode
+                         ? tiny_skia::filter::MorphologyOp::Erode
+                         : tiny_skia::filter::MorphologyOp::Dilate;
+              m.radiusX = static_cast<int>(std::round(toPixelX(primitive.radiusX)));
+              m.radiusY = static_cast<int>(std::round(toPixelY(primitive.radiusY)));
             }
+            gn.primitive = m;
+
           } else if constexpr (std::is_same_v<T, ConvolveMatrix>) {
-            output = createTransparentPixmap(w, h);
-            const int requiredKernelSize = primitive.orderX * primitive.orderY;
-            // Validate: kernel must have exactly orderX * orderY values, and order must be
-            // positive. Per spec, wrong kernel count disables the filter.
-            if (primitive.orderX > 0 && primitive.orderY > 0 &&
-                static_cast<int>(primitive.kernelMatrix.size()) == requiredKernelSize) {
-              // Resolve defaults: unset targetX/Y defaults to floor(order/2).
-              const int targetX =
-                  primitive.targetX.value_or(primitive.orderX / 2);
-              const int targetY =
-                  primitive.targetY.value_or(primitive.orderY / 2);
+            gp::ConvolveMatrix cm;
+            cm.orderX = primitive.orderX;
+            cm.orderY = primitive.orderY;
+            cm.kernel = primitive.kernelMatrix;
+            cm.bias = primitive.bias;
+            cm.edgeMode = static_cast<tiny_skia::filter::ConvolveEdgeMode>(primitive.edgeMode);
+            cm.preserveAlpha = primitive.preserveAlpha;
 
-              // Validate target is in range [0, order). Out-of-range disables the filter.
-              if (targetX >= 0 && targetX < primitive.orderX && targetY >= 0 &&
-                  targetY < primitive.orderY) {
-                // Compute divisor. Per spec: if divisor attribute is explicitly 0, it's
-                // an error (filter disabled). If unset, use sum of kernel (or 1 if sum=0).
-                double divisor = 0.0;
-                bool divisorValid = true;
-                if (primitive.divisor.has_value()) {
-                  divisor = *primitive.divisor;
-                  if (divisor == 0.0) {
-                    // Per spec: "It is an error if divisor is zero." Filter disabled.
-                    divisorValid = false;
-                  }
-                } else {
-                  for (int i = 0; i < requiredKernelSize; ++i) {
-                    divisor += primitive.kernelMatrix[i];
-                  }
-                  if (divisor == 0.0) {
-                    divisor = 1.0;
-                  }
-                }
+            const int requiredSize = primitive.orderX * primitive.orderY;
+            cm.targetX = primitive.targetX.value_or(primitive.orderX / 2);
+            cm.targetY = primitive.targetY.value_or(primitive.orderY / 2);
 
-                if (divisorValid) {
-                  tiny_skia::filter::ConvolveParams params;
-                  params.orderX = primitive.orderX;
-                  params.orderY = primitive.orderY;
-                  params.kernel = std::span<const double>(primitive.kernelMatrix.data(),
-                                                          requiredKernelSize);
-                  params.divisor = divisor;
-                  params.bias = primitive.bias;
-                  params.targetX = targetX;
-                  params.targetY = targetY;
-                  params.edgeMode =
-                      static_cast<tiny_skia::filter::ConvolveEdgeMode>(primitive.edgeMode);
-                  params.preserveAlpha = primitive.preserveAlpha;
-
-                  tiny_skia::filter::convolveMatrix(*input, *output, params);
-                }
+            // Compute divisor.
+            if (primitive.divisor.has_value()) {
+              cm.divisor = *primitive.divisor;
+            } else {
+              double sum = 0.0;
+              for (size_t i = 0;
+                   i < primitive.kernelMatrix.size() && i < static_cast<size_t>(requiredSize);
+                   ++i) {
+                sum += primitive.kernelMatrix[i];
               }
-              // else: invalid targetX/targetY, output stays transparent (disabled filter)
+              cm.divisor = (sum == 0.0) ? 1.0 : sum;
             }
-            // else: invalid order or kernel size, output stays transparent (disabled filter)
+            gn.primitive = cm;
+
           } else if constexpr (std::is_same_v<T, Tile>) {
-            output = createTransparentPixmap(w, h);
-            // The tile rectangle is the input's primitive subregion.
-            const Boxd inputSubregion =
-                node.inputs.empty() ? previousOutputSubregion
-                                    : resolveInputSubregion(node.inputs[0]);
-            const int tileX = std::max(0, static_cast<int>(std::floor(inputSubregion.topLeft.x)));
-            const int tileY = std::max(0, static_cast<int>(std::floor(inputSubregion.topLeft.y)));
-            const int tileR =
-                std::min(w, static_cast<int>(std::ceil(inputSubregion.bottomRight.x)));
-            const int tileB =
-                std::min(h, static_cast<int>(std::ceil(inputSubregion.bottomRight.y)));
-            const int tileW = tileR - tileX;
-            const int tileH = tileB - tileY;
-            if (tileW > 0 && tileH > 0) {
-              tiny_skia::filter::tile(*input, *output, tileX, tileY, tileW, tileH);
-            }
+            gn.primitive = gp::Tile{};
+
           } else if constexpr (std::is_same_v<T, Turbulence>) {
-            output = createTransparentPixmap(w, h);
-            tiny_skia::filter::TurbulenceParams turbParams;
-            turbParams.type =
-                primitive.type == Turbulence::Type::FractalNoise
-                    ? tiny_skia::filter::TurbulenceType::FractalNoise
-                    : tiny_skia::filter::TurbulenceType::Turbulence;
-            turbParams.baseFrequencyX = primitive.baseFrequencyX;
-            turbParams.baseFrequencyY = primitive.baseFrequencyY;
-            turbParams.numOctaves = primitive.numOctaves;
-            turbParams.seed = primitive.seed;
-            turbParams.stitchTiles = primitive.stitchTiles;
-            turbParams.tileWidth = w;
-            turbParams.tileHeight = h;
-            // Pass the current transform's scale so noise is generated in user space.
-            turbParams.scaleX = std::abs(currentTransform_.data[0]);
-            turbParams.scaleY = std::abs(currentTransform_.data[3]);
-            if (turbParams.scaleX < 1e-10) turbParams.scaleX = 1.0;
-            if (turbParams.scaleY < 1e-10) turbParams.scaleY = 1.0;
-            tiny_skia::filter::turbulence(*output, turbParams);
+            gp::Turbulence t;
+            t.params.type = primitive.type == Turbulence::Type::FractalNoise
+                                ? tiny_skia::filter::TurbulenceType::FractalNoise
+                                : tiny_skia::filter::TurbulenceType::Turbulence;
+            t.params.baseFrequencyX = primitive.baseFrequencyX;
+            t.params.baseFrequencyY = primitive.baseFrequencyY;
+            t.params.numOctaves = primitive.numOctaves;
+            t.params.seed = primitive.seed;
+            t.params.stitchTiles = primitive.stitchTiles;
+            t.params.tileWidth = w;
+            t.params.tileHeight = h;
+            t.params.scaleX = std::abs(currentTransform_.data[0]);
+            t.params.scaleY = std::abs(currentTransform_.data[3]);
+            if (t.params.scaleX < 1e-10) t.params.scaleX = 1.0;
+            if (t.params.scaleY < 1e-10) t.params.scaleY = 1.0;
+            gn.primitive = t;
+
           } else if constexpr (std::is_same_v<T, DisplacementMap>) {
-            tiny_skia::Pixmap* input2 =
-                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : sourceGraphic;
-            output = createTransparentPixmap(w, h);
-            static constexpr tiny_skia::filter::DisplacementChannel kChMap[] = {
-                tiny_skia::filter::DisplacementChannel::R,
-                tiny_skia::filter::DisplacementChannel::G,
-                tiny_skia::filter::DisplacementChannel::B,
-                tiny_skia::filter::DisplacementChannel::A,
-            };
-            const auto xCh = kChMap[static_cast<int>(primitive.xChannelSelector)];
-            const auto yCh = kChMap[static_cast<int>(primitive.yChannelSelector)];
-            tiny_skia::filter::displacementMap(*input, *input2, *output, primitive.scale, xCh,
-                                               yCh);
-          } else {
-            maybeWarnUnsupportedFilter();
+            gp::DisplacementMap dm;
+            dm.scale = primitive.scale;
+            dm.xChannel = static_cast<tiny_skia::filter::DisplacementChannel>(
+                primitive.xChannelSelector);
+            dm.yChannel = static_cast<tiny_skia::filter::DisplacementChannel>(
+                primitive.yChannelSelector);
+            gn.primitive = dm;
+
+          } else if constexpr (std::is_same_v<T, Image>) {
+            gn.primitive = gp::Image{};
+
+          } else if constexpr (std::is_same_v<T, DiffuseLighting>) {
+            if (primitive.light.has_value()) {
+              gp::DiffuseLighting dl;
+              dl.params.surfaceScale = primitive.surfaceScale;
+              dl.params.diffuseConstant = primitive.diffuseConstant;
+              const css::RGBA rgba = primitive.lightingColor.asRGBA();
+              dl.params.lightR = rgba.r / 255.0;
+              dl.params.lightG = rgba.g / 255.0;
+              dl.params.lightB = rgba.b / 255.0;
+              dl.params.light = convertLightSource(*primitive.light);
+              gn.primitive = dl;
+            } else {
+              gn.primitive = gp::Image{};  // No light = transparent output.
+            }
+
+          } else if constexpr (std::is_same_v<T, SpecularLighting>) {
+            if (primitive.light.has_value()) {
+              gp::SpecularLighting sl;
+              sl.params.surfaceScale = primitive.surfaceScale;
+              sl.params.specularConstant = primitive.specularConstant;
+              sl.params.specularExponent = primitive.specularExponent;
+              const css::RGBA rgba = primitive.lightingColor.asRGBA();
+              sl.params.lightR = rgba.r / 255.0;
+              sl.params.lightG = rgba.g / 255.0;
+              sl.params.lightB = rgba.b / 255.0;
+              sl.params.light = convertLightSource(*primitive.light);
+              gn.primitive = sl;
+            } else {
+              gn.primitive = gp::Image{};  // No light = transparent output.
+            }
           }
         },
         node.primitive);
 
-    if (output.has_value()) {
-      // Apply primitive subregion clipping if x/y/width/height are specified on the node.
-      if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
-          node.height.has_value()) {
-        // Compute subregion in user space. Unspecified attributes default to full pixmap extent.
-        const double ux = node.x.has_value() ? node.x->value : 0.0;
-        const double uy = node.y.has_value() ? node.y->value : 0.0;
-        const double uw = node.width.has_value() ? node.width->value : w;
-        const double uh = node.height.has_value() ? node.height->value : h;
-        const Boxd userRegion = Boxd::FromXYWH(ux, uy, uw, uh);
-
-        // Transform from user space to pixel space.
-        const Boxd pixelRegion = currentTransform_.transformBox(userRegion);
-        const int rx0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
-        const int ry0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.y)));
-        const int rx1 = std::min(w, static_cast<int>(std::ceil(pixelRegion.bottomRight.x)));
-        const int ry1 = std::min(h, static_cast<int>(std::ceil(pixelRegion.bottomRight.y)));
-
-        // Clear pixels outside the primitive subregion.
-        auto data = output->data();
-        for (int y = 0; y < ry0; ++y) {
-          std::fill_n(data.data() + y * w * 4, w * 4, std::uint8_t{0});
-        }
-        for (int y = ry0; y < ry1; ++y) {
-          if (rx0 > 0) {
-            std::fill_n(data.data() + y * w * 4, rx0 * 4, std::uint8_t{0});
-          }
-          if (rx1 < w) {
-            std::fill_n(data.data() + (y * w + rx1) * 4, (w - rx1) * 4, std::uint8_t{0});
-          }
-        }
-        for (int y = ry1; y < h; ++y) {
-          std::fill_n(data.data() + y * w * 4, w * 4, std::uint8_t{0});
-        }
-      }
-
-      // Compute this node's effective subregion. Per CSS Filter Effects spec:
-      // - If explicit x/y/width/height, use those values.
-      // - Otherwise, inherit from the input's subregion (tightest fitting bbox).
-      Boxd nodeSubregion;
-      if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
-          node.height.has_value()) {
-        const double ux = node.x.has_value() ? node.x->value : 0.0;
-        const double uy = node.y.has_value() ? node.y->value : 0.0;
-        const double uw = node.width.has_value() ? node.width->value : w;
-        const double uh = node.height.has_value() ? node.height->value : h;
-        nodeSubregion = currentTransform_.transformBox(Boxd::FromXYWH(ux, uy, uw, uh));
-      } else {
-        // Default: inherit from input's subregion (tightest fitting bbox per CSS Filter
-        // Effects spec). The subregion represents the tile rectangle geometry, not the
-        // content position — primitives like feOffset move content within the subregion
-        // but don't shift the subregion itself.
-        nodeSubregion = node.inputs.empty() ? previousOutputSubregion
-                                            : resolveInputSubregion(node.inputs[0]);
-      }
-      // Intersect with the filter region — content outside it is invisible.
-      nodeSubregion = Boxd(
-          Vector2d(std::max(nodeSubregion.topLeft.x, filterRegionPixel.topLeft.x),
-                   std::max(nodeSubregion.topLeft.y, filterRegionPixel.topLeft.y)),
-          Vector2d(std::min(nodeSubregion.bottomRight.x, filterRegionPixel.bottomRight.x),
-                   std::min(nodeSubregion.bottomRight.y, filterRegionPixel.bottomRight.y)));
-      // Clamp to non-negative dimensions.
-      if (nodeSubregion.bottomRight.x < nodeSubregion.topLeft.x) {
-        nodeSubregion.bottomRight.x = nodeSubregion.topLeft.x;
-      }
-      if (nodeSubregion.bottomRight.y < nodeSubregion.topLeft.y) {
-        nodeSubregion.bottomRight.y = nodeSubregion.topLeft.y;
-      }
-
-      if (node.result.has_value()) {
-        namedBuffers[*node.result] = *output;
-        namedSubregions[*node.result] = nodeSubregion;
-      }
-      previousOutput = std::move(output);
-      previousOutputSubregion = nodeSubregion;
-    }
+    graph.nodes.push_back(std::move(gn));
   }
 
-  // Convert final output from linearRGB back to sRGB and copy to source pixmap.
-  if (previousOutput.has_value()) {
-    if (useLinearRGB) {
-      tiny_skia::filter::linearToSrgb(*previousOutput);
-    }
-    auto srcData = previousOutput->data();
-    auto dstData = pixmap.data();
-    std::copy(srcData.begin(), srcData.end(), dstData.begin());
-  }
-}
-
-void RendererTinySkia::maybeWarnUnsupportedFilter() {
-  if (!verbose_ || warnedUnsupportedFilter_) {
-    return;
-  }
-
-  warnedUnsupportedFilter_ = true;
-  std::cerr << "RendererTinySkia: some filter effects are not implemented\n";
+  tiny_skia::filter::executeFilterGraph(pixmap, graph);
 }
 
 void RendererTinySkia::maybeWarnUnsupportedText() {

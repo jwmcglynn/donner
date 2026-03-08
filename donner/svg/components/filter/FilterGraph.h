@@ -67,8 +67,16 @@ namespace filter_primitive {
 
 /// Parameters for \c feGaussianBlur.
 struct GaussianBlur {
+  /// Edge handling mode.
+  enum class EdgeMode : std::uint8_t {
+    None,       ///< Treat out-of-bounds pixels as transparent black.
+    Duplicate,  ///< Clamp to nearest edge pixel.
+    Wrap,       ///< Wrap around (modular arithmetic).
+  };
+
   double stdDeviationX = 0.0;  ///< Standard deviation in X.
   double stdDeviationY = 0.0;  ///< Standard deviation in Y.
+  EdgeMode edgeMode = EdgeMode::None;  ///< Edge handling mode.
 };
 
 /// Parameters for \c feFlood.
@@ -251,11 +259,36 @@ struct DisplacementMap {
   Channel yChannelSelector = Channel::A;  ///< Channel to use for Y displacement.
 };
 
+/// Light source parameters for lighting filter primitives.
+struct LightSource {
+  /// Light source type.
+  enum class Type : std::uint8_t { Distant, Point, Spot };
+
+  Type type = Type::Distant;
+
+  // feDistantLight
+  double azimuth = 0.0;     ///< Angle in the XY plane (degrees).
+  double elevation = 0.0;   ///< Angle above the XY plane (degrees).
+
+  // fePointLight / feSpotLight
+  double x = 0.0;  ///< X position.
+  double y = 0.0;  ///< Y position.
+  double z = 0.0;  ///< Z position.
+
+  // feSpotLight
+  double pointsAtX = 0.0;   ///< X target.
+  double pointsAtY = 0.0;   ///< Y target.
+  double pointsAtZ = 0.0;   ///< Z target.
+  double spotExponent = 1.0; ///< Spotlight exponent.
+  std::optional<double> limitingConeAngle;  ///< Cone angle limit (degrees).
+};
+
 /// Parameters for \c feDiffuseLighting.
 struct DiffuseLighting {
   double surfaceScale = 1.0;       ///< Height of surface.
   double diffuseConstant = 1.0;    ///< Diffuse reflection constant.
-  // TODO(jwmcglynn): lightingColor (CSS color), light source child.
+  css::Color lightingColor{css::RGBA(0xFF, 0xFF, 0xFF, 0xFF)};  ///< Light color (default: white).
+  std::optional<LightSource> light;  ///< Light source (from child element).
 };
 
 /// Parameters for \c feSpecularLighting.
@@ -263,7 +296,8 @@ struct SpecularLighting {
   double surfaceScale = 1.0;        ///< Height of surface.
   double specularConstant = 1.0;    ///< Specular reflection constant.
   double specularExponent = 1.0;    ///< Specular exponent (1..128).
-  // TODO(jwmcglynn): lightingColor, light source child.
+  css::Color lightingColor{css::RGBA(0xFF, 0xFF, 0xFF, 0xFF)};  ///< Light color (default: white).
+  std::optional<LightSource> light;  ///< Light source (from child element).
 };
 
 }  // namespace filter_primitive

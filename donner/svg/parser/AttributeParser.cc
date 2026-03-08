@@ -512,6 +512,15 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserCont
       err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
+  } else if (name == XMLQualifiedNameRef("edgeMode")) {
+    auto& comp = element.entityHandle().get<components::FEGaussianBlurComponent>();
+    if (value == "none") {
+      comp.edgeMode = components::FEGaussianBlurComponent::EdgeMode::None;
+    } else if (value == "duplicate") {
+      comp.edgeMode = components::FEGaussianBlurComponent::EdgeMode::Duplicate;
+    } else if (value == "wrap") {
+      comp.edgeMode = components::FEGaussianBlurComponent::EdgeMode::Wrap;
+    }
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }
@@ -910,6 +919,168 @@ std::optional<ParseError> ParseAttribute<SVGFEDisplacementMapElement>(
       comp.yChannelSelector = components::FEDisplacementMapComponent::Channel::B;
     } else if (value == "A") {
       comp.yChannelSelector = components::FEDisplacementMapComponent::Channel::A;
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEImageElement>(
+    SVGParserContext& context, SVGFEImageElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
+    auto& comp = element.entityHandle().get<components::FEImageComponent>();
+    comp.href = RcString(value);
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEDiffuseLightingElement>(
+    SVGParserContext& context, SVGFEDiffuseLightingElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("surfaceScale")) {
+    auto& comp = element.entityHandle().get<components::FEDiffuseLightingComponent>();
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.surfaceScale = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("diffuseConstant")) {
+    auto& comp = element.entityHandle().get<components::FEDiffuseLightingComponent>();
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.diffuseConstant = std::max(0.0, *n);
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFESpecularLightingElement>(
+    SVGParserContext& context, SVGFESpecularLightingElement element,
+    const XMLQualifiedNameRef& name, std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("surfaceScale")) {
+    auto& comp = element.entityHandle().get<components::FESpecularLightingComponent>();
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.surfaceScale = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("specularConstant")) {
+    auto& comp = element.entityHandle().get<components::FESpecularLightingComponent>();
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.specularConstant = std::max(0.0, *n);
+    }
+  } else if (name == XMLQualifiedNameRef("specularExponent")) {
+    auto& comp = element.entityHandle().get<components::FESpecularLightingComponent>();
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.specularExponent = std::clamp(*n, 1.0, 128.0);
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEDistantLightElement>(
+    SVGParserContext& context, SVGFEDistantLightElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (name == XMLQualifiedNameRef("azimuth")) {
+    auto& comp = element.entityHandle().get<components::LightSourceComponent>();
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.azimuth = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("elevation")) {
+    auto& comp = element.entityHandle().get<components::LightSourceComponent>();
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.elevation = *n;
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEPointLightElement>(
+    SVGParserContext& context, SVGFEPointLightElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  auto& comp = element.entityHandle().get<components::LightSourceComponent>();
+  if (name == XMLQualifiedNameRef("x")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.x = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("y")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.y = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("z")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.z = *n;
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFESpotLightElement>(
+    SVGParserContext& context, SVGFESpotLightElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  auto& comp = element.entityHandle().get<components::LightSourceComponent>();
+  if (name == XMLQualifiedNameRef("x")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.x = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("y")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.y = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("z")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.z = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("pointsAtX")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.pointsAtX = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("pointsAtY")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.pointsAtY = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("pointsAtZ")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.pointsAtZ = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("specularExponent")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.spotExponent = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("limitingConeAngle")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      comp.limitingConeAngle = *n;
     }
   } else {
     return ParseCommonAttribute(context, element, name, value);

@@ -20,7 +20,9 @@ enum class ElementType : uint8_t {
   FeComponentTransfer,  //!< \ref xml_feComponentTransfer
   FeComposite,          //!< \ref xml_feComposite
   FeConvolveMatrix,     //!< \ref xml_feConvolveMatrix
+  FeDiffuseLighting,    //!< \ref xml_feDiffuseLighting
   FeDisplacementMap,    //!< \ref xml_feDisplacementMap
+  FeDistantLight,       //!< \ref xml_feDistantLight
   FeDropShadow,         //!< \ref xml_feDropShadow
   FeFlood,              //!< \ref xml_feFlood
   FeFuncA,              //!< \ref xml_feFuncA
@@ -28,10 +30,14 @@ enum class ElementType : uint8_t {
   FeFuncG,              //!< \ref xml_feFuncG
   FeFuncR,              //!< \ref xml_feFuncR
   FeGaussianBlur,  //!< \ref xml_feGaussianBlur
+  FeImage,         //!< \ref xml_feImage
   FeMerge,         //!< \ref xml_feMerge
   FeMergeNode,     //!< \ref xml_feMergeNode
   FeMorphology,    //!< \ref xml_feMorphology
   FeOffset,        //!< \ref xml_feOffset
+  FePointLight,    //!< \ref xml_fePointLight
+  FeSpecularLighting,  //!< \ref xml_feSpecularLighting
+  FeSpotLight,     //!< \ref xml_feSpotLight
   FeTile,          //!< \ref xml_feTile
   FeTurbulence,    //!< \ref xml_feTurbulence
   Filter,          //!< \ref xml_filter
@@ -112,8 +118,12 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
       return fn(std::integral_constant<ElementType, ElementType::FeComposite>());
     case ElementType::FeConvolveMatrix:
       return fn(std::integral_constant<ElementType, ElementType::FeConvolveMatrix>());
+    case ElementType::FeDiffuseLighting:
+      return fn(std::integral_constant<ElementType, ElementType::FeDiffuseLighting>());
     case ElementType::FeDisplacementMap:
       return fn(std::integral_constant<ElementType, ElementType::FeDisplacementMap>());
+    case ElementType::FeDistantLight:
+      return fn(std::integral_constant<ElementType, ElementType::FeDistantLight>());
     case ElementType::FeDropShadow:
       return fn(std::integral_constant<ElementType, ElementType::FeDropShadow>());
     case ElementType::FeFlood:
@@ -128,6 +138,8 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
       return fn(std::integral_constant<ElementType, ElementType::FeFuncR>());
     case ElementType::FeGaussianBlur:
       return fn(std::integral_constant<ElementType, ElementType::FeGaussianBlur>());
+    case ElementType::FeImage:
+      return fn(std::integral_constant<ElementType, ElementType::FeImage>());
     case ElementType::FeMerge:
       return fn(std::integral_constant<ElementType, ElementType::FeMerge>());
     case ElementType::FeMergeNode:
@@ -136,6 +148,12 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
       return fn(std::integral_constant<ElementType, ElementType::FeMorphology>());
     case ElementType::FeOffset:
       return fn(std::integral_constant<ElementType, ElementType::FeOffset>());
+    case ElementType::FePointLight:
+      return fn(std::integral_constant<ElementType, ElementType::FePointLight>());
+    case ElementType::FeSpecularLighting:
+      return fn(std::integral_constant<ElementType, ElementType::FeSpecularLighting>());
+    case ElementType::FeSpotLight:
+      return fn(std::integral_constant<ElementType, ElementType::FeSpotLight>());
     case ElementType::FeTile:
       return fn(std::integral_constant<ElementType, ElementType::FeTile>());
     case ElementType::FeTurbulence:

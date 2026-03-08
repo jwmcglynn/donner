@@ -15,7 +15,9 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::FeComponentTransfer: return os << "FeComponentTransfer";
     case ElementType::FeComposite: return os << "FeComposite";
     case ElementType::FeConvolveMatrix: return os << "FeConvolveMatrix";
+    case ElementType::FeDiffuseLighting: return os << "FeDiffuseLighting";
     case ElementType::FeDisplacementMap: return os << "FeDisplacementMap";
+    case ElementType::FeDistantLight: return os << "FeDistantLight";
     case ElementType::FeDropShadow: return os << "FeDropShadow";
     case ElementType::FeFlood: return os << "FeFlood";
     case ElementType::FeFuncA: return os << "FeFuncA";
@@ -23,10 +25,14 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::FeFuncG: return os << "FeFuncG";
     case ElementType::FeFuncR: return os << "FeFuncR";
     case ElementType::FeGaussianBlur: return os << "FeGaussianBlur";
+    case ElementType::FeImage: return os << "FeImage";
     case ElementType::FeMerge: return os << "FeMerge";
     case ElementType::FeMergeNode: return os << "FeMergeNode";
     case ElementType::FeMorphology: return os << "FeMorphology";
     case ElementType::FeOffset: return os << "FeOffset";
+    case ElementType::FePointLight: return os << "FePointLight";
+    case ElementType::FeSpecularLighting: return os << "FeSpecularLighting";
+    case ElementType::FeSpotLight: return os << "FeSpotLight";
     case ElementType::FeTile: return os << "FeTile";
     case ElementType::FeTurbulence: return os << "FeTurbulence";
     case ElementType::Filter: return os << "Filter";

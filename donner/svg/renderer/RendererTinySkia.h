@@ -249,13 +249,11 @@ private:
   void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity);
   void applyFilterGraph(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                         const std::optional<Boxd>& filterRegion);
-  void maybeWarnUnsupportedFilter();
   void maybeWarnUnsupportedText();
 
   bool verbose_ = false;
   bool antialias_ = true;
   bool warnedUnsupportedText_ = false;
-  bool warnedUnsupportedFilter_ = false;
 
   RenderViewport viewport_;
   PaintParams paint_;

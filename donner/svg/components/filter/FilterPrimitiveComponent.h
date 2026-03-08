@@ -38,10 +38,16 @@ struct FilterPrimitiveComponent {
  * Parameters for \ref SVGFEGaussianBlurElement.
  */
 struct FEGaussianBlurComponent {
+  /// Edge handling mode for the blur.
+  enum class EdgeMode : std::uint8_t {
+    None,       ///< Treat out-of-bounds pixels as transparent black.
+    Duplicate,  ///< Clamp to nearest edge pixel.
+    Wrap,       ///< Wrap around (modular arithmetic).
+  };
+
   double stdDeviationX = 0.0;  ///< The standard deviation of the Gaussian blur in the x direction.
   double stdDeviationY = 0.0;  ///< The standard deviation of the Gaussian blur in the y direction.
-
-  // TODO(https://github.com/jwmcglynn/donner/issues/151): edgeMode parameter.
+  EdgeMode edgeMode = EdgeMode::None;  ///< Edge handling mode (default: none).
 };
 
 /**
@@ -227,6 +233,14 @@ struct FETileComponent {
 };
 
 /**
+ * Parameters for \ref SVGFEImageElement.
+ */
+struct FEImageComponent {
+  RcString href;  ///< Image URL or fragment reference.
+  // TODO(jwmcglynn): preserveAspectRatio.
+};
+
+/**
  * Parameters for \ref SVGFEDisplacementMapElement.
  */
 struct FEDisplacementMapComponent {
@@ -274,6 +288,51 @@ struct FEMergeComponent {
 struct FEMergeNodeComponent {
   /// The input to this merge node. Parsed from the `in` attribute.
   std::optional<FilterInput> in;
+};
+
+/**
+ * Light source parameters, stored on feDistantLight, fePointLight, or feSpotLight child elements.
+ */
+struct LightSourceComponent {
+  /// Light source type.
+  enum class Type : std::uint8_t { Distant, Point, Spot };
+
+  Type type;
+
+  // feDistantLight attributes.
+  double azimuth = 0.0;     ///< Angle in the XY plane (degrees).
+  double elevation = 0.0;   ///< Angle above the XY plane (degrees).
+
+  // fePointLight / feSpotLight attributes.
+  double x = 0.0;  ///< X position.
+  double y = 0.0;  ///< Y position.
+  double z = 0.0;  ///< Z position.
+
+  // feSpotLight attributes.
+  double pointsAtX = 0.0;   ///< X target.
+  double pointsAtY = 0.0;   ///< Y target.
+  double pointsAtZ = 0.0;   ///< Z target.
+  double spotExponent = 1.0; ///< Spotlight exponent (falloff).
+  std::optional<double> limitingConeAngle;  ///< Cone angle limit (degrees).
+
+  explicit LightSourceComponent(Type t) : type(t) {}
+};
+
+/**
+ * Parameters for \ref SVGFEDiffuseLightingElement.
+ */
+struct FEDiffuseLightingComponent {
+  double surfaceScale = 1.0;      ///< Height of surface when alpha=1.
+  double diffuseConstant = 1.0;   ///< Diffuse reflection constant (kd).
+};
+
+/**
+ * Parameters for \ref SVGFESpecularLightingElement.
+ */
+struct FESpecularLightingComponent {
+  double surfaceScale = 1.0;       ///< Height of surface when alpha=1.
+  double specularConstant = 1.0;   ///< Specular reflection constant (ks).
+  double specularExponent = 1.0;   ///< Specular exponent (1..128).
 };
 
 }  // namespace donner::svg::components

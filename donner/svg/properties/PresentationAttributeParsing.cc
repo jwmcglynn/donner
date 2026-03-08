@@ -117,6 +117,36 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FeConvolveMatrix>(
 }
 
 template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeDiffuseLighting>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeDistantLight>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FePointLight>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeSpecularLighting>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeSpotLight>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeTile>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return false;
@@ -124,6 +154,12 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::FeTile>(
 
 template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeTurbulence>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeImage>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return false;
 }

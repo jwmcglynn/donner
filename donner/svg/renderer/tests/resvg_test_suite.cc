@@ -351,12 +351,26 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-// TODO(filter): e-feDiffuseLighting (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeDiffuseLighting, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feDiffuseLighting",
+        {
+            {"e-feDiffuseLighting-009.svg", Params::Skip()},  // lighting-color CSS property
+            {"e-feDiffuseLighting-011.svg", Params::Skip()},  // lighting-color CSS property
+            {"e-feDiffuseLighting-012.svg", Params::Skip()},  // lighting-color CSS property
+            {"e-feDiffuseLighting-021.svg", Params::Skip()},  // kernelUnitLength
+            {"e-feDiffuseLighting-022.svg", Params::Skip()},  // kernelUnitLength
+        })),
+    TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
     FeDisplacementMap, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-feDisplacementMap", {})),
     TestNameFromFilename);
-// TODO(filter): e-feDistantLight (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FeDistantLight, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("e-feDistantLight", {})),
+    TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
     FeDropShadow, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
@@ -392,7 +406,10 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-// TODO(filter): e-feImage (not implemented)
+// TODO(filter): e-feImage - element parsing is wired up but rendering produces transparent output.
+// Rendering requires image loading infrastructure (external URLs, data URIs) and fragment reference
+// rendering to be available in the filter graph execution context. No resvg test SVGs are currently
+// available in the test suite.
 
 INSTANTIATE_TEST_SUITE_P(
     FeMerge, ImageComparisonTestFixture,
@@ -425,9 +442,50 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-// TODO(filter): e-fePointLight (not implemented)
-// TODO(filter): e-feSpecularLighting (not implemented)
-// TODO(filter): e-feSpotLight (not implemented)
+INSTANTIATE_TEST_SUITE_P(
+    FePointLight, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-fePointLight",
+        {
+            {"e-fePointLight-002.svg", Params::Skip()},  // lighting-color CSS
+            {"e-fePointLight-003.svg", Params::Skip()},  // lighting-color CSS
+            {"e-fePointLight-004.svg", Params::Skip()},  // lighting-color CSS
+        })),
+    TestNameFromFilename);
+// Specular lighting: premultiplication and alpha handling differs from resvg.
+// TODO(jwmcglynn): Fix specular lighting output to match resvg.
+INSTANTIATE_TEST_SUITE_P(
+    FeSpecularLighting, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feSpecularLighting",
+        {
+            {"e-feSpecularLighting-001.svg", Params::Skip()},
+            {"e-feSpecularLighting-002.svg", Params::Skip()},
+            {"e-feSpecularLighting-003.svg", Params::Skip()},
+            {"e-feSpecularLighting-004.svg", Params::Skip()},
+            {"e-feSpecularLighting-005.svg", Params::Skip()},
+            {"e-feSpecularLighting-006.svg", Params::Skip()},
+            {"e-feSpecularLighting-007.svg", Params::Skip()},
+            {"e-feSpecularLighting-008.svg", Params::Skip()},
+        })),
+    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FeSpotLight, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feSpotLight",
+        {
+            {"e-feSpotLight-002.svg", Params::Skip()},   // lighting-color CSS
+            {"e-feSpotLight-003.svg", Params::Skip()},   // lighting-color CSS
+            {"e-feSpotLight-004.svg", Params::Skip()},   // lighting-color CSS
+            {"e-feSpotLight-005.svg", Params::Skip()},   // lighting-color CSS
+            {"e-feSpotLight-006.svg", Params::Skip()},   // lighting-color CSS
+            {"e-feSpotLight-007.svg", Params::Skip()},   // lighting-color CSS
+            {"e-feSpotLight-008.svg", Params::Skip()},   // lighting-color CSS
+            {"e-feSpotLight-010.svg", Params::Skip()},   // Complex spot + specular
+            {"e-feSpotLight-011.svg", Params::Skip()},   // Complex spot + specular
+            {"e-feSpotLight-012.svg", Params::Skip()},   // Complex spot + specular
+        })),
+    TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
     FeTile, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(

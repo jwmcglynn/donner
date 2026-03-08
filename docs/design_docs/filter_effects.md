@@ -37,24 +37,24 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - Filter region clipping on output
 - Primitive subregion computation (explicit attributes; TODO: union-of-inputs default)
 - `color-interpolation-filters` property (linearRGB/sRGB conversion via LUT)
-- 13/17 primitives: `feGaussianBlur`, `feFlood`, `feOffset`, `feComposite`, `feMerge`, `feColorMatrix`, `feBlend`, `feComponentTransfer`, `feDropShadow`, `feMorphology`, `feTile`, `feConvolveMatrix`
+- 15/17 primitives: `feGaussianBlur`, `feFlood`, `feOffset`, `feComposite`, `feMerge`, `feColorMatrix`, `feBlend`, `feComponentTransfer`, `feDropShadow`, `feMorphology`, `feTile`, `feConvolveMatrix`, `feTurbulence`, `feDisplacementMap`
+- `feImage` — element parsing wired up, rendering outputs transparent (needs image loading in filter context)
 - Native tiny-skia-cpp filter library with all implemented operations
 
 **Known gaps:**
 - `primitiveUnits` coordinate space handling
 - linearRGB LUT operates at 8-bit precision (should be float for accuracy)
 - Blur edge clipping: blur operates on full pixmap then clips, causing edge differences
-- 4 remaining primitives not yet rendered
+- 2 remaining primitives not yet rendered (`feDiffuseLighting`, `feSpecularLighting`)
 - Skia backend not yet updated for filter graph model
 
 ## Next Steps
 
-- Complete Milestone 3: implement `feImage`, add `edgeMode` to `feGaussianBlur`.
+- Complete Milestone 3: implement `feImage` rendering (currently parses but outputs transparent); `edgeMode` for `feGaussianBlur` is done.
 - Begin Milestone 4: implement lighting primitives (`feDiffuseLighting`, `feSpecularLighting`, light sources).
 - Add `primitiveUnits` coordinate space handling.
 - Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).
 - Fix blur edge clipping to match spec behavior.
-- Implement `feImage` (requires re-entrant rendering for fragment references).
 
 ## Implementation Plan
 
@@ -96,9 +96,9 @@ Less common but required for full spec compliance.
 - [x] `feMorphology` — erode/dilate operations
 - [x] `feTile` — tile input to fill primitive subregion
 - [x] `feTurbulence` — Perlin/fractal noise generation
-- [ ] `feImage` — external image or SVG fragment as filter input
+- [x] `feImage` — parsing and graph wiring complete; rendering outputs transparent (TODO: image loading in filter context, fragment references)
 - [x] `feDisplacementMap` — spatial displacement using a channel map
-- [ ] `feGaussianBlur` — add `edgeMode` attribute (currently missing)
+- [x] `feGaussianBlur` — `edgeMode` attribute (none/duplicate/wrap)
 
 ### Milestone 4: Lighting primitives
 
