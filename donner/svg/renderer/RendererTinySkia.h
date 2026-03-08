@@ -100,7 +100,8 @@ public:
    *
    * @param effects The filter chain to apply when the layer is popped.
    */
-  void pushFilterLayer(std::span<const FilterEffect> effects) override;
+  void pushFilterLayer(const components::FilterGraph& filterGraph,
+                       const std::optional<Boxd>& filterRegion) override;
 
   /// Pops the most recent filter layer.
   void popFilterLayer() override;
@@ -224,7 +225,8 @@ private:
     SurfaceKind kind;
     tiny_skia::Pixmap pixmap;
     double opacity = 1.0;
-    std::vector<FilterEffect> effects;
+    components::FilterGraph filterGraph;
+    std::optional<Boxd> filterRegion;
     std::optional<Boxd> maskBounds;
     Transformd maskBoundsTransform;
     std::optional<tiny_skia::Mask> maskAlpha;
@@ -245,8 +247,8 @@ private:
                                                                 const StrokeParams& stroke);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
   void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity);
-  void applyFilters(tiny_skia::Pixmap& pixmap, std::span<const FilterEffect> effects);
-  void maybeWarnUnsupportedFilter(const FilterEffect& effect);
+  void applyFilterGraph(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph);
+  void maybeWarnUnsupportedFilter();
   void maybeWarnUnsupportedText();
 
   bool verbose_ = false;

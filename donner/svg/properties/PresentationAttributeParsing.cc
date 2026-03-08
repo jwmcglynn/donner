@@ -30,7 +30,33 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Filter>(
 }
 
 template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeComposite>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+// ParsePresentationAttribute<FeFlood> is defined in FilterPrimitiveComponent.cc.
+
+template <>
 ParseResult<bool> ParsePresentationAttribute<ElementType::FeGaussianBlur>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeMerge>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeMergeNode>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::FeOffset>(
     EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
   return false;
 }

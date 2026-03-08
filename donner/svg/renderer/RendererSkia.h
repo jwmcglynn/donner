@@ -104,7 +104,8 @@ public:
   /**
    * Pushes a filter layer that applies the given effect chain.
    */
-  void pushFilterLayer(std::span<const FilterEffect> effects) override;
+  void pushFilterLayer(const components::FilterGraph& filterGraph,
+                       const std::optional<Boxd>& filterRegion) override;
 
   /**
    * Pops the most recent filter layer.

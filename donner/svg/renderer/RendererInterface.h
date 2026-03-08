@@ -13,7 +13,7 @@
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/FillRule.h"
 #include "donner/svg/core/PathSpline.h"
@@ -191,9 +191,14 @@ class RendererInterface {
   virtual void popIsolatedLayer() = 0;
 
   /**
-   * Pushes a filter layer that applies the given effect chain to all content drawn within it.
+   * Pushes a filter layer that applies the given filter graph to all content drawn within it.
+   *
+   * @param filterGraph The filter graph describing primitives and their connections.
+   * @param filterRegion The filter region bounds in local coordinates, used to clip the filter
+   *   output. If nullopt, the filter operates on the full surface.
    */
-  virtual void pushFilterLayer(std::span<const FilterEffect> effects) = 0;
+  virtual void pushFilterLayer(const components::FilterGraph& filterGraph,
+                               const std::optional<Boxd>& filterRegion) = 0;
 
   /**
    * Pops the most recent filter layer.

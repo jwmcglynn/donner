@@ -5,6 +5,7 @@
 
 #include "donner/base/Length.h"
 #include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 
 namespace donner::svg::components {
@@ -47,8 +48,11 @@ struct ComputedFilterComponent {
   FilterUnits filterUnits = FilterUnits::Default;           ///< The computed filter units.
   PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;  ///< The computed primitive units.
 
-  /// Parsed list of effects, which can be chained together to create complex effects. These are
-  /// evaluated in order.
+  /// The filter graph built from child filter primitives.
+  FilterGraph filterGraph;
+
+  /// Parsed list of effects for backward-compatibility with existing renderer push/pop interface.
+  /// Will be removed once the graph-based renderer API is complete.
   std::vector<FilterEffect> effectChain;
 };
 

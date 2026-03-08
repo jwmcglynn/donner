@@ -140,20 +140,83 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   return clip;
 }
 
-std::span<const FilterEffect> resolveFilterEffects(
+std::optional<components::FilterGraph> resolveFilterGraph(
     Registry& registry, const components::ResolvedFilterEffect& filter) {
   if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
-    return *effects;
+    // Convert legacy inline effects to a FilterGraph.
+    components::FilterGraph graph;
+    for (const FilterEffect& effect : *effects) {
+      std::visit(
+          [&](const auto& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::GaussianBlur{
+                  .stdDeviationX = e.stdDeviationX.value,
+                  .stdDeviationY = e.stdDeviationY.value,
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+            }
+          },
+          effect.value);
+    }
+    return graph;
   }
 
   if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
     if (const auto* computed =
             registry.try_get<components::ComputedFilterComponent>(*reference)) {
-      return computed->effectChain;
+      return computed->filterGraph;
     }
   }
 
-  return {};
+  return std::nullopt;
+}
+
+/// Compute the filter region bounds in entity-local coordinates from a resolved filter reference.
+std::optional<Boxd> computeFilterRegion(
+    Registry& registry, const components::ResolvedFilterEffect& filter,
+    const components::RenderingInstanceComponent& instance) {
+  const auto* reference = std::get_if<ResolvedReference>(&filter);
+  if (!reference) {
+    return std::nullopt;  // CSS inline filter functions don't have explicit filter regions.
+  }
+
+  const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference);
+  if (!computed) {
+    return std::nullopt;
+  }
+
+  // Determine the bounds reference for resolving percentages.
+  const Boxd shapeBounds =
+      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
+
+  if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
+    // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
+    // Unitless values are fractions (e.g., 0.1 = 10% of bbox dimension).
+    // Percent values use toPixels which handles the /100 division.
+    auto resolveOBB = [&](const Lengthd& len, double bboxDim) -> double {
+      if (len.unit == Lengthd::Unit::None) {
+        return len.value * bboxDim;
+      }
+      // Percent and other units: toPixels resolves relative to shapeBounds.
+      return len.toPixels(shapeBounds, FontMetrics(),
+                          bboxDim == shapeBounds.width() ? Lengthd::Extent::X : Lengthd::Extent::Y);
+    };
+    const double xPx = resolveOBB(computed->x, shapeBounds.width()) + shapeBounds.topLeft.x;
+    const double yPx = resolveOBB(computed->y, shapeBounds.height()) + shapeBounds.topLeft.y;
+    const double wPx = resolveOBB(computed->width, shapeBounds.width());
+    const double hPx = resolveOBB(computed->height, shapeBounds.height());
+    return Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+  }
+
+  const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  const double xPx = computed->x.toPixels(viewBox, FontMetrics(), Lengthd::Extent::X);
+  const double yPx = computed->y.toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y);
+  const double wPx = computed->width.toPixels(viewBox, FontMetrics(), Lengthd::Extent::X);
+  const double hPx = computed->height.toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y);
+  return Boxd::FromXYWH(xPx, yPx, wPx, hPx);
 }
 
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
@@ -291,11 +354,20 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity);
     }
 
-    const bool hasFilterLayer = instance.resolvedFilter.has_value();
+    const std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    // Per SVG spec, an empty or invalid filter reference makes the element invisible.
+    const bool filterHidesElement =
+        instance.resolvedFilter.has_value() && !hasFilterLayer;
     if (hasFilterLayer) {
-      const std::span<const FilterEffect> effects =
-          resolveFilterEffects(registry, instance.resolvedFilter.value());
-      renderer_.pushFilterLayer(effects);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     // Clip paths are in entity-local coordinates.
@@ -340,7 +412,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
-    if (instance.visible) {
+    if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
@@ -483,11 +555,19 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity);
     }
 
-    const bool hasFilterLayer = instance.resolvedFilter.has_value();
+    const std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    const bool filterHidesElement =
+        instance.resolvedFilter.has_value() && !hasFilterLayer;
     if (hasFilterLayer) {
-      const std::span<const FilterEffect> effects =
-          resolveFilterEffects(registry, instance.resolvedFilter.value());
-      renderer_.pushFilterLayer(effects);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
@@ -516,7 +596,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
-    if (instance.visible) {
+    if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);

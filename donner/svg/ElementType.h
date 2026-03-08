@@ -15,7 +15,12 @@ enum class ElementType : uint8_t {
   ClipPath,        //!< \ref xml_clipPath
   Defs,            //!< \ref xml_defs
   Ellipse,         //!< \ref xml_ellipse
+  FeComposite,     //!< \ref xml_feComposite
+  FeFlood,         //!< \ref xml_feFlood
   FeGaussianBlur,  //!< \ref xml_feGaussianBlur
+  FeMerge,         //!< \ref xml_feMerge
+  FeMergeNode,     //!< \ref xml_feMergeNode
+  FeOffset,        //!< \ref xml_feOffset
   Filter,          //!< \ref xml_filter
   G,               //!< \ref xml_g
   Image,           //!< \ref xml_image
@@ -84,8 +89,18 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
     case ElementType::Ellipse:
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
+    case ElementType::FeComposite:
+      return fn(std::integral_constant<ElementType, ElementType::FeComposite>());
+    case ElementType::FeFlood:
+      return fn(std::integral_constant<ElementType, ElementType::FeFlood>());
     case ElementType::FeGaussianBlur:
       return fn(std::integral_constant<ElementType, ElementType::FeGaussianBlur>());
+    case ElementType::FeMerge:
+      return fn(std::integral_constant<ElementType, ElementType::FeMerge>());
+    case ElementType::FeMergeNode:
+      return fn(std::integral_constant<ElementType, ElementType::FeMergeNode>());
+    case ElementType::FeOffset:
+      return fn(std::integral_constant<ElementType, ElementType::FeOffset>());
     case donner::svg::ElementType::Filter:
       return fn(std::integral_constant<ElementType, ElementType::Filter>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());

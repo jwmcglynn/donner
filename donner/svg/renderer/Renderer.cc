@@ -55,8 +55,9 @@ void Renderer::popIsolatedLayer() {
   impl_->popIsolatedLayer();
 }
 
-void Renderer::pushFilterLayer(std::span<const FilterEffect> effects) {
-  impl_->pushFilterLayer(effects);
+void Renderer::pushFilterLayer(const components::FilterGraph& filterGraph,
+                               const std::optional<Boxd>& filterRegion) {
+  impl_->pushFilterLayer(filterGraph, filterRegion);
 }
 
 void Renderer::popFilterLayer() {

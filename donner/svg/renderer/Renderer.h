@@ -95,7 +95,8 @@ public:
    *
    * @param effects The filter chain to apply when the layer is popped.
    */
-  void pushFilterLayer(std::span<const FilterEffect> effects) override;
+  void pushFilterLayer(const components::FilterGraph& filterGraph,
+                       const std::optional<Boxd>& filterRegion) override;
 
   /// Pops the most recent filter layer.
   void popFilterLayer() override;

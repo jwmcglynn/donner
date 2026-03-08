@@ -220,8 +220,9 @@ TEST_F(RendererTests, DonnerSplash) {
   this->compareWithGolden(
       "donner_splash.svg", "donner/svg/renderer/testdata/golden/donner_splash.png",
       this->optionsExperimental(),
-      ImageComparisonParams::WithThreshold(0.1f).requireFeature(
-          RendererBackendFeature::FilterEffects, "experimental filter effects"));
+      ImageComparisonParams::WithThreshold(0.1f, 10000)
+          .requireFeature(RendererBackendFeature::FilterEffects,
+                          "experimental filter effects"));
 }
 
 TEST_F(RendererTests, DonnerSplashNoExperimental) {

@@ -17,6 +17,8 @@
 #include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGMarkerElement.h"
+#include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/parser/AngleParser.h"
@@ -149,6 +151,64 @@ bool ParseXYWidthHeight(SVGParserContext& context, T element, const XMLQualified
   }
 
   return true;
+}
+
+/**
+ * Parse the `in` attribute value into a \ref FilterInput.
+ *
+ * Standard keywords: SourceGraphic, SourceAlpha, FillPaint, StrokePaint.
+ * Any other non-empty string is treated as a named result reference.
+ *
+ * @param value Attribute value.
+ * @return The parsed FilterInput.
+ */
+components::FilterInput ParseFilterInput(std::string_view value) {
+  using components::FilterInput;
+  using components::FilterStandardInput;
+
+  if (value == "SourceGraphic") {
+    return FilterInput{FilterStandardInput::SourceGraphic};
+  }
+  if (value == "SourceAlpha") {
+    return FilterInput{FilterStandardInput::SourceAlpha};
+  }
+  if (value == "FillPaint") {
+    return FilterInput{FilterStandardInput::FillPaint};
+  }
+  if (value == "StrokePaint") {
+    return FilterInput{FilterStandardInput::StrokePaint};
+  }
+  return FilterInput{FilterInput::Named{RcString(value)}};
+}
+
+/**
+ * Parses the `in` and `result` attributes common to all filter primitives.
+ * Returns true if the attribute was handled.
+ *
+ * @tparam T Element type deriving from SVGFilterPrimitiveStandardAttributes.
+ * @param element The element to set the values on.
+ * @param name The attribute name.
+ * @param value The attribute value.
+ * @return True if the attribute was `in` or `result`.
+ */
+template <typename T>
+bool ParseFilterPrimitiveAttributes(T element, const XMLQualifiedNameRef& name,
+                                    std::string_view value) {
+  if (name == XMLQualifiedNameRef("in")) {
+    element.entityHandle().template get<components::FilterPrimitiveComponent>().in =
+        ParseFilterInput(value);
+    return true;
+  }
+  if (name == XMLQualifiedNameRef("in2")) {
+    element.entityHandle().template get<components::FilterPrimitiveComponent>().in2 =
+        ParseFilterInput(value);
+    return true;
+  }
+  if (name == XMLQualifiedNameRef("result")) {
+    element.setResult(value);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -424,6 +484,9 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserCont
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    // Handled by filter primitive standard attributes.
+    return std::nullopt;
   } else if (name == XMLQualifiedNameRef("stdDeviation")) {
     const auto maybeNumber2d = Number2dParser::Parse(value);
     if (maybeNumber2d.hasResult()) {
@@ -441,6 +504,125 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserCont
       err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFECompositeElement>(SVGParserContext& context,
+                                                                 SVGFECompositeElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("operator")) {
+    auto& comp = element.entityHandle().get<components::FECompositeComponent>();
+    if (value == "over") {
+      comp.op = components::FECompositeComponent::Operator::Over;
+    } else if (value == "in") {
+      comp.op = components::FECompositeComponent::Operator::In;
+    } else if (value == "out") {
+      comp.op = components::FECompositeComponent::Operator::Out;
+    } else if (value == "atop") {
+      comp.op = components::FECompositeComponent::Operator::Atop;
+    } else if (value == "xor") {
+      comp.op = components::FECompositeComponent::Operator::Xor;
+    } else if (value == "lighter") {
+      comp.op = components::FECompositeComponent::Operator::Lighter;
+    } else if (value == "arithmetic") {
+      comp.op = components::FECompositeComponent::Operator::Arithmetic;
+    }
+  } else if (name == XMLQualifiedNameRef("k1")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      element.entityHandle().get<components::FECompositeComponent>().k1 = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("k2")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      element.entityHandle().get<components::FECompositeComponent>().k2 = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("k3")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      element.entityHandle().get<components::FECompositeComponent>().k3 = *n;
+    }
+  } else if (name == XMLQualifiedNameRef("k4")) {
+    if (auto n = ParseNumberNoSuffix(value)) {
+      element.entityHandle().get<components::FECompositeComponent>().k4 = *n;
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEFloodElement>(SVGParserContext& context,
+                                                             SVGFEFloodElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else {
+    // flood-color and flood-opacity are presentation attributes handled by the CSS property system.
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEOffsetElement>(SVGParserContext& context,
+                                                              SVGFEOffsetElement element,
+                                                              const XMLQualifiedNameRef& name,
+                                                              std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("dx")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setOffset(*maybeNumber, element.dy());
+    }
+  } else if (name == XMLQualifiedNameRef("dy")) {
+    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
+      element.setOffset(element.dx(), *maybeNumber);
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEMergeElement>(SVGParserContext& context,
+                                                             SVGFEMergeElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
+    return std::nullopt;
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEMergeNodeElement>(
+    SVGParserContext& context, SVGFEMergeNodeElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  if (name == XMLQualifiedNameRef("in")) {
+    element.entityHandle().get<components::FEMergeNodeComponent>().in = ParseFilterInput(value);
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

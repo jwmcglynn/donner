@@ -187,6 +187,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
 

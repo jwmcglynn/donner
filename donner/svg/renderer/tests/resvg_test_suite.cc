@@ -260,8 +260,123 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-// TODO(filter): e-fe
-// TODO(filter): e-filter
+// TODO(filter): e-feBlend (not implemented)
+// TODO(filter): e-feColorMatrix (not implemented)
+// TODO(filter): e-feComponentTransfer (not implemented)
+
+INSTANTIATE_TEST_SUITE_P(
+    FeComposite, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feComposite",
+        {
+            {"e-feComposite-007.svg", Params::Skip()},   // Not impl: default subregion
+            {"e-feComposite-009.svg", Params::Skip()},   // filter region (k4 nonzero)
+            {"e-feComposite-012.svg", Params::Skip()},   // Not impl: linearRGB color space
+            {"e-feComposite-017.svg", Params::Skip()},   // Not impl: linearRGB color space
+            {"e-feComposite-018.svg", Params::Skip()},   // Not impl: linearRGB color space
+        })),
+    TestNameFromFilename);
+
+// TODO(filter): e-feConvolveMatrix (not implemented)
+// TODO(filter): e-feDiffuseLighting (not implemented)
+// TODO(filter): e-feDisplacementMap (not implemented)
+// TODO(filter): e-feDistantLight (not implemented)
+// TODO(filter): e-feDropShadow (not implemented)
+
+INSTANTIATE_TEST_SUITE_P(
+    FeFlood, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feFlood",
+        {
+            {"e-feFlood-006.svg", Params::Skip()},  // Not impl: default subregion + negative coords
+            {"e-feFlood-007.svg", Params::Skip()},  // Not impl: primitiveUnits
+            {"e-feFlood-008.svg", Params::Skip()},  // Not impl: primitiveUnits
+        })),
+    TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(
+    FeGaussianBlur, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feGaussianBlur",
+        {
+            {"e-feGaussianBlur-002.svg", Params::Skip()},  // Huge stdDev clipping
+            {"e-feGaussianBlur-012.svg", Params::Skip()},  // Complex skew transform + asymmetric blur
+        })),
+    TestNameFromFilename);
+
+// TODO(filter): e-feImage (not implemented)
+
+INSTANTIATE_TEST_SUITE_P(
+    FeMerge, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feMerge",
+        {
+            {"e-feMerge-001.svg", Params::Skip()},  // Not impl: color-interpolation-filters
+            {"e-feMerge-002.svg", Params::Skip()},  // Not impl: color-interpolation-filters
+            {"e-feMerge-003.svg", Params::Skip()},  // Not impl: color-interpolation-filters
+        })),
+    TestNameFromFilename);
+
+// TODO(filter): e-feMorphology (not implemented)
+
+INSTANTIATE_TEST_SUITE_P(
+    FeOffset, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feOffset",
+        {
+            {"e-feOffset-007.svg", Params::Skip()},  // Not impl: primitiveUnits=objectBoundingBox
+            {"e-feOffset-008.svg", Params::Skip()},  // Not impl: complex skew transform
+        })),
+    TestNameFromFilename);
+
+// TODO(filter): e-fePointLight (not implemented)
+// TODO(filter): e-feSpecularLighting (not implemented)
+// TODO(filter): e-feSpotLight (not implemented)
+// TODO(filter): e-feTile (not implemented)
+// TODO(filter): e-feTurbulence (not implemented)
+
+INSTANTIATE_TEST_SUITE_P(
+    Filter, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-filter",
+        {
+            {"e-filter-002.svg", Params::Skip()},  // filter region (blur edge clipping)
+            {"e-filter-003.svg", Params::Skip()},  // filterUnits=userSpaceOnUse (blur edge)
+            {"e-filter-004.svg", Params::Skip()},  // subregion + filter region
+            {"e-filter-009.svg", Params::Skip()},  // subregion (blur edge, 615px)
+            {"e-filter-010.svg", Params::Skip()},  // subregion percentage
+            {"e-filter-011.svg", Params::Skip()},  // subregion
+            {"e-filter-012.svg", Params::Skip()},  // primitiveUnits=objectBoundingBox
+            {"e-filter-014.svg", Params::Skip()},  // negative subregion
+            {"e-filter-017.svg", Params::Skip()},  // xlink:href
+            {"e-filter-018.svg", Params::Skip()},  // xlink:href
+            {"e-filter-019.svg", Params::Skip()},  // xlink:href
+            {"e-filter-026.svg", Params::Skip()},  // transform on shape (blur edge)
+            {"e-filter-027.svg", Params::Skip()},  // transform + filter region
+            {"e-filter-030.svg", Params::Skip()},  // primitiveUnits=objectBoundingBox
+            {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage
+            {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha
+            {"e-filter-034.svg", Params::Skip()},  // in=FillPaint
+            {"e-filter-035.svg", Params::Skip()},  // in=StrokePaint
+            {"e-filter-036.svg", Params::Skip()},  // in=FillPaint gradient
+            {"e-filter-037.svg", Params::Skip()},  // in=FillPaint pattern
+            {"e-filter-038.svg", Params::Skip()},  // in=FillPaint on group
+            {"e-filter-039.svg", Params::Skip()},  // multiple primitives (blur edge clipping)
+            {"e-filter-040.svg", Params::Skip()},  // multiple primitives (blur edge clipping)
+            {"e-filter-041.svg", Params::Skip()},  // blur edge clipping
+            {"e-filter-042.svg", Params::Skip()},  // feBlend not implemented
+            {"e-filter-044.svg", Params::Skip()},  // chained blur edge clipping
+            {"e-filter-046.svg", Params::Skip()},  // color-interpolation-filters
+            {"e-filter-052.svg", Params::Skip()},  // clip-path + filter (blur edge)
+            {"e-filter-053.svg", Params::Skip()},  // mask + filter (blur edge)
+            {"e-filter-054.svg", Params::Skip()},  // clip-path + mask + filter (blur edge)
+            {"e-filter-055.svg", Params::Skip()},  // primitiveUnits=objectBoundingBox
+            {"e-filter-056.svg", Params::Skip()},  // in to invalid (filter region)
+            {"e-filter-059.svg", Params::Skip()},  // complex transforms (blur edge)
+            {"e-filter-060.svg", Params::Skip()},  // filter on root svg
+            {"e-filter-065.svg", Params::Skip()},  // in=FillPaint on empty group
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(G, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-g")),
                          TestNameFromFilename);

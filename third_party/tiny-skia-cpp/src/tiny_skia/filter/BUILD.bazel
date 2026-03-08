@@ -1,0 +1,27 @@
+"""Filter operations for tiny_skia pixmaps."""
+
+load("//:bazel/defs.bzl", "tiny_skia_cc_library")
+
+tiny_skia_cc_library(
+    name = "filter",
+    srcs = [
+        "Composite.cpp",
+        "Flood.cpp",
+        "GaussianBlur.cpp",
+        "Merge.cpp",
+        "Offset.cpp",
+    ],
+    hdrs = [
+        "Composite.h",
+        "Flood.h",
+        "GaussianBlur.h",
+        "Merge.h",
+        "Offset.h",
+    ],
+    include_prefix = "tiny_skia/filter",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/tiny_skia:tiny_skia_core",
+    ],
+)

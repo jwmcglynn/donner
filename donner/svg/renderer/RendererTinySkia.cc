@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
-#include <numbers>
+#include <map>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -21,6 +21,11 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/PathBuilder.h"
+#include "tiny_skia/filter/Composite.h"
+#include "tiny_skia/filter/Flood.h"
+#include "tiny_skia/filter/GaussianBlur.h"
+#include "tiny_skia/filter/Merge.h"
+#include "tiny_skia/filter/Offset.h"
 #include "tiny_skia/shaders/Shaders.h"
 
 namespace donner::svg {
@@ -345,212 +350,7 @@ void drawRectIntoMask(tiny_skia::Mask& mask, const Boxd& rect, const Transformd&
   mask.fillPath(path, tiny_skia::FillRule::Winding, antialias, toTinyTransform(transform));
 }
 
-struct ConvolutionKernel {
-  std::vector<float> weights;
-  std::vector<std::uint32_t> numerators;
-  std::uint32_t divisor = 1;
-  int origin = 0;
-};
-
-ConvolutionKernel makeGaussianKernel(double sigma) {
-  if (sigma <= 0.0) {
-    return {{1.0f}, {}, 1u, 0};
-  }
-
-  const int radius = std::max(1, static_cast<int>(std::ceil(sigma * 3.0)));
-  std::vector<float> weights(static_cast<std::size_t>(radius * 2 + 1));
-
-  const double twoSigmaSquared = 2.0 * sigma * sigma;
-  double sum = 0.0;
-  for (int i = -radius; i <= radius; ++i) {
-    const double weight = std::exp(-(i * i) / twoSigmaSquared);
-    weights[static_cast<std::size_t>(i + radius)] = static_cast<float>(weight);
-    sum += weight;
-  }
-
-  for (float& weight : weights) {
-    weight = static_cast<float>(weight / sum);
-  }
-
-  return {std::move(weights), {}, 1u, radius};
-}
-
-ConvolutionKernel makeBoxKernel(int minOffset, int maxOffset) {
-  const int width = maxOffset - minOffset + 1;
-  std::vector<std::uint32_t> numerators(static_cast<std::size_t>(width), 1u);
-  return {{}, std::move(numerators), static_cast<std::uint32_t>(width), -minOffset};
-}
-
-ConvolutionKernel convolveKernels(const ConvolutionKernel& lhs, const ConvolutionKernel& rhs) {
-  ConvolutionKernel result;
-  result.origin = lhs.origin + rhs.origin;
-  result.divisor = lhs.divisor * rhs.divisor;
-
-  if (!lhs.numerators.empty() && !rhs.numerators.empty()) {
-    result.numerators.assign(lhs.numerators.size() + rhs.numerators.size() - 1u, 0u);
-    for (std::size_t lhsIndex = 0; lhsIndex < lhs.numerators.size(); ++lhsIndex) {
-      for (std::size_t rhsIndex = 0; rhsIndex < rhs.numerators.size(); ++rhsIndex) {
-        result.numerators[lhsIndex + rhsIndex] += lhs.numerators[lhsIndex] * rhs.numerators[rhsIndex];
-      }
-    }
-  } else {
-    result.weights.assign(lhs.weights.size() + rhs.weights.size() - 1u, 0.0f);
-    for (std::size_t lhsIndex = 0; lhsIndex < lhs.weights.size(); ++lhsIndex) {
-      for (std::size_t rhsIndex = 0; rhsIndex < rhs.weights.size(); ++rhsIndex) {
-        result.weights[lhsIndex + rhsIndex] += lhs.weights[lhsIndex] * rhs.weights[rhsIndex];
-      }
-    }
-  }
-
-  return result;
-}
-
-ConvolutionKernel makeBoxApproximationKernel(double sigma) {
-  if (sigma <= 0.0) {
-    return {{1.0f}, {}, 1u, 0};
-  }
-
-  const double kWindowScale =
-      3.0 * std::sqrt(2.0 * std::numbers::pi_v<double>) / 4.0;
-  const int window =
-      std::max(1, static_cast<int>(std::floor(sigma * kWindowScale + 0.5)));
-  if (window <= 1) {
-    return {{1.0f}, {}, 1u, 0};
-  }
-
-  if ((window & 1) != 0) {
-    const int radius = window / 2;
-    const ConvolutionKernel box = makeBoxKernel(-radius, radius);
-    return convolveKernels(convolveKernels(box, box), box);
-  }
-
-  const int half = window / 2;
-  const ConvolutionKernel leftShifted = makeBoxKernel(-half, half - 1);
-  const ConvolutionKernel rightShifted = makeBoxKernel(-(half - 1), half);
-  const ConvolutionKernel centered = makeBoxKernel(-half, half);
-  return convolveKernels(convolveKernels(leftShifted, rightShifted), centered);
-}
-
-ConvolutionKernel makeBlurKernel(double sigma) {
-  if (sigma < 2.0) {
-    return makeGaussianKernel(sigma);
-  }
-
-  return makeBoxApproximationKernel(sigma);
-}
-
-void convolveHorizontal(const std::vector<std::uint8_t>& src, std::vector<std::uint8_t>& dst,
-                        int width, int height, const ConvolutionKernel& kernel) {
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      for (int channel = 0; channel < 4; ++channel) {
-        if (!kernel.numerators.empty()) {
-          std::uint64_t sum = 0;
-          for (std::size_t kernelIndex = 0; kernelIndex < kernel.numerators.size();
-               ++kernelIndex) {
-            const int sampleX = x + static_cast<int>(kernelIndex) - kernel.origin;
-            if (sampleX < 0 || sampleX >= width) {
-              continue;
-            }
-
-            const std::size_t srcIndex =
-                static_cast<std::size_t>((y * width + sampleX) * 4 + channel);
-            sum += static_cast<std::uint64_t>(kernel.numerators[kernelIndex]) * src[srcIndex];
-          }
-
-          const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-          dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(
-              static_cast<long>((sum + kernel.divisor / 2u) / kernel.divisor), 0L, 255L));
-          continue;
-        }
-
-        float sum = 0.0f;
-        for (std::size_t kernelIndex = 0; kernelIndex < kernel.weights.size(); ++kernelIndex) {
-          const int sampleX = x + static_cast<int>(kernelIndex) - kernel.origin;
-          if (sampleX < 0 || sampleX >= width) {
-            continue;
-          }
-
-          const std::size_t srcIndex =
-              static_cast<std::size_t>((y * width + sampleX) * 4 + channel);
-          sum += kernel.weights[kernelIndex] * static_cast<float>(src[srcIndex]);
-        }
-
-        const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-        dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(std::lround(sum), 0L, 255L));
-      }
-    }
-  }
-}
-
-void convolveVertical(const std::vector<std::uint8_t>& src, std::vector<std::uint8_t>& dst,
-                      int width, int height, const ConvolutionKernel& kernel) {
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      for (int channel = 0; channel < 4; ++channel) {
-        if (!kernel.numerators.empty()) {
-          std::uint64_t sum = 0;
-          for (std::size_t kernelIndex = 0; kernelIndex < kernel.numerators.size();
-               ++kernelIndex) {
-            const int sampleY = y + static_cast<int>(kernelIndex) - kernel.origin;
-            if (sampleY < 0 || sampleY >= height) {
-              continue;
-            }
-
-            const std::size_t srcIndex =
-                static_cast<std::size_t>((sampleY * width + x) * 4 + channel);
-            sum += static_cast<std::uint64_t>(kernel.numerators[kernelIndex]) * src[srcIndex];
-          }
-
-          const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-          dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(
-              static_cast<long>((sum + kernel.divisor / 2u) / kernel.divisor), 0L, 255L));
-          continue;
-        }
-
-        float sum = 0.0f;
-        for (std::size_t kernelIndex = 0; kernelIndex < kernel.weights.size(); ++kernelIndex) {
-          const int sampleY = y + static_cast<int>(kernelIndex) - kernel.origin;
-          if (sampleY < 0 || sampleY >= height) {
-            continue;
-          }
-
-          const std::size_t srcIndex =
-              static_cast<std::size_t>((sampleY * width + x) * 4 + channel);
-          sum += kernel.weights[kernelIndex] * static_cast<float>(src[srcIndex]);
-        }
-
-        const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-        dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(std::lround(sum), 0L, 255L));
-      }
-    }
-  }
-}
-
-void applyGaussianBlur(tiny_skia::Pixmap& pixmap, double sigmaX, double sigmaY) {
-  const int width = static_cast<int>(pixmap.width());
-  const int height = static_cast<int>(pixmap.height());
-  if (width <= 0 || height <= 0) {
-    return;
-  }
-
-  std::vector<std::uint8_t> buffer(pixmap.data().begin(), pixmap.data().end());
-  std::vector<std::uint8_t> scratch(buffer.size());
-
-  if (sigmaX > 0.0) {
-    const ConvolutionKernel kernel = makeBlurKernel(sigmaX);
-    convolveHorizontal(buffer, scratch, width, height, kernel);
-    buffer.swap(scratch);
-  }
-
-  if (sigmaY > 0.0) {
-    const ConvolutionKernel kernel = makeBlurKernel(sigmaY);
-    convolveVertical(buffer, scratch, width, height, kernel);
-    buffer.swap(scratch);
-  }
-
-  std::copy(buffer.begin(), buffer.end(), pixmap.data().begin());
-}
+// Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
 
 std::vector<std::uint8_t> premultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
   std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
@@ -675,10 +475,12 @@ void RendererTinySkia::popIsolatedLayer() {
   compositePixmap(frame.pixmap, frame.opacity);
 }
 
-void RendererTinySkia::pushFilterLayer(std::span<const FilterEffect> effects) {
+void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGraph,
+                                       const std::optional<Boxd>& filterRegion) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::FilterLayer;
-  frame.effects.assign(effects.begin(), effects.end());
+  frame.filterGraph = filterGraph;
+  frame.filterRegion = filterRegion;
   frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
                                          static_cast<int>(currentPixmap().height()));
   surfaceStack_.push_back(std::move(frame));
@@ -691,7 +493,41 @@ void RendererTinySkia::popFilterLayer() {
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
-  applyFilters(frame.pixmap, frame.effects);
+  applyFilterGraph(frame.pixmap, frame.filterGraph);
+
+  // Clip pixels outside the filter region to transparent.
+  if (frame.filterRegion.has_value()) {
+    const Boxd& region = *frame.filterRegion;
+    const int pw = static_cast<int>(frame.pixmap.width());
+    const int ph = static_cast<int>(frame.pixmap.height());
+
+    // Transform filter region bounds from local coordinates to pixel coordinates.
+    const Boxd pixelRegion = currentTransform_.transformBox(region);
+    const int rx0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
+    const int ry0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.y)));
+    const int rx1 = std::min(pw, static_cast<int>(std::ceil(pixelRegion.bottomRight.x)));
+    const int ry1 = std::min(ph, static_cast<int>(std::ceil(pixelRegion.bottomRight.y)));
+
+    auto data = frame.pixmap.data();
+    // Clear rows above the region.
+    for (int y = 0; y < ry0; ++y) {
+      std::fill_n(data.data() + y * pw * 4, pw * 4, std::uint8_t{0});
+    }
+    // Clear left/right margins within the region.
+    for (int y = ry0; y < ry1; ++y) {
+      if (rx0 > 0) {
+        std::fill_n(data.data() + y * pw * 4, rx0 * 4, std::uint8_t{0});
+      }
+      if (rx1 < pw) {
+        std::fill_n(data.data() + (y * pw + rx1) * 4, (pw - rx1) * 4, std::uint8_t{0});
+      }
+    }
+    // Clear rows below the region.
+    for (int y = ry1; y < ph; ++y) {
+      std::fill_n(data.data() + y * pw * 4, pw * 4, std::uint8_t{0});
+    }
+  }
+
   compositePixmap(frame.pixmap, 1.0);
 }
 
@@ -1262,25 +1098,190 @@ void RendererTinySkia::compositePixmap(const tiny_skia::Pixmap& pixmap, double o
   tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, pixmap.view(), paint);
 }
 
-void RendererTinySkia::applyFilters(tiny_skia::Pixmap& pixmap,
-                                    std::span<const FilterEffect> effects) {
-  for (const FilterEffect& effect : effects) {
-    std::visit(
-        [&](const auto& resolvedEffect) {
-          using T = std::decay_t<decltype(resolvedEffect)>;
-          if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
-            applyGaussianBlur(pixmap, resolvedEffect.stdDeviationX.value,
-                              resolvedEffect.stdDeviationY.value);
-          } else if constexpr (!std::is_same_v<T, FilterEffect::None>) {
-            maybeWarnUnsupportedFilter(effect);
+void RendererTinySkia::applyFilterGraph(tiny_skia::Pixmap& pixmap,
+                                        const components::FilterGraph& filterGraph) {
+  using namespace components;
+  using namespace components::filter_primitive;
+
+  const int w = static_cast<int>(pixmap.width());
+  const int h = static_cast<int>(pixmap.height());
+
+  // Buffer management: sourceGraphic is the captured content, previousOutput tracks implicit
+  // chaining, and namedBuffers stores explicitly named results.
+  tiny_skia::Pixmap* sourceGraphic = &pixmap;
+  std::optional<tiny_skia::Pixmap> sourceAlpha;
+  std::optional<tiny_skia::Pixmap> previousOutput;
+  std::map<RcString, tiny_skia::Pixmap> namedBuffers;
+
+  // Lazily create SourceAlpha: same as SourceGraphic but with RGB=0, keeping only alpha.
+  auto getSourceAlpha = [&]() -> tiny_skia::Pixmap* {
+    if (!sourceAlpha.has_value()) {
+      sourceAlpha = *sourceGraphic;
+      auto data = sourceAlpha->data();
+      for (int i = 0; i < w * h; ++i) {
+        // Premultiplied RGBA: set R, G, B to 0, keep A.
+        data[i * 4 + 0] = 0;
+        data[i * 4 + 1] = 0;
+        data[i * 4 + 2] = 0;
+      }
+    }
+    return &sourceAlpha.value();
+  };
+
+  auto resolveInput = [&](const FilterInput& input) -> tiny_skia::Pixmap* {
+    return std::visit(
+        [&](const auto& v) -> tiny_skia::Pixmap* {
+          using V = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<V, FilterInput::Previous>) {
+            return previousOutput.has_value() ? &previousOutput.value() : sourceGraphic;
+          } else if constexpr (std::is_same_v<V, FilterStandardInput>) {
+            if (v == FilterStandardInput::SourceGraphic) {
+              return sourceGraphic;
+            }
+            if (v == FilterStandardInput::SourceAlpha) {
+              return getSourceAlpha();
+            }
+            // TODO: FillPaint, StrokePaint
+            return sourceGraphic;
+          } else if constexpr (std::is_same_v<V, FilterInput::Named>) {
+            auto it = namedBuffers.find(v.name);
+            if (it != namedBuffers.end()) {
+              return &it->second;
+            }
+            return sourceGraphic;
+          } else {
+            return sourceGraphic;
           }
         },
-        effect.value);
+        input.value);
+  };
+
+  for (const FilterNode& node : filterGraph.nodes) {
+    tiny_skia::Pixmap* input =
+        node.inputs.empty() ? sourceGraphic : resolveInput(node.inputs[0]);
+
+    std::optional<tiny_skia::Pixmap> output;
+
+    std::visit(
+        [&](const auto& primitive) {
+          using T = std::decay_t<decltype(primitive)>;
+          if constexpr (std::is_same_v<T, GaussianBlur>) {
+            // Gaussian blur operates in-place on a copy of the input.
+            // Scale stdDeviation from user space to pixel space.
+            const Vector2d origin = currentTransform_.transformPosition(Vector2d(0, 0));
+            const Vector2d scaleX =
+                currentTransform_.transformPosition(Vector2d(primitive.stdDeviationX, 0)) - origin;
+            const Vector2d scaleY =
+                currentTransform_.transformPosition(Vector2d(0, primitive.stdDeviationY)) - origin;
+            // Negative stdDeviation means no blur (per SVG spec).
+            const double pixelSigmaX =
+                primitive.stdDeviationX >= 0 ? std::abs(scaleX.x) : 0.0;
+            const double pixelSigmaY =
+                primitive.stdDeviationY >= 0 ? std::abs(scaleY.y) : 0.0;
+            output = *input;
+            tiny_skia::filter::gaussianBlur(*output, pixelSigmaX, pixelSigmaY);
+          } else if constexpr (std::is_same_v<T, Flood>) {
+            output = createTransparentPixmap(w, h);
+            const css::RGBA rgba = primitive.floodColor.asRGBA();
+            const double alpha = (rgba.a / 255.0) * primitive.floodOpacity;
+            const uint8_t pa = static_cast<uint8_t>(std::round(alpha * 255.0));
+            const uint8_t pr = static_cast<uint8_t>(std::round(rgba.r * alpha));
+            const uint8_t pg = static_cast<uint8_t>(std::round(rgba.g * alpha));
+            const uint8_t pb = static_cast<uint8_t>(std::round(rgba.b * alpha));
+            tiny_skia::filter::flood(*output, pr, pg, pb, pa);
+          } else if constexpr (std::is_same_v<T, Offset>) {
+            output = createTransparentPixmap(w, h);
+            // Transform offset from user space to pixel space.
+            const Vector2d origin = currentTransform_.transformPosition(Vector2d(0, 0));
+            const Vector2d offsetPoint =
+                currentTransform_.transformPosition(Vector2d(primitive.dx, primitive.dy));
+            const Vector2d pixelOffset = offsetPoint - origin;
+            tiny_skia::filter::offset(*input, *output, static_cast<int>(pixelOffset.x),
+                                      static_cast<int>(pixelOffset.y));
+          } else if constexpr (std::is_same_v<T, Composite>) {
+            tiny_skia::Pixmap* input2 =
+                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : sourceGraphic;
+            output = createTransparentPixmap(w, h);
+
+            // Map FilterGraph Composite::Operator to tiny_skia::filter::CompositeOp.
+            static constexpr tiny_skia::filter::CompositeOp kOpMap[] = {
+                tiny_skia::filter::CompositeOp::Over,
+                tiny_skia::filter::CompositeOp::In,
+                tiny_skia::filter::CompositeOp::Out,
+                tiny_skia::filter::CompositeOp::Atop,
+                tiny_skia::filter::CompositeOp::Xor,
+                tiny_skia::filter::CompositeOp::Lighter,
+                tiny_skia::filter::CompositeOp::Arithmetic,
+            };
+            const auto op = kOpMap[static_cast<int>(primitive.op)];
+            tiny_skia::filter::composite(*input, *input2, *output, op, primitive.k1, primitive.k2,
+                                         primitive.k3, primitive.k4);
+          } else if constexpr (std::is_same_v<T, Merge>) {
+            // Collect all input layer pointers.
+            std::vector<const tiny_skia::Pixmap*> layers;
+            for (const auto& mergeInput : node.inputs) {
+              layers.push_back(resolveInput(mergeInput));
+            }
+            output = createTransparentPixmap(w, h);
+            tiny_skia::filter::merge(layers, *output);
+          } else {
+            maybeWarnUnsupportedFilter();
+          }
+        },
+        node.primitive);
+
+    if (output.has_value()) {
+      // Apply primitive subregion clipping if x/y/width/height are specified on the node.
+      if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+          node.height.has_value()) {
+        // Compute subregion in user space. Unspecified attributes default to full pixmap extent.
+        const double ux = node.x.has_value() ? node.x->value : 0.0;
+        const double uy = node.y.has_value() ? node.y->value : 0.0;
+        const double uw = node.width.has_value() ? node.width->value : w;
+        const double uh = node.height.has_value() ? node.height->value : h;
+        const Boxd userRegion = Boxd::FromXYWH(ux, uy, uw, uh);
+
+        // Transform from user space to pixel space.
+        const Boxd pixelRegion = currentTransform_.transformBox(userRegion);
+        const int rx0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
+        const int ry0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.y)));
+        const int rx1 = std::min(w, static_cast<int>(std::ceil(pixelRegion.bottomRight.x)));
+        const int ry1 = std::min(h, static_cast<int>(std::ceil(pixelRegion.bottomRight.y)));
+
+        // Clear pixels outside the primitive subregion.
+        auto data = output->data();
+        for (int y = 0; y < ry0; ++y) {
+          std::fill_n(data.data() + y * w * 4, w * 4, std::uint8_t{0});
+        }
+        for (int y = ry0; y < ry1; ++y) {
+          if (rx0 > 0) {
+            std::fill_n(data.data() + y * w * 4, rx0 * 4, std::uint8_t{0});
+          }
+          if (rx1 < w) {
+            std::fill_n(data.data() + (y * w + rx1) * 4, (w - rx1) * 4, std::uint8_t{0});
+          }
+        }
+        for (int y = ry1; y < h; ++y) {
+          std::fill_n(data.data() + y * w * 4, w * 4, std::uint8_t{0});
+        }
+      }
+
+      if (node.result.has_value()) {
+        namedBuffers[*node.result] = *output;
+      }
+      previousOutput = std::move(output);
+    }
+  }
+
+  // Copy the final output back to the source pixmap.
+  if (previousOutput.has_value()) {
+    auto srcData = previousOutput->data();
+    auto dstData = pixmap.data();
+    std::copy(srcData.begin(), srcData.end(), dstData.begin());
   }
 }
 
-void RendererTinySkia::maybeWarnUnsupportedFilter(const FilterEffect& effect) {
-  (void)effect;
+void RendererTinySkia::maybeWarnUnsupportedFilter() {
   if (!verbose_ || warnedUnsupportedFilter_) {
     return;
   }

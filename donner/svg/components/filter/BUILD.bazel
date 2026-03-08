@@ -2,8 +2,12 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
     name = "components",
+    srcs = [
+        "FilterPrimitiveComponent.cc",
+    ],
     hdrs = [
         "FilterComponent.h",
+        "FilterGraph.h",
         "FilterPrimitiveComponent.h",
         "FilterUnits.h",
     ],
@@ -13,7 +17,11 @@ donner_cc_library(
     deps = [
         ":filter_effect",
         "//donner/base",
+        "//donner/css",
+        "//donner/css/parser",
+        "//donner/svg/properties",
     ],
+    alwayslink = 1,
 )
 
 donner_cc_library(
@@ -47,6 +55,9 @@ donner_cc_library(
     deps = [
         ":components",
         "//donner/base",
+        "//donner/css/parser",
         "//donner/svg/components:components_core",
+        "//donner/svg/components/style:components",
+        "//donner/svg/properties",
     ],
 )

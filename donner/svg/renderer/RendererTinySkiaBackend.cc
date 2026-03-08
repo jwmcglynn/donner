@@ -31,8 +31,9 @@ public:
 
   void popIsolatedLayer() override { renderer_.popIsolatedLayer(); }
 
-  void pushFilterLayer(std::span<const FilterEffect> effects) override {
-    renderer_.pushFilterLayer(effects);
+  void pushFilterLayer(const components::FilterGraph& filterGraph,
+                       const std::optional<Boxd>& filterRegion) override {
+    renderer_.pushFilterLayer(filterGraph, filterRegion);
   }
 
   void popFilterLayer() override { renderer_.popFilterLayer(); }

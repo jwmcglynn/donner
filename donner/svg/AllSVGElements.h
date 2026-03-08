@@ -12,7 +12,12 @@
 #include "donner/svg/SVGClipPathElement.h"        // IWYU pragma: export
 #include "donner/svg/SVGDefsElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGEllipseElement.h"         // IWYU pragma: export
+#include "donner/svg/SVGFECompositeElement.h"     // IWYU pragma: export
+#include "donner/svg/SVGFEFloodElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGFEGaussianBlurElement.h"  // IWYU pragma: export
+#include "donner/svg/SVGFEMergeElement.h"         // IWYU pragma: export
+#include "donner/svg/SVGFEMergeNodeElement.h"     // IWYU pragma: export
+#include "donner/svg/SVGFEOffsetElement.h"        // IWYU pragma: export
 #include "donner/svg/SVGFilterElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGGElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGImageElement.h"           // IWYU pragma: export
@@ -49,7 +54,12 @@ using AllSVGElements = entt::type_list<  //
     SVGClipPathElement,                  //
     SVGDefsElement,                      //
     SVGEllipseElement,                   //
+    SVGFECompositeElement,               //
+    SVGFEFloodElement,                   //
     SVGFEGaussianBlurElement,            //
+    SVGFEMergeElement,                   //
+    SVGFEMergeNodeElement,               //
+    SVGFEOffsetElement,                  //
     SVGFilterElement,                    //
     SVGGElement,                         //
     SVGImageElement,                     //

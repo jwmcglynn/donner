@@ -31,7 +31,7 @@
 #endif
 // Donner
 #include "donner/base/Length.h"
-#include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
@@ -553,24 +553,25 @@ std::optional<SkPaint> RendererSkia::makeStrokePaint(const Boxd& bounds,
   return std::nullopt;
 }
 
-void RendererSkia::pushFilterLayer(std::span<const FilterEffect> effects) {
+void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
+                                   const std::optional<Boxd>& filterRegion) {
   if (currentCanvas_ == nullptr) {
     return;
   }
 
   SkPaint filterPaint;
   filterPaint.setAntiAlias(antialias_);
-  for (const FilterEffect& effect : effects) {
+  for (const components::FilterNode& node : filterGraph.nodes) {
     std::visit(
-        [&](const auto& e) {
-          using T = std::decay_t<decltype(e)>;
-          if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
+        [&](const auto& primitive) {
+          using T = std::decay_t<decltype(primitive)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
             filterPaint.setImageFilter(SkImageFilters::Blur(
-                static_cast<float>(e.stdDeviationX.value),
-                static_cast<float>(e.stdDeviationY.value), nullptr));
+                static_cast<float>(primitive.stdDeviationX),
+                static_cast<float>(primitive.stdDeviationY), nullptr));
           }
         },
-        effect.value);
+        node.primitive);
   }
   currentCanvas_->saveLayer(nullptr, &filterPaint);
 }
