@@ -351,7 +351,8 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feDropShadow",
         {
             // linearRGB 8-bit LUT rounding diffs at blur edges
-            {"e-feDropShadow-001.svg", Params::WithThreshold(kDefaultThreshold, 400)},  // 389px
+            {"e-feDropShadow-001.svg",
+             Params::WithThreshold(kDefaultThreshold, 400)},  // 389px: box blur edge rounding
             {"e-feDropShadow-002.svg", Params::WithThreshold(kDefaultThreshold, 200)},  // 196px
             {"e-feDropShadow-003.svg",
              Params::WithThreshold(kDefaultThreshold,
@@ -366,9 +367,6 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-feFlood",
         {
-            {"e-feFlood-006.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   50000)},  // Default subregion + negative coords (49275px)
             {"e-feFlood-008.svg",
              Params::WithThreshold(kDefaultThreshold, 60000)},  // OBB + complex transform (59247px)
         })),
@@ -395,9 +393,9 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feImage-001.svg", Params::Skip()},  // External file reference (no ResourceLoader)
             {"e-feImage-002.svg", Params::Skip()},  // External SVG reference
             {"e-feImage-003.svg",
-             Params::WithThreshold(0.1f, 30000)},  // Bilinear interpolation differences
+             Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
             {"e-feImage-004.svg",
-             Params::WithThreshold(0.1f, 25000)},   // Bilinear interpolation differences
+             Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
             {"e-feImage-006.svg", Params::Skip()},  // Fragment reference (#element)
             {"e-feImage-007.svg", Params::Skip()},  // Subregion with objectBoundingBox
             {"e-feImage-008.svg", Params::Skip()},  // Subregion with objectBoundingBox

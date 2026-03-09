@@ -54,6 +54,11 @@ struct Box {
     }
     return result;
   }
+
+  [[nodiscard]] Box unite(const Box& other) const {
+    return {std::min(x0, other.x0), std::min(y0, other.y0), std::max(x1, other.x1),
+            std::max(y1, other.y1)};
+  }
 };
 
 FloatPixmap createTransparentFloat(int w, int h) {
@@ -424,7 +429,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               const int srcW = primitive.width;
               const int srcH = primitive.height;
 
-              // Sample source pixel as float [0,1].
+              // Bilinear interpolation to scale source image into target rect.
+              // Sample source pixel as float [0,1], with clamp edge handling.
               auto sampleSrc = [&](int sx, int sy, int ch) -> float {
                 sx = std::clamp(sx, 0, srcW - 1);
                 sy = std::clamp(sy, 0, srcH - 1);
@@ -433,33 +439,29 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
               for (int dy = 0; dy < h; ++dy) {
                 for (int dx = 0; dx < w; ++dx) {
-                  const double imgXf = (static_cast<double>(dx) + 0.5 - tx) * invScaleX - 0.5;
-                  const double imgYf = (static_cast<double>(dy) + 0.5 - ty) * invScaleY - 0.5;
+                  // Map destination pixel center to source coordinates.
+                  const double srcXf = (static_cast<double>(dx) + 0.5 - tx) * invScaleX - 0.5;
+                  const double srcYf = (static_cast<double>(dy) + 0.5 - ty) * invScaleY - 0.5;
 
-                  if (imgXf < -1.0 || imgXf >= srcW || imgYf < -1.0 || imgYf >= srcH) {
+                  const int sx0 = static_cast<int>(std::floor(srcXf));
+                  const int sy0 = static_cast<int>(std::floor(srcYf));
+
+                  if (sx0 + 1 < 0 || sx0 >= srcW || sy0 + 1 < 0 || sy0 >= srcH) {
                     continue;
                   }
 
-                  const int x0 = static_cast<int>(std::floor(imgXf));
-                  const int y0 = static_cast<int>(std::floor(imgYf));
-                  const double fx = imgXf - x0;
-                  const double fy = imgYf - y0;
-
-                  const double w00 = (1.0 - fx) * (1.0 - fy);
-                  const double w10 = fx * (1.0 - fy);
-                  const double w01 = (1.0 - fx) * fy;
-                  const double w11 = fx * fy;
-
-                  if (x0 + 1 < 0 || x0 >= srcW || y0 + 1 < 0 || y0 >= srcH) {
-                    continue;
-                  }
+                  const float fx = static_cast<float>(srcXf - sx0);
+                  const float fy = static_cast<float>(srcYf - sy0);
 
                   const std::size_t dstIdx = static_cast<std::size_t>((dy * w + dx) * 4);
                   for (int ch = 0; ch < 4; ++ch) {
-                    const float val = static_cast<float>(
-                        w00 * sampleSrc(x0, y0, ch) + w10 * sampleSrc(x0 + 1, y0, ch) +
-                        w01 * sampleSrc(x0, y0 + 1, ch) + w11 * sampleSrc(x0 + 1, y0 + 1, ch));
-                    dstData[dstIdx + ch] = std::clamp(val, 0.0f, 1.0f);
+                    const float s00 = sampleSrc(sx0, sy0, ch);
+                    const float s10 = sampleSrc(sx0 + 1, sy0, ch);
+                    const float s01 = sampleSrc(sx0, sy0 + 1, ch);
+                    const float s11 = sampleSrc(sx0 + 1, sy0 + 1, ch);
+                    const float top = s00 + (s10 - s00) * fx;
+                    const float bottom = s01 + (s11 - s01) * fx;
+                    dstData[dstIdx + ch] = top + (bottom - top) * fy;
                   }
                 }
               }
@@ -472,18 +474,39 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
         node.primitive);
 
     if (output.has_value()) {
-      if (node.subregion.has_value()) {
-        applySubregionClipping(*output, *node.subregion, w, h);
-      }
+      // Compute the effective subregion for this node:
+      // - If x/y/width/height are explicitly set, use that subregion.
+      // - Otherwise, use the union of input subregions (or filter region for no-input primitives).
+      // Always intersect with the filter region per the SVG spec.
+      // Determine if this primitive is a source generator (no conceptual inputs per SVG spec).
+      // These always default to the filter region, regardless of any implicit inputs added
+      // by the parser. feTile also defaults to the filter region since its output fills the
+      // target area, not the input's subregion.
+      const bool isSourceGenerator =
+          std::holds_alternative<graph_primitive::Flood>(node.primitive) ||
+          std::holds_alternative<graph_primitive::Turbulence>(node.primitive) ||
+          std::holds_alternative<graph_primitive::Image>(node.primitive) ||
+          std::holds_alternative<graph_primitive::Tile>(node.primitive);
 
       Box nodeSubregion;
       if (node.subregion.has_value()) {
         nodeSubregion = Box::fromPixelRect(*node.subregion);
+      } else if (node.inputs.empty() || isSourceGenerator) {
+        nodeSubregion = filterRegionBox;
       } else {
-        nodeSubregion = node.inputs.empty() ? previousOutputSubregion
-                                            : resolveInputSubregion(node.inputs[0]);
+        // Default subregion = union of all input subregions (SVG spec 15.7.2).
+        nodeSubregion = resolveInputSubregion(node.inputs[0]);
+        for (std::size_t i = 1; i < node.inputs.size(); ++i) {
+          nodeSubregion = nodeSubregion.unite(resolveInputSubregion(node.inputs[i]));
+        }
       }
       nodeSubregion = nodeSubregion.intersect(filterRegionBox);
+
+      // Clip output pixels to the computed subregion.
+      const PixelRect clipRect{nodeSubregion.x0, nodeSubregion.y0,
+                               nodeSubregion.x1 - nodeSubregion.x0,
+                               nodeSubregion.y1 - nodeSubregion.y0};
+      applySubregionClipping(*output, clipRect, w, h);
 
       if (node.result.has_value()) {
         namedBuffers[*node.result] = *output;
