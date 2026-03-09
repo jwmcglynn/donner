@@ -3,6 +3,7 @@
 
 #include <ostream>
 
+#include "donner/css/ColorProfile.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/FontFace.h"
 #include "donner/css/Selector.h"
@@ -55,8 +56,11 @@ public:
    *
    * @param rules List of rules, ownership is taken.
    */
-  explicit Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces = {})
-      : rules_(std::move(rules)), fontFaces_(std::move(fontFaces)) {}
+  explicit Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces = {},
+                      ColorProfileRegistry colorProfiles = {})
+      : rules_(std::move(rules)),
+        fontFaces_(std::move(fontFaces)),
+        colorProfiles_(std::move(colorProfiles)) {}
 
   // Copyable and moveable.
   /// Copy constructor.
@@ -82,6 +86,11 @@ public:
   std::span<const FontFace> fontFaces() const { return fontFaces_; }
 
   /**
+   * Get the registry of @color-profile definitions declared in this stylesheet.
+   */
+  const ColorProfileRegistry& colorProfiles() const { return colorProfiles_; }
+
+  /**
    * Output a human-readable representation of the stylesheet to a stream.
    *
    * @param os Output stream.
@@ -97,6 +106,7 @@ public:
 private:
   std::vector<SelectorRule> rules_;
   std::vector<FontFace> fontFaces_;
+  ColorProfileRegistry colorProfiles_;
 };
 
 }  // namespace donner::css

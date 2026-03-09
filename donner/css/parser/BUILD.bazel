@@ -4,6 +4,7 @@ donner_cc_library(
     name = "parser",
     srcs = [
         "AnbMicrosyntaxParser.cc",
+        "ColorProfileParser.cc",
         "ColorParser.cc",
         "DeclarationListParser.cc",
         "RuleParser.cc",
@@ -14,6 +15,7 @@ donner_cc_library(
     ],
     hdrs = [
         "AnbMicrosyntaxParser.h",
+        "ColorProfileParser.h",
         "ColorParser.h",
         "DeclarationListParser.h",
         "RuleParser.h",
@@ -41,6 +43,7 @@ donner_cc_test(
     name = "parser_tests",
     srcs = [
         "tests/AnbMicrosyntaxParser_tests.cc",
+        "tests/ColorProfileParser_tests.cc",
         "tests/ColorParser_tests.cc",
         "tests/DeclarationListParser_tests.cc",
         "tests/RuleParser_tests.cc",
