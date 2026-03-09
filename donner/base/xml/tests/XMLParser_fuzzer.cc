@@ -1,4 +1,5 @@
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -24,7 +25,7 @@ int readEnvInt(const char* name, int defaultValue) {
 
 uint64_t readEnvUint64(const char* name, uint64_t defaultValue) {
   if (const char* env = std::getenv(name)) {
-    const unsigned long long parsed = std::strtoull(env, nullptr, 10);  // NOLINT(runtime/int)
+    const uint64_t parsed = static_cast<uint64_t>(std::strtoull(env, nullptr, 10));
     if (parsed > 0) {
       return static_cast<uint64_t>(parsed);
     }

@@ -13,19 +13,16 @@ using testing::Optional;
 namespace donner::css::parser {
 
 TEST(Color, ColorPrintTo) {
-  using string_literals::operator""_rgb;
-  using string_literals::operator""_rgba;
-
   EXPECT_EQ(testing::PrintToString(Color(RGBA(0x11, 0x22, 0x33, 0x44))), "rgba(17, 34, 51, 68)");
   EXPECT_EQ(testing::PrintToString(Color(Color::CurrentColor())), "currentColor");
 
-  EXPECT_EQ(testing::PrintToString(0xFFFFFF_rgb), "rgba(255, 255, 255, 255)");
-  EXPECT_EQ(testing::PrintToString(0x000000_rgb), "rgba(0, 0, 0, 255)");
-  EXPECT_EQ(testing::PrintToString(0x123456_rgb), "rgba(18, 52, 86, 255)");
+  EXPECT_EQ(testing::PrintToString(RgbHex(0xFFFFFF)), "rgba(255, 255, 255, 255)");
+  EXPECT_EQ(testing::PrintToString(RgbHex(0x000000)), "rgba(0, 0, 0, 255)");
+  EXPECT_EQ(testing::PrintToString(RgbHex(0x123456)), "rgba(18, 52, 86, 255)");
 
-  EXPECT_EQ(testing::PrintToString(0xFFFFFF00_rgba), "rgba(255, 255, 255, 0)");
-  EXPECT_EQ(testing::PrintToString(0x000000CC_rgba), "rgba(0, 0, 0, 204)");
-  EXPECT_EQ(testing::PrintToString(0x12345678_rgba), "rgba(18, 52, 86, 120)");
+  EXPECT_EQ(testing::PrintToString(RgbaHex(0xFFFFFF00)), "rgba(255, 255, 255, 0)");
+  EXPECT_EQ(testing::PrintToString(RgbaHex(0x000000CC)), "rgba(0, 0, 0, 204)");
+  EXPECT_EQ(testing::PrintToString(RgbaHex(0x12345678)), "rgba(18, 52, 86, 120)");
 }
 
 TEST(ColorParser, Empty) {
