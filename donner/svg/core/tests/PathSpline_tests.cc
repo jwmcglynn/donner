@@ -1385,4 +1385,27 @@ TEST(PathSpline, IsOnPathZeroStrokeWidth) {
   EXPECT_FALSE(spline.isOnPath(Vector2d(5, 0.0001), 0.0));
 }
 
+TEST(PathSpline, ToStringReadable) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.5, -0.25));
+  spline.lineTo(Vector2d(10.125, 0.0));
+  spline.curveTo(Vector2d(3.0, 4.0), Vector2d(5.0, -6.125), Vector2d(7.5, 8.5));
+  spline.closePath();
+
+  EXPECT_EQ(spline.ToString(), "M 0.5,-0.25 L 10.125,0 C 3,4 5,-6.125 7.5,8.5 Z");
+}
+
+TEST(PathSpline, ToStringCompact) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0.5, -0.25));
+  spline.lineTo(Vector2d(10.125, 0.0));
+  spline.curveTo(Vector2d(3.0, 4.0), Vector2d(5.0, -6.125), Vector2d(7.5, 8.5));
+  spline.closePath();
+
+  PathSpline::PathFormatOptions options;
+  options.mode = PathSpline::PathFormatOptions::Mode::SizeOptimized;
+
+  EXPECT_EQ(spline.ToString(options), "M.5,-.25L10.125,0C3,4,5,-6.125,7.5,8.5Z");
+}
+
 }  // namespace donner::svg
