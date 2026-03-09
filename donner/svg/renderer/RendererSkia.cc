@@ -138,7 +138,8 @@ void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
 }
 
 const components::filter_primitive::GaussianBlur* getSimpleNativeSkiaBlur(
-    const components::FilterGraph& filterGraph, const std::optional<Boxd>& filterRegion) {
+    const components::FilterGraph& filterGraph, const std::optional<Boxd>& filterRegion,
+    const Transformd& currentTransform) {
   (void)filterRegion;
 
   if (filterGraph.nodes.size() != 1u) {
@@ -157,6 +158,15 @@ const components::filter_primitive::GaussianBlur* getSimpleNativeSkiaBlur(
   const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(&node.primitive);
   if (blur == nullptr ||
       blur->edgeMode != components::filter_primitive::GaussianBlur::EdgeMode::None) {
+    return nullptr;
+  }
+
+  const Vector2d xAxis = currentTransform.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d yAxis = currentTransform.transformVector(Vector2d(0.0, 1.0));
+  const double xLength = xAxis.length();
+  const double yLength = yAxis.length();
+  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
+  if (!NearEquals(xLength, yLength, 1e-6) || !NearZero(dot, 1e-6)) {
     return nullptr;
   }
 
@@ -613,12 +623,21 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
 
-  if (const auto* blur = getSimpleNativeSkiaBlur(filterGraph, filterRegion)) {
+  if (const auto* blur = getSimpleNativeSkiaBlur(
+          filterGraph, filterRegion, toDonnerTransform(currentCanvas_->getTotalMatrix()))) {
     SkPaint filterPaint;
     filterPaint.setAntiAlias(antialias_);
-    filterPaint.setImageFilter(SkImageFilters::Blur(static_cast<SkScalar>(blur->stdDeviationX),
-                                                    static_cast<SkScalar>(blur->stdDeviationY),
-                                                    nullptr));
+    sk_sp<SkImageFilter> imageFilter;
+    if (filterRegion.has_value()) {
+      const SkRect cropRect = currentCanvas_->getTotalMatrix().mapRect(toSkia(*filterRegion));
+      imageFilter = SkImageFilters::Blur(static_cast<SkScalar>(blur->stdDeviationX),
+                                         static_cast<SkScalar>(blur->stdDeviationY), nullptr,
+                                         SkImageFilters::CropRect(cropRect));
+    } else {
+      imageFilter = SkImageFilters::Blur(static_cast<SkScalar>(blur->stdDeviationX),
+                                         static_cast<SkScalar>(blur->stdDeviationY), nullptr);
+    }
+    filterPaint.setImageFilter(std::move(imageFilter));
     currentCanvas_->saveLayer(nullptr, &filterPaint);
 
     FilterLayerState state;

@@ -41,12 +41,14 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   const double bboxX = isOBB ? filterGraph.elementBoundingBox->topLeft.x : 0.0;
   const double bboxY = isOBB ? filterGraph.elementBoundingBox->topLeft.y : 0.0;
 
-  auto toPixelX = [&](double userX) -> double {
-    return filterTransform.transformVector(Vector2d(userX, 0)).length();
-  };
-  auto toPixelY = [&](double userY) -> double {
-    return filterTransform.transformVector(Vector2d(0, userY)).length();
-  };
+  const Vector2d transformedXAxis = filterTransform.transformVector(Vector2d(1.0, 0.0));
+  const double scaleX = transformedXAxis.length();
+  const double determinant = filterTransform.determinant();
+  const double scaleY =
+      NearZero(scaleX, 1e-12) ? std::abs(filterTransform.data[3]) : std::abs(determinant) / scaleX;
+
+  auto toPixelX = [&](double userX) -> double { return std::abs(userX) * scaleX; };
+  auto toPixelY = [&](double userY) -> double { return std::abs(userY) * scaleY; };
 
   auto primToPixelX = [&](double val) -> double {
     return isOBB ? toPixelX(val * bboxW) : toPixelX(val);

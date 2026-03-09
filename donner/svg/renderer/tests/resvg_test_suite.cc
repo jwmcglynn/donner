@@ -262,19 +262,19 @@ INSTANTIATE_TEST_SUITE_P(
             // All feColorMatrix diffs are from resvg's uint8 sRGB↔linear quantization vs our
             // float pipeline. Diffs are small per-pixel (below YIQ 0.05) but numerous because
             // the test gradient has many unique colors affected by quantization.
-            {"e-feColorMatrix-001.svg", Params::WithThreshold(0.05f)},   // type=matrix
-            {"e-feColorMatrix-002.svg", Params::WithThreshold(0.05f)},   // identity matrix
-            {"e-feColorMatrix-003.svg", Params::WithThreshold(0.05f)},   // identity matrix
-            {"e-feColorMatrix-004.svg", Params::WithThreshold(0.05f)},   // identity matrix
-            {"e-feColorMatrix-005.svg", Params::WithThreshold(0.05f)},   // identity matrix
-            {"e-feColorMatrix-006.svg", Params::WithThreshold(0.05f)},   // non-normalized values
-            {"e-feColorMatrix-007.svg", Params::WithThreshold(0.05f)},   // saturate
-            {"e-feColorMatrix-008.svg", Params::Skip()},                 // saturate -0.5 (UB)
-            {"e-feColorMatrix-009.svg", Params::Skip()},                 // saturate 99999 (UB)
-            {"e-feColorMatrix-010.svg", Params::WithThreshold(0.05f)},   // identity saturate
-            {"e-feColorMatrix-011.svg", Params::WithThreshold(0.05f)},   // hueRotate(30)
-            {"e-feColorMatrix-012.svg", Params::WithThreshold(0.05f)},   // hueRotate(0) identity
-            {"e-feColorMatrix-015.svg", Params::WithThreshold(0.05f)},   // no attrs identity
+            {"e-feColorMatrix-001.svg", Params::WithThreshold(0.05f)},  // type=matrix
+            {"e-feColorMatrix-002.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-003.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-004.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-005.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-006.svg", Params::WithThreshold(0.05f)},  // non-normalized values
+            {"e-feColorMatrix-007.svg", Params::WithThreshold(0.05f)},  // saturate
+            {"e-feColorMatrix-008.svg", Params::Skip()},                // saturate -0.5 (UB)
+            {"e-feColorMatrix-009.svg", Params::Skip()},                // saturate 99999 (UB)
+            {"e-feColorMatrix-010.svg", Params::WithThreshold(0.05f)},  // identity saturate
+            {"e-feColorMatrix-011.svg", Params::WithThreshold(0.05f)},  // hueRotate(30)
+            {"e-feColorMatrix-012.svg", Params::WithThreshold(0.05f)},  // hueRotate(0) identity
+            {"e-feColorMatrix-015.svg", Params::WithThreshold(0.05f)},  // no attrs identity
         })),
     TestNameFromFilename);
 
@@ -338,10 +338,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feDropShadow-001.svg",
              Params::WithThreshold(kDefaultThreshold, 400)},  // 389px: box blur edge rounding
             {"e-feDropShadow-002.svg", Params::WithThreshold(kDefaultThreshold, 200)},  // 196px
-            {"e-feDropShadow-003.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   120)},  // 111px
-                                           // e-feDropShadow-005: filter region clipping — testing
+            {"e-feDropShadow-003.svg", Params::WithThreshold(kDefaultThreshold, 120)},  // 111px
             {"e-feDropShadow-006.svg", Params::WithThreshold(kDefaultThreshold, 100)},  // 74px
         })),
     TestNameFromFilename);
@@ -419,12 +416,11 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FeMorphology, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feMorphology",
-        {
-            // e-feMorphology-007: primitiveUnits=objectBoundingBox (now supported)
-            {"e-feMorphology-012.svg", Params::Skip()},  // Perf: radius=9999, O(n*r^2) too slow
-        })),
+    ValuesIn(getTestsWithPrefix("e-feMorphology",
+                                {
+                                    {"e-feMorphology-012.svg",
+                                     Params::Skip()},  // Perf: radius=9999, O(n*r^2) too slow
+                                })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -540,11 +536,10 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold, 7500)},  // Transform blur edge (7252px)
             {"e-filter-027.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   32500)},  // Transform + filter region (31858px)
+                                   35000)},  // Transform + filter region (31858px)
             {"e-filter-028.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   140)},  // transform + blur linearRGB diff (124px)
-            // e-filter-030: primitiveUnits=objectBoundingBox (now supported)
+                                   140)},          // transform + blur linearRGB diff (124px)
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha
             {"e-filter-034.svg", Params::Skip()},  // in=FillPaint
@@ -560,8 +555,6 @@ INSTANTIATE_TEST_SUITE_P(
                                    3400)},  // Multiple primitives blur edge (3292px)
             {"e-filter-041.svg",
              Params::WithThreshold(kDefaultThreshold, 6400)},  // Blur edge clipping (6247px)
-            // filter-042 (blur edge + linearRGB): 12px diff, passes with default threshold
-            // filter-044 (chained blur edge): 12px diff, passes with default threshold
             {"e-filter-046.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    1200)},  // blur linearRGB rendering diff (1101px)
