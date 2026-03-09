@@ -9,6 +9,7 @@
 #include "include/core/SkPath.h"
 #include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
+#include "include/core/SkPicture.h"
 #include "include/core/SkSamplingOptions.h"
 #include "include/core/SkSurface.h"
 #include "include/core/SkTypeface.h"
@@ -38,6 +39,7 @@
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/graph/Reference.h"
+#include "donner/svg/renderer/FilterGraphExecutor.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 
@@ -70,11 +72,96 @@ SkRect toSkia(const Boxd& box) {
       static_cast<SkScalar>(box.bottomRight.x), static_cast<SkScalar>(box.bottomRight.y));
 }
 
+Transformd toDonnerTransform(const SkMatrix& matrix) {
+  Transformd transform;
+  transform.data[0] = matrix.getScaleX();
+  transform.data[1] = matrix.getSkewY();
+  transform.data[2] = matrix.getSkewX();
+  transform.data[3] = matrix.getScaleY();
+  transform.data[4] = matrix.getTranslateX();
+  transform.data[5] = matrix.getTranslateY();
+  return transform;
+}
+
 SkColor toSkia(const css::RGBA rgba) {
   return SkColorSetARGB(rgba.a, rgba.r, rgba.g, rgba.b);
 }
 
+SkPath toSkia(const PathSpline& spline);
+
 SkTileMode toSkia(GradientSpreadMethod spreadMethod);
+
+void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
+  if (clip.clipRect.has_value()) {
+    canvas->clipRect(toSkia(*clip.clipRect));
+  }
+
+  if (clip.clipPaths.empty()) {
+    return;
+  }
+
+  const SkMatrix skUnitsTransform = toSkiaMatrix(clip.clipPathUnitsTransform);
+
+  SkPath fullPath;
+  SmallVector<SkPath, 5> layeredPaths;
+  int currentLayer = 0;
+
+  for (const PathShape& shape : clip.clipPaths) {
+    SkPath skPath = toSkia(shape.path);
+    skPath.setFillType(shape.fillRule == FillRule::EvenOdd ? SkPathFillType::kEvenOdd
+                                                           : SkPathFillType::kWinding);
+    skPath.transform(toSkiaMatrix(shape.entityFromParent) * skUnitsTransform);
+
+    if (shape.layer > currentLayer) {
+      layeredPaths.push_back(skPath);
+      currentLayer = shape.layer;
+      continue;
+    } else if (shape.layer < currentLayer) {
+      assert(!layeredPaths.empty());
+      SkPath layerPath = layeredPaths[layeredPaths.size() - 1];
+      layeredPaths.pop_back();
+      layerPath.transform(toSkiaMatrix(shape.entityFromParent) * skUnitsTransform);
+      Op(layerPath, skPath, kIntersect_SkPathOp, &skPath);
+      currentLayer = shape.layer;
+
+      if (currentLayer != 0) {
+        layeredPaths.push_back(skPath);
+        continue;
+      }
+    }
+
+    SkPath& targetPath = layeredPaths.empty() ? fullPath : layeredPaths[layeredPaths.size() - 1];
+    Op(targetPath, skPath, kUnion_SkPathOp, &targetPath);
+  }
+
+  canvas->clipPath(fullPath, SkClipOp::kIntersect, true);
+}
+
+const components::filter_primitive::GaussianBlur* getSimpleNativeSkiaBlur(
+    const components::FilterGraph& filterGraph, const std::optional<Boxd>& filterRegion) {
+  (void)filterRegion;
+
+  if (filterGraph.nodes.size() != 1u) {
+    return nullptr;
+  }
+
+  const components::FilterNode& node = filterGraph.nodes.front();
+  if (node.inputs.size() != 1u ||
+      !std::holds_alternative<components::FilterInput::Previous>(node.inputs.front().value) ||
+      node.result.has_value() || node.x.has_value() || node.y.has_value() ||
+      node.width.has_value() || node.height.has_value() ||
+      node.colorInterpolationFilters.has_value()) {
+    return nullptr;
+  }
+
+  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(&node.primitive);
+  if (blur == nullptr ||
+      blur->edgeMode != components::filter_primitive::GaussianBlur::EdgeMode::None) {
+    return nullptr;
+  }
+
+  return blur;
+}
 
 inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
   if (!numbersArePercent) {
@@ -100,7 +187,8 @@ Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewBox, bool n
 }
 
 Transformd resolveGradientTransform(
-    const components::ComputedLocalTransformComponent* maybeTransformComponent, const Boxd& viewBox) {
+    const components::ComputedLocalTransformComponent* maybeTransformComponent,
+    const Boxd& viewBox) {
   if (maybeTransformComponent == nullptr) {
     return Transformd();
   }
@@ -125,15 +213,15 @@ std::optional<SkPaint> instantiateGradientPaint(const components::PaintResolvedR
     return std::nullopt;
   }
 
-  const bool objectBoundingBox = computedGradient->gradientUnits == GradientUnits::ObjectBoundingBox;
+  const bool objectBoundingBox =
+      computedGradient->gradientUnits == GradientUnits::ObjectBoundingBox;
   const bool numbersArePercent = objectBoundingBox;
 
   // Use a generous tolerance for degenerate bounding box detection: cubic bezier computation
   // can produce floating-point artifacts (e.g. 1.4e-14 width for a perfectly vertical path).
   constexpr double kDegenerateBBoxTolerance = 1e-6;
-  if (objectBoundingBox &&
-      (NearZero(pathBounds.width(), kDegenerateBBoxTolerance) ||
-       NearZero(pathBounds.height(), kDegenerateBBoxTolerance))) {
+  if (objectBoundingBox && (NearZero(pathBounds.width(), kDegenerateBBoxTolerance) ||
+                            NearZero(pathBounds.height(), kDegenerateBBoxTolerance))) {
     return std::nullopt;
   }
 
@@ -182,20 +270,20 @@ std::optional<SkPaint> instantiateGradientPaint(const components::PaintResolvedR
     const Vector2d end = resolveGradientCoords(linear->x2, linear->y2, bounds, numbersArePercent);
 
     const SkPoint points[] = {toSkia(start), toSkia(end)};
-    paint.setShader(SkGradientShader::MakeLinear(points, colors.data(), positions.data(),
-                                                 static_cast<int>(positions.size()),
-                                                 toSkia(computedGradient->spreadMethod), 0,
-                                                 &skGradientFromGradientUnits));
+    paint.setShader(SkGradientShader::MakeLinear(
+        points, colors.data(), positions.data(), static_cast<int>(positions.size()),
+        toSkia(computedGradient->spreadMethod), 0, &skGradientFromGradientUnits));
     return paint;
   }
 
   if (const auto* radial = handle.try_get<components::ComputedRadialGradientComponent>()) {
     const double radius = resolveGradientCoord(radial->r, bounds, numbersArePercent);
-    const Vector2d center = resolveGradientCoords(radial->cx, radial->cy, bounds, numbersArePercent);
+    const Vector2d center =
+        resolveGradientCoords(radial->cx, radial->cy, bounds, numbersArePercent);
     const double focalRadius = resolveGradientCoord(radial->fr, bounds, numbersArePercent);
-    const Vector2d focalCenter = resolveGradientCoords(radial->fx.value_or(radial->cx),
-                                                      radial->fy.value_or(radial->cy), bounds,
-                                                      numbersArePercent);
+    const Vector2d focalCenter =
+        resolveGradientCoords(radial->fx.value_or(radial->cx), radial->fy.value_or(radial->cy),
+                              bounds, numbersArePercent);
 
     if (NearZero(radius)) {
       SkPaint solidPaint;
@@ -339,6 +427,8 @@ void RendererSkia::beginFrame(const RenderViewport& viewport) {
 
   transformDepth_ = 0;
   clipDepth_ = 0;
+  activeClips_.clear();
+  filterLayerStack_.clear();
 }
 
 void RendererSkia::endFrame() {
@@ -352,6 +442,8 @@ void RendererSkia::endFrame() {
   currentCanvas_ = nullptr;
   externalCanvas_ = nullptr;
   bitmapCanvas_.reset();
+  activeClips_.clear();
+  filterLayerStack_.clear();
 }
 
 void RendererSkia::setTransform(const Transformd& transform) {
@@ -386,52 +478,11 @@ void RendererSkia::pushClip(const ResolvedClip& clip) {
     return;
   }
 
+  const SkMatrix clipMatrix = currentCanvas_->getTotalMatrix();
   currentCanvas_->save();
-  if (clip.clipRect.has_value()) {
-    currentCanvas_->clipRect(toSkia(*clip.clipRect));
-  }
-
-  if (!clip.clipPaths.empty()) {
-    const SkMatrix skUnitsTransform = toSkiaMatrix(clip.clipPathUnitsTransform);
-
-    SkPath fullPath;
-    SmallVector<SkPath, 5> layeredPaths;
-    int currentLayer = 0;
-
-    for (const PathShape& shape : clip.clipPaths) {
-      SkPath skPath = toSkia(shape.path);
-      skPath.setFillType(shape.fillRule == FillRule::EvenOdd ? SkPathFillType::kEvenOdd
-                                                             : SkPathFillType::kWinding);
-      skPath.transform(toSkiaMatrix(shape.entityFromParent) * skUnitsTransform);
-
-      if (shape.layer > currentLayer) {
-        layeredPaths.push_back(skPath);
-        currentLayer = shape.layer;
-        continue;
-      } else if (shape.layer < currentLayer) {
-        // Intersect the accumulated layer path with this path.
-        assert(!layeredPaths.empty());
-        SkPath layerPath = layeredPaths[layeredPaths.size() - 1];
-        layeredPaths.pop_back();
-        // Transform the layer path into the current path's coordinate space before intersecting.
-        layerPath.transform(toSkiaMatrix(shape.entityFromParent) * skUnitsTransform);
-        Op(layerPath, skPath, kIntersect_SkPathOp, &skPath);
-        currentLayer = shape.layer;
-
-        if (currentLayer != 0) {
-          layeredPaths.push_back(skPath);
-          continue;
-        }
-      }
-
-      SkPath& targetPath = layeredPaths.empty() ? fullPath : layeredPaths[layeredPaths.size() - 1];
-      Op(targetPath, skPath, kUnion_SkPathOp, &targetPath);
-    }
-
-    currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
-  }
-
+  applyClipToCanvas(currentCanvas_, clip);
   ++clipDepth_;
+  activeClips_.push_back(ClipStackEntry{clip, clipMatrix});
 }
 
 void RendererSkia::popClip() {
@@ -441,6 +492,9 @@ void RendererSkia::popClip() {
 
   currentCanvas_->restore();
   --clipDepth_;
+  if (!activeClips_.empty()) {
+    activeClips_.pop_back();
+  }
 }
 
 std::optional<SkPaint> RendererSkia::makeFillPaint(const Boxd& bounds) {
@@ -559,28 +613,99 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
 
-  SkPaint filterPaint;
-  filterPaint.setAntiAlias(antialias_);
-  for (const components::FilterNode& node : filterGraph.nodes) {
-    std::visit(
-        [&](const auto& primitive) {
-          using T = std::decay_t<decltype(primitive)>;
-          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
-            filterPaint.setImageFilter(SkImageFilters::Blur(
-                static_cast<float>(primitive.stdDeviationX),
-                static_cast<float>(primitive.stdDeviationY), nullptr));
-          }
-        },
-        node.primitive);
-  }
-  currentCanvas_->saveLayer(nullptr, &filterPaint);
-}
+  if (const auto* blur = getSimpleNativeSkiaBlur(filterGraph, filterRegion)) {
+    SkPaint filterPaint;
+    filterPaint.setAntiAlias(antialias_);
+    filterPaint.setImageFilter(SkImageFilters::Blur(static_cast<SkScalar>(blur->stdDeviationX),
+                                                    static_cast<SkScalar>(blur->stdDeviationY),
+                                                    nullptr));
+    currentCanvas_->saveLayer(nullptr, &filterPaint);
 
-void RendererSkia::popFilterLayer() {
-  if (currentCanvas_ == nullptr) {
+    FilterLayerState state;
+    state.usesNativeSkiaFilter = true;
+    filterLayerStack_.push_back(std::move(state));
     return;
   }
 
+  const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
+  const int height = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
+  sk_sp<SkSurface> surface = SkSurfaces::Raster(
+      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
+  if (surface == nullptr) {
+    return;
+  }
+
+  SkCanvas* filterCanvas = surface->getCanvas();
+  filterCanvas->clear(SK_ColorTRANSPARENT);
+  for (const ClipStackEntry& entry : activeClips_) {
+    filterCanvas->save();
+    filterCanvas->setMatrix(entry.matrix);
+    applyClipToCanvas(filterCanvas, entry.clip);
+  }
+  filterCanvas->setMatrix(currentCanvas_->getTotalMatrix());
+
+  FilterLayerState state;
+  state.surface = std::move(surface);
+  state.parentCanvas = currentCanvas_;
+  state.filterGraph = filterGraph;
+  state.filterRegion = filterRegion;
+  state.filterTransform = toDonnerTransform(currentCanvas_->getTotalMatrix());
+  currentCanvas_ = filterCanvas;
+  filterLayerStack_.push_back(std::move(state));
+}
+
+void RendererSkia::popFilterLayer() {
+  if (currentCanvas_ == nullptr || filterLayerStack_.empty()) {
+    return;
+  }
+
+  FilterLayerState state = std::move(filterLayerStack_.back());
+  filterLayerStack_.pop_back();
+
+  if (state.usesNativeSkiaFilter) {
+    currentCanvas_->restore();
+    return;
+  }
+
+  const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
+  const int height = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
+  const auto size = tiny_skia::IntSize::fromWH(static_cast<std::uint32_t>(width),
+                                               static_cast<std::uint32_t>(height));
+  if (!size.has_value()) {
+    currentCanvas_ = state.parentCanvas;
+    return;
+  }
+
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4u, 0);
+  const SkImageInfo info =
+      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+  if (!state.surface->readPixels(info, pixels.data(), static_cast<std::size_t>(width) * 4u, 0, 0)) {
+    currentCanvas_ = state.parentCanvas;
+    return;
+  }
+
+  auto maybePixmap = tiny_skia::Pixmap::fromVec(std::move(pixels), *size);
+  if (!maybePixmap.has_value()) {
+    currentCanvas_ = state.parentCanvas;
+    return;
+  }
+
+  ApplyFilterGraphToPixmap(*maybePixmap, state.filterGraph, state.filterTransform,
+                           state.filterRegion);
+  ClipFilterOutputToRegion(*maybePixmap, state.filterRegion, state.filterTransform);
+
+  const std::vector<std::uint8_t> filteredPixels = maybePixmap->release();
+  const SkPixmap pixmap(info, filteredPixels.data(), static_cast<std::size_t>(width) * 4u);
+  sk_sp<SkImage> filteredImage = SkImages::RasterFromPixmapCopy(pixmap);
+
+  currentCanvas_ = state.parentCanvas;
+  if (filteredImage == nullptr) {
+    return;
+  }
+
+  currentCanvas_->save();
+  currentCanvas_->resetMatrix();
+  currentCanvas_->drawImage(filteredImage, 0.0f, 0.0f);
   currentCanvas_->restore();
 }
 
@@ -703,13 +828,12 @@ void RendererSkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
   if (verbose_) {
     const bool isSolid = std::holds_alternative<PaintServer::Solid>(paint_.fill);
     const SkMatrix m = currentCanvas_->getTotalMatrix();
-    std::cout << "[Skia::drawPath] saveCount=" << currentCanvas_->getSaveCount()
-              << " matrix=[" << m.getScaleX() << "," << m.getScaleY() << ","
-              << m.getTranslateX() << "," << m.getTranslateY() << "]"
-              << " bounds=" << path.path.bounds()
-              << " fillOpacity=" << paint_.fillOpacity
-              << " fillIsSolid=" << isSolid
-              << " isRef=" << std::holds_alternative<components::PaintResolvedReference>(paint_.fill)
+    std::cout << "[Skia::drawPath] saveCount=" << currentCanvas_->getSaveCount() << " matrix=["
+              << m.getScaleX() << "," << m.getScaleY() << "," << m.getTranslateX() << ","
+              << m.getTranslateY() << "]"
+              << " bounds=" << path.path.bounds() << " fillOpacity=" << paint_.fillOpacity
+              << " fillIsSolid=" << isSolid << " isRef="
+              << std::holds_alternative<components::PaintResolvedReference>(paint_.fill)
               << " isNone=" << std::holds_alternative<PaintServer::None>(paint_.fill);
     if (isSolid) {
       const auto& solid = std::get<PaintServer::Solid>(paint_.fill);
@@ -739,8 +863,7 @@ void RendererSkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
     adjustedStroke.dashOffset *= dashUnitsScale;
   }
 
-  if (std::optional<SkPaint> strokePaint =
-          makeStrokePaint(path.path.bounds(), adjustedStroke)) {
+  if (std::optional<SkPaint> strokePaint = makeStrokePaint(path.path.bounds(), adjustedStroke)) {
     currentCanvas_->drawPath(skPath, *strokePaint);
   }
 }
@@ -850,7 +973,6 @@ void RendererSkia::draw(SVGDocument& document) {
   RendererDriver driver(*this, verbose_);
   driver.draw(document);
 }
-
 
 std::string RendererSkia::drawIntoAscii(SVGDocument& document) {
   // Render directly into a grayscale bitmap to match the expected ASCII output.

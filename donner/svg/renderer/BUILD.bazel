@@ -88,6 +88,19 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "filter_graph_executor",
+    srcs = ["FilterGraphExecutor.cc"],
+    hdrs = ["FilterGraphExecutor.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],
@@ -162,6 +175,7 @@ donner_cc_library(
     srcs = ["RendererSkia.cc"],
     hdrs = ["RendererSkia.h"],
     deps = [
+        ":filter_graph_executor",
         ":renderer_driver",
         ":renderer_image_io",
         ":renderer_interface",
@@ -181,6 +195,7 @@ donner_cc_library(
     hdrs = ["RendererTinySkia.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":filter_graph_executor",
         ":renderer_driver",
         ":renderer_image_io",
         ":renderer_interface",

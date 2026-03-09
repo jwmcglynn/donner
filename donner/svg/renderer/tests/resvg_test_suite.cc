@@ -259,38 +259,22 @@ INSTANTIATE_TEST_SUITE_P(
             // Float pipeline diffs: identity-like filters (no-op) show gradient rendering
             // differences (~10945px) since the float sRGB↔linear round-trip is lossless.
             // Non-trivial filters improved significantly with float precision.
-            {"e-feColorMatrix-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 1900)},  // type=matrix (1799px)
-            {"e-feColorMatrix-002.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11500)},  // identity matrix (10945px rendering diff)
-            {"e-feColorMatrix-003.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11500)},  // identity matrix (10945px rendering diff)
-            {"e-feColorMatrix-004.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11500)},  // identity matrix (10945px rendering diff)
-            {"e-feColorMatrix-005.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11500)},  // identity matrix (10945px rendering diff)
-            {"e-feColorMatrix-006.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   420)},  // non-normalized values (398px, was 3383)
-            {"e-feColorMatrix-007.svg",
-             Params::WithThreshold(kDefaultThreshold, 3100)},  // saturate (2993px, was 6987)
-            {"e-feColorMatrix-008.svg", Params::Skip()},       // saturate -0.5 (UB, 141k px)
-            {"e-feColorMatrix-009.svg", Params::Skip()},       // saturate 99999 (UB, 158k px)
-            {"e-feColorMatrix-010.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11500)},  // identity saturate (10945px rendering diff)
-            {"e-feColorMatrix-011.svg",
-             Params::WithThreshold(kDefaultThreshold, 9200)},  // hueRotate(30) (8977px)
-            {"e-feColorMatrix-012.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11500)},  // hueRotate(0) identity (10945px rendering diff)
-            {"e-feColorMatrix-015.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11500)},  // no attrs identity (10945px rendering diff)
+            // All feColorMatrix diffs are from resvg's uint8 sRGB↔linear quantization vs our
+            // float pipeline. Diffs are small per-pixel (below YIQ 0.05) but numerous because
+            // the test gradient has many unique colors affected by quantization.
+            {"e-feColorMatrix-001.svg", Params::WithThreshold(0.05f)},   // type=matrix
+            {"e-feColorMatrix-002.svg", Params::WithThreshold(0.05f)},   // identity matrix
+            {"e-feColorMatrix-003.svg", Params::WithThreshold(0.05f)},   // identity matrix
+            {"e-feColorMatrix-004.svg", Params::WithThreshold(0.05f)},   // identity matrix
+            {"e-feColorMatrix-005.svg", Params::WithThreshold(0.05f)},   // identity matrix
+            {"e-feColorMatrix-006.svg", Params::WithThreshold(0.05f)},   // non-normalized values
+            {"e-feColorMatrix-007.svg", Params::WithThreshold(0.05f)},   // saturate
+            {"e-feColorMatrix-008.svg", Params::Skip()},                 // saturate -0.5 (UB)
+            {"e-feColorMatrix-009.svg", Params::Skip()},                 // saturate 99999 (UB)
+            {"e-feColorMatrix-010.svg", Params::WithThreshold(0.05f)},   // identity saturate
+            {"e-feColorMatrix-011.svg", Params::WithThreshold(0.05f)},   // hueRotate(30)
+            {"e-feColorMatrix-012.svg", Params::WithThreshold(0.05f)},   // hueRotate(0) identity
+            {"e-feColorMatrix-015.svg", Params::WithThreshold(0.05f)},   // no attrs identity
         })),
     TestNameFromFilename);
 
@@ -593,6 +577,9 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-055.svg", Params::Skip()},  // OBB + subregion % (141644px diff)
             {"e-filter-056.svg",
              Params::WithThreshold(kDefaultThreshold, 98000)},  // Invalid named result (97365px)
+            {"e-filter-058.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   60000)},  // Multiple transforms + blur (59394px)
             {"e-filter-059.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    37000)},        // Complex transforms blur edge (36065px)

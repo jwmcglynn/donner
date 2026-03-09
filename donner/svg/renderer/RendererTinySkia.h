@@ -227,6 +227,7 @@ private:
     double opacity = 1.0;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
+    Transformd filterTransform;
     std::optional<Boxd> maskBounds;
     Transformd maskBoundsTransform;
     std::optional<tiny_skia::Mask> maskAlpha;
@@ -247,8 +248,6 @@ private:
                                                                 const StrokeParams& stroke);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
   void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity);
-  void applyFilterGraph(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
-                        const std::optional<Boxd>& filterRegion);
   void maybeWarnUnsupportedText();
 
   bool verbose_ = false;

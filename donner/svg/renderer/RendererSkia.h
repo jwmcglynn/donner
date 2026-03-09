@@ -11,6 +11,7 @@
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkGraphics.h"
 #include "include/core/SkPictureRecorder.h"
+#include "include/core/SkSurface.h"
 
 namespace donner::svg {
 
@@ -240,10 +241,10 @@ private:
   sk_sp<class SkFontMgr> fontMgr_;  //!< Font manager, may be initialized with custom fonts.
   std::map<std::string, sk_sp<SkTypeface>> typefaces_;  //!< Cached typefaces by family name.
 
-  SkBitmap bitmap_;                       //!< The bitmap to render into.
+  SkBitmap bitmap_;                         //!< The bitmap to render into.
   std::unique_ptr<SkCanvas> bitmapCanvas_;  //!< Direct canvas from bitmap.
-  SkCanvas* currentCanvas_ = nullptr;    //!< The current canvas.
-  bool antialias_ = true;                //!< Whether to antialias.
+  SkCanvas* currentCanvas_ = nullptr;       //!< The current canvas.
+  bool antialias_ = true;                   //!< Whether to antialias.
 
   RenderViewport viewport_;
   PaintParams paint_;
@@ -261,6 +262,23 @@ private:
   std::vector<PatternState> patternStack_;
   std::optional<SkPaint> patternFillPaint_;
   std::optional<SkPaint> patternStrokePaint_;
+
+  struct ClipStackEntry {
+    ResolvedClip clip;
+    SkMatrix matrix;
+  };
+
+  struct FilterLayerState {
+    bool usesNativeSkiaFilter = false;
+    sk_sp<SkSurface> surface;
+    SkCanvas* parentCanvas = nullptr;
+    components::FilterGraph filterGraph;
+    std::optional<Boxd> filterRegion;
+    Transformd filterTransform;
+  };
+
+  std::vector<ClipStackEntry> activeClips_;
+  std::vector<FilterLayerState> filterLayerStack_;
 
   std::optional<SkPaint> makeFillPaint(const Boxd& bounds);
   std::optional<SkPaint> makeStrokePaint(const Boxd& bounds, const StrokeParams& stroke);

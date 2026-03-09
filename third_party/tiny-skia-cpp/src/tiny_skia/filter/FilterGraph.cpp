@@ -103,10 +103,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   }
 
   // Convert source to float. Keep in sRGB — convert to linear only when needed per-node.
+  // This deferred conversion approach allows identity operations (like identity feColorMatrix)
+  // to avoid the sRGB↔linear round-trip entirely, eliminating quantization artifacts.
   FloatPixmap sourceFloat = FloatPixmap::fromPixmap(sourceGraphic);
-  if (graph.useLinearRGB) {
-    srgbToLinear(sourceFloat);
-  }
 
   // Buffer management — all intermediate work in float precision.
   FloatPixmap* source = &sourceFloat;
@@ -115,8 +114,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   std::map<std::string, FloatPixmap> namedBuffers;
 
   // Color space tracking: true = linearRGB, false = sRGB.
-  bool sourceColorSpace = graph.useLinearRGB;
-  bool previousOutputColorSpace = graph.useLinearRGB;
+  // Source starts in sRGB; conversion to linear is done per-node via ensureColorSpace.
+  bool sourceColorSpace = false;
+  bool previousOutputColorSpace = false;
   std::map<std::string, bool> namedColorSpaces;
 
   auto ensureColorSpace = [](FloatPixmap* buf, bool currentIsLinear, bool targetIsLinear,
@@ -228,6 +228,10 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
     std::optional<FloatPixmap> convertedInput;
     FloatPixmap* input = ensureColorSpace(rawInput, inputCS, nodeLinearRGB, convertedInput);
 
+    // Color space of this node's output — defaults to nodeLinearRGB but may be overridden
+    // by specific primitives (e.g., identity feColorMatrix skips color space conversion).
+    bool outputColorSpace = nodeLinearRGB;
+
     std::optional<FloatPixmap> output;
 
     std::visit(
@@ -300,8 +304,15 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             merge(layers, *output);
 
           } else if constexpr (std::is_same_v<T, graph_primitive::ColorMatrix>) {
-            output = *input;
-            colorMatrix(*output, primitive.matrix);
+            if (primitive.matrix == identityMatrix()) {
+              // Identity matrix: skip color space conversion to avoid unnecessary
+              // sRGB↔linear round-trip quantization artifacts. Pass through raw input.
+              output = *rawInput;
+              outputColorSpace = inputCS;
+            } else {
+              output = *input;
+              colorMatrix(*output, primitive.matrix);
+            }
 
           } else if constexpr (std::is_same_v<T, graph_primitive::ComponentTransfer>) {
             output = *input;
@@ -511,11 +522,11 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
       if (node.result.has_value()) {
         namedBuffers[*node.result] = *output;
         namedSubregions[*node.result] = nodeSubregion;
-        namedColorSpaces[*node.result] = nodeLinearRGB;
+        namedColorSpaces[*node.result] = outputColorSpace;
       }
       previousOutput = std::move(output);
       previousOutputSubregion = nodeSubregion;
-      previousOutputColorSpace = nodeLinearRGB;
+      previousOutputColorSpace = outputColorSpace;
     }
   }
 

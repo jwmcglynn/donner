@@ -3,7 +3,7 @@
 **Status:** In Progress (Milestones 1-4 complete, Milestone 5 next)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-07
-**Last Updated:** 2026-03-08
+**Last Updated:** 2026-03-09
 **Tracking:** [#151](https://github.com/jwmcglynn/donner/issues/151)
 
 ## Summary
@@ -41,17 +41,26 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - Light sources: `feDistantLight`, `fePointLight`, `feSpotLight` with coordinate scaling for non-1:1 viewBox/canvas ratios
 - Native tiny-skia-cpp filter library with all implemented operations
 
+**Implemented (Skia backend, partial):**
+- Offscreen filter capture using raster `SkSurface` layers
+- Shared CPU fallback via `FilterGraphExecutor` for graph execution and filter region clipping
+- Native fast path for simple single-node `feGaussianBlur` graphs
+- Clip stack replay into offscreen filter surfaces before filter execution
+
 **Known gaps:**
 - `primitiveUnits` coordinate space handling
 - linearRGB LUT operates at 8-bit precision (should be float for accuracy)
 - Blur edge clipping: blur operates on full pixmap then clips, causing edge differences
-- Skia backend not yet updated for filter graph model
+- Skia backend still routes most graphs through the shared CPU executor
+- General transform-aware anisotropic blur is still only correct on the native Skia blur fast path
+- Skia mask + filter interaction still has a known threshold miss (`e-filter-053.svg`)
 - `feImage` fragment references (`href="#elementId"`) — deferred to future work, depends on nested SVG rendering (e.g. `<use>` element support)
 - Light coordinate scaling: z and surfaceScale interaction at non-1:1 pixel density causes minor diffs for some spot light configurations (~3K pixels for cone-boundary cases)
 
 ## Next Steps
 
-- Begin Milestone 5: CSS shorthand filter functions (`blur()`, `brightness()`, etc.).
+- Begin Milestone 5: Skia backend integration.
+- Prepare Milestone 6: CSS shorthand filter functions (`blur()`, `brightness()`, etc.).
 - Add `primitiveUnits` coordinate space handling.
 - Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).
 - Fix blur edge clipping to match spec behavior.
@@ -110,13 +119,22 @@ Less common but required for full spec compliance.
 - [x] `feSpotLight` — spotlight source with coordinate scaling (x/y/z scaled to pixel space)
 - [x] `lighting-color` CSS property parsing and resolution
 
-### Milestone 5: CSS shorthand filter functions
+### Milestone 5: Skia backend integration
+
+- [x] Land the bridge layer: raster `SkSurface` capture, clip replay, and shared CPU fallback
+- [x] Add a native Skia fast path for simple single-node `feGaussianBlur`
+- [ ] Expand native lowering for simple linear chains (`feOffset`, `feDropShadow`, `feColorMatrix`, `feComposite`, `feBlend`, `feMorphology`, `feDisplacementMap`, `feTile`)
+- [ ] Partition graphs into maximal native Skia subgraphs and CPU fallback islands
+- [ ] Resolve remaining Skia conformance gaps such as `e-filter-053.svg`
+- [ ] Keep unsupported graphs on the shared executor until native lowering is behaviorally correct
+
+### Milestone 6: CSS shorthand filter functions
 
 - [ ] Parse CSS `filter` property function syntax: `blur()`, `brightness()`, `contrast()`, `drop-shadow()`, `grayscale()`, `hue-rotate()`, `invert()`, `opacity()`, `saturate()`, `sepia()`
 - [ ] Map each function to equivalent filter graph nodes
 - [ ] Support chained function lists (e.g., `filter: blur(5px) brightness(1.2)`)
 
-### Milestone 6: Polish and conformance
+### Milestone 7: Polish and conformance
 
 - [ ] Remove experimental flag from `<filter>` and all `<fe*>` elements
 - [ ] Enable all resvg filter test cases
@@ -691,24 +709,90 @@ This ensures correctness at the library level independent of SVG parsing or grap
 
 ### Skia Backend Strategy
 
-The Skia backend can leverage `SkImageFilter` subclasses for several primitives:
+The Skia backend should use a hybrid execution model:
+
+1. **Native lowering when possible:** Build an `SkImageFilter` chain for simple graphs that map
+   directly to Skia and preserve transform semantics.
+2. **Shared CPU fallback:** Render to a raster `SkSurface`, execute the shared
+   `FilterGraphExecutor`, and composite the filtered result back when the graph cannot be lowered
+   cleanly.
+3. **Native special cases first:** Prefer native Skia for primitives where transform-space behavior
+   matters, especially anisotropic `feGaussianBlur`.
+
+#### Native lowering candidates
 
 | Primitive | Skia API |
 |---|---|
-| `feGaussianBlur` | `SkImageFilters::Blur` (already used) |
+| `feGaussianBlur` | `SkImageFilters::Blur` |
 | `feColorMatrix` | `SkImageFilters::ColorFilter` + `SkColorFilters::Matrix` |
 | `feOffset` | `SkImageFilters::Offset` |
 | `feBlend` | `SkImageFilters::Blend` |
 | `feComposite` | `SkImageFilters::Blend` (Porter-Duff) / `SkImageFilters::Arithmetic` |
-| `feMerge` | `SkImageFilters::Merge` |
+| `feMerge` | `SkImageFilters::Merge` / nested `Blend(kSrcOver)` |
 | `feFlood` | `SkImageFilters::ColorFilter` with solid color |
 | `feMorphology` | `SkImageFilters::Dilate` / `SkImageFilters::Erode` |
 | `feDisplacementMap` | `SkImageFilters::DisplacementMap` |
 | `feTile` | `SkImageFilters::Tile` |
 | `feImage` | `SkImageFilters::Image` |
-| Lighting | `SkImageFilters::DistantLitDiffuse`, etc. |
+| Lighting | Investigate `SkImageFilters::*Lit*` coverage and SVG behavior differences |
 
-For primitives without direct Skia API equivalents (`feComponentTransfer`, `feTurbulence`, `feConvolveMatrix`), render to an `SkBitmap`, apply the pixel operation, and wrap as an `SkImage`.
+Primitives without a direct or behaviorally-correct Skia equivalent (`feComponentTransfer`,
+`feTurbulence`, some `feConvolveMatrix` cases, or graphs with SVG-specific routing) should stay on
+the shared CPU executor.
+
+#### Lowering eligibility
+
+Lower a graph to native Skia only when all of the following hold:
+
+- Inputs are limited to `SourceGraphic` and implicit previous-result chaining.
+- The graph is a simple linear chain or a merge/blend tree that Skia can express directly.
+- No `result` fan-out, named intermediate reuse, or SVG-only standard inputs
+  (`FillPaint`, `StrokePaint`, `BackgroundImage`, `BackgroundAlpha`) are present.
+- Primitive subregions, per-node color-space overrides, and edge modes are either absent or known
+  to match Skia semantics.
+- The expected output should remain correct when Skia evaluates the filter in layer-local space.
+
+#### Phased integration plan
+
+**Phase 1: Land the bridge layer**
+
+- [x] Capture filtered content into raster `SkSurface` layers.
+- [x] Replay the active clip stack into the offscreen surface.
+- [x] Execute unsupported graphs through the shared `FilterGraphExecutor`.
+- [x] Add a native fast path for single-node `feGaussianBlur`.
+
+**Phase 2: Expand native linear-chain lowering**
+
+- [ ] Add native lowering for `feOffset`.
+- [ ] Add native lowering for `feDropShadow`.
+- [ ] Add native lowering for `feColorMatrix`.
+- [ ] Add native lowering for Porter-Duff `feComposite`.
+- [ ] Add native lowering for `feMorphology`.
+- [ ] Add native lowering for `feDisplacementMap`.
+- [ ] Add native lowering for `feTile`.
+
+**Phase 3: Add mixed native/raster execution**
+
+- [ ] Partition graphs into maximal native Skia subgraphs and CPU fallback islands.
+- [ ] Materialize native subgraph outputs into raster snapshots when a fallback island needs them.
+- [ ] Preserve filter-region clipping and color-space boundaries across native/fallback transitions.
+- [ ] Reuse the shared executor only for the unsupported islands instead of the whole graph.
+
+**Phase 4: Close the known conformance gaps**
+
+- [ ] Fix Skia `mask` + filter interaction (`e-filter-053.svg`).
+- [ ] Reduce or remove Skia-specific thresholds for transformed blur cases.
+- [ ] Add focused regression tests for native vs. fallback path selection.
+- [ ] Document the final primitive support matrix for Skia-native lowering.
+
+#### Immediate priorities
+
+The next Skia-native primitives should be:
+
+- `feOffset`, because it is simple and commonly appears next to blur.
+- `feDropShadow`, because it is high-impact and transform-sensitive.
+- `feColorMatrix`, because it covers many CSS shorthand filter functions.
+- `feComposite` and `feBlend`, because they unlock more native linear chains.
 
 ## Security / Privacy
 
@@ -737,7 +821,7 @@ The current `std::vector<FilterEffect>` is simple but cannot represent multi-inp
 Skia's `SkImageFilter` already supports DAG composition via `makeWithChildren`. We could build the entire filter graph as a composed `SkImageFilter` tree and let Skia execute it in one `saveLayer`. This is simpler for the Skia backend but doesn't help TinySkia. The design uses a shared graph model with backend-specific node execution, keeping the architecture uniform.
 
 **Implement only CSS shorthand functions first:**
-CSS filter functions (`blur()`, `brightness()`, etc.) cover common use cases and are simpler to implement (no graph routing). However, real SVG content uses `<filter>` elements with multiple primitives, and the graph plumbing is needed regardless. CSS functions are implemented as syntactic sugar over the same graph in Milestone 5.
+CSS filter functions (`blur()`, `brightness()`, etc.) cover common use cases and are simpler to implement (no graph routing). However, real SVG content uses `<filter>` elements with multiple primitives, and the graph plumbing is needed regardless. CSS functions are implemented as syntactic sugar over the same graph in Milestone 6.
 
 ## Open Questions
 
