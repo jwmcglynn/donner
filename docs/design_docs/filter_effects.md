@@ -63,8 +63,7 @@ As of 2026-03-09:
 
 - `bazel test //donner/svg/renderer/tests:resvg_test_suite` passes on the default TinySkia
   backend.
-- `bazel test //donner/svg/renderer/tests:resvg_test_suite --config=skia` now fails 3 cases:
-  `e-pattern-008.svg`, `e-pattern-010.svg`, and `e-pattern-019.svg`.
+- `bazel test //donner/svg/renderer/tests:resvg_test_suite --config=skia` also passes.
 
 ### Resolved During This Investigation
 
@@ -79,28 +78,13 @@ As of 2026-03-09:
   executor instead.
 - Skia mask execution now mirrors TinySkia's CPU luminance-mask extraction and application model.
   This resolved the remaining Skia filter regression in `e-filter-053.svg`.
-
-### Remaining Pattern Issues: `e-pattern-008.svg`, `e-pattern-010.svg`, `e-pattern-019.svg`
-
-- These are now the only remaining failures in the full Skia `resvg_test_suite`.
-- `e-pattern-008.svg`: `234` differing pixels. Uses `patternContentUnits="objectBoundingBox"`.
-- `e-pattern-010.svg`: `113` differing pixels. Uses `patternContentUnits` with a `viewBox`; per
-  the test description, `patternContentUnits` should be ignored when `viewBox` is present.
-- `e-pattern-019.svg`: `2136` differing pixels. Uses a nested pattern where a
-  `userSpaceOnUse` pattern references an `objectBoundingBox` child pattern.
-- These are not filter regressions. They remain after the Skia filter fixes and are localized to
-  pattern coordinate-space semantics.
-- The three failures point at the same Skia-side area: pattern tile recording and
-  `patternContentUnits` / `viewBox` handling, especially for object-bounding-box content scaling
-  and nested pattern references.
-- The current pattern implementation in `RendererSkia` should be treated as the next separate
-  investigation after `e-filter-053.svg`.
+- Skia pattern rendering now uses the same supersampled raster-tile strategy as TinySkia instead of
+  `SkPicture` shaders. This resolved the Skia pattern regressions in `e-pattern-008.svg`,
+  `e-pattern-010.svg`, and `e-pattern-019.svg`, including the nested pattern case.
 
 ## Next Steps
 
 - Begin Milestone 5: Skia backend integration.
-- Debug the remaining Skia pattern coordinate-space issues
-  (`e-pattern-008.svg`, `e-pattern-010.svg`, `e-pattern-019.svg`).
 - Prepare Milestone 6: CSS shorthand filter functions (`blur()`, `brightness()`, etc.).
 - Add `primitiveUnits` coordinate space handling.
 - Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).

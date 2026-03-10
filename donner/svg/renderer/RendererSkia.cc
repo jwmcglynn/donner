@@ -295,6 +295,37 @@ std::optional<tiny_skia::Pixmap> readSurfaceToPixmap(const sk_sp<SkSurface>& sur
   return tiny_skia::Pixmap::fromVec(std::move(pixels), *size);
 }
 
+Vector2d patternRasterScaleForTransform(const Transformd& deviceFromPattern) {
+  const double scaleX =
+      std::max(1.0, deviceFromPattern.transformVector(Vector2d(1.0, 0.0)).length());
+  const double scaleY =
+      std::max(1.0, deviceFromPattern.transformVector(Vector2d(0.0, 1.0)).length());
+  constexpr double kPatternSupersampleScale = 2.0;
+  return Vector2d(scaleX * kPatternSupersampleScale, scaleY * kPatternSupersampleScale);
+}
+
+Vector2d effectivePatternRasterScale(const Boxd& tileRect, int pixelWidth, int pixelHeight,
+                                     const Vector2d& fallbackScale) {
+  const double scaleX = NearZero(tileRect.width())
+                            ? fallbackScale.x
+                            : static_cast<double>(pixelWidth) / tileRect.width();
+  const double scaleY = NearZero(tileRect.height())
+                            ? fallbackScale.y
+                            : static_cast<double>(pixelHeight) / tileRect.height();
+  return Vector2d(scaleX, scaleY);
+}
+
+Transformd scaleTransformOutput(const Transformd& transform, const Vector2d& scale) {
+  Transformd result = transform;
+  result.data[0] *= scale.x;
+  result.data[2] *= scale.x;
+  result.data[4] *= scale.x;
+  result.data[1] *= scale.y;
+  result.data[3] *= scale.y;
+  result.data[5] *= scale.y;
+  return result;
+}
+
 inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
   if (!numbersArePercent) {
     return value;
@@ -583,7 +614,14 @@ void RendererSkia::setTransform(const Transformd& transform) {
     return;
   }
 
-  currentCanvas_->setMatrix(toSkiaMatrix(transform));
+  if (!patternStack_.empty() && patternStack_.back().surface != nullptr &&
+      currentCanvas_ == patternStack_.back().surface->getCanvas()) {
+    const Transformd& rasterFromTile = patternStack_.back().patternRasterFromTile;
+    currentCanvas_->setMatrix(toSkiaMatrix(
+        scaleTransformOutput(transform, Vector2d(rasterFromTile.data[0], rasterFromTile.data[3]))));
+  } else {
+    currentCanvas_->setMatrix(toSkiaMatrix(transform));
+  }
 }
 
 void RendererSkia::pushTransform(const Transformd& transform) {
@@ -1057,11 +1095,32 @@ void RendererSkia::beginPatternTile(const Boxd& tileRect, const Transformd& targ
     return;
   }
 
+  const Transformd deviceFromTarget = toDonnerTransform(currentCanvas_->getTotalMatrix());
+  const Transformd deviceFromPattern = deviceFromTarget * targetFromPattern;
+  const Vector2d requestedRasterScale = patternRasterScaleForTransform(deviceFromPattern);
+  const int pixelWidth =
+      std::max(1, static_cast<int>(std::ceil(tileRect.width() * requestedRasterScale.x)));
+  const int pixelHeight =
+      std::max(1, static_cast<int>(std::ceil(tileRect.height() * requestedRasterScale.y)));
+  const Vector2d rasterScale =
+      effectivePatternRasterScale(tileRect, pixelWidth, pixelHeight, requestedRasterScale);
+  sk_sp<SkSurface> surface = SkSurfaces::Raster(
+      SkImageInfo::Make(pixelWidth, pixelHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
+  if (surface == nullptr) {
+    return;
+  }
+
   PatternState state;
+  state.surface = std::move(surface);
   state.targetFromPattern = targetFromPattern;
+  state.patternRasterFromTile = Transformd::Scale(rasterScale);
+  state.targetFromPattern.data[4] *= rasterScale.x;
+  state.targetFromPattern.data[5] *= rasterScale.y;
+  state.targetFromPattern =
+      state.targetFromPattern * Transformd::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
   state.savedCanvas = currentCanvas_;
-  state.recorder = std::make_unique<SkPictureRecorder>();
-  currentCanvas_ = state.recorder->beginRecording(toSkia(tileRect));
+  currentCanvas_ = state.surface->getCanvas();
+  currentCanvas_->clear(SK_ColorTRANSPARENT);
   patternStack_.push_back(std::move(state));
 }
 
@@ -1076,19 +1135,20 @@ void RendererSkia::endPatternTile(bool forStroke) {
   currentCanvas_ = state.savedCanvas;
 
   const SkMatrix skTargetFromPattern = toSkiaMatrix(state.targetFromPattern);
-  sk_sp<SkPicture> picture = state.recorder->finishRecordingAsPicture();
-  state.recorder.reset();
-
-  if (picture == nullptr) {
+  if (state.surface == nullptr) {
     return;
   }
 
-  const SkRect tileRect = picture->cullRect();
+  sk_sp<SkImage> image = state.surface->makeImageSnapshot();
+  if (image == nullptr) {
+    return;
+  }
+
   SkPaint patternPaint;
   patternPaint.setAntiAlias(antialias_);
-  patternPaint.setShader(picture->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat,
-                                             SkFilterMode::kLinear, &skTargetFromPattern,
-                                             &tileRect));
+  patternPaint.setShader(image->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat,
+                                           SkSamplingOptions(SkFilterMode::kLinear),
+                                           &skTargetFromPattern));
 
   if (forStroke) {
     patternStrokePaint_ = std::move(patternPaint);

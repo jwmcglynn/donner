@@ -256,8 +256,9 @@ private:
 
   // Pattern recording state, stacked for nested patterns.
   struct PatternState {
-    std::unique_ptr<SkPictureRecorder> recorder;
+    sk_sp<SkSurface> surface;
     SkCanvas* savedCanvas = nullptr;
+    Transformd patternRasterFromTile;
     Transformd targetFromPattern;
   };
   std::vector<PatternState> patternStack_;
