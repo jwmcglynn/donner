@@ -4,6 +4,12 @@ embeddable SVG support into apps and games, enabling browser-level functionalit
 
 module(name = "donner", version = "0.1.2")
 
+# Donner build-time feature configuration.
+# Downstream consumers can override these defaults via donner.configure() in their MODULE.bazel.
+donner = use_extension("//config:extensions.bzl", "donner")
+donner.configure()
+use_repo(donner, "donner_config")
+
 local_repository = use_repo_rule("//third_party:bazel/local.bzl", "local_repository")
 new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local_repository")
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
