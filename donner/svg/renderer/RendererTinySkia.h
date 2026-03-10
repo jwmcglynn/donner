@@ -224,6 +224,8 @@ private:
   struct SurfaceFrame {
     SurfaceKind kind;
     tiny_skia::Pixmap pixmap;
+    std::optional<tiny_skia::Pixmap> fillPaintPixmap;
+    std::optional<tiny_skia::Pixmap> strokePaintPixmap;
     double opacity = 1.0;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
@@ -247,6 +249,8 @@ private:
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Boxd& bounds,
                                                                 const StrokeParams& stroke);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
+  void compositePixmapInto(tiny_skia::Pixmap& destination, const tiny_skia::Pixmap& pixmap,
+                           double opacity);
   void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity);
   void maybeWarnUnsupportedText();
 

@@ -19,8 +19,8 @@ struct LightSourceParams {
   LightType type = LightType::Distant;
 
   // feDistantLight
-  double azimuth = 0.0;     ///< Angle in XY plane (degrees).
-  double elevation = 0.0;   ///< Angle above XY plane (degrees).
+  double azimuth = 0.0;    ///< Angle in XY plane (degrees).
+  double elevation = 0.0;  ///< Angle above XY plane (degrees).
 
   // fePointLight / feSpotLight
   double x = 0.0;

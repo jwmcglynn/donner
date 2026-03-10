@@ -5,6 +5,7 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
@@ -129,8 +130,8 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
                                 std::vector<ParseError>* outWarnings) {
   // Start with values from the component (set via XML presentation attributes).
   Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
-    return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
-  }};
+                                       return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
+                                     }};
   if (const auto* comp = registry.try_get<LightingComponent>(cur)) {
     lightingColor = comp->lightingColor;
   }
@@ -171,8 +172,8 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
 /// Resolve color-interpolation-filters on an individual filter primitive entity.
 /// Returns the per-primitive value if explicitly set, or std::nullopt if the filter-level
 /// default should be used.
-std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(
-    const Registry& registry, entt::entity cur) {
+std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(const Registry& registry,
+                                                                          entt::entity cur) {
   // Check CSS unparsed properties (from presentation attribute or style="").
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
     if (style->properties.has_value()) {
@@ -200,17 +201,134 @@ std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(
   return std::nullopt;
 }
 
+bool hasFilterPrimitiveChildren(const Registry& registry, EntityHandle handle) {
+  const auto& tree = handle.get<donner::components::TreeComponent>();
+  for (auto cur = tree.firstChild(); cur != entt::null;
+       cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
+    if (registry.try_get<FilterPrimitiveComponent>(cur) != nullptr) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+std::vector<EntityHandle> getInheritanceChain(EntityHandle handle,
+                                              std::vector<ParseError>* outWarnings) {
+  Registry& registry = *handle.registry();
+
+  std::vector<EntityHandle> inheritanceChain;
+  inheritanceChain.push_back(handle);
+
+  RecursionGuard guard;
+  guard.add(handle);
+
+  EntityHandle current = handle;
+  while (const auto* filter = current.try_get<FilterComponent>()) {
+    if (!filter->href.has_value()) {
+      break;
+    }
+
+    auto resolvedReference = filter->href->resolve(registry);
+    if (!resolvedReference.has_value()) {
+      if (outWarnings) {
+        ParseError err;
+        err.reason = "Filter element href=\"" + filter->href->href + "\" failed to resolve";
+        outWarnings->push_back(std::move(err));
+      }
+      break;
+    }
+
+    EntityHandle target = resolvedReference->handle;
+    if (!target.valid() || !target.all_of<FilterComponent>()) {
+      if (outWarnings) {
+        ParseError err;
+        err.reason =
+            "Filter element href=\"" + filter->href->href + "\" does not reference a <filter>";
+        outWarnings->push_back(std::move(err));
+      }
+      break;
+    }
+
+    if (guard.hasRecursion(target)) {
+      if (outWarnings) {
+        ParseError err;
+        err.reason = "Circular filter inheritance detected";
+        outWarnings->push_back(std::move(err));
+      }
+      break;
+    }
+
+    inheritanceChain.push_back(target);
+    guard.add(target);
+    current = target;
+  }
+
+  return inheritanceChain;
+}
+
 }  // namespace
 
 void FilterSystem::createComputedFilter(EntityHandle handle, const FilterComponent& component,
                                         std::vector<ParseError>* outWarnings) {
+  (void)component;
+
   const Registry& registry = *handle.registry();
+
+  const std::vector<EntityHandle> inheritanceChain = getInheritanceChain(handle, outWarnings);
+
+  EntityHandle primitiveSource;
+  for (EntityHandle candidate : inheritanceChain) {
+    if (hasFilterPrimitiveChildren(registry, candidate)) {
+      primitiveSource = candidate;
+      break;
+    }
+  }
+
+  if (!primitiveSource.valid()) {
+    handle.remove<ComputedFilterComponent>();
+    return;
+  }
+
+  Lengthd computedX(-10.0, Lengthd::Unit::Percent);
+  Lengthd computedY(-10.0, Lengthd::Unit::Percent);
+  Lengthd computedWidth(120.0, Lengthd::Unit::Percent);
+  Lengthd computedHeight(120.0, Lengthd::Unit::Percent);
+  FilterUnits computedFilterUnits = FilterUnits::Default;
+  PrimitiveUnits computedPrimitiveUnits = PrimitiveUnits::Default;
+  ColorInterpolationFilters computedColorInterpolationFilters = ColorInterpolationFilters::Default;
+
+  for (auto it = inheritanceChain.rbegin(); it != inheritanceChain.rend(); ++it) {
+    const FilterComponent& currentFilter = it->get<FilterComponent>();
+    if (currentFilter.x.has_value()) {
+      computedX = *currentFilter.x;
+    }
+    if (currentFilter.y.has_value()) {
+      computedY = *currentFilter.y;
+    }
+    if (currentFilter.width.has_value()) {
+      computedWidth = *currentFilter.width;
+    }
+    if (currentFilter.height.has_value()) {
+      computedHeight = *currentFilter.height;
+    }
+    if (currentFilter.filterUnits.has_value()) {
+      computedFilterUnits = *currentFilter.filterUnits;
+    }
+    if (currentFilter.primitiveUnits.has_value()) {
+      computedPrimitiveUnits = *currentFilter.primitiveUnits;
+    }
+    if (currentFilter.colorInterpolationFilters.has_value()) {
+      computedColorInterpolationFilters = *currentFilter.colorInterpolationFilters;
+    }
+  }
 
   std::vector<FilterEffect> effectChain;
   FilterGraph filterGraph;
 
-  // Find all FilterPrimitiveComponent instances in this filter.
-  const donner::components::TreeComponent& tree = handle.get<donner::components::TreeComponent>();
+  // Find the first filter in the inheritance chain that contributes primitive children.
+  const donner::components::TreeComponent& tree =
+      primitiveSource.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
     const auto* primitive = registry.try_get<FilterPrimitiveComponent>(cur);
@@ -233,13 +351,12 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
           filter_primitive::GaussianBlur{
               .stdDeviationX = blur->stdDeviationX,
               .stdDeviationY = blur->stdDeviationY,
-              .edgeMode =
-                  static_cast<filter_primitive::GaussianBlur::EdgeMode>(blur->edgeMode),
+              .edgeMode = static_cast<filter_primitive::GaussianBlur::EdgeMode>(blur->edgeMode),
           },
           *primitive));
     } else if (registry.try_get<FEFloodComponent>(cur)) {
-      filterGraph.nodes.push_back(
-          makeFilterNode(resolveFloodProperties(registry, cur, outWarnings), *primitive, primitiveCIF));
+      filterGraph.nodes.push_back(makeFilterNode(resolveFloodProperties(registry, cur, outWarnings),
+                                                 *primitive, primitiveCIF));
     } else if (const auto* offset = registry.try_get<FEOffsetComponent>(cur)) {
       filterGraph.nodes.push_back(makeFilterNode(
           filter_primitive::Offset{
@@ -400,7 +517,8 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.preserveAlpha = convolve->preserveAlpha;
       filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));
     } else if (registry.try_get<FETileComponent>(cur)) {
-      filterGraph.nodes.push_back(makeFilterNode(filter_primitive::Tile{}, *primitive, primitiveCIF));
+      filterGraph.nodes.push_back(
+          makeFilterNode(filter_primitive::Tile{}, *primitive, primitiveCIF));
     } else if (const auto* turbulence = registry.try_get<FETurbulenceComponent>(cur)) {
       filter_primitive::Turbulence prim;
       prim.type = static_cast<filter_primitive::Turbulence::Type>(turbulence->type);
@@ -511,15 +629,15 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     ComputedFilterComponent& computed = handle.emplace_or_replace<ComputedFilterComponent>();
     computed.effectChain = std::move(effectChain);
     computed.filterGraph = std::move(filterGraph);
-    computed.x = component.x.value_or(computed.x);
-    computed.y = component.y.value_or(computed.y);
-    computed.width = component.width.value_or(computed.width);
-    computed.height = component.height.value_or(computed.height);
-    computed.filterUnits = component.filterUnits;
-    computed.primitiveUnits = component.primitiveUnits;
-    computed.colorInterpolationFilters = component.colorInterpolationFilters;
-    computed.filterGraph.colorInterpolationFilters = component.colorInterpolationFilters;
-    computed.filterGraph.primitiveUnits = component.primitiveUnits;
+    computed.x = computedX;
+    computed.y = computedY;
+    computed.width = computedWidth;
+    computed.height = computedHeight;
+    computed.filterUnits = computedFilterUnits;
+    computed.primitiveUnits = computedPrimitiveUnits;
+    computed.colorInterpolationFilters = computedColorInterpolationFilters;
+    computed.filterGraph.colorInterpolationFilters = computedColorInterpolationFilters;
+    computed.filterGraph.primitiveUnits = computedPrimitiveUnits;
   } else {
     handle.remove<ComputedFilterComponent>();
   }

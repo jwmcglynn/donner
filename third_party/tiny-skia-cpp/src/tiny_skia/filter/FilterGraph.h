@@ -22,6 +22,7 @@
 #include "tiny_skia/filter/Composite.h"
 #include "tiny_skia/filter/ConvolveMatrix.h"
 #include "tiny_skia/filter/DisplacementMap.h"
+#include "tiny_skia/filter/FloatPixmap.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 #include "tiny_skia/filter/Lighting.h"
 #include "tiny_skia/filter/Morphology.h"
@@ -33,8 +34,8 @@ namespace tiny_skia::filter {
 enum class StandardInput : std::uint8_t {
   SourceGraphic,  ///< The original element rendering.
   SourceAlpha,    ///< Alpha channel of SourceGraphic (RGB = 0).
-  FillPaint,      ///< The element's fill paint (not yet implemented).
-  StrokePaint,    ///< The element's stroke paint (not yet implemented).
+  FillPaint,      ///< The element's fill paint.
+  StrokePaint,    ///< The element's stroke paint.
 };
 
 /// Identifies the input to a filter primitive node.
@@ -86,9 +87,9 @@ struct GaussianBlur {
 
 /// Parameters for feFlood.
 struct Flood {
-  std::uint8_t r = 0;  ///< Red (premultiplied sRGB).
-  std::uint8_t g = 0;  ///< Green (premultiplied sRGB).
-  std::uint8_t b = 0;  ///< Blue (premultiplied sRGB).
+  std::uint8_t r = 0;    ///< Red (premultiplied sRGB).
+  std::uint8_t g = 0;    ///< Green (premultiplied sRGB).
+  std::uint8_t b = 0;    ///< Blue (premultiplied sRGB).
   std::uint8_t a = 255;  ///< Alpha.
 };
 
@@ -186,14 +187,14 @@ struct SpecularLighting {
 
 /// Parameters for feDropShadow (decomposed internally into flood+composite+offset+blur+merge).
 struct DropShadow {
-  std::uint8_t r = 0;  ///< Shadow color red (premultiplied sRGB).
-  std::uint8_t g = 0;  ///< Shadow color green (premultiplied sRGB).
-  std::uint8_t b = 0;  ///< Shadow color blue (premultiplied sRGB).
+  std::uint8_t r = 0;    ///< Shadow color red (premultiplied sRGB).
+  std::uint8_t g = 0;    ///< Shadow color green (premultiplied sRGB).
+  std::uint8_t b = 0;    ///< Shadow color blue (premultiplied sRGB).
   std::uint8_t a = 255;  ///< Shadow color alpha.
-  int dx = 0;  ///< Horizontal offset in pixels.
-  int dy = 0;  ///< Vertical offset in pixels.
-  double sigmaX = 0.0;  ///< Blur standard deviation X in pixels.
-  double sigmaY = 0.0;  ///< Blur standard deviation Y in pixels.
+  int dx = 0;            ///< Horizontal offset in pixels.
+  int dy = 0;            ///< Vertical offset in pixels.
+  double sigmaX = 0.0;   ///< Blur standard deviation X in pixels.
+  double sigmaY = 0.0;   ///< Blur standard deviation Y in pixels.
 };
 
 /// Parameters for feImage. Image data is pre-loaded by the caller and stored here as premultiplied
@@ -209,24 +210,20 @@ struct Image {
 }  // namespace graph_primitive
 
 /// Variant holding all filter primitive types for graph nodes.
-using GraphPrimitive = std::variant<graph_primitive::GaussianBlur, graph_primitive::Flood,
-                                    graph_primitive::Offset, graph_primitive::Composite,
-                                    graph_primitive::Blend, graph_primitive::Merge,
-                                    graph_primitive::ColorMatrix,
-                                    graph_primitive::ComponentTransfer,
-                                    graph_primitive::ConvolveMatrix, graph_primitive::Morphology,
-                                    graph_primitive::Tile, graph_primitive::Turbulence,
-                                    graph_primitive::DisplacementMap,
-                                    graph_primitive::DiffuseLighting,
-                                    graph_primitive::SpecularLighting, graph_primitive::DropShadow,
-                                    graph_primitive::Image>;
+using GraphPrimitive = std::variant<
+    graph_primitive::GaussianBlur, graph_primitive::Flood, graph_primitive::Offset,
+    graph_primitive::Composite, graph_primitive::Blend, graph_primitive::Merge,
+    graph_primitive::ColorMatrix, graph_primitive::ComponentTransfer,
+    graph_primitive::ConvolveMatrix, graph_primitive::Morphology, graph_primitive::Tile,
+    graph_primitive::Turbulence, graph_primitive::DisplacementMap, graph_primitive::DiffuseLighting,
+    graph_primitive::SpecularLighting, graph_primitive::DropShadow, graph_primitive::Image>;
 
 /// A single node in the filter graph.
 struct GraphNode {
-  GraphPrimitive primitive;               ///< The filter operation.
-  std::vector<NodeInput> inputs;          ///< Input reference(s).
-  std::optional<std::string> result;      ///< Named output (for `result` attribute).
-  std::optional<PixelRect> subregion;     ///< Pixel-space primitive subregion (for clipping).
+  GraphPrimitive primitive;            ///< The filter operation.
+  std::vector<NodeInput> inputs;       ///< Input reference(s).
+  std::optional<std::string> result;   ///< Named output (for `result` attribute).
+  std::optional<PixelRect> subregion;  ///< Pixel-space primitive subregion (for clipping).
 
   /// Per-node color space override. When set, overrides the graph-level `useLinearRGB`.
   /// true = linearRGB, false = sRGB.
@@ -235,8 +232,12 @@ struct GraphNode {
 
 /// Complete filter graph specification ready for execution.
 struct FilterGraph {
-  std::vector<GraphNode> nodes;  ///< Nodes in execution order.
-  bool useLinearRGB = true;      ///< Convert to linearRGB for processing.
+  std::vector<GraphNode> nodes;           ///< Nodes in execution order.
+  bool useLinearRGB = true;               ///< Convert to linearRGB for processing.
+  bool clipSourceToFilterRegion = false;  ///< Zero SourceGraphic outside filterRegion before eval.
+
+  std::optional<FloatPixmap> fillPaintInput;    ///< Optional FillPaint standard input.
+  std::optional<FloatPixmap> strokePaintInput;  ///< Optional StrokePaint standard input.
 
   /// Filter region in pixel space (clips subregions). If not set, uses full pixmap extent.
   std::optional<PixelRect> filterRegion;

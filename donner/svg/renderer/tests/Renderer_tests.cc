@@ -187,21 +187,21 @@ TEST_F(RendererTests, QuadBezier) {
 }
 
 TEST_F(RendererTests, MinimalClosedCubic2x2) {
-  this->compareWithGolden("donner/svg/renderer/testdata/minimal_closed_cubic_2x2.svg",
-                          "donner/svg/renderer/testdata/golden/minimal_closed_cubic_2x2.png",
-                          parser::SVGParser::Options(),
-                          ImageComparisonParams::WithThreshold(0.0f, 0)
-                              .includeAntiAliasingDifferences()
-                              .setCanvasSize(10, 10));
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/minimal_closed_cubic_2x2.svg",
+      "donner/svg/renderer/testdata/golden/minimal_closed_cubic_2x2.png",
+      parser::SVGParser::Options(),
+      ImageComparisonParams::WithThreshold(0.0f, 0).includeAntiAliasingDifferences().setCanvasSize(
+          10, 10));
 }
 
 TEST_F(RendererTests, MinimalClosedCubic5x3) {
-  this->compareWithGolden("donner/svg/renderer/testdata/minimal_closed_cubic_5x3.svg",
-                          "donner/svg/renderer/testdata/golden/minimal_closed_cubic_5x3.png",
-                          parser::SVGParser::Options(),
-                          ImageComparisonParams::WithThreshold(0.0f, 0)
-                              .includeAntiAliasingDifferences()
-                              .setCanvasSize(10, 6));
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/minimal_closed_cubic_5x3.svg",
+      "donner/svg/renderer/testdata/golden/minimal_closed_cubic_5x3.png",
+      parser::SVGParser::Options(),
+      ImageComparisonParams::WithThreshold(0.0f, 0).includeAntiAliasingDifferences().setCanvasSize(
+          10, 6));
 }
 
 TEST_F(RendererTests, BigLightningGlowNoFilterCrop) {
@@ -210,6 +210,24 @@ TEST_F(RendererTests, BigLightningGlowNoFilterCrop) {
       "donner/svg/renderer/testdata/golden/big_lightning_glow_no_filter_crop.png",
       parser::SVGParser::Options(),
       ImageComparisonParams::WithThreshold(0.0f, 0).includeAntiAliasingDifferences());
+}
+
+TEST_F(RendererTests, FilterFillPaint) {
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/filter_fill_paint.svg",
+      "donner/svg/renderer/testdata/golden/filter_fill_paint.png", this->optionsExperimental(),
+      ImageComparisonParams::WithThreshold(0.1f, 50)
+          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .includeAntiAliasingDifferences());
+}
+
+TEST_F(RendererTests, FilterStrokePaint) {
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/filter_stroke_paint.svg",
+      "donner/svg/renderer/testdata/golden/filter_stroke_paint.png", this->optionsExperimental(),
+      ImageComparisonParams::WithThreshold(0.1f, 50)
+          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .includeAntiAliasingDifferences());
 }
 
 TEST_F(RendererTests, DonnerIcon) {
@@ -221,8 +239,7 @@ TEST_F(RendererTests, DonnerSplash) {
       "donner_splash.svg", "donner/svg/renderer/testdata/golden/donner_splash.png",
       this->optionsExperimental(),
       ImageComparisonParams::WithThreshold(0.1f, 10000)
-          .requireFeature(RendererBackendFeature::FilterEffects,
-                          "experimental filter effects"));
+          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects"));
 }
 
 TEST_F(RendererTests, DonnerSplashNoExperimental) {

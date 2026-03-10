@@ -31,7 +31,10 @@ namespace donner::svg {
  */
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transformd& deviceFromFilter,
-                              const std::optional<Boxd>& filterRegion);
+                              const std::optional<Boxd>& filterRegion,
+                              bool clipSourceToFilterRegion = false,
+                              const tiny_skia::Pixmap* fillPaintInput = nullptr,
+                              const tiny_skia::Pixmap* strokePaintInput = nullptr);
 
 /**
  * Clears pixels outside the transformed filter region.

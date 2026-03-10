@@ -34,6 +34,15 @@ Lengthd SVGFilterElement::height() const {
       Lengthd(120.0, Lengthd::Unit::Percent));
 }
 
+std::optional<RcString> SVGFilterElement::href() const {
+  auto maybeHref = handle_.get<components::FilterComponent>().href;
+  if (maybeHref.has_value()) {
+    return maybeHref->href;
+  } else {
+    return std::nullopt;
+  }
+}
+
 void SVGFilterElement::setX(const Lengthd& value) {
   handle_.get<components::FilterComponent>().x = value;
 }
@@ -50,8 +59,18 @@ void SVGFilterElement::setHeight(const Lengthd& value) {
   handle_.get<components::FilterComponent>().height = value;
 }
 
+void SVGFilterElement::setHref(OptionalRef<RcStringOrRef> value) {
+  if (value) {
+    handle_.get<components::FilterComponent>().href = Reference(RcString(value.value()));
+  } else {
+    handle_.get<components::FilterComponent>().href = std::nullopt;
+  }
+
+  handle_.remove<components::ComputedFilterComponent>();
+}
+
 FilterUnits SVGFilterElement::filterUnits() const {
-  return handle_.get<components::FilterComponent>().filterUnits;
+  return handle_.get<components::FilterComponent>().filterUnits.value_or(FilterUnits::Default);
 }
 
 void SVGFilterElement::setFilterUnits(FilterUnits value) {
@@ -59,7 +78,8 @@ void SVGFilterElement::setFilterUnits(FilterUnits value) {
 }
 
 PrimitiveUnits SVGFilterElement::primitiveUnits() const {
-  return handle_.get<components::FilterComponent>().primitiveUnits;
+  return handle_.get<components::FilterComponent>().primitiveUnits.value_or(
+      PrimitiveUnits::Default);
 }
 
 void SVGFilterElement::setPrimitiveUnits(PrimitiveUnits value) {

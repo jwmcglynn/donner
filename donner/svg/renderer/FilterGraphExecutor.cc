@@ -26,7 +26,10 @@ std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixe
 
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transformd& deviceFromFilter,
-                              const std::optional<Boxd>& filterRegion) {
+                              const std::optional<Boxd>& filterRegion,
+                              bool clipSourceToFilterRegion,
+                              const tiny_skia::Pixmap* fillPaintInput,
+                              const tiny_skia::Pixmap* strokePaintInput) {
   using namespace components;
   using namespace components::filter_primitive;
   namespace gp = tiny_skia::filter::graph_primitive;
@@ -59,6 +62,68 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   auto primToPixelOffset = [&](double dx, double dy) -> Vector2d {
     const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW, dy * bboxH) : Vector2d(dx, dy);
     return deviceFromFilter.transformVector(userOffset);
+  };
+
+  const Boxd primitiveUnitsBounds = [&]() {
+    if (isOBB) {
+      return *filterGraph.elementBoundingBox;
+    }
+    const double userW =
+        NearZero(filterGraph.userToPixelScale.x, 1e-12)
+            ? (NearZero(scaleX, 1e-12) ? static_cast<double>(w) : static_cast<double>(w) / scaleX)
+            : static_cast<double>(w) / filterGraph.userToPixelScale.x;
+    const double userH =
+        NearZero(filterGraph.userToPixelScale.y, 1e-12)
+            ? (NearZero(scaleY, 1e-12) ? static_cast<double>(h) : static_cast<double>(h) / scaleY)
+            : static_cast<double>(h) / filterGraph.userToPixelScale.y;
+    return Boxd::FromXYWH(0.0, 0.0, userW, userH);
+  }();
+
+  auto percentPositionReferenceSize = [&](Lengthd::Extent extent) -> double {
+    if (isOBB) {
+      return extent == Lengthd::Extent::X ? bboxW : bboxH;
+    }
+    return extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                        : primitiveUnitsBounds.height();
+  };
+
+  auto percentPositionReferenceOrigin = [&](Lengthd::Extent extent) -> double {
+    if (isOBB) {
+      return extent == Lengthd::Extent::X ? bboxX : bboxY;
+    }
+    return extent == Lengthd::Extent::X ? primitiveUnitsBounds.topLeft.x
+                                        : primitiveUnitsBounds.topLeft.y;
+  };
+
+  auto percentSizeReference = [&](Lengthd::Extent extent) -> double {
+    if (isOBB) {
+      return extent == Lengthd::Extent::X ? bboxW : bboxH;
+    }
+    return extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                        : primitiveUnitsBounds.height();
+  };
+
+  auto resolvePrimitivePosition = [&](const Lengthd& len, Lengthd::Extent extent, double origin,
+                                      double bboxDim) -> double {
+    if (isOBB && len.unit == Lengthd::Unit::None) {
+      return origin + len.value * bboxDim;
+    }
+    if (len.unit == Lengthd::Unit::Percent) {
+      return percentPositionReferenceOrigin(extent) +
+             percentPositionReferenceSize(extent) * len.value / 100.0;
+    }
+    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  };
+
+  auto resolvePrimitiveSize = [&](const Lengthd& len, Lengthd::Extent extent,
+                                  double bboxDim) -> double {
+    if (isOBB && len.unit == Lengthd::Unit::None) {
+      return len.value * bboxDim;
+    }
+    if (len.unit == Lengthd::Unit::Percent) {
+      return percentSizeReference(extent) * len.value / 100.0;
+    }
+    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
   };
 
   auto convertInput = [](const FilterInput& fi) -> tiny_skia::filter::NodeInput {
@@ -146,6 +211,13 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
   tiny_skia::filter::FilterGraph graph;
   graph.useLinearRGB = filterGraph.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
+  graph.clipSourceToFilterRegion = clipSourceToFilterRegion;
+  if (fillPaintInput != nullptr) {
+    graph.fillPaintInput = tiny_skia::filter::FloatPixmap::fromPixmap(*fillPaintInput);
+  }
+  if (strokePaintInput != nullptr) {
+    graph.strokePaintInput = tiny_skia::filter::FloatPixmap::fromPixmap(*strokePaintInput);
+  }
 
   if (filterRegion.has_value()) {
     const Boxd pixelRegion = deviceFromFilter.transformBox(*filterRegion);
@@ -168,16 +240,24 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
     if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
         node.height.has_value()) {
-      double ux = node.x.has_value() ? node.x->value : 0.0;
-      double uy = node.y.has_value() ? node.y->value : 0.0;
-      double uw = node.width.has_value() ? node.width->value : w;
-      double uh = node.height.has_value() ? node.height->value : h;
-      if (isOBB) {
-        ux = ux * bboxW + bboxX;
-        uy = uy * bboxH + bboxY;
-        uw = uw * bboxW;
-        uh = uh * bboxH;
-      }
+      const Boxd defaultSubregionUser = filterRegion.value_or(primitiveUnitsBounds);
+      const double defaultUserWidth = defaultSubregionUser.width();
+      const double defaultUserHeight = defaultSubregionUser.height();
+      const double defaultOriginX = defaultSubregionUser.topLeft.x;
+      const double defaultOriginY = defaultSubregionUser.topLeft.y;
+
+      const double ux = node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
+                                                                      isOBB ? bboxX : 0.0, bboxW)
+                                           : defaultOriginX;
+      const double uy = node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
+                                                                      isOBB ? bboxY : 0.0, bboxH)
+                                           : defaultOriginY;
+      const double uw = node.width.has_value()
+                            ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
+                            : defaultUserWidth;
+      const double uh = node.height.has_value()
+                            ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
+                            : defaultUserHeight;
 
       const Boxd pixelRegion = deviceFromFilter.transformBox(Boxd::FromXYWH(ux, uy, uw, uh));
       graphNode.subregion =
@@ -205,8 +285,10 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
           } else if constexpr (std::is_same_v<T, Offset>) {
             const Vector2d offset = primToPixelOffset(primitive.dx, primitive.dy);
-            graphNode.primitive =
-                gp::Offset{static_cast<int>(offset.x), static_cast<int>(offset.y)};
+            graphNode.primitive = gp::Offset{
+                static_cast<int>(std::lround(offset.x)),
+                static_cast<int>(std::lround(offset.y)),
+            };
 
           } else if constexpr (std::is_same_v<T, Composite>) {
             gp::Composite composite;
@@ -275,8 +357,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
             dropShadow.b = pm.b;
             dropShadow.a = pm.a;
             const Vector2d offset = primToPixelOffset(primitive.dx, primitive.dy);
-            dropShadow.dx = static_cast<int>(offset.x);
-            dropShadow.dy = static_cast<int>(offset.y);
+            dropShadow.dx = static_cast<int>(std::lround(offset.x));
+            dropShadow.dy = static_cast<int>(std::lround(offset.y));
             dropShadow.sigmaX =
                 primitive.stdDeviationX >= 0 ? primToPixelX(primitive.stdDeviationX) : 0.0;
             dropShadow.sigmaY =
@@ -450,13 +532,44 @@ void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box
     return;
   }
 
+  const Vector2d transformedXAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d transformedYAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
+  const double dot =
+      transformedXAxis.x * transformedYAxis.x + transformedXAxis.y * transformedYAxis.y;
+  const bool hasNonAxisAlignedTransform = !NearZero(dot, 1e-6) ||
+                                          !NearZero(deviceFromFilter.data[1], 1e-6) ||
+                                          !NearZero(deviceFromFilter.data[2], 1e-6);
+
+  if (hasNonAxisAlignedTransform && !NearZero(deviceFromFilter.determinant(), 1e-12)) {
+    const Transformd filterFromDevice = deviceFromFilter.inverse();
+    const int width = static_cast<int>(pixmap.width());
+    const int height = static_cast<int>(pixmap.height());
+    auto data = pixmap.data();
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const Vector2d filterPoint = filterFromDevice.transformPosition(Vector2d(x + 0.5, y + 0.5));
+        if (filterPoint.x < filterRegion->topLeft.x ||
+            filterPoint.x >= filterRegion->bottomRight.x ||
+            filterPoint.y < filterRegion->topLeft.y ||
+            filterPoint.y >= filterRegion->bottomRight.y) {
+          const std::size_t idx = static_cast<std::size_t>((y * width + x) * 4);
+          data[idx + 0] = 0;
+          data[idx + 1] = 0;
+          data[idx + 2] = 0;
+          data[idx + 3] = 0;
+        }
+      }
+    }
+    return;
+  }
+
   const Boxd pixelRegion = deviceFromFilter.transformBox(*filterRegion);
   const int width = static_cast<int>(pixmap.width());
   const int height = static_cast<int>(pixmap.height());
   const int x0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
   const int y0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.y)));
-  const int x1 = std::min(width, static_cast<int>(std::ceil(pixelRegion.bottomRight.x)));
-  const int y1 = std::min(height, static_cast<int>(std::ceil(pixelRegion.bottomRight.y)));
+  const int x1 = std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.x)), 0, width);
+  const int y1 = std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.y)), 0, height);
 
   auto data = pixmap.data();
   for (int y = 0; y < y0; ++y) {

@@ -421,6 +421,20 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
   return hasBlur;
 }
 
+bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
+                            components::FilterStandardInput input) {
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    for (const components::FilterInput& nodeInput : node.inputs) {
+      const auto* standardInput = std::get_if<components::FilterStandardInput>(&nodeInput.value);
+      if (standardInput != nullptr && *standardInput == input) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
   for (const auto& node : filterGraph.nodes) {
     bool anisotropic = false;
@@ -575,8 +589,18 @@ void RendererTinySkia::pushIsolatedLayer(double opacity) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::IsolatedLayer;
   frame.opacity = opacity;
-  frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
-                                         static_cast<int>(currentPixmap().height()));
+  const int width = static_cast<int>(currentPixmap().width());
+  const int height = static_cast<int>(currentPixmap().height());
+  frame.pixmap = createTransparentPixmap(width, height);
+  if (!surfaceStack_.empty()) {
+    const SurfaceFrame& parent = surfaceStack_.back();
+    if (parent.fillPaintPixmap.has_value()) {
+      frame.fillPaintPixmap = createTransparentPixmap(width, height);
+    }
+    if (parent.strokePaintPixmap.has_value()) {
+      frame.strokePaintPixmap = createTransparentPixmap(width, height);
+    }
+  }
   surfaceStack_.push_back(std::move(frame));
 }
 
@@ -588,6 +612,15 @@ void RendererTinySkia::popIsolatedLayer() {
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
   compositePixmap(frame.pixmap, frame.opacity);
+  if (!surfaceStack_.empty()) {
+    SurfaceFrame& parent = surfaceStack_.back();
+    if (frame.fillPaintPixmap.has_value() && parent.fillPaintPixmap.has_value()) {
+      compositePixmapInto(*parent.fillPaintPixmap, *frame.fillPaintPixmap, frame.opacity);
+    }
+    if (frame.strokePaintPixmap.has_value() && parent.strokePaintPixmap.has_value()) {
+      compositePixmapInto(*parent.strokePaintPixmap, *frame.strokePaintPixmap, frame.opacity);
+    }
+  }
 }
 
 void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGraph,
@@ -597,8 +630,15 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   frame.filterGraph = filterGraph;
   frame.filterRegion = filterRegion;
   frame.deviceFromFilter = currentTransform_;
-  frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
-                                         static_cast<int>(currentPixmap().height()));
+  const int width = static_cast<int>(currentPixmap().width());
+  const int height = static_cast<int>(currentPixmap().height());
+  frame.pixmap = createTransparentPixmap(width, height);
+  if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint)) {
+    frame.fillPaintPixmap = createTransparentPixmap(width, height);
+  }
+  if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint)) {
+    frame.strokePaintPixmap = createTransparentPixmap(width, height);
+  }
   surfaceStack_.push_back(std::move(frame));
 }
 
@@ -616,13 +656,13 @@ void RendererTinySkia::popFilterLayer() {
   // correct blur orientation for rotated/skewed elements.
   // Only activate when the transform has rotation/skew (off-diagonal elements non-zero).
   // For pure scale+translate, the device-space blur is already correct.
-  const bool useTransformedPath =
+  const bool useTransformedBlurPath =
       frame.filterRegion.has_value() && frame.filterRegion->width() > 0 &&
       frame.filterRegion->height() > 0 && !NearZero(frame.deviceFromFilter.determinant()) &&
       isEligibleForTransformedBlurPath(frame.filterGraph) &&
       shouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter);
 
-  if (useTransformedPath) {
+  if (useTransformedBlurPath) {
     const Transformd& deviceFromFilter = frame.deviceFromFilter;
     const Boxd& filterRegion = *frame.filterRegion;
 
@@ -632,8 +672,6 @@ void RendererTinySkia::popFilterLayer() {
     const double scaleY =
         std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
 
-    // Expand the local raster beyond the filter region so the blur kernel has full context
-    // at the edges.
     const double blurPadding = computeBlurPadding(frame.filterGraph);
     const Boxd paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
                             filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
@@ -680,7 +718,8 @@ void RendererTinySkia::popFilterLayer() {
           Vector2d(blurPadding, blurPadding),
           Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
 
-      ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localTransform, localFilterRegion);
+      ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localTransform, localFilterRegion,
+                               false);
 
       // Clip to the original filter region within the padded raster.
       ClipFilterOutputToRegion(localPixmap, localFilterRegion, localTransform);
@@ -703,8 +742,10 @@ void RendererTinySkia::popFilterLayer() {
     }
   } else {
   device_space_fallback:
-    ApplyFilterGraphToPixmap(frame.pixmap, frame.filterGraph, frame.deviceFromFilter,
-                             frame.filterRegion);
+    ApplyFilterGraphToPixmap(
+        frame.pixmap, frame.filterGraph, frame.deviceFromFilter, frame.filterRegion, true,
+        frame.fillPaintPixmap.has_value() ? &*frame.fillPaintPixmap : nullptr,
+        frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr);
     ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, frame.deviceFromFilter);
 
     compositePixmap(frame.pixmap, 1.0);
@@ -740,8 +781,20 @@ void RendererTinySkia::transitionMaskToContent() {
   }
 
   frame.kind = SurfaceKind::MaskContent;
-  frame.pixmap = createTransparentPixmap(static_cast<int>(frame.pixmap.width()),
-                                         static_cast<int>(frame.pixmap.height()));
+  const int width = static_cast<int>(frame.pixmap.width());
+  const int height = static_cast<int>(frame.pixmap.height());
+  frame.pixmap = createTransparentPixmap(width, height);
+  frame.fillPaintPixmap.reset();
+  frame.strokePaintPixmap.reset();
+  if (surfaceStack_.size() >= 2u) {
+    const SurfaceFrame& parent = surfaceStack_[surfaceStack_.size() - 2u];
+    if (parent.fillPaintPixmap.has_value()) {
+      frame.fillPaintPixmap = createTransparentPixmap(width, height);
+    }
+    if (parent.strokePaintPixmap.has_value()) {
+      frame.strokePaintPixmap = createTransparentPixmap(width, height);
+    }
+  }
 }
 
 void RendererTinySkia::popMask() {
@@ -754,8 +807,25 @@ void RendererTinySkia::popMask() {
   if (frame.maskAlpha.has_value()) {
     auto pixmapView = frame.pixmap.mutableView();
     tiny_skia::Painter::applyMask(pixmapView, *frame.maskAlpha);
+    if (frame.fillPaintPixmap.has_value()) {
+      auto fillView = frame.fillPaintPixmap->mutableView();
+      tiny_skia::Painter::applyMask(fillView, *frame.maskAlpha);
+    }
+    if (frame.strokePaintPixmap.has_value()) {
+      auto strokeView = frame.strokePaintPixmap->mutableView();
+      tiny_skia::Painter::applyMask(strokeView, *frame.maskAlpha);
+    }
   }
   compositePixmap(frame.pixmap, 1.0);
+  if (!surfaceStack_.empty()) {
+    SurfaceFrame& parent = surfaceStack_.back();
+    if (frame.fillPaintPixmap.has_value() && parent.fillPaintPixmap.has_value()) {
+      compositePixmapInto(*parent.fillPaintPixmap, *frame.fillPaintPixmap, 1.0);
+    }
+    if (frame.strokePaintPixmap.has_value() && parent.strokePaintPixmap.has_value()) {
+      compositePixmapInto(*parent.strokePaintPixmap, *frame.strokePaintPixmap, 1.0);
+    }
+  }
 }
 
 void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) {
@@ -821,12 +891,26 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
 
   const tiny_skia::Path tinyPath = toTinyPath(path.path);
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  tiny_skia::Pixmap* fillPaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
+          ? &*surfaceStack_.back().fillPaintPixmap
+          : nullptr;
+  tiny_skia::Pixmap* strokePaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value()
+          ? &*surfaceStack_.back().strokePaintPixmap
+          : nullptr;
 
   const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(path.path.bounds())) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint, toTinyFillRule(path.fillRule),
                                  toTinyTransform(currentTransform_), mask);
+    if (fillPaintPixmap != nullptr) {
+      auto fillPaintView = fillPaintPixmap->mutableView();
+      tiny_skia::Painter::fillPath(fillPaintView, tinyPath, *fillPaint,
+                                   toTinyFillRule(path.fillRule),
+                                   toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternFill) {
       patternFillPaint_.reset();
     }
@@ -869,6 +953,11 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, tinyPath, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (strokePaintPixmap != nullptr) {
+      auto strokePaintView = strokePaintPixmap->mutableView();
+      tiny_skia::Painter::strokePath(strokePaintView, tinyPath, *strokePaint, tinyStroke,
+                                     toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -886,11 +975,25 @@ void RendererTinySkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
     return;
   }
 
+  tiny_skia::Pixmap* fillPaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
+          ? &*surfaceStack_.back().fillPaintPixmap
+          : nullptr;
+  tiny_skia::Pixmap* strokePaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value()
+          ? &*surfaceStack_.back().strokePaintPixmap
+          : nullptr;
+
   const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(rect)) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillRect(pixmapView, *tinyRect, *fillPaint,
                                  toTinyTransform(currentTransform_), mask);
+    if (fillPaintPixmap != nullptr) {
+      auto fillPaintView = fillPaintPixmap->mutableView();
+      tiny_skia::Painter::fillRect(fillPaintView, *tinyRect, *fillPaint,
+                                   toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternFill) {
       patternFillPaint_.reset();
     }
@@ -908,6 +1011,11 @@ void RendererTinySkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, path, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (strokePaintPixmap != nullptr) {
+      auto strokePaintView = strokePaintPixmap->mutableView();
+      tiny_skia::Painter::strokePath(strokePaintView, path, *strokePaint, tinyStroke,
+                                     toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -928,11 +1036,25 @@ void RendererTinySkia::drawEllipse(const Boxd& bounds, const StrokeParams& strok
   }
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  tiny_skia::Pixmap* fillPaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
+          ? &*surfaceStack_.back().fillPaintPixmap
+          : nullptr;
+  tiny_skia::Pixmap* strokePaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value()
+          ? &*surfaceStack_.back().strokePaintPixmap
+          : nullptr;
+
   const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(bounds)) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, path, *fillPaint, tiny_skia::FillRule::Winding,
                                  toTinyTransform(currentTransform_), mask);
+    if (fillPaintPixmap != nullptr) {
+      auto fillPaintView = fillPaintPixmap->mutableView();
+      tiny_skia::Painter::fillPath(fillPaintView, path, *fillPaint, tiny_skia::FillRule::Winding,
+                                   toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternFill) {
       patternFillPaint_.reset();
     }
@@ -949,6 +1071,11 @@ void RendererTinySkia::drawEllipse(const Boxd& bounds, const StrokeParams& strok
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, path, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (strokePaintPixmap != nullptr) {
+      auto strokePaintView = strokePaintPixmap->mutableView();
+      tiny_skia::Painter::strokePath(strokePaintView, path, *strokePaint, tinyStroke,
+                                     toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -1264,6 +1391,11 @@ tiny_skia::Pixmap RendererTinySkia::createTransparentPixmap(int width, int heigh
 }
 
 void RendererTinySkia::compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity) {
+  compositePixmapInto(currentPixmap(), pixmap, opacity);
+}
+
+void RendererTinySkia::compositePixmapInto(tiny_skia::Pixmap& destination,
+                                           const tiny_skia::Pixmap& pixmap, double opacity) {
   if (opacity <= 0.0 || pixmap.width() == 0 || pixmap.height() == 0) {
     return;
   }
@@ -1272,10 +1404,10 @@ void RendererTinySkia::compositePixmap(const tiny_skia::Pixmap& pixmap, double o
   paint.opacity = NarrowToFloat(opacity);
   paint.blendMode = tiny_skia::BlendMode::SourceOver;
   paint.quality = tiny_skia::FilterQuality::Nearest;
-  paint.unpremulStore = surfaceStack_.empty();
+  paint.unpremulStore = &destination == &frame_;
 
-  auto pixmapView = currentPixmapView();
-  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, pixmap.view(), paint);
+  auto destinationView = destination.mutableView();
+  tiny_skia::Painter::drawPixmap(destinationView, 0, 0, pixmap.view(), paint);
 }
 
 void RendererTinySkia::maybeWarnUnsupportedText() {

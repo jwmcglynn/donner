@@ -4,7 +4,13 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/SVGFEComponentTransferElement.h"
+#include "donner/svg/SVGFEFuncBElement.h"
 #include "donner/svg/SVGFEGaussianBlurElement.h"
+#include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
+#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
@@ -112,6 +118,123 @@ TEST(SVGFilterElementTests, PrimitiveUnits) {
         R"(<filter primitiveUnits="invalid" />)", options);
     EXPECT_THAT(filter->primitiveUnits(), testing::Eq(PrimitiveUnits::Default));
   }
+}
+
+TEST(SVGFilterElementTests, Href) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
+  {
+    auto filter =
+        instantiateSubtreeElementAs<SVGFilterElement>(R"(<filter href="#baseFilter" />)", options);
+    EXPECT_THAT(filter->href(), testing::Optional(testing::Eq("#baseFilter")));
+  }
+
+  {
+    auto filter = instantiateSubtreeElementAs<SVGFilterElement>(
+        R"(<filter xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#baseFilter" />)",
+        options);
+    EXPECT_THAT(filter->href(), testing::Optional(testing::Eq("#baseFilter")));
+  }
+}
+
+TEST(SVGFilterElementTests, HrefInheritsPrimitivesAndRegion) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
+  SVGDocument document = instantiateSubtree(R"(
+    <defs>
+      <filter id="filter0" x="0.1" y="0.2" width="0.8" height="1.0">
+        <feGaussianBlur stdDeviation="4"/>
+      </filter>
+      <filter id="filter1" href="#filter0"/>
+    </defs>
+  )",
+                                            options, Vector2i(200, 200));
+
+  std::vector<ParseError> warnings;
+  components::FilterSystem().instantiateAllComputedComponents(document.registry(), &warnings);
+
+  const entt::entity filter1Entity =
+      document.registry().ctx().get<const components::SVGDocumentContext>().getEntityById(
+          "filter1");
+  ASSERT_TRUE(filter1Entity != entt::null);
+
+  const auto* computed =
+      document.registry().try_get<components::ComputedFilterComponent>(filter1Entity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_EQ(computed->filterGraph.nodes.size(), 1u);
+
+  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
+      &computed->filterGraph.nodes.front().primitive);
+  ASSERT_NE(blur, nullptr);
+  EXPECT_DOUBLE_EQ(blur->stdDeviationX, 4.0);
+  EXPECT_DOUBLE_EQ(blur->stdDeviationY, 4.0);
+  EXPECT_THAT(computed->x.value, testing::DoubleEq(0.1));
+  EXPECT_THAT(computed->y.value, testing::DoubleEq(0.2));
+  EXPECT_THAT(computed->width.value, testing::DoubleEq(0.8));
+  EXPECT_THAT(computed->height.value, testing::DoubleEq(1.0));
+}
+
+TEST(SVGFilterElementTests, HrefInheritsAttributesButKeepsLocalPrimitives) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
+  SVGDocument document = instantiateSubtree(R"(
+    <defs>
+      <filter id="filter0" x="0.1" height="1.0">
+        <feGaussianBlur stdDeviation="2"/>
+      </filter>
+      <filter id="filter1" y="0.2" width="0.8" href="#filter0">
+        <feGaussianBlur stdDeviation="4"/>
+      </filter>
+    </defs>
+  )",
+                                            options, Vector2i(200, 200));
+
+  std::vector<ParseError> warnings;
+  components::FilterSystem().instantiateAllComputedComponents(document.registry(), &warnings);
+
+  const entt::entity filter1Entity =
+      document.registry().ctx().get<const components::SVGDocumentContext>().getEntityById(
+          "filter1");
+  ASSERT_TRUE(filter1Entity != entt::null);
+
+  const auto* computed =
+      document.registry().try_get<components::ComputedFilterComponent>(filter1Entity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_EQ(computed->filterGraph.nodes.size(), 1u);
+
+  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
+      &computed->filterGraph.nodes.front().primitive);
+  ASSERT_NE(blur, nullptr);
+  EXPECT_DOUBLE_EQ(blur->stdDeviationX, 4.0);
+  EXPECT_DOUBLE_EQ(blur->stdDeviationY, 4.0);
+  EXPECT_THAT(computed->x.value, testing::DoubleEq(0.1));
+  EXPECT_THAT(computed->y.value, testing::DoubleEq(0.2));
+  EXPECT_THAT(computed->width.value, testing::DoubleEq(0.8));
+  EXPECT_THAT(computed->height.value, testing::DoubleEq(1.0));
+}
+
+TEST(SVGFilterElementTests, RejectsInvalidFeFuncTableValuesWithUnitSuffix) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
+  auto transfer = instantiateSubtreeElementAs<SVGFEComponentTransferElement>(
+      R"(
+        <feComponentTransfer>
+          <feFuncB type="table" tableValues="1px"/>
+        </feComponentTransfer>
+      )",
+      options);
+
+  auto maybeChild = transfer->firstChild();
+  ASSERT_TRUE(maybeChild.has_value());
+
+  auto funcB = maybeChild->cast<SVGFEFuncBElement>();
+  const auto* component = funcB.entityHandle().try_get<components::FEFuncComponent>();
+  ASSERT_NE(component, nullptr);
+  EXPECT_TRUE(component->tableValues.empty());
 }
 
 // TODO: Move to another file

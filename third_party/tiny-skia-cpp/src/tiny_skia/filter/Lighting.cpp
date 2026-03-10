@@ -75,8 +75,7 @@ void computeNormal(const Pixmap& pixmap, int x, int y, double surfaceScale, doub
       nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft)) / 3.0;
       ny = -surfaceScale * (2.0 * (center - top) + (left - topLeft)) / 3.0;
     } else {
-      nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft) + (bottom - bottomLeft)) /
-           4.0;
+      nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft) + (bottom - bottomLeft)) / 4.0;
       ny = -surfaceScale * (2.0 * (bottom - top) + (bottomLeft - topLeft)) / 4.0;
     }
   } else {
@@ -91,8 +90,7 @@ void computeNormal(const Pixmap& pixmap, int x, int y, double surfaceScale, doub
       const double bottom = getAlpha(pixmap, x, y + 1);
       const double bottomRight = getAlpha(pixmap, x + 1, y + 1);
       nx = -surfaceScale * (2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
-      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomRight - right) +
-                            (bottomLeft - left)) /
+      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomRight - right) + (bottomLeft - left)) /
            4.0;
     } else if (y == h - 1) {
       // Bottom edge interior.
@@ -169,8 +167,7 @@ double spotLightFactor(const LightSourceParams& light, double lx, double ly, dou
 
   double coneFactor = 1.0;
   if (light.limitingConeAngle.has_value()) {
-    const double cosOuter =
-        std::cos(*light.limitingConeAngle * std::numbers::pi / 180.0);
+    const double cosOuter = std::cos(*light.limitingConeAngle * std::numbers::pi / 180.0);
     // Apply smooth anti-aliased transition at the cone boundary (~1 degree ramp),
     // per SVG spec recommendation: "User agents should apply a smoothing technique
     // such as anti-aliasing at the boundary of the cone."
@@ -382,8 +379,7 @@ void computeNormalFloat(const FloatPixmap& pixmap, int x, int y, double surfaceS
       nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft)) / 3.0;
       ny = -surfaceScale * (2.0 * (center - top) + (left - topLeft)) / 3.0;
     } else {
-      nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft) + (bottom - bottomLeft)) /
-           4.0;
+      nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft) + (bottom - bottomLeft)) / 4.0;
       ny = -surfaceScale * (2.0 * (bottom - top) + (bottomLeft - topLeft)) / 4.0;
     }
   } else {
@@ -396,8 +392,7 @@ void computeNormalFloat(const FloatPixmap& pixmap, int x, int y, double surfaceS
       const double bottom = getAlphaFloat(pixmap, x, y + 1);
       const double bottomRight = getAlphaFloat(pixmap, x + 1, y + 1);
       nx = -surfaceScale * (2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
-      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomRight - right) +
-                            (bottomLeft - left)) /
+      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomRight - right) + (bottomLeft - left)) /
            4.0;
     } else if (y == h - 1) {
       const double topLeft = getAlphaFloat(pixmap, x - 1, y - 1);

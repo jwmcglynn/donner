@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <rect width="200" height="200" fill="#f1f1f1" />
+
+  <filter id="blur-fill">
+    <feGaussianBlur in="FillPaint" stdDeviation="4" />
+  </filter>
+
+  <circle cx="100" cy="100" r="56" fill="seagreen" filter="url(#blur-fill)" />
+  <rect x="1" y="1" width="198" height="198" fill="none" stroke="black" />
+</svg>

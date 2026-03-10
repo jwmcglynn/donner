@@ -44,7 +44,7 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - Filter region computation with `objectBoundingBox` and `userSpaceOnUse` `filterUnits`
 - Filter region clipping on output
 - Primitive subregion computation (explicit attributes; TODO: union-of-inputs default)
-- `color-interpolation-filters` property (linearRGB/sRGB conversion via LUT)
+- `color-interpolation-filters` property with float `linearRGB` / `sRGB` conversion
 - All 17 primitives: `feGaussianBlur`, `feFlood`, `feOffset`, `feComposite`, `feMerge`, `feColorMatrix`, `feBlend`, `feComponentTransfer`, `feDropShadow`, `feMorphology`, `feTile`, `feConvolveMatrix`, `feTurbulence`, `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`, `feImage`
 - Light sources: `feDistantLight`, `fePointLight`, `feSpotLight` with coordinate scaling for non-1:1 viewBox/canvas ratios
 - Native tiny-skia-cpp filter library with all implemented operations
@@ -60,7 +60,8 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 
 **Known gaps:**
 - `primitiveUnits` coordinate space handling
-- linearRGB LUT operates at 8-bit precision (should be float for accuracy)
+- Some identity-like `linearRGB` cases still rely on thresholds because Donner's float pipeline
+  does not bit-match resvg's quantized round-trip behavior
 - Blur edge clipping: blur operates on full pixmap then clips, causing edge differences
 - Skia backend still routes most graphs through the shared CPU executor
 - Skia native `saveLayer` blur is currently restricted to no-crop cases; transformed blur chains use
@@ -101,21 +102,27 @@ investigations, and intentional skips for UB or pathological cases.
 
 ### Remaining Feature Gaps
 
-- [ ] Finish `primitiveUnits` and percentage primitive-subregion handling.
-  Affected tests: `e-feTile-006.svg`, `e-filter-055.svg`, and the large-threshold
-  `e-filter-012.svg`.
-  Plan: move primitive-region resolution fully into filter-local coordinates, support percentage
-  widths/heights for primitive subregions, and add focused tests for OBB + percentage clipping.
-- [ ] Add filter templating / `href` inheritance for `<filter>`.
+- [x] Finish `primitiveUnits` and percentage primitive-subregion handling in the shared executor.
+  Status: user-space and object-bounding-box primitive subregions now resolve correctly through the
+  executor, including percentage coordinates and sizes, and the targeted OBB/percentage regression
+  coverage lives in `FilterGraphExecutor_tests.cc`.
+  Result: `e-feTile-006.svg`, `e-filter-010.svg`, `e-filter-012.svg`, and `e-filter-055.svg`
+  pass on both backends without the old skip/large-threshold handling.
+- [x] Add filter templating / `href` inheritance for `<filter>`.
   Affected tests: `e-filter-017.svg`, `e-filter-018.svg`, `e-filter-019.svg`.
-  Plan: mirror the inheritance model already used by gradients and patterns, then add graph-level
-  merge tests for inherited primitives and inherited filter regions.
-- [ ] Add the remaining standard filter inputs that are still in scope.
-  Affected tests: `e-filter-034.svg`, `e-filter-035.svg`, `e-filter-036.svg`,
-  `e-filter-037.svg`, `e-filter-038.svg`, `e-filter-065.svg`.
-  Plan: capture `FillPaint` and `StrokePaint` into buffers at filter-layer entry, thread those
-  through `FilterGraphExecutor`, and keep `BackgroundImage` / `BackgroundAlpha`
-  (`e-filter-032.svg`, `e-filter-033.svg`) explicitly deferred unless scope changes.
+  Status: inherited filter attributes and primitive children now resolve on both backends, and the
+  tests are enabled. Their remaining tolerances are now tracked under the blur edge-clipping debt
+  below.
+- [x] Add the standard filter inputs that are still in scope for ordinary rendered content.
+  Status: `FillPaint` and `StrokePaint` are now captured through the shared filter executor on both
+  backends, with deterministic renderer coverage in
+  `donner/svg/renderer/testdata/filter_fill_paint.svg` and
+  `donner/svg/renderer/testdata/filter_stroke_paint.svg`.
+  Resvg note: `e-filter-034.svg`, `e-filter-035.svg`, `e-filter-036.svg`,
+  `e-filter-037.svg`, `e-filter-038.svg`, and `e-filter-065.svg` remain skipped because their
+  titles explicitly mark them as UB, so they are no longer treated as actionable feature debt.
+  Remaining gap: keep `BackgroundImage` / `BackgroundAlpha` (`e-filter-032.svg`,
+  `e-filter-033.svg`) explicitly deferred unless scope changes.
 - [ ] Extend `feImage` beyond external bitmap loading.
   Affected tests: `e-feImage-006.svg` through `e-feImage-024.svg`.
   Plan: support fragment references by re-entrant subtree rendering into a pixmap, then add
@@ -124,41 +131,53 @@ investigations, and intentional skips for UB or pathological cases.
   Affected tests: `e-filter-060.svg`.
   Plan: define root-surface capture semantics in `RendererDriver` and ensure viewport clipping is
   applied after the filtered root result is composited back.
-- [ ] Add missing lighting sampling controls.
-  Affected tests: `e-feDiffuseLighting-021.svg`, `e-feDiffuseLighting-022.svg`.
-  Plan: implement `kernelUnitLength` in the lighting primitives and verify it against targeted
-  height-map fixtures before unskipping the resvg cases.
+- [x] Revalidate the remaining diffuse-lighting skips.
+  Status: `e-feDiffuseLighting-022.svg` now passes on both backends and has been re-enabled.
+  `e-feDiffuseLighting-021.svg` remains skipped because it is still a real transformed-lighting
+  bug, not a `kernelUnitLength` issue.
+  Note: `kernelUnitLength` itself is still not covered by a dedicated resvg case here; treat it
+  as future spec-completeness work if a real repro or targeted fixture appears.
 
 ### Threshold Reduction Investigations
 
-- [ ] Replace the 8-bit `linearRGB` LUT with float conversions and tighten the color-space
-  thresholds.
+- [ ] Decide how closely we want to match resvg's quantized `linearRGB` behavior and then tighten
+  the remaining color-space thresholds.
   Affected tests: `a-color-interpolation-filters-001.svg`, `e-feColorMatrix-001.svg` through
   `e-feColorMatrix-007.svg`, `e-feColorMatrix-010.svg` through `e-feColorMatrix-012.svg`,
   `e-feColorMatrix-015.svg`, `e-feDropShadow-001.svg` through `e-feDropShadow-006.svg`,
   `e-feMerge-001.svg` through `e-feMerge-003.svg`, `e-feImage-003.svg`, `e-feImage-004.svg`,
   `e-filter-028.svg`, `e-filter-046.svg`, and `e-feTurbulence-019.svg`.
-  Plan: land a shared float sRGB<->linearRGB path in the filter library, rerun the affected tests,
-  and remove or shrink the 0.05 / 0.1 tolerances before touching larger geometry issues.
+  Plan: measure which diffs come from resvg's uint8 quantization versus real rendering errors,
+  then either keep the current float path and tighten only the defensible thresholds or add an
+  explicit compatibility mode for the no-op / identity-like cases.
 - [ ] Match blur edge-clipping semantics more closely to the spec.
-  Affected tests: `e-filter-002.svg`, `e-filter-003.svg`, `e-filter-009.svg`, `e-filter-039.svg`,
-  `e-filter-040.svg`, `e-filter-041.svg`, `e-filter-052.svg`, `e-filter-053.svg`,
-  `e-filter-054.svg`, `e-filter-058.svg`, and `e-filter-059.svg`.
+  Affected tests: `e-filter-002.svg`, `e-filter-003.svg`, `e-filter-009.svg`, `e-filter-017.svg`,
+  `e-filter-018.svg`, `e-filter-019.svg`, `e-filter-039.svg`, `e-filter-040.svg`,
+  `e-filter-041.svg`, `e-filter-052.svg`, `e-filter-053.svg`, `e-filter-054.svg`,
+  `e-filter-058.svg`, and `e-filter-059.svg`.
+  Status: clipping `SourceGraphic` to the filter region in the ordinary device-space path reduced
+  the inherited-filter cases substantially (`e-filter-017.svg` / `e-filter-018.svg` now land at
+  `2312` pixels, `e-filter-019.svg` at `16308`).
   Plan: stop treating the full pixmap as the blur extent, compute primitive subregions from the
   union of inputs, and crop the blur kernel to the primitive region rather than blurring first and
   clipping afterward.
 - [ ] Close the remaining coordinate-space and transform threshold cases.
   Affected tests: `e-feFlood-008.svg`, `e-feGaussianBlur-012.svg`, `e-feOffset-007.svg`,
   `e-feOffset-008.svg`, `e-filter-004.svg`, `e-filter-010.svg`, `e-filter-011.svg`,
-  `e-filter-012.svg`, `e-filter-014.svg`, `e-filter-026.svg`, `e-filter-027.svg`,
-  `e-filter-058.svg`, `e-filter-059.svg`, and `e-feTurbulence-018.svg`.
-  Plan: finish the remaining `primitiveUnits` work, audit all `deviceFromFilter` conversions for
-  OBB inputs, and add transform-specific regression tests around filter-region clipping.
+  `e-filter-012.svg`, `e-filter-014.svg`, `e-filter-026.svg`,
+  `e-filter-027.svg`, `e-filter-055.svg`, `e-filter-058.svg`, `e-filter-059.svg`,
+  and `e-feTurbulence-018.svg`.
+  Plan: audit the remaining `deviceFromFilter` conversions for OBB and transformed inputs, and add
+  transform-specific regression tests around filter-region clipping.
 - [ ] Investigate the remaining high-threshold graph-routing and arithmetic cases.
   Affected tests: `e-feComponentTransfer-020.svg`, `e-feConvolveMatrix-014.svg`,
   `e-feConvolveMatrix-018.svg`, `e-feConvolveMatrix-022.svg`, `e-feConvolveMatrix-024.svg`,
   `e-feTile-001.svg`, `e-feTile-002.svg`, `e-feTile-004.svg`, `e-feTile-005.svg`,
   and `e-filter-056.svg`.
+  Status: several stale geometry thresholds have already been reduced substantially
+  (`e-feFlood-008.svg`, `e-feOffset-008.svg`, `e-filter-004.svg`, `e-filter-010.svg`,
+  `e-filter-011.svg`, `e-filter-014.svg`). The largest remaining non-lighting thresholds in this
+  bucket are now `e-filter-052.svg`, `e-filter-054.svg`, and `e-filter-056.svg`.
   Plan: add small golden fixtures for each primitive in isolation, then debug whether the diffs
   come from arithmetic mismatch, tile seam sampling, or invalid-input fallback behavior.
 - [ ] Reduce the remaining lighting tolerances.
@@ -172,10 +191,10 @@ investigations, and intentional skips for UB or pathological cases.
 
 ### Skip Triage: Keep, Fix, or Reclassify
 
-- [ ] Fix parser or validation bugs that are currently hidden by skips.
+- [x] Fix parser or validation bugs that are currently hidden by skips.
   Affected tests: `e-feComponentTransfer-009.svg`.
-  Plan: reject invalid unit-suffixed numeric values at parse time and convert this from a skip to a
-  normal negative test.
+  Status: invalid unit-suffixed `tableValues` entries on `feFunc*` elements are now rejected at
+  parse time, and `e-feComponentTransfer-009.svg` is enabled on both backends.
 - [ ] Decide which current skips are genuine non-goals or external-integration work.
   Affected tests: `e-feImage-001.svg`, `e-feImage-002.svg`, `e-filter-032.svg`,
   `e-filter-033.svg`.
@@ -197,7 +216,7 @@ investigations, and intentional skips for UB or pathological cases.
 
 - Finish the remaining resvg filter debt in the order above: first real feature gaps, then
   threshold-reduction investigations, then skip reclassification.
-- Treat `primitiveUnits`, float `linearRGB`, and blur-edge clipping as the next highest-leverage
+- Treat color-space threshold cleanup and blur-edge clipping as the next highest-leverage
   conformance tasks because they unlock multiple thresholded cases at once.
 - Begin Milestone 6 once the highest-cost resvg skips and thresholds are retired.
 
@@ -213,10 +232,12 @@ Replace the current `std::vector<FilterEffect>` linear chain with a proper filte
 - [x] Replace `pushFilterLayer`/`popFilterLayer` interface with graph-aware execution (`FilterGraph` passed through interface)
 - [x] Move Gaussian blur to native tiny-skia-cpp filter library (`tiny_skia::filter::gaussianBlur`)
 - [x] Add `in2` attribute parsing for two-input primitives
-- [x] Implement standard input resolution (`SourceGraphic`, `SourceAlpha`) with multi-buffer routing (TODO: `FillPaint`, `StrokePaint`)
+- [x] Implement standard input resolution (`SourceGraphic`, `SourceAlpha`, `FillPaint`,
+  `StrokePaint`) with multi-buffer routing
+- [x] Add filter templating / `href` inheritance for `<filter>`
 - [x] Implement filter region clipping (x/y/width/height on `<filter>`, with objectBoundingBox defaults)
 - [x] Implement primitive subregion computation (explicit x/y/width/height on each primitive; TODO: union-of-inputs default)
-- [ ] Add `primitiveUnits` coordinate space handling (`userSpaceOnUse` vs `objectBoundingBox`)
+- [x] Add `primitiveUnits` coordinate space handling (`userSpaceOnUse` vs `objectBoundingBox`)
 - [x] Add `color-interpolation-filters` property support (`linearRGB` default vs `sRGB`)
 - [ ] Remove legacy `effectChain` from `ComputedFilterComponent`
 

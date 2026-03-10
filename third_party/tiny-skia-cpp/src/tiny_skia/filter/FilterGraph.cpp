@@ -32,9 +32,7 @@ struct Box {
   double x1 = 0;
   double y1 = 0;
 
-  static Box fromPixelRect(const PixelRect& r) {
-    return {r.x, r.y, r.x + r.w, r.y + r.h};
-  }
+  static Box fromPixelRect(const PixelRect& r) { return {r.x, r.y, r.x + r.w, r.y + r.h}; }
 
   static Box fromWH(int w, int h) {
     return {0.0, 0.0, static_cast<double>(w), static_cast<double>(h)};
@@ -59,6 +57,14 @@ struct Box {
     return {std::min(x0, other.x0), std::min(y0, other.y0), std::max(x1, other.x1),
             std::max(y1, other.y1)};
   }
+
+  [[nodiscard]] Box translate(double dx, double dy) const {
+    return {x0 + dx, y0 + dy, x1 + dx, y1 + dy};
+  }
+
+  [[nodiscard]] Box outset(double dx, double dy) const {
+    return {x0 - dx, y0 - dy, x1 + dx, y1 + dy};
+  }
 };
 
 FloatPixmap createTransparentFloat(int w, int h) {
@@ -69,12 +75,44 @@ FloatPixmap createTransparentFloat(int w, int h) {
   return std::move(*fp);
 }
 
+std::optional<Box> computeNonTransparentBounds(const FloatPixmap& pixmap) {
+  const int w = static_cast<int>(pixmap.width());
+  const int h = static_cast<int>(pixmap.height());
+  const auto data = pixmap.data();
+
+  int minX = w;
+  int minY = h;
+  int maxX = -1;
+  int maxY = -1;
+
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const float alpha = data[static_cast<std::size_t>((y * w + x) * 4 + 3)];
+      if (alpha <= 0.0f) {
+        continue;
+      }
+
+      minX = std::min(minX, x);
+      minY = std::min(minY, y);
+      maxX = std::max(maxX, x + 1);
+      maxY = std::max(maxY, y + 1);
+    }
+  }
+
+  if (maxX <= minX || maxY <= minY) {
+    return std::nullopt;
+  }
+
+  return Box{static_cast<double>(minX), static_cast<double>(minY), static_cast<double>(maxX),
+             static_cast<double>(maxY)};
+}
+
 /// Apply subregion clipping on float pixmap: clear pixels outside the given rect.
 void applySubregionClipping(FloatPixmap& output, const PixelRect& sr, int w, int h) {
   const int rx0 = std::max(0, static_cast<int>(std::floor(sr.x)));
   const int ry0 = std::max(0, static_cast<int>(std::floor(sr.y)));
-  const int rx1 = std::min(w, static_cast<int>(std::ceil(sr.x + sr.w)));
-  const int ry1 = std::min(h, static_cast<int>(std::ceil(sr.y + sr.h)));
+  const int rx1 = std::clamp(static_cast<int>(std::ceil(sr.x + sr.w)), 0, w);
+  const int ry1 = std::clamp(static_cast<int>(std::ceil(sr.y + sr.h)), 0, h);
 
   auto data = output.data();
   for (int y = 0; y < ry0; ++y) {
@@ -106,9 +144,18 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   // This deferred conversion approach allows identity operations (like identity feColorMatrix)
   // to avoid the sRGB↔linear round-trip entirely, eliminating quantization artifacts.
   FloatPixmap sourceFloat = FloatPixmap::fromPixmap(sourceGraphic);
+  std::optional<FloatPixmap> fillPaintStorage = graph.fillPaintInput;
+  std::optional<FloatPixmap> strokePaintStorage = graph.strokePaintInput;
+
+  if (graph.clipSourceToFilterRegion && graph.filterRegion.has_value()) {
+    applySubregionClipping(sourceFloat, *graph.filterRegion, w, h);
+  }
 
   // Buffer management — all intermediate work in float precision.
   FloatPixmap* source = &sourceFloat;
+  FloatPixmap* fillPaint = fillPaintStorage.has_value() ? &*fillPaintStorage : nullptr;
+  FloatPixmap* strokePaint = strokePaintStorage.has_value() ? &*strokePaintStorage : nullptr;
+  std::optional<FloatPixmap> transparentPaintInput;
   std::optional<FloatPixmap> sourceAlpha;
   std::optional<FloatPixmap> previousOutput;
   std::map<std::string, FloatPixmap> namedBuffers;
@@ -116,6 +163,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   // Color space tracking: true = linearRGB, false = sRGB.
   // Source starts in sRGB; conversion to linear is done per-node via ensureColorSpace.
   bool sourceColorSpace = false;
+  const bool fillPaintColorSpace = false;
+  const bool strokePaintColorSpace = false;
   bool previousOutputColorSpace = false;
   std::map<std::string, bool> namedColorSpaces;
 
@@ -138,7 +187,18 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   const Box filterRegionBox =
       graph.filterRegion.has_value() ? Box::fromPixelRect(*graph.filterRegion) : fullRegion;
   Box previousOutputSubregion = fullRegion;
+  const std::optional<Box> fillPaintSubregion =
+      fillPaint != nullptr ? computeNonTransparentBounds(*fillPaint) : std::nullopt;
+  const std::optional<Box> strokePaintSubregion =
+      strokePaint != nullptr ? computeNonTransparentBounds(*strokePaint) : std::nullopt;
   std::map<std::string, Box> namedSubregions;
+
+  auto getTransparentPaintInput = [&]() -> FloatPixmap* {
+    if (!transparentPaintInput.has_value()) {
+      transparentPaintInput = createTransparentFloat(w, h);
+    }
+    return &*transparentPaintInput;
+  };
 
   auto getSourceAlpha = [&]() -> FloatPixmap* {
     if (!sourceAlpha.has_value()) {
@@ -166,6 +226,12 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             if (v == StandardInput::SourceAlpha) {
               return getSourceAlpha();
             }
+            if (v == StandardInput::FillPaint) {
+              return fillPaint != nullptr ? fillPaint : getTransparentPaintInput();
+            }
+            if (v == StandardInput::StrokePaint) {
+              return strokePaint != nullptr ? strokePaint : getTransparentPaintInput();
+            }
             return source;
           } else if constexpr (std::is_same_v<V, NodeInput::Named>) {
             auto it = namedBuffers.find(v.name);
@@ -192,6 +258,14 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               return it->second;
             }
             return sourceColorSpace;
+          } else if constexpr (std::is_same_v<V, StandardInput>) {
+            if (v == StandardInput::FillPaint) {
+              return fillPaintColorSpace;
+            }
+            if (v == StandardInput::StrokePaint) {
+              return strokePaintColorSpace;
+            }
+            return sourceColorSpace;
           } else {
             return sourceColorSpace;
           }
@@ -211,6 +285,14 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               return it->second;
             }
             return fullRegion;
+          } else if constexpr (std::is_same_v<V, StandardInput>) {
+            if (v == StandardInput::FillPaint) {
+              return fillPaintSubregion.value_or(fullRegion);
+            }
+            if (v == StandardInput::StrokePaint) {
+              return strokePaintSubregion.value_or(fullRegion);
+            }
+            return fullRegion;
           } else {
             return fullRegion;
           }
@@ -218,12 +300,62 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
         input.value);
   };
 
+  auto defaultNodeSubregion = [&](const GraphNode& node) -> Box {
+    const bool isSourceGenerator =
+        std::holds_alternative<graph_primitive::Flood>(node.primitive) ||
+        std::holds_alternative<graph_primitive::Turbulence>(node.primitive) ||
+        std::holds_alternative<graph_primitive::Image>(node.primitive) ||
+        std::holds_alternative<graph_primitive::Tile>(node.primitive);
+
+    if (node.subregion.has_value()) {
+      return Box::fromPixelRect(*node.subregion).intersect(filterRegionBox);
+    }
+
+    if (node.inputs.empty() || isSourceGenerator) {
+      return filterRegionBox;
+    }
+
+    Box inputBounds = resolveInputSubregion(node.inputs[0]);
+    for (std::size_t i = 1; i < node.inputs.size(); ++i) {
+      inputBounds = inputBounds.unite(resolveInputSubregion(node.inputs[i]));
+    }
+
+    return std::visit(
+               [&](const auto& primitive) -> Box {
+                 using T = std::decay_t<decltype(primitive)>;
+
+                 if constexpr (std::is_same_v<T, graph_primitive::GaussianBlur>) {
+                   const double expandX = std::ceil(primitive.sigmaX * 3.0);
+                   const double expandY = std::ceil(primitive.sigmaY * 3.0);
+                   return inputBounds.outset(expandX, expandY);
+                 } else if constexpr (std::is_same_v<T, graph_primitive::DropShadow>) {
+                   const double expandX = std::ceil(primitive.sigmaX * 3.0);
+                   const double expandY = std::ceil(primitive.sigmaY * 3.0);
+                   const Box shadowBounds = inputBounds
+                                                .translate(static_cast<double>(primitive.dx),
+                                                           static_cast<double>(primitive.dy))
+                                                .outset(expandX, expandY);
+                   return inputBounds.unite(shadowBounds);
+                 } else if constexpr (std::is_same_v<T, graph_primitive::Morphology>) {
+                   if (primitive.op == MorphologyOp::Dilate) {
+                     return inputBounds.outset(static_cast<double>(primitive.radiusX),
+                                               static_cast<double>(primitive.radiusY));
+                   }
+
+                   return inputBounds;
+                 } else {
+                   return inputBounds;
+                 }
+               },
+               node.primitive)
+        .intersect(filterRegionBox);
+  };
+
   for (const GraphNode& node : graph.nodes) {
     const bool nodeLinearRGB = node.useLinearRGB.value_or(graph.useLinearRGB);
 
     FloatPixmap* rawInput = node.inputs.empty() ? source : resolveInput(node.inputs[0]);
-    bool inputCS = node.inputs.empty() ? sourceColorSpace
-                                       : resolveInputColorSpace(node.inputs[0]);
+    bool inputCS = node.inputs.empty() ? sourceColorSpace : resolveInputColorSpace(node.inputs[0]);
 
     std::optional<FloatPixmap> convertedInput;
     FloatPixmap* input = ensureColorSpace(rawInput, inputCS, nodeLinearRGB, convertedInput);
@@ -260,10 +392,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             filter::offset(*input, *output, primitive.dx, primitive.dy);
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Composite>) {
-            FloatPixmap* rawInput2 =
-                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
-            bool input2CS = node.inputs.size() > 1 ? resolveInputColorSpace(node.inputs[1])
-                                                    : sourceColorSpace;
+            FloatPixmap* rawInput2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            bool input2CS =
+                node.inputs.size() > 1 ? resolveInputColorSpace(node.inputs[1]) : sourceColorSpace;
             std::optional<FloatPixmap> convertedInput2;
             FloatPixmap* input2 =
                 ensureColorSpace(rawInput2, input2CS, nodeLinearRGB, convertedInput2);
@@ -272,10 +403,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                       primitive.k3, primitive.k4);
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Blend>) {
-            FloatPixmap* rawInput2 =
-                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
-            bool input2CS = node.inputs.size() > 1 ? resolveInputColorSpace(node.inputs[1])
-                                                    : sourceColorSpace;
+            FloatPixmap* rawInput2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            bool input2CS =
+                node.inputs.size() > 1 ? resolveInputColorSpace(node.inputs[1]) : sourceColorSpace;
             std::optional<FloatPixmap> convertedInput2;
             FloatPixmap* input2 =
                 ensureColorSpace(rawInput2, input2CS, nodeLinearRGB, convertedInput2);
@@ -360,9 +490,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Tile>) {
             output = createTransparentFloat(w, h);
-            const Box inputSubregion = node.inputs.empty()
-                                           ? previousOutputSubregion
-                                           : resolveInputSubregion(node.inputs[0]);
+            const Box inputSubregion = node.inputs.empty() ? previousOutputSubregion
+                                                           : resolveInputSubregion(node.inputs[0]);
             const int tileX = std::max(0, static_cast<int>(std::floor(inputSubregion.x0)));
             const int tileY = std::max(0, static_cast<int>(std::floor(inputSubregion.y0)));
             const int tileR = std::min(w, static_cast<int>(std::ceil(inputSubregion.x1)));
@@ -378,10 +507,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             turbulence(*output, primitive.params);
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DisplacementMap>) {
-            FloatPixmap* rawInput2 =
-                node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
-            bool input2CS = node.inputs.size() > 1 ? resolveInputColorSpace(node.inputs[1])
-                                                    : sourceColorSpace;
+            FloatPixmap* rawInput2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            bool input2CS =
+                node.inputs.size() > 1 ? resolveInputColorSpace(node.inputs[1]) : sourceColorSpace;
             std::optional<FloatPixmap> convertedInput2;
             FloatPixmap* input2 =
                 ensureColorSpace(rawInput2, input2CS, nodeLinearRGB, convertedInput2);
@@ -427,10 +555,10 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             if (!primitive.pixels.empty() && primitive.width > 0 && primitive.height > 0) {
               const double tx = primitive.targetRect.has_value() ? primitive.targetRect->x : 0.0;
               const double ty = primitive.targetRect.has_value() ? primitive.targetRect->y : 0.0;
-              const double tw =
-                  primitive.targetRect.has_value() ? primitive.targetRect->w : static_cast<double>(w);
-              const double th =
-                  primitive.targetRect.has_value() ? primitive.targetRect->h : static_cast<double>(h);
+              const double tw = primitive.targetRect.has_value() ? primitive.targetRect->w
+                                                                 : static_cast<double>(w);
+              const double th = primitive.targetRect.has_value() ? primitive.targetRect->h
+                                                                 : static_cast<double>(h);
 
               const double invScaleX = static_cast<double>(primitive.width) / tw;
               const double invScaleY = static_cast<double>(primitive.height) / th;
@@ -485,33 +613,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
         node.primitive);
 
     if (output.has_value()) {
-      // Compute the effective subregion for this node:
-      // - If x/y/width/height are explicitly set, use that subregion.
-      // - Otherwise, use the union of input subregions (or filter region for no-input primitives).
-      // Always intersect with the filter region per the SVG spec.
-      // Determine if this primitive is a source generator (no conceptual inputs per SVG spec).
-      // These always default to the filter region, regardless of any implicit inputs added
-      // by the parser. feTile also defaults to the filter region since its output fills the
-      // target area, not the input's subregion.
-      const bool isSourceGenerator =
-          std::holds_alternative<graph_primitive::Flood>(node.primitive) ||
-          std::holds_alternative<graph_primitive::Turbulence>(node.primitive) ||
-          std::holds_alternative<graph_primitive::Image>(node.primitive) ||
-          std::holds_alternative<graph_primitive::Tile>(node.primitive);
-
-      Box nodeSubregion;
-      if (node.subregion.has_value()) {
-        nodeSubregion = Box::fromPixelRect(*node.subregion);
-      } else if (node.inputs.empty() || isSourceGenerator) {
-        nodeSubregion = filterRegionBox;
-      } else {
-        // Default subregion = union of all input subregions (SVG spec 15.7.2).
-        nodeSubregion = resolveInputSubregion(node.inputs[0]);
-        for (std::size_t i = 1; i < node.inputs.size(); ++i) {
-          nodeSubregion = nodeSubregion.unite(resolveInputSubregion(node.inputs[i]));
-        }
-      }
-      nodeSubregion = nodeSubregion.intersect(filterRegionBox);
+      const Box nodeSubregion = defaultNodeSubregion(node);
 
       // Clip output pixels to the computed subregion.
       const PixelRect clipRect{nodeSubregion.x0, nodeSubregion.y0,

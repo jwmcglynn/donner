@@ -217,6 +217,20 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
   return hasBlur;
 }
 
+bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
+                            components::FilterStandardInput input) {
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    for (const components::FilterInput& nodeInput : node.inputs) {
+      const auto* standardInput = std::get_if<components::FilterStandardInput>(&nodeInput.value);
+      if (standardInput != nullptr && *standardInput == input) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
   for (const auto& node : filterGraph.nodes) {
     bool anisotropic = false;
@@ -777,6 +791,38 @@ std::optional<SkPaint> RendererSkia::makeStrokePaint(const Boxd& bounds,
   return std::nullopt;
 }
 
+RendererSkia::FilterLayerState* RendererSkia::currentFilterLayerState() {
+  if (filterLayerStack_.empty()) {
+    return nullptr;
+  }
+
+  FilterLayerState& state = filterLayerStack_.back();
+  return state.usesNativeSkiaFilter ? nullptr : &state;
+}
+
+void RendererSkia::drawOnFilterInputSurface(const sk_sp<SkSurface>& surface,
+                                            const std::function<void(SkCanvas*)>& drawFn) {
+  if (surface == nullptr || currentCanvas_ == nullptr) {
+    return;
+  }
+
+  SkCanvas* canvas = surface->getCanvas();
+  canvas->save();
+  for (const ClipStackEntry& entry : activeClips_) {
+    canvas->save();
+    canvas->setMatrix(entry.matrix);
+    applyClipToCanvas(canvas, entry.clip);
+  }
+
+  canvas->setMatrix(currentCanvas_->getTotalMatrix());
+  drawFn(canvas);
+
+  for (std::size_t i = 0; i < activeClips_.size(); ++i) {
+    canvas->restore();
+  }
+  canvas->restore();
+}
+
 void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
                                    const std::optional<Boxd>& filterRegion) {
   if (currentCanvas_ == nullptr) {
@@ -810,11 +856,24 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
 
   const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
   const int height = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
-  sk_sp<SkSurface> surface = SkSurfaces::Raster(
-      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
+  const SkImageInfo surfaceInfo =
+      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+  sk_sp<SkSurface> surface = SkSurfaces::Raster(surfaceInfo);
   if (surface == nullptr) {
     return;
   }
+
+  auto createFilterInputSurface = [&](bool needed) -> sk_sp<SkSurface> {
+    if (!needed) {
+      return nullptr;
+    }
+
+    sk_sp<SkSurface> inputSurface = SkSurfaces::Raster(surfaceInfo);
+    if (inputSurface != nullptr) {
+      inputSurface->getCanvas()->clear(SK_ColorTRANSPARENT);
+    }
+    return inputSurface;
+  };
 
   SkCanvas* filterCanvas = surface->getCanvas();
   filterCanvas->clear(SK_ColorTRANSPARENT);
@@ -827,6 +886,10 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
 
   FilterLayerState state;
   state.surface = std::move(surface);
+  state.fillPaintSurface = createFilterInputSurface(
+      graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint));
+  state.strokePaintSurface = createFilterInputSurface(
+      graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint));
   state.parentCanvas = currentCanvas_;
   state.filterGraph = filterGraph;
   state.filterRegion = filterRegion;
@@ -871,13 +934,23 @@ void RendererSkia::popFilterLayer() {
     return;
   }
 
-  const bool useTransformedPath =
+  std::optional<tiny_skia::Pixmap> fillPaintPixmap;
+  if (state.fillPaintSurface != nullptr) {
+    fillPaintPixmap = readSurfaceToPixmap(state.fillPaintSurface, width, height);
+  }
+
+  std::optional<tiny_skia::Pixmap> strokePaintPixmap;
+  if (state.strokePaintSurface != nullptr) {
+    strokePaintPixmap = readSurfaceToPixmap(state.strokePaintSurface, width, height);
+  }
+
+  const bool useTransformedBlurPath =
       state.filterRegion.has_value() && state.filterRegion->width() > 0 &&
       state.filterRegion->height() > 0 && !NearZero(state.deviceFromFilter.determinant()) &&
       isEligibleForTransformedBlurPath(state.filterGraph) &&
       shouldUseTransformedBlurPath(state.filterGraph, state.deviceFromFilter);
 
-  if (useTransformedPath) {
+  if (useTransformedBlurPath) {
     const Boxd& filterRegion = *state.filterRegion;
     const double scaleX =
         std::max(1.0, state.deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
@@ -916,7 +989,7 @@ void RendererSkia::popFilterLayer() {
           Vector2d(blurPadding, blurPadding),
           Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
       ApplyFilterGraphToPixmap(localPixmap, state.filterGraph, localDeviceFromFilter,
-                               localFilterRegion);
+                               localFilterRegion, false);
       ClipFilterOutputToRegion(localPixmap, localFilterRegion, localDeviceFromFilter);
 
       const Transformd deviceFromLocal =
@@ -945,7 +1018,9 @@ void RendererSkia::popFilterLayer() {
   }
 
   ApplyFilterGraphToPixmap(*maybePixmap, state.filterGraph, state.deviceFromFilter,
-                           state.filterRegion);
+                           state.filterRegion, true,
+                           fillPaintPixmap.has_value() ? &*fillPaintPixmap : nullptr,
+                           strokePaintPixmap.has_value() ? &*strokePaintPixmap : nullptr);
   ClipFilterOutputToRegion(*maybePixmap, state.filterRegion, state.deviceFromFilter);
 
   const std::vector<std::uint8_t> filteredPixels = maybePixmap->release();
@@ -1189,8 +1264,13 @@ void RendererSkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
     skPath.setFillType(SkPathFillType::kEvenOdd);
   }
 
+  FilterLayerState* filterLayerState = currentFilterLayerState();
   if (std::optional<SkPaint> fillPaint = makeFillPaint(path.path.bounds())) {
     currentCanvas_->drawPath(skPath, *fillPaint);
+    if (filterLayerState != nullptr && filterLayerState->fillPaintSurface != nullptr) {
+      drawOnFilterInputSurface(filterLayerState->fillPaintSurface,
+                               [&](SkCanvas* canvas) { canvas->drawPath(skPath, *fillPaint); });
+    }
   }
 
   // Apply pathLength scaling to dash arrays if needed.
@@ -1207,29 +1287,51 @@ void RendererSkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
 
   if (std::optional<SkPaint> strokePaint = makeStrokePaint(path.path.bounds(), adjustedStroke)) {
     currentCanvas_->drawPath(skPath, *strokePaint);
+    if (filterLayerState != nullptr && filterLayerState->strokePaintSurface != nullptr) {
+      drawOnFilterInputSurface(filterLayerState->strokePaintSurface,
+                               [&](SkCanvas* canvas) { canvas->drawPath(skPath, *strokePaint); });
+    }
   }
 }
 
 void RendererSkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
   const SkRect skRect = toSkia(rect);
+  FilterLayerState* filterLayerState = currentFilterLayerState();
   if (std::optional<SkPaint> fillPaint = makeFillPaint(rect)) {
     currentCanvas_->drawRect(skRect, *fillPaint);
+    if (filterLayerState != nullptr && filterLayerState->fillPaintSurface != nullptr) {
+      drawOnFilterInputSurface(filterLayerState->fillPaintSurface,
+                               [&](SkCanvas* canvas) { canvas->drawRect(skRect, *fillPaint); });
+    }
   }
 
   if (std::optional<SkPaint> strokePaint = makeStrokePaint(rect, stroke)) {
     currentCanvas_->drawRect(skRect, *strokePaint);
+    if (filterLayerState != nullptr && filterLayerState->strokePaintSurface != nullptr) {
+      drawOnFilterInputSurface(filterLayerState->strokePaintSurface,
+                               [&](SkCanvas* canvas) { canvas->drawRect(skRect, *strokePaint); });
+    }
   }
 }
 
 void RendererSkia::drawEllipse(const Boxd& bounds, const StrokeParams& stroke) {
   SkPath ellipse;
   ellipse.addOval(toSkia(bounds));
+  FilterLayerState* filterLayerState = currentFilterLayerState();
   if (std::optional<SkPaint> fillPaint = makeFillPaint(bounds)) {
     currentCanvas_->drawPath(ellipse, *fillPaint);
+    if (filterLayerState != nullptr && filterLayerState->fillPaintSurface != nullptr) {
+      drawOnFilterInputSurface(filterLayerState->fillPaintSurface,
+                               [&](SkCanvas* canvas) { canvas->drawPath(ellipse, *fillPaint); });
+    }
   }
 
   if (std::optional<SkPaint> strokePaint = makeStrokePaint(bounds, stroke)) {
     currentCanvas_->drawPath(ellipse, *strokePaint);
+    if (filterLayerState != nullptr && filterLayerState->strokePaintSurface != nullptr) {
+      drawOnFilterInputSurface(filterLayerState->strokePaintSurface,
+                               [&](SkCanvas* canvas) { canvas->drawPath(ellipse, *strokePaint); });
+    }
   }
 }
 

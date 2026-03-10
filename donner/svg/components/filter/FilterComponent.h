@@ -7,6 +7,7 @@
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/filter/FilterUnits.h"
+#include "donner/svg/graph/Reference.h"
 
 namespace donner::svg::components {
 
@@ -26,17 +27,20 @@ struct FilterComponent {
   /// Height of the filter, defaults to 120% (outside of the element itself).
   std::optional<Lengthd> height;
 
+  /// An optional href to another filter, used to inherit attributes and primitive children.
+  std::optional<Reference> href;
+
   /// The parsed value of the "filterUnits" attribute, which defines the coordinate system for the
   /// `x`, `y`, `width`, and `height` attributes of the mask.
-  FilterUnits filterUnits = FilterUnits::Default;
+  std::optional<FilterUnits> filterUnits;
 
   /// The parsed value of the "primitiveUnits" attribute, which defines the coordinate system for
   /// the various attributes of the filter effects.
-  PrimitiveUnits primitiveUnits = PrimitiveUnits::Default;
+  std::optional<PrimitiveUnits> primitiveUnits;
 
   /// The parsed value of the "color-interpolation-filters" property, which specifies the color
   /// space for filter operations.
-  ColorInterpolationFilters colorInterpolationFilters = ColorInterpolationFilters::Default;
+  std::optional<ColorInterpolationFilters> colorInterpolationFilters;
 };
 
 /**

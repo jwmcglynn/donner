@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include "donner/base/OptionalRef.h"
+#include "donner/base/RcStringOrRef.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 
@@ -104,6 +106,12 @@ public:
   Lengthd height() const;
 
   /**
+   * Get the value of the `href` attribute, if specified, which is a reference to another filter
+   * element to use as a template.
+   */
+  std::optional<RcString> href() const;
+
+  /**
    * Set the top-left X coordinate of the filter region, which defines a rectangular region on the
    * canvas to which this filter applies. The initial value is '-10%'.
    *
@@ -134,6 +142,14 @@ public:
    * @param value Dimension value.
    */
   void setHeight(const Lengthd& value);
+
+  /**
+   * Set the `href` attribute, which is a reference to another filter element to use as a
+   * template.
+   *
+   * @param value The href value to set.
+   */
+  void setHref(OptionalRef<RcStringOrRef> value);
 
   /**
    * Get the `filterUnits` attribute which defines the coordinate system for attributes `x`,

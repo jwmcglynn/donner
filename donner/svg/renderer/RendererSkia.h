@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <functional>
 #include <string>
 
 #include "donner/base/EcsRegistry.h"
@@ -273,6 +274,8 @@ private:
   struct FilterLayerState {
     bool usesNativeSkiaFilter = false;
     sk_sp<SkSurface> surface;
+    sk_sp<SkSurface> fillPaintSurface;
+    sk_sp<SkSurface> strokePaintSurface;
     SkCanvas* parentCanvas = nullptr;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
@@ -292,6 +295,9 @@ private:
 
   std::optional<SkPaint> makeFillPaint(const Boxd& bounds);
   std::optional<SkPaint> makeStrokePaint(const Boxd& bounds, const StrokeParams& stroke);
+  FilterLayerState* currentFilterLayerState();
+  void drawOnFilterInputSurface(const sk_sp<SkSurface>& surface,
+                                const std::function<void(SkCanvas*)>& drawFn);
 };
 
 }  // namespace donner::svg
