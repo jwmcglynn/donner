@@ -828,10 +828,30 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
     }
   }
 
-  // Resolve typeface.
+  // Resolve typeface: try system fonts first, then @font-face data, then fallback.
   const SmallVector<RcString, 1>& families = params.fontFamilies;
   const std::string familyName = families.empty() ? "" : families[0].str();
   sk_sp<SkTypeface> typeface = fontMgr_->matchFamilyStyle(familyName.c_str(), SkFontStyle());
+  if (!typeface) {
+    // Try @font-face declarations for this family.
+    for (const auto& face : params.fontFaces) {
+      if (face.familyName != familyName) {
+        continue;
+      }
+      for (const auto& source : face.sources) {
+        if (source.kind == css::FontFaceSource::Kind::Data) {
+          const auto& data = std::get<std::vector<uint8_t>>(source.payload);
+          typeface = fontMgr_->makeFromData(SkData::MakeWithCopy(data.data(), data.size()));
+          if (typeface) {
+            break;
+          }
+        }
+      }
+      if (typeface) {
+        break;
+      }
+    }
+  }
   if (!typeface) {
     typeface = fontMgr_->makeFromData(SkData::MakeWithoutCopy(
         embedded::kPublicSansMediumOtf.data(), embedded::kPublicSansMediumOtf.size()));
@@ -848,6 +868,14 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   // This provides full OpenType GSUB/GPOS support with identical shaping across backends.
   {
     static FontManager fontManager;
+    // Register @font-face declarations so custom fonts can be resolved.
+    // Only add new faces (faces_ grows monotonically, so track how many we've seen).
+    const size_t existingFaces = fontManager.numFaces();
+    if (params.fontFaces.size() > existingFaces) {
+      for (size_t i = existingFaces; i < params.fontFaces.size(); ++i) {
+        fontManager.addFontFace(params.fontFaces[i]);
+      }
+    }
     TextShaper shaper(fontManager);
     std::vector<ShapedTextRun> runs = shaper.layout(text, params);
 
