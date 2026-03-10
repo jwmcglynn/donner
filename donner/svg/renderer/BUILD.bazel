@@ -1,32 +1,76 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
+load("@donner_config//:config.bzl", "DONNER_CONFIG")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library", "renderer_backend_compatible_with")
 
-# Enable CoreText font rendering on macOS. Set with --@donner//donner/svg/renderer:use_coretext=true
+# Renderer backend used by //donner/svg/renderer:renderer.
+# Override with --//donner/svg/renderer:renderer_backend=<skia|tiny_skia>
+# or via donner.configure(renderer = "...") in MODULE.bazel.
+string_flag(
+    name = "renderer_backend",
+    build_setting_default = DONNER_CONFIG.get("renderer", "tiny_skia"),
+    visibility = ["//visibility:public"],
+)
+
+# Enable text rendering (stb_truetype, TTF/OTF/WOFF1).
+# Override with --//donner/svg/renderer:text=true or via donner.configure(text = True).
+bool_flag(
+    name = "text",
+    build_setting_default = DONNER_CONFIG.get("text", False),
+    visibility = ["//visibility:public"],
+)
+
+# Enable WOFF2 font support (requires text). Adds woff2 + Brotli dependencies.
+# Override with --//donner/svg/renderer:text_woff2=true or via donner.configure(text_woff2 = True).
+bool_flag(
+    name = "text_woff2",
+    build_setting_default = DONNER_CONFIG.get("text_woff2", False),
+    visibility = ["//visibility:public"],
+)
+
+# Enable CoreText font rendering on macOS.
+# Override with --//donner/svg/renderer:use_coretext=true or via donner.configure(use_coretext = True).
 bool_flag(
     name = "use_coretext",
-    build_setting_default = False,
+    build_setting_default = DONNER_CONFIG.get("use_coretext", False),
     visibility = ["//visibility:public"],
 )
 
-# Enable Fontconfig font rendering on Linux. Set with --@donner//donner/svg/renderer:use_fontconfig=true
+# Enable Fontconfig font rendering on Linux.
+# Override with --//donner/svg/renderer:use_fontconfig=true or via donner.configure(use_fontconfig = True).
 bool_flag(
     name = "use_fontconfig",
-    build_setting_default = False,
+    build_setting_default = DONNER_CONFIG.get("use_fontconfig", False),
     visibility = ["//visibility:public"],
 )
 
-# Build skia debug. Set with --@donner//donner/svg/renderer:skia_debug=true
+# Build skia debug. Set with --//donner/svg/renderer:skia_debug=true
 bool_flag(
     name = "skia_debug",
     build_setting_default = False,
     visibility = ["//visibility:public"],
 )
 
-# Renderer backend used by //donner/svg/renderer:renderer. Set with
-# --//donner/svg/renderer:renderer_backend=<skia|tiny_skia>
-string_flag(
-    name = "renderer_backend",
-    build_setting_default = "tiny_skia",
+config_setting(
+    name = "renderer_backend_skia",
+    flag_values = {":renderer_backend": "skia"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "renderer_backend_tiny_skia",
+    flag_values = {":renderer_backend": "tiny_skia"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "text_enabled",
+    flag_values = {":text": "true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "text_woff2_enabled",
+    flag_values = {":text_woff2": "true"},
     visibility = ["//visibility:public"],
 )
 
@@ -45,18 +89,6 @@ config_setting(
 config_setting(
     name = "config_skia_debug",
     flag_values = {":skia_debug": "true"},
-)
-
-config_setting(
-    name = "renderer_backend_skia",
-    flag_values = {":renderer_backend": "skia"},
-    visibility = ["//visibility:public"],
-)
-
-config_setting(
-    name = "renderer_backend_tiny_skia",
-    flag_values = {":renderer_backend": "tiny_skia"},
-    visibility = ["//visibility:public"],
 )
 
 donner_cc_library(
