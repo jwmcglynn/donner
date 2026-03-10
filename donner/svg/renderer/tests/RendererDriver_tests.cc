@@ -10,8 +10,8 @@
 #include "donner/css/Specificity.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
-#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
@@ -98,7 +98,7 @@ public:
   MOCK_METHOD(void, pushMask, (const std::optional<Boxd>& maskBounds), (override));
   MOCK_METHOD(void, transitionMaskToContent, (), (override));
   MOCK_METHOD(void, popMask, (), (override));
-  MOCK_METHOD(void, beginPatternTile, (const Boxd& tileRect, const Transformd& patternToTarget),
+  MOCK_METHOD(void, beginPatternTile, (const Boxd& tileRect, const Transformd& targetFromPattern),
               (override));
   MOCK_METHOD(void, endPatternTile, (bool forStroke), (override));
   MOCK_METHOD(void, setPaint, (const PaintParams& paint), (override));
@@ -207,9 +207,8 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
 
     const Vector2i canvasSize = document.canvasSize();
     document.registry().emplace<components::ComputedViewBoxComponent>(
-        textEntity,
-        Boxd(Vector2d(),
-             Vector2d(static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y))));
+        textEntity, Boxd(Vector2d(), Vector2d(static_cast<double>(canvasSize.x),
+                                              static_cast<double>(canvasSize.y))));
 
     components::ComputedStyleComponent style;
     PropertyRegistry properties;
@@ -299,7 +298,8 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
     const Boxd intrinsicSize = Boxd::WithSize(Vector2d(loaded.image->width, loaded.image->height));
     const Transformd expectedTransform =
         PreserveAspectRatio::Default().elementContentFromViewBoxTransform(bounds, intrinsicSize);
-    EXPECT_THAT(transforms, testing::Not(testing::Contains(TransformNear(expectedTransform, 1e-6))));
+    EXPECT_THAT(transforms,
+                testing::Not(testing::Contains(TransformNear(expectedTransform, 1e-6))));
   }
 
   EXPECT_CALL(renderer, beginFrame(_)).Times(1);

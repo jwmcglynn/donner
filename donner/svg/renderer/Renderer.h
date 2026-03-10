@@ -118,9 +118,9 @@ public:
    * Begins pattern tile recording.
    *
    * @param tileRect Tile bounds in pattern space.
-   * @param patternToTarget Transform from pattern tile space to target space.
+   * @param targetFromPattern Transform from pattern tile space to target space.
    */
-  void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) override;
+  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override;
 
   /**
    * Ends pattern recording and stores the resulting pattern paint.

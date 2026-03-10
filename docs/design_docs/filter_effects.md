@@ -52,14 +52,55 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - linearRGB LUT operates at 8-bit precision (should be float for accuracy)
 - Blur edge clipping: blur operates on full pixmap then clips, causing edge differences
 - Skia backend still routes most graphs through the shared CPU executor
-- General transform-aware anisotropic blur is still only correct on the native Skia blur fast path
-- Skia mask + filter interaction still has a known threshold miss (`e-filter-053.svg`)
+- Skia native `saveLayer` blur is currently restricted to no-crop cases; transformed blur chains use
+  the shared local-raster executor instead
 - `feImage` fragment references (`href="#elementId"`) — deferred to future work, depends on nested SVG rendering (e.g. `<use>` element support)
 - Light coordinate scaling: z and surfaceScale interaction at non-1:1 pixel density causes minor diffs for some spot light configurations (~3K pixels for cone-boundary cases)
+
+## Open Issues and Current Findings
+
+As of 2026-03-09:
+
+- `bazel test //donner/svg/renderer/tests:resvg_test_suite` passes on the default TinySkia
+  backend.
+- `bazel test //donner/svg/renderer/tests:resvg_test_suite --config=skia` now fails 3 cases:
+  `e-pattern-008.svg`, `e-pattern-010.svg`, and `e-pattern-019.svg`.
+
+### Resolved During This Investigation
+
+- TinySkia now evaluates eligible blur chains in a transformed local raster instead of device
+  space. This fixed the transformed blur family on the default backend:
+  `e-feGaussianBlur-012.svg`, `e-filter-026.svg`, `e-filter-027.svg`, and `e-filter-058.svg`.
+- Skia now uses the same transformed local-raster fallback for eligible simple blur chains.
+  This fixed the remaining transformed Skia blur/filter cases in the full suite.
+- Skia's native `saveLayer` blur path was narrowed after it produced incorrect results for plain
+  anisotropic blur with a computed filter region (`e-feGaussianBlur-008.svg`,
+  `e-feGaussianBlur-009.svg`, `e-feGaussianBlur-010.svg`). Those cases now use the shared CPU
+  executor instead.
+- Skia mask execution now mirrors TinySkia's CPU luminance-mask extraction and application model.
+  This resolved the remaining Skia filter regression in `e-filter-053.svg`.
+
+### Remaining Pattern Issues: `e-pattern-008.svg`, `e-pattern-010.svg`, `e-pattern-019.svg`
+
+- These are now the only remaining failures in the full Skia `resvg_test_suite`.
+- `e-pattern-008.svg`: `234` differing pixels. Uses `patternContentUnits="objectBoundingBox"`.
+- `e-pattern-010.svg`: `113` differing pixels. Uses `patternContentUnits` with a `viewBox`; per
+  the test description, `patternContentUnits` should be ignored when `viewBox` is present.
+- `e-pattern-019.svg`: `2136` differing pixels. Uses a nested pattern where a
+  `userSpaceOnUse` pattern references an `objectBoundingBox` child pattern.
+- These are not filter regressions. They remain after the Skia filter fixes and are localized to
+  pattern coordinate-space semantics.
+- The three failures point at the same Skia-side area: pattern tile recording and
+  `patternContentUnits` / `viewBox` handling, especially for object-bounding-box content scaling
+  and nested pattern references.
+- The current pattern implementation in `RendererSkia` should be treated as the next separate
+  investigation after `e-filter-053.svg`.
 
 ## Next Steps
 
 - Begin Milestone 5: Skia backend integration.
+- Debug the remaining Skia pattern coordinate-space issues
+  (`e-pattern-008.svg`, `e-pattern-010.svg`, `e-pattern-019.svg`).
 - Prepare Milestone 6: CSS shorthand filter functions (`blur()`, `brightness()`, etc.).
 - Add `primitiveUnits` coordinate space handling.
 - Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).

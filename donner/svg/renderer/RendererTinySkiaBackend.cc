@@ -44,8 +44,8 @@ public:
 
   void popMask() override { renderer_.popMask(); }
 
-  void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) override {
-    renderer_.beginPatternTile(tileRect, patternToTarget);
+  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override {
+    renderer_.beginPatternTile(tileRect, targetFromPattern);
   }
 
   void endPatternTile(bool forStroke) override { renderer_.endPatternTile(forStroke); }

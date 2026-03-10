@@ -76,8 +76,8 @@ void Renderer::popMask() {
   impl_->popMask();
 }
 
-void Renderer::beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) {
-  impl_->beginPatternTile(tileRect, patternToTarget);
+void Renderer::beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) {
+  impl_->beginPatternTile(tileRect, targetFromPattern);
 }
 
 void Renderer::endPatternTile(bool forStroke) {

@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "donner/base/Box.h"
-#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/RcString.h"
+#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
@@ -139,7 +139,7 @@ struct TextParams {
  * Backend-agnostic rendering interface consumed by the traversal driver.
  */
 class RendererInterface {
- public:
+public:
   virtual ~RendererInterface() = default;
 
   /**
@@ -230,9 +230,9 @@ class RendererInterface {
    * endPatternTile is captured as a repeating pattern.
    *
    * @param tileRect The tile rectangle in pattern coordinate space.
-   * @param patternToTarget Transform from pattern tile space to target element space.
+   * @param targetFromPattern Transform from pattern tile space to target element space.
    */
-  virtual void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) = 0;
+  virtual void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) = 0;
 
   /**
    * Ends pattern tile recording and sets the resulting tiled shader as the current fill or stroke

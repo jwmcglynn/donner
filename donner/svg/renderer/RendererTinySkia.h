@@ -123,9 +123,9 @@ public:
    * Begins pattern tile recording.
    *
    * @param tileRect Tile bounds in pattern space.
-   * @param patternToTarget Transform from pattern tile space to target space.
+   * @param targetFromPattern Transform from pattern tile space to target space.
    */
-  void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) override;
+  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override;
 
   /**
    * Ends pattern recording and stores the resulting pattern paint.
@@ -210,7 +210,7 @@ public:
 private:
   struct PatternPaintState {
     tiny_skia::Pixmap pixmap;
-    Transformd patternToTarget;
+    Transformd targetFromPattern;
   };
 
   enum class SurfaceKind {
@@ -227,11 +227,11 @@ private:
     double opacity = 1.0;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
-    Transformd filterTransform;
+    Transformd deviceFromFilter;
     std::optional<Boxd> maskBounds;
     Transformd maskBoundsTransform;
     std::optional<tiny_skia::Mask> maskAlpha;
-    Transformd patternToTarget;
+    Transformd targetFromPattern;
     Transformd patternRasterFromTile;
     Transformd savedTransform;
     std::vector<Transformd> savedTransformStack;

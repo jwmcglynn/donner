@@ -12,6 +12,7 @@
 #include "include/core/SkGraphics.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkSurface.h"
+#include "tiny_skia/Mask.h"
 
 namespace donner::svg {
 
@@ -117,7 +118,7 @@ public:
   void transitionMaskToContent() override;
   void popMask() override;
 
-  void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) override;
+  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override;
   void endPatternTile(bool forStroke) override;
 
   /**
@@ -257,7 +258,7 @@ private:
   struct PatternState {
     std::unique_ptr<SkPictureRecorder> recorder;
     SkCanvas* savedCanvas = nullptr;
-    Transformd patternToTarget;
+    Transformd targetFromPattern;
   };
   std::vector<PatternState> patternStack_;
   std::optional<SkPaint> patternFillPaint_;
@@ -274,11 +275,19 @@ private:
     SkCanvas* parentCanvas = nullptr;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
-    Transformd filterTransform;
+    Transformd deviceFromFilter;
+  };
+
+  struct MaskLayerState {
+    sk_sp<SkSurface> maskSurface;
+    sk_sp<SkSurface> contentSurface;
+    SkCanvas* parentCanvas = nullptr;
+    std::optional<tiny_skia::Mask> maskAlpha;
   };
 
   std::vector<ClipStackEntry> activeClips_;
   std::vector<FilterLayerState> filterLayerStack_;
+  std::vector<MaskLayerState> maskLayerStack_;
 
   std::optional<SkPaint> makeFillPaint(const Boxd& bounds);
   std::optional<SkPaint> makeStrokePaint(const Boxd& bounds, const StrokeParams& stroke);

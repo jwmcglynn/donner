@@ -26,11 +26,11 @@ namespace donner::svg {
  *
  * @param pixmap Premultiplied RGBA pixmap containing SourceGraphic on entry.
  * @param filterGraph Filter graph to execute.
- * @param filterTransform Transform active when the filter layer was pushed.
+ * @param deviceFromFilter Transform from filter local coordinates to device coordinates.
  * @param filterRegion Optional filter region in filter local coordinates.
  */
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
-                              const Transformd& filterTransform,
+                              const Transformd& deviceFromFilter,
                               const std::optional<Boxd>& filterRegion);
 
 /**
@@ -38,9 +38,9 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
  *
  * @param pixmap Premultiplied RGBA pixmap to modify in place.
  * @param filterRegion Optional filter region in filter local coordinates.
- * @param filterTransform Transform active when the filter layer was pushed.
+ * @param deviceFromFilter Transform from filter local coordinates to device coordinates.
  */
 void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Boxd>& filterRegion,
-                              const Transformd& filterTransform);
+                              const Transformd& deviceFromFilter);
 
 }  // namespace donner::svg

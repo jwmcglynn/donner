@@ -415,9 +415,12 @@ Phase 2a changed renderer testing to build only one backend at a time:
 - How should resource lifetimes (fonts, images) be managed across backends--via shared caches in
   the driver or per-backend ownership?
 - If file-based recording is added later, should the format be versioned independently?
-- What is the text rendering story for `RendererTinySkia`? Options: (a) stub that renders
-  bounding boxes, (b) integration with a lightweight shaping library like SheenBidi +
-  stb_truetype, (c) require Skia backend for text-heavy SVGs.
+- What is the text rendering story for `RendererTinySkia`? See
+  [text_rendering.md](text_rendering.md) for the design: stb_truetype base tier with optional
+  HarfBuzz shaping, gated by build-time feature flags.
+- How should downstream bzlmod consumers configure donner features (backend, text, etc.)?
+  Design: module extension with `donner.configure()` tag class that generates `@donner_config`
+  repo with flag defaults. See [text_rendering.md § Downstream consumer configuration](text_rendering.md#downstream-config).
 
 ## Future Work
 

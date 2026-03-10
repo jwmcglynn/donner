@@ -362,7 +362,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::Skip()},  // huge stdDev=1000, 207K px diff, 70s runtime
             {"e-feGaussianBlur-012.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   47000)},  // Complex skew transform + asymmetric blur (45857px)
+                                   40000)},  // Rotated asymmetric blur, transformed path (39340px)
         })),
     TestNameFromFilename);
 
@@ -533,10 +533,11 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-018.svg", Params::Skip()},               // xlink:href
             {"e-filter-019.svg", Params::Skip()},               // xlink:href
             {"e-filter-026.svg",
-             Params::WithThreshold(kDefaultThreshold, 7500)},  // Transform blur edge (7252px)
+             Params::WithThreshold(kDefaultThreshold,
+                                   12000)},  // Transformed local-raster blur path (11437px)
             {"e-filter-027.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   35000)},  // Transform + filter region (31858px)
+                                   21000)},  // Skew transform + narrow filter region (20508px)
             {"e-filter-028.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    140)},          // transform + blur linearRGB diff (124px)

@@ -348,6 +348,140 @@ void drawRectIntoMask(tiny_skia::Mask& mask, const Boxd& rect, const Transformd&
 
 // Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
 
+/**
+ * Returns true if the filter graph is a linear chain of single-input blur-family primitives
+ * eligible for the transformed local-raster path.
+ *
+ * Eligible graphs have:
+ * - Only GaussianBlur, Offset, or DropShadow primitives
+ * - Each node has at most one input, and that input is Previous or implicit SourceGraphic
+ * - No named `result` attributes
+ * - No primitive subregions (x/y/width/height unset on every node)
+ * - primitiveUnits is not objectBoundingBox
+ */
+bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
+  if (filterGraph.nodes.empty()) {
+    return false;
+  }
+
+  if (filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+    return false;
+  }
+
+  bool hasBlur = false;
+
+  for (std::size_t i = 0; i < filterGraph.nodes.size(); ++i) {
+    const components::FilterNode& node = filterGraph.nodes[i];
+
+    // Check primitive type: only GaussianBlur, Offset, DropShadow allowed.
+    const bool isBlur =
+        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
+        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
+    const bool isOffset =
+        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
+    if (!isBlur && !isOffset) {
+      return false;
+    }
+    hasBlur |= isBlur;
+
+    // No named result reuse.
+    if (node.result.has_value()) {
+      return false;
+    }
+
+    // No primitive subregions.
+    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+        node.height.has_value()) {
+      return false;
+    }
+
+    // Linear chain: each node has 0 or 1 inputs, and that input is Previous or SourceGraphic
+    // (for the first node).
+    if (node.inputs.size() > 1) {
+      return false;
+    }
+
+    if (node.inputs.size() == 1) {
+      const auto& input = node.inputs[0];
+      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
+        // OK
+      } else if (const auto* stdInput =
+                     std::get_if<components::FilterStandardInput>(&input.value)) {
+        if (*stdInput != components::FilterStandardInput::SourceGraphic) {
+          return false;
+        }
+      } else {
+        // Named input - not eligible.
+        return false;
+      }
+    }
+  }
+
+  // Must have at least one blur primitive to benefit from the transformed path.
+  return hasBlur;
+}
+
+bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
+  for (const auto& node : filterGraph.nodes) {
+    bool anisotropic = false;
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          }
+        },
+        node.primitive);
+    if (anisotropic) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
+                                  const Transformd& deviceFromFilter) {
+  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
+  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
+  const bool hasSkew = !NearZero(dot, 1e-6);
+  if (hasSkew) {
+    return true;
+  }
+
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (!hasRotation) {
+    return false;
+  }
+
+  return graphHasAnisotropicBlur(filterGraph);
+}
+
+/**
+ * Computes the required blur padding in user-space units for the transformed local-raster path.
+ * Returns 3σ + 1 for the maximum stdDeviation across all blur primitives.
+ */
+double computeBlurPadding(const components::FilterGraph& filterGraph) {
+  double maxSigma = 0.0;
+  for (const auto& node : filterGraph.nodes) {
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          }
+        },
+        node.primitive);
+  }
+  return maxSigma * 3.0 + 1.0;
+}
+
 }  // namespace
 
 RendererTinySkia::RendererTinySkia(bool verbose) : verbose_(verbose) {}
@@ -462,7 +596,7 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   frame.kind = SurfaceKind::FilterLayer;
   frame.filterGraph = filterGraph;
   frame.filterRegion = filterRegion;
-  frame.filterTransform = currentTransform_;
+  frame.deviceFromFilter = currentTransform_;
   frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
                                          static_cast<int>(currentPixmap().height()));
   surfaceStack_.push_back(std::move(frame));
@@ -475,11 +609,106 @@ void RendererTinySkia::popFilterLayer() {
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
-  ApplyFilterGraphToPixmap(frame.pixmap, frame.filterGraph, frame.filterTransform,
-                           frame.filterRegion);
-  ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, frame.filterTransform);
 
-  compositePixmap(frame.pixmap, 1.0);
+  // Use the transformed local-raster path for eligible simple blur chains with
+  // rotation or skew transforms. This resamples device content into an axis-aligned local
+  // raster, applies the blur in filter-local coordinates, and composites back. This produces
+  // correct blur orientation for rotated/skewed elements.
+  // Only activate when the transform has rotation/skew (off-diagonal elements non-zero).
+  // For pure scale+translate, the device-space blur is already correct.
+  const bool useTransformedPath =
+      frame.filterRegion.has_value() && frame.filterRegion->width() > 0 &&
+      frame.filterRegion->height() > 0 && !NearZero(frame.deviceFromFilter.determinant()) &&
+      isEligibleForTransformedBlurPath(frame.filterGraph) &&
+      shouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter);
+
+  if (useTransformedPath) {
+    const Transformd& deviceFromFilter = frame.deviceFromFilter;
+    const Boxd& filterRegion = *frame.filterRegion;
+
+    // Compute local raster density from the filter transform basis vectors.
+    const double scaleX =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
+    const double scaleY =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+
+    // Expand the local raster beyond the filter region so the blur kernel has full context
+    // at the edges.
+    const double blurPadding = computeBlurPadding(frame.filterGraph);
+    const Boxd paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
+                            filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
+
+    const int localWidth = std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX)));
+    const int localHeight =
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY)));
+
+    if (verbose_) {
+      std::cerr << "[TinySkia::popFilterLayer] TRANSFORMED PATH\n"
+                << "  filterRegion=" << filterRegion << " paddedRegion=" << paddedRegion << "\n"
+                << "  scaleX=" << scaleX << " scaleY=" << scaleY << " localSize=" << localWidth
+                << "x" << localHeight << "\n";
+    }
+
+    // Allocate local-raster pixmap.
+    tiny_skia::Pixmap localPixmap = createTransparentPixmap(localWidth, localHeight);
+    if (localPixmap.width() == 0 || localPixmap.height() == 0) {
+      goto device_space_fallback;
+    }
+
+    {
+      // Resample device pixels into local filter coordinates.
+      const Transformd filterFromDevice = deviceFromFilter.inverse();
+      const Transformd deviceToLocal =
+          Transformd::Scale(scaleX, scaleY) *
+          Transformd::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
+          filterFromDevice;
+
+      {
+        tiny_skia::PixmapPaint resamplePaint;
+        resamplePaint.opacity = 1.0f;
+        resamplePaint.blendMode = tiny_skia::BlendMode::Source;
+        resamplePaint.quality = tiny_skia::FilterQuality::Bilinear;
+
+        auto localView = localPixmap.mutableView();
+        tiny_skia::Painter::drawPixmap(localView, 0, 0, frame.pixmap.view(), resamplePaint,
+                                       toTinyTransform(deviceToLocal));
+      }
+
+      // Execute the filter graph in local raster space.
+      const Transformd localTransform = Transformd::Scale(scaleX, scaleY);
+      const Boxd localFilterRegion(
+          Vector2d(blurPadding, blurPadding),
+          Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
+
+      ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localTransform, localFilterRegion);
+
+      // Clip to the original filter region within the padded raster.
+      ClipFilterOutputToRegion(localPixmap, localFilterRegion, localTransform);
+
+      // Composite the filtered local raster back to the parent device pixmap.
+      const Transformd deviceFromLocal =
+          deviceFromFilter * Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
+          Transformd::Scale(1.0 / scaleX, 1.0 / scaleY);
+
+      tiny_skia::PixmapPaint compositePaint;
+      compositePaint.opacity = 1.0f;
+      compositePaint.blendMode = tiny_skia::BlendMode::SourceOver;
+      compositePaint.quality = tiny_skia::FilterQuality::Bilinear;
+      compositePaint.unpremulStore = surfaceStack_.empty();
+
+      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+      auto pixmapView = currentPixmapView();
+      tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, localPixmap.view(), compositePaint,
+                                     toTinyTransform(deviceFromLocal), mask);
+    }
+  } else {
+  device_space_fallback:
+    ApplyFilterGraphToPixmap(frame.pixmap, frame.filterGraph, frame.deviceFromFilter,
+                             frame.filterRegion);
+    ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, frame.deviceFromFilter);
+
+    compositePixmap(frame.pixmap, 1.0);
+  }
 }
 
 void RendererTinySkia::pushMask(const std::optional<Boxd>& maskBounds) {
@@ -529,14 +758,14 @@ void RendererTinySkia::popMask() {
   compositePixmap(frame.pixmap, 1.0);
 }
 
-void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) {
+void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::PatternTile;
   frame.savedTransform = currentTransform_;
   frame.savedTransformStack = transformStack_;
   frame.savedClipMask = currentClipMask_;
   frame.savedClipStack = clipStack_;
-  const Transformd deviceFromPattern = frame.savedTransform * patternToTarget;
+  const Transformd deviceFromPattern = frame.savedTransform * targetFromPattern;
   const Vector2d requestedRasterScale = patternRasterScaleForTransform(deviceFromPattern);
   const int pixelWidth =
       std::max(1, static_cast<int>(std::ceil(tileRect.width() * requestedRasterScale.x)));
@@ -545,11 +774,11 @@ void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& 
   const Vector2d rasterScale =
       effectivePatternRasterScale(tileRect, pixelWidth, pixelHeight, requestedRasterScale);
   frame.patternRasterFromTile = Transformd::Scale(rasterScale);
-  frame.patternToTarget = patternToTarget;
-  frame.patternToTarget.data[4] *= rasterScale.x;
-  frame.patternToTarget.data[5] *= rasterScale.y;
-  frame.patternToTarget =
-      frame.patternToTarget * Transformd::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
+  frame.targetFromPattern = targetFromPattern;
+  frame.targetFromPattern.data[4] *= rasterScale.x;
+  frame.targetFromPattern.data[5] *= rasterScale.y;
+  frame.targetFromPattern =
+      frame.targetFromPattern * Transformd::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
   frame.pixmap = createTransparentPixmap(pixelWidth, pixelHeight);
 
   surfaceStack_.push_back(std::move(frame));
@@ -572,7 +801,7 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
   transformStack_ = std::move(frame.savedTransformStack);
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
-  PatternPaintState state{std::move(frame.pixmap), frame.patternToTarget};
+  PatternPaintState state{std::move(frame.pixmap), frame.targetFromPattern};
   if (forStroke) {
     patternStrokePaint_ = std::move(state);
   } else {
@@ -950,7 +1179,7 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeFillPaint(const Boxd& boun
     paint.shader =
         tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
                            tiny_skia::FilterQuality::Bilinear, NarrowToFloat(paint_.fillOpacity),
-                           toTinyTransform(patternFillPaint_->patternToTarget));
+                           toTinyTransform(patternFillPaint_->targetFromPattern));
     return paint;
   }
 
@@ -991,7 +1220,7 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeStrokePaint(const Boxd& bo
     paint.shader =
         tiny_skia::Pattern(patternStrokePaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
                            tiny_skia::FilterQuality::Bilinear, NarrowToFloat(paint_.strokeOpacity),
-                           toTinyTransform(patternStrokePaint_->patternToTarget));
+                           toTinyTransform(patternStrokePaint_->targetFromPattern));
     return paint;
   }
 

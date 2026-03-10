@@ -25,7 +25,7 @@ std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixe
 }
 
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
-                              const Transformd& filterTransform,
+                              const Transformd& deviceFromFilter,
                               const std::optional<Boxd>& filterRegion) {
   using namespace components;
   using namespace components::filter_primitive;
@@ -41,11 +41,11 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   const double bboxX = isOBB ? filterGraph.elementBoundingBox->topLeft.x : 0.0;
   const double bboxY = isOBB ? filterGraph.elementBoundingBox->topLeft.y : 0.0;
 
-  const Vector2d transformedXAxis = filterTransform.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d transformedXAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
   const double scaleX = transformedXAxis.length();
-  const double determinant = filterTransform.determinant();
+  const double determinant = deviceFromFilter.determinant();
   const double scaleY =
-      NearZero(scaleX, 1e-12) ? std::abs(filterTransform.data[3]) : std::abs(determinant) / scaleX;
+      NearZero(scaleX, 1e-12) ? std::abs(deviceFromFilter.data[3]) : std::abs(determinant) / scaleX;
 
   auto toPixelX = [&](double userX) -> double { return std::abs(userX) * scaleX; };
   auto toPixelY = [&](double userY) -> double { return std::abs(userY) * scaleY; };
@@ -58,7 +58,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   };
   auto primToPixelOffset = [&](double dx, double dy) -> Vector2d {
     const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW, dy * bboxH) : Vector2d(dx, dy);
-    return filterTransform.transformVector(userOffset);
+    return deviceFromFilter.transformVector(userOffset);
   };
 
   auto convertInput = [](const FilterInput& fi) -> tiny_skia::filter::NodeInput {
@@ -95,10 +95,10 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   };
 
   const double pixelScale = [&]() -> double {
-    const Vector2d sx = filterTransform.transformPosition(Vector2d(1, 0)) -
-                        filterTransform.transformPosition(Vector2d(0, 0));
-    const Vector2d sy = filterTransform.transformPosition(Vector2d(0, 1)) -
-                        filterTransform.transformPosition(Vector2d(0, 0));
+    const Vector2d sx = deviceFromFilter.transformPosition(Vector2d(1, 0)) -
+                        deviceFromFilter.transformPosition(Vector2d(0, 0));
+    const Vector2d sy = deviceFromFilter.transformPosition(Vector2d(0, 1)) -
+                        deviceFromFilter.transformPosition(Vector2d(0, 0));
     return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
   }();
 
@@ -131,8 +131,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
       userPtZ = ls.pointsAtZ;
     }
 
-    const Vector2d lightPixel = filterTransform.transformPosition(Vector2d(userX, userY));
-    const Vector2d pointsAtPixel = filterTransform.transformPosition(Vector2d(userPtX, userPtY));
+    const Vector2d lightPixel = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+    const Vector2d pointsAtPixel = deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
     lp.x = lightPixel.x;
     lp.y = lightPixel.y;
     lp.z = userZ * pixelScale;
@@ -148,7 +148,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   graph.useLinearRGB = filterGraph.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
 
   if (filterRegion.has_value()) {
-    const Boxd pixelRegion = filterTransform.transformBox(*filterRegion);
+    const Boxd pixelRegion = deviceFromFilter.transformBox(*filterRegion);
     graph.filterRegion =
         tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
                                      pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
@@ -179,7 +179,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
         uh = uh * bboxH;
       }
 
-      const Boxd pixelRegion = filterTransform.transformBox(Boxd::FromXYWH(ux, uy, uw, uh));
+      const Boxd pixelRegion = deviceFromFilter.transformBox(Boxd::FromXYWH(ux, uy, uw, uh));
       graphNode.subregion =
           tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
                                        pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
@@ -339,8 +339,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
             turbulence.params.stitchTiles = primitive.stitchTiles;
             turbulence.params.tileWidth = w;
             turbulence.params.tileHeight = h;
-            turbulence.params.scaleX = std::abs(filterTransform.data[0]);
-            turbulence.params.scaleY = std::abs(filterTransform.data[3]);
+            turbulence.params.scaleX = std::abs(deviceFromFilter.data[0]);
+            turbulence.params.scaleY = std::abs(deviceFromFilter.data[3]);
             if (turbulence.params.scaleX < 1e-10) {
               turbulence.params.scaleX = 1.0;
             }
@@ -445,12 +445,12 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 }
 
 void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Boxd>& filterRegion,
-                              const Transformd& filterTransform) {
+                              const Transformd& deviceFromFilter) {
   if (!filterRegion.has_value()) {
     return;
   }
 
-  const Boxd pixelRegion = filterTransform.transformBox(*filterRegion);
+  const Boxd pixelRegion = deviceFromFilter.transformBox(*filterRegion);
   const int width = static_cast<int>(pixmap.width());
   const int height = static_cast<int>(pixmap.height());
   const int x0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
