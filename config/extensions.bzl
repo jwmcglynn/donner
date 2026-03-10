@@ -15,7 +15,7 @@ hardcoded defaults.
 """
 
 _DEFAULTS = dict(
-    renderer = "skia",
+    renderer = "tiny_skia",
     text = True,
     text_woff2 = True,
     text_shaping = False,

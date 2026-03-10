@@ -207,7 +207,10 @@ float FontManager::scaleForPixelHeight(FontHandle handle, float pixelHeight) con
   if (!info) {
     return 0.0f;
   }
-  return stbtt_ScaleForPixelHeight(info, pixelHeight);
+  // Use em-based scaling: CSS/SVG font-size specifies the em-square size, not the
+  // ascent-to-descent distance. stbtt_ScaleForMappingEmToPixels maps 1em to the given pixel
+  // size, matching how Skia and browsers interpret font-size.
+  return stbtt_ScaleForMappingEmToPixels(info, pixelHeight);
 }
 
 std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
