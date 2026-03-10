@@ -103,6 +103,87 @@ ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> component
   return err;
 }
 
+ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("start")) {
+        return TextAnchor::Start;
+      } else if (value.equalsLowercase("middle")) {
+        return TextAnchor::Middle;
+      } else if (value.equalsLowercase("end")) {
+        return TextAnchor::End;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid text-anchor value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("none")) {
+        return TextDecoration::None;
+      } else if (value.equalsLowercase("underline")) {
+        return TextDecoration::Underline;
+      } else if (value.equalsLowercase("overline")) {
+        return TextDecoration::Overline;
+      } else if (value.equalsLowercase("line-through")) {
+        return TextDecoration::LineThrough;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid text-decoration value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<DominantBaseline> ParseDominantBaseline(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("auto")) {
+        return DominantBaseline::Auto;
+      } else if (value.equalsLowercase("text-bottom")) {
+        return DominantBaseline::TextBottom;
+      } else if (value.equalsLowercase("alphabetic")) {
+        return DominantBaseline::Alphabetic;
+      } else if (value.equalsLowercase("ideographic")) {
+        return DominantBaseline::Ideographic;
+      } else if (value.equalsLowercase("middle")) {
+        return DominantBaseline::Middle;
+      } else if (value.equalsLowercase("central")) {
+        return DominantBaseline::Central;
+      } else if (value.equalsLowercase("mathematical")) {
+        return DominantBaseline::Mathematical;
+      } else if (value.equalsLowercase("hanging")) {
+        return DominantBaseline::Hanging;
+      } else if (value.equalsLowercase("text-top")) {
+        return DominantBaseline::TextTop;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid dominant-baseline value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -749,6 +830,33 @@ constexpr auto kProperties =
                                                               params.allowUserUnits());
                        },
                        &registry.fontSize);
+                 }},  //
+                {"text-anchor",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseTextAnchor(params.components());
+                       },
+                       &registry.textAnchor);
+                 }},  //
+                {"text-decoration",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseTextDecoration(params.components());
+                       },
+                       &registry.textDecoration);
+                 }},  //
+                {"dominant-baseline",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseDominantBaseline(params.components());
+                       },
+                       &registry.dominantBaseline);
                  }},  //
                 {"display",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

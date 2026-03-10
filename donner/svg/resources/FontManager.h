@@ -158,6 +158,18 @@ private:
    */
   FontHandle loadWoff1(std::span<const uint8_t> data);
 
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+  /**
+   * Internal: load a WOFF 2.0 font by decompressing via Brotli and table transforms.
+   *
+   * Only available when built with the `text_woff2` feature flag.
+   *
+   * @param data Raw WOFF2 data.
+   * @return A valid FontHandle on success, or an invalid handle on failure.
+   */
+  FontHandle loadWoff2(std::span<const uint8_t> data);
+#endif
+
   /// Registered @font-face rules.
   std::vector<css::FontFace> faces_;
 

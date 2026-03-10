@@ -5,6 +5,9 @@
 
 #include "donner/base/fonts/WoffFont.h"
 #include "donner/base/fonts/WoffParser.h"
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+#include "donner/base/fonts/Woff2Parser.h"
+#endif
 #include "embed_resources/PublicSansFont.h"
 
 #define STBTT_DEF extern
@@ -16,6 +19,9 @@ namespace {
 
 /// WOFF 1.0 magic: 'wOFF'
 constexpr uint32_t kWoffMagic = 0x774F4646;
+
+/// WOFF 2.0 magic: 'wOF2'
+constexpr uint32_t kWoff2Magic = 0x774F4632;
 
 /// Write a uint32_t in big-endian format.
 void writeBE32(uint8_t* p, uint32_t v) {
@@ -173,6 +179,16 @@ FontHandle FontManager::loadFontData(std::span<const uint8_t> data) {
     return loadWoff1(data);
   }
 
+  if (magic == kWoff2Magic) {
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+    return loadWoff2(data);
+#else
+    std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
+                 "Build with --config=text-woff2 to enable.\n";
+    return FontHandle();
+#endif
+  }
+
   // Treat as raw TTF/OTF. Copy the data since stb_truetype holds a pointer.
   std::vector<uint8_t> owned(data.begin(), data.end());
   return loadRawFont(std::move(owned));
@@ -243,5 +259,17 @@ FontHandle FontManager::loadWoff1(std::span<const uint8_t> data) {
   std::vector<uint8_t> sfntData = reconstructSfnt(maybeFont.result());
   return loadRawFont(std::move(sfntData));
 }
+
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+FontHandle FontManager::loadWoff2(std::span<const uint8_t> data) {
+  auto result = fonts::Woff2Parser::Decompress(data);
+  if (result.hasError()) {
+    std::cerr << "FontManager: WOFF2 decompression failed: " << result.error().reason << "\n";
+    return FontHandle();
+  }
+
+  return loadRawFont(std::move(result.result()));
+}
+#endif
 
 }  // namespace donner::svg

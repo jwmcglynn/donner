@@ -15,9 +15,13 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/FillRule.h"
+#include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PathSpline.h"
 #include "donner/svg/core/Stroke.h"
+#include "donner/svg/core/TextAnchor.h"
+#include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg {
@@ -135,6 +139,12 @@ struct TextParams {
   Lengthd fontSize;
   Boxd viewBox;
   FontMetrics fontMetrics;
+  TextAnchor textAnchor = TextAnchor::Start;
+  TextDecoration textDecoration = TextDecoration::None;
+  DominantBaseline dominantBaseline = DominantBaseline::Auto;
+  /// If set, stretches or compresses text to fill the given length.
+  std::optional<Lengthd> textLength;
+  LengthAdjust lengthAdjust = LengthAdjust::Default;
 };
 
 /**

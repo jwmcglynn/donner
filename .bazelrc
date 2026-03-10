@@ -55,6 +55,7 @@ common:dev --//build_defs:disable_backend_test_transition=true
 # Text rendering features
 common:text --//donner/svg/renderer:text=true
 common:text-woff2 --//donner/svg/renderer:text=true --//donner/svg/renderer:text_woff2=true
+common:text-shaping --//donner/svg/renderer:text=true --//donner/svg/renderer:text_shaping=true
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++

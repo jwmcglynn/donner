@@ -27,6 +27,14 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Enable HarfBuzz text shaping (requires text). Adds full OpenType GSUB/GPOS support.
+# Override with --//donner/svg/renderer:text_shaping=true or via donner.configure(text_shaping = True).
+bool_flag(
+    name = "text_shaping",
+    build_setting_default = DONNER_CONFIG.get("text_shaping", False),
+    visibility = ["//visibility:public"],
+)
+
 # Enable CoreText font rendering on macOS.
 # Override with --//donner/svg/renderer:use_coretext=true or via donner.configure(use_coretext = True).
 bool_flag(
@@ -71,6 +79,15 @@ config_setting(
 config_setting(
     name = "text_woff2_enabled",
     flag_values = {":text_woff2": "true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "text_shaping_enabled",
+    flag_values = {
+        ":text_shaping": "true",
+        ":text": "true",
+    },
     visibility = ["//visibility:public"],
 )
 
@@ -193,6 +210,10 @@ donner_cc_library(
     name = "renderer_skia",
     srcs = ["RendererSkia.cc"],
     hdrs = ["RendererSkia.h"],
+    defines = select({
+        ":text_shaping_enabled": ["DONNER_TEXT_SHAPING_ENABLED"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":renderer_driver",
         ":renderer_image_io",
@@ -204,6 +225,33 @@ donner_cc_library(
         "//donner/svg/core",
         "//donner/svg/renderer/common",
         "//third_party/public-sans",
+    ] + select({
+        ":text_shaping_enabled": [":text_shaper"],
+        "//conditions:default": [],
+    }),
+)
+
+donner_cc_library(
+    name = "text_layout",
+    srcs = ["TextLayout.cc"],
+    hdrs = ["TextLayout.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":renderer_interface",
+        "//donner/svg/resources:font_manager",
+        "@stb//:truetype",
+    ],
+)
+
+donner_cc_library(
+    name = "text_shaper",
+    srcs = ["TextShaper.cc"],
+    hdrs = ["TextShaper.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":renderer_interface",
+        "//donner/svg/resources:font_manager",
+        "@harfbuzz",
     ],
 )
 
@@ -212,6 +260,13 @@ donner_cc_library(
     srcs = ["RendererTinySkia.cc"],
     hdrs = ["RendererTinySkia.h"],
     visibility = ["//visibility:public"],
+    defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }) + select({
+        ":text_shaping_enabled": ["DONNER_TEXT_SHAPING_ENABLED"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":renderer_driver",
         ":renderer_image_io",
@@ -219,7 +274,11 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
-    ],
+    ] + select({
+        ":text_shaping_enabled": [":text_shaper"],
+        ":text_enabled": [":text_layout"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
