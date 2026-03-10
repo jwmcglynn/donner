@@ -135,6 +135,11 @@ public:
   std::span<const uint8_t> fontData(FontHandle handle) const;
 
   /**
+   * Get the number of registered @font-face rules.
+   */
+  size_t numFaces() const { return faces_.size(); }
+
+  /**
    * Get the handle for the embedded fallback font (Public Sans).
    */
   FontHandle fallbackFont();

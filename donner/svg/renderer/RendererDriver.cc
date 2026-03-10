@@ -20,6 +20,7 @@
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -270,6 +271,11 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   if (textComp) {
     params.textLength = textComp->textLength;
     params.lengthAdjust = textComp->lengthAdjust;
+  }
+
+  // Pass @font-face declarations so renderers can resolve custom fonts.
+  if (auto* resourceManager = registry.ctx().find<components::ResourceManagerContext>()) {
+    params.fontFaces = resourceManager->fontFaces();
   }
 
   return params;

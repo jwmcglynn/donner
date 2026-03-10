@@ -1147,6 +1147,15 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
   }
   auto& fontManager = *static_cast<FontManager*>(fontManagerPtr_);
 
+  // Register @font-face declarations so custom fonts can be resolved.
+  // Only add new faces (faces_ grows monotonically, so track how many we've seen).
+  const size_t existingFaces = fontManager.numFaces();
+  if (params.fontFaces.size() > existingFaces) {
+    for (size_t i = existingFaces; i < params.fontFaces.size(); ++i) {
+      fontManager.addFontFace(params.fontFaces[i]);
+    }
+  }
+
 #ifdef DONNER_TEXT_SHAPING_ENABLED
   TextShaper shaper(fontManager);
   std::vector<ShapedTextRun> runs = shaper.layout(text, params);

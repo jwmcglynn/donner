@@ -12,6 +12,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/css/FontFace.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
@@ -143,6 +144,8 @@ struct TextParams {
   /// If set, stretches or compresses text to fill the given length.
   std::optional<Lengthd> textLength;
   LengthAdjust lengthAdjust = LengthAdjust::Default;
+  /// @font-face declarations for custom font resolution.
+  std::span<const css::FontFace> fontFaces;
 };
 
 /**

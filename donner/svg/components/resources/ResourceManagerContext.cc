@@ -100,6 +100,7 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
   fontFacesToLoad_.insert(fontFacesToLoad_.end(), fontFaces.begin(), fontFaces.end());
+  fontFaces_.insert(fontFaces_.end(), fontFaces.begin(), fontFaces.end());
 }
 
 std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) const {
