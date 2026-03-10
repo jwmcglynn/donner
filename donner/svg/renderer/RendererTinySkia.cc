@@ -16,7 +16,9 @@
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#ifdef DONNER_FILTERS_ENABLED
 #include "donner/svg/renderer/FilterGraphExecutor.h"
+#endif
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
@@ -357,6 +359,26 @@ void drawRectIntoMask(tiny_skia::Mask& mask, const Boxd& rect, const Transformd&
   mask.fillPath(path, tiny_skia::FillRule::Winding, antialias, toTinyTransform(transform));
 }
 
+#ifndef DONNER_FILTERS_ENABLED
+// When filters are disabled, FilterGraphExecutor.h is not included so PremultiplyRgba is not
+// available. Provide a local copy for drawImage().
+std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
+  std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
+  for (std::size_t i = 0; i + 3 < result.size(); i += 4) {
+    const unsigned alpha = result[i + 3];
+    result[i + 0] =
+        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 0]) * alpha + 127u) / 255u);
+    result[i + 1] =
+        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 1]) * alpha + 127u) / 255u);
+    result[i + 2] =
+        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 2]) * alpha + 127u) / 255u);
+  }
+
+  return result;
+}
+#endif  // !DONNER_FILTERS_ENABLED
+
+#ifdef DONNER_FILTERS_ENABLED
 // Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
 
 /**
@@ -506,6 +528,7 @@ double computeBlurPadding(const components::FilterGraph& filterGraph) {
   }
   return maxSigma * 3.0 + 1.0;
 }
+#endif  // DONNER_FILTERS_ENABLED
 
 }  // namespace
 
@@ -640,6 +663,7 @@ void RendererTinySkia::popIsolatedLayer() {
 
 void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGraph,
                                        const std::optional<Boxd>& filterRegion) {
+#ifdef DONNER_FILTERS_ENABLED
   SurfaceFrame frame;
   frame.kind = SurfaceKind::FilterLayer;
   frame.filterGraph = filterGraph;
@@ -655,9 +679,14 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
     frame.strokePaintPixmap = createTransparentPixmap(width, height);
   }
   surfaceStack_.push_back(std::move(frame));
+#else
+  UTILS_UNUSED(filterGraph);
+  UTILS_UNUSED(filterRegion);
+#endif
 }
 
 void RendererTinySkia::popFilterLayer() {
+#ifdef DONNER_FILTERS_ENABLED
   if (surfaceStack_.empty() || surfaceStack_.back().kind != SurfaceKind::FilterLayer) {
     return;
   }
@@ -765,6 +794,7 @@ void RendererTinySkia::popFilterLayer() {
 
     compositePixmap(frame.pixmap, 1.0);
   }
+#endif  // DONNER_FILTERS_ENABLED
 }
 
 void RendererTinySkia::pushMask(const std::optional<Boxd>& maskBounds) {

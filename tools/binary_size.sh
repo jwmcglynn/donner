@@ -4,6 +4,25 @@ cd "$(bazel info workspace)"
 
 mkdir -p build-binary-size
 
+# Check for bloaty — prefer the vendored Bazel build, fall back to system install.
+BLOATY_CMD=""
+if bazel build -c opt --ui_event_filters=-info,-warning,-stdout,-stderr --noshow_progress @bloaty//:bloaty 2>/dev/null; then
+  BLOATY_CMD="bazel-bin/external/bloaty+/bloaty"
+elif command -v bloaty &> /dev/null; then
+  BLOATY_CMD="bloaty"
+else
+  echo "ERROR: bloaty is not installed and the vendored build failed." >&2
+  echo "" >&2
+  echo "Install it with:" >&2
+  if [[ "$(uname)" == "Darwin" ]]; then
+    echo "  brew install bloaty" >&2
+  else
+    echo "  sudo apt-get install bloaty   # Debian/Ubuntu" >&2
+    echo "  # or build from source: https://github.com/google/bloaty" >&2
+  fi
+  exit 1
+fi
+
 # If verbose is set, show all output
 if [[ "$1" == "--verbose" ]]; then
   BAZEL_QUIET_OPTIONS=""
@@ -62,13 +81,13 @@ fi
 # To see symbols only: -d donner_package,symbol
 
 # Output an <svg> with a bar chart of the binary size by directory
-bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/svg_parser_tool > build-binary-size/svg_parser_tool.bloaty_compileunits.csv
+$BLOATY_CMD -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/svg_parser_tool > build-binary-size/svg_parser_tool.bloaty_compileunits.csv
 python3 tools/python/generate_size_barchart_svg.py build-binary-size/svg_parser_tool.bloaty_compileunits.csv > build-binary-size/binary_size_bargraph.svg
 
 echo ""
 
 # Create the binary_size_report webtreemap
-bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/svg_parser_tool > build-binary-size/svg_parser_tool.bloaty.csv
+$BLOATY_CMD -c tools/binary_size_config.bloaty -d donner_package,compileunits,symbols -n 2000 --csv $DEBUG_FILE_ARG build-binary-size/svg_parser_tool > build-binary-size/svg_parser_tool.bloaty.csv
 python3 tools/binary_size_analysis.py build-binary-size/svg_parser_tool.bloaty.csv build-binary-size/binary_size_report.html
 
 # Output summary
@@ -76,6 +95,6 @@ echo ""
 echo '`bloaty -d compileunits -n 20` output'
 echo '```'
 
-bazel run -c opt $BAZEL_QUIET_OPTIONS --run_under="cd $PWD &&" @bloaty//:bloaty -- -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/svg_parser_tool
+$BLOATY_CMD -c tools/binary_size_config.bloaty -d donner_package,compileunits -n 20 $DEBUG_FILE_ARG build-binary-size/svg_parser_tool
 
 echo '```'

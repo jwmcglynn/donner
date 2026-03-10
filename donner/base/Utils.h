@@ -107,6 +107,15 @@
  *
  * Returns true if exceptions are enabled, false otherwise.
  */
+/**
+ * \def UTILS_UNUSED(x)
+ *
+ * Suppresses unused-variable warnings for \p x.
+ *
+ * @param x The variable to mark as intentionally unused.
+ */
+#define UTILS_UNUSED(x) (void)(x)
+
 #if defined(__cpp_exceptions) && __cpp_exceptions == 199711
 #define UTILS_EXCEPTIONS_ENABLED() true
 #else

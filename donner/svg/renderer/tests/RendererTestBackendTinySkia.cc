@@ -1,3 +1,4 @@
+#include "donner/base/Utils.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
@@ -13,7 +14,11 @@ std::string_view ActiveRendererBackendName() {
 
 bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   switch (feature) {
+#ifdef DONNER_FILTERS_ENABLED
     case RendererBackendFeature::FilterEffects: return true;
+#else
+    case RendererBackendFeature::FilterEffects: return false;
+#endif
     case RendererBackendFeature::Text:
     case RendererBackendFeature::AsciiSnapshot:
     case RendererBackendFeature::SkpDebug: return false;
@@ -29,8 +34,8 @@ RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbo
 }
 
 bool WriteActiveRendererDebugSkp(SVGDocument& document, const std::filesystem::path& outputPath) {
-  (void)document;
-  (void)outputPath;
+  UTILS_UNUSED(document);
+  UTILS_UNUSED(outputPath);
   return false;
 }
 

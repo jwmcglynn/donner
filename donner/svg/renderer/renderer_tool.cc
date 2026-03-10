@@ -24,8 +24,7 @@
 #include "donner/base/FailureSignalHandler.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVG.h"
-#include "donner/svg/renderer/RendererDriver.h"
-#include "donner/svg/renderer/RendererSkia.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
@@ -251,13 +250,12 @@ int main(int argc, char* argv[]) {
   }
 
   Trace traceCreateRenderer("Create Renderer");
-  RendererSkia renderer(verbose);
-  RendererDriver driver(renderer, verbose);
+  Renderer renderer(verbose);
   traceCreateRenderer.stop();
 
   {
     Trace traceRender("Render");
-    driver.draw(document);
+    renderer.draw(document);
   }
 
   std::cout << "Final size: " << renderer.width() << "x" << renderer.height() << "\n";

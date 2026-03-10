@@ -16,6 +16,7 @@ hardcoded defaults.
 
 _DEFAULTS = dict(
     renderer = "tiny_skia",
+    filters = True,
     text = True,
     text_woff2 = True,
     text_shaping = False,
@@ -25,6 +26,7 @@ _DEFAULTS = dict(
 
 _configure = tag_class(attrs = {
     "renderer": attr.string(default = _DEFAULTS["renderer"], values = ["skia", "tiny_skia"]),
+    "filters": attr.bool(default = _DEFAULTS["filters"]),
     "text": attr.bool(default = _DEFAULTS["text"]),
     "text_woff2": attr.bool(default = _DEFAULTS["text_woff2"]),
     "text_shaping": attr.bool(default = _DEFAULTS["text_shaping"]),
@@ -37,6 +39,7 @@ def _donner_config_repo_impl(rctx):
     rctx.file("config.bzl", """\
 DONNER_CONFIG = {{
     "renderer": {renderer},
+    "filters": {filters},
     "text": {text},
     "text_woff2": {text_woff2},
     "text_shaping": {text_shaping},
@@ -45,6 +48,7 @@ DONNER_CONFIG = {{
 }}
 """.format(
         renderer = repr(rctx.attr.renderer),
+        filters = repr(rctx.attr.filters),
         text = repr(rctx.attr.text),
         text_woff2 = repr(rctx.attr.text_woff2),
         text_shaping = repr(rctx.attr.text_shaping),
@@ -56,6 +60,7 @@ _donner_config_repo = repository_rule(
     implementation = _donner_config_repo_impl,
     attrs = {
         "renderer": attr.string(default = _DEFAULTS["renderer"]),
+        "filters": attr.bool(default = _DEFAULTS["filters"]),
         "text": attr.bool(default = _DEFAULTS["text"]),
         "text_woff2": attr.bool(default = _DEFAULTS["text_woff2"]),
         "text_shaping": attr.bool(default = _DEFAULTS["text_shaping"]),
@@ -72,6 +77,7 @@ def _donner_impl(module_ctx):
             if mod.is_root:
                 cfg = dict(
                     renderer = tag.renderer,
+                    filters = tag.filters,
                     text = tag.text,
                     text_woff2 = tag.text_woff2,
                     text_shaping = tag.text_shaping,
