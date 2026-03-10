@@ -1,0 +1,47 @@
+"""Build file for HarfBuzz (decode-only, amalgamated, HB_TINY).
+
+HarfBuzz is the industry-standard OpenType text shaping engine, providing
+GSUB/GPOS support for ligatures, contextual kerning, and complex scripts.
+
+This target uses the amalgamated single-file build for simplicity and enables
+HB_TINY for minimal binary size (~400-600 KB).
+"""
+
+cc_library(
+    name = "harfbuzz",
+    srcs = ["src/harfbuzz.cc"],
+    hdrs = glob(["src/hb*.h"]),
+    textual_hdrs = glob(
+        [
+            "src/**/*.hh",
+            "src/**/*.cc",
+        ],
+        exclude = [
+            "src/harfbuzz.cc",
+            "src/harfbuzz-subset.cc",
+            "src/main.cc",
+            "src/test-*.cc",
+        ],
+    ) + ["src/config-override.h"],
+    copts = [
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+        "-Wno-unused-function",
+        "-Wno-missing-field-initializers",
+        "-Wno-cast-function-type-mismatch",
+    ],
+    # HB_TINY strips many features for binary size. We override HB_NO_DRAW
+    # (set by HB_TINY) because we need the draw API for glyph outline extraction.
+    defines = [
+        "HB_TINY",
+        "HB_NO_MT",
+        "HAVE_STDBOOL_H",
+        "HAVE_CONFIG_OVERRIDE_H",
+    ],
+    local_defines = [
+        # Cannot un-define via defines, so we use a workaround in the source.
+    ],
+    includes = ["src"],
+    visibility = ["//visibility:public"],
+    alwayslink = True,
+)

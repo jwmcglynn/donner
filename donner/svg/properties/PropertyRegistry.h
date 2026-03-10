@@ -14,6 +14,9 @@
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/TextAnchor.h"
+#include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
@@ -96,6 +99,11 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `marker-start` | \ref markerStart | `none` |
  * | `marker-mid` | \ref markerMid | `none` |
  * | `marker-end` | \ref markerEnd | `none` |
+ * | `font-family` | \ref fontFamily | `serif` |
+ * | `font-size` | \ref fontSize | `16px` |
+ * | `text-anchor` | \ref textAnchor | `start` |
+ * | `text-decoration` | \ref textDecoration | `none` |
+ * | `dominant-baseline` | \ref dominantBaseline | `auto` |
  */
 class PropertyRegistry {
 public:
@@ -259,6 +267,23 @@ public:
   /// `font-size` property, which determines the font size for text content. Inherited.
   Property<Lengthd, PropertyCascade::Inherit> fontSize{
       "font-size", []() -> std::optional<Lengthd> { return Lengthd(16, Lengthd::Unit::Px); }};
+
+  /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
+  /// Inherited. Defaults to \ref TextAnchor::Start.
+  Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
+      "text-anchor", []() -> std::optional<TextAnchor> { return TextAnchor::Start; }};
+
+  /// `text-decoration` property, which determines decoration lines drawn on text.
+  /// Not inherited. Defaults to \ref TextDecoration::None.
+  Property<TextDecoration> textDecoration{
+      "text-decoration",
+      []() -> std::optional<TextDecoration> { return TextDecoration::None; }};
+
+  /// `dominant-baseline` property, which determines the baseline alignment for text.
+  /// Not inherited. Defaults to \ref DominantBaseline::Auto.
+  Property<DominantBaseline> dominantBaseline{
+      "dominant-baseline",
+      []() -> std::optional<DominantBaseline> { return DominantBaseline::Auto; }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.

@@ -71,6 +71,40 @@ new_local_repository(
 
 bazel_dep(name = "zlib", version = "1.3.1.bcr.8")
 
+# WOFF2 text support (gated by text_woff2 flag)
+bazel_dep(name = "brotli", version = "1.2.0")
+
+new_git_repository(
+    name = "woff2",
+    build_file = "//third_party:BUILD.woff2",
+    commit = "1bccf208bca986e53a647dfe4811322adb06ecf8",
+    remote = "https://github.com/google/woff2.git",
+)
+
+# HarfBuzz text shaping (gated by text_shaping flag)
+new_git_repository(
+    name = "harfbuzz",
+    build_file = "//third_party:BUILD.harfbuzz",
+    tag = "10.1.0",
+    remote = "https://github.com/harfbuzz/harfbuzz.git",
+    patch_cmds = [
+        # Create config-override.h to re-enable the draw API (disabled by HB_LEAN/HB_TINY).
+        # We need hb_font_draw_glyph() for glyph outline extraction.
+        """cat > src/config-override.h << 'HBEOF'
+// Re-enable the draw API for glyph outline extraction.
+// HB_TINY -> HB_LEAN -> HB_NO_DRAW -> HB_NO_OUTLINE, which strips these.
+#undef HB_NO_DRAW
+#undef HB_NO_OUTLINE
+// Re-enable CFF outlines (our fallback font Public Sans is OTF/CFF).
+#undef HB_NO_CFF
+#undef HB_NO_OT_FONT_CFF
+// Re-enable file I/O (hb_face_create_from_file_or_fail references
+// hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
+#undef HB_NO_OPEN
+HBEOF""",
+    ],
+)
+
 ##
 ## Test dependencies
 ##

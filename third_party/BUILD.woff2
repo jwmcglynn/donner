@@ -1,0 +1,36 @@
+cc_library(
+    name = "woff2_decode",
+    srcs = [
+        "src/table_tags.cc",
+        "src/variable_length.cc",
+        "src/woff2_common.cc",
+        "src/woff2_dec.cc",
+        "src/woff2_out.cc",
+    ],
+    hdrs = [
+        "include/woff2/decode.h",
+        "include/woff2/output.h",
+    ],
+    textual_hdrs = [
+        "src/buffer.h",
+        "src/port.h",
+        "src/round.h",
+        "src/store_bytes.h",
+        "src/table_tags.h",
+        "src/variable_length.h",
+        "src/woff2_common.h",
+    ],
+    copts = [
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+        "-Wno-unused-const-variable",
+    ],
+    includes = [
+        "include",
+        "src",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@brotli//:brotlidec",
+    ],
+)

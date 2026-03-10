@@ -229,4 +229,23 @@ TEST(FontManagerTest, KernAdvance) {
   (void)kern;  // Just verify no crash; actual value is font-dependent.
 }
 
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+TEST(FontManagerTest, LoadWoff2Data) {
+  FontManager mgr;
+
+  std::vector<uint8_t> woff2Data = readFile("donner/base/fonts/testdata/valid-001.woff2");
+  ASSERT_FALSE(woff2Data.empty()) << "Could not read WOFF2 test file";
+
+  FontHandle handle = mgr.loadFontData(woff2Data);
+  EXPECT_TRUE(static_cast<bool>(handle));
+
+  const stbtt_fontinfo* info = mgr.fontInfo(handle);
+  ASSERT_NE(info, nullptr);
+
+  // Should be able to find Latin glyphs (this WOFF2 was created from Public Sans).
+  int glyphIndex = stbtt_FindGlyphIndex(info, 'A');
+  EXPECT_GT(glyphIndex, 0);
+}
+#endif
+
 }  // namespace donner::svg

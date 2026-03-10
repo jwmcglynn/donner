@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -257,6 +258,10 @@ private:
   bool verbose_ = false;
   bool antialias_ = true;
   bool warnedUnsupportedText_ = false;
+
+  /// Opaque pointer to FontManager, only used when DONNER_TEXT_ENABLED is defined.
+  /// Stored as void* to avoid requiring FontManager.h when text is disabled.
+  void* fontManagerPtr_ = nullptr;
 
   RenderViewport viewport_;
   PaintParams paint_;

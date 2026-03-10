@@ -4,6 +4,7 @@
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkData.h"
 #include "include/core/SkFont.h"
+#include "include/core/SkFontMetrics.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPath.h"
@@ -28,6 +29,10 @@
 #else
 #error \
     "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
+#endif
+#ifdef DONNER_TEXT_SHAPING_ENABLED
+#include "donner/svg/renderer/TextShaper.h"
+#include "donner/svg/resources/FontManager.h"
 #endif
 // Donner
 #include "donner/base/Length.h"
@@ -1362,9 +1367,37 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
     return;
   }
 
-  SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
-  paint.setColor(toSkia(params.fillColor.rgba()));
+  // Resolve fill paint.
+  SkPaint fillPaint = basePaint(antialias_, params.opacity * paintOpacity_);
+  fillPaint.setStyle(SkPaint::kFill_Style);
+  fillPaint.setColor(toSkia(params.fillColor.rgba()));
 
+  // Resolve stroke paint.
+  const bool hasStroke = params.strokeParams.strokeWidth > 0.0;
+  SkPaint strokePaint;
+  if (hasStroke) {
+    strokePaint = basePaint(antialias_, params.opacity * paintOpacity_);
+    strokePaint.setStyle(SkPaint::kStroke_Style);
+    strokePaint.setColor(toSkia(params.strokeColor.rgba()));
+    strokePaint.setStrokeWidth(NarrowToFloat(params.strokeParams.strokeWidth));
+    strokePaint.setStrokeMiter(NarrowToFloat(params.strokeParams.miterLimit));
+    switch (params.strokeParams.lineCap) {
+      case StrokeLinecap::Butt: strokePaint.setStrokeCap(SkPaint::kButt_Cap); break;
+      case StrokeLinecap::Round: strokePaint.setStrokeCap(SkPaint::kRound_Cap); break;
+      case StrokeLinecap::Square: strokePaint.setStrokeCap(SkPaint::kSquare_Cap); break;
+    }
+    switch (params.strokeParams.lineJoin) {
+      case StrokeLinejoin::Miter:
+      case StrokeLinejoin::MiterClip:
+      case StrokeLinejoin::Arcs:
+        strokePaint.setStrokeJoin(SkPaint::kMiter_Join);
+        break;
+      case StrokeLinejoin::Round: strokePaint.setStrokeJoin(SkPaint::kRound_Join); break;
+      case StrokeLinejoin::Bevel: strokePaint.setStrokeJoin(SkPaint::kBevel_Join); break;
+    }
+  }
+
+  // Resolve typeface.
   const SmallVector<RcString, 1>& families = params.fontFamilies;
   const std::string familyName = families.empty() ? "" : families[0].str();
   sk_sp<SkTypeface> typeface = fontMgr_->matchFamilyStyle(familyName.c_str(), SkFontStyle());
@@ -1379,16 +1412,233 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   SkFont font(typeface, fontSizePx);
   font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
+#ifdef DONNER_TEXT_SHAPING_ENABLED
+  // When text shaping is enabled, use TextShaper for layout and drawGlyphs() for rendering.
+  // This provides full OpenType GSUB/GPOS support with identical shaping across backends.
+  {
+    static FontManager fontManager;
+    TextShaper shaper(fontManager);
+    std::vector<ShapedTextRun> runs = shaper.layout(text, params);
+
+    // Create SkTypeface from the FontManager's font data so glyph IDs match HarfBuzz output.
+    sk_sp<SkTypeface> shapedTypeface;
+    if (!runs.empty() && runs[0].font) {
+      const auto fontBytes = fontManager.fontData(runs[0].font);
+      if (!fontBytes.empty()) {
+        shapedTypeface = fontMgr_->makeFromData(
+            SkData::MakeWithoutCopy(fontBytes.data(), fontBytes.size()));
+      }
+    }
+    if (!shapedTypeface) {
+      shapedTypeface = typeface;
+    }
+
+    SkFont shapedFont(shapedTypeface, fontSizePx);
+    shapedFont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+
+    for (const auto& run : runs) {
+      if (run.glyphs.empty()) {
+        continue;
+      }
+
+      // Convert shaped glyphs to Skia arrays.
+      const auto glyphCount = static_cast<int>(run.glyphs.size());
+      std::vector<SkGlyphID> skGlyphs(run.glyphs.size());
+      std::vector<SkPoint> skPositions(run.glyphs.size());
+
+      for (size_t i = 0; i < run.glyphs.size(); ++i) {
+        skGlyphs[i] = static_cast<SkGlyphID>(run.glyphs[i].glyphIndex);
+        skPositions[i] =
+            SkPoint::Make(NarrowToFloat(run.glyphs[i].xPosition),
+                          NarrowToFloat(run.glyphs[i].yPosition));
+      }
+
+      const SkPoint origin = SkPoint::Make(0, 0);
+
+      if (run.glyphs[0].rotateDegrees != 0.0) {
+        // Per-glyph rotation: draw each glyph individually with rotation.
+        for (int i = 0; i < glyphCount; ++i) {
+          currentCanvas_->save();
+          currentCanvas_->translate(skPositions[i].x(), skPositions[i].y());
+          currentCanvas_->rotate(NarrowToFloat(run.glyphs[i].rotateDegrees));
+          if (hasStroke) {
+            currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, strokePaint);
+          }
+          currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, fillPaint);
+          currentCanvas_->restore();
+        }
+      } else {
+        // No rotation: batch draw all glyphs.
+        if (hasStroke) {
+          currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
+                                     shapedFont, strokePaint);
+        }
+        currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
+                                   shapedFont, fillPaint);
+      }
+
+      // Draw text-decoration lines.
+      if (params.textDecoration != TextDecoration::None) {
+        SkFontMetrics metrics;
+        shapedFont.getMetrics(&metrics);
+
+        const SkScalar firstX = NarrowToFloat(run.glyphs.front().xPosition);
+        const SkScalar lastEnd = NarrowToFloat(run.glyphs.back().xPosition +
+                                               run.glyphs.back().xAdvance);
+        const SkScalar textWidth = lastEnd - firstX;
+        const SkScalar y = NarrowToFloat(run.glyphs.front().yPosition);
+
+        SkScalar decoY = y;
+        SkScalar thickness = metrics.fUnderlineThickness > 0 ? metrics.fUnderlineThickness
+                                                             : fontSizePx / 18.0f;
+
+        if (params.textDecoration == TextDecoration::Underline) {
+          decoY = y + (metrics.fUnderlinePosition > 0 ? metrics.fUnderlinePosition
+                                                      : fontSizePx * 0.15f);
+        } else if (params.textDecoration == TextDecoration::Overline) {
+          decoY = y + metrics.fAscent;
+        } else if (params.textDecoration == TextDecoration::LineThrough) {
+          decoY = y + (metrics.fStrikeoutPosition != 0 ? metrics.fStrikeoutPosition
+                                                       : metrics.fAscent * 0.35f);
+          if (metrics.fStrikeoutThickness > 0) {
+            thickness = metrics.fStrikeoutThickness;
+          }
+        }
+
+        SkRect decoRect = SkRect::MakeXYWH(firstX, decoY - thickness / 2, textWidth, thickness);
+        if (hasStroke) {
+          currentCanvas_->drawRect(decoRect, strokePaint);
+        }
+        currentCanvas_->drawRect(decoRect, fillPaint);
+      }
+    }
+  }
+#else
+  // Compute dominant-baseline shift using Skia font metrics.
+  SkScalar baselineShift = 0;
+  if (params.dominantBaseline != DominantBaseline::Auto &&
+      params.dominantBaseline != DominantBaseline::Alphabetic) {
+    SkFontMetrics fm;
+    font.getMetrics(&fm);
+    // Skia: fAscent < 0 (above baseline), fDescent > 0 (below baseline).
+    // Negate to get positive-up shift values matching the stb_truetype convention.
+    switch (params.dominantBaseline) {
+      case DominantBaseline::Auto:
+      case DominantBaseline::Alphabetic:
+        break;
+      case DominantBaseline::Middle:
+      case DominantBaseline::Central:
+        baselineShift = -(fm.fAscent + fm.fDescent) * 0.5f;
+        break;
+      case DominantBaseline::Hanging:
+        baselineShift = -fm.fAscent * 0.8f;
+        break;
+      case DominantBaseline::Mathematical:
+        baselineShift = -fm.fAscent * 0.5f;
+        break;
+      case DominantBaseline::TextTop:
+        baselineShift = -fm.fAscent;
+        break;
+      case DominantBaseline::TextBottom:
+      case DominantBaseline::Ideographic:
+        baselineShift = -fm.fDescent;
+        break;
+    }
+  }
+
   for (const auto& span : text.spans) {
-    const SkScalar x = static_cast<SkScalar>(
+    SkScalar x = static_cast<SkScalar>(
         span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
         span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
     const SkScalar y = static_cast<SkScalar>(
         span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-        span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y));
-    currentCanvas_->drawSimpleText(span.text.data(), span.text.size(), SkTextEncoding::kUTF8, x, y,
-                                   font, paint);
+        span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y)) +
+        baselineShift;
+
+    // Use the span slice, not the full text string.
+    const char* spanData = span.text.data() + span.start;
+    const size_t spanLen = span.end - span.start;
+
+    // Apply text-anchor adjustment.
+    if (params.textAnchor != TextAnchor::Start) {
+      const SkScalar textWidth = font.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
+      if (params.textAnchor == TextAnchor::Middle) {
+        x -= textWidth / 2;
+      } else if (params.textAnchor == TextAnchor::End) {
+        x -= textWidth;
+      }
+    }
+
+    if (span.rotateDegrees != 0.0) {
+      // Per-glyph rotation: convert to glyphs and draw individually.
+      const int glyphCount = font.countText(spanData, spanLen, SkTextEncoding::kUTF8);
+      if (glyphCount <= 0) {
+        continue;
+      }
+
+      std::vector<SkGlyphID> glyphs(static_cast<size_t>(glyphCount));
+      font.textToGlyphs(spanData, spanLen, SkTextEncoding::kUTF8, glyphs.data(), glyphCount);
+
+      std::vector<SkScalar> widths(static_cast<size_t>(glyphCount));
+      font.getWidths(glyphs.data(), glyphCount, widths.data());
+
+      SkScalar penX = x;
+      const SkPoint origin = SkPoint::Make(0, 0);
+      for (int i = 0; i < glyphCount; ++i) {
+        currentCanvas_->save();
+        currentCanvas_->translate(penX, y);
+        currentCanvas_->rotate(static_cast<SkScalar>(span.rotateDegrees));
+        // SVG stroke is drawn first (behind fill), then fill on top.
+        if (hasStroke) {
+          currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, strokePaint);
+        }
+        currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, fillPaint);
+        currentCanvas_->restore();
+        penX += widths[i];
+      }
+    } else {
+      // No rotation: use drawSimpleText for better performance.
+      // SVG stroke is drawn first (behind fill), then fill on top.
+      if (hasStroke) {
+        currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, font,
+                                       strokePaint);
+      }
+      currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, font,
+                                     fillPaint);
+    }
+
+    // Draw text-decoration lines.
+    if (params.textDecoration != TextDecoration::None) {
+      SkFontMetrics metrics;
+      font.getMetrics(&metrics);
+
+      const SkScalar textWidth = font.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
+      SkScalar decoY = y;
+      SkScalar thickness = metrics.fUnderlineThickness > 0 ? metrics.fUnderlineThickness
+                                                           : fontSizePx / 18.0f;
+
+      if (params.textDecoration == TextDecoration::Underline) {
+        decoY = y + (metrics.fUnderlinePosition > 0 ? metrics.fUnderlinePosition
+                                                    : fontSizePx * 0.15f);
+      } else if (params.textDecoration == TextDecoration::Overline) {
+        decoY = y + metrics.fAscent;  // fAscent is negative (above baseline)
+      } else if (params.textDecoration == TextDecoration::LineThrough) {
+        decoY = y + (metrics.fStrikeoutPosition != 0 ? metrics.fStrikeoutPosition
+                                                     : metrics.fAscent * 0.35f);
+        if (metrics.fStrikeoutThickness > 0) {
+          thickness = metrics.fStrikeoutThickness;
+        }
+      }
+
+      SkRect decoRect = SkRect::MakeXYWH(x, decoY - thickness / 2, textWidth, thickness);
+      // SVG stroke first, then fill.
+      if (hasStroke) {
+        currentCanvas_->drawRect(decoRect, strokePaint);
+      }
+      currentCanvas_->drawRect(decoRect, fillPaint);
+    }
   }
+#endif
 }
 
 RendererBitmap RendererSkia::takeSnapshot() const {

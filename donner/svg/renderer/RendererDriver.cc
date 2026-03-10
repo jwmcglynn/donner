@@ -24,6 +24,7 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
@@ -243,7 +244,8 @@ css::Color resolveFillColor(const components::RenderingInstanceComponent& instan
 }
 
 TextParams toTextParams(Registry& registry, const components::RenderingInstanceComponent& instance,
-                        const components::ComputedStyleComponent& style) {
+                        const components::ComputedStyleComponent& style,
+                        const components::TextComponent* textComp) {
   TextParams params;
   const auto& properties = style.properties.value();
   const css::RGBA currentColor = properties.color.getRequired().rgba();
@@ -261,6 +263,14 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   params.fontSize = properties.fontSize.getRequired();
   params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   params.fontMetrics = FontMetrics();
+  params.textAnchor = properties.textAnchor.getRequired();
+  params.textDecoration = properties.textDecoration.getRequired();
+  params.dominantBaseline = properties.dominantBaseline.getRequired();
+
+  if (textComp) {
+    params.textLength = textComp->textLength;
+    params.lengthAdjust = textComp->lengthAdjust;
+  }
 
   return params;
 }
@@ -434,7 +444,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         drawMarkers(view, registry, instance, *path, style);
       } else if (const auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const TextParams textParams = toTextParams(registry, instance, style);
+        const auto* textComp =
+            instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
         renderer_.drawText(*text, textParams);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
@@ -629,7 +641,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
       } else if (const auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const TextParams textParams = toTextParams(registry, instance, style);
+        const auto* textComp =
+            instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
         renderer_.drawText(*text, textParams);
       }
     }

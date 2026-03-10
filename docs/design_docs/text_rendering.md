@@ -1,6 +1,6 @@
 # Design: Text Rendering
 
-**Status:** Design
+**Status:** Implemented (Phases 1-6)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-09
 **Tracking:** [#242](https://github.com/jwmcglynn/donner/issues/242)
@@ -22,8 +22,8 @@ This design covers:
 4. **Optional WOFF2** — gated behind a separate feature flag.
 5. **Feature tiers** — build-time opt-in via Bazel flags controlling binary size cost.
 
-Full OpenType shaping (GSUB/GPOS via HarfBuzz) is deferred as a follow-up `text_shaping` tier
-to avoid roughly doubling the TinySkia binary size in the initial implementation.
+Full OpenType shaping (GSUB/GPOS via HarfBuzz) is available as an opt-in `text_shaping` tier
+(`--config=text-shaping`) to avoid roughly doubling the TinySkia binary size when not needed.
 
 ## Goals
 
@@ -36,8 +36,6 @@ to avoid roughly doubling the TinySkia binary size in the initial implementation
 
 ## Non-Goals
 
-- Full OpenType shaping (GSUB/GPOS — ligatures, contextual forms) in the initial implementation.
-  Deferred to the `text_shaping` tier (HarfBuzz follow-up).
 - Complex script support (Arabic, Devanagari, etc.) or bidirectional text.
 - Vertical writing modes (`writing-mode: vertical-rl`).
 - SVG fonts (`<font>` element — deprecated in SVG2).
@@ -51,9 +49,9 @@ Text support is split into independently selectable features, ordered by depende
 
 | Feature | What it adds | New deps | Binary cost | Status |
 |---------|-------------|----------|------------|--------|
-| **`text`** | Font loading (TTF/OTF/WOFF1), `kern`-table kerning, glyph outlines, `@font-face` | None (stb_truetype already vendored) | ~55 KB | This design |
-| **`text_woff2`** | WOFF2 web font decompression | Google woff2 + Brotli | ~190 KB | This design |
-| **`text_shaping`** | Full OpenType shaping (GSUB/GPOS: ligatures, contextual kerning) | HarfBuzz (`HB_TINY`) | ~400-600 KB | Follow-up |
+| **`text`** | Font loading (TTF/OTF/WOFF1), `kern`-table kerning, glyph outlines, `@font-face` | None (stb_truetype already vendored) | ~55 KB | **Done** |
+| **`text_woff2`** | WOFF2 web font decompression | Google woff2 + Brotli | ~190 KB | **Done** |
+| **`text_shaping`** | Full OpenType shaping (GSUB/GPOS: ligatures, contextual kerning) | HarfBuzz (`HB_TINY`) | ~400-600 KB | **Done** |
 
 Each tier implies the previous: `text_shaping` implies `text`, `text_woff2` implies `text`.
 All tiers default to **off** so existing consumers pay nothing.
@@ -105,6 +103,7 @@ donner.configure(
     renderer = "tiny_skia",
     text = True,
     text_woff2 = False,
+    text_shaping = False,
 )
 use_repo(donner, "donner_config")
 ```
@@ -113,6 +112,7 @@ The `configure` tag validates values at module-resolution time (before the build
 - `renderer`: `"skia"` (default) or `"tiny_skia"`
 - `text`: `True`/`False` (default `False`)
 - `text_woff2`: `True`/`False` (default `False`)
+- `text_shaping`: `True`/`False` (default `False`)
 - `use_coretext`: `True`/`False` (default `False`, macOS only)
 - `use_fontconfig`: `True`/`False` (default `False`, Linux only)
 
@@ -279,6 +279,7 @@ Donner's `.bazelrc` still provides shortcuts for internal development:
 # .bazelrc
 common:text --//donner/svg/renderer:text=true
 common:text-woff2 --//donner/svg/renderer:text=true --//donner/svg/renderer:text_woff2=true
+common:text-shaping --//donner/svg/renderer:text=true --//donner/svg/renderer:text_shaping=true
 common:skia --//donner/svg/renderer:renderer_backend=skia
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 ```
@@ -367,29 +368,27 @@ mirrors the existing `Feature::FilterEffects` pattern.
 |-----------|--------|
 | `<text>`, `<tspan>` parsing | Done — attributes, content nodes, positioning lists |
 | `ComputedTextComponent` | Done — resolved spans with x/y/dx/dy/rotate |
-| `TextParams` | Done — font families, size, fill/stroke colors, opacity |
+| `TextParams` | Done — font families, size, fill/stroke colors, opacity, text-anchor, dominant-baseline, text-decoration, textLength |
 | WOFF 1.0 parsing | Done — `WoffParser` decompresses tables via zlib |
+| WOFF 2.0 parsing | Done — `Woff2Parser` via Google woff2 + Brotli (`--config=text-woff2`) |
 | `@font-face` CSS parsing | Done — `FontFace` struct with local/url/data sources |
 | `FontLoader` | Done — loads WOFF from URI/data, returns `FontResource` |
-| Skia `drawText` | Partial — fills text, resolves font family via `SkFontMgr` |
+| `FontManager` | Done — TTF/OTF/WOFF1 loading, `@font-face` cascade, fallback to Public Sans |
+| `TextLayout` | Done — stb_truetype layout with kern-table kerning, text-anchor, dominant-baseline, textLength |
+| `TextShaper` | Done — HarfBuzz shaping with GSUB/GPOS (`--config=text-shaping`) |
+| Skia `drawText` | Done — fill, stroke, rotation, text-anchor, dominant-baseline, text-decoration |
+| TinySkia `drawText` | Done — glyph outlines via stb_truetype/HarfBuzz, fill, stroke, rotation |
 | Embedded fallback font | Done — Public Sans Medium OTF in `third_party/public-sans` |
-| stb_truetype | Vendored in `third_party/stb/` — not yet used for text |
 
-### What's missing
+### What's remaining
 
 | Feature | Skia | TinySkia |
 |---------|------|----------|
-| Text rendering | Partial (fill only) | None (stub) |
-| `kern`-table kerning | No (Skia does its own) | No |
-| Stroke rendering | No | No |
-| Per-glyph rotation | No | No |
-| `text-anchor` | No | No |
-| `dominant-baseline` | No | No |
-| `text-decoration` | No | No |
-| `@font-face` integration | No (uses SkFontMgr) | No |
-| WOFF2 decompression | No | No |
-| OpenType shaping (GSUB/GPOS) | No | No |
-| Bidirectional text | No | No |
+| `<textPath>` rendering | No | No |
+| Bidirectional text (RTL) | No | No |
+| Vertical writing modes | No | No |
+| Variable fonts | No | No |
+| System font discovery | Partial (via SkFontMgr) | No (embedded/loaded only) |
 
 ## Dependency Evaluation
 
@@ -430,18 +429,22 @@ Already vendored in `third_party/stb/stb_truetype.h`. Single-header C library.
   for fonts with `kern` tables. The architecture is designed so HarfBuzz can replace stb_truetype
   for the layout/outline path in the `text_shaping` tier.
 
-### HarfBuzz — Full OpenType shaping (follow-up tier)
+### HarfBuzz — Full OpenType shaping
 
-Industry-standard OpenType text shaper. Handles GSUB and GPOS.
+Industry-standard OpenType text shaper. Handles GSUB and GPOS. **Implemented** as `TextShaper`
+in the `text_shaping` tier.
 
 - **License:** MIT
 - **Binary size:** ~400-600 KB with `HB_TINY` — roughly doubles the TinySkia binary
-- **Key capability:** `hb_font_get_glyph_shape()` (HarfBuzz 7.0+) provides glyph outlines via
-  Bezier path callbacks, replacing stb_truetype for outline extraction when enabled.
-- **Build:** Amalgamated single-file `harfbuzz.cc`, compiles in <15s
-- **Verdict:** Deferred to `text_shaping` follow-up tier. The binary size cost is significant
-  relative to the TinySkia backend. When added, HarfBuzz replaces stb_truetype for both layout
-  and outline extraction, eliminating the double-kerning issue and adding full GSUB/GPOS support.
+- **Key capability:** `hb_font_draw_glyph()` (HarfBuzz 7.0+) provides glyph outlines via
+  Bezier path draw callbacks, replacing stb_truetype for outline extraction when enabled.
+- **Build:** Amalgamated single-file `harfbuzz.cc` via `new_git_repository`, compiles in ~5s.
+  Uses `HB_TINY` for minimal size with `config-override.h` (`patch_cmds`) to re-enable the
+  draw API (`HB_NO_DRAW`), CFF outlines (`HB_NO_CFF`), and file I/O (`HB_NO_OPEN`).
+- **Version:** 10.1.0 (tag, resolved to commit `9ef44a2d`)
+- **Integration:** `TextShaper` creates HarfBuzz font objects from `FontManager`'s raw font
+  data. Both backends use conditional compilation (`DONNER_TEXT_SHAPING_ENABLED`) to select
+  `TextShaper` vs `TextLayout`.
 
 ### kb_text_shape.h — Lightweight alternative shaper
 
@@ -594,30 +597,31 @@ public:
 4. Apply span's absolute x/y positioning and dx/dy shifts.
 5. Apply `text-anchor` adjustment (measure total advance, shift all glyph positions).
 
-### Designing for the HarfBuzz upgrade path
+### TextShaper (HarfBuzz tier)
 
-The `TextLayout` class is designed to be replaceable by a `TextShaper` that uses HarfBuzz in the
-`text_shaping` tier. Both produce the same `LayoutTextRun`/`LayoutGlyph` output — the rendering
-code in both backends consumes this interface identically. The Bazel `select()` swaps the
-implementation:
+The `TextShaper` class replaces `TextLayout` when the `text_shaping` tier is enabled. Both
+produce equivalent output formats (`ShapedTextRun`/`ShapedGlyph` vs `LayoutTextRun`/`LayoutGlyph`)
+so renderers can consume either identically. The Bazel `select()` in each renderer backend
+conditionally compiles the appropriate path:
 
-```python
-# Future text_shaping tier
-donner_cc_library(
-    name = "text_layout_impl",
-    deps = select({
-        ":text_shaping_enabled": [":text_shaper"],  # HarfBuzz-based
-        "//conditions:default": [":text_layout"],     # stb_truetype-based
-    }),
-)
+```cpp
+#ifdef DONNER_TEXT_SHAPING_ENABLED
+  TextShaper shaper(fontManager);
+  auto runs = shaper.layout(text, params);
+  // ... use ShapedTextRun for rendering
+#else
+  TextLayout layout(fontManager);
+  auto runs = layout.layout(text, params);
+  // ... use LayoutTextRun for rendering
+#endif
 ```
 
 When HarfBuzz is enabled:
 - `TextShaper` replaces `TextLayout` — it calls `hb_shape()` instead of manual advance+kern.
 - Glyph outline extraction switches from `stbtt_GetGlyphShape()` to
-  `hb_font_get_glyph_shape()` (HarfBuzz 7.0+ `hb_draw` API).
-- `FontManager` internally uses HarfBuzz font objects instead of `stbtt_fontinfo`.
-- The rendering code in both backends is unchanged — it still receives `LayoutTextRun[]`.
+  `hb_font_draw_glyph()` (HarfBuzz 7.0+ draw API).
+- `TextShaper` creates HarfBuzz font objects internally from `FontManager`'s raw font data.
+- Both backends use conditional compilation (`DONNER_TEXT_SHAPING_ENABLED`) to select the tier.
 
 ### Glyph outline extraction (TinySkia)
 
@@ -687,9 +691,9 @@ own potentially-better kerning (since it can access GPOS via FreeType internally
 
 **Recommendation:** Option A for the base tier. Skia's `drawSimpleText()` already works and its
 layout is at least as good as stb_truetype's (likely better, since it has GPOS access). Adding
-`TextLayout` for Skia provides no benefit at this tier. When HarfBuzz is added in the
-`text_shaping` tier, Option B becomes the right choice — both backends use identical HarfBuzz
-shaping, and Skia uses `drawGlyphs()`.
+`TextLayout` for Skia provides no benefit at this tier. At the `text_shaping` tier (now
+implemented), Option B is used — both backends use identical HarfBuzz shaping, and Skia uses
+`drawGlyphs()` with glyph positions from `TextShaper`.
 
 For the base tier, Skia improvements focus on:
 - Stroke text rendering via `SkPaint::kStroke_Style`.
@@ -734,83 +738,91 @@ struct TextParams {
 
 ### Phase 1: Module extension and feature flags
 
-- [ ] Implement the `donner` module extension in `config/extensions.bzl`.
-  - [ ] `_donner_config_repo` repo rule generating `config.bzl`.
-  - [ ] `_configure` tag class with all donner build options.
-  - [ ] `donner.configure()` call in donner's own `MODULE.bazel`.
-- [ ] Migrate existing flags (`renderer_backend`, `use_coretext`, `use_fontconfig`) to load
+- [x] Implement the `donner` module extension in `config/extensions.bzl`.
+  - [x] `_donner_config_repo` repo rule generating `config.bzl`.
+  - [x] `_configure` tag class with all donner build options.
+  - [x] `donner.configure()` call in donner's own `MODULE.bazel`.
+- [x] Migrate existing flags (`renderer_backend`, `use_coretext`, `use_fontconfig`) to load
   defaults from `@donner_config//:config.bzl`.
-- [ ] Add `text` and `text_woff2` bool_flags with defaults from `DONNER_CONFIG`.
-  - [ ] Create config_settings and `.bazelrc` shortcuts.
-  - [ ] Add `DONNER_TEXT_ENABLED` / `DONNER_TEXT_WOFF2_ENABLED` defines via `select()`.
-- [ ] Create stb_truetype Bazel target (wrap existing vendored header via `stb_library` macro).
-- [ ] Implement `FontManager` in `donner/svg/resources/`.
-  - [ ] TTF/OTF loading via `stbtt_InitFont()`.
-  - [ ] WOFF1 loading via existing `WoffParser` → sfnt reconstruction → `stbtt_InitFont()`.
-  - [ ] `@font-face` source cascade.
-  - [ ] Fallback to embedded Public Sans.
-  - [ ] Font handle caching.
-  - [ ] Unit tests.
+- [x] Add `text` and `text_woff2` bool_flags with defaults from `DONNER_CONFIG`.
+  - [x] Create config_settings and `.bazelrc` shortcuts.
+  - [x] Add `DONNER_TEXT_ENABLED` / `DONNER_TEXT_WOFF2_ENABLED` defines via `select()`.
+- [x] Create stb_truetype Bazel target (wrap existing vendored header via `stb_library` macro).
+- [x] Implement `FontManager` in `donner/svg/resources/`.
+  - [x] TTF/OTF loading via `stbtt_InitFont()`.
+  - [x] WOFF1 loading via existing `WoffParser` → sfnt reconstruction → `stbtt_InitFont()`.
+  - [x] `@font-face` source cascade.
+  - [x] Fallback to embedded Public Sans.
+  - [x] Font handle caching.
+  - [x] Unit tests.
 
 ### Phase 2: TextLayout and TinySkia text rendering
 
-- [ ] Implement `TextLayout` in `donner/svg/renderer/`.
-  - [ ] UTF-8 iteration → codepoint → glyph index mapping.
-  - [ ] Advance width + `kern`-table kerning accumulation.
-  - [ ] `text-anchor` adjustment (measure total advance, shift origin).
-  - [ ] Unit tests with embedded Public Sans.
-- [ ] Implement glyph outline extraction via `stbtt_GetGlyphShape()`.
-  - [ ] stb_truetype vertex array → `PathSpline::Builder`.
-  - [ ] Y-axis flip (stb_truetype Y-up → SVG Y-down).
-  - [ ] Glyph path cache (`{FontHandle, glyphIndex}` → `PathSpline`).
-- [ ] Implement `RendererTinySkia::drawText()`.
-  - [ ] Lay out text via `TextLayout`.
-  - [ ] For each glyph: extract outline, translate to position, fill via `fill_path()`.
-  - [ ] Stroke support via `stroke_path()`.
-  - [ ] Per-glyph rotation.
-- [ ] Add text golden images for TinySkia.
+- [x] Implement `TextLayout` in `donner/svg/renderer/`.
+  - [x] UTF-8 iteration → codepoint → glyph index mapping.
+  - [x] Advance width + `kern`-table kerning accumulation.
+  - [x] `text-anchor` adjustment (measure total advance, shift origin).
+  - [x] Unit tests with embedded Public Sans.
+- [x] Implement glyph outline extraction via `stbtt_GetGlyphShape()`.
+  - [x] stb_truetype vertex array → `PathSpline::Builder`.
+  - [x] Y-axis flip (stb_truetype Y-up → SVG Y-down).
+  - [x] Glyph path cache (`{FontHandle, glyphIndex}` → `PathSpline`).
+- [x] Implement `RendererTinySkia::drawText()`.
+  - [x] Lay out text via `TextLayout`.
+  - [x] For each glyph: extract outline, translate to position, fill via `fill_path()`.
+  - [x] Stroke support via `stroke_path()`.
+  - [x] Per-glyph rotation.
+- [x] Add text golden images for TinySkia.
 
 ### Phase 3: Skia backend text improvements
 
-- [ ] Wire `FontManager` into Skia for `@font-face` font loading.
-  - [ ] `SkFontMgr::makeFromData()` with font bytes from `FontManager`.
-  - [ ] Fallback chain: `@font-face` → system font → embedded Public Sans.
-- [ ] Add stroke text rendering.
-  - [ ] `SkPaint::kStroke_Style` with stroke params from `TextParams`.
-  - [ ] Draw stroke first, then fill (SVG paint order).
-- [ ] Add per-glyph rotation support.
-- [ ] Add `text-anchor` support via `SkFont::measureText()`.
-- [ ] Add `dominant-baseline` support.
-- [ ] Update golden images for text tests.
+- [x] Wire `FontManager` into Skia for `@font-face` font loading.
+  - [x] `SkFontMgr::makeFromData()` with font bytes from `FontManager`.
+  - [x] Fallback chain: `@font-face` → system font → embedded Public Sans.
+- [x] Add stroke text rendering.
+  - [x] `SkPaint::kStroke_Style` with stroke params from `TextParams`.
+  - [x] Draw stroke first, then fill (SVG paint order).
+- [x] Add per-glyph rotation support.
+- [x] Add `text-anchor` support via `SkFont::measureText()`.
+- [x] Add `dominant-baseline` support.
+- [x] Update golden images for text tests.
 
 ### Phase 4: WOFF2 support (behind `text_woff2` flag)
 
-- [ ] Vendor Google woff2 + Brotli under `third_party/`.
-  - [ ] `cc_library` targets (decode-only for both).
-- [ ] Implement `Woff2Parser` in `donner/base/fonts/`.
-  - [ ] Unit tests with sample WOFF2 files.
-- [ ] Wire into `FontManager` behind `#ifdef DONNER_TEXT_WOFF2_ENABLED`.
+- [x] Vendor Google woff2 + Brotli under `third_party/`.
+  - [x] `cc_library` targets (decode-only for both).
+- [x] Implement `Woff2Parser` in `donner/base/fonts/`.
+  - [x] Unit tests with sample WOFF2 files.
+- [x] Wire into `FontManager` behind `#ifdef DONNER_TEXT_WOFF2_ENABLED`.
 
 ### Phase 5: SVG text properties (both backends)
 
-- [ ] `text-decoration` (underline, overline, line-through).
-  - [ ] Compute decoration lines from font metrics via `stbtt_GetFontVMetrics()`.
-  - [ ] Draw as stroked paths.
-- [ ] `textLength` / `lengthAdjust` support.
-  - [ ] Spacing mode: distribute extra space between glyphs.
-  - [ ] SpacingAndGlyphs mode: scale glyph advances.
+- [x] `text-decoration` (underline, overline, line-through).
+  - [x] Compute decoration lines from font metrics via `stbtt_GetFontVMetrics()`.
+  - [x] Draw as stroked paths.
+- [x] `textLength` / `lengthAdjust` support.
+  - [x] Spacing mode: distribute extra space between glyphs.
+  - [x] SpacingAndGlyphs mode: scale glyph advances.
+- [x] `dominant-baseline` support (both backends, both layout tiers).
 
 ### Phase 6: HarfBuzz shaping tier (follow-up)
 
-- [ ] Add `text_shaping` bool_flag and config_setting.
-- [ ] Vendor HarfBuzz (amalgamated, `HB_TINY`) under `third_party/harfbuzz`.
+- [x] Add `text_shaping` bool_flag and config_setting.
+  - `--config=text-shaping` enables both `text=true` and `text_shaping=true`.
+  - `text_shaping_enabled` config_setting requires both flags for Bazel select() specificity.
+- [x] Vendor HarfBuzz (amalgamated, `HB_TINY`) under `third_party/harfbuzz`.
+  - Uses `new_git_repository` with `patch_cmds` to create `config-override.h` that re-enables
+    the draw API (`#undef HB_NO_DRAW`), CFF outlines (`#undef HB_NO_CFF`), and file I/O
+    (`#undef HB_NO_OPEN`) which are disabled by `HB_LEAN`/`HB_TINY`.
   - [ ] Measure actual arm64 binary size.
   - [ ] Also evaluate `kb_text_shape.h` as a lighter alternative.
-- [ ] Implement `TextShaper` as drop-in replacement for `TextLayout`.
-  - [ ] HarfBuzz buffer setup, `hb_shape()`, glyph position extraction.
-  - [ ] Glyph outline extraction via `hb_font_get_glyph_shape()`.
-- [ ] Update `FontManager` to use HarfBuzz font objects when `text_shaping` is enabled.
-- [ ] Switch Skia backend to `drawGlyphs()` with shared shaping (Option B).
+- [x] Implement `TextShaper` as drop-in replacement for `TextLayout`.
+  - [x] HarfBuzz buffer setup, `hb_shape()`, glyph position extraction.
+  - [x] Glyph outline extraction via `hb_font_draw_glyph()` draw API (HarfBuzz 7.0+).
+  - [x] text-anchor, textLength, dominant-baseline adjustments.
+  - [x] 7 unit tests covering shaping, outlines, multi-byte, text-anchor.
+- [x] TextShaper creates HarfBuzz font objects from FontManager's raw font data internally.
+- [x] Switch Skia backend to `drawGlyphs()` with shared shaping (Option B).
 - [ ] Run resvg text tests, compare quality improvement vs base tier.
 
 ### Phase 7: Bidirectional text (deferred)
@@ -854,10 +866,10 @@ CI runs all feature combinations to ensure both enabled and disabled paths work.
 
 ### Backend parity
 
-- Text golden images will differ between Skia and TinySkia at the base tier because Skia uses
+- Text golden images differ between Skia and TinySkia at the base tier because Skia uses
   its own internal layout (with GPOS access) while TinySkia uses stb_truetype (kern-table only).
-- At the `text_shaping` tier (HarfBuzz follow-up), shaping output will be identical between
-  backends since both use HarfBuzz, and golden images should be much closer.
+- At the `text_shaping` tier, shaping output is identical between backends since both use
+  HarfBuzz, and golden images should be much closer.
 - TinySkia renders glyph outlines as vector paths (no hinting), so small-size text will look
   slightly different from Skia's hinted rasterization regardless of shaping tier.
 
@@ -868,7 +880,7 @@ CI runs all feature combinations to ensure both enabled and disabled paths work.
 | stb_truetype | `text` | Public domain / MIT | ~55 KB | Already vendored |
 | Google woff2 (decode) | `text_woff2` | MIT | ~15 KB | Yes |
 | Brotli (decode) | `text_woff2` | MIT | ~175 KB | Yes |
-| HarfBuzz (`HB_TINY`) | `text_shaping` (follow-up) | MIT | ~400-600 KB | Future |
+| HarfBuzz (`HB_TINY`) | `text_shaping` | MIT | ~400-600 KB | Done |
 | SheenBidi | Future | Apache 2.0 | ~30 KB | Future |
 | Public Sans | `text` | OFL 1.1 | ~90 KB (data) | Already vendored |
 | zlib | (existing) | zlib | — | Already a dep |
@@ -880,17 +892,17 @@ CI runs all feature combinations to ensure both enabled and disabled paths work.
 | No text (default) | 0 | None |
 | `--config=text` | ~55 KB | None (stb_truetype already vendored) |
 | `--config=text-woff2` | ~245 KB | woff2, Brotli |
-| `--config=text-shaping` (future) | ~500-650 KB | HarfBuzz |
+| `--config=text-shaping` | ~500-650 KB | HarfBuzz |
 
 For comparison: tiny-skia-cpp is ~200 KB, Skia is ~6-8 MB linked.
 
 ## Alternatives Considered
 
 **HarfBuzz as the base tier instead of stb_truetype:**
-Deferred. HarfBuzz `HB_TINY` adds ~400-600 KB, roughly doubling the TinySkia binary. The
-quality improvement (GSUB/GPOS) is real but not critical for Latin-heavy SVG content with fonts
-that include `kern` tables. The architecture is designed so HarfBuzz can be added later as a
-drop-in replacement for the layout path, and the `text_shaping` tier is explicitly planned.
+Kept as opt-in tier. HarfBuzz `HB_TINY` adds ~400-600 KB, roughly doubling the TinySkia binary.
+The quality improvement (GSUB/GPOS) is available via `--config=text-shaping` but not forced on
+all consumers. The base tier (stb_truetype) provides correct text for fonts with `kern` tables
+at minimal binary cost.
 
 **FreeType for glyph outlines:**
 Rejected. stb_truetype covers font parsing/outlines at ~55 KB vs FreeType's ~767 KB (full) or
@@ -959,8 +971,8 @@ than coexisting. This avoids maintaining two layout codepaths long-term.
 
 ## Future Work
 
-- [ ] `text_shaping` tier: HarfBuzz or kb_text_shape.h for full GSUB/GPOS.
 - [ ] `<textPath>` rendering (text along arbitrary paths).
+- [ ] Bidirectional text (SheenBidi).
 - [ ] Vertical writing modes (`writing-mode: vertical-rl/lr`).
 - [ ] Font feature settings (`font-feature-settings` CSS property).
 - [ ] Variable fonts (OpenType font variations).
@@ -968,5 +980,7 @@ than coexisting. This avoids maintaining two layout codepaths long-term.
 - [ ] System font discovery for TinySkia (platform-specific font enumeration).
 - [ ] Glyph bitmap caching for TinySkia performance optimization.
 - [ ] `text-decoration` with proper ink-skip behavior.
-- [ ] CMake feature selection matching the Bazel `text`/`text_woff2` flags.
-- [ ] Bidirectional text (SheenBidi).
+- [ ] CMake feature selection matching the Bazel `text`/`text_woff2`/`text_shaping` flags.
+- [ ] Measure actual HarfBuzz `HB_TINY` arm64 binary size impact.
+- [ ] Evaluate `kb_text_shape.h` as lighter HarfBuzz alternative.
+- [ ] Run resvg text tests with `text_shaping` tier, compare quality vs base tier.
