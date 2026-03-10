@@ -1,14 +1,22 @@
 # Design: SVG Filter Effects
 
-**Status:** In Progress (Milestones 1-4 complete, Milestone 5 next)
+**Status:** In Progress (Milestones 1-5 functionally complete; remaining work is debt reduction)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-07
-**Last Updated:** 2026-03-09
+**Last Updated:** 2026-03-10
 **Tracking:** [#151](https://github.com/jwmcglynn/donner/issues/151)
 
 ## Summary
 
-Implement full SVG filter support aligned with the [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec (referenced by [SVG2 §11](https://www.w3.org/TR/SVG2/render.html#FilteringPaintedRegions)). Donner currently supports 15 of 17 filter primitives with a working filter graph execution model, `in`/`result` routing, and `SourceGraphic`/`SourceAlpha` standard inputs on the TinySkia backend. All filter pixel operations are implemented natively in the `tiny-skia-cpp` library (`third_party/tiny-skia-cpp/src/tiny_skia/filter/`), keeping the renderer thin (graph routing only). This design covers the remaining 6 primitives, CSS shorthand filter functions, color space handling, and the Skia backend.
+Implement full SVG filter support aligned with the
+[Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec
+(referenced by [SVG2 §11](https://www.w3.org/TR/SVG2/render.html#FilteringPaintedRegions)).
+Donner now supports all 17 filter primitives with a working filter graph execution model,
+`in`/`result` routing, and `SourceGraphic`/`SourceAlpha` standard inputs on both backends.
+All filter pixel operations are implemented natively in the `tiny-skia-cpp` library
+(`third_party/tiny-skia-cpp/src/tiny_skia/filter/`), keeping the renderer thin
+(graph routing only). This design now tracks the remaining conformance debt,
+CSS shorthand filter functions, color space cleanup, and future backend optimization work.
 
 Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at least drop shadows or blur; icon sets and data visualizations use color matrix transforms and compositing. Without filter support these render as unfiltered content, which is visually wrong.
 
@@ -41,11 +49,14 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - Light sources: `feDistantLight`, `fePointLight`, `feSpotLight` with coordinate scaling for non-1:1 viewBox/canvas ratios
 - Native tiny-skia-cpp filter library with all implemented operations
 
-**Implemented (Skia backend, partial):**
+**Implemented (Skia backend):**
 - Offscreen filter capture using raster `SkSurface` layers
 - Shared CPU fallback via `FilterGraphExecutor` for graph execution and filter region clipping
+- Transformed local-raster execution for eligible blur chains
+- CPU luminance-mask execution aligned with TinySkia for filter + mask interactions
 - Native fast path for simple single-node `feGaussianBlur` graphs
 - Clip stack replay into offscreen filter surfaces before filter execution
+- Full `resvg_test_suite` passes on Skia
 
 **Known gaps:**
 - `primitiveUnits` coordinate space handling
@@ -59,7 +70,7 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 
 ## Open Issues and Current Findings
 
-As of 2026-03-09:
+As of 2026-03-10:
 
 - `bazel test //donner/svg/renderer/tests:resvg_test_suite` passes on the default TinySkia
   backend.
@@ -82,14 +93,113 @@ As of 2026-03-09:
   `SkPicture` shaders. This resolved the Skia pattern regressions in `e-pattern-008.svg`,
   `e-pattern-010.svg`, and `e-pattern-019.svg`, including the nested pattern case.
 
+## Remaining Resvg Filter Debt
+
+The full resvg suite now passes on both backends, but filter coverage still relies on a meaningful
+set of skips and large thresholds. The remaining debt divides into feature gaps, conformance
+investigations, and intentional skips for UB or pathological cases.
+
+### Remaining Feature Gaps
+
+- [ ] Finish `primitiveUnits` and percentage primitive-subregion handling.
+  Affected tests: `e-feTile-006.svg`, `e-filter-055.svg`, and the large-threshold
+  `e-filter-012.svg`.
+  Plan: move primitive-region resolution fully into filter-local coordinates, support percentage
+  widths/heights for primitive subregions, and add focused tests for OBB + percentage clipping.
+- [ ] Add filter templating / `href` inheritance for `<filter>`.
+  Affected tests: `e-filter-017.svg`, `e-filter-018.svg`, `e-filter-019.svg`.
+  Plan: mirror the inheritance model already used by gradients and patterns, then add graph-level
+  merge tests for inherited primitives and inherited filter regions.
+- [ ] Add the remaining standard filter inputs that are still in scope.
+  Affected tests: `e-filter-034.svg`, `e-filter-035.svg`, `e-filter-036.svg`,
+  `e-filter-037.svg`, `e-filter-038.svg`, `e-filter-065.svg`.
+  Plan: capture `FillPaint` and `StrokePaint` into buffers at filter-layer entry, thread those
+  through `FilterGraphExecutor`, and keep `BackgroundImage` / `BackgroundAlpha`
+  (`e-filter-032.svg`, `e-filter-033.svg`) explicitly deferred unless scope changes.
+- [ ] Extend `feImage` beyond external bitmap loading.
+  Affected tests: `e-feImage-006.svg` through `e-feImage-024.svg`.
+  Plan: support fragment references by re-entrant subtree rendering into a pixmap, then add
+  subregion, OBB, percentage-width, and rotated-subregion coverage on top of that.
+- [ ] Support filter application on the root `<svg>`.
+  Affected tests: `e-filter-060.svg`.
+  Plan: define root-surface capture semantics in `RendererDriver` and ensure viewport clipping is
+  applied after the filtered root result is composited back.
+- [ ] Add missing lighting sampling controls.
+  Affected tests: `e-feDiffuseLighting-021.svg`, `e-feDiffuseLighting-022.svg`.
+  Plan: implement `kernelUnitLength` in the lighting primitives and verify it against targeted
+  height-map fixtures before unskipping the resvg cases.
+
+### Threshold Reduction Investigations
+
+- [ ] Replace the 8-bit `linearRGB` LUT with float conversions and tighten the color-space
+  thresholds.
+  Affected tests: `a-color-interpolation-filters-001.svg`, `e-feColorMatrix-001.svg` through
+  `e-feColorMatrix-007.svg`, `e-feColorMatrix-010.svg` through `e-feColorMatrix-012.svg`,
+  `e-feColorMatrix-015.svg`, `e-feDropShadow-001.svg` through `e-feDropShadow-006.svg`,
+  `e-feMerge-001.svg` through `e-feMerge-003.svg`, `e-feImage-003.svg`, `e-feImage-004.svg`,
+  `e-filter-028.svg`, `e-filter-046.svg`, and `e-feTurbulence-019.svg`.
+  Plan: land a shared float sRGB<->linearRGB path in the filter library, rerun the affected tests,
+  and remove or shrink the 0.05 / 0.1 tolerances before touching larger geometry issues.
+- [ ] Match blur edge-clipping semantics more closely to the spec.
+  Affected tests: `e-filter-002.svg`, `e-filter-003.svg`, `e-filter-009.svg`, `e-filter-039.svg`,
+  `e-filter-040.svg`, `e-filter-041.svg`, `e-filter-052.svg`, `e-filter-053.svg`,
+  `e-filter-054.svg`, `e-filter-058.svg`, and `e-filter-059.svg`.
+  Plan: stop treating the full pixmap as the blur extent, compute primitive subregions from the
+  union of inputs, and crop the blur kernel to the primitive region rather than blurring first and
+  clipping afterward.
+- [ ] Close the remaining coordinate-space and transform threshold cases.
+  Affected tests: `e-feFlood-008.svg`, `e-feGaussianBlur-012.svg`, `e-feOffset-007.svg`,
+  `e-feOffset-008.svg`, `e-filter-004.svg`, `e-filter-010.svg`, `e-filter-011.svg`,
+  `e-filter-012.svg`, `e-filter-014.svg`, `e-filter-026.svg`, `e-filter-027.svg`,
+  `e-filter-058.svg`, `e-filter-059.svg`, and `e-feTurbulence-018.svg`.
+  Plan: finish the remaining `primitiveUnits` work, audit all `deviceFromFilter` conversions for
+  OBB inputs, and add transform-specific regression tests around filter-region clipping.
+- [ ] Investigate the remaining high-threshold graph-routing and arithmetic cases.
+  Affected tests: `e-feComponentTransfer-020.svg`, `e-feConvolveMatrix-014.svg`,
+  `e-feConvolveMatrix-018.svg`, `e-feConvolveMatrix-022.svg`, `e-feConvolveMatrix-024.svg`,
+  `e-feTile-001.svg`, `e-feTile-002.svg`, `e-feTile-004.svg`, `e-feTile-005.svg`,
+  and `e-filter-056.svg`.
+  Plan: add small golden fixtures for each primitive in isolation, then debug whether the diffs
+  come from arithmetic mismatch, tile seam sampling, or invalid-input fallback behavior.
+- [ ] Reduce the remaining lighting tolerances.
+  Affected tests: `e-fePointLight-004.svg`, `e-feSpecularLighting-002.svg`,
+  `e-feSpecularLighting-004.svg`, `e-feSpecularLighting-005.svg`,
+  `e-feSpecularLighting-007.svg`, `e-feSpotLight-007.svg`, `e-feSpotLight-008.svg`,
+  and `e-feSpotLight-012.svg`.
+  Plan: separate alpha-clipping differences from lighting-vector math, then investigate spotlight
+  cone boundaries, coordinate scaling, and any remaining mismatch between float lighting and the
+  resvg reference images.
+
+### Skip Triage: Keep, Fix, or Reclassify
+
+- [ ] Fix parser or validation bugs that are currently hidden by skips.
+  Affected tests: `e-feComponentTransfer-009.svg`.
+  Plan: reject invalid unit-suffixed numeric values at parse time and convert this from a skip to a
+  normal negative test.
+- [ ] Decide which current skips are genuine non-goals or external-integration work.
+  Affected tests: `e-feImage-001.svg`, `e-feImage-002.svg`, `e-filter-032.svg`,
+  `e-filter-033.svg`.
+  Plan: keep these documented as deferred if scope remains unchanged; otherwise split external
+  resource loading from standard-input compositing into separate milestones.
+- [ ] Keep UB / pathological cases explicitly classified until we choose to emulate resvg quirks.
+  Affected tests: `e-feColorMatrix-008.svg`, `e-feColorMatrix-009.svg`,
+  `e-feConvolveMatrix-015.svg`, `e-feConvolveMatrix-016.svg`,
+  `e-feConvolveMatrix-017.svg`, `e-feConvolveMatrix-023.svg`, `e-feSpotLight-005.svg`,
+  `e-feTile-007.svg`, and `e-feTurbulence-017.svg`.
+  Plan: leave these skipped with comments unless we decide to chase browser-compat behavior over
+  spec-defined UB.
+- [ ] Revisit performance-only skips with dedicated fast paths or separate stress coverage.
+  Affected tests: `e-feGaussianBlur-002.svg` and `e-feMorphology-012.svg`.
+  Plan: either add asymptotically faster implementations for huge kernels or keep them out of the
+  normal suite and cover them with dedicated perf/stress tests instead of image-compare tests.
+
 ## Next Steps
 
-- Begin Milestone 5: Skia backend integration.
-- Prepare Milestone 6: CSS shorthand filter functions (`blur()`, `brightness()`, etc.).
-- Add `primitiveUnits` coordinate space handling.
-- Upgrade linearRGB conversion to float precision (fix 8-bit LUT rounding diffs).
-- Fix blur edge clipping to match spec behavior.
-- Improve `feImage` external image rendering (subregion/OBB tests).
+- Finish the remaining resvg filter debt in the order above: first real feature gaps, then
+  threshold-reduction investigations, then skip reclassification.
+- Treat `primitiveUnits`, float `linearRGB`, and blur-edge clipping as the next highest-leverage
+  conformance tasks because they unlock multiple thresholded cases at once.
+- Begin Milestone 6 once the highest-cost resvg skips and thresholds are retired.
 
 ## Implementation Plan
 
@@ -148,10 +258,15 @@ Less common but required for full spec compliance.
 
 - [x] Land the bridge layer: raster `SkSurface` capture, clip replay, and shared CPU fallback
 - [x] Add a native Skia fast path for simple single-node `feGaussianBlur`
-- [ ] Expand native lowering for simple linear chains (`feOffset`, `feDropShadow`, `feColorMatrix`, `feComposite`, `feBlend`, `feMorphology`, `feDisplacementMap`, `feTile`)
+- [x] Add transformed local-raster execution for blur-chain cases that do not match `saveLayer`
+- [x] Align Skia mask handling with TinySkia's CPU luminance-mask execution
+- [x] Resolve Skia regressions uncovered during filter bring-up so the full `resvg_test_suite`
+  passes on Skia
+- [ ] Expand native lowering for simple linear chains (`feOffset`, `feDropShadow`,
+      `feColorMatrix`, `feComposite`, `feBlend`, `feMorphology`, `feDisplacementMap`,
+      `feTile`)
 - [ ] Partition graphs into maximal native Skia subgraphs and CPU fallback islands
-- [ ] Resolve remaining Skia conformance gaps such as `e-filter-053.svg`
-- [ ] Keep unsupported graphs on the shared executor until native lowering is behaviorally correct
+- [x] Keep unsupported graphs on the shared executor until native lowering is behaviorally correct
 
 ### Milestone 6: CSS shorthand filter functions
 
