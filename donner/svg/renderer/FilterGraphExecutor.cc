@@ -449,36 +449,46 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
               image.width = primitive.imageWidth;
               image.height = primitive.imageHeight;
 
-              double regionX = 0.0;
-              double regionY = 0.0;
-              double regionW = w;
-              double regionH = h;
-              if (graphNode.subregion.has_value()) {
-                regionX = graphNode.subregion->x;
-                regionY = graphNode.subregion->y;
-                regionW = graphNode.subregion->w;
-                regionH = graphNode.subregion->h;
-              } else if (graph.filterRegion.has_value()) {
-                regionX = graph.filterRegion->x;
-                regionY = graph.filterRegion->y;
-                regionW = graph.filterRegion->w;
-                regionH = graph.filterRegion->h;
+              if (primitive.isFragmentReference) {
+                // Fragment references are rendered in the same coordinate space as the filter
+                // pixmap. Place the image at (0,0) with 1:1 pixel mapping — no
+                // preserveAspectRatio scaling needed.
+                image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0,
+                    static_cast<double>(primitive.imageWidth),
+                    static_cast<double>(primitive.imageHeight)};
+              } else {
+                double regionX = 0.0;
+                double regionY = 0.0;
+                double regionW = w;
+                double regionH = h;
+                if (graphNode.subregion.has_value()) {
+                  regionX = graphNode.subregion->x;
+                  regionY = graphNode.subregion->y;
+                  regionW = graphNode.subregion->w;
+                  regionH = graphNode.subregion->h;
+                } else if (graph.filterRegion.has_value()) {
+                  regionX = graph.filterRegion->x;
+                  regionY = graph.filterRegion->y;
+                  regionW = graph.filterRegion->w;
+                  regionH = graph.filterRegion->h;
+                }
+
+                const Boxd imageBox =
+                    Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+                const Boxd regionRect = Boxd::FromXYWH(0, 0, regionW, regionH);
+                const Transformd regionFromImage =
+                    primitive.preserveAspectRatio.elementContentFromViewBoxTransform(regionRect,
+                                                                                     imageBox);
+
+                const Vector2d topLeft = regionFromImage.transformPosition(Vector2d(0, 0));
+                const Vector2d bottomRight = regionFromImage.transformPosition(
+                    Vector2d(primitive.imageWidth, primitive.imageHeight));
+                image.targetRect = tiny_skia::filter::PixelRect{
+                    std::min(topLeft.x, bottomRight.x) + regionX,
+                    std::min(topLeft.y, bottomRight.y) + regionY,
+                    std::abs(bottomRight.x - topLeft.x),
+                    std::abs(bottomRight.y - topLeft.y)};
               }
-
-              const Boxd imageBox =
-                  Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
-              const Boxd regionRect = Boxd::FromXYWH(0, 0, regionW, regionH);
-              const Transformd regionFromImage =
-                  primitive.preserveAspectRatio.elementContentFromViewBoxTransform(regionRect,
-                                                                                   imageBox);
-
-              const Vector2d topLeft = regionFromImage.transformPosition(Vector2d(0, 0));
-              const Vector2d bottomRight = regionFromImage.transformPosition(
-                  Vector2d(primitive.imageWidth, primitive.imageHeight));
-              image.targetRect = tiny_skia::filter::PixelRect{
-                  std::min(topLeft.x, bottomRight.x) + regionX,
-                  std::min(topLeft.y, bottomRight.y) + regionY, std::abs(bottomRight.x - topLeft.x),
-                  std::abs(bottomRight.y - topLeft.y)};
             }
             graphNode.primitive = std::move(image);
 

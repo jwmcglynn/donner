@@ -3,7 +3,7 @@
 **Status:** In Progress (Milestones 1-5 functionally complete; remaining work is debt reduction)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-07
-**Last Updated:** 2026-03-10
+**Last Updated:** 2026-03-11
 **Tracking:** [#151](https://github.com/jwmcglynn/donner/issues/151)
 
 ## Summary
@@ -66,12 +66,12 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - Skia backend still routes most graphs through the shared CPU executor
 - Skia native `saveLayer` blur is currently restricted to no-crop cases; transformed blur chains use
   the shared local-raster executor instead
-- `feImage` fragment references (`href="#elementId"`) — deferred to future work, depends on nested SVG rendering (e.g. `<use>` element support)
+- `feImage` fragment references (`href="#elementId"`) render through 8-bit intermediate buffer, causing edge-pixel differences (~9K px for simple rects, ~34K px for transforms/chaining) vs resvg's direct float rendering
 - Light coordinate scaling: z and surfaceScale interaction at non-1:1 pixel density causes minor diffs for some spot light configurations (~3K pixels for cone-boundary cases)
 
 ## Open Issues and Current Findings
 
-As of 2026-03-10:
+As of 2026-03-11:
 
 - `bazel test //donner/svg/renderer/tests:resvg_test_suite` passes on the default TinySkia
   backend.
@@ -123,10 +123,13 @@ investigations, and intentional skips for UB or pathological cases.
   titles explicitly mark them as UB, so they are no longer treated as actionable feature debt.
   Remaining gap: keep `BackgroundImage` / `BackgroundAlpha` (`e-filter-032.svg`,
   `e-filter-033.svg`) explicitly deferred unless scope changes.
-- [ ] Extend `feImage` beyond external bitmap loading.
-  Affected tests: `e-feImage-006.svg` through `e-feImage-024.svg`.
-  Plan: support fragment references by re-entrant subtree rendering into a pixmap, then add
-  subregion, OBB, percentage-width, and rotated-subregion coverage on top of that.
+- [x] Extend `feImage` with fragment references (`href="#elementId"`).
+  Fragment references render the referenced element subtree into an offscreen pixmap via
+  `instantiateSubtreeForStandaloneRender` + `traverseRange`, with a recursion guard to prevent
+  infinite loops. Elements inside `<defs>` are handled by ignoring `Nonrenderable` behavior.
+  Subregion support (OBB, percentage width, absolute coords) works for non-rotated cases
+  (`e-feImage-007.svg` through `e-feImage-010.svg`). Remaining gap: `e-feImage-011.svg` (rotated
+  subregion) has a filter region sizing mismatch with the rotation transform.
 - [ ] Support filter application on the root `<svg>`.
   Affected tests: `e-filter-060.svg`.
   Plan: define root-surface capture semantics in `RendererDriver` and ensure viewport clipping is
@@ -262,7 +265,7 @@ Less common but required for full spec compliance.
 - [x] `feMorphology` — erode/dilate operations
 - [x] `feTile` — tile input to fill primitive subregion
 - [x] `feTurbulence` — Perlin/fractal noise generation
-- [x] `feImage` — external image rendering complete; fragment references (`href="#elementId"`) deferred to future work (depends on nested SVG/`<use>` support)
+- [x] `feImage` — external image rendering, fragment references (`href="#elementId"`), and primitive subregion placement (OBB, percentage, absolute coords) complete; rotated subregion sizing still open (`e-feImage-011.svg`)
 - [x] `feDisplacementMap` — spatial displacement using a channel map
 - [x] `feGaussianBlur` — `edgeMode` attribute (none/duplicate/wrap)
 
@@ -751,11 +754,18 @@ void turbulence(Pixmap& dst, const TurbulenceParams& params);
 
 **Algorithm:** Render an external image or SVG fragment reference into the filter output buffer.
 Two cases:
-1. **External image URL (implemented):** Load via existing `ImageResource` pipeline, draw into the
-   output buffer with `preserveAspectRatio` scaling.
-2. **Fragment reference (`#elementId`) (future work):** Requires re-entrant rendering of the
-   referenced element subtree into a temporary pixmap. This depends on nested SVG rendering
-   infrastructure (similar to `<use>` element support) and is deferred to future work.
+1. **External image URL:** Load via existing `ImageResource` pipeline, draw into the output buffer
+   with `preserveAspectRatio` scaling into the primitive subregion.
+2. **Fragment reference (`#elementId`):** Re-entrant rendering of the referenced element subtree
+   into an offscreen pixmap via `instantiateSubtreeForStandaloneRender` + `traverseRange`. Elements
+   inside `<defs>` are handled by ignoring `Nonrenderable` behavior. A recursion guard
+   (`feImageFragmentGuard_`) prevents infinite loops when the referenced element itself uses the
+   same filter. The rendered pixmap is placed at (0,0) with 1:1 pixel mapping in device space,
+   then the filter pipeline clips to the filter region.
+
+Primitive subregion placement (x/y/width/height on the `<feImage>` element) is handled by the
+shared `resolvePrimitivePosition`/`resolvePrimitiveSize` infrastructure in `FilterGraphExecutor`,
+supporting both `objectBoundingBox` and `userSpaceOnUse` `primitiveUnits` modes.
 
 This primitive is handled in the renderer layer (not the tiny-skia-cpp filter library) because it
 requires access to the SVG document and image loading infrastructure.
@@ -988,11 +998,12 @@ CSS filter functions (`blur()`, `brightness()`, etc.) cover common use cases and
 
 - Should we support `BackgroundImage`/`BackgroundAlpha` standard inputs? These require CSS compositing isolation groups and are rarely used in practice. Proposed: defer to future work.
 - What is the maximum filter region size we should enforce? 4096x4096 seems reasonable for an SVG library but may need tuning.
-- Should `feImage` support referencing SVG fragments (not just external images)? The spec allows `href="#elementId"` to render a subtree. This requires re-entrant rendering.
+- ~~Should `feImage` support referencing SVG fragments (not just external images)?~~ **Resolved:** implemented via re-entrant rendering with recursion guard.
 
 ## Future Work
 
-- [ ] `feImage` fragment references (`href="#elementId"`) — requires re-entrant rendering of referenced element subtrees into pixmaps; depends on nested SVG rendering infrastructure (e.g. `<use>` element)
+- [ ] `feImage` rotated subregion sizing — `e-feImage-011.svg` has filter region mismatch with rotation transform
+- [ ] `feImage` fragment precision: render directly into float filter buffer instead of 8-bit intermediate to eliminate edge-pixel differences
 - [ ] `BackgroundImage` / `BackgroundAlpha` standard inputs via CSS isolation groups
 - [ ] GPU-accelerated filter execution for large filter regions
 - [ ] Filter parameter animation support

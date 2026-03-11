@@ -54,6 +54,16 @@ public:
    */
   void setInitialContextPaint(std::any fill, std::any stroke);
 
+  /**
+   * Instantiate a render tree for a single element subtree, ignoring \c Nonrenderable behavior.
+   * Used for feImage fragment references that need to render elements inside `<defs>`.
+   *
+   * @param targetEntity The entity to render (root of the subtree).
+   * @param verbose If true, enable verbose logging.
+   * @return The last entity in the instantiated subtree (for use with traverseRange).
+   */
+  Entity instantiateSubtreeForStandaloneRender(Entity targetEntity, bool verbose);
+
 private:
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.

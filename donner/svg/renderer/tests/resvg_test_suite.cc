@@ -366,25 +366,47 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
             {"e-feImage-004.svg",
              Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
-            {"e-feImage-006.svg", Params::Skip()},  // Fragment reference (#element)
-            {"e-feImage-007.svg", Params::Skip()},  // Subregion with objectBoundingBox
-            {"e-feImage-008.svg", Params::Skip()},  // Subregion with objectBoundingBox
-            {"e-feImage-009.svg", Params::Skip()},  // Subregion with percentage width
-            {"e-feImage-010.svg", Params::Skip()},  // Subregion with percentage width
-            {"e-feImage-011.svg", Params::Skip()},  // Subregion with rotation transform
-            {"e-feImage-012.svg", Params::Skip()},  // Fragment reference outside defs
-            {"e-feImage-013.svg", Params::Skip()},  // Fragment reference outside defs
-            {"e-feImage-014.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-015.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-016.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-017.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-018.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-019.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-020.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-021.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-022.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-023.svg", Params::Skip()},  // Fragment reference
-            {"e-feImage-024.svg", Params::Skip()},  // Fragment reference
+            {"e-feImage-006.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   9500)},  // Fragment ref edge AA (8-bit intermediate buffer)
+            {"e-feImage-007.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   6600)},  // OBB subregion, bilinear edge diff
+            {"e-feImage-008.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   6600)},  // OBB subregion with percentage, bilinear edge diff
+            {"e-feImage-009.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   18200)},  // Percentage width subregion, edge diff
+            {"e-feImage-010.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   18900)},  // Absolute subregion coords, edge diff
+            {"e-feImage-011.svg",
+             Params::Skip()},  // Subregion with rotation: filter region sizing mismatch
+            {"e-feImage-012.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   36000)},  // Fragment ref outside defs, larger rect edge diff
+            {"e-feImage-013.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   9500)},  // Fragment ref group, edge AA
+            {"e-feImage-014.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   9500)},  // Fragment ref use element, edge AA
+            {"e-feImage-017.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   9500)},  // Fragment ref outside defs (2), edge AA
+            {"e-feImage-019.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   18200)},  // Fragment ref with skewX transform on element
+            {"e-feImage-021.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   34200)},  // Fragment ref with complex transform (skewX+translate)
+            {"e-feImage-023.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   9500)},  // Fragment ref with opacity, edge AA
+            {"e-feImage-024.svg",
+             Params::WithThreshold(kDefaultThreshold,
+                                   33600)},  // Chained feImage fragment refs
         })),
     TestNameFromFilename);
 

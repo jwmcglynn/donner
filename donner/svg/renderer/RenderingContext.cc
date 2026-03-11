@@ -89,8 +89,10 @@ bool IsValidMarker(EntityHandle handle) {
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
-                                const ContextPaintServers& initialContext = {})
-      : registry_(registry), verbose_(verbose), contextPaintServers_(initialContext) {
+                                const ContextPaintServers& initialContext = {},
+                                bool ignoreNonrenderable = false)
+      : registry_(registry), verbose_(verbose), ignoreNonrenderable_(ignoreNonrenderable),
+        contextPaintServers_(initialContext) {
     // Get the LayoutSystem from the registry context if available
     LayoutSystem* layoutSystem = nullptr;
     if (registry_.ctx().contains<LayoutSystem*>()) {
@@ -132,7 +134,7 @@ public:
     }
 
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
-      if (behavior->behavior == RenderingBehavior::Nonrenderable) {
+      if (behavior->behavior == RenderingBehavior::Nonrenderable && !ignoreNonrenderable_) {
         return;
       } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
         traverseChildren = false;
@@ -515,8 +517,9 @@ public:
 
 private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  Registry& registry_;  //!< Registry being operated on for rendering..
-  bool verbose_;        //!< If true, enable verbose logging.
+  Registry& registry_;           //!< Registry being operated on for rendering..
+  bool verbose_;                 //!< If true, enable verbose logging.
+  bool ignoreNonrenderable_;     //!< If true, skip the Nonrenderable behavior check.
 
   int drawOrder_ = 0;                       //!< The current draw order index.
   Entity lastRenderedEntity_ = entt::null;  //!< The last entity rendered.
@@ -788,6 +791,21 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
       [](const RenderingInstanceComponent& lhs, const RenderingInstanceComponent& rhs) {
         return lhs.drawOrder < rhs.drawOrder;
       });
+}
+
+Entity RenderingContext::instantiateSubtreeForStandaloneRender(Entity targetEntity, bool verbose) {
+  // NOTE: Does NOT call invalidateRenderTree() to preserve existing render instances.
+  // New instances are added alongside existing ones.
+  RenderingContextImpl impl(registry_, verbose, {}, /*ignoreNonrenderable=*/true);
+  Entity lastEntity = entt::null;
+  impl.traverseTree(targetEntity, &lastEntity);
+
+  registry_.sort<RenderingInstanceComponent>(
+      [](const RenderingInstanceComponent& lhs, const RenderingInstanceComponent& rhs) {
+        return lhs.drawOrder < rhs.drawOrder;
+      });
+
+  return lastEntity != entt::null ? lastEntity : targetEntity;
 }
 
 }  // namespace donner::svg::components

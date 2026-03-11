@@ -16,6 +16,7 @@
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
@@ -406,6 +407,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         instance.resolvedFilter.has_value() && !hasFilterLayer;
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -676,6 +678,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         instance.resolvedFilter.has_value() && !hasFilterLayer;
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -1234,6 +1237,166 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
 
     // Clear the sub-document pointer since we've now rendered to pixels.
     imageNode->svgSubDocument = nullptr;
+  }
+}
+
+void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGraph,
+                                                Registry& registry) {
+  // Lazily create the recursion guard set if needed.
+  std::unordered_set<entt::id_type> localGuard;
+  const bool ownsGuard = (feImageFragmentGuard_ == nullptr);
+  if (ownsGuard) {
+    feImageFragmentGuard_ = &localGuard;
+  }
+
+  for (auto& node : filterGraph.nodes) {
+    auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
+    if (!imageNode || imageNode->fragmentId.empty() || !imageNode->imageData.empty()) {
+      continue;
+    }
+
+    // Look up the referenced element by ID.
+    const auto& docCtx = registry.ctx().get<const components::SVGDocumentContext>();
+    const Entity targetEntity = docCtx.getEntityById(imageNode->fragmentId);
+    if (targetEntity == entt::null) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Fragment '" << imageNode->fragmentId
+                  << "' not found\n";
+      }
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Recursion guard: skip if this entity is already being rendered as an feImage fragment.
+    const auto entityId = entt::to_integral(targetEntity);
+    if (feImageFragmentGuard_->count(entityId) > 0) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Skipping recursive reference to '"
+                  << imageNode->fragmentId << "'\n";
+      }
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Create an offscreen renderer at the same canvas size.
+    auto offscreen = renderer_.createOffscreenInstance();
+    if (!offscreen) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Backend does not support offscreen rendering\n";
+      }
+      continue;
+    }
+
+    // Add to recursion guard before rendering.
+    feImageFragmentGuard_->insert(entityId);
+
+    // Check if the element is in the normal render tree.
+    const auto* targetInstance =
+        registry.try_get<components::RenderingInstanceComponent>(targetEntity);
+
+    // For elements NOT in the render tree (e.g., inside <defs>), create a temporary
+    // standalone render tree for the target subtree.
+    const bool needsStandaloneRender = (targetInstance == nullptr);
+    Entity standaloneLastEntity = entt::null;
+    if (needsStandaloneRender) {
+      if (!registry.ctx().contains<components::RenderingContext>()) {
+        registry.ctx().emplace<components::RenderingContext>(registry);
+      }
+      auto& renderCtx = registry.ctx().get<components::RenderingContext>();
+      standaloneLastEntity =
+          renderCtx.instantiateSubtreeForStandaloneRender(targetEntity, verbose_);
+      // Re-query after instantiation.
+      targetInstance = registry.try_get<components::RenderingInstanceComponent>(targetEntity);
+    }
+
+    if (targetInstance == nullptr) {
+      feImageFragmentGuard_->erase(entityId);
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Determine the last entity in the subtree for traverseRange.
+    Entity lastEntity;
+    if (needsStandaloneRender) {
+      lastEntity = standaloneLastEntity;
+    } else if (targetInstance->subtreeInfo) {
+      lastEntity = targetInstance->subtreeInfo->lastRenderedEntity;
+    } else {
+      lastEntity = targetEntity;
+    }
+
+    // Begin frame with same viewport.
+    RenderViewport viewport;
+    viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
+    viewport.devicePixelRatio = 1.0;
+    offscreen->beginFrame(viewport);
+
+    // Create a sub-driver for offscreen rendering and share the recursion guard.
+    RendererDriver subDriver(*offscreen, verbose_);
+    subDriver.renderingSize_ = renderingSize_;
+    subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
+
+    {
+      RenderingInstanceView subView(registry);
+      subDriver.traverseRange(subView, registry, targetEntity, lastEntity);
+    }
+
+    offscreen->endFrame();
+
+    // Capture the rendered pixels.
+    RendererBitmap snapshot = offscreen->takeSnapshot();
+    if (!snapshot.empty()) {
+      imageNode->imageWidth = snapshot.dimensions.x;
+      imageNode->imageHeight = snapshot.dimensions.y;
+
+      // Convert to tightly packed RGBA.
+      const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
+      if (snapshot.rowBytes == tightRowBytes) {
+        imageNode->imageData = std::move(snapshot.pixels);
+      } else {
+        imageNode->imageData.resize(tightRowBytes * snapshot.dimensions.y);
+        for (int y = 0; y < snapshot.dimensions.y; ++y) {
+          std::memcpy(imageNode->imageData.data() + y * tightRowBytes,
+                      snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
+        }
+      }
+    }
+
+    // Remove from recursion guard after rendering.
+    feImageFragmentGuard_->erase(entityId);
+
+    // If we created standalone render instances, remove them to restore the original state.
+    if (needsStandaloneRender) {
+      // Collect all entities that have RenderingInstanceComponent with draw orders >= the
+      // standalone instances. Since standalone instances were added after the main render tree,
+      // they have the highest draw orders. We can find them by checking if they existed before.
+      // Simplest approach: iterate all instances and remove any on non-renderable entities.
+      std::vector<Entity> toRemove;
+      for (auto entity : registry.view<components::RenderingInstanceComponent>()) {
+        // If the entity's data handle has Nonrenderable behavior, it was added by standalone render.
+        const auto* behavior =
+            registry.try_get<components::RenderingBehaviorComponent>(entity);
+        if (behavior && behavior->behavior == components::RenderingBehavior::Nonrenderable) {
+          toRemove.push_back(entity);
+        }
+      }
+      // Also check shadow entities — the target and its children may be shadow entities
+      // whose light entities are Nonrenderable.
+      if (registry.all_of<components::RenderingInstanceComponent>(targetEntity)) {
+        toRemove.push_back(targetEntity);
+      }
+      for (Entity e : toRemove) {
+        registry.remove<components::RenderingInstanceComponent>(e);
+      }
+    }
+
+    // Clear fragmentId since we've rendered to pixels.
+    imageNode->fragmentId = RcString();
+  }
+
+  // Clean up owned guard.
+  if (ownsGuard) {
+    feImageFragmentGuard_ = nullptr;
   }
 }
 

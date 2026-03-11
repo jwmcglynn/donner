@@ -614,6 +614,11 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
                  svgLoaded && svgLoaded->subDocument) {
         // SVG sub-document — store the pointer for the renderer to pre-render to pixels.
         prim.svgSubDocument = svgLoaded->subDocument;
+      } else if (const std::string_view hrefView(feImage->href);
+                 !hrefView.empty() && hrefView[0] == '#') {
+        // Same-document fragment reference — store the fragment ID for the renderer to resolve.
+        prim.fragmentId = RcString(hrefView.substr(1));
+        prim.isFragmentReference = true;
       }
 
       // feImage has no standard input (it generates its own content).

@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <unordered_set>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
@@ -58,6 +60,7 @@ private:
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transformd& parentAbsoluteTransform, double opacity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph);
+  void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry);
   static void setSubDocumentContextPaint(
       SVGDocument& subDocument, const components::ResolvedPaintServer& contextFill,
       const components::ResolvedPaintServer& contextStroke);
@@ -76,6 +79,11 @@ private:
   std::vector<DeferredPop> subtreeMarkers_;
   Transformd layerBaseTransform_;
   Vector2i renderingSize_;  ///< Canvas size in pixels, set during draw().
+
+  /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered
+  /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver
+  /// instances via pointer.
+  std::unordered_set<entt::id_type>* feImageFragmentGuard_ = nullptr;
 };
 
 }  // namespace donner::svg
