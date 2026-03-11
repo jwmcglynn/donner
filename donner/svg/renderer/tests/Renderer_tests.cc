@@ -273,6 +273,34 @@ TEST_F(RendererTests, FilterStrokePaint) {
           .includeAntiAliasingDifferences());
 }
 
+TEST_F(RendererTests, FilterDropShadow) {
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/filter_drop_shadow.svg",
+      "donner/svg/renderer/testdata/golden/filter_drop_shadow.png", this->optionsExperimental(),
+      ImageComparisonParams::WithThreshold(0.1f, 50)
+          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .includeAntiAliasingDifferences());
+}
+
+TEST_F(RendererTests, FilterSpotLight) {
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/filter_spot_light.svg",
+      "donner/svg/renderer/testdata/golden/filter_spot_light.png", this->optionsExperimental(),
+      ImageComparisonParams::WithThreshold(0.1f, 50)
+          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .includeAntiAliasingDifferences());
+}
+
+TEST_F(RendererTests, FilterDisplacementMap) {
+  this->compareWithGolden(
+      "donner/svg/renderer/testdata/filter_displacement_map.svg",
+      "donner/svg/renderer/testdata/golden/filter_displacement_map.png",
+      this->optionsExperimental(),
+      ImageComparisonParams::WithThreshold(0.1f, 50)
+          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .includeAntiAliasingDifferences());
+}
+
 TEST_F(RendererTests, DonnerIcon) {
   this->compareWithGolden("donner_icon.svg", "donner/svg/renderer/testdata/golden/donner_icon.png");
 }

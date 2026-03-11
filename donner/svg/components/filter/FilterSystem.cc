@@ -535,7 +535,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
           static_cast<filter_primitive::DisplacementMap::Channel>(displace->xChannelSelector);
       prim.yChannelSelector =
           static_cast<filter_primitive::DisplacementMap::Channel>(displace->yChannelSelector);
-      filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));
+      filterGraph.nodes.push_back(makeFilterNode2(prim, *primitive, primitiveCIF));
     } else if (const auto* diffuse = registry.try_get<FEDiffuseLightingComponent>(cur)) {
       filter_primitive::DiffuseLighting prim;
       prim.surfaceScale = diffuse->surfaceScale;
