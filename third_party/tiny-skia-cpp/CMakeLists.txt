@@ -5,6 +5,7 @@ project(tiny-skia-cpp LANGUAGES CXX)
 set(TINY_SKIA_SOURCES
   # Core
   src/tiny_skia/AlphaRuns.cpp
+  src/tiny_skia/AnalyticEdge.cpp
   src/tiny_skia/BlendMode.cpp
   src/tiny_skia/Blitter.cpp
   src/tiny_skia/Color.cpp
@@ -27,30 +28,30 @@ set(TINY_SKIA_SOURCES
   src/tiny_skia/Transform.cpp
 
   # Pipeline
-  src/tiny_skia/pipeline/Blitter.cpp
   src/tiny_skia/pipeline/Highp.cpp
   src/tiny_skia/pipeline/Lowp.cpp
-  src/tiny_skia/pipeline/Mod.cpp
+  src/tiny_skia/pipeline/Pipeline.cpp
+  src/tiny_skia/pipeline/PipelineBlitter.cpp
 
   # Shaders
   src/tiny_skia/shaders/Gradient.cpp
   src/tiny_skia/shaders/LinearGradient.cpp
-  src/tiny_skia/shaders/Mod.cpp
   src/tiny_skia/shaders/Pattern.cpp
   src/tiny_skia/shaders/RadialGradient.cpp
+  src/tiny_skia/shaders/Shaders.cpp
   src/tiny_skia/shaders/SweepGradient.cpp
 
   # Scan
   src/tiny_skia/scan/Hairline.cpp
   src/tiny_skia/scan/HairlineAa.cpp
-  src/tiny_skia/scan/Mod.cpp
   src/tiny_skia/scan/Path.cpp
   src/tiny_skia/scan/PathAa.cpp
+  src/tiny_skia/scan/Scan.cpp
 
   # Path64
   src/tiny_skia/path64/Cubic64.cpp
   src/tiny_skia/path64/LineCubicIntersections.cpp
-  src/tiny_skia/path64/Mod.cpp
+  src/tiny_skia/path64/Path64.cpp
   src/tiny_skia/path64/Point64.cpp
   src/tiny_skia/path64/Quad64.cpp
   src/tiny_skia/path64/Scalar64.cpp
@@ -64,9 +65,28 @@ set(TINY_SKIA_SOURCES
   src/tiny_skia/wide/U16x16T.cpp
   src/tiny_skia/wide/U32x4T.cpp
   src/tiny_skia/wide/U32x8T.cpp
-  src/tiny_skia/wide/Mod.cpp
+  src/tiny_skia/wide/Wide.cpp
 
-  # Painter (top-level drawing API)
+  # Filter
+  src/tiny_skia/filter/Blend.cpp
+  src/tiny_skia/filter/ColorMatrix.cpp
+  src/tiny_skia/filter/ColorSpace.cpp
+  src/tiny_skia/filter/ComponentTransfer.cpp
+  src/tiny_skia/filter/Composite.cpp
+  src/tiny_skia/filter/ConvolveMatrix.cpp
+  src/tiny_skia/filter/DisplacementMap.cpp
+  src/tiny_skia/filter/FilterGraph.cpp
+  src/tiny_skia/filter/Flood.cpp
+  src/tiny_skia/filter/GaussianBlur.cpp
+  src/tiny_skia/filter/Lighting.cpp
+  src/tiny_skia/filter/Merge.cpp
+  src/tiny_skia/filter/Morphology.cpp
+  src/tiny_skia/filter/Offset.cpp
+  src/tiny_skia/filter/Tile.cpp
+  src/tiny_skia/filter/Turbulence.cpp
+
+  # Canvas (high-level drawing API)
+  src/tiny_skia/Canvas.cpp
   src/tiny_skia/MaskOps.cpp
   src/tiny_skia/Painter.cpp
 )
