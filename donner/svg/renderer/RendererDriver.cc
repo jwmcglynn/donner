@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 
+#include <any>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -25,8 +27,10 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/core/Overflow.h"
+#include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
 namespace donner::svg {
@@ -355,14 +359,17 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     // Set the absolute transform for this entity. This uses setMatrix (no save/restore),
     // so it doesn't interact with the clip/layer save stack.
+    // layerBaseTransform_ is composed with the entity's transform to support sub-document
+    // rendering where a base transform maps from the parent document's coordinate space.
     if (verbose_) {
+      const Transformd combined = layerBaseTransform_ * instance.entityFromWorldTransform;
       std::cout << "[traverse] entity=" << entt::to_integral(entity)
                 << " visible=" << instance.visible
                 << " hasMask=" << instance.mask.has_value()
                 << " hasSubtree=" << instance.subtreeInfo.has_value()
-                << " transform=" << instance.entityFromWorldTransform << "\n";
+                << " transform=" << combined << "\n";
     }
-    renderer_.setTransform(instance.entityFromWorldTransform);
+    renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
     const double opacity = style.properties->opacity.getRequired();
     const bool hasIsolatedLayer = opacity < 1.0;
@@ -398,6 +405,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const bool filterHidesElement =
         instance.resolvedFilter.has_value() && !hasFilterLayer;
     if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -454,6 +462,61 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         renderer_.drawText(*text, textParams);
+      } else if (const auto* svgImage =
+                     instance.dataHandle(registry)
+                         .try_get<components::LoadedSVGImageComponent>()) {
+        // SVG sub-document referenced by <image>.
+        if (svgImage->subDocument != nullptr) {
+          const auto* sizedElement =
+              instance.dataHandle(registry)
+                  .try_get<components::ComputedSizedElementComponent>();
+          if (sizedElement != nullptr) {
+            const auto* preserveAspectRatioComp =
+                instance.dataHandle(registry)
+                    .try_get<components::PreserveAspectRatioComponent>();
+            const PreserveAspectRatio aspectRatio =
+                preserveAspectRatioComp != nullptr
+                    ? preserveAspectRatioComp->preserveAspectRatio
+                    : PreserveAspectRatio::Default();
+            const double opacity = style.properties->opacity.getRequired();
+
+            auto* subDoc = std::any_cast<SVGDocument>(svgImage->subDocument);
+            if (subDoc != nullptr) {
+              drawSubDocument(*subDoc, sizedElement->bounds, aspectRatio, opacity);
+            }
+          }
+        }
+      } else if (const auto* externalUse =
+                     instance.dataHandle(registry)
+                         .try_get<components::ExternalUseComponent>()) {
+        // External SVG sub-document referenced by <use>.
+        if (externalUse->subDocument != nullptr) {
+          auto* subDoc = std::any_cast<SVGDocument>(externalUse->subDocument);
+          if (subDoc != nullptr) {
+            // Pass the <use> element's fill/stroke as context-fill/context-stroke
+            // for the sub-document (SVG2 context paint inheritance).
+            setSubDocumentContextPaint(*subDoc, instance.resolvedFill,
+                                       instance.resolvedStroke);
+
+            if (!externalUse->fragment.empty()) {
+              // Fragment reference: render only the referenced element from the sub-document.
+              // Pass the <use> element's absolute transform so the fragment is positioned
+              // at the <use> element's location in the parent document.
+              const Transformd parentAbsoluteTransform =
+                  layerBaseTransform_ * instance.entityFromWorldTransform;
+              drawSubDocumentElement(*subDoc, externalUse->fragment,
+                                     parentAbsoluteTransform,
+                                     style.properties->opacity.getRequired());
+            } else {
+              // Whole-document reference: render the entire sub-document.
+              const Vector2i subDocSize = subDoc->canvasSize();
+              const Boxd viewportBounds =
+                  Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
+              drawSubDocument(*subDoc, viewportBounds, PreserveAspectRatio::Default(),
+                              style.properties->opacity.getRequired());
+            }
+          }
+        }
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -612,6 +675,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const bool filterHidesElement =
         instance.resolvedFilter.has_value() && !hasFilterLayer;
     if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -997,6 +1061,180 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   layerBaseTransform_ = savedLayerBase;
+}
+
+void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewportBounds,
+                                     const PreserveAspectRatio& aspectRatio, double opacity) {
+  // Prepare the sub-document's render tree (styles, layout, resources).
+  RendererUtils::prepareDocumentForRendering(subDocument, verbose_);
+
+  // Determine the sub-document's intrinsic size for preserveAspectRatio mapping.
+  // Per SVG2 spec, the <image> element's preserveAspectRatio controls scaling, and
+  // the referenced SVG's root preserveAspectRatio is overridden to 'none'.
+  const Vector2i subDocSize = subDocument.canvasSize();
+  const Boxd subDocRect = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
+
+  // Clip to the <image> element's bounds.
+  ResolvedClip imageClip;
+  imageClip.clipRect = viewportBounds;
+  renderer_.pushClip(imageClip);
+
+  // Apply opacity as an isolated layer if needed.
+  const bool needsOpacityLayer = opacity < 1.0;
+  if (needsOpacityLayer) {
+    renderer_.pushIsolatedLayer(opacity);
+  }
+
+  // Compute the base transform that maps sub-document coordinates into the parent canvas.
+  // This composes:
+  //   1. preserveAspectRatio mapping from sub-doc intrinsic size to the <image> viewport
+  //   2. The sub-document's own viewBox-to-document transform
+  // traverse() will compose this with each sub-document entity's entityFromWorldTransform.
+  const Transformd subDocFromLocal =
+      aspectRatio.elementContentFromViewBoxTransform(viewportBounds, subDocRect);
+  const Transformd baseTransform = subDocFromLocal * subDocument.documentFromCanvasTransform();
+
+  // Save and override layerBaseTransform for sub-document rendering.
+  const Transformd savedLayerBase = layerBaseTransform_;
+  layerBaseTransform_ = baseTransform;
+
+  // Traverse the sub-document's render tree, emitting draw calls to the same renderer.
+  RenderingInstanceView subView(subDocument.registry());
+  traverse(subView, subDocument.registry());
+
+  layerBaseTransform_ = savedLayerBase;
+
+  if (needsOpacityLayer) {
+    renderer_.popIsolatedLayer();
+  }
+
+  renderer_.popClip();
+}
+
+void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
+                                            const Transformd& parentAbsoluteTransform,
+                                            double opacity) {
+  // Prepare the sub-document's render tree.
+  RendererUtils::prepareDocumentForRendering(subDocument, verbose_);
+
+  // Find the referenced element by ID.
+  auto& docCtx = subDocument.registry().ctx().get<const components::SVGDocumentContext>();
+  const Entity targetEntity = docCtx.getEntityById(RcString(fragmentId));
+  if (targetEntity == entt::null) {
+    if (verbose_) {
+      std::cerr << "[drawSubDocumentElement] Fragment '" << fragmentId << "' not found\n";
+    }
+    return;
+  }
+
+  // Find the target's RenderingInstanceComponent in the sub-document's render tree.
+  const auto* targetInstance =
+      subDocument.registry().try_get<components::RenderingInstanceComponent>(targetEntity);
+  if (targetInstance == nullptr) {
+    if (verbose_) {
+      std::cerr << "[drawSubDocumentElement] No RenderingInstanceComponent for fragment '"
+                << fragmentId << "'\n";
+    }
+    return;
+  }
+
+  // Determine the subtree range: from the target entity to its last descendant.
+  const Entity lastEntity = targetInstance->subtreeInfo
+                                ? targetInstance->subtreeInfo->lastRenderedEntity
+                                : targetEntity;
+
+  // Apply opacity as an isolated layer if needed.
+  const bool needsOpacityLayer = opacity < 1.0;
+  if (needsOpacityLayer) {
+    renderer_.pushIsolatedLayer(opacity);
+  }
+
+  // Set layerBaseTransform to position the target element at the <use> element's location.
+  // The target's entityFromWorldTransform includes all ancestor transforms from the
+  // sub-document root. By composing parentAbsoluteTransform with the inverse of the target's
+  // transform, we strip the sub-document ancestors and place the element at the <use> position.
+  // For each entity in the subtree:
+  //   finalTransform = parentAbsolute * inverse(target) * entity = parentAbsolute * entityFromTarget
+  const Transformd savedLayerBase = layerBaseTransform_;
+  layerBaseTransform_ = parentAbsoluteTransform * targetInstance->entityFromWorldTransform.inverse();
+
+  // Traverse only the target element's subtree from the sub-document's render tree.
+  RenderingInstanceView subView(subDocument.registry());
+  traverseRange(subView, subDocument.registry(), targetEntity, lastEntity);
+
+  layerBaseTransform_ = savedLayerBase;
+
+  if (needsOpacityLayer) {
+    renderer_.popIsolatedLayer();
+  }
+}
+
+void RendererDriver::setSubDocumentContextPaint(
+    SVGDocument& subDocument, const components::ResolvedPaintServer& contextFill,
+    const components::ResolvedPaintServer& contextStroke) {
+  if (!subDocument.registry().ctx().contains<components::RenderingContext>()) {
+    subDocument.registry().ctx().emplace<components::RenderingContext>(subDocument.registry());
+  }
+  auto& renderCtx = subDocument.registry().ctx().get<components::RenderingContext>();
+  renderCtx.setInitialContextPaint(
+      std::any(contextFill), std::any(contextStroke));
+}
+
+void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) {
+  for (auto& node : filterGraph.nodes) {
+    auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
+    if (!imageNode || !imageNode->svgSubDocument || !imageNode->imageData.empty()) {
+      continue;
+    }
+
+    // Cast the type-erased sub-document pointer.
+    auto* subDoc = std::any_cast<SVGDocument>(imageNode->svgSubDocument);
+    if (!subDoc) {
+      continue;
+    }
+
+    // Create an independent offscreen renderer to render the sub-document.
+    auto offscreen = renderer_.createOffscreenInstance();
+    if (!offscreen) {
+      if (verbose_) {
+        std::cerr << "[preRenderSvgFeImages] Backend does not support offscreen rendering\n";
+      }
+      continue;
+    }
+
+    // Render the sub-document into the offscreen renderer.
+    // draw() handles prepareDocumentForRendering, beginFrame, traverse, and endFrame internally.
+    RendererDriver subDriver(*offscreen, verbose_);
+    subDriver.draw(*subDoc);
+
+    // Determine the rendered size from the sub-document's canvas size.
+    const Vector2i subDocSize = subDoc->canvasSize();
+    if (subDocSize.x <= 0 || subDocSize.y <= 0) {
+      continue;
+    }
+
+    // Capture the rendered pixels.
+    RendererBitmap snapshot = offscreen->takeSnapshot();
+    if (!snapshot.empty()) {
+      imageNode->imageWidth = snapshot.dimensions.x;
+      imageNode->imageHeight = snapshot.dimensions.y;
+
+      // The snapshot may have row padding. Convert to tightly packed RGBA.
+      const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
+      if (snapshot.rowBytes == tightRowBytes) {
+        imageNode->imageData = std::move(snapshot.pixels);
+      } else {
+        imageNode->imageData.resize(tightRowBytes * snapshot.dimensions.y);
+        for (int y = 0; y < snapshot.dimensions.y; ++y) {
+          std::memcpy(imageNode->imageData.data() + y * tightRowBytes,
+                      snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
+        }
+      }
+    }
+
+    // Clear the sub-document pointer since we've now rendered to pixels.
+    imageNode->svgSubDocument = nullptr;
+  }
 }
 
 }  // namespace donner::svg

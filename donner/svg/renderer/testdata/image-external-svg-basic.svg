@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="200" height="200" viewBox="0 0 200 200">
+  <!-- Background -->
+  <rect width="200" height="200" fill="#eeeeee"/>
+
+  <!-- External SVG rendered as image, centered with padding -->
+  <image href="external-shapes.svg" x="25" y="25" width="150" height="150"/>
+</svg>

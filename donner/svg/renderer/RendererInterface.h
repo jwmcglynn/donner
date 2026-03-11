@@ -291,6 +291,15 @@ public:
    * consumers. The snapshot must remain valid after the render pass completes.
    */
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
+
+  /**
+   * Creates an independent offscreen renderer instance of the same type as this one.
+   * Used for rendering sub-documents to pixmaps (e.g., for feImage with SVG content).
+   * Returns nullptr if offscreen rendering is not supported.
+   */
+  [[nodiscard]] virtual std::unique_ptr<RendererInterface> createOffscreenInstance() const {
+    return nullptr;
+  }
 };
 
 }  // namespace donner::svg

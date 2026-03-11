@@ -13,7 +13,7 @@ namespace donner::svg {
 
 SVGDocument::SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
                          EntityHandle ontoEntityHandle)
-    : registry_(std::move(registry)) {
+    : registry_(std::move(registry)), processingMode_(settings.processingMode) {
   auto& ctx = registry_->ctx().emplace<components::SVGDocumentContext>(
       components::SVGDocumentContext::InternalCtorTag{}, registry_);
   if (ontoEntityHandle) {
@@ -25,6 +25,10 @@ SVGDocument::SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
   components::ResourceManagerContext& resourceCtx =
       registry_->ctx().emplace<components::ResourceManagerContext>(*registry_);
   resourceCtx.setResourceLoader(std::move(settings.resourceLoader));
+  resourceCtx.setProcessingMode(settings.processingMode);
+  if (settings.svgParseCallback) {
+    resourceCtx.setSvgParseCallback(std::move(settings.svgParseCallback));
+  }
 
   registry_->ctx().emplace<xml::components::XMLNamespaceContext>(*registry_);
 }

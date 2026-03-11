@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
 
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
 // clang-format off
 /**
@@ -61,6 +63,47 @@ protected:
       const char* svgFilename, const char* goldenFilename, parser::SVGParser::Options options = {},
       ImageComparisonParams params = ImageComparisonParams::WithThreshold(0.1f)) {
     SVGDocument document = loadSVG(svgFilename, options);
+    params.enableGoldenUpdateFromEnv();
+    renderAndCompare(document, svgFilename, goldenFilename, params);
+  }
+
+  SVGDocument loadSVGWithResources(const char* filename,
+                                   parser::SVGParser::Options options = {}) {
+    std::ifstream file(filename);
+    EXPECT_TRUE(file) << "Failed to open file: " << filename;
+    if (!file) {
+      return SVGDocument();
+    }
+
+    file.seekg(0, std::ios::end);
+    const std::streamsize fileLength = file.tellg();
+    file.seekg(0);
+
+    std::string fileData;
+    fileData.resize(fileLength);
+    file.read(fileData.data(), fileLength);
+
+    const std::filesystem::path filePath(filename);
+    const std::filesystem::path resourceDir = filePath.parent_path();
+
+    SVGDocument::Settings settings;
+    settings.resourceLoader =
+        std::make_unique<SandboxedFileResourceLoader>(resourceDir, filePath);
+
+    auto maybeResult =
+        parser::SVGParser::ParseSVG(fileData, nullptr, options, std::move(settings));
+    EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
+    if (maybeResult.hasError()) {
+      return SVGDocument();
+    }
+
+    return std::move(maybeResult.result());
+  }
+
+  void compareWithGoldenAndResources(
+      const char* svgFilename, const char* goldenFilename, parser::SVGParser::Options options = {},
+      ImageComparisonParams params = ImageComparisonParams::WithThreshold(0.1f)) {
+    SVGDocument document = loadSVGWithResources(svgFilename, options);
     params.enableGoldenUpdateFromEnv();
     renderAndCompare(document, svgFilename, goldenFilename, params);
   }
@@ -283,6 +326,50 @@ TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
   this->compareWithGolden("donner/svg/renderer/testdata/z0rly_test6.svg",
                           "donner/svg/renderer/testdata/golden/z0rly_test6.png",
                           this->optionsExperimental());
+}
+
+TEST_F(RendererTests, ImageExternalSvgBasic) {
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/image-external-svg-basic.svg",
+      "donner/svg/renderer/testdata/golden/image-external-svg-basic.png");
+}
+
+TEST_F(RendererTests, ImageExternalSvgPar) {
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/image-external-svg-par.svg",
+      "donner/svg/renderer/testdata/golden/image-external-svg-par.png");
+}
+
+TEST_F(RendererTests, ImageExternalSvgViewbox) {
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/image-external-svg-viewbox.svg",
+      "donner/svg/renderer/testdata/golden/image-external-svg-viewbox.png");
+}
+
+TEST_F(RendererTests, UseExternalSvg) {
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/use-external-svg.svg",
+      "donner/svg/renderer/testdata/golden/use-external-svg.png");
+}
+
+TEST_F(RendererTests, UseExternalSvgFragment) {
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/use-external-svg-fragment.svg",
+      "donner/svg/renderer/testdata/golden/use-external-svg-fragment.png");
+}
+
+TEST_F(RendererTests, FeImageExternalSvg) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/feimage-external-svg.svg",
+      "donner/svg/renderer/testdata/golden/feimage-external-svg.png", options);
+}
+
+TEST_F(RendererTests, UseExternalContextPaint) {
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/use-external-context-paint.svg",
+      "donner/svg/renderer/testdata/golden/use-external-context-paint.png");
 }
 
 }  // namespace

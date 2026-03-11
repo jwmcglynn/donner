@@ -3,6 +3,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/core/MarkerOrient.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -52,6 +53,14 @@ private:
   void renderPattern(RenderingInstanceView& view, Registry& registry,
                      const components::RenderingInstanceComponent& instance,
                      const components::PaintResolvedReference& ref, bool forStroke);
+  void drawSubDocument(SVGDocument& subDocument, const Boxd& viewportBounds,
+                       const PreserveAspectRatio& aspectRatio, double opacity);
+  void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
+                              const Transformd& parentAbsoluteTransform, double opacity);
+  void preRenderSvgFeImages(components::FilterGraph& filterGraph);
+  static void setSubDocumentContextPaint(
+      SVGDocument& subDocument, const components::ResolvedPaintServer& contextFill,
+      const components::ResolvedPaintServer& contextStroke);
 
   struct DeferredPop {
     Entity lastEntity{};

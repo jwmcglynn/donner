@@ -39,15 +39,24 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
 
 }  // namespace
 
-std::variant<ImageResource, UrlLoaderError> ImageLoader::fromUri(std::string_view uri) {
+ImageLoader::Result ImageLoader::fromUri(std::string_view uri) {
   auto urlResultOrError = urlLoader_.fromUri(uri);
   if (std::holds_alternative<UrlLoaderError>(urlResultOrError)) {
     return std::get<UrlLoaderError>(urlResultOrError);
   }
 
-  const UrlLoader::Result& urlResult = std::get<UrlLoader::Result>(urlResultOrError);
+  UrlLoader::Result& urlResult = std::get<UrlLoader::Result>(urlResultOrError);
 
-  return LoadImage(urlResult.mimeType, urlResult.data);
+  // Route SVG content to a separate path: return raw bytes for the caller to parse.
+  if (urlResult.mimeType == "image/svg+xml") {
+    return SvgImageContent{std::move(urlResult.data)};
+  }
+
+  auto rasterResult = LoadImage(urlResult.mimeType, urlResult.data);
+  if (std::holds_alternative<UrlLoaderError>(rasterResult)) {
+    return std::get<UrlLoaderError>(rasterResult);
+  }
+  return std::get<ImageResource>(std::move(rasterResult));
 }
 
 }  // namespace donner::svg

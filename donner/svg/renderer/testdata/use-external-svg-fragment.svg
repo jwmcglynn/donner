@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="200" height="200" viewBox="0 0 200 200">
+  <!-- Background -->
+  <rect width="200" height="200" fill="#eeeeee"/>
+
+  <!-- Reference the yellow circle from external SVG at (20, 20) -->
+  <use href="external-shapes.svg#yellowCircle" x="20" y="20"/>
+
+  <!-- Reference the blue rect from external SVG at (100, 50) -->
+  <use href="external-shapes.svg#blueRect" x="100" y="50"/>
+
+  <!-- Reference the red line from external SVG at (20, 120) -->
+  <use href="external-shapes.svg#redLine" x="20" y="120"/>
+</svg>

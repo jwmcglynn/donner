@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <any>
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -254,6 +255,11 @@ struct Image {
   std::vector<uint8_t> imageData;
   int imageWidth = 0;   ///< Width of loaded image in pixels.
   int imageHeight = 0;  ///< Height of loaded image in pixels.
+
+  /// Non-owning pointer to an SVG sub-document (`std::any` containing `SVGDocument`), set when
+  /// the feImage href references an external SVG file. The renderer pre-renders this to pixel data
+  /// before filter execution. Owned by \ref SubDocumentCache.
+  std::any* svgSubDocument = nullptr;
 };
 
 /// Parameters for \c feDisplacementMap.

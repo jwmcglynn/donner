@@ -2,6 +2,7 @@
 /// @file
 
 #include <ostream>
+#include <string_view>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
@@ -32,14 +33,19 @@ struct ResolvedReference {
  *
  * The reference can be resolved to an entity using \ref resolve.
  *
- * | **Source** | **`href` value** |
- * |------------|------------------|
- * | `url(#id)` | `#id` |
- * | `href="#id` | `#id` |
- * | `xlink:href="#id"` | `#id` |
- * | `xlink:href="url(#id)"` | `url(#id)` (invalid syntax) |
+ * Supports both same-document and external references:
  *
- * Note that absolute references, such as `path/to/other-file.svg#elementId`, are not supported.
+ * | **Source** | **`href` value** | **Type** |
+ * |------------|------------------|----------|
+ * | `url(#id)` | `#id` | Same-document |
+ * | `href="#id"` | `#id` | Same-document |
+ * | `href="file.svg"` | `file.svg` | External (whole document) |
+ * | `href="file.svg#id"` | `file.svg#id` | External (element by ID) |
+ *
+ * Same-document references are resolved via \ref resolve(). External references require
+ * loading the external document first; use \ref isExternal(), \ref documentUrl(), and
+ * \ref fragment() to inspect the reference components, then resolve the fragment against
+ * the external document's registry.
  */
 struct Reference {
   RcString href;  //!< The href string identifying the referenced entity, e.g. `#id`
@@ -57,12 +63,53 @@ struct Reference {
   /* implicit */ Reference(const char* href) : href(href) {}
 
   /**
-   * Attempts to resolve the reference using the provided registry.
+   * Returns true if this reference points to an external document (i.e., has a document URL
+   * component). A reference like `#id` is same-document; `file.svg` or `file.svg#id` is external.
+   */
+  bool isExternal() const;
 
+  /**
+   * Returns the document URL component of the reference, or an empty string if this is a
+   * same-document reference.
+   *
+   * Examples:
+   * - `#id` → `""`
+   * - `file.svg` → `"file.svg"`
+   * - `file.svg#elementId` → `"file.svg"`
+   * - `path/to/file.svg#id` → `"path/to/file.svg"`
+   */
+  std::string_view documentUrl() const;
+
+  /**
+   * Returns the fragment component of the reference (without the `#` prefix), or an empty
+   * string if there is no fragment.
+   *
+   * Examples:
+   * - `#id` → `"id"`
+   * - `file.svg` → `""`
+   * - `file.svg#elementId` → `"elementId"`
+   */
+  std::string_view fragment() const;
+
+  /**
+   * Attempts to resolve the reference as a same-document reference using the provided registry.
+   * Only handles fragment-only references (`#id`). For external references, use \ref isExternal()
+   * and load the external document separately.
+   *
    * @param registry The Registry to use for resolution
    * @return An optional ResolvedReference, which is empty if resolution fails
    */
   std::optional<ResolvedReference> resolve(Registry& registry) const;
+
+  /**
+   * Resolves a fragment identifier against the given registry. Unlike \ref resolve(), this
+   * does not require the href to start with `#` — it uses the \ref fragment() component directly.
+   * This is used for resolving external references after loading the external document.
+   *
+   * @param registry The Registry to resolve the fragment against.
+   * @return An optional ResolvedReference, which is empty if the fragment is empty or not found.
+   */
+  std::optional<ResolvedReference> resolveFragment(Registry& registry) const;
 
   /// Equality operator.
   bool operator==(const Reference& other) const = default;

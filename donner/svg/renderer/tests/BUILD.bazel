@@ -93,6 +93,7 @@ donner_cc_test(
     deps = [
         ":image_comparison_test_fixture",
         "//donner/svg/parser",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
         "@com_google_gtest//:gtest_main",
     ],
 )

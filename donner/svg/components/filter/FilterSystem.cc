@@ -610,6 +610,10 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         prim.imageData = loaded->image->data;
         prim.imageWidth = loaded->image->width;
         prim.imageHeight = loaded->image->height;
+      } else if (const auto* svgLoaded = registry.try_get<LoadedSVGImageComponent>(cur);
+                 svgLoaded && svgLoaded->subDocument) {
+        // SVG sub-document — store the pointer for the renderer to pre-render to pixels.
+        prim.svgSubDocument = svgLoaded->subDocument;
       }
 
       // feImage has no standard input (it generates its own content).

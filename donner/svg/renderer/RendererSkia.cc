@@ -1691,6 +1691,10 @@ RendererBitmap RendererSkia::takeSnapshot() const {
   return snapshot;
 }
 
+std::unique_ptr<RendererInterface> RendererSkia::createOffscreenInstance() const {
+  return std::make_unique<RendererSkia>(verbose_);
+}
+
 void RendererSkia::draw(SVGDocument& document) {
   RendererDriver driver(*this, verbose_);
   driver.draw(document);

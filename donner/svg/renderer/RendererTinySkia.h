@@ -190,6 +190,7 @@ public:
    * @return A snapshot of the rendered frame.
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+  [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
   /**
    * Saves the last rendered frame to a PNG file.

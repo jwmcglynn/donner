@@ -1354,6 +1354,10 @@ bool RendererTinySkia::save(const char* filename) {
                                                    snapshot.dimensions.y);
 }
 
+std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() const {
+  return std::make_unique<RendererTinySkia>(verbose_);
+}
+
 int RendererTinySkia::width() const {
   return static_cast<int>(frame_.width());
 }

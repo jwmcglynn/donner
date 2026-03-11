@@ -1,7 +1,12 @@
 #pragma once
 /// @file
 
+#include <any>
+#include <functional>
+
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseError.h"
+#include "donner/svg/core/ProcessingMode.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
@@ -31,10 +36,24 @@ class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement
  */
 class SVGDocument {
 public:
+  /// Callback type for parsing SVG content into a document. Used by \ref SubDocumentCache.
+  using SvgParseCallback = std::function<std::optional<std::any>(
+      const std::vector<uint8_t>& svgContent, std::vector<ParseError>* outWarnings)>;
+
   /// Document settings which configure the document behavior.
   struct Settings {
     /// Resource loader to use for loading external resources.
     std::unique_ptr<ResourceLoaderInterface> resourceLoader;
+
+    /// Processing mode for this document. Defaults to \ref ProcessingMode::DynamicInteractive.
+    ProcessingMode processingMode;
+
+    /// Callback to parse SVG content into sub-documents. Injected by the parser to avoid
+    /// circular dependencies.
+    SvgParseCallback svgParseCallback;
+
+    /// Default constructor.
+    Settings() : processingMode(ProcessingMode::DynamicInteractive) {}
   };
 
 private:
@@ -137,9 +156,15 @@ public:
 
   std::optional<SVGElement> querySelector(std::string_view selector);
 
+  /// Get the processing mode of this document.
+  ProcessingMode processingMode() const { return processingMode_; }
+
 private:
   /// Owned reference to the registry, which contains all information about the loaded document.
   std::shared_ptr<Registry> registry_;
+
+  /// Processing mode for this document.
+  ProcessingMode processingMode_ = ProcessingMode::DynamicInteractive;
 };
 
 }  // namespace donner::svg

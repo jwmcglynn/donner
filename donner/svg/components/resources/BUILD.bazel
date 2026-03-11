@@ -26,9 +26,11 @@ donner_cc_library(
     name = "resource_manager_context",
     srcs = [
         "ResourceManagerContext.cc",
+        "SubDocumentCache.cc",
     ],
     hdrs = [
         "ResourceManagerContext.h",
+        "SubDocumentCache.h",
     ],
     visibility = [
         "//donner/svg/components:__subpackages__",
