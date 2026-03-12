@@ -678,6 +678,16 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint)) {
     frame.strokePaintPixmap = createTransparentPixmap(width, height);
   }
+
+  // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
+  // The SourceGraphic for the filter should be the element's unclipped content. Save and clear
+  // the current clip mask so that content renders unclipped into the filter's offscreen buffer.
+  // The clip mask is restored in popFilterLayer and applied when compositing the filter output.
+  frame.savedClipMask = std::move(currentClipMask_);
+  frame.savedClipStack = std::move(clipStack_);
+  currentClipMask_.reset();
+  clipStack_.clear();
+
   surfaceStack_.push_back(std::move(frame));
 #else
   UTILS_UNUSED(filterGraph);
@@ -693,6 +703,12 @@ void RendererTinySkia::popFilterLayer() {
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
+
+  // Restore the clip mask that was saved in pushFilterLayer. This allows the clip to be applied
+  // to the filter output during compositing, implementing the SVG rendering order:
+  // paint → filter → clip-path → mask → opacity.
+  currentClipMask_ = std::move(frame.savedClipMask);
+  clipStack_ = std::move(frame.savedClipStack);
 
   // Use the transformed local-raster path for eligible simple blur chains with
   // rotation or skew transforms. This resamples device content into an axis-aligned local
@@ -792,7 +808,20 @@ void RendererTinySkia::popFilterLayer() {
         frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr);
     ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, frame.deviceFromFilter);
 
-    compositePixmap(frame.pixmap, 1.0);
+    {
+      // Composite the filter result with the restored clip mask applied, so the clip-path
+      // clips the filter output rather than the input.
+      tiny_skia::PixmapPaint paint;
+      paint.opacity = 1.0f;
+      paint.blendMode = tiny_skia::BlendMode::SourceOver;
+      paint.quality = tiny_skia::FilterQuality::Nearest;
+      paint.unpremulStore = surfaceStack_.empty();
+
+      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+      auto pixmapView = currentPixmapView();
+      tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, frame.pixmap.view(), paint,
+                                     tiny_skia::Transform::identity(), mask);
+    }
   }
 #endif  // DONNER_FILTERS_ENABLED
 }

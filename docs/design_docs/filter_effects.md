@@ -68,6 +68,9 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
   the shared local-raster executor instead
 - `feImage` fragment references (`href="#elementId"`) render through 8-bit intermediate buffer, causing edge-pixel differences (~9K px for simple rects, ~34K px for transforms/chaining) vs resvg's direct float rendering
 - Light coordinate scaling: z and surfaceScale interaction at non-1:1 pixel density causes minor diffs for some spot light configurations (~3K pixels for cone-boundary cases)
+- Invalid named result fallback: resolved — now falls back to previous result per SVG spec
+- Filter + clip-path rendering order: resolved — clip-path now correctly clips the filter output,
+  not the SourceGraphic input
 
 ## Open Issues and Current Findings
 
@@ -93,6 +96,37 @@ As of 2026-03-11:
 - Skia pattern rendering now uses the same supersampled raster-tile strategy as TinySkia instead of
   `SkPicture` shaders. This resolved the Skia pattern regressions in `e-pattern-008.svg`,
   `e-pattern-010.svg`, and `e-pattern-019.svg`, including the nested pattern case.
+- Fixed invalid named result fallback in filter graph executor: when `in` references a non-existent
+  named result, the spec says to treat it as if `in` was not specified (i.e., use previous result
+  for non-first primitives, or SourceGraphic for the first). Previously fell back to SourceGraphic
+  unconditionally. This fixed `e-filter-056.svg` (97,365 → 8 pixels).
+- Fixed SVG rendering order for filter + clip-path: the spec defines the order as
+  paint → filter → clip-path → mask → opacity. Previously clip-path was applied to the
+  SourceGraphic before filtering, causing blurred edges on clipped content. Now pushFilterLayer
+  saves/clears the clip mask so SourceGraphic is unclipped, and popFilterLayer restores the clip
+  mask and applies it when compositing the filter output. This fixed `e-filter-052.svg`
+  (42,888 → <100 pixels) and `e-filter-054.svg` (34,305 → 50 pixels).
+- Tightened stale thresholds for tests that improved over time: `e-fePointLight-004.svg`
+  (53,000 → 120), `e-feSpotLight-012.svg` (68,000 → 15,200), `e-feFlood-008.svg`
+  (46,600 → 18,000), `e-feMerge-003.svg` (28,000 → 10,500), `e-feOffset-008.svg`
+  (5,700 → 2,000).
+- Fixed `feComponentTransfer` transparent pixel handling: when a pixel has alpha=0 and the
+  transfer function produces non-zero output, the RGB transfer functions are now applied (instead
+  of forcing RGB to black). This fixed `e-feComponentTransfer-020.svg` (70,400 → ~0 pixels).
+- Fixed lighting color space: `lighting-color` CSS property values are now converted from sRGB
+  to linearRGB when the filter primitive operates in linearRGB color space, per the SVG spec
+  requirement to convert `lighting-color` to the filter primitive's color-interpolation-filters
+  color space. No visible diff change for current tests (all use white light or sRGB mode), but
+  this is spec-correct for non-white lighting colors in linearRGB mode.
+- Tightened stale threshold: `e-feTurbulence-018.svg` (109,500 → 70,000).
+- Fixed `feSpecularLighting` out-of-range `specularExponent` handling: values < 1.0 now skip the
+  primitive entirely (produce transparent output), values > 128.0 are clamped to 128. This matches
+  resvg's behavior (confirmed via source inspection). Previously all values were clamped to [1, 128]
+  which produced a visible highlight for `specularExponent="0"` while resvg produced transparent.
+  This fixed `e-feSpecularLighting-007.svg` (157,470 → 0 pixels).
+- Fixed `feSpotLight` negative `specularExponent` handling: non-positive values now fall back to
+  the default (1.0), matching resvg's `PositiveF32` validation. This enabled the previously-skipped
+  `e-feSpotLight-005.svg` test (specularExponent="-10") which now passes at 0 pixel diff.
 
 ## Remaining Resvg Filter Debt
 
@@ -153,14 +187,19 @@ investigations, and intentional skips for UB or pathological cases.
   Plan: measure which diffs come from resvg's uint8 quantization versus real rendering errors,
   then either keep the current float path and tighten only the defensible thresholds or add an
   explicit compatibility mode for the no-op / identity-like cases.
-- [ ] Match blur edge-clipping semantics more closely to the spec.
-  Affected tests: `e-filter-002.svg`, `e-filter-003.svg`, `e-filter-009.svg`, `e-filter-017.svg`,
+- [x] Fix SVG rendering order for filter + clip-path/mask.
+  The rendering pipeline now correctly implements the SVG spec order: paint → filter → clip-path →
+  mask → opacity. `pushFilterLayer` saves/clears the clip mask so the SourceGraphic is unclipped,
+  and `popFilterLayer` restores the clip mask for compositing. This resolved the clip-path and
+  mask interaction cases:
+  `e-filter-052.svg` (42,888 → <100px), `e-filter-054.svg` (34,305 → 50px).
+  Remaining blur edge-clipping cases are now purely about the blur kernel extent, not rendering
+  order: `e-filter-002.svg`, `e-filter-003.svg`, `e-filter-009.svg`, `e-filter-017.svg`,
   `e-filter-018.svg`, `e-filter-019.svg`, `e-filter-039.svg`, `e-filter-040.svg`,
-  `e-filter-041.svg`, `e-filter-052.svg`, `e-filter-053.svg`, `e-filter-054.svg`,
-  `e-filter-058.svg`, and `e-filter-059.svg`.
-  Status: clipping `SourceGraphic` to the filter region in the ordinary device-space path reduced
-  the inherited-filter cases substantially (`e-filter-017.svg` / `e-filter-018.svg` now land at
-  `2312` pixels, `e-filter-019.svg` at `16308`).
+  `e-filter-041.svg`, `e-filter-053.svg`, `e-filter-058.svg`, and `e-filter-059.svg`.
+- [ ] Match blur edge-clipping semantics more closely to the spec.
+  Remaining affected tests: `e-filter-009.svg`, `e-filter-017.svg`, `e-filter-018.svg`,
+  `e-filter-019.svg`, `e-filter-046.svg`.
   Plan: stop treating the full pixmap as the blur extent, compute primitive subregions from the
   union of inputs, and crop the blur kernel to the primitive region rather than blurring first and
   clipping afterward.
@@ -175,12 +214,10 @@ investigations, and intentional skips for UB or pathological cases.
 - [ ] Investigate the remaining high-threshold graph-routing and arithmetic cases.
   Affected tests: `e-feComponentTransfer-020.svg`, `e-feConvolveMatrix-014.svg`,
   `e-feConvolveMatrix-018.svg`, `e-feConvolveMatrix-022.svg`, `e-feConvolveMatrix-024.svg`,
-  `e-feTile-001.svg`, `e-feTile-002.svg`, `e-feTile-004.svg`, `e-feTile-005.svg`,
-  and `e-filter-056.svg`.
-  Status: several stale geometry thresholds have already been reduced substantially
-  (`e-feFlood-008.svg`, `e-feOffset-008.svg`, `e-filter-004.svg`, `e-filter-010.svg`,
-  `e-filter-011.svg`, `e-filter-014.svg`). The largest remaining non-lighting thresholds in this
-  bucket are now `e-filter-052.svg`, `e-filter-054.svg`, and `e-filter-056.svg`.
+  `e-feTile-001.svg`, `e-feTile-002.svg`, `e-feTile-004.svg`, `e-feTile-005.svg`.
+  Status: `e-filter-056.svg` resolved (invalid named result fallback fixed, 97K → 8px).
+  `e-filter-052.svg` and `e-filter-054.svg` resolved (rendering order fix, clip-path now applied
+  to filter output). Several stale geometry thresholds tightened.
   Plan: add small golden fixtures for each primitive in isolation, then debug whether the diffs
   come from arithmetic mismatch, tile seam sampling, or invalid-input fallback behavior.
 - [ ] Reduce the remaining lighting tolerances.

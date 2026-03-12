@@ -215,9 +215,12 @@ void turbulence(Pixmap& dst, const TurbulenceParams& params) {
     for (int x = 0; x < w; x++) {
       double pixel[4] = {0, 0, 0, 0};
 
-      // Convert pixel coordinates to user-space coordinates.
-      const double ux = static_cast<double>(x) / params.scaleX;
-      const double uy = static_cast<double>(y) / params.scaleY;
+      // Convert pixel coordinates to user-space coordinates using the full
+      // inverse transform (handles skew/rotation, not just scale).
+      const double px = static_cast<double>(x);
+      const double py = static_cast<double>(y);
+      const double ux = params.filterFromDeviceA * px + params.filterFromDeviceB * py;
+      const double uy = params.filterFromDeviceC * px + params.filterFromDeviceD * py;
 
       double freqX = params.baseFrequencyX;
       double freqY = params.baseFrequencyY;
@@ -334,8 +337,12 @@ void turbulence(FloatPixmap& dst, const TurbulenceParams& params) {
     for (int x = 0; x < w; x++) {
       double pixel[4] = {0, 0, 0, 0};
 
-      const double ux = static_cast<double>(x) / params.scaleX;
-      const double uy = static_cast<double>(y) / params.scaleY;
+      // Convert pixel coordinates to user-space coordinates using the full
+      // inverse transform (handles skew/rotation, not just scale).
+      const double px = static_cast<double>(x);
+      const double py = static_cast<double>(y);
+      const double ux = params.filterFromDeviceA * px + params.filterFromDeviceB * py;
+      const double uy = params.filterFromDeviceC * px + params.filterFromDeviceD * py;
 
       double freqX = params.baseFrequencyX;
       double freqY = params.baseFrequencyY;

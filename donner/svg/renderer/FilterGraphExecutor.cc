@@ -421,13 +421,23 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
             turbulence.params.stitchTiles = primitive.stitchTiles;
             turbulence.params.tileWidth = w;
             turbulence.params.tileHeight = h;
-            turbulence.params.scaleX = std::abs(deviceFromFilter.data[0]);
-            turbulence.params.scaleY = std::abs(deviceFromFilter.data[3]);
-            if (turbulence.params.scaleX < 1e-10) {
-              turbulence.params.scaleX = 1.0;
-            }
-            if (turbulence.params.scaleY < 1e-10) {
-              turbulence.params.scaleY = 1.0;
+            // Compute the 2x2 inverse of deviceFromFilter to map pixel
+            // coordinates back to user (filter) space.  This handles skew and
+            // rotation, not just axis-aligned scale.
+            {
+              const double a = deviceFromFilter.data[0];
+              const double b = deviceFromFilter.data[1];
+              const double c = deviceFromFilter.data[2];
+              const double d = deviceFromFilter.data[3];
+              double det = a * d - b * c;
+              if (std::abs(det) < 1e-10) {
+                det = 1.0;  // Degenerate transform: fall back to identity.
+              }
+              const double invDet = 1.0 / det;
+              turbulence.params.filterFromDeviceA = d * invDet;
+              turbulence.params.filterFromDeviceB = -c * invDet;
+              turbulence.params.filterFromDeviceC = -b * invDet;
+              turbulence.params.filterFromDeviceD = a * invDet;
             }
             graphNode.primitive = turbulence;
 

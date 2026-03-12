@@ -182,7 +182,10 @@ double spotLightFactor(const LightSourceParams& light, double lx, double ly, dou
     }
   }
 
-  return std::pow(cosAngle, light.spotExponent) * coneFactor;
+  // Per SVG spec, feSpotLight's specularExponent must be positive.
+  // Non-positive values fall back to the default (1.0), matching resvg behavior.
+  const double exp = light.spotExponent > 0.0 ? light.spotExponent : 1.0;
+  return std::pow(cosAngle, exp) * coneFactor;
 }
 
 }  // namespace
@@ -318,7 +321,8 @@ void specularLighting(const Pixmap& src, Pixmap& dst, const SpecularLightingPara
       const double a = std::max({r, g, b});
 
       const std::size_t idx = static_cast<std::size_t>((y * w + x) * 4);
-      // Spec output (Sr, Sg, Sb, max(Sr,Sg,Sb)) is already premultiplied.
+      // Spec output (Sr, Sg, Sb, max(Sr,Sg,Sb)) is already premultiplied:
+      // R <= max(R,G,B) = A, so (R,G,B,A) is valid premultiplied RGBA.
       dstData[idx + 0] = static_cast<std::uint8_t>(std::round(r * 255.0));
       dstData[idx + 1] = static_cast<std::uint8_t>(std::round(g * 255.0));
       dstData[idx + 2] = static_cast<std::uint8_t>(std::round(b * 255.0));
@@ -544,7 +548,8 @@ void specularLighting(const FloatPixmap& src, FloatPixmap& dst,
       const double a = std::max({r, g, b});
 
       const std::size_t idx = static_cast<std::size_t>((y * w + x) * 4);
-      // Spec output (Sr, Sg, Sb, max(Sr,Sg,Sb)) is already premultiplied.
+      // Spec output (Sr, Sg, Sb, max(Sr,Sg,Sb)) is already premultiplied:
+      // R <= max(R,G,B) = A, so (R,G,B,A) is valid premultiplied RGBA.
       dstData[idx + 0] = static_cast<float>(r);
       dstData[idx + 1] = static_cast<float>(g);
       dstData[idx + 2] = static_cast<float>(b);

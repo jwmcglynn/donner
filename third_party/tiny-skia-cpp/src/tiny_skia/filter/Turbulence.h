@@ -22,10 +22,15 @@ struct TurbulenceParams {
   int tileWidth = 0;   ///< Tile width for stitching (in user-space pixels).
   int tileHeight = 0;  ///< Tile height for stitching (in user-space pixels).
 
-  // Coordinate transform from pixel space to user space.
-  // User-space coordinate = pixel_coordinate / scale.
-  double scaleX = 1.0;  ///< Horizontal scale (canvas pixels per user-space unit).
-  double scaleY = 1.0;  ///< Vertical scale (canvas pixels per user-space unit).
+  // Inverse transform from pixel (device) space to filter (user) space.
+  // User-space coordinate = filterFromDevice * pixel_coordinate.
+  // This is a 2x2 matrix stored as [a, b, c, d] where:
+  //   ux = a * px + b * py
+  //   uy = c * px + d * py
+  double filterFromDeviceA = 1.0;  ///< [0,0] element
+  double filterFromDeviceB = 0.0;  ///< [0,1] element
+  double filterFromDeviceC = 0.0;  ///< [1,0] element
+  double filterFromDeviceD = 1.0;  ///< [1,1] element
 };
 
 /**

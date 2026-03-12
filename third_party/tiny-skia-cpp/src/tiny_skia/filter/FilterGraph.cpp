@@ -160,6 +160,14 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   std::optional<FloatPixmap> previousOutput;
   std::map<std::string, FloatPixmap> namedBuffers;
 
+  // sRGB to linear conversion for a single channel value in [0,1].
+  auto srgbToLinearChannel = [](double s) -> double {
+    if (s <= 0.04045) {
+      return s / 12.92;
+    }
+    return std::pow((s + 0.055) / 1.055, 2.4);
+  };
+
   // Color space tracking: true = linearRGB, false = sRGB.
   // Source starts in sRGB; conversion to linear is done per-node via ensureColorSpace.
   bool sourceColorSpace = false;
@@ -238,7 +246,11 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             if (it != namedBuffers.end()) {
               return &it->second;
             }
-            return source;
+            // Per SVG spec: "If no matching filter primitive has been previously defined [with
+            // this result name], the attribute is treated as if the attribute is not specified."
+            // When unspecified, non-first primitives use the previous result, and the first
+            // primitive uses SourceGraphic.
+            return previousOutput.has_value() ? &previousOutput.value() : source;
           } else {
             return source;
           }
@@ -257,7 +269,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             if (it != namedColorSpaces.end()) {
               return it->second;
             }
-            return sourceColorSpace;
+            // Invalid name: treat as if `in` was not specified (previous result fallback).
+            return previousOutputColorSpace;
           } else if constexpr (std::is_same_v<V, StandardInput>) {
             if (v == StandardInput::FillPaint) {
               return fillPaintColorSpace;
@@ -284,7 +297,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             if (it != namedSubregions.end()) {
               return it->second;
             }
-            return fullRegion;
+            // Invalid name: treat as if `in` was not specified (previous result fallback).
+            return previousOutputSubregion;
           } else if constexpr (std::is_same_v<V, StandardInput>) {
             if (v == StandardInput::FillPaint) {
               return fillPaintSubregion.value_or(fullRegion);
@@ -519,11 +533,33 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DiffuseLighting>) {
             output = createTransparentFloat(w, h);
-            diffuseLighting(*input, *output, primitive.params);
+            if (nodeLinearRGB) {
+              // Convert lighting-color from sRGB to linear for the linearRGB pipeline.
+              auto params = primitive.params;
+              params.lightR = srgbToLinearChannel(params.lightR);
+              params.lightG = srgbToLinearChannel(params.lightG);
+              params.lightB = srgbToLinearChannel(params.lightB);
+              diffuseLighting(*input, *output, params);
+            } else {
+              diffuseLighting(*input, *output, primitive.params);
+            }
 
           } else if constexpr (std::is_same_v<T, graph_primitive::SpecularLighting>) {
             output = createTransparentFloat(w, h);
-            specularLighting(*input, *output, primitive.params);
+            // Per SVG spec, specularExponent must be in [1, 128].
+            // Values < 1: skip the primitive entirely (produce transparent output).
+            // Values > 128: clamp to 128 and render normally.
+            // This matches resvg behavior.
+            if (primitive.params.specularExponent >= 1.0) {
+              auto params = primitive.params;
+              params.specularExponent = std::min(params.specularExponent, 128.0);
+              if (nodeLinearRGB) {
+                params.lightR = srgbToLinearChannel(params.lightR);
+                params.lightG = srgbToLinearChannel(params.lightG);
+                params.lightB = srgbToLinearChannel(params.lightB);
+              }
+              specularLighting(*input, *output, params);
+            }
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DropShadow>) {
             // Decompose: flood → composite(in, SourceAlpha) → offset → blur → merge

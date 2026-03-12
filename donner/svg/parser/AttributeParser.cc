@@ -1045,7 +1045,7 @@ std::optional<ParseError> ParseAttribute<SVGFESpecularLightingElement>(
   } else if (name == XMLQualifiedNameRef("specularExponent")) {
     auto& comp = element.entityHandle().get<components::FESpecularLightingComponent>();
     if (auto n = ParseNumberNoSuffix(value)) {
-      comp.specularExponent = std::clamp(*n, 1.0, 128.0);
+      comp.specularExponent = *n;
     }
   } else {
     return ParseCommonAttribute(context, element, name, value);

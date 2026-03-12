@@ -405,13 +405,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Per SVG spec, an empty or invalid filter reference makes the element invisible.
     const bool filterHidesElement =
         instance.resolvedFilter.has_value() && !hasFilterLayer;
-    if (hasFilterLayer) {
-      preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry);
-      renderer_.pushFilterLayer(*filterGraph, filterRegion);
-    }
 
     // Clip paths are in entity-local coordinates.
+    // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
+    // Push entity clip BEFORE filter so it's the outer layer: clip-path clips the filter output,
+    // not the SourceGraphic input. The filter layer saves/clears the clip mask so the
+    // SourceGraphic is rendered unclipped.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     // Mask is handled separately below; don't let pushClip see it.
@@ -420,6 +419,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     // Render mask content, then transition to masked content layer.
@@ -575,11 +580,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       if (hasMask) {
         renderer_.popMask();
       }
-      if (hasEntityClip) {
-        renderer_.popClip();
-      }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (hasEntityClip) {
+        renderer_.popClip();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -595,11 +601,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       if (deferred.hasMask) {
         renderer_.popMask();
       }
-      if (deferred.hasEntityClip) {
-        renderer_.popClip();
-      }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (deferred.hasEntityClip) {
+        renderer_.popClip();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -676,17 +683,20 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
     const bool filterHidesElement =
         instance.resolvedFilter.has_value() && !hasFilterLayer;
-    if (hasFilterLayer) {
-      preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry);
-      renderer_.pushFilterLayer(*filterGraph, filterRegion);
-    }
 
+    // Per SVG spec: paint → filter → clip-path. Push clip before filter so clip applies to
+    // the filter output. The filter layer saves/clears the clip mask internally.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -729,11 +739,12 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       deferred.hasEntityClip = hasEntityClip;
       localDeferred.push_back(deferred);
     } else {
-      if (hasEntityClip) {
-        renderer_.popClip();
-      }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (hasEntityClip) {
+        renderer_.popClip();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -742,11 +753,12 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     while (!localDeferred.empty() && localDeferred.back().lastEntity == entity) {
       const DeferredPop& deferred = localDeferred.back();
-      if (deferred.hasEntityClip) {
-        renderer_.popClip();
-      }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (deferred.hasEntityClip) {
+        renderer_.popClip();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();

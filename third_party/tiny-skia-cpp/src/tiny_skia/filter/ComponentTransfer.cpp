@@ -80,13 +80,22 @@ void componentTransfer(Pixmap& pixmap, const TransferFunc& funcR, const Transfer
     const std::uint8_t a = data[off + 3];
 
     if (a == 0) {
-      // Transparent pixel: apply alpha LUT (may produce non-zero alpha).
+      // Transparent pixel: unpremultiplied RGB is 0. Apply all transfer functions.
+      const std::uint8_t newR = lutR[0];
+      const std::uint8_t newG = lutG[0];
+      const std::uint8_t newB = lutB[0];
       const std::uint8_t newA = lutA[0];
-      if (newA != 0) {
-        // Alpha function produced non-zero for zero input (e.g., linear with positive intercept).
-        data[off + 0] = 0;
-        data[off + 1] = 0;
-        data[off + 2] = 0;
+      if (newA == 0) {
+        // Still transparent — leave as zeros.
+      } else {
+        // Re-premultiply.
+        const double alphaFrac = newA / 255.0;
+        data[off + 0] =
+            static_cast<std::uint8_t>(std::clamp(std::round(newR * alphaFrac), 0.0, 255.0));
+        data[off + 1] =
+            static_cast<std::uint8_t>(std::clamp(std::round(newG * alphaFrac), 0.0, 255.0));
+        data[off + 2] =
+            static_cast<std::uint8_t>(std::clamp(std::round(newB * alphaFrac), 0.0, 255.0));
         data[off + 3] = newA;
       }
       continue;
@@ -197,12 +206,18 @@ void componentTransfer(FloatPixmap& pixmap, const TransferFunc& funcR, const Tra
     const float a = data[off + 3];
 
     if (a == 0.0f) {
-      // Transparent pixel: apply alpha func (may produce non-zero alpha).
+      // Transparent pixel: unpremultiplied RGB is 0. Apply all transfer functions.
+      const double newR = evalTransferFunc(funcR, 0.0);
+      const double newG = evalTransferFunc(funcG, 0.0);
+      const double newB = evalTransferFunc(funcB, 0.0);
       const double newA = evalTransferFunc(funcA, 0.0);
-      if (newA != 0.0) {
-        data[off + 0] = 0.0f;
-        data[off + 1] = 0.0f;
-        data[off + 2] = 0.0f;
+      if (newA == 0.0) {
+        // Still transparent — leave as zeros.
+      } else {
+        // Re-premultiply.
+        data[off + 0] = static_cast<float>(std::clamp(newR * newA, 0.0, 1.0));
+        data[off + 1] = static_cast<float>(std::clamp(newG * newA, 0.0, 1.0));
+        data[off + 2] = static_cast<float>(std::clamp(newB * newA, 0.0, 1.0));
         data[off + 3] = static_cast<float>(newA);
       }
       continue;

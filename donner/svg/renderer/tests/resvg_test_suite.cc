@@ -273,14 +273,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FeComponentTransfer, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feComponentTransfer",
-        {
-            {"e-feComponentTransfer-020.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   72000)},  // Mixed types + feFuncA gamma + opacity (70400px)
-        })),
-    TestNameFromFilename);
+    ValuesIn(getTestsWithPrefix("e-feComponentTransfer")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FeComposite, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feComposite")), TestNameFromFilename);
@@ -310,7 +303,7 @@ INSTANTIATE_TEST_SUITE_P(FeDiffuseLighting, ImageComparisonTestFixture,
                              "e-feDiffuseLighting",
                              {
                                  {"e-feDiffuseLighting-021.svg",
-                                  Params::Skip()},  // Bug: transformed diffuse lighting
+                                  Params::WithThreshold(0.1f, 750)},  // Transformed diffuse (690px)
                              })),
                          TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(FeDisplacementMap, ImageComparisonTestFixture,
@@ -338,7 +331,7 @@ INSTANTIATE_TEST_SUITE_P(
                                 {
                                     {"e-feFlood-008.svg",
                                      Params::WithThreshold(kDefaultThreshold,
-                                                           46600)},  // OBB + complex transform
+                                                           18000)},  // OBB + complex transform (17501px)
                                 })),
     TestNameFromFilename);
 
@@ -382,7 +375,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold,
                                    18900)},  // Absolute subregion coords, edge diff
             {"e-feImage-011.svg",
-             Params::Skip()},  // Subregion with rotation: filter region sizing mismatch
+             Params::Skip()},  // Subregion with rotation: filter region sizing mismatch (64K px)
             {"e-feImage-012.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    36000)},  // Fragment ref outside defs, larger rect edge diff
@@ -421,7 +414,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold, 2350)},  // linearRGB rounding (2269px)
             {"e-feMerge-003.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   28000)},  // Complex skew transform + c-i-f (27503px)
+                                   10500)},  // Complex skew transform + c-i-f (10008px)
         })),
     TestNameFromFilename);
 
@@ -442,7 +435,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feOffset-007.svg",
              Params::WithThreshold(kDefaultThreshold, 350)},  // OBB offset rounding (307px)
             {"e-feOffset-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 5700)},  // Complex skew transform
+             Params::WithThreshold(kDefaultThreshold, 2000)},  // Complex skew transform (1828px)
         })),
     TestNameFromFilename);
 
@@ -452,11 +445,12 @@ INSTANTIATE_TEST_SUITE_P(
         "e-fePointLight",
         {
             {"e-fePointLight-004.svg",
-             Params::WithThreshold(0.1f, 53000)},  // Lighting alpha=1.0 vs resvg clips to shape
+             Params::WithThreshold(0.1f, 120)},  // Lighting alpha=1.0 vs resvg clips to shape (54px)
         })),
     TestNameFromFilename);
 // Specular lighting: algorithm differences vs resvg.
 // Float pipeline + light coordinate scaling fixed most tests to 0 diffs at 0.1f threshold.
+// specularExponent out-of-range handling: <1 skips primitive (transparent), >128 clamps to 128.
 INSTANTIATE_TEST_SUITE_P(
     FeSpecularLighting, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
@@ -464,9 +458,9 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-feSpecularLighting-002.svg", Params::WithThreshold(0.1f)},  // 2717px at 0.01f
             {"e-feSpecularLighting-004.svg",
-             Params::WithThreshold(0.1f, 58000)},                           // 57392px at 0.01f
+             Params::WithThreshold(0.1f, 58000)},  // resvg golden bug: R=0 channel (BGRA issue in
+                                                    // resvg ~v0.9.x)
             {"e-feSpecularLighting-005.svg", Params::WithThreshold(0.1f)},  // 1466px at 0.01f
-            {"e-feSpecularLighting-007.svg", Params::WithThreshold(0.1f, 158000)},  // 157470px
         })),
     TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
@@ -474,11 +468,12 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-feSpotLight",
         {
-            {"e-feSpotLight-005.svg", Params::Skip()},  // Negative specularExponent=-10 edge case
+            // feSpotLight-005: negative specularExponent=-10 on feSpotLight. Non-positive values
+            // fall back to default 1.0, matching resvg's PositiveF32 validation.
             {"e-feSpotLight-007.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // 2922px
             {"e-feSpotLight-008.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // 2922px
             {"e-feSpotLight-012.svg",
-             Params::WithThreshold(0.1f, 68000)},  // Lighting alpha=1.0 vs resvg clips to shape
+             Params::WithThreshold(0.1f, 15200)},  // Lighting alpha=1.0 vs resvg clips to shape (14622px)
         })),
     TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(
@@ -506,7 +501,9 @@ INSTANTIATE_TEST_SUITE_P(
             // feTurbulence-002 removed (was 0 diff with 1500 threshold)
             {"e-feTurbulence-017.svg", Params::Skip()},  // stitchTiles=stitch (UB per test title)
             {"e-feTurbulence-018.svg",
-             Params::WithThreshold(kDefaultThreshold, 109500)},  // Complex skew transform
+             Params::WithThreshold(kDefaultThreshold,
+                                   9000)},  // Complex skew transform (8891px: float vs uint8
+                                            // quantization in noise pipeline)
             {"e-feTurbulence-019.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    24000)},  // sRGB color-interpolation (23604px)
@@ -552,14 +549,12 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-046.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    1200)},  // blur linearRGB rendering diff (1101px)
-            {"e-filter-052.svg",
-             Params::WithThreshold(kDefaultThreshold, 42950)},  // Clip-path + filter blur edge
+            // e-filter-052.svg: fixed clip-path+filter rendering order (was 42950px, now <100)
             {"e-filter-053.svg",
              Params::WithThreshold(kDefaultThreshold, 500)},  // Mask + filter (498px)
             {"e-filter-054.svg",
-             Params::WithThreshold(kDefaultThreshold, 34400)},  // Clip-path + mask + filter
-            {"e-filter-056.svg",
-             Params::WithThreshold(kDefaultThreshold, 97500)},  // Invalid named result
+             Params::WithThreshold(kDefaultThreshold, 120)},  // Clip-path + mask + filter (50px)
+            // e-filter-056.svg: fixed invalid named result fallback (was 97500px, now <100)
             {"e-filter-060.svg", Params::Skip()},               // Filter on root svg (227K px diff)
             {"e-filter-065.svg", Params::Skip()},               // UB: in=FillPaint on empty group
         })),
