@@ -1,17 +1,17 @@
 /// @file FailureSignalHandler.cc
-/// Implementation of crash signal handlers with stack trace printing for macOS and Linux.
+/// Implementation of crash signal handlers with a fixed-buffer demangled stack trace.
 
 #include "donner/base/FailureSignalHandler.h"
 
 #include <cxxabi.h>
+#include <dlfcn.h>
 #include <execinfo.h>
 #include <unistd.h>
 
 #include <array>
 #include <csignal>
 #include <cstdlib>
-#include <memory>
-#include <string>
+#include <cstring>
 #include <string_view>
 
 namespace donner {
@@ -20,6 +20,8 @@ namespace {
 
 /// Maximum number of stack frames to capture.
 constexpr int kMaxStackFrames = 64;
+/// Size of the fixed demangling buffer used to avoid per-crash heap allocations.
+constexpr size_t kDemangleBufferSize = 64 * 1024;
 
 /// Signals to handle and their names.
 struct SignalEntry {
@@ -40,90 +42,138 @@ std::array<struct sigaction, kNumFailureSignals>& previousActions() {
   return actions;
 }
 
+/// Returns storage for the fixed demangling buffer.
+char& demangleBufferStorage() {
+  static char buffer[kDemangleBufferSize];
+  return buffer[0];
+}
+
+/// Returns the fixed demangling buffer as a writable char pointer.
+char* demangleBuffer() { return &demangleBufferStorage(); }
+
 /// Write a string to stderr (async-signal-safe).
 void writeToStderr(std::string_view str) {
-  // write() is async-signal-safe, unlike fprintf.
-  // Ignore return value in signal handler - nothing we can do if write fails.
-  std::ignore = write(STDERR_FILENO, str.data(), str.size());
+  (void)write(STDERR_FILENO, str.data(), str.size());
 }
 
-/// Try to demangle a symbol name. Returns the demangled name in a unique_ptr, or nullptr.
-std::unique_ptr<char, decltype(&free)> tryDemangle(const char* mangled) {
+/// Write a single character to stderr (async-signal-safe).
+void writeChar(char ch) { (void)write(STDERR_FILENO, &ch, 1); }
+
+/// Write an unsigned integer in decimal to stderr.
+void writeUnsigned(uint64_t value) {
+  char buffer[32];
+  int index = 0;
+
+  do {
+    buffer[index++] = static_cast<char>('0' + (value % 10));
+    value /= 10;
+  } while (value != 0 && index < static_cast<int>(sizeof(buffer)));
+
+  while (index > 0) {
+    writeChar(buffer[--index]);
+  }
+}
+
+/// Write an address-sized integer in hexadecimal to stderr.
+void writeHex(uintptr_t value) {
+  constexpr char kDigits[] = "0123456789abcdef";
+  char buffer[2 + sizeof(uintptr_t) * 2];
+  int index = 0;
+
+  writeToStderr("0x");
+  do {
+    buffer[index++] = kDigits[value & 0xfu];
+    value >>= 4;
+  } while (value != 0 && index < static_cast<int>(sizeof(buffer)));
+
+  while (index > 0) {
+    writeChar(buffer[--index]);
+  }
+}
+
+/// Return the basename component of a path, or the original string if no slash exists.
+const char* basenameOrSelf(const char* path) {
+  if (path == nullptr) {
+    return nullptr;
+  }
+
+  const char* slash = std::strrchr(path, '/');
+  return slash ? slash + 1 : path;
+}
+
+/// Try to demangle a symbol name into the fixed buffer. Returns nullptr on failure or overflow.
+const char* tryDemangleIntoFixedBuffer(const char* mangled) {
+  if (mangled == nullptr) {
+    return nullptr;
+  }
+
+  size_t length = kDemangleBufferSize;
   int status = 0;
-  std::unique_ptr<char, decltype(&free)> result(
-      abi::__cxa_demangle(mangled, nullptr, nullptr, &status), &free);
-  if (status != 0) {
-    result.reset();
+  char* result = abi::__cxa_demangle(mangled, demangleBuffer(), &length, &status);
+  if (status == 0 && result == demangleBuffer()) {
+    return result;
   }
-  return result;
+
+  return nullptr;
 }
 
-/// Print a single backtrace symbol line, attempting to demangle.
-void printBacktraceSymbol(const char* symbol) {
-  // backtrace_symbols() output format:
-  //   macOS:  "index  module  address  mangled_name + offset"
-  //   Linux:  "module(mangled_name+0xoffset) [address]"
-
-#ifdef __APPLE__
-  // Parse macOS format: "index  module  address  mangled_name + offset"
-  // Find the mangled name by looking for the 4th whitespace-separated token.
-  const char* p = symbol;
-  int spaces = 0;
-  while (*p && spaces < 3) {
-    if (*p == ' ') {
-      ++spaces;
-      while (*(p + 1) == ' ') {
-        ++p;
-      }
-    }
-    ++p;
+/// Print a single backtrace frame, attempting to demangle the symbol into the fixed buffer.
+void printBacktraceFrame(void* frame) {
+  Dl_info info {};
+  if (!dladdr(frame, &info)) {
+    writeToStderr("  ");
+    writeHex(reinterpret_cast<uintptr_t>(frame));
+    writeToStderr("\n");
+    return;
   }
 
-  if (*p) {
-    // p now points to the mangled name
-    const char* nameStart = p;
-    const char* nameEnd = nameStart;
-    while (*nameEnd && *nameEnd != ' ') {
-      ++nameEnd;
+  writeToStderr("  ");
+  writeHex(reinterpret_cast<uintptr_t>(frame));
+
+  const char* imageName = basenameOrSelf(info.dli_fname);
+  if (imageName != nullptr) {
+    writeToStderr("  ");
+    writeToStderr(imageName);
+  }
+
+  if (info.dli_sname != nullptr) {
+    writeToStderr("  ");
+    if (const char* demangled = tryDemangleIntoFixedBuffer(info.dli_sname)) {
+      writeToStderr(demangled);
+    } else {
+      writeToStderr(info.dli_sname);
     }
 
-    std::string mangledName(nameStart, nameEnd);
-    if (auto demangled = tryDemangle(mangledName.c_str())) {
-      // Print everything before the mangled name, then the demangled name, then the rest.
-      writeToStderr(std::string_view(symbol, static_cast<size_t>(nameStart - symbol)));
-      writeToStderr(demangled.get());
-      writeToStderr(nameEnd);
-      writeToStderr("\n");
-      return;
+    if (info.dli_saddr != nullptr) {
+      writeToStderr(" + ");
+      const uintptr_t offset = reinterpret_cast<uintptr_t>(frame) -
+                               reinterpret_cast<uintptr_t>(info.dli_saddr);
+      writeUnsigned(offset);
     }
   }
-#elif defined(__linux__)
-  // Parse Linux format: "module(mangled_name+0xoffset) [address]"
-  const char* parenOpen = strchr(symbol, '(');
-  if (parenOpen) {
-    const char* plus = strchr(parenOpen, '+');
-    const char* parenClose = strchr(parenOpen, ')');
-    if (plus && parenClose && plus > parenOpen + 1) {
-      std::string mangledName(parenOpen + 1, plus);
-      if (auto demangled = tryDemangle(mangledName.c_str())) {
-        writeToStderr(std::string_view(symbol, static_cast<size_t>(parenOpen - symbol + 1)));
-        writeToStderr(demangled.get());
-        writeToStderr(std::string_view(plus, strlen(symbol) - static_cast<size_t>(plus - symbol)));
-        writeToStderr("\n");
-        return;
-      }
-    }
-  }
-#endif
 
-  // Fallback: print the raw symbol.
-  writeToStderr(symbol);
   writeToStderr("\n");
+}
+
+/// Warm up symbolization and demangling paths so the signal handler can reuse initialized state.
+void prewarmSymbolization() {
+  void* frames[1] = {};
+  (void)backtrace(frames, 1);
+
+  Dl_info info {};
+  (void)dladdr(reinterpret_cast<void*>(&InstallFailureSignalHandler), &info);
+
+  const char* kDummyMangled = "_Z1fv";
+  size_t length = kDemangleBufferSize;
+  int status = 0;
+  char* result = abi::__cxa_demangle(kDummyMangled, demangleBuffer(), &length, &status);
+  if (result != nullptr && result != demangleBuffer()) {
+    free(result);
+  }
 }
 
 /// Signal handler that prints a stack trace and re-raises the signal.
 void failureSignalHandler(int signo) {
-  // Find the signal name.
   const char* signalName = "UNKNOWN";
   int signalIndex = -1;
   for (size_t i = 0; i < kNumFailureSignals; ++i) {
@@ -138,28 +188,15 @@ void failureSignalHandler(int signo) {
   writeToStderr(signalName);
   writeToStderr(" received ***\n");
 
-  // Capture backtrace.
   std::array<void*, kMaxStackFrames> frames = {};
   const int numFrames = backtrace(frames.data(), kMaxStackFrames);
-
   if (numFrames > 0) {
-    std::unique_ptr<char*, decltype(&free)> symbols(
-        backtrace_symbols(frames.data(), numFrames), &free);
-    if (symbols) {
-      writeToStderr("Stack trace:\n");
-      // Skip the first few frames (signal handler internals).
-      for (int i = 2; i < numFrames; ++i) {
-        writeToStderr("  ");
-        printBacktraceSymbol(symbols.get()[i]);
-      }
-    } else {
-      // Fallback: use backtrace_symbols_fd which writes directly.
-      writeToStderr("Stack trace (raw):\n");
-      backtrace_symbols_fd(frames.data(), numFrames, STDERR_FILENO);
+    writeToStderr("Stack trace:\n");
+    for (int i = 2; i < numFrames; ++i) {
+      printBacktraceFrame(frames[static_cast<size_t>(i)]);
     }
   }
 
-  // Restore the previous signal action and re-raise to get default behavior (e.g. core dump).
   if (signalIndex >= 0) {
     sigaction(signo, &previousActions()[signalIndex], nullptr);
   } else {
@@ -171,11 +208,12 @@ void failureSignalHandler(int signo) {
 }  // namespace
 
 void InstallFailureSignalHandler() {
+  prewarmSymbolization();
+
   for (size_t i = 0; i < kNumFailureSignals; ++i) {
     struct sigaction action{};
     action.sa_handler = failureSignalHandler;
     sigemptyset(&action.sa_mask);
-    // SA_RESETHAND: restore the default handler after the first signal.
     action.sa_flags = SA_RESETHAND;
 
     sigaction(kFailureSignals[i].signo, &action, &previousActions()[i]);
