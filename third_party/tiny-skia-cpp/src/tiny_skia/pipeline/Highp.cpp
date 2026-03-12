@@ -894,6 +894,28 @@ void evenlySpaced2StopGradient(Pipeline& pipeline) {
   pipeline.nextStage();
 }
 
+void fusedLinearGradient2Stop(Pipeline& pipeline) {
+  const auto& ctx = pipeline.ctx->fusedLinearGradient2Stop;
+  for (std::size_t i = 0; i < kStageWidth; ++i) {
+    // SeedShader + Transform + PadX1 fused: compute gradient t directly.
+    const float x = static_cast<float>(pipeline.dx) + static_cast<float>(i) + 0.5f;
+    const float y = static_cast<float>(pipeline.dy) + 0.5f;
+    const float t = normalize(mad(x, ctx.sx, mad(y, ctx.kx, ctx.tx)));
+    // EvenlySpaced2StopGradient: interpolate colors.
+    pipeline.r[i] = mad(t, ctx.factor.r, ctx.bias.r);
+    pipeline.g[i] = mad(t, ctx.factor.g, ctx.bias.g);
+    pipeline.b[i] = mad(t, ctx.factor.b, ctx.bias.b);
+    pipeline.a[i] = mad(t, ctx.factor.a, ctx.bias.a);
+    // Premultiply if needed.
+    if (ctx.needsPremultiply) {
+      pipeline.r[i] *= pipeline.a[i];
+      pipeline.g[i] *= pipeline.a[i];
+      pipeline.b[i] *= pipeline.a[i];
+    }
+  }
+  pipeline.nextStage();
+}
+
 void gradient(Pipeline& pipeline) {
   const auto& ctx = pipeline.ctx->gradient;
   for (std::size_t i = 0; i < kStageWidth; ++i) {
@@ -949,6 +971,147 @@ void xyToRadius(Pipeline& pipeline) {
     const float y = pipeline.g[i];
     pipeline.r[i] = std::sqrt(x * x + y * y);
   }
+  pipeline.nextStage();
+}
+
+void fusedRadialGradient2Stop(Pipeline& pipeline) {
+  const auto& ctx = pipeline.ctx->fusedRadialGradient2Stop;
+  for (std::size_t i = 0; i < kStageWidth; ++i) {
+    const float x = static_cast<float>(pipeline.dx) + static_cast<float>(i) + 0.5f;
+    const float y = static_cast<float>(pipeline.dy) + 0.5f;
+    // Transform to unit space.
+    const float u = mad(x, ctx.sx, mad(y, ctx.kx, ctx.tx));
+    const float v = mad(x, ctx.ky, mad(y, ctx.sy, ctx.ty));
+    // Radius + clamp to [0,1].
+    const float t = normalize(std::sqrt(u * u + v * v));
+    // Interpolate colors.
+    pipeline.r[i] = mad(t, ctx.factor.r, ctx.bias.r);
+    pipeline.g[i] = mad(t, ctx.factor.g, ctx.bias.g);
+    pipeline.b[i] = mad(t, ctx.factor.b, ctx.bias.b);
+    pipeline.a[i] = mad(t, ctx.factor.a, ctx.bias.a);
+    if (ctx.needsPremultiply) {
+      pipeline.r[i] *= pipeline.a[i];
+      pipeline.g[i] *= pipeline.a[i];
+      pipeline.b[i] *= pipeline.a[i];
+    }
+  }
+  pipeline.nextStage();
+}
+
+void fusedBilinearPattern(Pipeline& pipeline) {
+  const auto& ctx = pipeline.ctx->fusedBilinearPattern;
+  if (!ctx.pixels || ctx.width == 0 || ctx.height == 0) {
+    pipeline.nextStage();
+    return;
+  }
+
+  const float w = static_cast<float>(ctx.width);
+  const float h = static_cast<float>(ctx.height);
+  const float wMax = w - 1.0f;
+  const float hMax = h - 1.0f;
+  const std::uint32_t pixW = ctx.width;
+  const std::uint32_t pixCount = ctx.width * ctx.height;
+  constexpr float kInv255 = 1.0f / 255.0f;
+
+  for (std::size_t i = 0; i < kStageWidth; ++i) {
+    const float px = static_cast<float>(pipeline.dx + i) + 0.5f;
+    const float py = static_cast<float>(pipeline.dy) + 0.5f;
+    float cx = mad(px, ctx.sx, mad(py, ctx.kx, ctx.tx));
+    float cy = mad(px, ctx.ky, mad(py, ctx.sy, ctx.ty));
+
+    float r, g, b, a;
+    if (ctx.useNearest) {
+      float tx = cx, ty = cy;
+      if (ctx.spreadMode == SpreadMode::Repeat) {
+        tx = tx - std::floor(tx * ctx.invWidth) * w;
+        ty = ty - std::floor(ty * ctx.invHeight) * h;
+      }
+      tx = std::max(0.0f, std::min(wMax, tx));
+      ty = std::max(0.0f, std::min(hMax, ty));
+      std::uint32_t ix = static_cast<std::uint32_t>(static_cast<std::int32_t>(ty)) * pixW +
+                         static_cast<std::uint32_t>(static_cast<std::int32_t>(tx));
+      ix = std::min(ix, pixCount - 1);
+      const std::size_t off = static_cast<std::size_t>(ix) * 4;
+      r = static_cast<float>(ctx.pixels[off + 0]) * kInv255;
+      g = static_cast<float>(ctx.pixels[off + 1]) * kInv255;
+      b = static_cast<float>(ctx.pixels[off + 2]) * kInv255;
+      a = static_cast<float>(ctx.pixels[off + 3]) * kInv255;
+    } else {
+      const float fx = (cx + 0.5f) - std::floor(cx + 0.5f);
+      const float fy = (cy + 0.5f) - std::floor(cy + 0.5f);
+      const float wx[2] = {1.0f - fx, fx};
+      const float wy[2] = {1.0f - fy, fy};
+
+      r = 0.0f; g = 0.0f; b = 0.0f; a = 0.0f;
+      float sy = cy - 0.5f;
+      for (int j = 0; j < 2; ++j) {
+        float sx = cx - 0.5f;
+        for (int k = 0; k < 2; ++k) {
+          float tx = sx, ty = sy;
+          if (ctx.spreadMode == SpreadMode::Repeat) {
+            tx = tx - std::floor(tx * ctx.invWidth) * w;
+            ty = ty - std::floor(ty * ctx.invHeight) * h;
+          }
+          tx = std::max(0.0f, std::min(wMax, tx));
+          ty = std::max(0.0f, std::min(hMax, ty));
+          std::uint32_t ix = static_cast<std::uint32_t>(static_cast<std::int32_t>(ty)) * pixW +
+                             static_cast<std::uint32_t>(static_cast<std::int32_t>(tx));
+          ix = std::min(ix, pixCount - 1);
+          const std::size_t off = static_cast<std::size_t>(ix) * 4;
+          float sr = static_cast<float>(ctx.pixels[off + 0]) * kInv255;
+          float sg = static_cast<float>(ctx.pixels[off + 1]) * kInv255;
+          float sb = static_cast<float>(ctx.pixels[off + 2]) * kInv255;
+          float sa = static_cast<float>(ctx.pixels[off + 3]) * kInv255;
+          const float wt = wx[k] * wy[j];
+          r = mad(wt, sr, r);
+          g = mad(wt, sg, g);
+          b = mad(wt, sb, b);
+          a = mad(wt, sa, a);
+          sx += 1.0f;
+        }
+        sy += 1.0f;
+      }
+    }
+
+    if (ctx.opacity < 1.0f) {
+      r *= ctx.opacity;
+      g *= ctx.opacity;
+      b *= ctx.opacity;
+      a *= ctx.opacity;
+    }
+
+    pipeline.r[i] = r;
+    pipeline.g[i] = g;
+    pipeline.b[i] = b;
+    pipeline.a[i] = a;
+  }
+
+  // Fused SourceOver+Store: load dst, blend, store in one pass.
+  if ((ctx.fuseSourceOver || ctx.fuseSourceOverCoverage) && pipeline.pixmapDst != nullptr) {
+    if (ctx.fuseSourceOverCoverage) {
+      const float cov = pipeline.ctx->currentCoverage;
+      for (std::size_t i = 0; i < pipeline.tail; ++i) {
+        pipeline.r[i] *= cov;
+        pipeline.g[i] *= cov;
+        pipeline.b[i] *= cov;
+        pipeline.a[i] *= cov;
+      }
+    }
+    load8888(pipeline.pixmapDst->data, pipeline.pixmapDst->realWidth, pipeline.dx, pipeline.dy,
+             pipeline.tail, pipeline, pipeline.dr, pipeline.dg, pipeline.db, pipeline.da);
+    for (std::size_t i = 0; i < pipeline.tail; ++i) {
+      const float saInv = 1.0f - pipeline.a[i];
+      pipeline.r[i] = pipeline.dr[i] * saInv + pipeline.r[i];
+      pipeline.g[i] = pipeline.dg[i] * saInv + pipeline.g[i];
+      pipeline.b[i] = pipeline.db[i] * saInv + pipeline.b[i];
+      pipeline.a[i] = pipeline.da[i] * saInv + pipeline.a[i];
+    }
+    store8888(pipeline.pixmapDst->data, pipeline.pixmapDst->realWidth, pipeline.dx, pipeline.dy,
+              pipeline.tail, pipeline.r, pipeline.g, pipeline.b, pipeline.a);
+    pipeline.nextStage();
+    return;
+  }
+
   pipeline.nextStage();
 }
 
@@ -1463,6 +1626,9 @@ const std::array<StageFn, kStagesCount> STAGES = {
     gammaCompressSrgb,
     unpremultiply,
     premultiplyDestination,
+    fusedLinearGradient2Stop,
+    fusedRadialGradient2Stop,
+    fusedBilinearPattern,
 };
 
 }  // namespace tiny_skia::pipeline::highp

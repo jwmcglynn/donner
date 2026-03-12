@@ -7,9 +7,7 @@
 #include <numbers>
 #include <vector>
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-#include <arm_neon.h>
-#endif
+#include "tiny_skia/filter/SimdVec.h"
 
 namespace tiny_skia::filter {
 
@@ -51,14 +49,12 @@ WeightedKernel makeGaussianKernel(double sigma) {
 // Box blur pass parameters for large sigma (σ ≥ 2.0).
 // ---------------------------------------------------------------------------
 
-/// Parameters for a single box blur pass (asymmetric window).
 struct BoxPass {
-  int left;   ///< Samples to the left of center.
-  int right;  ///< Samples to the right of center.
+  int left;
+  int right;
   int width() const { return left + right + 1; }
 };
 
-/// Sequence of box passes that approximate a Gaussian blur.
 struct BoxBlurPlan {
   BoxPass passes[4];
   int numPasses = 0;
@@ -74,14 +70,12 @@ BoxBlurPlan computeBoxPasses(double sigma) {
   }
 
   if ((window & 1) != 0) {
-    // Odd window: 3 passes of the same symmetric box.
     const int radius = window / 2;
     for (int i = 0; i < 3; ++i) {
       plan.passes[i] = {radius, radius};
     }
     plan.numPasses = 3;
   } else {
-    // Even window: 3 passes with shifted/centered boxes.
     const int half = window / 2;
     plan.passes[0] = {half, half - 1};
     plan.passes[1] = {half - 1, half};
@@ -93,11 +87,8 @@ BoxBlurPlan computeBoxPasses(double sigma) {
 
 // ---------------------------------------------------------------------------
 // Cache-friendly RGBA pixel transposition for vertical blur optimization.
-// Instead of column-wise blur (cache miss per row), transpose → row-wise blur → transpose.
 // ---------------------------------------------------------------------------
 
-/// Transpose an RGBA image: dst[x * srcHeight + y] = src[y * srcWidth + x] for each pixel.
-/// Uses block tiling for cache friendliness.
 template <typename T>
 void transposeRGBA(const T* src, T* dst, int srcWidth, int srcHeight) {
   constexpr int kBlock = 32;
@@ -123,8 +114,6 @@ void transposeRGBA(const T* src, T* dst, int srcWidth, int srcHeight) {
 // Edge mode resolution.
 // ---------------------------------------------------------------------------
 
-/// Resolve an out-of-bounds coordinate based on edge mode.
-/// Returns the resolved coordinate, or -1 if the pixel should be treated as transparent black.
 int resolveEdge(int coord, int size, BlurEdgeMode edgeMode) {
   if (coord >= 0 && coord < size) {
     return coord;
@@ -132,13 +121,13 @@ int resolveEdge(int coord, int size, BlurEdgeMode edgeMode) {
   switch (edgeMode) {
     case BlurEdgeMode::Duplicate: return std::clamp(coord, 0, size - 1);
     case BlurEdgeMode::Wrap: return ((coord % size) + size) % size;
-    case BlurEdgeMode::None: return -1;  // transparent black
+    case BlurEdgeMode::None: return -1;
   }
   return -1;
 }
 
 // ---------------------------------------------------------------------------
-// Weighted convolution (σ < 2.0): process all 4 channels per pixel.
+// Weighted convolution (σ < 2.0) — uint8 path.
 // ---------------------------------------------------------------------------
 
 void convolveHorizontalWeighted(const std::uint8_t* src, std::uint8_t* dst, int width, int height,
@@ -170,67 +159,87 @@ void convolveHorizontalWeighted(const std::uint8_t* src, std::uint8_t* dst, int 
 
 // ---------------------------------------------------------------------------
 // Running-sum box blur (σ ≥ 2.0): O(1) per pixel per pass.
+// Uses Vec4u32 SIMD + ScaledDivider (Phases 1+2).
+// Phase 7: Loop splitting for EdgeMode::None — eliminates edge checks in bulk middle.
 // ---------------------------------------------------------------------------
 
 void boxBlurHorizontal(const std::uint8_t* src, std::uint8_t* dst, int width, int height,
                        const BoxPass& pass, BlurEdgeMode edgeMode) {
   const int kernelWidth = pass.width();
-  const std::uint32_t halfKernel = static_cast<std::uint32_t>(kernelWidth) / 2u;
+  const ScaledDivider divider(static_cast<std::uint32_t>(kernelWidth));
 
   for (int y = 0; y < height; ++y) {
-    // Initialize running sums for the first pixel's window.
-    std::uint32_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-    for (int k = -pass.left; k <= pass.right; ++k) {
-      const int sx = resolveEdge(k, width, edgeMode);
-      if (sx >= 0) {
-        const std::size_t si = static_cast<std::size_t>((y * width + sx) * 4);
-        s0 += src[si + 0];
-        s1 += src[si + 1];
-        s2 += src[si + 2];
-        s3 += src[si + 3];
-      }
-    }
+    const std::uint8_t* srcRow = src + static_cast<std::size_t>(y) * width * 4;
+    std::uint8_t* dstRow = dst + static_cast<std::size_t>(y) * width * 4;
 
-    const std::size_t di0 = static_cast<std::size_t>(y * width * 4);
-    dst[di0 + 0] = static_cast<std::uint8_t>((s0 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
-    dst[di0 + 1] = static_cast<std::uint8_t>((s1 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
-    dst[di0 + 2] = static_cast<std::uint8_t>((s2 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
-    dst[di0 + 3] = static_cast<std::uint8_t>((s3 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
+    if (edgeMode == BlurEdgeMode::None) {
+      // Fast path: out-of-bounds = zero. Split into 3 sections to eliminate edge checks.
+      Vec4u32 sum;
 
-    // Slide the window across the row.
-    for (int x = 1; x < width; ++x) {
-      // Add entering pixel.
-      const int enterX = resolveEdge(x + pass.right, width, edgeMode);
-      if (enterX >= 0) {
-        const std::size_t ei = static_cast<std::size_t>((y * width + enterX) * 4);
-        s0 += src[ei + 0];
-        s1 += src[ei + 1];
-        s2 += src[ei + 2];
-        s3 += src[ei + 3];
+      // Initialize: accumulate window for x=0.
+      const int initEnd = std::min(pass.right, width - 1);
+      for (int k = 0; k <= initEnd; ++k) {
+        sum += Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(k) * 4);
       }
-      // Remove leaving pixel.
-      const int leaveX = resolveEdge(x - pass.left - 1, width, edgeMode);
-      if (leaveX >= 0) {
-        const std::size_t li = static_cast<std::size_t>((y * width + leaveX) * 4);
-        s0 -= src[li + 0];
-        s1 -= src[li + 1];
-        s2 -= src[li + 2];
-        s3 -= src[li + 3];
+      sum.scaledDivide(divider).storeToU8(dstRow);
+
+      // Section 1: Left edge — leaving pixel is out of bounds (x < pass.left + 1).
+      const int leftEdgeEnd = std::min(pass.left + 1, width);
+      for (int x = 1; x < leftEdgeEnd; ++x) {
+        const int enterX = x + pass.right;
+        if (enterX < width) {
+          sum += Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(enterX) * 4);
+        }
+        // leaveX = x - pass.left - 1 < 0, no subtraction needed.
+        sum.scaledDivide(divider).storeToU8(dstRow + static_cast<std::size_t>(x) * 4);
       }
 
-      const std::size_t di = static_cast<std::size_t>((y * width + x) * 4);
-      dst[di + 0] = static_cast<std::uint8_t>((s0 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
-      dst[di + 1] = static_cast<std::uint8_t>((s1 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
-      dst[di + 2] = static_cast<std::uint8_t>((s2 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
-      dst[di + 3] = static_cast<std::uint8_t>((s3 + halfKernel) / static_cast<std::uint32_t>(kernelWidth));
+      // Section 2: Bulk middle — both entering and leaving pixels are in bounds.
+      const int bulkEnd = std::min(width - pass.right, width);
+      for (int x = leftEdgeEnd; x < bulkEnd; ++x) {
+        sum += Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(x + pass.right) * 4);
+        sum -= Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(x - pass.left - 1) * 4);
+        sum.scaledDivide(divider).storeToU8(dstRow + static_cast<std::size_t>(x) * 4);
+      }
+
+      // Section 3: Right edge — entering pixel is out of bounds.
+      for (int x = std::max(leftEdgeEnd, bulkEnd); x < width; ++x) {
+        // enterX = x + pass.right >= width, no addition needed.
+        const int leaveX = x - pass.left - 1;
+        if (leaveX >= 0) {
+          sum -= Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(leaveX) * 4);
+        }
+        sum.scaledDivide(divider).storeToU8(dstRow + static_cast<std::size_t>(x) * 4);
+      }
+    } else {
+      // General path with resolveEdge.
+      Vec4u32 sum;
+      for (int k = -pass.left; k <= pass.right; ++k) {
+        const int sx = resolveEdge(k, width, edgeMode);
+        if (sx >= 0) {
+          sum += Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(sx) * 4);
+        }
+      }
+      sum.scaledDivide(divider).storeToU8(dstRow);
+
+      for (int x = 1; x < width; ++x) {
+        const int enterX = resolveEdge(x + pass.right, width, edgeMode);
+        if (enterX >= 0) {
+          sum += Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(enterX) * 4);
+        }
+        const int leaveX = resolveEdge(x - pass.left - 1, width, edgeMode);
+        if (leaveX >= 0) {
+          sum -= Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(leaveX) * 4);
+        }
+        sum.scaledDivide(divider).storeToU8(dstRow + static_cast<std::size_t>(x) * 4);
+      }
     }
   }
 }
 
-// Vertical box blur removed — uses transpose + horizontal blur + transpose instead.
-
 // ---------------------------------------------------------------------------
-// Float variants.
+// Float box blur — uses Vec4f32 SIMD for all paths (Phases 2+6).
+// Phase 7: Loop splitting for EdgeMode::None.
 // ---------------------------------------------------------------------------
 
 void convolveHorizontalWeightedFloat(const float* src, float* dst, int width, int height,
@@ -238,132 +247,93 @@ void convolveHorizontalWeightedFloat(const float* src, float* dst, int width, in
   const int kernelSize = static_cast<int>(kernel.weights.size());
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-      float32x4_t sum = vdupq_n_f32(0.0f);
+      Vec4f32 sum;
       for (int k = 0; k < kernelSize; ++k) {
         const int sampleX = resolveEdge(x + k - kernel.radius, width, edgeMode);
         if (sampleX < 0) {
           continue;
         }
-        const float32x4_t w = vdupq_n_f32(kernel.weights[static_cast<std::size_t>(k)]);
-        const std::size_t si = static_cast<std::size_t>((y * width + sampleX) * 4);
-        sum = vmlaq_f32(sum, vld1q_f32(&src[si]), w);
+        const Vec4f32 w = Vec4f32::splat(kernel.weights[static_cast<std::size_t>(k)]);
+        sum += Vec4f32::load(&src[(y * width + sampleX) * 4]) * w;
       }
-      const std::size_t di = static_cast<std::size_t>((y * width + x) * 4);
-      const float32x4_t zero = vdupq_n_f32(0.0f);
-      const float32x4_t one = vdupq_n_f32(1.0f);
-      vst1q_f32(&dst[di], vminq_f32(vmaxq_f32(sum, zero), one));
-#else
-      float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
-      for (int k = 0; k < kernelSize; ++k) {
-        const int sampleX = resolveEdge(x + k - kernel.radius, width, edgeMode);
-        if (sampleX < 0) {
-          continue;
-        }
-        const float w = kernel.weights[static_cast<std::size_t>(k)];
-        const std::size_t si = static_cast<std::size_t>((y * width + sampleX) * 4);
-        sum0 += w * src[si + 0];
-        sum1 += w * src[si + 1];
-        sum2 += w * src[si + 2];
-        sum3 += w * src[si + 3];
-      }
-      const std::size_t di = static_cast<std::size_t>((y * width + x) * 4);
-      dst[di + 0] = std::clamp(sum0, 0.0f, 1.0f);
-      dst[di + 1] = std::clamp(sum1, 0.0f, 1.0f);
-      dst[di + 2] = std::clamp(sum2, 0.0f, 1.0f);
-      dst[di + 3] = std::clamp(sum3, 0.0f, 1.0f);
-#endif
+      sum.clamp01().store(&dst[(y * width + x) * 4]);
     }
   }
 }
 
 void boxBlurHorizontalFloat(const float* src, float* dst, int width, int height,
                             const BoxPass& pass, BlurEdgeMode edgeMode) {
-  const float invWidth = 1.0f / static_cast<float>(pass.width());
+  const Vec4f32 invWidth = Vec4f32::splat(1.0f / static_cast<float>(pass.width()));
 
   for (int y = 0; y < height; ++y) {
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-    float32x4_t sum = vdupq_n_f32(0.0f);
-    for (int k = -pass.left; k <= pass.right; ++k) {
-      const int sx = resolveEdge(k, width, edgeMode);
-      if (sx >= 0) {
-        const std::size_t si = static_cast<std::size_t>((y * width + sx) * 4);
-        sum = vaddq_f32(sum, vld1q_f32(&src[si]));
+    const float* srcRow = src + static_cast<std::size_t>(y) * width * 4;
+    float* dstRow = dst + static_cast<std::size_t>(y) * width * 4;
+
+    if (edgeMode == BlurEdgeMode::None) {
+      Vec4f32 sum;
+      const int initEnd = std::min(pass.right, width - 1);
+      for (int k = 0; k <= initEnd; ++k) {
+        sum += Vec4f32::load(srcRow + static_cast<std::size_t>(k) * 4);
+      }
+      (sum * invWidth).store(dstRow);
+
+      // Left edge.
+      const int leftEdgeEnd = std::min(pass.left + 1, width);
+      for (int x = 1; x < leftEdgeEnd; ++x) {
+        const int enterX = x + pass.right;
+        if (enterX < width) {
+          sum += Vec4f32::load(srcRow + static_cast<std::size_t>(enterX) * 4);
+        }
+        (sum * invWidth).store(dstRow + static_cast<std::size_t>(x) * 4);
+      }
+
+      // Bulk middle — no edge checks.
+      const int bulkEnd = std::min(width - pass.right, width);
+      for (int x = leftEdgeEnd; x < bulkEnd; ++x) {
+        sum += Vec4f32::load(srcRow + static_cast<std::size_t>(x + pass.right) * 4);
+        sum -= Vec4f32::load(srcRow + static_cast<std::size_t>(x - pass.left - 1) * 4);
+        (sum * invWidth).store(dstRow + static_cast<std::size_t>(x) * 4);
+      }
+
+      // Right edge.
+      for (int x = std::max(leftEdgeEnd, bulkEnd); x < width; ++x) {
+        const int leaveX = x - pass.left - 1;
+        if (leaveX >= 0) {
+          sum -= Vec4f32::load(srcRow + static_cast<std::size_t>(leaveX) * 4);
+        }
+        (sum * invWidth).store(dstRow + static_cast<std::size_t>(x) * 4);
+      }
+    } else {
+      Vec4f32 sum;
+      for (int k = -pass.left; k <= pass.right; ++k) {
+        const int sx = resolveEdge(k, width, edgeMode);
+        if (sx >= 0) {
+          sum += Vec4f32::load(srcRow + static_cast<std::size_t>(sx) * 4);
+        }
+      }
+      (sum * invWidth).store(dstRow);
+
+      for (int x = 1; x < width; ++x) {
+        const int enterX = resolveEdge(x + pass.right, width, edgeMode);
+        if (enterX >= 0) {
+          sum += Vec4f32::load(srcRow + static_cast<std::size_t>(enterX) * 4);
+        }
+        const int leaveX = resolveEdge(x - pass.left - 1, width, edgeMode);
+        if (leaveX >= 0) {
+          sum -= Vec4f32::load(srcRow + static_cast<std::size_t>(leaveX) * 4);
+        }
+        (sum * invWidth).store(dstRow + static_cast<std::size_t>(x) * 4);
       }
     }
-
-    const float32x4_t vInvWidth = vdupq_n_f32(invWidth);
-    const std::size_t di0 = static_cast<std::size_t>(y * width * 4);
-    vst1q_f32(&dst[di0], vmulq_f32(sum, vInvWidth));
-
-    for (int x = 1; x < width; ++x) {
-      const int enterX = resolveEdge(x + pass.right, width, edgeMode);
-      if (enterX >= 0) {
-        const std::size_t ei = static_cast<std::size_t>((y * width + enterX) * 4);
-        sum = vaddq_f32(sum, vld1q_f32(&src[ei]));
-      }
-      const int leaveX = resolveEdge(x - pass.left - 1, width, edgeMode);
-      if (leaveX >= 0) {
-        const std::size_t li = static_cast<std::size_t>((y * width + leaveX) * 4);
-        sum = vsubq_f32(sum, vld1q_f32(&src[li]));
-      }
-
-      const std::size_t di = static_cast<std::size_t>((y * width + x) * 4);
-      vst1q_f32(&dst[di], vmulq_f32(sum, vInvWidth));
-    }
-#else
-    double s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-    for (int k = -pass.left; k <= pass.right; ++k) {
-      const int sx = resolveEdge(k, width, edgeMode);
-      if (sx >= 0) {
-        const std::size_t si = static_cast<std::size_t>((y * width + sx) * 4);
-        s0 += src[si + 0];
-        s1 += src[si + 1];
-        s2 += src[si + 2];
-        s3 += src[si + 3];
-      }
-    }
-
-    const std::size_t di0 = static_cast<std::size_t>(y * width * 4);
-    dst[di0 + 0] = static_cast<float>(s0 * invWidth);
-    dst[di0 + 1] = static_cast<float>(s1 * invWidth);
-    dst[di0 + 2] = static_cast<float>(s2 * invWidth);
-    dst[di0 + 3] = static_cast<float>(s3 * invWidth);
-
-    for (int x = 1; x < width; ++x) {
-      const int enterX = resolveEdge(x + pass.right, width, edgeMode);
-      if (enterX >= 0) {
-        const std::size_t ei = static_cast<std::size_t>((y * width + enterX) * 4);
-        s0 += src[ei + 0];
-        s1 += src[ei + 1];
-        s2 += src[ei + 2];
-        s3 += src[ei + 3];
-      }
-      const int leaveX = resolveEdge(x - pass.left - 1, width, edgeMode);
-      if (leaveX >= 0) {
-        const std::size_t li = static_cast<std::size_t>((y * width + leaveX) * 4);
-        s0 -= src[li + 0];
-        s1 -= src[li + 1];
-        s2 -= src[li + 2];
-        s3 -= src[li + 3];
-      }
-
-      const std::size_t di = static_cast<std::size_t>((y * width + x) * 4);
-      dst[di + 0] = static_cast<float>(s0 * invWidth);
-      dst[di + 1] = static_cast<float>(s1 * invWidth);
-      dst[di + 2] = static_cast<float>(s2 * invWidth);
-      dst[di + 3] = static_cast<float>(s3 * invWidth);
-    }
-#endif
   }
 }
 
-// Vertical float blur removed — uses transpose + horizontal blur + transpose instead.
 
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // Public API: uint8 blur.
+// Vertical pass uses transpose + horizontal (cache-friendly for 3 box passes).
 // ---------------------------------------------------------------------------
 
 void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edgeMode) {
@@ -391,7 +361,7 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edg
   }
 
   if (sigmaY > 0.0) {
-    // Transpose so that vertical blur becomes a cache-friendly horizontal blur.
+    // Transpose for cache-friendly vertical blur.
     transposeRGBA(buffer.data(), scratch.data(), width, height);
     buffer.swap(scratch);
 
@@ -407,7 +377,7 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edg
       }
     }
 
-    // Transpose back to original orientation.
+    // Transpose back.
     transposeRGBA(buffer.data(), scratch.data(), height, width);
     buffer.swap(scratch);
   }
@@ -447,7 +417,6 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
   }
 
   if (sigmaY > 0.0) {
-    // Transpose so that vertical blur becomes a cache-friendly horizontal blur.
     transposeRGBA(buffer.data(), scratch.data(), width, height);
     buffer.swap(scratch);
 
@@ -465,7 +434,6 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
       }
     }
 
-    // Transpose back to original orientation.
     transposeRGBA(buffer.data(), scratch.data(), height, width);
     buffer.swap(scratch);
   }

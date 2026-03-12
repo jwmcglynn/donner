@@ -40,6 +40,16 @@ class Gradient {
       const std::function<void(pipeline::RasterPipelineBuilder&)>& pushStagesPre,
       const std::function<void(pipeline::RasterPipelineBuilder&)>& pushStagesPost) const;
 
+  /// Attempts to emit a single fused stage for 2-stop Pad linear gradients.
+  /// Returns true if fused stage was emitted, false if caller should use normal path.
+  [[nodiscard]] bool tryPushFusedLinear2Stop(pipeline::RasterPipelineBuilder& p,
+                                             ColorSpace cs) const;
+
+  /// Attempts to emit a single fused stage for 2-stop Pad radial gradients.
+  /// Returns true if fused stage was emitted, false if caller should use normal path.
+  [[nodiscard]] bool tryPushFusedRadial2Stop(pipeline::RasterPipelineBuilder& p,
+                                             ColorSpace cs) const;
+
   void applyOpacity(float opacity);
 
   Transform transform;

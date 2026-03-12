@@ -38,6 +38,7 @@ tiny_skia_cc_library(
         "Merge.h",
         "Morphology.h",
         "Offset.h",
+        "SimdVec.h",
         "Tile.h",
         "Turbulence.h",
     ],

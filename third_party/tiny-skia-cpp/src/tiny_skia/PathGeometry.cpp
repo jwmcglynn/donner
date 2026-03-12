@@ -876,8 +876,13 @@ std::optional<std::span<const Conic>> Conic::buildUnitArc(Point uStart, Point uS
 }
 
 std::optional<AutoConicToQuads> autoConicToQuads(Point pt0, Point pt1, Point pt2, float weight) {
+  return autoConicToQuads(pt0, pt1, pt2, weight, 0.25f);
+}
+
+std::optional<AutoConicToQuads> autoConicToQuads(Point pt0, Point pt1, Point pt2, float weight,
+                                                 float tolerance) {
   Conic conic = Conic::create(pt0, pt1, pt2, weight);
-  auto pow2 = conic.computeQuadPow2(0.25f);
+  auto pow2 = conic.computeQuadPow2(tolerance);
   if (!pow2.has_value()) return std::nullopt;
   AutoConicToQuads result;
   result.len = conic.chopIntoQuadsPow2(*pow2, result.points);

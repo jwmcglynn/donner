@@ -36,6 +36,8 @@ class RasterPipelineBlitter final : public tiny_skia::Blitter {
   void blitV(std::uint32_t x, std::uint32_t y, LengthU32 height, AlphaU8 alpha) override;
   void blitAntiH2(std::uint32_t x, std::uint32_t y, AlphaU8 alpha0, AlphaU8 alpha1) override;
   void blitAntiV2(std::uint32_t x, std::uint32_t y, AlphaU8 alpha0, AlphaU8 alpha1) override;
+  void blitAntiRect(std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height,
+                    AlphaU8 leftAlpha, AlphaU8 rightAlpha) override;
   void blitRect(const ScreenIntRect& rect) override;
   void blitMask(const Mask& mask, const ScreenIntRect& clip) override;
 
@@ -44,6 +46,7 @@ class RasterPipelineBlitter final : public tiny_skia::Blitter {
  private:
   RasterPipelineBlitter(MutableSubPixmapView* pixmap, bool isMaskOnly,
                         std::optional<PremultipliedColorU8> memsetColor,
+                        std::optional<PremultipliedColorU8> solidSrcOverColor,
                         std::optional<SubMaskView> mask, Pixmap pixmapSrcStorage,
                         RasterPipeline blitAntiHRp, RasterPipeline blitRectRp,
                         RasterPipeline blitMaskRp);
@@ -51,6 +54,8 @@ class RasterPipelineBlitter final : public tiny_skia::Blitter {
   MutableSubPixmapView* pixmap_ = nullptr;
   bool isMaskOnly_ = false;
   std::optional<PremultipliedColorU8> memsetColor_;
+  /// Premultiplied color for solid SourceOver fast paths (blitAntiH2/blitV).
+  std::optional<PremultipliedColorU8> solidSrcOverColor_;
   std::optional<SubMaskView> mask_;
   Pixmap pixmapSrcStorage_;
   RasterPipeline blitAntiHRp_;

@@ -72,8 +72,8 @@ PathBuilder& PathBuilder::conicTo(float x1, float y1, float x, float y, float we
   } else {
     injectMoveToIfNeeded();
     auto last = lastPoint().value_or(Point::zero());
-    auto quadder =
-        pathGeometry::autoConicToQuads(last, Point::fromXY(x1, y1), Point::fromXY(x, y), weight);
+    auto quadder = pathGeometry::autoConicToQuads(last, Point::fromXY(x1, y1),
+                                                     Point::fromXY(x, y), weight, conicTolerance_);
     if (quadder.has_value()) {
       std::size_t offset = 1;
       for (std::uint8_t i = 0; i < quadder->len; ++i) {

@@ -52,6 +52,9 @@ class PathBuilder {
   PathBuilder& conicTo(float x1, float y1, float x, float y, float weight);
   /// Adds a conic segment using Point arguments.
   PathBuilder& conicPointsTo(Point pt1, Point pt2, float weight);
+
+  /// Sets the tolerance for conic-to-quadratic conversion (default 0.25).
+  void setConicTolerance(float tolerance) { conicTolerance_ = tolerance; }
   /// Closes the current sub-path.
   PathBuilder& close();
 
@@ -99,6 +102,7 @@ class PathBuilder {
   std::vector<Point> points_;
   std::size_t lastMoveToIndex_ = 0;
   bool moveToRequired_ = true;
+  float conicTolerance_ = 0.25f;
 };
 
 }  // namespace tiny_skia

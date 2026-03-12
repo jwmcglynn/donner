@@ -158,6 +158,16 @@ std::optional<std::variant<Color, RadialGradient>> RadialGradient::create(
 bool RadialGradient::pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) const {
   using Stage = pipeline::Stage;
 
+  // Try fused fast path for simple radial gradient (same center, startRadius=0, 2-stop, Pad).
+  if (const auto* rt = std::get_if<RadialType>(&gradientType_)) {
+    if (rt->radius1 == 0.0f) {
+      // Simple radial: no ApplyConcentricScaleBias needed (p0=1, p1=0).
+      if (base_.tryPushFusedRadial2Stop(p, cs)) {
+        return true;
+      }
+    }
+  }
+
   float p0 = 0.0f, p1 = 0.0f;
   if (const auto* rt = std::get_if<RadialType>(&gradientType_)) {
     if (rt->radius1 == 0.0f) {

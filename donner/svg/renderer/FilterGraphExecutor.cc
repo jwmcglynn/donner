@@ -213,10 +213,10 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   graph.useLinearRGB = filterGraph.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
   graph.clipSourceToFilterRegion = clipSourceToFilterRegion;
   if (fillPaintInput != nullptr) {
-    graph.fillPaintInput = tiny_skia::filter::FloatPixmap::fromPixmap(*fillPaintInput);
+    graph.fillPaintInput = *fillPaintInput;
   }
   if (strokePaintInput != nullptr) {
-    graph.strokePaintInput = tiny_skia::filter::FloatPixmap::fromPixmap(*strokePaintInput);
+    graph.strokePaintInput = *strokePaintInput;
   }
 
   if (filterRegion.has_value()) {

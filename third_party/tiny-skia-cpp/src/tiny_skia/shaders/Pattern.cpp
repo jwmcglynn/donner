@@ -23,9 +23,6 @@ bool Pattern::pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) cons
   const auto ts = transform_.invert();
   if (!ts.has_value()) return false;
 
-  p.push(Stage::SeedShader);
-  p.pushTransform(*ts);
-
   auto quality = quality_;
 
   // Reduce quality if transform is identity or translate-only.
@@ -38,6 +35,35 @@ bool Pattern::pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) cons
       quality = FilterQuality::Nearest;
     }
   }
+
+  // Try fused pattern path (avoids highp-only Gather/Bilinear/Repeat stages).
+  if ((quality == FilterQuality::Bilinear || quality == FilterQuality::Nearest) &&
+      pixmap_.width() > 0 && pixmap_.height() > 0) {
+    const auto expandSt = expandStage(cs);
+    if (!expandSt.has_value()) {
+      p.ctx().fusedBilinearPattern = pipeline::FusedBilinearPatternCtx{
+          .sx = ts->sx,
+          .kx = ts->kx,
+          .tx = ts->tx,
+          .ky = ts->ky,
+          .sy = ts->sy,
+          .ty = ts->ty,
+          .pixels = pixmap_.data().data(),
+          .width = pixmap_.width(),
+          .height = pixmap_.height(),
+          .invWidth = 1.0f / static_cast<float>(pixmap_.width()),
+          .invHeight = 1.0f / static_cast<float>(pixmap_.height()),
+          .spreadMode = spreadMode_,
+          .opacity = opacity_.get(),
+          .useNearest = (quality == FilterQuality::Nearest),
+      };
+      p.push(Stage::FusedBilinearPattern);
+      return true;
+    }
+  }
+
+  p.push(Stage::SeedShader);
+  p.pushTransform(*ts);
 
   switch (quality) {
     case FilterQuality::Nearest: {

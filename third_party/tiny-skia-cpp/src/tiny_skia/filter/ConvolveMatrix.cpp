@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
+
+#include "tiny_skia/filter/SimdVec.h"
 
 namespace tiny_skia::filter {
 

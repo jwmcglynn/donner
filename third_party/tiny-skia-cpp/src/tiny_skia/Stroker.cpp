@@ -633,11 +633,18 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
   }
 
   resScale_ = resScale;
-  // The '4' below matches the fill scan converter's error term.
-  invResScale_ = 1.0f / (resScale * 4.0f);
-  invResScaleSquared_ = invResScale_ * invResScale_;
-
   radius_ = width * 0.5f;
+  // The '4' below matches the fill scan converter's error term.
+  float baseInvResScale = 1.0f / (resScale * 4.0f);
+  // For thin strokes (radius < 2px), loosen tolerance proportionally.
+  // Subpixel precision is wasted when the stroke is only a few pixels wide.
+  if (radius_ > 0.0f && radius_ < 2.0f) {
+    float scale = std::min(2.0f / radius_, 2.0f);
+    invResScale_ = baseInvResScale * scale;
+  } else {
+    invResScale_ = baseInvResScale;
+  }
+  invResScaleSquared_ = invResScale_ * invResScale_;
   invMiterLimit_ = invMiterLimit;
 
   firstNormal_ = Point::zero();
@@ -655,6 +662,15 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
 
   capper_ = capFactory(lineCap);
   joiner_ = joinFactory(lineJoin);
+
+  // For thin strokes, use looser conic tolerance to generate fewer quads from
+  // round caps/joins. The default 0.25 is tight for small radius arcs.
+  if (radius_ > 0.0f && radius_ < 4.0f) {
+    float conicTol = std::min(1.0f, 0.25f * (4.0f / radius_));
+    inner_.setConicTolerance(conicTol);
+    outer_.setConicTolerance(conicTol);
+    cusper_.setConicTolerance(conicTol);
+  }
 
   // Reserve space based on input path size.
   inner_.clear();

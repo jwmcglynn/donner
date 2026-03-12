@@ -143,8 +143,9 @@ check_ratio "blur_sigma_invariance" "${blur_sigma_ratio}" "0.80" "1.30"
 # ~1.4x slower than r3. Allow up to 2.0x. If O(r^2) brute-force returns, this would be ~10x+.
 check_ratio "morphology_radius_invariance" "${morph_radius_ratio}" "0.80" "2.00"
 
-# Float/uint8 blur ratio: float is ~1.7x slower due to wider data. Allow up to 2.5x.
-check_ratio "blur_float_over_uint8" "${blur_float_over_uint8}" "1.00" "2.50"
+# Float/uint8 blur ratio: float is ~3x slower due to wider data and uint8's ScaledDivider +
+# Vec4u32 SIMD optimization. Allow up to 4.0x.
+check_ratio "blur_float_over_uint8" "${blur_float_over_uint8}" "1.00" "4.00"
 
 echo ""
 echo "Filter perf regression checks passed."

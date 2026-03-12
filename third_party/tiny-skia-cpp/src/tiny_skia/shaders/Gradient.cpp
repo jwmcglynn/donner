@@ -50,6 +50,71 @@ Gradient::Gradient(std::vector<GradientStop> stops, SpreadMode tileMode, Transfo
   }
 }
 
+bool Gradient::tryPushFusedLinear2Stop(pipeline::RasterPipelineBuilder& p, ColorSpace cs) const {
+  if (stops_.size() != 2 || tileMode_ != SpreadMode::Pad || !hasUniformStops_) {
+    return false;
+  }
+
+  const auto ts = transform.invert();
+  if (!ts.has_value()) {
+    return false;
+  }
+  const auto finalTs = ts->postConcat(pointsToUnit_);
+  if (!finalTs.isFinite()) {
+    return false;
+  }
+
+  const auto c0 = expandColor(cs, stops_[0].color);
+  const auto c1 = expandColor(cs, stops_[1].color);
+
+  p.ctx().fusedLinearGradient2Stop = pipeline::FusedLinearGradient2StopCtx{
+      .sx = finalTs.sx,
+      .kx = finalTs.kx,
+      .tx = finalTs.tx,
+      .factor = pipeline::GradientColor{c1.red() - c0.red(), c1.green() - c0.green(),
+                                        c1.blue() - c0.blue(), c1.alpha() - c0.alpha()},
+      .bias = pipeline::GradientColor{c0.red(), c0.green(), c0.blue(), c0.alpha()},
+      .needsPremultiply = !colorsAreOpaque_,
+  };
+
+  p.push(pipeline::Stage::FusedLinearGradient2Stop);
+  return true;
+}
+
+bool Gradient::tryPushFusedRadial2Stop(pipeline::RasterPipelineBuilder& p, ColorSpace cs) const {
+  if (stops_.size() != 2 || tileMode_ != SpreadMode::Pad || !hasUniformStops_) {
+    return false;
+  }
+
+  const auto ts = transform.invert();
+  if (!ts.has_value()) {
+    return false;
+  }
+  const auto finalTs = ts->postConcat(pointsToUnit_);
+  if (!finalTs.isFinite()) {
+    return false;
+  }
+
+  const auto c0 = expandColor(cs, stops_[0].color);
+  const auto c1 = expandColor(cs, stops_[1].color);
+
+  p.ctx().fusedRadialGradient2Stop = pipeline::FusedRadialGradient2StopCtx{
+      .sx = finalTs.sx,
+      .kx = finalTs.kx,
+      .tx = finalTs.tx,
+      .ky = finalTs.ky,
+      .sy = finalTs.sy,
+      .ty = finalTs.ty,
+      .factor = pipeline::GradientColor{c1.red() - c0.red(), c1.green() - c0.green(),
+                                        c1.blue() - c0.blue(), c1.alpha() - c0.alpha()},
+      .bias = pipeline::GradientColor{c0.red(), c0.green(), c0.blue(), c0.alpha()},
+      .needsPremultiply = !colorsAreOpaque_,
+  };
+
+  p.push(pipeline::Stage::FusedRadialGradient2Stop);
+  return true;
+}
+
 bool Gradient::pushStages(
     pipeline::RasterPipelineBuilder& p, ColorSpace cs,
     const std::function<void(pipeline::RasterPipelineBuilder&)>& pushStagesPre,

@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstddef>
 
+#include "tiny_skia/filter/SimdVec.h"
+
 namespace tiny_skia::filter {
 
 namespace {
@@ -288,15 +290,57 @@ void blend(const FloatPixmap& bg, const FloatPixmap& fg, FloatPixmap& dst, Blend
   auto dstData = dst.data();
   const std::size_t pixelCount = dstData.size() / 4;
 
+  const float* bgPtr = bgData.data();
+  const float* fgPtr = fgData.data();
+  float* dstPtr = dstData.data();
+
+  // Fast premultiplied paths for modes where the CSS compositing formula simplifies
+  // to avoid unpremultiply/premultiply. These use Vec4f32 SIMD for all 4 channels.
+  switch (mode) {
+    case BlendMode::Normal:
+      // Co = pCs + pCb*(1-As) (Source Over compositing)
+      for (std::size_t i = 0; i < pixelCount; ++i) {
+        const std::size_t off = i * 4;
+        Vec4f32 pb = Vec4f32::load(bgPtr + off);
+        Vec4f32 pf = Vec4f32::load(fgPtr + off);
+        Vec4f32::fmadd(pb, Vec4f32::splat(1.0f - fgPtr[off + 3]), pf).clamp01().store(dstPtr + off);
+      }
+      return;
+
+    case BlendMode::Multiply:
+      // Co = pCs*(1-Ab) + pCb*(1-As) + pCb*pCs
+      // Alpha: As + Ab - As*Ab = Source Over (correct for all 4 channels)
+      for (std::size_t i = 0; i < pixelCount; ++i) {
+        const std::size_t off = i * 4;
+        Vec4f32 pb = Vec4f32::load(bgPtr + off);
+        Vec4f32 pf = Vec4f32::load(fgPtr + off);
+        float bgA = bgPtr[off + 3];
+        float fgA = fgPtr[off + 3];
+        Vec4f32 result = pf * Vec4f32::splat(1.0f - bgA) + pb * Vec4f32::splat(1.0f - fgA) + pb * pf;
+        result.clamp01().store(dstPtr + off);
+      }
+      return;
+
+    case BlendMode::Screen:
+      // Co = pCs + pCb - pCb*pCs
+      // Alpha: As + Ab - As*Ab = Source Over (correct for all 4 channels)
+      for (std::size_t i = 0; i < pixelCount; ++i) {
+        const std::size_t off = i * 4;
+        Vec4f32 pb = Vec4f32::load(bgPtr + off);
+        Vec4f32 pf = Vec4f32::load(fgPtr + off);
+        (pf + pb - pb * pf).clamp01().store(dstPtr + off);
+      }
+      return;
+
+    default: break;
+  }
+
+  // General path: use float instead of double, function pointer for blend mode.
   const bool nonSeparable = isNonSeparable(mode);
 
-  // Select separable blend function (nullptr for non-separable).
   double (*blendFn)(double, double) = nullptr;
   if (!nonSeparable) {
     switch (mode) {
-      case BlendMode::Normal: blendFn = blendNormal; break;
-      case BlendMode::Multiply: blendFn = blendMultiply; break;
-      case BlendMode::Screen: blendFn = blendScreen; break;
       case BlendMode::Darken: blendFn = blendDarken; break;
       case BlendMode::Lighten: blendFn = blendLighten; break;
       case BlendMode::Overlay: blendFn = blendOverlay; break;
@@ -313,64 +357,49 @@ void blend(const FloatPixmap& bg, const FloatPixmap& fg, FloatPixmap& dst, Blend
   for (std::size_t i = 0; i < pixelCount; ++i) {
     const std::size_t off = i * 4;
 
-    // Read premultiplied RGBA (already in [0,1]).
-    const double pBgR = bgData[off + 0];
-    const double pBgG = bgData[off + 1];
-    const double pBgB = bgData[off + 2];
-    const double bgA = bgData[off + 3];
+    const float bgA = bgPtr[off + 3];
+    const float fgA = fgPtr[off + 3];
+    const float resultA = fgA + bgA - fgA * bgA;
 
-    const double pFgR = fgData[off + 0];
-    const double pFgG = fgData[off + 1];
-    const double pFgB = fgData[off + 2];
-    const double fgA = fgData[off + 3];
-
-    // Result alpha: Ar = As + Ab - As*Ab (Source Over compositing).
-    const double resultA = fgA + bgA - fgA * bgA;
-
-    if (resultA == 0.0) {
-      dstData[off + 0] = 0.0f;
-      dstData[off + 1] = 0.0f;
-      dstData[off + 2] = 0.0f;
-      dstData[off + 3] = 0.0f;
+    if (resultA == 0.0f) {
+      Vec4f32().store(dstPtr + off);
       continue;
     }
 
-    // Unpremultiply for blend calculation.
-    const double bgR = bgA > 0 ? pBgR / bgA : 0.0;
-    const double bgG = bgA > 0 ? pBgG / bgA : 0.0;
-    const double bgB = bgA > 0 ? pBgB / bgA : 0.0;
-    const double fgR = fgA > 0 ? pFgR / fgA : 0.0;
-    const double fgG = fgA > 0 ? pFgG / fgA : 0.0;
-    const double fgB = fgA > 0 ? pFgB / fgA : 0.0;
+    // Unpremultiply using float reciprocal.
+    const float invBgA = bgA > 0.0f ? 1.0f / bgA : 0.0f;
+    const float invFgA = fgA > 0.0f ? 1.0f / fgA : 0.0f;
+    const float bgR = bgPtr[off + 0] * invBgA;
+    const float bgG = bgPtr[off + 1] * invBgA;
+    const float bgB = bgPtr[off + 2] * invBgA;
+    const float fgR = fgPtr[off + 0] * invFgA;
+    const float fgG = fgPtr[off + 1] * invFgA;
+    const float fgB = fgPtr[off + 2] * invFgA;
 
     if (nonSeparable) {
       auto blended = blendNonSeparable(mode, bgR, bgG, bgB, fgR, fgG, fgB);
 
-      // CSS compositing formula (premultiplied output):
-      // Co = (1-Ab)*As*Cs + (1-As)*Ab*Cb + As*Ab*B(Cb,Cs)
-      auto composite = [&](double cb, double cs, double b) -> double {
+      auto composite = [&](double cb, double cs, double b) -> float {
         double co = (1.0 - bgA) * fgA * cs + (1.0 - fgA) * bgA * cb + fgA * bgA * b;
-        return std::clamp(co, 0.0, 1.0);
+        return static_cast<float>(std::clamp(co, 0.0, 1.0));
       };
 
-      dstData[off + 0] = static_cast<float>(composite(bgR, fgR, blended.r));
-      dstData[off + 1] = static_cast<float>(composite(bgG, fgG, blended.g));
-      dstData[off + 2] = static_cast<float>(composite(bgB, fgB, blended.b));
+      dstPtr[off + 0] = composite(bgR, fgR, blended.r);
+      dstPtr[off + 1] = composite(bgG, fgG, blended.g);
+      dstPtr[off + 2] = composite(bgB, fgB, blended.b);
     } else {
-      // Separable: apply blend function per channel.
-      auto blendChannel = [&](double cb, double cs) -> double {
-        const double blended = blendFn(cb, cs);
-        const double co =
-            (1.0 - bgA) * fgA * cs + (1.0 - fgA) * bgA * cb + fgA * bgA * blended;
-        return std::clamp(co, 0.0, 1.0);
+      auto blendChannel = [&](float cb, float cs) -> float {
+        const float blended = static_cast<float>(blendFn(cb, cs));
+        const float co = (1.0f - bgA) * fgA * cs + (1.0f - fgA) * bgA * cb + fgA * bgA * blended;
+        return std::clamp(co, 0.0f, 1.0f);
       };
 
-      dstData[off + 0] = static_cast<float>(blendChannel(bgR, fgR));
-      dstData[off + 1] = static_cast<float>(blendChannel(bgG, fgG));
-      dstData[off + 2] = static_cast<float>(blendChannel(bgB, fgB));
+      dstPtr[off + 0] = blendChannel(bgR, fgR);
+      dstPtr[off + 1] = blendChannel(bgG, fgG);
+      dstPtr[off + 2] = blendChannel(bgB, fgB);
     }
 
-    dstData[off + 3] = static_cast<float>(std::clamp(resultA, 0.0, 1.0));
+    dstPtr[off + 3] = std::clamp(resultA, 0.0f, 1.0f);
   }
 }
 

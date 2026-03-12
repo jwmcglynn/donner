@@ -98,6 +98,9 @@ std::optional<std::variant<Color, LinearGradient>> LinearGradient::create(
 }
 
 bool LinearGradient::pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) const {
+  if (base_.tryPushFusedLinear2Stop(p, cs)) {
+    return true;
+  }
   return base_.pushStages(p, cs, [](auto&) {}, [](auto&) {});
 }
 

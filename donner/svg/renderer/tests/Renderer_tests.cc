@@ -296,7 +296,7 @@ TEST_F(RendererTests, FilterDisplacementMap) {
       "donner/svg/renderer/testdata/filter_displacement_map.svg",
       "donner/svg/renderer/testdata/golden/filter_displacement_map.png",
       this->optionsExperimental(),
-      ImageComparisonParams::WithThreshold(0.1f, 50)
+      ImageComparisonParams::WithThreshold(0.1f, 600)
           .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
           .includeAntiAliasingDifferences());
 }

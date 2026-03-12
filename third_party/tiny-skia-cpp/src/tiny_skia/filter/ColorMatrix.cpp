@@ -72,55 +72,48 @@ void colorMatrix(Pixmap& pixmap, const std::array<double, 20>& matrix) {
 void colorMatrix(FloatPixmap& pixmap, const std::array<double, 20>& matrix) {
   auto data = pixmap.data();
   const std::size_t pixelCount = data.size() / 4;
+  float* ptr = data.data();
+
+  // Pre-convert matrix to float for faster per-pixel math.
+  float m[20];
+  for (int j = 0; j < 20; ++j) {
+    m[j] = static_cast<float>(matrix[j]);
+  }
 
   for (std::size_t i = 0; i < pixelCount; ++i) {
     const std::size_t offset = i * 4;
-    const double pa = data[offset + 3];
+    const float pa = ptr[offset + 3];
 
-    if (pa == 0.0) {
-      // Fully transparent: only the translation components can produce non-zero output.
-      // Apply matrix to [0,0,0,0,1]. Translation components are in [0,1] range.
-      const double nr = matrix[4];
-      const double ng = matrix[9];
-      const double nb = matrix[14];
-      const double na = matrix[19];
-
-      const double ca = std::clamp(na, 0.0, 1.0);
-      if (ca == 0.0) {
-        continue;  // Still transparent.
+    if (pa == 0.0f) {
+      const float ca = std::clamp(m[19], 0.0f, 1.0f);
+      if (ca == 0.0f) {
+        continue;
       }
-      data[offset + 0] = static_cast<float>(std::clamp(nr * ca, 0.0, 1.0));
-      data[offset + 1] = static_cast<float>(std::clamp(ng * ca, 0.0, 1.0));
-      data[offset + 2] = static_cast<float>(std::clamp(nb * ca, 0.0, 1.0));
-      data[offset + 3] = static_cast<float>(ca);
+      ptr[offset + 0] = std::clamp(m[4] * ca, 0.0f, 1.0f);
+      ptr[offset + 1] = std::clamp(m[9] * ca, 0.0f, 1.0f);
+      ptr[offset + 2] = std::clamp(m[14] * ca, 0.0f, 1.0f);
+      ptr[offset + 3] = ca;
       continue;
     }
 
-    // Unpremultiply: values are in [0,1] premultiplied, so unpremultiplied = premultiplied / alpha.
-    const double invAlpha = 1.0 / pa;
-    const double r = data[offset + 0] * invAlpha;
-    const double g = data[offset + 1] * invAlpha;
-    const double b = data[offset + 2] * invAlpha;
-    const double a = pa;
+    // Unpremultiply.
+    const float invAlpha = 1.0f / pa;
+    const float r = ptr[offset + 0] * invAlpha;
+    const float g = ptr[offset + 1] * invAlpha;
+    const float b = ptr[offset + 2] * invAlpha;
 
-    // Apply 5x4 matrix: [R,G,B,A,1] -> [R',G',B',A']
-    // Translation components (matrix[4], [9], [14], [19]) are in 0-1 range per SVG spec.
-    const double nr = matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4];
-    const double ng = matrix[5] * r + matrix[6] * g + matrix[7] * b + matrix[8] * a + matrix[9];
-    const double nb =
-        matrix[10] * r + matrix[11] * g + matrix[12] * b + matrix[13] * a + matrix[14];
-    const double na =
-        matrix[15] * r + matrix[16] * g + matrix[17] * b + matrix[18] * a + matrix[19];
+    // Apply 5x4 matrix.
+    const float nr = m[0] * r + m[1] * g + m[2] * b + m[3] * pa + m[4];
+    const float ng = m[5] * r + m[6] * g + m[7] * b + m[8] * pa + m[9];
+    const float nb = m[10] * r + m[11] * g + m[12] * b + m[13] * pa + m[14];
+    const float na = m[15] * r + m[16] * g + m[17] * b + m[18] * pa + m[19];
 
     // Clamp and re-premultiply.
-    const double ca = std::clamp(na, 0.0, 1.0);
-    data[offset + 0] =
-        static_cast<float>(std::clamp(std::clamp(nr, 0.0, 1.0) * ca, 0.0, 1.0));
-    data[offset + 1] =
-        static_cast<float>(std::clamp(std::clamp(ng, 0.0, 1.0) * ca, 0.0, 1.0));
-    data[offset + 2] =
-        static_cast<float>(std::clamp(std::clamp(nb, 0.0, 1.0) * ca, 0.0, 1.0));
-    data[offset + 3] = static_cast<float>(ca);
+    const float ca = std::clamp(na, 0.0f, 1.0f);
+    ptr[offset + 0] = std::clamp(std::clamp(nr, 0.0f, 1.0f) * ca, 0.0f, 1.0f);
+    ptr[offset + 1] = std::clamp(std::clamp(ng, 0.0f, 1.0f) * ca, 0.0f, 1.0f);
+    ptr[offset + 2] = std::clamp(std::clamp(nb, 0.0f, 1.0f) * ca, 0.0f, 1.0f);
+    ptr[offset + 3] = ca;
   }
 }
 

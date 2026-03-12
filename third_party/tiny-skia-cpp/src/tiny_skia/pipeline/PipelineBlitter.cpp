@@ -27,12 +27,14 @@ constexpr std::size_t kBytesPerPixel = 4;
 
 RasterPipelineBlitter::RasterPipelineBlitter(MutableSubPixmapView* pixmap, bool isMaskOnly,
                                              std::optional<PremultipliedColorU8> memsetColor,
+                                             std::optional<PremultipliedColorU8> solidSrcOverColor,
                                              std::optional<SubMaskView> mask,
                                              Pixmap pixmapSrcStorage, RasterPipeline blitAntiHRp,
                                              RasterPipeline blitRectRp, RasterPipeline blitMaskRp)
     : pixmap_(pixmap),
       isMaskOnly_(isMaskOnly),
       memsetColor_(memsetColor),
+      solidSrcOverColor_(solidSrcOverColor),
       mask_(mask),
       pixmapSrcStorage_(std::move(pixmapSrcStorage)),
       blitAntiHRp_(blitAntiHRp),
@@ -151,7 +153,14 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(Premultiplied
     return p.compile();
   }();
 
-  return RasterPipelineBlitter(pixmap, false, memsetColor, mask, makeDummyPixmapSrc(), blitAntiHRp,
+  // For solid SourceOver (including strength-reduced to Source), enable inline blend fast path.
+  std::optional<PremultipliedColorU8> solidSrcOverColor;
+  if (!mask.has_value() && (blendMode == BlendMode::Source || blendMode == BlendMode::SourceOver)) {
+    solidSrcOverColor = color;
+  }
+
+  return RasterPipelineBlitter(pixmap, false, memsetColor, solidSrcOverColor, mask,
+                               makeDummyPixmapSrc(), blitAntiHRp,
                                blitRectRp, blitMaskRp);
 }
 
@@ -360,8 +369,17 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     pixmapSrcStorage = makeDummyPixmapSrc();
   }
 
-  return RasterPipelineBlitter(pixmap, false, memsetColor, mask, std::move(pixmapSrcStorage),
-                               *blitAntiHRp, *blitRectRp, *blitMaskRp);
+  // For solid color SourceOver (or strength-reduced to Source), enable inline blend fast path.
+  std::optional<PremultipliedColorU8> solidSrcOverColor;
+  if (paint.isSolidColor() && !mask.has_value() && !unpremul &&
+      (blendMode == BlendMode::Source || blendMode == BlendMode::SourceOver)) {
+    const auto& color = std::get<Color>(paint.shader);
+    solidSrcOverColor = color.premultiply().toColorU8();
+  }
+
+  return RasterPipelineBlitter(pixmap, false, memsetColor, solidSrcOverColor, mask,
+                               std::move(pixmapSrcStorage), *blitAntiHRp, *blitRectRp,
+                               *blitMaskRp);
 }
 
 std::optional<RasterPipelineBlitter> RasterPipelineBlitter::createMask(MutableSubPixmapView* pixmap) {
@@ -400,8 +418,8 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::createMask(MutableSu
     return p.compile();
   }();
 
-  return RasterPipelineBlitter(pixmap, true, memsetColor, std::nullopt, makeDummyPixmapSrc(),
-                               blitAntiHRp, blitRectRp, blitMaskRp);
+  return RasterPipelineBlitter(pixmap, true, memsetColor, std::nullopt, std::nullopt,
+                               makeDummyPixmapSrc(), blitAntiHRp, blitRectRp, blitMaskRp);
 }
 
 void RasterPipelineBlitter::blitH(std::uint32_t x, std::uint32_t y, LengthU32 width) {
@@ -411,6 +429,72 @@ void RasterPipelineBlitter::blitH(std::uint32_t x, std::uint32_t y, LengthU32 wi
 void RasterPipelineBlitter::blitAntiH(std::uint32_t x, std::uint32_t y,
                                       std::span<std::uint8_t> alpha, std::span<AlphaRun> runs) {
   if (pixmap_ == nullptr || alpha.empty() || runs.empty()) {
+    return;
+  }
+
+  // Inline pattern blend fast path: bypass pipeline for identity+repeat+nearest patterns.
+  const auto& patCtx = blitAntiHRp_.ctx().fusedBilinearPattern;
+  if (patCtx.fuseSourceOverCoverage && patCtx.pixels != nullptr && patCtx.useNearest &&
+      patCtx.spreadMode == SpreadMode::Repeat && !mask_.has_value() && patCtx.opacity >= 1.0f &&
+      patCtx.sx == 1.0f && patCtx.kx == 0.0f && patCtx.ky == 0.0f) {
+    const std::uint32_t tw = patCtx.width;
+    const std::uint32_t th = patCtx.height;
+    const float fw = static_cast<float>(tw);
+    const float fh = static_cast<float>(th);
+
+    // Compute tile Y (constant for entire scanline).
+    float cyRaw = (static_cast<float>(y) + 0.5f) * patCtx.sy + patCtx.ty;
+    cyRaw = cyRaw - std::floor(cyRaw * patCtx.invHeight) * fh;
+    if (cyRaw < 0.0f) cyRaw += fh;
+    const std::uint32_t tileY = std::min(static_cast<std::uint32_t>(static_cast<std::int32_t>(cyRaw)),
+                                         th - 1);
+    const std::uint8_t* tileRow = patCtx.pixels + static_cast<std::size_t>(tileY) * tw * 4;
+    auto* data = pixmap_->data;
+    const auto rw = pixmap_->realWidth;
+
+    auto div255 = [](std::uint32_t v) -> std::uint8_t {
+      return static_cast<std::uint8_t>((v + 128 + ((v + 128) >> 8)) >> 8);
+    };
+
+    std::size_t aaOffset = 0;
+    std::size_t runOffset = 0;
+    while (runOffset < runs.size() && runs[runOffset].has_value()) {
+      const auto run = static_cast<LengthU32>(runs[runOffset].value());
+      if (run == 0u || aaOffset >= alpha.size()) break;
+      const auto cov = alpha[aaOffset];
+      if (cov == 255u) {
+        blitH(x, y, run);
+      } else if (cov != 0u) {
+        for (std::uint32_t i = 0; i < run; ++i) {
+          const auto px = x + i;
+          // Compute tile X.
+          float cxRaw = static_cast<float>(px) + 0.5f + patCtx.tx;
+          cxRaw = cxRaw - std::floor(cxRaw * patCtx.invWidth) * fw;
+          if (cxRaw < 0.0f) cxRaw += fw;
+          const std::uint32_t tileX = std::min(
+              static_cast<std::uint32_t>(static_cast<std::int32_t>(cxRaw)), tw - 1);
+          const std::uint8_t* sp = tileRow + tileX * 4;
+          // Scale source by coverage, then SourceOver blend.
+          std::uint32_t sr = div255(static_cast<std::uint32_t>(sp[0]) * cov);
+          std::uint32_t sg = div255(static_cast<std::uint32_t>(sp[1]) * cov);
+          std::uint32_t sb = div255(static_cast<std::uint32_t>(sp[2]) * cov);
+          std::uint32_t sa = div255(static_cast<std::uint32_t>(sp[3]) * cov);
+          std::uint32_t invSa = 255 - sa;
+          const auto offset = (static_cast<std::size_t>(y) * rw + px) * kBytesPerPixel;
+          data[offset + 0] = static_cast<std::uint8_t>(
+              sr + div255(static_cast<std::uint32_t>(data[offset + 0]) * invSa));
+          data[offset + 1] = static_cast<std::uint8_t>(
+              sg + div255(static_cast<std::uint32_t>(data[offset + 1]) * invSa));
+          data[offset + 2] = static_cast<std::uint8_t>(
+              sb + div255(static_cast<std::uint32_t>(data[offset + 2]) * invSa));
+          data[offset + 3] = static_cast<std::uint8_t>(
+              sa + div255(static_cast<std::uint32_t>(data[offset + 3]) * invSa));
+        }
+      }
+      x += run;
+      runOffset += static_cast<std::size_t>(run);
+      aaOffset += static_cast<std::size_t>(run);
+    }
     return;
   }
 
@@ -446,6 +530,64 @@ void RasterPipelineBlitter::blitV(std::uint32_t x, std::uint32_t y, LengthU32 he
     return;
   }
 
+  // Fast path for opaque Source: simple lerp.
+  if (memsetColor_.has_value() && !isMaskOnly_ && pixmap_ != nullptr && x < pixmap_->width()) {
+    const auto c = *memsetColor_;
+    auto* data = pixmap_->data;
+    const auto rw = pixmap_->realWidth;
+    const auto maxY = std::min(static_cast<std::size_t>(y) + height, pixmap_->height());
+    if (alpha == 255) {
+      for (auto yy = static_cast<std::size_t>(y); yy < maxY; ++yy) {
+        const auto offset = (yy * rw + x) * kBytesPerPixel;
+        data[offset + 0] = c.red();
+        data[offset + 1] = c.green();
+        data[offset + 2] = c.blue();
+        data[offset + 3] = c.alpha();
+      }
+    } else {
+      const uint32_t inv = 255 - alpha;
+      auto blend = [](uint32_t src, uint32_t dst, uint32_t a, uint32_t invA) {
+        uint32_t t = src * a + dst * invA + 128;
+        return static_cast<std::uint8_t>((t + (t >> 8)) >> 8);
+      };
+      for (auto yy = static_cast<std::size_t>(y); yy < maxY; ++yy) {
+        const auto offset = (yy * rw + x) * kBytesPerPixel;
+        data[offset + 0] = blend(c.red(), data[offset + 0], alpha, inv);
+        data[offset + 1] = blend(c.green(), data[offset + 1], alpha, inv);
+        data[offset + 2] = blend(c.blue(), data[offset + 2], alpha, inv);
+        data[offset + 3] = blend(c.alpha(), data[offset + 3], alpha, inv);
+      }
+    }
+    return;
+  }
+  // Fast path for semi-transparent SourceOver.
+  if (solidSrcOverColor_.has_value() && pixmap_ != nullptr && x < pixmap_->width()) {
+    const auto c = *solidSrcOverColor_;
+    auto* data = pixmap_->data;
+    const auto rw = pixmap_->realWidth;
+    const auto maxY = std::min(static_cast<std::size_t>(y) + height, pixmap_->height());
+    auto div255 = [](uint32_t v) -> std::uint8_t {
+      return static_cast<std::uint8_t>((v + 128 + ((v + 128) >> 8)) >> 8);
+    };
+    uint32_t sa = div255(static_cast<uint32_t>(c.alpha()) * alpha);
+    uint32_t inv_sa = 255 - sa;
+    uint32_t sr = div255(static_cast<uint32_t>(c.red()) * alpha);
+    uint32_t sg = div255(static_cast<uint32_t>(c.green()) * alpha);
+    uint32_t sb = div255(static_cast<uint32_t>(c.blue()) * alpha);
+    for (auto yy = static_cast<std::size_t>(y); yy < maxY; ++yy) {
+      const auto offset = (yy * rw + x) * kBytesPerPixel;
+      data[offset + 0] =
+          static_cast<std::uint8_t>(sr + div255(static_cast<uint32_t>(data[offset + 0]) * inv_sa));
+      data[offset + 1] =
+          static_cast<std::uint8_t>(sg + div255(static_cast<uint32_t>(data[offset + 1]) * inv_sa));
+      data[offset + 2] =
+          static_cast<std::uint8_t>(sb + div255(static_cast<uint32_t>(data[offset + 2]) * inv_sa));
+      data[offset + 3] =
+          static_cast<std::uint8_t>(sa + div255(static_cast<uint32_t>(data[offset + 3]) * inv_sa));
+    }
+    return;
+  }
+
   const auto bounds = ScreenIntRect::fromXYWHSafe(x, y, 1u, height);
   const AAMaskCtx aaMaskCtx{{alpha, alpha},
                               0u,  // rowBytes=0: reuse same data for all rows
@@ -457,6 +599,137 @@ void RasterPipelineBlitter::blitV(std::uint32_t x, std::uint32_t y, LengthU32 he
 
 void RasterPipelineBlitter::blitAntiH2(std::uint32_t x, std::uint32_t y, AlphaU8 alpha0,
                                        AlphaU8 alpha1) {
+  // Inline pattern blend fast path: bypass pipeline for identity+repeat+nearest patterns.
+  {
+    const auto& patCtx = blitMaskRp_.ctx().fusedBilinearPattern;
+    if (patCtx.pixels != nullptr && patCtx.useNearest && patCtx.width > 0 && patCtx.height > 0 &&
+        patCtx.spreadMode == SpreadMode::Repeat && !mask_.has_value() && patCtx.opacity >= 1.0f &&
+        patCtx.sx == 1.0f && patCtx.kx == 0.0f && patCtx.ky == 0.0f && pixmap_ != nullptr) {
+      const std::uint32_t tw = patCtx.width;
+      const std::uint32_t th = patCtx.height;
+      const float fw = static_cast<float>(tw);
+      const float fh = static_cast<float>(th);
+
+      float cyRaw = (static_cast<float>(y) + 0.5f) * patCtx.sy + patCtx.ty;
+      cyRaw = cyRaw - std::floor(cyRaw * patCtx.invHeight) * fh;
+      if (cyRaw < 0.0f) cyRaw += fh;
+      const std::uint32_t tileY =
+          std::min(static_cast<std::uint32_t>(static_cast<std::int32_t>(cyRaw)), th - 1);
+      const std::uint8_t* tileRow = patCtx.pixels + static_cast<std::size_t>(tileY) * tw * 4;
+      auto* data = pixmap_->data;
+      const auto rw = pixmap_->realWidth;
+
+      auto div255 = [](std::uint32_t v) -> std::uint8_t {
+        return static_cast<std::uint8_t>((v + 128 + ((v + 128) >> 8)) >> 8);
+      };
+
+      const AlphaU8 alphas[2] = {alpha0, alpha1};
+      for (int i = 0; i < 2; ++i) {
+        const auto px = x + static_cast<std::uint32_t>(i);
+        const auto cov = alphas[i];
+        if (cov == 0 || px >= pixmap_->width() || y >= pixmap_->height()) continue;
+
+        float cxRaw = static_cast<float>(px) + 0.5f + patCtx.tx;
+        cxRaw = cxRaw - std::floor(cxRaw * patCtx.invWidth) * fw;
+        if (cxRaw < 0.0f) cxRaw += fw;
+        const std::uint32_t tileX =
+            std::min(static_cast<std::uint32_t>(static_cast<std::int32_t>(cxRaw)), tw - 1);
+        const std::uint8_t* sp = tileRow + tileX * 4;
+
+        const auto offset = (static_cast<std::size_t>(y) * rw + px) * kBytesPerPixel;
+        if (cov == 255) {
+          // SourceOver without coverage scaling.
+          std::uint32_t sa = sp[3];
+          std::uint32_t invSa = 255 - sa;
+          data[offset + 0] = static_cast<std::uint8_t>(
+              sp[0] + div255(static_cast<std::uint32_t>(data[offset + 0]) * invSa));
+          data[offset + 1] = static_cast<std::uint8_t>(
+              sp[1] + div255(static_cast<std::uint32_t>(data[offset + 1]) * invSa));
+          data[offset + 2] = static_cast<std::uint8_t>(
+              sp[2] + div255(static_cast<std::uint32_t>(data[offset + 2]) * invSa));
+          data[offset + 3] = static_cast<std::uint8_t>(
+              sa + div255(static_cast<std::uint32_t>(data[offset + 3]) * invSa));
+        } else {
+          // Scale source by coverage, then SourceOver.
+          std::uint32_t sr = div255(static_cast<std::uint32_t>(sp[0]) * cov);
+          std::uint32_t sg = div255(static_cast<std::uint32_t>(sp[1]) * cov);
+          std::uint32_t sb = div255(static_cast<std::uint32_t>(sp[2]) * cov);
+          std::uint32_t sa = div255(static_cast<std::uint32_t>(sp[3]) * cov);
+          std::uint32_t invSa = 255 - sa;
+          data[offset + 0] = static_cast<std::uint8_t>(
+              sr + div255(static_cast<std::uint32_t>(data[offset + 0]) * invSa));
+          data[offset + 1] = static_cast<std::uint8_t>(
+              sg + div255(static_cast<std::uint32_t>(data[offset + 1]) * invSa));
+          data[offset + 2] = static_cast<std::uint8_t>(
+              sb + div255(static_cast<std::uint32_t>(data[offset + 2]) * invSa));
+          data[offset + 3] = static_cast<std::uint8_t>(
+              sa + div255(static_cast<std::uint32_t>(data[offset + 3]) * invSa));
+        }
+      }
+      return;
+    }
+  }
+
+  // Fast path for opaque Source (strength-reduced from SourceOver): simple lerp.
+  if (memsetColor_.has_value() && !isMaskOnly_ && pixmap_ != nullptr) {
+    const auto c = *memsetColor_;
+    auto* data = pixmap_->data;
+    const auto rw = pixmap_->realWidth;
+    const AlphaU8 alphas[2] = {alpha0, alpha1};
+    for (int i = 0; i < 2; ++i) {
+      const auto xx = x + static_cast<std::uint32_t>(i);
+      if (xx >= pixmap_->width() || y >= pixmap_->height()) continue;
+      const auto a = alphas[i];
+      if (a == 0) continue;
+      const auto offset = (static_cast<std::size_t>(y) * rw + xx) * kBytesPerPixel;
+      if (a == 255) {
+        data[offset + 0] = c.red();
+        data[offset + 1] = c.green();
+        data[offset + 2] = c.blue();
+        data[offset + 3] = c.alpha();
+      } else {
+        const uint32_t inv = 255 - a;
+        auto blend = [](uint32_t src, uint32_t dst, uint32_t alpha, uint32_t invAlpha) {
+          uint32_t t = src * alpha + dst * invAlpha + 128;
+          return static_cast<std::uint8_t>((t + (t >> 8)) >> 8);
+        };
+        data[offset + 0] = blend(c.red(), data[offset + 0], a, inv);
+        data[offset + 1] = blend(c.green(), data[offset + 1], a, inv);
+        data[offset + 2] = blend(c.blue(), data[offset + 2], a, inv);
+        data[offset + 3] = blend(c.alpha(), data[offset + 3], a, inv);
+      }
+    }
+    return;
+  }
+  // Fast path for semi-transparent SourceOver: ScaleU8 + SourceOver inline.
+  if (solidSrcOverColor_.has_value() && pixmap_ != nullptr) {
+    const auto c = *solidSrcOverColor_;
+    auto* data = pixmap_->data;
+    const auto rw = pixmap_->realWidth;
+    auto div255 = [](uint32_t v) -> std::uint8_t {
+      return static_cast<std::uint8_t>((v + 128 + ((v + 128) >> 8)) >> 8);
+    };
+    const AlphaU8 alphas[2] = {alpha0, alpha1};
+    for (int i = 0; i < 2; ++i) {
+      const auto xx = x + static_cast<std::uint32_t>(i);
+      if (xx >= pixmap_->width() || y >= pixmap_->height()) continue;
+      const auto cov = alphas[i];
+      if (cov == 0) continue;
+      const auto offset = (static_cast<std::size_t>(y) * rw + xx) * kBytesPerPixel;
+      uint32_t sa = div255(static_cast<uint32_t>(c.alpha()) * cov);
+      uint32_t inv_sa = 255 - sa;
+      data[offset + 0] = div255(static_cast<uint32_t>(c.red()) * cov) +
+                         div255(static_cast<uint32_t>(data[offset + 0]) * inv_sa);
+      data[offset + 1] = div255(static_cast<uint32_t>(c.green()) * cov) +
+                         div255(static_cast<uint32_t>(data[offset + 1]) * inv_sa);
+      data[offset + 2] = div255(static_cast<uint32_t>(c.blue()) * cov) +
+                         div255(static_cast<uint32_t>(data[offset + 2]) * inv_sa);
+      data[offset + 3] =
+          static_cast<std::uint8_t>(sa + div255(static_cast<uint32_t>(data[offset + 3]) * inv_sa));
+    }
+    return;
+  }
+
   const auto bounds = ScreenIntRect::fromXYWH(x, y, 2, 1);
   if (!bounds.has_value()) {
     return;
@@ -479,6 +752,27 @@ void RasterPipelineBlitter::blitAntiV2(std::uint32_t x, std::uint32_t y, AlphaU8
   const auto maskCtx = makeMaskCtx(mask_);
   const auto pixmapSrcRef = pixmapSrcStorage_.view();
   blitMaskRp_.run(*bounds, aaMaskCtx, maskCtx, pixmapSrcRef, pixmap_);
+}
+
+void RasterPipelineBlitter::blitAntiRect(std::int32_t x, std::int32_t y, std::int32_t width,
+                                         std::int32_t height, AlphaU8 leftAlpha,
+                                         AlphaU8 rightAlpha) {
+  if (height <= 0) return;
+  auto uy = static_cast<std::uint32_t>(y);
+  auto uh = static_cast<LengthU32>(height);
+  // Left edge column: one blitV call for full height.
+  if (leftAlpha > 0) {
+    blitV(static_cast<std::uint32_t>(x), uy, uh, leftAlpha);
+  }
+  // Interior: one blitRect call (uses memset fast path for opaque).
+  if (width > 0) {
+    blitRect(ScreenIntRect::fromXYWHSafe(static_cast<std::uint32_t>(x + 1), uy,
+                                         static_cast<LengthU32>(width), uh));
+  }
+  // Right edge column: one blitV call for full height.
+  if (rightAlpha > 0) {
+    blitV(static_cast<std::uint32_t>(x + 1 + width), uy, uh, rightAlpha);
+  }
 }
 
 void RasterPipelineBlitter::blitRect(const ScreenIntRect& rect) {

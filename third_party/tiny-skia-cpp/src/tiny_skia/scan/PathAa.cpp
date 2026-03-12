@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <optional>
 #include <vector>
 
 #include "tiny_skia/AnalyticEdge.h"
@@ -102,6 +101,8 @@ class AdditiveBlitter {
         width_(width),
         top_(top),
         currY_(top - 1),
+        dirtyMin_(width),
+        dirtyMax_(-1),
         row_(static_cast<std::size_t>(width) + 2, 0),
         // Match Skia: small paths use MaskAdditiveBlitter which doesn't snap alpha.
         useMaskMode_(width <= kMaskMaxWidth &&
@@ -118,6 +119,8 @@ class AdditiveBlitter {
     x -= left_;
     if (x >= 0 && x < width_) {
       safelyAddAlpha(row_[static_cast<std::size_t>(x)], alpha);
+      if (x < dirtyMin_) dirtyMin_ = x;
+      if (x > dirtyMax_) dirtyMax_ = x;
     }
   }
 
@@ -125,22 +128,30 @@ class AdditiveBlitter {
     if (alpha == 0 || w <= 0) return;
     checkY(y);
     x -= left_;
-    for (int i = 0; i < w; ++i) {
-      int xi = x + i;
-      if (xi >= 0 && xi < width_) {
-        safelyAddAlpha(row_[static_cast<std::size_t>(xi)], alpha);
-      }
+    int start = std::max(0, x);
+    int end = std::min(x + w, width_);
+    for (int xi = start; xi < end; ++xi) {
+      safelyAddAlpha(row_[static_cast<std::size_t>(xi)], alpha);
+    }
+    if (start < end) {
+      if (start < dirtyMin_) dirtyMin_ = start;
+      if (end - 1 > dirtyMax_) dirtyMax_ = end - 1;
     }
   }
 
   void blitAntiHArray(int x, int y, const AlphaU8* alphas, int len) {
     checkY(y);
     x -= left_;
-    for (int i = 0; i < len; ++i) {
-      int xi = x + i;
-      if (xi >= 0 && xi < width_) {
-        safelyAddAlpha(row_[static_cast<std::size_t>(xi)], alphas[i]);
-      }
+    int start = std::max(0, -x);
+    int end = std::min(len, width_ - x);
+    for (int i = start; i < end; ++i) {
+      safelyAddAlpha(row_[static_cast<std::size_t>(x + i)], alphas[i]);
+    }
+    if (start < end) {
+      int lo = x + start;
+      int hi = x + end - 1;
+      if (lo < dirtyMin_) dirtyMin_ = lo;
+      if (hi > dirtyMax_) dirtyMax_ = hi;
     }
   }
 
@@ -159,59 +170,48 @@ class AdditiveBlitter {
   }
 
   void flush() {
-    if (currY_ < top_) return;
-
-    bool hasContent = false;
-    for (int i = 0; i < width_; ++i) {
-      if (row_[static_cast<std::size_t>(i)] != 0) {
-        hasContent = true;
-        break;
-      }
-    }
-    if (!hasContent) {
+    if (currY_ < top_ || dirtyMax_ < dirtyMin_) {
       currY_ = top_ - 1;
+      dirtyMin_ = width_;
+      dirtyMax_ = -1;
       return;
     }
 
-    // Snap and build runs for the real blitter.
-    // Skia's MaskAdditiveBlitter (used for small paths) doesn't snap alpha values.
-    // Only snap when using the run-based path (large paths).
-    if (!useMaskMode_) {
-      for (int i = 0; i < width_; ++i) {
-        row_[static_cast<std::size_t>(i)] = snapAlpha(row_[static_cast<std::size_t>(i)]);
+    auto uy = static_cast<std::uint32_t>(currY_);
+    int i = dirtyMin_;
+    int end = dirtyMax_ + 1;
+
+    while (i < end) {
+      AlphaU8 a = row_[static_cast<std::size_t>(i)];
+      if (!useMaskMode_) {
+        a = snapAlpha(a);
+      }
+
+      if (a == 0) {
+        ++i;
+        continue;
+      }
+
+      if (a == 0xFF) {
+        int start = i;
+        ++i;
+        while (i < end) {
+          AlphaU8 next = row_[static_cast<std::size_t>(i)];
+          if (!useMaskMode_) next = snapAlpha(next);
+          if (next != 0xFF) break;
+          ++i;
+        }
+        realBlitter_.blitH(static_cast<std::uint32_t>(left_ + start), uy,
+                           static_cast<LengthU32>(i - start));
+      } else {
+        realBlitter_.blitAntiH2(static_cast<std::uint32_t>(left_ + i), uy, a, 0);
+        ++i;
       }
     }
 
-    // Build runs in Skia's scattered AlphaRuns format.
-    // The blitter advances indices by run length, so entries must be placed
-    // at cumulative run positions: runs[pos] = len, alpha[pos] = value,
-    // next entry at pos + len.
-    alphasBuf_.assign(static_cast<std::size_t>(width_) + 1, 0);
-    runsBuf_.assign(static_cast<std::size_t>(width_) + 1, std::nullopt);
-
-    int pos = 0;
-    int i = 0;
-    while (i < width_) {
-      auto a = row_[static_cast<std::size_t>(i)];
-      int runLen = 1;
-      while (i + runLen < width_ &&
-             row_[static_cast<std::size_t>(i + runLen)] == a) {
-        ++runLen;
-      }
-      alphasBuf_[static_cast<std::size_t>(pos)] = a;
-      runsBuf_[static_cast<std::size_t>(pos)] =
-          AlphaRun{static_cast<std::uint16_t>(runLen)};
-      pos += runLen;
-      i += runLen;
-    }
-    // Terminator at pos.
-    alphasBuf_[static_cast<std::size_t>(pos)] = 0;
-    runsBuf_[static_cast<std::size_t>(pos)] = std::nullopt;
-
-    realBlitter_.blitAntiH(static_cast<std::uint32_t>(left_),
-                           static_cast<std::uint32_t>(currY_), alphasBuf_, runsBuf_);
-
-    std::fill(row_.begin(), row_.begin() + width_, static_cast<AlphaU8>(0));
+    std::fill(row_.begin() + dirtyMin_, row_.begin() + end, static_cast<AlphaU8>(0));
+    dirtyMin_ = width_;
+    dirtyMax_ = -1;
     currY_ = top_ - 1;
   }
 
@@ -220,9 +220,9 @@ class AdditiveBlitter {
   std::int32_t width_;
   std::int32_t top_;
   std::int32_t currY_;
+  int dirtyMin_;
+  int dirtyMax_;
   std::vector<AlphaU8> row_;
-  std::vector<AlphaU8> alphasBuf_;
-  std::vector<AlphaRun> runsBuf_;
   bool useMaskMode_;  ///< When true, skip snapAlpha (matches Skia's MaskAdditiveBlitter).
 };
 
@@ -319,7 +319,7 @@ void blitAaaTrapezoidRow(AdditiveBlitter& blitter, int y, FDot16 ul, FDot16 ur, 
     return;
   }
 
-  constexpr int kQuickLen = 31;
+  constexpr int kQuickLen = 513;
   AlphaU8 quickAlphas[(kQuickLen + 1) * 2];
   AlphaU8* alphas;
   AlphaU8* tempAlphas;
@@ -380,21 +380,35 @@ void blitAaaTrapezoidRow(AdditiveBlitter& blitter, int y, FDot16 ul, FDot16 ur, 
   }
 
   if (fullAlpha == 0xFF && !noRealBlitter) {
-    // Build runs for the real blitter.
-    std::vector<std::int16_t> runs(static_cast<std::size_t>(len) + 1);
-    for (int i = 0; i < len; ++i) runs[static_cast<std::size_t>(i)] = 1;
-    runs[static_cast<std::size_t>(len)] = 0;
-
-    // Convert to AlphaRun format.
-    std::vector<AlphaRun> alphaRuns(static_cast<std::size_t>(len) + 1);
-    for (int i = 0; i < len; ++i) {
-      alphaRuns[static_cast<std::size_t>(i)] = AlphaRun{1};
+    // Direct blit to real blitter, avoiding additive accumulation.
+    // Instead of building per-pixel runs (3 vector allocations), decompose into:
+    //   left partial pixels | full-coverage interior | right partial pixels
+    auto& rb = blitter.getRealBlitter();
+    auto uy = static_cast<std::uint32_t>(y);
+    int i = 0;
+    // Left partial pixels.
+    while (i < len && alphas[i] != 0xFF) {
+      if (alphas[i] > 0) {
+        rb.blitAntiH2(static_cast<std::uint32_t>(L + i), uy, alphas[i], 0);
+      }
+      ++i;
     }
-    alphaRuns[static_cast<std::size_t>(len)] = std::nullopt;
-
-    std::vector<AlphaU8> alphaVec(alphas, alphas + len + 1);
-    blitter.getRealBlitter().blitAntiH(static_cast<std::uint32_t>(L),
-                                       static_cast<std::uint32_t>(y), alphaVec, alphaRuns);
+    // Full-coverage interior.
+    int interiorStart = i;
+    while (i < len && alphas[i] == 0xFF) {
+      ++i;
+    }
+    if (i > interiorStart) {
+      rb.blitH(static_cast<std::uint32_t>(L + interiorStart), uy,
+               static_cast<LengthU32>(i - interiorStart));
+    }
+    // Right partial pixels.
+    while (i < len) {
+      if (alphas[i] > 0) {
+        rb.blitAntiH2(static_cast<std::uint32_t>(L + i), uy, alphas[i], 0);
+      }
+      ++i;
+    }
   } else {
     blitter.blitAntiHArray(L, y, alphas, len);
   }

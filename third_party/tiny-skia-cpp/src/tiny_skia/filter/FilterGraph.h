@@ -22,7 +22,6 @@
 #include "tiny_skia/filter/Composite.h"
 #include "tiny_skia/filter/ConvolveMatrix.h"
 #include "tiny_skia/filter/DisplacementMap.h"
-#include "tiny_skia/filter/FloatPixmap.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 #include "tiny_skia/filter/Lighting.h"
 #include "tiny_skia/filter/Morphology.h"
@@ -236,8 +235,8 @@ struct FilterGraph {
   bool useLinearRGB = true;               ///< Convert to linearRGB for processing.
   bool clipSourceToFilterRegion = false;  ///< Zero SourceGraphic outside filterRegion before eval.
 
-  std::optional<FloatPixmap> fillPaintInput;    ///< Optional FillPaint standard input.
-  std::optional<FloatPixmap> strokePaintInput;  ///< Optional StrokePaint standard input.
+  std::optional<Pixmap> fillPaintInput;    ///< Optional FillPaint standard input (uint8 sRGB).
+  std::optional<Pixmap> strokePaintInput;  ///< Optional StrokePaint standard input (uint8 sRGB).
 
   /// Filter region in pixel space (clips subregions). If not set, uses full pixmap extent.
   std::optional<PixelRect> filterRegion;

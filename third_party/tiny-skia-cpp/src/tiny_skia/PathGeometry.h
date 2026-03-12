@@ -116,5 +116,7 @@ struct AutoConicToQuads {
 };
 
 std::optional<AutoConicToQuads> autoConicToQuads(Point pt0, Point pt1, Point pt2, float weight);
+std::optional<AutoConicToQuads> autoConicToQuads(Point pt0, Point pt1, Point pt2, float weight,
+                                                 float tolerance);
 
 }  // namespace tiny_skia::pathGeometry

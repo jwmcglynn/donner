@@ -126,10 +126,14 @@ enum class Stage : std::uint8_t {
   // Highp-only stages for unpremultiplied output (matching Skia's kUnpremul output).
   Unpremultiply,             ///< Divides source r,g,b by source a (float).
   PremultiplyDestination,    ///< Multiplies dest r,g,b by dest a (float).
+  // Fused stages for performance.
+  FusedLinearGradient2Stop,  ///< SeedShader+Transform+PadX1+EvenlySpaced2StopGradient+Premultiply
+  FusedRadialGradient2Stop,  ///< Same as above but for simple radial (xy_to_radius path)
+  FusedBilinearPattern,      ///< SeedShader+Transform+BilinearRepeat pattern sampling
 };
 
 /// @internal
-inline constexpr std::size_t kStagesCount = 1 + static_cast<std::size_t>(Stage::PremultiplyDestination);
+inline constexpr std::size_t kStagesCount = 1 + static_cast<std::size_t>(Stage::FusedBilinearPattern);
 /// @internal
 inline constexpr std::size_t kMaxStages = 32;
 
@@ -211,6 +215,56 @@ struct EvenlySpaced2StopGradientCtx {
 };
 
 /// @internal
+/// Fused context combining SeedShader + Transform + PadX1 + EvenlySpaced2StopGradient +
+/// optionally Premultiply into a single stage for 2-stop linear gradients.
+struct FusedLinearGradient2StopCtx {
+  float sx = 0.0f;   ///< Transform x-row: t = sx * x + kx * y + tx
+  float kx = 0.0f;
+  float tx = 0.0f;
+  GradientColor factor{};  ///< Color interpolation: color = t * factor + bias
+  GradientColor bias{};
+  bool needsPremultiply = false;
+};
+
+/// @internal
+/// Fused context for simple radial gradient (same center, startRadius=0, 2-stop, Pad mode).
+/// Combines SeedShader + Transform + XYToRadius + PadX1 + EvenlySpaced2StopGradient + Premultiply.
+struct FusedRadialGradient2StopCtx {
+  float sx = 0.0f;   ///< Transform row 1: u = sx * x + kx * y + tx
+  float kx = 0.0f;
+  float tx = 0.0f;
+  float ky = 0.0f;   ///< Transform row 2: v = ky * x + sy * y + ty
+  float sy = 0.0f;
+  float ty = 0.0f;
+  GradientColor factor{};  ///< Color interpolation: color = t * factor + bias
+  GradientColor bias{};
+  bool needsPremultiply = false;
+};
+
+/// @internal
+/// Fused context for pattern sampling (SeedShader+Transform+Gather/Bilinear).
+/// Stores pixel data pointer so lowp can access it without Pipeline::pixmapSrc.
+struct FusedBilinearPatternCtx {
+  float sx = 0.0f;   ///< Transform row 1: u = sx * x + kx * y + tx
+  float kx = 0.0f;
+  float tx = 0.0f;
+  float ky = 0.0f;   ///< Transform row 2: v = ky * x + sy * y + ty
+  float sy = 0.0f;
+  float ty = 0.0f;
+  const std::uint8_t* pixels = nullptr;  ///< RGBA pixel data (premultiplied)
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  float invWidth = 0.0f;
+  float invHeight = 0.0f;
+  SpreadMode spreadMode = SpreadMode::Pad;
+  float opacity = 1.0f;
+  bool useNearest = false;   ///< true = nearest-neighbor, false = bilinear
+  bool fuseSourceOver = false;  ///< Fuse SourceOver+Store into this stage (peephole opt)
+  bool fuseSourceOverCoverage = false;  ///< Fuse Scale1Float+LoadDst+SourceOver+Store (AA edges)
+  std::int8_t opaqueCheckResult = -1;  ///< -1 = unchecked, 0 = has transparency, 1 = all opaque
+};
+
+/// @internal
 struct TwoPointConicalGradientCtx {
   std::array<std::uint32_t, 8> mask = {};
   float p0 = 0.0f;
@@ -229,6 +283,9 @@ struct Context {
   SamplerCtx sampler;
   UniformColorCtx uniformColor;
   EvenlySpaced2StopGradientCtx evenlySpaced2StopGradient;
+  FusedLinearGradient2StopCtx fusedLinearGradient2Stop;
+  FusedRadialGradient2StopCtx fusedRadialGradient2Stop;
+  FusedBilinearPatternCtx fusedBilinearPattern;
   struct GradientCtx {
     std::size_t len = 0;
     std::vector<GradientColor> factors;

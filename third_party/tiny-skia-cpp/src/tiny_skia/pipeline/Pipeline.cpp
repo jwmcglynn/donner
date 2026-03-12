@@ -9,7 +9,7 @@
 
 namespace tiny_skia::pipeline {
 
-static_assert(kStagesCount == 81);
+static_assert(kStagesCount == 84);
 static_assert(sizeof(GradientColor) == sizeof(float) * 4);
 
 namespace {
@@ -98,6 +98,9 @@ namespace {
     case Stage::Gradient:
     case Stage::EvenlySpaced2StopGradient:
     case Stage::XYToRadius:
+    case Stage::FusedLinearGradient2Stop:
+    case Stage::FusedRadialGradient2Stop:
+    case Stage::FusedBilinearPattern:
       return true;
   }
   return false;  // unreachable; satisfies -Wreturn-type
@@ -211,6 +214,24 @@ RasterPipeline RasterPipelineBuilder::compile() {
   if (stageCount_ == 0) {
     RasterPipeline pipeline(RasterPipeline::Kind::High, Context{}, stages_, 0);
     return pipeline;
+  }
+
+  // Peephole: fuse [FusedBilinearPattern, SourceOverRgba] into a single stage.
+  if (stageCount_ >= 2 && stages_[stageCount_ - 2] == Stage::FusedBilinearPattern &&
+      stages_[stageCount_ - 1] == Stage::SourceOverRgba) {
+    ctx_.fusedBilinearPattern.fuseSourceOver = true;
+    --stageCount_;
+  }
+
+  // Peephole: fuse [FusedBilinearPattern, Scale1Float, LoadDestination, SourceOver, Store]
+  // into a single stage. This is the blitAntiH pipeline for AA edges with pattern fills.
+  if (stageCount_ >= 5 && stages_[stageCount_ - 5] == Stage::FusedBilinearPattern &&
+      stages_[stageCount_ - 4] == Stage::Scale1Float &&
+      stages_[stageCount_ - 3] == Stage::LoadDestination &&
+      stages_[stageCount_ - 2] == Stage::SourceOver &&
+      stages_[stageCount_ - 1] == Stage::Store) {
+    ctx_.fusedBilinearPattern.fuseSourceOverCoverage = true;
+    stageCount_ -= 4;
   }
 
   const bool isLowpCompatible = isPipelineLowpCompatible(stages_, stageCount_);
