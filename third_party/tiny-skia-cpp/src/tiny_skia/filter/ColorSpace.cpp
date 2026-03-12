@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstddef>
 
+#include "tiny_skia/Math.h"
+
 namespace tiny_skia::filter {
 
 namespace {
@@ -162,12 +164,13 @@ void srgbToLinear(FloatPixmap& pixmap) {
       continue;
     }
 
-    // sRGB transfer function (inverse gamma).
+    // sRGB transfer function (inverse gamma). Uses fast bit-trick power approximation
+    // (~3-5 FLOPs) instead of std::pow() (~50+ cycles).
     auto srgbToLinearChannel = [](float s) -> float {
       if (s <= 0.04045f) {
         return s / 12.92f;
       }
-      return static_cast<float>(std::pow((s + 0.055) / 1.055, 2.4));
+      return tiny_skia::approxPowf((s + 0.055f) / 1.055f, 2.4f);
     };
 
     if (a >= 1.0f) {
@@ -201,12 +204,12 @@ void linearToSrgb(FloatPixmap& pixmap) {
       continue;
     }
 
-    // sRGB transfer function (apply gamma).
+    // sRGB transfer function (apply gamma). Uses fast bit-trick power approximation.
     auto linearToSrgbChannel = [](float l) -> float {
       if (l <= 0.0031308f) {
         return 12.92f * l;
       }
-      return static_cast<float>(1.055 * std::pow(l, 1.0 / 2.4) - 0.055);
+      return 1.055f * tiny_skia::approxPowf(l, 1.0f / 2.4f) - 0.055f;
     };
 
     if (a >= 1.0f) {

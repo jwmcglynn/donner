@@ -8,6 +8,7 @@
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPath.h"
+#include "include/core/SkPoint3.h"
 #include "include/core/SkPathEffect.h"
 #include "include/core/SkPathMeasure.h"
 #include "include/core/SkPicture.h"
@@ -17,6 +18,7 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
+#include "include/effects/SkPerlinNoiseShader.h"
 #include "include/pathops/SkPathOps.h"
 
 #ifdef DONNER_USE_CORETEXT
@@ -35,6 +37,9 @@
 #include "donner/svg/resources/FontManager.h"
 #endif
 // Donner
+#include <map>
+#include <numbers>
+
 #include "donner/base/Length.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/TransformComponent.h"
@@ -140,45 +145,6 @@ void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
   }
 
   canvas->clipPath(fullPath, SkClipOp::kIntersect, true);
-}
-
-const components::filter_primitive::GaussianBlur* getSimpleNativeSkiaBlur(
-    const components::FilterGraph& filterGraph, const std::optional<Boxd>& filterRegion,
-    const Transformd& deviceFromFilter) {
-  if (filterRegion.has_value()) {
-    return nullptr;
-  }
-
-  if (filterGraph.nodes.size() != 1u) {
-    return nullptr;
-  }
-
-  const components::FilterNode& node = filterGraph.nodes.front();
-  if (node.inputs.size() != 1u ||
-      !std::holds_alternative<components::FilterInput::Previous>(node.inputs.front().value) ||
-      node.result.has_value() || node.x.has_value() || node.y.has_value() ||
-      node.width.has_value() || node.height.has_value() ||
-      node.colorInterpolationFilters.has_value()) {
-    return nullptr;
-  }
-
-  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(&node.primitive);
-  if (blur == nullptr ||
-      blur->edgeMode != components::filter_primitive::GaussianBlur::EdgeMode::None ||
-      NearEquals(blur->stdDeviationX, blur->stdDeviationY, 1e-6)) {
-    return nullptr;
-  }
-
-  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
-  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
-  const double xLength = xAxis.length();
-  const double yLength = yAxis.length();
-  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
-  if (!NearEquals(xLength, yLength, 1e-6) || !NearZero(dot, 1e-6)) {
-    return nullptr;
-  }
-
-  return blur;
 }
 
 bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
@@ -312,6 +278,572 @@ std::optional<tiny_skia::Pixmap> readSurfaceToPixmap(const sk_sp<SkSurface>& sur
   }
 
   return tiny_skia::Pixmap::fromVec(std::move(pixels), *size);
+}
+
+// ---------------------------------------------------------------------------
+// Native Skia filter DAG builder — lowers the full FilterGraph to SkImageFilter.
+// ---------------------------------------------------------------------------
+
+/// Convert donner Blend::Mode to SkBlendMode.
+SkBlendMode toSkiaBlendMode(components::filter_primitive::Blend::Mode mode) {
+  using Mode = components::filter_primitive::Blend::Mode;
+  switch (mode) {
+    case Mode::Normal: return SkBlendMode::kSrcOver;
+    case Mode::Multiply: return SkBlendMode::kMultiply;
+    case Mode::Screen: return SkBlendMode::kScreen;
+    case Mode::Darken: return SkBlendMode::kDarken;
+    case Mode::Lighten: return SkBlendMode::kLighten;
+    case Mode::Overlay: return SkBlendMode::kOverlay;
+    case Mode::ColorDodge: return SkBlendMode::kColorDodge;
+    case Mode::ColorBurn: return SkBlendMode::kColorBurn;
+    case Mode::HardLight: return SkBlendMode::kHardLight;
+    case Mode::SoftLight: return SkBlendMode::kSoftLight;
+    case Mode::Difference: return SkBlendMode::kDifference;
+    case Mode::Exclusion: return SkBlendMode::kExclusion;
+    case Mode::Hue: return SkBlendMode::kHue;
+    case Mode::Saturation: return SkBlendMode::kSaturation;
+    case Mode::Color: return SkBlendMode::kColor;
+    case Mode::Luminosity: return SkBlendMode::kLuminosity;
+  }
+  return SkBlendMode::kSrcOver;
+}
+
+/// Convert donner Composite::Operator to SkBlendMode (for non-arithmetic operators).
+std::optional<SkBlendMode> compositeOpToBlendMode(
+    components::filter_primitive::Composite::Operator op) {
+  using Op = components::filter_primitive::Composite::Operator;
+  switch (op) {
+    case Op::Over: return SkBlendMode::kSrcOver;
+    case Op::In: return SkBlendMode::kSrcIn;
+    case Op::Out: return SkBlendMode::kSrcOut;
+    case Op::Atop: return SkBlendMode::kSrcATop;
+    case Op::Xor: return SkBlendMode::kXor;
+    case Op::Lighter: return SkBlendMode::kPlus;
+    case Op::Arithmetic: return std::nullopt;  // Uses SkImageFilters::Arithmetic instead.
+  }
+  return SkBlendMode::kSrcOver;
+}
+
+/// Convert donner GaussianBlur::EdgeMode to SkTileMode.
+SkTileMode blurEdgeModeToTileMode(components::filter_primitive::GaussianBlur::EdgeMode edgeMode) {
+  using EdgeMode = components::filter_primitive::GaussianBlur::EdgeMode;
+  switch (edgeMode) {
+    case EdgeMode::None: return SkTileMode::kDecal;
+    case EdgeMode::Duplicate: return SkTileMode::kClamp;
+    case EdgeMode::Wrap: return SkTileMode::kRepeat;
+  }
+  return SkTileMode::kDecal;
+}
+
+/// Convert donner ConvolveMatrix::EdgeMode to SkTileMode.
+SkTileMode convolveEdgeModeToTileMode(
+    components::filter_primitive::ConvolveMatrix::EdgeMode edgeMode) {
+  using EdgeMode = components::filter_primitive::ConvolveMatrix::EdgeMode;
+  switch (edgeMode) {
+    case EdgeMode::Duplicate: return SkTileMode::kClamp;
+    case EdgeMode::Wrap: return SkTileMode::kRepeat;
+    case EdgeMode::None: return SkTileMode::kDecal;
+  }
+  return SkTileMode::kClamp;
+}
+
+/// Convert donner DisplacementMap::Channel to SkColorChannel.
+SkColorChannel toSkiaColorChannel(components::filter_primitive::DisplacementMap::Channel channel) {
+  using Channel = components::filter_primitive::DisplacementMap::Channel;
+  switch (channel) {
+    case Channel::R: return SkColorChannel::kR;
+    case Channel::G: return SkColorChannel::kG;
+    case Channel::B: return SkColorChannel::kB;
+    case Channel::A: return SkColorChannel::kA;
+  }
+  return SkColorChannel::kA;
+}
+
+/// Build the 5×4 color matrix for feColorMatrix.
+/// Returns a float[20] array suitable for SkColorFilters::Matrix().
+std::array<float, 20> buildColorMatrix(const components::filter_primitive::ColorMatrix& cm) {
+  std::array<float, 20> m{};
+  switch (cm.type) {
+    case components::filter_primitive::ColorMatrix::Type::Matrix: {
+      for (std::size_t i = 0; i < std::min(cm.values.size(), std::size_t{20}); ++i) {
+        m[i] = static_cast<float>(cm.values[i]);
+      }
+      break;
+    }
+    case components::filter_primitive::ColorMatrix::Type::Saturate: {
+      const float s = cm.values.empty() ? 1.0f : static_cast<float>(cm.values[0]);
+      // SVG saturate matrix
+      m[0] = 0.213f + 0.787f * s;
+      m[1] = 0.715f - 0.715f * s;
+      m[2] = 0.072f - 0.072f * s;
+      m[5] = 0.213f - 0.213f * s;
+      m[6] = 0.715f + 0.285f * s;
+      m[7] = 0.072f - 0.072f * s;
+      m[10] = 0.213f - 0.213f * s;
+      m[11] = 0.715f - 0.715f * s;
+      m[12] = 0.072f + 0.928f * s;
+      m[18] = 1.0f;
+      break;
+    }
+    case components::filter_primitive::ColorMatrix::Type::HueRotate: {
+      const double angle =
+          (cm.values.empty() ? 0.0 : cm.values[0]) * std::numbers::pi_v<double> / 180.0;
+      const float cosA = static_cast<float>(std::cos(angle));
+      const float sinA = static_cast<float>(std::sin(angle));
+      m[0] = 0.213f + cosA * 0.787f - sinA * 0.213f;
+      m[1] = 0.715f - cosA * 0.715f - sinA * 0.715f;
+      m[2] = 0.072f - cosA * 0.072f + sinA * 0.928f;
+      m[5] = 0.213f - cosA * 0.213f + sinA * 0.143f;
+      m[6] = 0.715f + cosA * 0.285f + sinA * 0.140f;
+      m[7] = 0.072f - cosA * 0.072f - sinA * 0.283f;
+      m[10] = 0.213f - cosA * 0.213f - sinA * 0.787f;
+      m[11] = 0.715f - cosA * 0.715f + sinA * 0.715f;
+      m[12] = 0.072f + cosA * 0.928f + sinA * 0.072f;
+      m[18] = 1.0f;
+      break;
+    }
+    case components::filter_primitive::ColorMatrix::Type::LuminanceToAlpha: {
+      m[15] = 0.2126f;
+      m[16] = 0.7152f;
+      m[17] = 0.0722f;
+      break;
+    }
+  }
+  return m;
+}
+
+/// Build a 256-entry LUT for a single feComponentTransfer channel function.
+void buildTransferTable(const components::filter_primitive::ComponentTransfer::Func& func,
+                        uint8_t table[256]) {
+  using FuncType = components::filter_primitive::ComponentTransfer::FuncType;
+  switch (func.type) {
+    case FuncType::Identity:
+      for (int i = 0; i < 256; ++i) {
+        table[i] = static_cast<uint8_t>(i);
+      }
+      break;
+    case FuncType::Table: {
+      const auto& v = func.tableValues;
+      const int n = static_cast<int>(v.size());
+      if (n < 2) {
+        for (int i = 0; i < 256; ++i) {
+          table[i] = static_cast<uint8_t>(i);
+        }
+        break;
+      }
+      for (int i = 0; i < 256; ++i) {
+        const double c = static_cast<double>(i) / 255.0 * static_cast<double>(n - 1);
+        const int k = std::min(static_cast<int>(c), n - 2);
+        const double frac = c - k;
+        const double val = v[static_cast<std::size_t>(k)] * (1.0 - frac) +
+                           v[static_cast<std::size_t>(k + 1)] * frac;
+        table[i] = static_cast<uint8_t>(std::clamp(std::lround(val * 255.0), 0L, 255L));
+      }
+      break;
+    }
+    case FuncType::Discrete: {
+      const auto& v = func.tableValues;
+      const int n = static_cast<int>(v.size());
+      if (n == 0) {
+        for (int i = 0; i < 256; ++i) {
+          table[i] = static_cast<uint8_t>(i);
+        }
+        break;
+      }
+      for (int i = 0; i < 256; ++i) {
+        const int k = std::min(static_cast<int>(static_cast<double>(i) / 255.0 * n), n - 1);
+        table[i] =
+            static_cast<uint8_t>(std::clamp(std::lround(v[static_cast<std::size_t>(k)] * 255.0),
+                                            0L, 255L));
+      }
+      break;
+    }
+    case FuncType::Linear:
+      for (int i = 0; i < 256; ++i) {
+        const double val = func.slope * static_cast<double>(i) / 255.0 + func.intercept;
+        table[i] = static_cast<uint8_t>(std::clamp(std::lround(val * 255.0), 0L, 255L));
+      }
+      break;
+    case FuncType::Gamma:
+      for (int i = 0; i < 256; ++i) {
+        const double val = func.amplitude * std::pow(static_cast<double>(i) / 255.0,
+                                                     func.exponent) +
+                           func.offset;
+        table[i] = static_cast<uint8_t>(std::clamp(std::lround(val * 255.0), 0L, 255L));
+      }
+      break;
+  }
+}
+
+/// Attempt to lower the entire FilterGraph to a single SkImageFilter DAG.
+/// Returns nullptr if any node can't be lowered (caller should fall back to CPU path).
+sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& filterGraph,
+                                               const Transformd& deviceFromFilter) {
+  namespace fp = components::filter_primitive;
+
+  // Track the implicit previous result and named results.
+  sk_sp<SkImageFilter> previousFilter;  // nullptr = SourceGraphic
+  std::map<RcString, sk_sp<SkImageFilter>> namedResults;
+
+  // SourceAlpha: extract alpha channel (zero RGB, keep A).
+  auto makeSourceAlpha = [](sk_sp<SkImageFilter> input) -> sk_sp<SkImageFilter> {
+    float alphaMatrix[20] = {};
+    alphaMatrix[18] = 1.0f;  // A = A
+    return SkImageFilters::ColorFilter(
+        SkColorFilters::Matrix(alphaMatrix), std::move(input));
+  };
+
+  // Determine the default color space for the graph.
+  const bool graphUsesLinearRGB =
+      filterGraph.colorInterpolationFilters == ColorInterpolationFilters::LinearRGB;
+
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    // Determine this node's color space.
+    const bool nodeUsesLinearRGB = node.colorInterpolationFilters.has_value()
+        ? (*node.colorInterpolationFilters == ColorInterpolationFilters::LinearRGB)
+        : graphUsesLinearRGB;
+
+    // Resolve inputs.
+    auto resolveInput = [&](const components::FilterInput& input) -> sk_sp<SkImageFilter> {
+      return std::visit(
+          [&](const auto& v) -> sk_sp<SkImageFilter> {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, components::FilterInput::Previous>) {
+              return previousFilter;
+            } else if constexpr (std::is_same_v<T, components::FilterStandardInput>) {
+              switch (v) {
+                case components::FilterStandardInput::SourceGraphic: return nullptr;
+                case components::FilterStandardInput::SourceAlpha: return makeSourceAlpha(nullptr);
+                case components::FilterStandardInput::FillPaint:
+                case components::FilterStandardInput::StrokePaint:
+                  // FillPaint/StrokePaint require pre-rendered images that aren't available
+                  // in the native Skia filter path (we'd need to pre-render them).
+                  // For now, return nullptr (transparent source) as a fallback.
+                  // TODO: Support FillPaint/StrokePaint by pre-rendering into SkImage.
+                  return nullptr;
+              }
+              return nullptr;
+            } else if constexpr (std::is_same_v<T, components::FilterInput::Named>) {
+              auto it = namedResults.find(v.name);
+              if (it != namedResults.end()) {
+                return it->second;
+              }
+              return previousFilter;  // Fallback per SVG spec.
+            }
+          },
+          input.value);
+    };
+
+    // Resolve first (and possibly second) input.
+    sk_sp<SkImageFilter> in1 = node.inputs.empty() ? previousFilter : resolveInput(node.inputs[0]);
+    sk_sp<SkImageFilter> in2 =
+        node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : nullptr;
+
+    // Apply color space conversion to inputs if this node uses linearRGB.
+    auto applyColorSpace = [&](sk_sp<SkImageFilter> filter) -> sk_sp<SkImageFilter> {
+      if (nodeUsesLinearRGB) {
+        return SkImageFilters::ColorFilter(
+            SkColorFilters::SRGBToLinearGamma(), std::move(filter));
+      }
+      return filter;
+    };
+
+    in1 = applyColorSpace(std::move(in1));
+    if (in2) {
+      in2 = applyColorSpace(std::move(in2));
+    }
+
+    // Lower the primitive to an SkImageFilter.
+    sk_sp<SkImageFilter> result;
+
+    const bool lowered = std::visit(
+        [&](const auto& primitive) -> bool {
+          using T = std::decay_t<decltype(primitive)>;
+
+          if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
+            result = SkImageFilters::Blur(
+                static_cast<SkScalar>(primitive.stdDeviationX),
+                static_cast<SkScalar>(primitive.stdDeviationY),
+                blurEdgeModeToTileMode(primitive.edgeMode), std::move(in1));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Offset>) {
+            result = SkImageFilters::Offset(
+                static_cast<SkScalar>(primitive.dx), static_cast<SkScalar>(primitive.dy),
+                std::move(in1));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Flood>) {
+            const auto rgba = primitive.floodColor.asRGBA();
+            const float a = static_cast<float>(primitive.floodOpacity);
+            const SkColor4f color = {
+                static_cast<float>(rgba.r) / 255.0f * a,
+                static_cast<float>(rgba.g) / 255.0f * a,
+                static_cast<float>(rgba.b) / 255.0f * a,
+                static_cast<float>(rgba.a) / 255.0f * a};
+            result = SkImageFilters::Shader(SkShaders::Color(color, nullptr));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Blend>) {
+            result = SkImageFilters::Blend(
+                toSkiaBlendMode(primitive.mode), std::move(in1), std::move(in2));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Composite>) {
+            if (primitive.op == fp::Composite::Operator::Arithmetic) {
+              result = SkImageFilters::Arithmetic(
+                  static_cast<SkScalar>(primitive.k1), static_cast<SkScalar>(primitive.k2),
+                  static_cast<SkScalar>(primitive.k3), static_cast<SkScalar>(primitive.k4),
+                  true /* enforcePMColor */, std::move(in1), std::move(in2));
+            } else {
+              auto blendMode = compositeOpToBlendMode(primitive.op);
+              if (!blendMode) {
+                return false;
+              }
+              result = SkImageFilters::Blend(*blendMode, std::move(in1), std::move(in2));
+            }
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Merge>) {
+            // Collect all inputs for merge.
+            std::vector<sk_sp<SkImageFilter>> mergeInputs;
+            mergeInputs.reserve(node.inputs.size());
+            // Re-resolve all inputs (in1/in2 only covers first two).
+            for (const auto& input : node.inputs) {
+              mergeInputs.push_back(applyColorSpace(resolveInput(input)));
+            }
+            result = SkImageFilters::Merge(
+                mergeInputs.data(), static_cast<int>(mergeInputs.size()));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::ColorMatrix>) {
+            const auto matrix = buildColorMatrix(primitive);
+            result = SkImageFilters::ColorFilter(
+                SkColorFilters::Matrix(matrix.data()), std::move(in1));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::DropShadow>) {
+            const auto rgba = primitive.floodColor.asRGBA();
+            const float opacity = static_cast<float>(primitive.floodOpacity);
+            result = SkImageFilters::DropShadow(
+                static_cast<SkScalar>(primitive.dx), static_cast<SkScalar>(primitive.dy),
+                static_cast<SkScalar>(primitive.stdDeviationX),
+                static_cast<SkScalar>(primitive.stdDeviationY),
+                SkColorSetARGB(
+                    static_cast<uint8_t>(std::clamp(rgba.a * opacity, 0.0f, 255.0f)),
+                    rgba.r, rgba.g, rgba.b),
+                std::move(in1));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Morphology>) {
+            if (primitive.op == fp::Morphology::Operator::Dilate) {
+              result = SkImageFilters::Dilate(
+                  static_cast<SkScalar>(primitive.radiusX),
+                  static_cast<SkScalar>(primitive.radiusY), std::move(in1));
+            } else {
+              result = SkImageFilters::Erode(
+                  static_cast<SkScalar>(primitive.radiusX),
+                  static_cast<SkScalar>(primitive.radiusY), std::move(in1));
+            }
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::ComponentTransfer>) {
+            uint8_t tableR[256], tableG[256], tableB[256], tableA[256];
+            buildTransferTable(primitive.funcR, tableR);
+            buildTransferTable(primitive.funcG, tableG);
+            buildTransferTable(primitive.funcB, tableB);
+            buildTransferTable(primitive.funcA, tableA);
+            result = SkImageFilters::ColorFilter(
+                SkColorFilters::TableARGB(tableA, tableR, tableG, tableB), std::move(in1));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::ConvolveMatrix>) {
+            const int orderX = primitive.orderX;
+            const int orderY = primitive.orderY;
+            const int targetX = primitive.targetX.value_or(orderX / 2);
+            const int targetY = primitive.targetY.value_or(orderY / 2);
+            double divisor = primitive.divisor.value_or(0.0);
+            if (divisor == 0.0) {
+              divisor = 0.0;
+              for (double v : primitive.kernelMatrix) {
+                divisor += v;
+              }
+              if (NearZero(divisor)) {
+                divisor = 1.0;
+              }
+            }
+            const float gain = static_cast<float>(1.0 / divisor);
+            const float bias = static_cast<float>(primitive.bias);
+
+            std::vector<SkScalar> kernel(primitive.kernelMatrix.size());
+            for (std::size_t i = 0; i < primitive.kernelMatrix.size(); ++i) {
+              kernel[i] = static_cast<SkScalar>(primitive.kernelMatrix[i]);
+            }
+
+            result = SkImageFilters::MatrixConvolution(
+                SkISize::Make(orderX, orderY), kernel.data(), gain, bias,
+                SkIPoint::Make(targetX, targetY),
+                convolveEdgeModeToTileMode(primitive.edgeMode),
+                !primitive.preserveAlpha, std::move(in1));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::DisplacementMap>) {
+            // Note: Skia's DisplacementMap takes (displacement, color) — in2 is displacement.
+            result = SkImageFilters::DisplacementMap(
+                toSkiaColorChannel(primitive.xChannelSelector),
+                toSkiaColorChannel(primitive.yChannelSelector),
+                static_cast<SkScalar>(primitive.scale), std::move(in2), std::move(in1));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Turbulence>) {
+            sk_sp<SkShader> shader;
+            if (primitive.type == fp::Turbulence::Type::FractalNoise) {
+              shader = SkShaders::MakeFractalNoise(
+                  static_cast<SkScalar>(primitive.baseFrequencyX),
+                  static_cast<SkScalar>(primitive.baseFrequencyY),
+                  primitive.numOctaves, static_cast<SkScalar>(primitive.seed));
+            } else {
+              shader = SkShaders::MakeTurbulence(
+                  static_cast<SkScalar>(primitive.baseFrequencyX),
+                  static_cast<SkScalar>(primitive.baseFrequencyY),
+                  primitive.numOctaves, static_cast<SkScalar>(primitive.seed));
+            }
+            result = SkImageFilters::Shader(std::move(shader));
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::DiffuseLighting>) {
+            if (!primitive.light.has_value()) {
+              return false;
+            }
+            const auto& light = *primitive.light;
+            const auto lightRgba = primitive.lightingColor.asRGBA();
+            const SkColor lightColor = toSkia(lightRgba);
+            const SkScalar surfaceScale = static_cast<SkScalar>(primitive.surfaceScale);
+            const SkScalar kd = static_cast<SkScalar>(primitive.diffuseConstant);
+
+            switch (light.type) {
+              case fp::LightSource::Type::Distant: {
+                const double azRad = light.azimuth * std::numbers::pi / 180.0;
+                const double elRad = light.elevation * std::numbers::pi / 180.0;
+                const SkPoint3 dir = {
+                    static_cast<SkScalar>(std::cos(azRad) * std::cos(elRad)),
+                    static_cast<SkScalar>(std::sin(azRad) * std::cos(elRad)),
+                    static_cast<SkScalar>(std::sin(elRad))};
+                result = SkImageFilters::DistantLitDiffuse(
+                    dir, lightColor, surfaceScale, kd, std::move(in1));
+                break;
+              }
+              case fp::LightSource::Type::Point: {
+                const SkPoint3 location = {
+                    static_cast<SkScalar>(light.x), static_cast<SkScalar>(light.y),
+                    static_cast<SkScalar>(light.z)};
+                result = SkImageFilters::PointLitDiffuse(
+                    location, lightColor, surfaceScale, kd, std::move(in1));
+                break;
+              }
+              case fp::LightSource::Type::Spot: {
+                const SkPoint3 location = {
+                    static_cast<SkScalar>(light.x), static_cast<SkScalar>(light.y),
+                    static_cast<SkScalar>(light.z)};
+                const SkPoint3 target = {
+                    static_cast<SkScalar>(light.pointsAtX),
+                    static_cast<SkScalar>(light.pointsAtY),
+                    static_cast<SkScalar>(light.pointsAtZ)};
+                const SkScalar cutoff = light.limitingConeAngle.has_value()
+                    ? static_cast<SkScalar>(*light.limitingConeAngle)
+                    : 180.0f;
+                result = SkImageFilters::SpotLitDiffuse(
+                    location, target, static_cast<SkScalar>(light.spotExponent),
+                    cutoff, lightColor, surfaceScale, kd, std::move(in1));
+                break;
+              }
+            }
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::SpecularLighting>) {
+            if (!primitive.light.has_value()) {
+              return false;
+            }
+            const auto& light = *primitive.light;
+            const auto lightRgba = primitive.lightingColor.asRGBA();
+            const SkColor lightColor = toSkia(lightRgba);
+            const SkScalar surfaceScale = static_cast<SkScalar>(primitive.surfaceScale);
+            const SkScalar ks = static_cast<SkScalar>(primitive.specularConstant);
+            const SkScalar shininess = static_cast<SkScalar>(primitive.specularExponent);
+
+            switch (light.type) {
+              case fp::LightSource::Type::Distant: {
+                const double azRad = light.azimuth * std::numbers::pi / 180.0;
+                const double elRad = light.elevation * std::numbers::pi / 180.0;
+                const SkPoint3 dir = {
+                    static_cast<SkScalar>(std::cos(azRad) * std::cos(elRad)),
+                    static_cast<SkScalar>(std::sin(azRad) * std::cos(elRad)),
+                    static_cast<SkScalar>(std::sin(elRad))};
+                result = SkImageFilters::DistantLitSpecular(
+                    dir, lightColor, surfaceScale, ks, shininess, std::move(in1));
+                break;
+              }
+              case fp::LightSource::Type::Point: {
+                const SkPoint3 location = {
+                    static_cast<SkScalar>(light.x), static_cast<SkScalar>(light.y),
+                    static_cast<SkScalar>(light.z)};
+                result = SkImageFilters::PointLitSpecular(
+                    location, lightColor, surfaceScale, ks, shininess, std::move(in1));
+                break;
+              }
+              case fp::LightSource::Type::Spot: {
+                const SkPoint3 location = {
+                    static_cast<SkScalar>(light.x), static_cast<SkScalar>(light.y),
+                    static_cast<SkScalar>(light.z)};
+                const SkPoint3 target = {
+                    static_cast<SkScalar>(light.pointsAtX),
+                    static_cast<SkScalar>(light.pointsAtY),
+                    static_cast<SkScalar>(light.pointsAtZ)};
+                const SkScalar cutoff = light.limitingConeAngle.has_value()
+                    ? static_cast<SkScalar>(*light.limitingConeAngle)
+                    : 180.0f;
+                result = SkImageFilters::SpotLitSpecular(
+                    location, target, static_cast<SkScalar>(light.spotExponent),
+                    cutoff, lightColor, surfaceScale, ks, shininess, std::move(in1));
+                break;
+              }
+            }
+            return true;
+
+          } else if constexpr (std::is_same_v<T, fp::Tile>) {
+            // feTile needs source and destination rectangles which depend on the filter region.
+            // For now, fall back to CPU.
+            return false;
+
+          } else if constexpr (std::is_same_v<T, fp::Image>) {
+            // feImage needs the pre-loaded image data or fragment rendering.
+            // For now, fall back to CPU.
+            return false;
+
+          } else {
+            return false;  // Unknown primitive type.
+          }
+        },
+        node.primitive);
+
+    if (!lowered || !result) {
+      return nullptr;  // Can't lower this node — fall back to CPU.
+    }
+
+    // Convert back from linearRGB to sRGB if the node operated in linear.
+    if (nodeUsesLinearRGB) {
+      result = SkImageFilters::ColorFilter(
+          SkColorFilters::LinearToSRGBGamma(), std::move(result));
+    }
+
+    // Store named result if this node has a result attribute.
+    if (node.result.has_value()) {
+      namedResults[*node.result] = result;
+    }
+    previousFilter = std::move(result);
+  }
+
+  return previousFilter;
 }
 
 Vector2d patternRasterScaleForTransform(const Transformd& deviceFromPattern) {
@@ -835,28 +1367,22 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
   }
 
   const Transformd deviceFromFilter = toDonnerTransform(currentCanvas_->getTotalMatrix());
-  if (!shouldUseTransformedBlurPath(filterGraph, deviceFromFilter)) {
-    if (const auto* blur = getSimpleNativeSkiaBlur(filterGraph, filterRegion, deviceFromFilter)) {
-      SkPaint filterPaint;
-      filterPaint.setAntiAlias(antialias_);
-      sk_sp<SkImageFilter> imageFilter;
-      if (filterRegion.has_value()) {
-        const SkRect cropRect = currentCanvas_->getTotalMatrix().mapRect(toSkia(*filterRegion));
-        imageFilter = SkImageFilters::Blur(static_cast<SkScalar>(blur->stdDeviationX),
-                                           static_cast<SkScalar>(blur->stdDeviationY), nullptr,
-                                           SkImageFilters::CropRect(cropRect));
-      } else {
-        imageFilter = SkImageFilters::Blur(static_cast<SkScalar>(blur->stdDeviationX),
-                                           static_cast<SkScalar>(blur->stdDeviationY), nullptr);
-      }
-      filterPaint.setImageFilter(std::move(imageFilter));
-      currentCanvas_->saveLayer(nullptr, &filterPaint);
 
-      FilterLayerState state;
-      state.usesNativeSkiaFilter = true;
-      filterLayerStack_.push_back(std::move(state));
-      return;
+  // Try to lower the entire filter graph to native Skia SkImageFilter DAG.
+  if (sk_sp<SkImageFilter> nativeFilter = buildNativeSkiaFilterDAG(filterGraph, deviceFromFilter)) {
+    SkPaint filterPaint;
+    filterPaint.setAntiAlias(antialias_);
+    if (filterRegion.has_value()) {
+      const SkRect cropRect = currentCanvas_->getTotalMatrix().mapRect(toSkia(*filterRegion));
+      nativeFilter = SkImageFilters::Crop(cropRect, std::move(nativeFilter));
     }
+    filterPaint.setImageFilter(std::move(nativeFilter));
+    currentCanvas_->saveLayer(nullptr, &filterPaint);
+
+    FilterLayerState state;
+    state.usesNativeSkiaFilter = true;
+    filterLayerStack_.push_back(std::move(state));
+    return;
   }
 
   const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
