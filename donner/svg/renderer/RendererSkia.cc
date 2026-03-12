@@ -497,6 +497,63 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   const bool graphUsesLinearRGB =
       filterGraph.colorInterpolationFilters == ColorInterpolationFilters::LinearRGB;
 
+  // Resolve a node's subregion to user-space Boxd. Used by feTile (needs input subregion)
+  // and feImage (needs viewport for preserveAspectRatio mapping).
+  const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
+                     filterGraph.elementBoundingBox.has_value();
+  const Boxd defaultSubregion =
+      filterGraph.filterRegion.value_or(Boxd::FromXYWH(0, 0, 1, 1));
+
+  auto resolveNodeSubregion = [&](const components::FilterNode& n) -> Boxd {
+    if (!n.x.has_value() && !n.y.has_value() && !n.width.has_value() && !n.height.has_value()) {
+      return defaultSubregion;
+    }
+    const Boxd& bbox = isOBB ? *filterGraph.elementBoundingBox : defaultSubregion;
+    auto resolvePos = [&](const std::optional<Lengthd>& len, Lengthd::Extent ext,
+                          double origin, double bboxDim) -> double {
+      if (!len.has_value()) {
+        return ext == Lengthd::Extent::X ? defaultSubregion.topLeft.x
+                                         : defaultSubregion.topLeft.y;
+      }
+      if (isOBB && len->unit == Lengthd::Unit::None) {
+        return origin + len->value * bboxDim;
+      }
+      if (len->unit == Lengthd::Unit::Percent) {
+        const double refSize = ext == Lengthd::Extent::X ? bbox.width() : bbox.height();
+        const double refOrigin = ext == Lengthd::Extent::X ? bbox.topLeft.x : bbox.topLeft.y;
+        return refOrigin + refSize * len->value / 100.0;
+      }
+      return len->toPixels(bbox, FontMetrics(), ext);
+    };
+    auto resolveSize = [&](const std::optional<Lengthd>& len, Lengthd::Extent ext,
+                           double bboxDim) -> double {
+      if (!len.has_value()) {
+        return ext == Lengthd::Extent::X ? defaultSubregion.width() : defaultSubregion.height();
+      }
+      if (isOBB && len->unit == Lengthd::Unit::None) {
+        return len->value * bboxDim;
+      }
+      if (len->unit == Lengthd::Unit::Percent) {
+        const double refSize = ext == Lengthd::Extent::X ? bbox.width() : bbox.height();
+        return refSize * len->value / 100.0;
+      }
+      return len->toPixels(bbox, FontMetrics(), ext);
+    };
+    const double bboxW = isOBB ? bbox.width() : 1.0;
+    const double bboxH = isOBB ? bbox.height() : 1.0;
+    const double bboxX = isOBB ? bbox.topLeft.x : 0.0;
+    const double bboxY = isOBB ? bbox.topLeft.y : 0.0;
+    const double x = resolvePos(n.x, Lengthd::Extent::X, bboxX, bboxW);
+    const double y = resolvePos(n.y, Lengthd::Extent::Y, bboxY, bboxH);
+    const double w = resolveSize(n.width, Lengthd::Extent::X, bboxW);
+    const double h = resolveSize(n.height, Lengthd::Extent::Y, bboxH);
+    return Boxd::FromXYWH(x, y, w, h);
+  };
+
+  // Track the previous node's resolved subregion (for feTile input subregion).
+  Boxd previousSubregion = defaultSubregion;
+  std::map<RcString, Boxd> namedSubregions;
+
   for (const components::FilterNode& node : filterGraph.nodes) {
     // Determine this node's color space.
     const bool nodeUsesLinearRGB = node.colorInterpolationFilters.has_value()
@@ -811,14 +868,97 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Tile>) {
-            // feTile needs source and destination rectangles which depend on the filter region.
-            // For now, fall back to CPU.
-            return false;
+            // feTile tiles the input's subregion to fill the output.
+            // Source rect = input node's subregion, dest rect = filter region.
+            Boxd inputSubregion = previousSubregion;
+            if (!node.inputs.empty()) {
+              const auto& input = node.inputs[0];
+              std::visit(
+                  [&](const auto& v) {
+                    using V = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<V, components::FilterInput::Named>) {
+                      auto it = namedSubregions.find(v.name);
+                      if (it != namedSubregions.end()) {
+                        inputSubregion = it->second;
+                      }
+                    }
+                  },
+                  input.value);
+            }
+            const SkRect srcRect = SkRect::MakeXYWH(
+                static_cast<SkScalar>(inputSubregion.topLeft.x),
+                static_cast<SkScalar>(inputSubregion.topLeft.y),
+                static_cast<SkScalar>(inputSubregion.width()),
+                static_cast<SkScalar>(inputSubregion.height()));
+            const Boxd dstRegion = resolveNodeSubregion(node);
+            const SkRect dstRect = SkRect::MakeXYWH(
+                static_cast<SkScalar>(dstRegion.topLeft.x),
+                static_cast<SkScalar>(dstRegion.topLeft.y),
+                static_cast<SkScalar>(dstRegion.width()),
+                static_cast<SkScalar>(dstRegion.height()));
+            result = SkImageFilters::Tile(srcRect, dstRect, std::move(in1));
+            return true;
 
           } else if constexpr (std::is_same_v<T, fp::Image>) {
-            // feImage needs the pre-loaded image data or fragment rendering.
-            // For now, fall back to CPU.
-            return false;
+            if (primitive.imageData.empty() || primitive.imageWidth <= 0 ||
+                primitive.imageHeight <= 0) {
+              // No image data — produce transparent output.
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              return true;
+            }
+
+            // Premultiply the image data and create an SkImage.
+            const auto premultiplied = PremultiplyRgba(primitive.imageData);
+            const SkImageInfo imageInfo = SkImageInfo::Make(
+                primitive.imageWidth, primitive.imageHeight,
+                kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+            const SkPixmap pixmap(imageInfo, premultiplied.data(),
+                                  static_cast<size_t>(primitive.imageWidth) * 4);
+            sk_sp<SkImage> skImage = SkImages::RasterFromPixmapCopy(pixmap);
+            if (!skImage) {
+              return false;
+            }
+
+            const SkRect srcRect = SkRect::MakeWH(
+                static_cast<SkScalar>(primitive.imageWidth),
+                static_cast<SkScalar>(primitive.imageHeight));
+
+            if (primitive.isFragmentReference) {
+              // Fragment references: place at (0,0) with 1:1 mapping.
+              result = SkImageFilters::Image(
+                  std::move(skImage),
+                  SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest));
+              return true;
+            }
+
+            // Compute viewport from node's subregion for preserveAspectRatio mapping.
+            const Boxd viewport = resolveNodeSubregion(node);
+            const Boxd imageBox =
+                Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+            const Boxd viewportLocal =
+                Boxd::FromXYWH(0, 0, viewport.width(), viewport.height());
+            const Transformd viewportFromImage =
+                primitive.preserveAspectRatio.elementContentFromViewBoxTransform(
+                    viewportLocal, imageBox);
+
+            const Vector2d topLeft =
+                viewportFromImage.transformPosition(Vector2d(0, 0));
+            const Vector2d bottomRight =
+                viewportFromImage.transformPosition(
+                    Vector2d(primitive.imageWidth, primitive.imageHeight));
+            const SkRect dstRect = SkRect::MakeXYWH(
+                static_cast<SkScalar>(std::min(topLeft.x, bottomRight.x) +
+                                      viewport.topLeft.x),
+                static_cast<SkScalar>(std::min(topLeft.y, bottomRight.y) +
+                                      viewport.topLeft.y),
+                static_cast<SkScalar>(std::abs(bottomRight.x - topLeft.x)),
+                static_cast<SkScalar>(std::abs(bottomRight.y - topLeft.y)));
+
+            result = SkImageFilters::Image(
+                std::move(skImage), srcRect, dstRect,
+                SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest));
+            return true;
 
           } else {
             return false;  // Unknown primitive type.
@@ -837,10 +977,13 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
     }
 
     // Store named result if this node has a result attribute.
+    const Boxd nodeSubregion = resolveNodeSubregion(node);
     if (node.result.has_value()) {
       namedResults[*node.result] = result;
+      namedSubregions[*node.result] = nodeSubregion;
     }
     previousFilter = std::move(result);
+    previousSubregion = nodeSubregion;
   }
 
   return previousFilter;

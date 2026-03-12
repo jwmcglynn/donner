@@ -404,12 +404,19 @@ backward scan, and merge. This is noted in `filter_effects.md` as future work.
 17. ✅ **van Herk/Gil-Werman morphology** — O(w×h) separable erode/dilate with
     transpose-based vertical pass.
 
+### Phase 5: Complete Native Skia Coverage ✅
+
+18. ✅ **feTile native Skia lowering** — `SkImageFilters::Tile(srcRect, dstRect, input)` with
+    subregion resolution for source/dest rects. Tracks per-node subregions for input resolution.
+19. ✅ **feImage native Skia lowering** — creates `SkImage` from pre-loaded pixel data,
+    applies preserveAspectRatio mapping. Supports both regular images and fragment references.
+
+All 17 SVG filter primitives now lower to native `SkImageFilter` chains on the Skia backend.
+
 ### Remaining
 
-18. **Benchmark suite** — automated perf regression tests for Donner Splash and isolated
+20. **Benchmark suite** — automated perf regression tests for Donner Splash and isolated
     primitives.
-19. **feTile native Skia lowering** — needs filter region source/dest rects.
-20. **feImage native Skia lowering** — needs pre-loaded image data or fragment rendering.
 
 ---
 
@@ -430,7 +437,7 @@ Donner Splash SVG (3 single-node isotropic Gaussian blurs: σ=3, 4.5, 6):
 
 | Backend    | Time   | Speedup | How                                         |
 |------------|--------|---------|----------------------------------------------|
-| Skia       | native | ~20×+   | Full SkImageFilter DAG (15/17 primitives)    |
+| Skia       | native | ~20×+   | Full SkImageFilter DAG (17/17 primitives)    |
 | TinySkia   | ~3.8s* | ~3.7×   | Box blur + transpose + NEON + approxPowf     |
 
 *Test suite wall-clock time for 48 renderer tests (includes non-filter tests).
