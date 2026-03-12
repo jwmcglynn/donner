@@ -91,7 +91,7 @@ baseline_ratio() {
 
   if [[ "${arch}" == "arm64" && "${workload}" == "stroke_path" \
     && "${metric}" == "simd_over_scalar" ]]; then
-    echo "1.20"; return
+    echo "1.50"; return
   fi
   if [[ "${arch}" == "arm64" && "${workload}" == "fill_path_gradient" \
     && "${metric}" == "simd_over_scalar" ]]; then

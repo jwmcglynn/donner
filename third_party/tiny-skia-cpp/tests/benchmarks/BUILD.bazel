@@ -22,6 +22,42 @@ tiny_skia_cc_binary(
     deps = _COMMON_DEPS + ["//src:tiny_skia_lib_scalar"],
 )
 
+_FILTER_DEPS = [
+    "//src/tiny_skia/filter:filter",
+    "@google_benchmark//:benchmark_main",
+]
+
+tiny_skia_cc_binary(
+    name = "filter_perf_bench_native",
+    srcs = ["FilterPerfBench.cpp"],
+    deps = _FILTER_DEPS + ["//src:tiny_skia_lib_native"],
+)
+
+tiny_skia_cc_binary(
+    name = "filter_perf_bench_scalar",
+    srcs = ["FilterPerfBench.cpp"],
+    deps = _FILTER_DEPS + ["//src:tiny_skia_lib_scalar"],
+)
+
+sh_test(
+    name = "filter_perf_regression_test",
+    size = "large",
+    srcs = ["run_filter_perf_regression_test.sh"],
+    args = [
+        "$(COMPILATION_MODE)",
+        "$(location :filter_perf_bench_native)",
+        "$(location :filter_perf_bench_scalar)",
+    ],
+    data = [
+        ":filter_perf_bench_native",
+        ":filter_perf_bench_scalar",
+    ],
+    tags = [
+        "exclusive",
+        "perf_regression",
+    ],
+)
+
 sh_test(
     name = "render_perf_regression_test",
     size = "large",

@@ -413,10 +413,17 @@ backward scan, and merge. This is noted in `filter_effects.md` as future work.
 
 All 17 SVG filter primitives now lower to native `SkImageFilter` chains on the Skia backend.
 
-### Remaining
+### Phase 6: Benchmark Suite ✅
 
-20. **Benchmark suite** — automated perf regression tests for Donner Splash and isolated
-    primitives.
+20. ✅ **Filter benchmark suite** — Google Benchmark-based microbenchmarks for blur, color space
+    conversion, morphology, and FloatPixmap conversion. Located at
+    `third_party/tiny-skia-cpp/tests/benchmarks/FilterPerfBench.cpp`.
+21. ✅ **Filter perf regression test** — automated guard checking algorithmic invariants:
+    - Blur sigma invariance (σ=20/σ=6 ≈ 1.0) — detects O(kernelSize) regression
+    - Morphology radius invariance (r=30/r=3 < 2.0) — detects O(r²) regression
+    - Float/uint8 blur ratio (< 2.5×) — detects float path regression
+22. ✅ **Updated render perf regression baseline** — stroke_path/simd_over_scalar baseline
+    raised from 1.20 to 1.50 to match improved SIMD stroke performance.
 
 ---
 
