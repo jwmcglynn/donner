@@ -19,8 +19,6 @@ _DEFAULTS = dict(
     text = True,
     text_woff2 = True,
     text_shaping = False,
-    use_coretext = False,
-    use_fontconfig = False,
 )
 
 _configure = tag_class(attrs = {
@@ -28,8 +26,6 @@ _configure = tag_class(attrs = {
     "text": attr.bool(default = _DEFAULTS["text"]),
     "text_woff2": attr.bool(default = _DEFAULTS["text_woff2"]),
     "text_shaping": attr.bool(default = _DEFAULTS["text_shaping"]),
-    "use_coretext": attr.bool(default = _DEFAULTS["use_coretext"]),
-    "use_fontconfig": attr.bool(default = _DEFAULTS["use_fontconfig"]),
 })
 
 def _donner_config_repo_impl(rctx):
@@ -40,16 +36,12 @@ DONNER_CONFIG = {{
     "text": {text},
     "text_woff2": {text_woff2},
     "text_shaping": {text_shaping},
-    "use_coretext": {use_coretext},
-    "use_fontconfig": {use_fontconfig},
 }}
 """.format(
         renderer = repr(rctx.attr.renderer),
         text = repr(rctx.attr.text),
         text_woff2 = repr(rctx.attr.text_woff2),
         text_shaping = repr(rctx.attr.text_shaping),
-        use_coretext = repr(rctx.attr.use_coretext),
-        use_fontconfig = repr(rctx.attr.use_fontconfig),
     ))
 
 _donner_config_repo = repository_rule(
@@ -59,8 +51,6 @@ _donner_config_repo = repository_rule(
         "text": attr.bool(default = _DEFAULTS["text"]),
         "text_woff2": attr.bool(default = _DEFAULTS["text_woff2"]),
         "text_shaping": attr.bool(default = _DEFAULTS["text_shaping"]),
-        "use_coretext": attr.bool(default = _DEFAULTS["use_coretext"]),
-        "use_fontconfig": attr.bool(default = _DEFAULTS["use_fontconfig"]),
     },
 )
 
@@ -75,8 +65,6 @@ def _donner_impl(module_ctx):
                     text = tag.text,
                     text_woff2 = tag.text_woff2,
                     text_shaping = tag.text_shaping,
-                    use_coretext = tag.use_coretext,
-                    use_fontconfig = tag.use_fontconfig,
                 )
 
     _donner_config_repo(name = "donner_config", **cfg)

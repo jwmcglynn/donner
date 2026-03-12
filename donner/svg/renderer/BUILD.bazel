@@ -35,22 +35,6 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
-# Enable CoreText font rendering on macOS.
-# Override with --//donner/svg/renderer:use_coretext=true or via donner.configure(use_coretext = True).
-bool_flag(
-    name = "use_coretext",
-    build_setting_default = DONNER_CONFIG.get("use_coretext", False),
-    visibility = ["//visibility:public"],
-)
-
-# Enable Fontconfig font rendering on Linux.
-# Override with --//donner/svg/renderer:use_fontconfig=true or via donner.configure(use_fontconfig = True).
-bool_flag(
-    name = "use_fontconfig",
-    build_setting_default = DONNER_CONFIG.get("use_fontconfig", False),
-    visibility = ["//visibility:public"],
-)
-
 # Build skia debug. Set with --//donner/svg/renderer:skia_debug=true
 bool_flag(
     name = "skia_debug",
@@ -94,13 +78,11 @@ config_setting(
 config_setting(
     name = "macos_coretext",
     constraint_values = ["@platforms//os:macos"],
-    flag_values = {":use_coretext": "true"},
 )
 
 config_setting(
     name = "linux_fontconfig",
     constraint_values = ["@platforms//os:linux"],
-    flag_values = {":use_fontconfig": "true"},
 )
 
 config_setting(
@@ -206,6 +188,20 @@ donner_perf_sensitive_cc_library(
     }),
 )
 
+donner_perf_sensitive_cc_library(
+    name = "tiny_skia_deps",
+    deps = [
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+    ],
+)
+
+donner_perf_sensitive_cc_library(
+    name = "tiny_skia_filter_deps",
+    deps = [
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
 donner_cc_library(
     name = "renderer_skia",
     srcs = ["RendererSkia.cc"],
@@ -271,9 +267,9 @@ donner_cc_library(
         ":renderer_driver",
         ":renderer_image_io",
         ":renderer_interface",
+        ":tiny_skia_deps",
         "//donner/base",
         "//donner/svg",
-        "@tiny-skia-cpp//src:tiny_skia_lib_native",
     ] + select({
         ":text_shaping_enabled": [":text_shaper"],
         ":text_enabled": [":text_layout"],
