@@ -186,4 +186,35 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Mask>(
   return false;
 }
 
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::Animate>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::AnimateMotion>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::AnimateTransform>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::MPath>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  return false;
+}
+
+template <>
+ParseResult<bool> ParsePresentationAttribute<ElementType::Set>(
+    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+  // Animation elements don't have element-specific presentation attributes.
+  return false;
+}
+
 }  // namespace donner::svg::parser

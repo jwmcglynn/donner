@@ -8,6 +8,9 @@
 
 #include <entt/entt.hpp>
 
+#include "donner/svg/SVGAnimateElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGAnimateMotionElement.h"        // IWYU pragma: export
+#include "donner/svg/SVGAnimateTransformElement.h"     // IWYU pragma: export
 #include "donner/svg/SVGCircleElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGClipPathElement.h"        // IWYU pragma: export
 #include "donner/svg/SVGDefsElement.h"            // IWYU pragma: export
@@ -44,6 +47,7 @@
 #include "donner/svg/SVGLinearGradientElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGMarkerElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGMaskElement.h"            // IWYU pragma: export
+#include "donner/svg/SVGMPathElement.h"           // IWYU pragma: export
 #include "donner/svg/SVGPathElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGPatternElement.h"         // IWYU pragma: export
 #include "donner/svg/SVGPolygonElement.h"         // IWYU pragma: export
@@ -51,6 +55,7 @@
 #include "donner/svg/SVGRadialGradientElement.h"  // IWYU pragma: export
 #include "donner/svg/SVGRectElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGSVGElement.h"             // IWYU pragma: export
+#include "donner/svg/SVGSetElement.h"             // IWYU pragma: export
 #include "donner/svg/SVGStopElement.h"            // IWYU pragma: export
 #include "donner/svg/SVGStyleElement.h"           // IWYU pragma: export
 #include "donner/svg/SVGSymbolElement.h"          // IWYU pragma: export
@@ -69,6 +74,9 @@ namespace donner::svg {
  * donner::svg::parser::SVGParser.
  */
 using AllSVGElements = entt::type_list<  //
+    SVGAnimateElement,                   //
+    SVGAnimateMotionElement,             //
+    SVGAnimateTransformElement,          //
     SVGCircleElement,                    //
     SVGClipPathElement,                  //
     SVGDefsElement,                      //
@@ -105,6 +113,7 @@ using AllSVGElements = entt::type_list<  //
     SVGLinearGradientElement,            //
     SVGMarkerElement,                    //
     SVGMaskElement,                      //
+    SVGMPathElement,                     //
     SVGStopElement,                      //
     SVGRadialGradientElement,            //
     SVGPathElement,                      //
@@ -112,6 +121,7 @@ using AllSVGElements = entt::type_list<  //
     SVGPolygonElement,                   //
     SVGPolylineElement,                  //
     SVGRectElement,                      //
+    SVGSetElement,                       //
     SVGStyleElement,                     //
     SVGSVGElement,                       //
     SVGSymbolElement,                    //

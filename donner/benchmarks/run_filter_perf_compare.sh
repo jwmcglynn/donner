@@ -229,3 +229,102 @@ print_comparison "Tile 64x64 512x512" \
 echo ""
 echo "  (ratio = tiny-skia / skia; lower is better for tiny-skia)"
 echo "======================================================================"
+
+# -----------------------------------------------------------------------
+# Enforce 2x threshold: fail if any filter operation exceeds 2x of Skia.
+# -----------------------------------------------------------------------
+MAX_RATIO="2.00"
+FAIL_COUNT=0
+
+check_threshold() {
+  local label="$1"
+  local native_name="$2"
+  local skia_name="$3"
+
+  local native_ns skia_ns r
+  native_ns="$(extract_mean_real_time_ns "${NATIVE_CSV}" "${native_name}")"
+  skia_ns="$(extract_mean_real_time_ns "${SKIA_CSV}" "${skia_name}")"
+
+  if [[ -z "${native_ns}" || -z "${skia_ns}" ]]; then
+    return
+  fi
+
+  r="$(ratio "${native_ns}" "${skia_ns}")"
+
+  local exceeded
+  exceeded="$(awk -v r="${r}" -v max="${MAX_RATIO}" 'BEGIN { print (r > max) ? "yes" : "no" }')"
+  if [[ "${exceeded}" == "yes" ]]; then
+    echo "FAIL: ${label} ratio ${r}x exceeds ${MAX_RATIO}x threshold"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  fi
+}
+
+echo ""
+echo "Checking 2x threshold..."
+
+check_threshold "GaussianBlur sigma=3" \
+  "BM_GaussianBlur_Float/512/3" "BM_GaussianBlur_Skia/512/3"
+check_threshold "GaussianBlur sigma=6" \
+  "BM_GaussianBlur_Float/512/6" "BM_GaussianBlur_Skia/512/6"
+check_threshold "GaussianBlur sigma=20" \
+  "BM_GaussianBlur_Float/512/20" "BM_GaussianBlur_Skia/512/20"
+check_threshold "GaussianBlur uint8 sigma=3" \
+  "BM_GaussianBlur_Uint8/512/3" "BM_GaussianBlur_Skia/512/3"
+check_threshold "GaussianBlur uint8 sigma=6" \
+  "BM_GaussianBlur_Uint8/512/6" "BM_GaussianBlur_Skia/512/6"
+check_threshold "GaussianBlur uint8 sigma=20" \
+  "BM_GaussianBlur_Uint8/512/20" "BM_GaussianBlur_Skia/512/20"
+check_threshold "Dilate radius=3" \
+  "BM_Morphology_Dilate_Float/512/3" "BM_Morphology_Dilate_Skia/512/3"
+check_threshold "Dilate radius=10" \
+  "BM_Morphology_Dilate_Float/512/10" "BM_Morphology_Dilate_Skia/512/10"
+check_threshold "Dilate radius=30" \
+  "BM_Morphology_Dilate_Float/512/30" "BM_Morphology_Dilate_Skia/512/30"
+check_threshold "Erode radius=3" \
+  "BM_Morphology_Erode_Float/512/3" "BM_Morphology_Erode_Skia/512/3"
+check_threshold "Erode radius=10" \
+  "BM_Morphology_Erode_Float/512/10" "BM_Morphology_Erode_Skia/512/10"
+check_threshold "Erode radius=30" \
+  "BM_Morphology_Erode_Float/512/30" "BM_Morphology_Erode_Skia/512/30"
+check_threshold "Blend Multiply" \
+  "BM_Blend_Multiply_Float/512" "BM_Blend_Multiply_Skia/512"
+check_threshold "Blend Screen" \
+  "BM_Blend_Screen_Float/512" "BM_Blend_Screen_Skia/512"
+check_threshold "Composite Over" \
+  "BM_Composite_Over_Float/512" "BM_Composite_Over_Skia/512"
+check_threshold "Composite Arithmetic" \
+  "BM_Composite_Arithmetic_Float/512" "BM_Composite_Arithmetic_Skia/512"
+check_threshold "ColorMatrix Saturate" \
+  "BM_ColorMatrix_Saturate_Float/512" "BM_ColorMatrix_Saturate_Skia/512"
+check_threshold "ConvolveMatrix 3x3" \
+  "BM_ConvolveMatrix_3x3_Float/512" "BM_ConvolveMatrix_3x3_Skia/512"
+check_threshold "ConvolveMatrix 5x5" \
+  "BM_ConvolveMatrix_5x5_Float/512" "BM_ConvolveMatrix_5x5_Skia/512"
+check_threshold "Turbulence" \
+  "BM_Turbulence_Float/512" "BM_Turbulence_Skia/512"
+check_threshold "FractalNoise" \
+  "BM_FractalNoise_Float/512" "BM_FractalNoise_Skia/512"
+check_threshold "DiffuseLighting Point" \
+  "BM_DiffuseLighting_Point_Float/512" "BM_DiffuseLighting_Point_Skia/512"
+check_threshold "SpecularLighting Point" \
+  "BM_SpecularLighting_Point_Float/512" "BM_SpecularLighting_Point_Skia/512"
+check_threshold "DisplacementMap" \
+  "BM_DisplacementMap_Float/512" "BM_DisplacementMap_Skia/512"
+check_threshold "Flood" \
+  "BM_Flood_Uint8/512" "BM_Flood_Skia/512"
+check_threshold "Offset" \
+  "BM_Offset_Uint8/512" "BM_Offset_Skia/512"
+check_threshold "Merge 3-Input" \
+  "BM_Merge_3Input_Uint8/512" "BM_Merge_3Input_Skia/512"
+check_threshold "ComponentTransfer Table" \
+  "BM_ComponentTransfer_Table_Uint8/512" "BM_ComponentTransfer_Table_Skia/512"
+check_threshold "Tile" \
+  "BM_Tile_Uint8/512" "BM_Tile_Skia/512"
+
+if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+  echo ""
+  echo "FAILED: ${FAIL_COUNT} filter operation(s) exceeded the ${MAX_RATIO}x threshold."
+  exit 1
+fi
+
+echo "PASSED: All filter operations within ${MAX_RATIO}x of Skia."

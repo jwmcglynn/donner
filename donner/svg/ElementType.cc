@@ -6,6 +6,9 @@ namespace donner::svg {
 
 std::ostream& operator<<(std::ostream& os, ElementType type) {
   switch (type) {
+    case ElementType::Animate: return os << "Animate";
+    case ElementType::AnimateMotion: return os << "AnimateMotion";
+    case ElementType::AnimateTransform: return os << "AnimateTransform";
     case ElementType::Circle: return os << "Circle";
     case ElementType::ClipPath: return os << "ClipPath";
     case ElementType::Defs: return os << "Defs";
@@ -42,12 +45,14 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::LinearGradient: return os << "LinearGradient";
     case ElementType::Marker: return os << "Marker";
     case ElementType::Mask: return os << "Mask";
+    case ElementType::MPath: return os << "MPath";
     case ElementType::Path: return os << "Path";
     case ElementType::Pattern: return os << "Pattern";
     case ElementType::Polygon: return os << "Polygon";
     case ElementType::Polyline: return os << "Polyline";
     case ElementType::RadialGradient: return os << "RadialGradient";
     case ElementType::Rect: return os << "Rect";
+    case ElementType::Set: return os << "Set";
     case ElementType::Stop: return os << "Stop";
     case ElementType::Style: return os << "Style";
     case ElementType::SVG: return os << "SVG";

@@ -69,6 +69,10 @@ public:
   /// contents are rendered.
   std::optional<Vector2i> canvasSize;
 
+  /// Current document time in seconds, advanced by SVGDocument::setTime().
+  /// Used by the animation system to evaluate animation state.
+  double documentTime = 0.0;
+
   /// Root entity of the document, which contains the \ref xml_svg element.
   Entity rootEntity = entt::null;
 

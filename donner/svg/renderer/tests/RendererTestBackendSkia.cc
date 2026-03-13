@@ -26,6 +26,10 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   return false;
 }
 
+std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
+  return std::make_unique<RendererSkia>(verbose);
+}
+
 RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose) {
   RendererSkia renderer(verbose);
   renderer.draw(document);

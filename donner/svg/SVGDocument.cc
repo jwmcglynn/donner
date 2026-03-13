@@ -65,6 +65,15 @@ Vector2i SVGDocument::canvasSize() const {
       *registry_, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 }
 
+void SVGDocument::setTime(double seconds) {
+  registry_->ctx().get<components::SVGDocumentContext>().documentTime = seconds;
+  components::RenderingContext(*registry_).invalidateRenderTree();
+}
+
+double SVGDocument::currentTime() const {
+  return registry_->ctx().get<components::SVGDocumentContext>().documentTime;
+}
+
 bool SVGDocument::operator==(const SVGDocument& other) const {
   return &registry_->ctx().get<const components::SVGDocumentContext>() ==
          &other.registry_->ctx().get<const components::SVGDocumentContext>();

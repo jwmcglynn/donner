@@ -11,6 +11,9 @@ namespace donner::svg {
  * \ref xml_rect, etc.
  */
 enum class ElementType : uint8_t {
+  Animate,              //!< \ref xml_animate, value animation element.
+  AnimateMotion,        //!< \ref xml_animateMotion, motion path animation element.
+  AnimateTransform,     //!< \ref xml_animateTransform, transform animation element.
   Circle,          //!< \ref xml_circle
   ClipPath,        //!< \ref xml_clipPath
   Defs,            //!< \ref xml_defs
@@ -47,12 +50,14 @@ enum class ElementType : uint8_t {
   LinearGradient,  //!< \ref xml_linearGradient
   Marker,          //!< \ref xml_marker
   Mask,            //!< \ref xml_mask
+  MPath,           //!< \ref xml_mpath, motion path reference for animateMotion.
   Path,            //!< \ref xml_path
   Pattern,         //!< \ref xml_pattern
   Polygon,         //!< \ref xml_polygon
   Polyline,        //!< \ref xml_polyline
   RadialGradient,  //!< \ref xml_radialGradient
   Rect,            //!< \ref xml_rect
+  Set,             //!< \ref xml_set, discrete animation element.
   Stop,            //!< \ref xml_stop, for gradient stops.
   Style,           //!< \ref xml_style
   SVG,             //!< \ref xml_svg, SVG root element.
@@ -102,6 +107,12 @@ std::ostream& operator<<(std::ostream& os, ElementType type);
 template <typename ReturnType, typename FnT>
 ReturnType ToConstexpr(ElementType type, FnT fn) {
   switch (type) {
+    case ElementType::Animate:
+      return fn(std::integral_constant<ElementType, ElementType::Animate>());
+    case ElementType::AnimateMotion:
+      return fn(std::integral_constant<ElementType, ElementType::AnimateMotion>());
+    case ElementType::AnimateTransform:
+      return fn(std::integral_constant<ElementType, ElementType::AnimateTransform>());
     case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());
     case ElementType::ClipPath:
       return fn(std::integral_constant<ElementType, ElementType::ClipPath>());
@@ -167,6 +178,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
       return fn(std::integral_constant<ElementType, ElementType::LinearGradient>());
     case ElementType::Marker: return fn(std::integral_constant<ElementType, ElementType::Marker>());
     case ElementType::Mask: return fn(std::integral_constant<ElementType, ElementType::Mask>());
+    case ElementType::MPath: return fn(std::integral_constant<ElementType, ElementType::MPath>());
     case ElementType::Path: return fn(std::integral_constant<ElementType, ElementType::Path>());
     case ElementType::Pattern:
       return fn(std::integral_constant<ElementType, ElementType::Pattern>());
@@ -177,6 +189,7 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::RadialGradient:
       return fn(std::integral_constant<ElementType, ElementType::RadialGradient>());
     case ElementType::Rect: return fn(std::integral_constant<ElementType, ElementType::Rect>());
+    case ElementType::Set: return fn(std::integral_constant<ElementType, ElementType::Set>());
     case ElementType::Stop: return fn(std::integral_constant<ElementType, ElementType::Stop>());
     case ElementType::Style: return fn(std::integral_constant<ElementType, ElementType::Style>());
     case ElementType::SVG: return fn(std::integral_constant<ElementType, ElementType::SVG>());

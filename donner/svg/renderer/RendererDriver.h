@@ -31,6 +31,20 @@ public:
   void draw(SVGDocument& document);
 
   /**
+   * Render a range of entities from an already-prepared document's render tree.
+   * The document must have been prepared via RendererUtils::prepareDocumentForRendering()
+   * before calling this method.
+   *
+   * @param registry The registry containing the prepared render tree.
+   * @param firstEntity First entity in the range to render (inclusive).
+   * @param lastEntity Last entity in the range to render (inclusive).
+   * @param viewport Viewport for the render pass.
+   * @param baseTransform Transform applied to all entities (e.g., layer-local offset).
+   */
+  void drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
+                       const RenderViewport& viewport, const Transformd& baseTransform);
+
+  /**
    * Capture a snapshot from the underlying backend after rendering.
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const;

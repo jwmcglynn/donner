@@ -137,3 +137,66 @@ print_comparison "FillPath Pattern (64x64 tile)" \
 echo ""
 echo "  (ratio = tiny-skia / skia; lower is better for tiny-skia)"
 echo "======================================================================"
+
+# -----------------------------------------------------------------------
+# Enforce 2x threshold: fail if any render operation exceeds 2x of Skia.
+# -----------------------------------------------------------------------
+MAX_RATIO="2.00"
+FAIL_COUNT=0
+
+check_threshold() {
+  local label="$1"
+  local tinyskia_name="$2"
+  local skia_name="$3"
+
+  local tinyskia_ns skia_ns r
+  tinyskia_ns="$(extract_mean_real_time_ns "${TINYSKIA_CSV}" "${tinyskia_name}")"
+  skia_ns="$(extract_mean_real_time_ns "${SKIA_CSV}" "${skia_name}")"
+
+  if [[ -z "${tinyskia_ns}" || -z "${skia_ns}" ]]; then
+    return
+  fi
+
+  r="$(ratio "${tinyskia_ns}" "${skia_ns}")"
+
+  local exceeded
+  exceeded="$(awk -v r="${r}" -v max="${MAX_RATIO}" 'BEGIN { print (r > max) ? "yes" : "no" }')"
+  if [[ "${exceeded}" == "yes" ]]; then
+    echo "FAIL: ${label} ratio ${r}x exceeds ${MAX_RATIO}x threshold"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  fi
+}
+
+echo ""
+echo "Checking 2x threshold..."
+
+check_threshold "FillPath (semi-transparent)" \
+  "BM_FillPath_TinySkia/512" "BM_FillPath_Skia/512"
+check_threshold "FillRect (semi-transparent)" \
+  "BM_FillRect_TinySkia/512" "BM_FillRect_Skia/512"
+check_threshold "FillPath Opaque" \
+  "BM_FillPath_Opaque_TinySkia/512" "BM_FillPath_Opaque_Skia/512"
+check_threshold "FillPath EvenOdd" \
+  "BM_FillPath_EvenOdd_TinySkia/512" "BM_FillPath_EvenOdd_Skia/512"
+check_threshold "FillPath Transformed (30deg)" \
+  "BM_FillPath_Transformed_TinySkia/512" "BM_FillPath_Transformed_Skia/512"
+check_threshold "StrokePath (3px round)" \
+  "BM_StrokePath_TinySkia/512" "BM_StrokePath_Skia/512"
+check_threshold "StrokePath Dashed (10/5)" \
+  "BM_StrokePath_Dashed_TinySkia/512" "BM_StrokePath_Dashed_Skia/512"
+check_threshold "StrokePath Thick (10px round)" \
+  "BM_StrokePath_Thick_TinySkia/512" "BM_StrokePath_Thick_Skia/512"
+check_threshold "FillPath LinearGradient" \
+  "BM_FillPath_LinearGradient_TinySkia/512" "BM_FillPath_LinearGradient_Skia/512"
+check_threshold "FillPath RadialGradient" \
+  "BM_FillPath_RadialGradient_TinySkia/512" "BM_FillPath_RadialGradient_Skia/512"
+check_threshold "FillPath Pattern (64x64 tile)" \
+  "BM_FillPath_Pattern_TinySkia/512" "BM_FillPath_Pattern_Skia/512"
+
+if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+  echo ""
+  echo "FAILED: ${FAIL_COUNT} render operation(s) exceeded the ${MAX_RATIO}x threshold."
+  exit 1
+fi
+
+echo "PASSED: All render operations within ${MAX_RATIO}x of Skia."

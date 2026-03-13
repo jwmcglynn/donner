@@ -333,6 +333,214 @@ void RendererDriver::draw(SVGDocument& document) {
   renderer_.endFrame();
 }
 
+void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
+                                     const RenderViewport& viewport,
+                                     const Transformd& baseTransform) {
+  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  layerBaseTransform_ = baseTransform;
+
+  renderer_.beginFrame(viewport);
+
+  RenderingInstanceView view(registry);
+
+  // Advance to the first entity.
+  while (!view.done() && view.currentEntity() != firstEntity) {
+    view.advance();
+  }
+
+  // Traverse from first to last (inclusive).
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    reachedLast = (view.currentEntity() == lastEntity);
+
+    const components::RenderingInstanceComponent& instance = view.get();
+    const Entity entity = view.currentEntity();
+    view.advance();
+
+    const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
+    if (!style.properties.has_value()) {
+      continue;
+    }
+
+    const bool hasViewportClip = instance.clipRect.has_value();
+    if (hasViewportClip) {
+      ResolvedClip viewportClip;
+      viewportClip.clipRect = instance.clipRect;
+      renderer_.pushClip(viewportClip);
+    }
+
+    renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
+
+    const double opacity = style.properties->opacity.getRequired();
+    const bool hasIsolatedLayer = opacity < 1.0;
+    if (hasIsolatedLayer) {
+      renderer_.pushIsolatedLayer(opacity);
+    }
+
+    std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+      if (viewBox.width() > 0 && viewBox.height() > 0) {
+        filterGraph->userToPixelScale =
+            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      }
+    }
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    const bool filterHidesElement =
+        instance.resolvedFilter.has_value() && !hasFilterLayer;
+
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    entityClip.clipRect = std::nullopt;
+    const std::optional<components::ResolvedMask> entityMask = entityClip.mask;
+    entityClip.mask = std::nullopt;
+    const bool hasEntityClip = !entityClip.empty();
+    if (hasEntityClip) {
+      renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
+    }
+
+    const bool hasMask = entityMask.has_value() && entityMask->valid();
+    bool subtreeConsumedBySubRendering = false;
+
+    if (hasMask) {
+      renderMask(view, registry, instance, *entityMask);
+      subtreeConsumedBySubRendering = true;
+    }
+
+    if (const auto* fillRef =
+            std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
+      if (fillRef->subtreeInfo &&
+          fillRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
+        renderPattern(view, registry, instance, *fillRef, /*forStroke=*/false);
+        subtreeConsumedBySubRendering = true;
+      }
+    }
+    if (const auto* strokeRef =
+            std::get_if<components::PaintResolvedReference>(&instance.resolvedStroke)) {
+      if (strokeRef->subtreeInfo &&
+          strokeRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
+        renderPattern(view, registry, instance, *strokeRef, /*forStroke=*/true);
+        subtreeConsumedBySubRendering = true;
+      }
+    }
+
+    const PaintParams paint = toPaintParams(registry, instance, style);
+    renderer_.setPaint(paint);
+
+    if (instance.visible && !filterHidesElement) {
+      if (const auto* path =
+              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        drawMarkers(view, registry, instance, *path, style);
+      } else if (const auto* text =
+                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const auto* textComp =
+            instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        renderer_.drawText(*text, textParams);
+      } else if (const auto* image =
+                     instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
+        const std::optional<ImageParams> imageParams =
+            toImageParams(instance, style, *image, registry);
+        if (imageParams.has_value()) {
+          renderer_.drawImage(*image->image, *imageParams);
+        }
+      }
+    }
+
+    const bool subtreeConsumed = instance.subtreeInfo && subtreeConsumedBySubRendering;
+    const bool shouldDefer = instance.subtreeInfo && !subtreeConsumed;
+    if (shouldDefer) {
+      DeferredPop deferred;
+      deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
+      deferred.hasViewportClip = hasViewportClip;
+      deferred.hasIsolatedLayer = hasIsolatedLayer;
+      deferred.hasFilterLayer = hasFilterLayer;
+      deferred.hasEntityClip = hasEntityClip;
+      deferred.hasMask = hasMask;
+      subtreeMarkers_.push_back(deferred);
+    } else {
+      if (hasMask) {
+        renderer_.popMask();
+      }
+      if (hasFilterLayer) {
+        renderer_.popFilterLayer();
+      }
+      if (hasEntityClip) {
+        renderer_.popClip();
+      }
+      if (hasIsolatedLayer) {
+        renderer_.popIsolatedLayer();
+      }
+      if (hasViewportClip) {
+        renderer_.popClip();
+      }
+    }
+
+    while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
+      const DeferredPop& deferred = subtreeMarkers_.back();
+      if (deferred.hasMask) {
+        renderer_.popMask();
+      }
+      if (deferred.hasFilterLayer) {
+        renderer_.popFilterLayer();
+      }
+      if (deferred.hasEntityClip) {
+        renderer_.popClip();
+      }
+      if (deferred.hasIsolatedLayer) {
+        renderer_.popIsolatedLayer();
+      }
+      if (deferred.hasViewportClip) {
+        renderer_.popClip();
+      }
+      subtreeMarkers_.pop_back();
+    }
+  }
+
+  // Pop any remaining deferred layers (handles the case where lastEntity is
+  // a subtree root whose deferred pop hasn't fired yet).
+  while (!subtreeMarkers_.empty()) {
+    const DeferredPop& deferred = subtreeMarkers_.back();
+    if (deferred.hasMask) {
+      renderer_.popMask();
+    }
+    if (deferred.hasFilterLayer) {
+      renderer_.popFilterLayer();
+    }
+    if (deferred.hasEntityClip) {
+      renderer_.popClip();
+    }
+    if (deferred.hasIsolatedLayer) {
+      renderer_.popIsolatedLayer();
+    }
+    if (deferred.hasViewportClip) {
+      renderer_.popClip();
+    }
+    subtreeMarkers_.pop_back();
+  }
+
+  renderer_.endFrame();
+  layerBaseTransform_ = Transformd();
+}
+
 RendererBitmap RendererDriver::takeSnapshot() const {
   return renderer_.takeSnapshot();
 }

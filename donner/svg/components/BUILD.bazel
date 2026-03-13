@@ -25,6 +25,7 @@ donner_cc_library(
     hdrs = [
         "ClassComponent.h",
         "ComputedClipPathsComponent.h",
+        "LayerMembershipComponent.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
         "PathLengthComponent.h",

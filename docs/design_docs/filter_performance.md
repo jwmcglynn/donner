@@ -566,6 +566,9 @@ filter; subsequent iterations returned the cached result (~60μs blit time). Add
 
 **All 11 render operations are within 1.5x of Skia. 4 operations are faster than Skia.**
 
+Both `render_perf_compare` and `filter_perf_compare` tests enforce a **2.0x threshold** — the test
+fails if any operation exceeds 2x of Skia, serving as a regression gate.
+
 **Completed optimizations:**
 
 - **LinearGradient: 6.53x → 1.00x** — Fused `FusedLinearGradient2Stop` pipeline stage replaces

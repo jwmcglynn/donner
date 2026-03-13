@@ -1,0 +1,39 @@
+load("//build_defs:rules.bzl", "donner_cc_library")
+
+donner_cc_library(
+    name = "components",
+    hdrs = [
+        "AnimateMotionComponent.h",
+        "AnimateTransformComponent.h",
+        "AnimateValueComponent.h",
+        "AnimatedValuesComponent.h",
+        "AnimationStateComponent.h",
+        "AnimationTimingComponent.h",
+        "ClockValue.h",
+        "SetAnimationComponent.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "animation_system",
+    srcs = ["AnimationSystem.cc"],
+    hdrs = ["AnimationSystem.h"],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/base/xml/components",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components:svg_document_context",
+        "//donner/svg/core",
+        "//donner/svg/parser:parser_core",
+    ],
+)

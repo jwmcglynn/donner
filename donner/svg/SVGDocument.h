@@ -156,6 +156,21 @@ public:
 
   std::optional<SVGElement> querySelector(std::string_view selector);
 
+  /**
+   * Set the current document time for animations.
+   *
+   * Advancing the document time causes the animation system to update animated attribute values
+   * on the next render. Time is measured in seconds from the document start.
+   *
+   * @param seconds Document time in seconds.
+   */
+  void setTime(double seconds);
+
+  /**
+   * Get the current document time in seconds.
+   */
+  double currentTime() const;
+
   /// Get the processing mode of this document.
   ProcessingMode processingMode() const { return processingMode_; }
 
