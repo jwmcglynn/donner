@@ -454,7 +454,10 @@ void PathSpline::closePath() {
   UTILS_RELEASE_ASSERT_MSG(moveToPointIndex_ != kNPos || !commands_.empty(),
                            "ClosePath without an open path");
 
-  assert(currentSegmentStartCommandIndex_ != kNPos);
+  // Consecutive closePath calls are no-ops — the subpath is already closed.
+  if (currentSegmentStartCommandIndex_ == kNPos) {
+    return;
+  }
 
   // Close the path, which will draw a line back to the start.
   const size_t commandIndex = commands_.size();

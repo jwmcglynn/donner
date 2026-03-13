@@ -144,6 +144,31 @@ TEST(PathParser, ClosePath) {
   }
 }
 
+TEST(PathParser, ConsecutiveClosePath) {
+  // Multiple consecutive z commands should not crash (regression test for fuzzer crash).
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 z z z z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero()));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
+  }
+
+  // Consecutive z after a line.
+  {
+    ParseResult<PathSpline> result = PathParser::Parse("M 1 2 L 3 4 z z");
+    ASSERT_THAT(result, NoParseError());
+
+    PathSpline spline = result.result();
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1, 2), Vector2d(3, 4)));
+    EXPECT_THAT(spline.commands(),
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::ClosePath, 0}));
+  }
+}
+
 TEST(PathParser, ClosePathParseErrors) {
   // Comma at end is a parse error.
   {
