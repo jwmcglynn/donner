@@ -71,6 +71,7 @@ SKIPPED_PACKAGES = {
     "",  # root package - handled by generate_root()
     "third_party/stb",
     "pixelmatch-cpp17",
+    "donner/benchmarks",
 }
 
 # Individual targets to skip (require optional deps like HarfBuzz).

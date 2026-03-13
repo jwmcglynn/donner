@@ -2,24 +2,22 @@
 
 \tableofcontents
 
-Donner is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
+Donner is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM with complete rendering support including text, filters, and animation.
 
 \htmlonly <style>img[src="donner_splash.svg"]{max-width:800px;}</style> \endhtmlonly
 ![Donner splash image](donner_splash.svg)
 
-Currently, Donner includes:
+Donner includes:
 
 - SVG2 core functionality, such as shapes, fills, strokes, and gradients.
+- All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.).
+- Text rendering with `<text>` and `<tspan>`, including WOFF2 web fonts and optional HarfBuzz shaping.
+- SVG animation: `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>` with full timing model.
 - CSS3 parsing and cascading support, with a hand-rolled library.
 - A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree.
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory.
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
-
-Donner supports two rendering backends, selected at build time:
-- **TinySkia** (default): A lightweight software rasterizer for fast builds with no system dependencies.
-- **Skia**: Full-featured rendering via Google Skia, used as a reference renderer.
-
-See the \ref BuildingDonner instructions for backend selection.
+- Two renderer backends: **Skia** (Chromium's renderer) and **tiny-skia** (lightweight software renderer).
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
@@ -28,6 +26,8 @@ Donner focuses on security and performance, which is validated with code coverag
 ```sh
 bazel run //examples:svg_to_png -- donner_splash.svg
 ```
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jwmcglynn/donner)
 
 How it works: \ref svg_to_png.cc
 
@@ -53,8 +53,8 @@ Detailed docs: \ref svg_tree_interaction.cc
 
 ## Status
 
-- [Project Status](https://github.com/jwmcglynn/donner/issues/149) (github)
-- [Build Report](build_report.md)
+- [Project status](https://github.com/jwmcglynn/donner/issues/149) (github)
+- [Build report](build_report.md)
 
 ## Building
 
@@ -66,6 +66,6 @@ See more details in the \ref BuildingDonner instructions.
 
 | Previous |                                   Next |
 | :------- | -------------------------------------: |
-|          | [Getting Started](GettingStarted.html) |
+|          | [Getting started](GettingStarted.html) |
 
 </div>
