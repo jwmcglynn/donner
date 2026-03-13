@@ -11,7 +11,7 @@ cc_library(
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
-        "//donner/svg/properties",
+        "//donner/svg/properties:property_parsing",
     ],
 )
 

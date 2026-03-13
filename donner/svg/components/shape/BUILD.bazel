@@ -18,10 +18,11 @@ cc_library(
     ],
     visibility = [
         "//donner/svg/components:__subpackages__",
+        "//donner/svg/properties:__pkg__",
     ],
     deps = [
         "//donner/base",
-        "//donner/svg/properties",
+        "//donner/svg/properties:property_parsing",
     ],
 )
 
@@ -35,6 +36,7 @@ cc_library(
     ],
     visibility = [
         "//donner/svg/components:__subpackages__",
+        "//donner/svg/properties:__pkg__",
     ],
     deps = [
         ":components",

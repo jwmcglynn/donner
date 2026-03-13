@@ -5,7 +5,6 @@
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
 
@@ -69,18 +68,11 @@ ComputedCircleComponent::ComputedCircleComponent(
   }
 }
 
-}  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  const components::CirclePresentationAttributeParseFn* parseFn =
-      components::kProperties.find(name);
+ParseResult<bool> ParseCirclePresentationAttribute(EntityHandle handle, std::string_view name,
+                                                    const parser::PropertyParseFnParams& params) {
+  const CirclePresentationAttributeParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
-    components::CircleProperties& properties =
-        handle.get_or_emplace<components::CircleComponent>().properties;
+    CircleProperties& properties = handle.get_or_emplace<CircleComponent>().properties;
     auto maybeError = (*parseFn)(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
@@ -93,4 +85,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Circle>(
   return false;
 }
 
-}  // namespace donner::svg::parser
+}  // namespace donner::svg::components

@@ -1297,9 +1297,7 @@ ParseResult<bool> ParseSpecialAttributes(parser::PropertyParseFnParams& params,
     return false;
   }
 
-  return ToConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
-    return parser::ParsePresentationAttribute<elementType()>(handle, name, params);
-  });
+  return parser::ParsePresentationAttribute(type.value(), handle, name, params);
 }
 
 }  // namespace

@@ -160,4 +160,10 @@ private:
                                                       std::vector<ParseError>* outWarnings);
 };
 
+/**
+ * Parse presentation attributes for a \ref xml_path element (the "d" attribute).
+ */
+ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                  const parser::PropertyParseFnParams& params);
+
 }  // namespace donner::svg::components

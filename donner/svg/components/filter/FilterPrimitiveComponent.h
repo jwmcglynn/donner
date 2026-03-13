@@ -3,12 +3,14 @@
 
 #include <optional>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/properties/Property.h"
+#include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
 
@@ -357,5 +359,15 @@ struct FESpecularLightingComponent {
     return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
   }};
 };
+
+// Forward declare for presentation attribute parsing helpers.
+ParseResult<bool> ParseFeFloodPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                    const parser::PropertyParseFnParams& params);
+ParseResult<bool> ParseFeDropShadowPresentationAttribute(
+    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params);
+ParseResult<bool> ParseFeDiffuseLightingPresentationAttribute(
+    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params);
+ParseResult<bool> ParseFeSpecularLightingPresentationAttribute(
+    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

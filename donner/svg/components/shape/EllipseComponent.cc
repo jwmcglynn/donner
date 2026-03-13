@@ -5,7 +5,6 @@
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
 
@@ -79,18 +78,11 @@ ComputedEllipseComponent::ComputedEllipseComponent(
   }
 }
 
-}  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Ellipse>(
-    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
-  const components::EllipsePresentationAttributeParseFn* parseFn =
-      components::kProperties.find(name);
+ParseResult<bool> ParseEllipsePresentationAttribute(EntityHandle handle, std::string_view name,
+                                                     const parser::PropertyParseFnParams& params) {
+  const EllipsePresentationAttributeParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
-    components::EllipseProperties& properties =
-        handle.get_or_emplace<components::EllipseComponent>().properties;
+    EllipseProperties& properties = handle.get_or_emplace<EllipseComponent>().properties;
     auto maybeError = (*parseFn)(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
@@ -103,4 +95,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Ellipse>(
   return false;
 }
 
-}  // namespace donner::svg::parser
+}  // namespace donner::svg::components

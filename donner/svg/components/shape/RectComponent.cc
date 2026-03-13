@@ -5,7 +5,6 @@
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
 
 namespace donner::svg::components {
 namespace {
@@ -96,17 +95,11 @@ ComputedRectComponent::ComputedRectComponent(
   }
 }
 
-}  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Rect>(
-    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
-  const components::RectPresentationAttributeParseFn* parseFn = components::kProperties.find(name);
+ParseResult<bool> ParseRectPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                  const parser::PropertyParseFnParams& params) {
+  const RectPresentationAttributeParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
-    components::RectProperties& properties =
-        handle.get_or_emplace<components::RectComponent>().properties;
+    RectProperties& properties = handle.get_or_emplace<RectComponent>().properties;
     auto maybeError = (*parseFn)(properties, params);
     if (maybeError) {
       return std::move(maybeError).value();
@@ -119,4 +112,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Rect>(
   return false;
 }
 
-}  // namespace donner::svg::parser
+}  // namespace donner::svg::components

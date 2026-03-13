@@ -1,7 +1,5 @@
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
-
 namespace donner::svg::components {
 
 void LinearGradientComponent::inheritAttributes(EntityHandle handle, EntityHandle base) {
@@ -35,15 +33,3 @@ void ComputedLinearGradientComponent::inheritAttributes(EntityHandle handle, Ent
 }
 
 }  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::LinearGradient>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <linearGradient> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
-}
-
-}  // namespace donner::svg::parser

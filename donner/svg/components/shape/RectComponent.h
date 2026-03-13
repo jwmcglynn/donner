@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"
@@ -91,5 +92,11 @@ struct RectComponent {
   /// The properties of the rectangle.
   RectProperties properties;
 };
+
+/**
+ * Parse presentation attributes for a \ref xml_rect element, such as x, y, width, height, rx, ry.
+ */
+ParseResult<bool> ParseRectPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                  const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components
