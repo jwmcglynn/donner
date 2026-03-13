@@ -1,6 +1,7 @@
-"""Donner is a modern C++20 SVG rendering library which intends to provide easily
-embeddable SVG support into apps and games, enabling browser-level functionalit
- without the browser."""
+"""Donner SVG: Embeddable browser-grade SVG2 engine for your application.
+
+A C++20 SVG rendering library providing full SVG DOM access with complete rendering
+support including text, filters, and animation."""
 
 module(name = "donner", version = "0.1.2")
 

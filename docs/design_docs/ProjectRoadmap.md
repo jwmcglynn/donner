@@ -72,6 +72,14 @@ Everything completed since v0.1, collected into a single release milestone.
   `elementFromPoint`, `findIntersectingRect`, `getWorldBounds`), incremental spatial index updates.
 - ([design](interactivity.md))
 
+### Incremental Invalidation
+
+- **Partial computed tree invalidation** — When DOM mutations occur, only invalidate the
+  affected subtree of the computed style/layout tree rather than recomputing the entire
+  document. CSS restyling performs differential updates: identify which elements' computed
+  styles are affected by a change and re-resolve only those, propagating inherited property
+  changes down the affected subtree.
+
 ### Infrastructure
 
 - Auto-detect font backends, crash handling hardening.
@@ -116,6 +124,9 @@ Flagship v1.0 feature: a hybrid structured/freeform SVG editor workflow.
   ranges and incremental updates matching the XML parser's capabilities.
 - [ ] **XML parser conformance** — Fix bugs like non-conforming `Name` token acceptance
   ([#304](https://github.com/jwmcglynn/donner/issues/304)).
+- [ ] **CSS3 gap closure** — Audit CSS3 property and selector support against the properties
+  used by SVG2. Close gaps in selectors, cascading, specificity, shorthand expansion, and
+  value parsing for properties referenced by the SVG2 spec.
 
 ### Entity Lifecycle
 
@@ -134,6 +145,8 @@ Flagship v1.0 feature: a hybrid structured/freeform SVG editor workflow.
 
 - [ ] **SVG2 conformance pass** — Systematic audit of SVG2 spec coverage. Identify and close
   high-impact gaps across all element categories.
+- [ ] **90% code coverage** — Achieve and maintain ≥90% line coverage across all production code.
+  Identify under-covered subsystems and add targeted tests.
 - [ ] **Animation test suite** — Comprehensive test coverage for the animation system
   (Phases 1–9), including timing edge cases, interpolation correctness, and event-based triggers.
 - [ ] **Update resvg test suite** — The upstream resvg test suite had a major refactor/rename of
@@ -179,6 +192,12 @@ Flagship v1.0 feature: a hybrid structured/freeform SVG editor workflow.
 - [ ] **Compile time** — Reduce build times. Audit heavy template instantiations, consider
   explicit template instantiation, forward declarations, and pimpl patterns where header
   fan-out is excessive.
+- [ ] **"Donner Tiny" build profile** — A minimal-footprint tier that strips text, filters,
+  animation, and JavaScript, producing the smallest possible binary for embedded/constrained
+  environments. Each feature is independently opt-in via build flags (CMake options / Bazel
+  configs), so users can compose exactly the feature set they need. Document the size impact of
+  each optional module and provide pre-defined profiles: `tiny` (core rendering only), `standard`
+  (current default), `full` (everything including JS).
 
 ### Ecosystem
 
@@ -202,6 +221,8 @@ Flagship v1.0 feature: a hybrid structured/freeform SVG editor workflow.
 - All v1.0 issues closed.
 - SVG2 conformance report published with known limitations documented.
 - Stable API surface for rendering, editing, and authoring operations.
+- ≥90% code coverage across production code.
+- CSS3 gap analysis complete, all SVG2-referenced properties supported.
 - Performance and binary-size profiles documented.
 - Release documentation complete for embedders.
 
@@ -256,4 +277,5 @@ flowchart TD
 | [Animation](animation.md) | Shipped (Phases 1–9) |
 | [Composited Rendering](composited_rendering.md) | Shipped |
 | [Interactivity](interactivity.md) | Shipped (Phases 1–6) |
+| [v0.5 Release](v0_5_release.md) | In Progress |
 | [External SVG References](external_svg_references.md) | Design |

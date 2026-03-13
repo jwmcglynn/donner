@@ -2,20 +2,22 @@
 
 \tableofcontents
 
-Donner is an under-development modern C++20 SVG rendering library which provides full access to the SVG DOM, enabling browser-level functionality without the browser.
+Donner is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM with complete rendering support including text, filters, and animation.
 
 \htmlonly <style>img[src="donner_splash.svg"]{max-width:800px;}</style> \endhtmlonly
 ![Donner splash image](donner_splash.svg)
 
-Currently, Donner includes:
+Donner includes:
 
 - SVG2 core functionality, such as shapes, fills, strokes, and gradients.
+- All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.).
+- Text rendering with `<text>` and `<tspan>`, including WOFF2 web fonts and optional HarfBuzz shaping.
+- SVG animation: `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>` with full timing model.
 - CSS3 parsing and cascading support, with a hand-rolled library.
 - A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree.
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory.
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
-
-Donner currently renders with Skia as core functionality is being implemented. While Skia is powerful, it adds a lot of code size so alternative approaches may be considered in the future.
+- Two renderer backends: **Skia** (Chromium's renderer) and **tiny-skia** (lightweight software renderer).
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
