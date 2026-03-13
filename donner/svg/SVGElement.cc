@@ -15,6 +15,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/properties/PresentationAttributeParsing.h"
 
 namespace donner::svg {
 
@@ -137,9 +138,21 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     actualName = "transform";
   }
 
+  // Try common CSS properties first (fill, stroke, opacity, transform, etc.).
   auto trySetResult =
       handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
           handle_, actualName, value);
+
+  if (trySetResult.hasError()) {
+    return trySetResult;
+  }
+
+  if (!trySetResult.result()) {
+    // Try element-specific presentation attributes (cx, cy, r, rx, ry, d, etc.).
+    parser::PropertyParseFnParams params =
+        parser::PropertyParseFnParams::CreateForAttribute(value);
+    trySetResult = parser::ParsePresentationAttribute(type(), handle_, actualName, params);
+  }
 
   if (trySetResult.hasResult() && trySetResult.result()) {
     // Set succeeded, so store the attribute value.

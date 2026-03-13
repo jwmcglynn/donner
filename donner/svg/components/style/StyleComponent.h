@@ -47,8 +47,10 @@ struct StyleComponent {
   void updateStyle(std::string_view style) { properties.parseStyle(style); }
 
   /**
-   * Tries to set a presentation attribute on the given entity. This is used during the CSS cascade
-   * to apply the computed style to the element.
+   * Tries to set a common presentation attribute (fill, stroke, opacity, transform, etc.).
+   *
+   * For element-specific attributes (cx, cy, r, d, etc.), callers should also invoke
+   * \c parser::ParsePresentationAttribute separately.
    *
    * @param handle The entity to set the attribute on.
    * @param name The name of the attribute.
@@ -57,8 +59,7 @@ struct StyleComponent {
    */
   ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
                                                 std::string_view value) {
-    return properties.parsePresentationAttribute(name, value,
-                                                 handle.get<ElementTypeComponent>().type(), handle);
+    return properties.parsePresentationAttribute(name, value, handle);
   }
 };
 

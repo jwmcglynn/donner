@@ -10,7 +10,6 @@ donner_cc_library(
     ],
     hdrs = [
         "PaintServer.h",
-        "PresentationAttributeParsing.h",
         "PropertyParsing.h",
         "PropertyRegistry.h",
         "RxRyProperties.h",
@@ -36,6 +35,9 @@ donner_cc_library(
     name = "properties",
     srcs = [
         "PresentationAttributeParsing.cc",
+    ],
+    hdrs = [
+        "PresentationAttributeParsing.h",
     ],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
