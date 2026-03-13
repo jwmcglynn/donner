@@ -16,6 +16,7 @@
 #include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/parser/TransformParser.h"
+#include "donner/svg/properties/PresentationAttributeParsing.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg {
@@ -1193,40 +1194,14 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
-                                                               std::string_view value,
-                                                               EntityHandle handle) {
-  /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not necessarily
-   * the same. There may need to be a second mapping.
-   */
-  /* For attributes, fields may be unitless, in which case they are specified in "user units",
-   * see https://www.w3.org/TR/SVG2/coords.html#TermUserUnits. For this case, the spec says to
-   * adjust the grammar to modify things like <length> to [<length> | <number>], see
-   * https://www.w3.org/TR/SVG2/types.html#syntax.
-   *
-   * In practice, we propagate an "AllowUserUnits" flag. "User units" are specified as being
-   * equivalent to pixels.
-   */
+namespace {
 
-  if (!kValidPresentationAttributes.contains(name)) {
-    return false;
-  }
-
-  parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
-
-  const PropertyParseFn* parseFn = kProperties.find(name);
-  if (parseFn != nullptr) {
-    auto maybeError = (*parseFn)(*this, params);
-    if (maybeError.has_value()) {
-      return std::move(maybeError.value());
-    }
-
-    return true;
-  }
-
-  // Handle 'transform' as a special case — it's stored in TransformComponent, not PropertyRegistry.
-  if (handle != EntityHandle() &&
-      StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
+/// Parse special property attributes that are element-specific, such as `transform` and
+/// presentation attributes that are dispatched per element type.
+ParseResult<bool> ParseSpecialAttributes(parser::PropertyParseFnParams& params,
+                                         std::string_view name, std::optional<ElementType> type,
+                                         EntityHandle handle) {
+  if (StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
     auto& transform = handle.get_or_emplace<components::TransformComponent>();
     auto maybeError = parser::Parse(
         params,
@@ -1247,7 +1222,53 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
     return true;
   }
 
-  return false;
+  if (!type.has_value()) {
+    // Stop processing if there is not an element type.
+    return false;
+  }
+
+  return ToConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
+    return parser::ParsePresentationAttribute<elementType()>(handle, name, params);
+  });
+}
+
+}  // namespace
+
+ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
+                                                               std::string_view value,
+                                                               std::optional<ElementType> type,
+                                                               EntityHandle handle) {
+  /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not necessarily
+   * the same. There may need to be a second mapping.
+   */
+  /* For attributes, fields may be unitless, in which case they are specified in "user units",
+   * see https://www.w3.org/TR/SVG2/coords.html#TermUserUnits. For this case, the spec says to
+   * adjust the grammar to modify things like <length> to [<length> | <number>], see
+   * https://www.w3.org/TR/SVG2/types.html#syntax.
+   *
+   * In practice, we propagate an "AllowUserUnits" flag. "User units" are specified as being
+   * equivalent to pixels.
+   */
+  assert((!type.has_value() || (type.has_value() && handle != EntityHandle())) &&
+         "If a type is specified, entity handle must be set");
+
+  if (!kValidPresentationAttributes.contains(name)) {
+    return false;
+  }
+
+  parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
+
+  const PropertyParseFn* parseFn = kProperties.find(name);
+  if (parseFn != nullptr) {
+    auto maybeError = (*parseFn)(*this, params);
+    if (maybeError.has_value()) {
+      return std::move(maybeError.value());
+    }
+
+    return true;
+  }
+
+  return ParseSpecialAttributes(params, name, type, handle);
 }
 
 bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
