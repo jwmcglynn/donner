@@ -139,9 +139,9 @@ echo "  (ratio = tiny-skia / skia; lower is better for tiny-skia)"
 echo "======================================================================"
 
 # -----------------------------------------------------------------------
-# Enforce 2x threshold: fail if any render operation exceeds 2x of Skia.
+# Enforce 1.5x threshold: fail if any render operation exceeds 1.5x of Skia.
 # -----------------------------------------------------------------------
-MAX_RATIO="2.00"
+MAX_RATIO="1.50"
 FAIL_COUNT=0
 
 check_threshold() {
@@ -168,7 +168,7 @@ check_threshold() {
 }
 
 echo ""
-echo "Checking 2x threshold..."
+echo "Checking 1.5x threshold..."
 
 check_threshold "FillPath (semi-transparent)" \
   "BM_FillPath_TinySkia/512" "BM_FillPath_Skia/512"

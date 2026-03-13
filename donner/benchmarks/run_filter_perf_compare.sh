@@ -231,9 +231,9 @@ echo "  (ratio = tiny-skia / skia; lower is better for tiny-skia)"
 echo "======================================================================"
 
 # -----------------------------------------------------------------------
-# Enforce 2x threshold: fail if any filter operation exceeds 2x of Skia.
+# Enforce 1.5x threshold: fail if any filter operation exceeds 1.5x of Skia.
 # -----------------------------------------------------------------------
-MAX_RATIO="2.00"
+MAX_RATIO="1.50"
 FAIL_COUNT=0
 
 check_threshold() {
@@ -260,7 +260,7 @@ check_threshold() {
 }
 
 echo ""
-echo "Checking 2x threshold..."
+echo "Checking 1.5x threshold..."
 
 check_threshold "GaussianBlur sigma=3" \
   "BM_GaussianBlur_Float/512/3" "BM_GaussianBlur_Skia/512/3"

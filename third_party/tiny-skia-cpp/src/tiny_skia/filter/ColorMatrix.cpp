@@ -4,6 +4,10 @@
 #include <cmath>
 #include <cstddef>
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 namespace tiny_skia::filter {
 
 void colorMatrix(Pixmap& pixmap, const std::array<double, 20>& matrix) {
@@ -80,6 +84,61 @@ void colorMatrix(FloatPixmap& pixmap, const std::array<double, 20>& matrix) {
     m[j] = static_cast<float>(matrix[j]);
   }
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  // Transpose the 5x4 matrix into column vectors for NEON vectorized multiply.
+  // Each column contains the coefficients for one input component across all 4 outputs.
+  const float32x4_t col_r = {m[0], m[5], m[10], m[15]};   // R coefficients
+  const float32x4_t col_g = {m[1], m[6], m[11], m[16]};   // G coefficients
+  const float32x4_t col_b = {m[2], m[7], m[12], m[17]};   // B coefficients
+  const float32x4_t col_a = {m[3], m[8], m[13], m[18]};   // A coefficients
+  const float32x4_t col_1 = {m[4], m[9], m[14], m[19]};   // Translation
+  const float32x4_t zero = vdupq_n_f32(0.0f);
+  const float32x4_t one = vdupq_n_f32(1.0f);
+
+  for (std::size_t i = 0; i < pixelCount; ++i) {
+    const std::size_t offset = i * 4;
+    const float pa = ptr[offset + 3];
+
+    if (pa == 0.0f) {
+      const float ca = std::clamp(m[19], 0.0f, 1.0f);
+      if (ca == 0.0f) {
+        continue;
+      }
+      ptr[offset + 0] = std::clamp(m[4] * ca, 0.0f, 1.0f);
+      ptr[offset + 1] = std::clamp(m[9] * ca, 0.0f, 1.0f);
+      ptr[offset + 2] = std::clamp(m[14] * ca, 0.0f, 1.0f);
+      ptr[offset + 3] = ca;
+      continue;
+    }
+
+    // Unpremultiply.
+    const float invAlpha = 1.0f / pa;
+    const float r = ptr[offset + 0] * invAlpha;
+    const float g = ptr[offset + 1] * invAlpha;
+    const float b = ptr[offset + 2] * invAlpha;
+
+    // Matrix multiply: result = r*col_r + g*col_g + b*col_b + pa*col_a + col_1
+    float32x4_t result = col_1;
+    result = vfmaq_n_f32(result, col_r, r);
+    result = vfmaq_n_f32(result, col_g, g);
+    result = vfmaq_n_f32(result, col_b, b);
+    result = vfmaq_n_f32(result, col_a, pa);
+
+    // Clamp all channels to [0, 1].
+    result = vmaxq_f32(result, zero);
+    result = vminq_f32(result, one);
+
+    // Extract new alpha and premultiply RGB.
+    const float ca = vgetq_lane_f32(result, 3);
+    const float32x4_t premul = vmulq_n_f32(result, ca);
+
+    // Store premultiplied RGB and clamped alpha.
+    ptr[offset + 0] = vgetq_lane_f32(premul, 0);
+    ptr[offset + 1] = vgetq_lane_f32(premul, 1);
+    ptr[offset + 2] = vgetq_lane_f32(premul, 2);
+    ptr[offset + 3] = ca;
+  }
+#else
   for (std::size_t i = 0; i < pixelCount; ++i) {
     const std::size_t offset = i * 4;
     const float pa = ptr[offset + 3];
@@ -115,6 +174,7 @@ void colorMatrix(FloatPixmap& pixmap, const std::array<double, 20>& matrix) {
     ptr[offset + 2] = std::clamp(std::clamp(nb, 0.0f, 1.0f) * ca, 0.0f, 1.0f);
     ptr[offset + 3] = ca;
   }
+#endif
 }
 
 std::array<double, 20> saturateMatrix(double s) {

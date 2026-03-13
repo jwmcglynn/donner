@@ -10,6 +10,10 @@
 #include <cstring>
 #include <utility>
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 namespace tiny_skia::filter {
 
 namespace {
@@ -94,6 +98,140 @@ public:
     return lerp(sy, a, b);
   }
 
+  // Compute noise at (x, y) for all 4 channels simultaneously.
+  // Shares lattice lookups and s-curve computation across channels.
+  void noise2_4ch(double x, double y, const StitchInfo* stitch, double out[4]) const {
+    double t = x + static_cast<double>(kPerlinN);
+    int bx0 = static_cast<int>(static_cast<int64_t>(t));
+    int bx1 = bx0 + 1;
+    double rx0 = t - static_cast<double>(static_cast<int64_t>(t));
+    double rx1 = rx0 - 1.0;
+
+    t = y + static_cast<double>(kPerlinN);
+    int by0 = static_cast<int>(static_cast<int64_t>(t));
+    int by1 = by0 + 1;
+    double ry0 = t - static_cast<double>(static_cast<int64_t>(t));
+    double ry1 = ry0 - 1.0;
+
+    // Apply stitching before masking.
+    if (stitch) {
+      if (bx0 >= stitch->wrapX) bx0 -= stitch->width;
+      if (bx1 >= stitch->wrapX) bx1 -= stitch->width;
+      if (by0 >= stitch->wrapY) by0 -= stitch->height;
+      if (by1 >= stitch->wrapY) by1 -= stitch->height;
+    }
+
+    // Mask to table range AFTER stitching.
+    bx0 &= 0xFF;
+    bx1 &= 0xFF;
+    by0 &= 0xFF;
+    by1 &= 0xFF;
+
+    // Two-level permutation lookup (shared across all channels).
+    const int i = latticeSelector_[bx0];
+    const int j = latticeSelector_[bx1];
+    const int b00 = latticeSelector_[i + by0];
+    const int b10 = latticeSelector_[j + by0];
+    const int b01 = latticeSelector_[i + by1];
+    const int b11 = latticeSelector_[j + by1];
+
+    // Shared s-curve values.
+    const double sx = sCurve(rx0);
+    const double sy = sCurve(ry0);
+
+    // Compute all 4 channels using shared lattice indices.
+    for (int ch = 0; ch < 4; ++ch) {
+      double u = dot(gradient_[ch][b00], rx0, ry0);
+      double v = dot(gradient_[ch][b10], rx1, ry0);
+      const double a = lerp(sx, u, v);
+
+      u = dot(gradient_[ch][b01], rx0, ry1);
+      v = dot(gradient_[ch][b11], rx1, ry1);
+      const double b = lerp(sx, u, v);
+
+      out[ch] = lerp(sy, a, b);
+    }
+  }
+
+  // Float-precision 4-channel noise with NEON vectorization.
+  // Uses SOA gradient tables for cache-friendly 4-channel SIMD loads.
+  void noise2_4ch_f(float x, float y, const StitchInfo* stitch, float out[4]) const {
+    float t = x + static_cast<float>(kPerlinN);
+    int bx0 = static_cast<int>(static_cast<int64_t>(t));
+    int bx1 = bx0 + 1;
+    float rx0 = t - static_cast<float>(static_cast<int64_t>(t));
+    float rx1 = rx0 - 1.0f;
+
+    t = y + static_cast<float>(kPerlinN);
+    int by0 = static_cast<int>(static_cast<int64_t>(t));
+    int by1 = by0 + 1;
+    float ry0 = t - static_cast<float>(static_cast<int64_t>(t));
+    float ry1 = ry0 - 1.0f;
+
+    if (stitch) {
+      if (bx0 >= stitch->wrapX) bx0 -= stitch->width;
+      if (bx1 >= stitch->wrapX) bx1 -= stitch->width;
+      if (by0 >= stitch->wrapY) by0 -= stitch->height;
+      if (by1 >= stitch->wrapY) by1 -= stitch->height;
+    }
+
+    bx0 &= 0xFF;
+    bx1 &= 0xFF;
+    by0 &= 0xFF;
+    by1 &= 0xFF;
+
+    const int i = latticeSelector_[bx0];
+    const int j = latticeSelector_[bx1];
+    const int b00 = latticeSelector_[i + by0];
+    const int b10 = latticeSelector_[j + by0];
+    const int b01 = latticeSelector_[i + by1];
+    const int b11 = latticeSelector_[j + by1];
+
+    const float sx = sCurveF(rx0);
+    const float sy = sCurveF(ry0);
+
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    // Load 4-channel gradient vectors from SOA tables (contiguous float[4]).
+    const float32x4_t gx00 = vld1q_f32(gradX4_[b00]);
+    const float32x4_t gy00 = vld1q_f32(gradY4_[b00]);
+    const float32x4_t gx10 = vld1q_f32(gradX4_[b10]);
+    const float32x4_t gy10 = vld1q_f32(gradY4_[b10]);
+    const float32x4_t gx01 = vld1q_f32(gradX4_[b01]);
+    const float32x4_t gy01 = vld1q_f32(gradY4_[b01]);
+    const float32x4_t gx11 = vld1q_f32(gradX4_[b11]);
+    const float32x4_t gy11 = vld1q_f32(gradY4_[b11]);
+
+    // 4 dot products: dot = gx * rx + gy * ry
+    const float32x4_t d00 = vfmaq_n_f32(vmulq_n_f32(gx00, rx0), gy00, ry0);
+    const float32x4_t d10 = vfmaq_n_f32(vmulq_n_f32(gx10, rx1), gy10, ry0);
+    const float32x4_t d01 = vfmaq_n_f32(vmulq_n_f32(gx01, rx0), gy01, ry1);
+    const float32x4_t d11 = vfmaq_n_f32(vmulq_n_f32(gx11, rx1), gy11, ry1);
+
+    // Bilinear interpolation: lerp(sx, d00, d10) then lerp(sy, a, b)
+    const float32x4_t sx_v = vdupq_n_f32(sx);
+    const float32x4_t a = vfmaq_f32(d00, sx_v, vsubq_f32(d10, d00));
+    const float32x4_t b = vfmaq_f32(d01, sx_v, vsubq_f32(d11, d01));
+
+    const float32x4_t sy_v = vdupq_n_f32(sy);
+    const float32x4_t result = vfmaq_f32(a, sy_v, vsubq_f32(b, a));
+
+    vst1q_f32(out, result);
+#else
+    // Scalar float fallback.
+    for (int ch = 0; ch < 4; ++ch) {
+      float u = gradX4_[b00][ch] * rx0 + gradY4_[b00][ch] * ry0;
+      float v = gradX4_[b10][ch] * rx1 + gradY4_[b10][ch] * ry0;
+      const float af = u + sx * (v - u);
+
+      u = gradX4_[b01][ch] * rx0 + gradY4_[b01][ch] * ry1;
+      v = gradX4_[b11][ch] * rx1 + gradY4_[b11][ch] * ry1;
+      const float bf = u + sx * (v - u);
+
+      out[ch] = af + sy * (bf - af);
+    }
+#endif
+  }
+
 private:
   void init(double seedVal) {
     // Seed clamping matching resvg.
@@ -148,6 +286,16 @@ private:
         gradient_[ch][kBLen + i][1] = gradient_[ch][i][1];
       }
     }
+
+    // Build SOA float gradient tables for NEON-vectorized 4-channel access.
+    // gradX4_[idx] = {ch0_x, ch1_x, ch2_x, ch3_x} as float.
+    constexpr int kTableSize = kBLen + kBLenPlus2;
+    for (int idx = 0; idx < kTableSize; ++idx) {
+      for (int ch = 0; ch < 4; ++ch) {
+        gradX4_[idx][ch] = static_cast<float>(gradient_[ch][idx][0]);
+        gradY4_[idx][ch] = static_cast<float>(gradient_[ch][idx][1]);
+      }
+    }
   }
 
   static long random(long seed) {  // NOLINT
@@ -160,6 +308,7 @@ private:
   }
 
   static double sCurve(double t) { return t * t * (3.0 - 2.0 * t); }
+  static float sCurveF(float t) { return t * t * (3.0f - 2.0f * t); }
 
   static double lerp(double t, double a, double b) { return a + t * (b - a); }
 
@@ -167,6 +316,9 @@ private:
 
   int latticeSelector_[kBLen + kBLenPlus2] = {};
   double gradient_[4][kBLen + kBLenPlus2][2] = {};
+  // SOA float gradient tables: gradX4_[idx][ch], gradY4_[idx][ch] for NEON 4-channel loads.
+  alignas(16) float gradX4_[kBLen + kBLenPlus2][4] = {};
+  alignas(16) float gradY4_[kBLen + kBLenPlus2][4] = {};
 };
 
 }  // namespace
@@ -233,28 +385,26 @@ void turbulence(Pixmap& dst, const TurbulenceParams& params) {
         StitchInfo stitch;
         StitchInfo* stitchPtr = nullptr;
         if (params.stitchTiles) {
-          stitch.width =
-              static_cast<int>(static_cast<double>(params.tileWidth) * freqX);
-          stitch.height =
-              static_cast<int>(static_cast<double>(params.tileHeight) * freqY);
-          if (stitch.width < 1) {
-            stitch.width = 1;
-          }
-          if (stitch.height < 1) {
-            stitch.height = 1;
-          }
+          stitch.width = static_cast<int>(static_cast<double>(params.tileWidth) * freqX);
+          stitch.height = static_cast<int>(static_cast<double>(params.tileHeight) * freqY);
+          if (stitch.width < 1) stitch.width = 1;
+          if (stitch.height < 1) stitch.height = 1;
           stitch.wrapX = stitch.width + kPerlinN;
           stitch.wrapY = stitch.height + kPerlinN;
           stitchPtr = &stitch;
         }
 
-        for (int channel = 0; channel < 4; channel++) {
-          const double n = gen.noise2(channel, nx, ny, stitchPtr);
+        double noise[4];
+        gen.noise2_4ch(nx, ny, stitchPtr, noise);
 
-          if (params.type == TurbulenceType::FractalNoise) {
-            pixel[channel] += n / ratio;
-          } else {
-            pixel[channel] += std::abs(n) / ratio;
+        const double invRatio = 1.0 / ratio;
+        if (params.type == TurbulenceType::FractalNoise) {
+          for (int c = 0; c < 4; ++c) {
+            pixel[c] += noise[c] * invRatio;
+          }
+        } else {
+          for (int c = 0; c < 4; ++c) {
+            pixel[c] += std::abs(noise[c]) * invRatio;
           }
         }
 
@@ -330,83 +480,85 @@ void turbulence(FloatPixmap& dst, const TurbulenceParams& params) {
   TurbulenceGenerator gen(params.seed);
 
   const int numOctaves = std::min(params.numOctaves, 24);
+  const bool isFractal = (params.type == TurbulenceType::FractalNoise);
+
+  // Pre-convert transform coefficients to float.
+  const float fA = static_cast<float>(params.filterFromDeviceA);
+  const float fB = static_cast<float>(params.filterFromDeviceB);
+  const float fC = static_cast<float>(params.filterFromDeviceC);
+  const float fD = static_cast<float>(params.filterFromDeviceD);
+  const float baseFreqXf = static_cast<float>(params.baseFrequencyX);
+  const float baseFreqYf = static_cast<float>(params.baseFrequencyY);
 
   auto data = dst.data();
 
   for (int y = 0; y < h; y++) {
+    const float py = static_cast<float>(y);
     for (int x = 0; x < w; x++) {
-      double pixel[4] = {0, 0, 0, 0};
+      float pixel[4] = {0, 0, 0, 0};
 
-      // Convert pixel coordinates to user-space coordinates using the full
-      // inverse transform (handles skew/rotation, not just scale).
-      const double px = static_cast<double>(x);
-      const double py = static_cast<double>(y);
-      const double ux = params.filterFromDeviceA * px + params.filterFromDeviceB * py;
-      const double uy = params.filterFromDeviceC * px + params.filterFromDeviceD * py;
+      const float px = static_cast<float>(x);
+      const float ux = fA * px + fB * py;
+      const float uy = fC * px + fD * py;
 
-      double freqX = params.baseFrequencyX;
-      double freqY = params.baseFrequencyY;
-      double ratio = 1.0;
+      float freqX = baseFreqXf;
+      float freqY = baseFreqYf;
+      float invRatio = 1.0f;
 
       for (int octave = 0; octave < numOctaves; octave++) {
-        const double nx = ux * freqX;
-        const double ny = uy * freqY;
+        const float nx = ux * freqX;
+        const float ny = uy * freqY;
 
         StitchInfo stitch;
         StitchInfo* stitchPtr = nullptr;
         if (params.stitchTiles) {
-          stitch.width = static_cast<int>(static_cast<double>(params.tileWidth) * freqX);
-          stitch.height = static_cast<int>(static_cast<double>(params.tileHeight) * freqY);
-          if (stitch.width < 1) {
-            stitch.width = 1;
-          }
-          if (stitch.height < 1) {
-            stitch.height = 1;
-          }
+          stitch.width = static_cast<int>(static_cast<float>(params.tileWidth) * freqX);
+          stitch.height = static_cast<int>(static_cast<float>(params.tileHeight) * freqY);
+          if (stitch.width < 1) stitch.width = 1;
+          if (stitch.height < 1) stitch.height = 1;
           stitch.wrapX = stitch.width + kPerlinN;
           stitch.wrapY = stitch.height + kPerlinN;
           stitchPtr = &stitch;
         }
 
-        for (int channel = 0; channel < 4; channel++) {
-          const double n = gen.noise2(channel, nx, ny, stitchPtr);
+        float noise[4];
+        gen.noise2_4ch_f(nx, ny, stitchPtr, noise);
 
-          if (params.type == TurbulenceType::FractalNoise) {
-            pixel[channel] += n / ratio;
-          } else {
-            pixel[channel] += std::abs(n) / ratio;
+        if (isFractal) {
+          for (int c = 0; c < 4; ++c) {
+            pixel[c] += noise[c] * invRatio;
+          }
+        } else {
+          for (int c = 0; c < 4; ++c) {
+            pixel[c] += std::abs(noise[c]) * invRatio;
           }
         }
 
-        freqX *= 2.0;
-        freqY *= 2.0;
-        ratio *= 2.0;
+        freqX *= 2.0f;
+        freqY *= 2.0f;
+        invRatio *= 0.5f;
       }
 
       // Map noise to [0,1] values:
       // fractalNoise: (sum + 1) / 2
       // turbulence: sum (already [0, 1])
       float rgba[4];
-      for (int c = 0; c < 4; c++) {
-        double val;
-        if (params.type == TurbulenceType::FractalNoise) {
-          val = (pixel[c] + 1.0) / 2.0;
-        } else {
-          val = pixel[c];
+      if (isFractal) {
+        for (int c = 0; c < 4; c++) {
+          rgba[c] = std::clamp((pixel[c] + 1.0f) * 0.5f, 0.0f, 1.0f);
         }
-        rgba[c] = static_cast<float>(std::clamp(val, 0.0, 1.0));
+      } else {
+        for (int c = 0; c < 4; c++) {
+          rgba[c] = std::clamp(pixel[c], 0.0f, 1.0f);
+        }
       }
 
       // Output is unpremultiplied in resvg, but our pixmaps are premultiplied.
       const float a = rgba[3];
-      const float r = rgba[0] * a;
-      const float g = rgba[1] * a;
-      const float b = rgba[2] * a;
-
       const int off = (y * w + x) * 4;
-      data[off + 0] = r;
-      data[off + 1] = g;
-      data[off + 2] = b;
+      data[off + 0] = rgba[0] * a;
+      data[off + 1] = rgba[1] * a;
+      data[off + 2] = rgba[2] * a;
       data[off + 3] = a;
     }
   }

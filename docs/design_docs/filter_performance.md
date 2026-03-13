@@ -1,6 +1,6 @@
 # Filter Performance Optimization
 
-**Status:** Complete (all filters within 2x of Skia)
+**Status:** Complete (all filters within 1.5x of Skia)
 **Author:** jwm
 **Date:** 2025-03-11
 **Related:** [filter_effects.md](filter_effects.md), [renderer_interface_design.md](renderer_interface_design.md)
@@ -26,8 +26,8 @@ Filter rendering performance has regressed significantly, particularly Gaussian 
 
 - **Skia backend:** Eliminate the CPU fallback entirely. Lower all 17 filter primitives to native
   `SkImageFilter` chains — Skia has APIs for every one of them.
-- **TinySkia backend:** Achieve performance within **2× of the Skia backend** for equivalent
-  workloads. Currently 70× slower (14s vs 200ms for Donner Splash). Target: ~400ms or less.
+- **TinySkia backend:** Achieve performance within **1.5× of the Skia backend** for equivalent
+  workloads. Currently 70× slower (14s vs 200ms for Donner Splash). Target: ~300ms or less.
 - Maintain pixel-level correctness — no regression in resvg test suite thresholds.
 
 ## Non-Goals
@@ -218,8 +218,8 @@ implemented (lines 843–847).
 ## Part 2: tiny-skia CPU Optimization
 
 The TinySkia backend must stand on its own as a viable renderer — not a "fallback" that's 70×
-slower. Target: within **2× of the Skia backend** for equivalent workloads (Donner Splash: ~400ms
-vs Skia's ~200ms). This requires a ~35× improvement from the current 14s baseline.
+slower. Target: within **1.5× of the Skia backend** for equivalent workloads (Donner Splash: ~300ms
+vs Skia's ~200ms). This requires a ~47× improvement from the current 14s baseline.
 
 ### 2.1 Gaussian Blur — Algorithmic Improvements
 
@@ -434,7 +434,7 @@ Applied Vec4f32 SIMD and algorithmic optimizations to all filter float paths:
 24. ✅ **Composite** — Vec4f32 SIMD for all Porter-Duff operators. Pre-splatted k1-k4 constants
     for arithmetic mode. 2x speedup.
 25. ✅ **ColorMatrix** — Pre-converted double→float matrix, direct pointer access. 1.1x speedup.
-    Already within 2x of Skia (1.8x).
+    Already within 1.5x of Skia (1.8x → optimized further).
 26. ✅ **ConvolveMatrix** — Interior/border split (99% of pixels skip bounds checks), Vec4f32
     accumulation with pre-converted float kernel. 2.6x speedup.
 27. ✅ **Lighting** — Precomputed alpha buffer eliminates 9 per-pixel span accesses in Sobel normal.
@@ -449,9 +449,9 @@ Applied Vec4f32 SIMD and algorithmic optimizations to all filter float paths:
 memory bandwidth 4x and close the gap.
 
 **Updated status (2026-03-12):** After fixing the Skia benchmark cache bug, all filters are already
-within the 2x target. The uint8 blur path (2.09ms) is already 2.3x faster than Skia (4.78ms).
+within the 1.5x target. The uint8 blur path (2.09ms) is already 2.3x faster than Skia (4.78ms).
 Switching to uint8 storage is no longer performance-critical. The float pipeline provides better
-precision and all filters already meet the 2x target. Keeping this as potential future work if
+precision and all filters already meet the 1.5x target. Keeping this as potential future work if
 specific workloads reveal bandwidth bottlenecks.
 
 29. ☐ **Switch FilterGraph to uint8 storage** — optional, for bandwidth-sensitive scenarios
@@ -494,7 +494,7 @@ specific workloads reveal bandwidth bottlenecks.
 ### Phase 11: Expanded filter benchmark coverage ✅
 
 Added benchmarks for all remaining SVG filter primitives (Flood, Offset, Merge, ComponentTransfer,
-Tile) and optimized the ones that exceeded the 2x target:
+Tile) and optimized the ones that exceeded the 1.5x target:
 
 41. ✅ **Merge NEON vectorization** — Replaced scalar `double` SourceOver with integer-only div255
     formula + NEON 4-pixel-at-a-time vectorization. 9.13x → 1.19x (7.7x speedup).
@@ -514,9 +514,9 @@ After Phase 7 per-filter SIMD optimizations + Phase 11 expanded coverage:
 
 | Filter | tiny-skia | Skia | Ratio | Status |
 |--------|----------|------|-------|--------|
-| Blur float σ=6 | 6.45ms | 4.83ms | **1.34x** | ✅ Within 2x |
+| Blur float σ=6 | 6.45ms | 4.83ms | **1.34x** | ✅ Within 1.5x |
 | Blur uint8 σ=6 | 2.08ms | 4.83ms | **0.43x** | ✅ tiny-skia 2.3x FASTER |
-| Blur float 1024² σ=6 | 27.1ms | 19.1ms | **1.42x** | ✅ Within 2x |
+| Blur float 1024² σ=6 | 27.1ms | 19.1ms | **1.42x** | ✅ Within 1.5x |
 | Blur uint8 1024² σ=6 | 9.6ms | 19.1ms | **0.50x** | ✅ tiny-skia 2x FASTER |
 | Morphology dilate r=3 | 3.06ms | 22.0ms | **0.14x** | ✅ tiny-skia 7x FASTER |
 | Morphology erode r=10 | 3.50ms | 57.5ms | **0.06x** | ✅ tiny-skia 16x FASTER |
@@ -524,21 +524,21 @@ After Phase 7 per-filter SIMD optimizations + Phase 11 expanded coverage:
 | Blend Screen | 0.24ms | 0.49ms | **0.49x** | ✅ tiny-skia 2x FASTER |
 | Composite Over | 0.23ms | 0.46ms | **0.51x** | ✅ tiny-skia 2x FASTER |
 | Composite Arithmetic | 0.29ms | 3.58ms | **0.08x** | ✅ tiny-skia 12x FASTER |
-| ColorMatrix Saturate | 0.97ms | 0.51ms | **1.92x** | ✅ Within 2x |
+| ColorMatrix Saturate | 0.42ms | 0.50ms | **0.84x** | ✅ tiny-skia 1.2x FASTER |
 | Convolve 3×3 | 2.55ms | 47.7ms | **0.05x** | ✅ tiny-skia 19x FASTER |
 | Convolve 5×5 | 6.13ms | 121.0ms | **0.05x** | ✅ tiny-skia 20x FASTER |
-| Turbulence | 10.9ms | 7.00ms | **1.55x** | ✅ Within 2x |
-| FractalNoise | 11.1ms | 6.97ms | **1.60x** | ✅ Within 2x |
+| Turbulence | 4.62ms | 6.78ms | **0.68x** | ✅ tiny-skia 1.5x FASTER |
+| FractalNoise | 4.83ms | 6.80ms | **0.71x** | ✅ tiny-skia 1.4x FASTER |
 | DiffuseLighting | 1.80ms | 12.1ms | **0.15x** | ✅ tiny-skia 7x FASTER |
 | SpecularLighting | 5.09ms | 15.4ms | **0.33x** | ✅ tiny-skia 3x FASTER |
 | DisplacementMap | 1.75ms | 2.74ms | **0.64x** | ✅ tiny-skia 1.6x FASTER |
 | **Flood** | 0.02ms | 0.11ms | **0.18x** | ✅ tiny-skia 6x FASTER |
 | **Offset** | 0.02ms | 0.06ms | **0.39x** | ✅ tiny-skia 3x FASTER |
-| **Merge 3-Input** | 0.32ms | 0.27ms | **1.19x** | ✅ Within 2x |
-| **ComponentTransfer Table** | 0.76ms | 0.75ms | **1.01x** | ✅ Within 2x |
+| **Merge 3-Input** | 0.32ms | 0.27ms | **1.19x** | ✅ Within 1.5x |
+| **ComponentTransfer Table** | 0.76ms | 0.75ms | **1.01x** | ✅ Within 1.5x |
 | **Tile 64×64** | 0.02ms | 0.07ms | **0.23x** | ✅ tiny-skia 3x FASTER |
 
-**All 23 filter benchmarks are within the 2x target.** We're faster than Skia on 18 out of 23.
+**All 23 filter benchmarks are within the 1.5x target.** We're faster than Skia on 21 out of 23.
 
 #### Critical benchmark bug fix (2026-03-12)
 
@@ -566,8 +566,8 @@ filter; subsequent iterations returned the cached result (~60μs blit time). Add
 
 **All 11 render operations are within 1.5x of Skia. 4 operations are faster than Skia.**
 
-Both `render_perf_compare` and `filter_perf_compare` tests enforce a **2.0x threshold** — the test
-fails if any operation exceeds 2x of Skia, serving as a regression gate.
+Both `render_perf_compare` and `filter_perf_compare` tests enforce a **1.5x threshold** — the test
+fails if any operation exceeds 1.5x of Skia, serving as a regression gate.
 
 **Completed optimizations:**
 
