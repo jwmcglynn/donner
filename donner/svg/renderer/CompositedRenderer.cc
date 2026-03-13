@@ -1,9 +1,9 @@
 #include "donner/svg/renderer/CompositedRenderer.h"
 
 #include <cassert>
-#include <iostream>
-
 #include <cmath>
+#include <cstring>
+#include <iostream>
 
 #include "donner/svg/components/LayerMembershipComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
