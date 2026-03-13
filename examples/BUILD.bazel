@@ -25,3 +25,19 @@ donner_cc_binary(
         "@donner",
     ],
 )
+
+donner_cc_binary(
+    name = "svg_animation",
+    srcs = ["svg_animation.cc"],
+    deps = [
+        "@donner",
+    ],
+)
+
+donner_cc_binary(
+    name = "svg_interactivity",
+    srcs = ["svg_interactivity.cc"],
+    deps = [
+        "@donner",
+    ],
+)

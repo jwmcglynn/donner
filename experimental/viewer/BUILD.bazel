@@ -1,21 +1,39 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 
+_VIEWER_COMPATIBLE_WITH = select({
+    "//build_defs:gui_supported": [
+        "@platforms//os:macos",
+    ],
+    "//conditions:default": [
+        "@platforms//:incompatible",
+    ],
+})
+
+_VIEWER_DEPS = [
+    "@donner",
+    "@donner//donner/base:failure_signal_handler",
+    "@donner//third_party/glad",
+    "@glfw",
+    "@imgui",
+]
+
 cc_binary(
     name = "svg_viewer",
     srcs = ["svg_viewer.cc"],
-    target_compatible_with = select({
-        "//build_defs:gui_supported": [
-            "@platforms//os:macos",
-        ],
-        "//conditions:default": [
-            "@platforms//:incompatible",
-        ],
-    }),
-    deps = [
-        "@donner",
-        "@donner//donner/base:failure_signal_handler",
-        "@donner//third_party/glad",
-        "@glfw",
-        "@imgui",
-    ],
+    target_compatible_with = _VIEWER_COMPATIBLE_WITH,
+    deps = _VIEWER_DEPS,
+)
+
+cc_binary(
+    name = "svg_animation_viewer",
+    srcs = ["svg_animation_viewer.cc"],
+    target_compatible_with = _VIEWER_COMPATIBLE_WITH,
+    deps = _VIEWER_DEPS,
+)
+
+cc_binary(
+    name = "svg_interactivity_viewer",
+    srcs = ["svg_interactivity_viewer.cc"],
+    target_compatible_with = _VIEWER_COMPATIBLE_WITH,
+    deps = _VIEWER_DEPS,
 )
