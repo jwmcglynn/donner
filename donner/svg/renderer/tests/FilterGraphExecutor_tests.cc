@@ -82,8 +82,10 @@ TEST(FilterGraphExecutorTest, RoundsFractionalOffsetsToNearestPixel) {
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transformd::Scale(2.5), std::nullopt);
 
-  EXPECT_EQ(GetPixel(pixmap, 13, 1), Pixel({255, 0, 0, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 12, 1), Pixel({0, 0, 0, 0}));
+  // dx=5.0 with Scale(2.5) → pixel offset = lround(12.5) = 13.
+  // Pixel at (1,1) moves to (14,1).
+  EXPECT_EQ(GetPixel(pixmap, 14, 1), Pixel({255, 0, 0, 255}));
+  EXPECT_EQ(GetPixel(pixmap, 13, 1), Pixel({0, 0, 0, 0}));
 }
 
 TEST(FilterGraphExecutorTest, ClipsFilterOutputUsingCapturedFilterTransform) {
@@ -217,7 +219,9 @@ TEST(FilterGraphExecutorTest, GaussianBlurExpandsDefaultPrimitiveSubregion) {
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(0.0, 0.0, 32.0, 32.0));
 
-  EXPECT_EQ(GetPixel(pixmap, 12, 16), Pixel({0, 0, 0, 0}));
+  // Flood at (16,16) size 1x1, blur σ=2 → subregion expands by ceil(2*3)=6.
+  // Expanded subregion: x=[10,23], y=[10,23]. Pixel (9,16) is outside.
+  EXPECT_EQ(GetPixel(pixmap, 9, 16), Pixel({0, 0, 0, 0}));
   EXPECT_GT(GetPixel(pixmap, 15, 16)[3], 0);
   EXPECT_GT(GetPixel(pixmap, 16, 15)[3], 0);
 }

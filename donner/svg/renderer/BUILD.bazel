@@ -172,8 +172,8 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/svg",
-        "@tiny-skia-cpp//src:tiny_skia_lib_native",
-        "@tiny-skia-cpp//src/tiny_skia/filter",
+        ":tiny_skia_deps",
+        ":tiny_skia_filter_deps",
     ],
 )
 

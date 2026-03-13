@@ -402,7 +402,10 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                    ++i) {
                 sum += primitive.kernelMatrix[i];
               }
-              convolveMatrix.divisor = sum == 0.0 ? 1.0 : sum;
+              // Per SVG spec: if the sum is zero, divisor defaults to 1.
+              // Use a tolerance check because floating-point sums of values like
+              // 0.1*8 + (-0.8) may not be exactly 0.0 due to IEEE 754 representation.
+              convolveMatrix.divisor = std::abs(sum) < 1e-10 ? 1.0 : sum;
             }
             graphNode.primitive = convolveMatrix;
 
