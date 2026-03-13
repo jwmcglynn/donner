@@ -4,6 +4,7 @@
 #include <any>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseError.h"
 #include "donner/base/Vector2.h"
@@ -30,11 +31,35 @@ public:
   void instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings);
 
   /**
-   * Find the first entity that intersects the given point.
+   * Find the first entity that intersects the given point, using spatial acceleration
+   * when the document has enough elements.
    *
    * @param point Point to find the intersecting entity for
    */
   Entity findIntersecting(const Vector2d& point);
+
+  /**
+   * Find all entities that intersect the given point, ordered front-to-back.
+   *
+   * @param point Point to find intersecting entities for
+   */
+  std::vector<Entity> findAllIntersecting(const Vector2d& point);
+
+  /**
+   * Find all entities whose world-space bounds intersect the given rectangle,
+   * ordered front-to-back. Uses the spatial grid for acceleration when available.
+   *
+   * @param rect Rectangle in world coordinates to test intersection against
+   */
+  std::vector<Entity> findIntersectingRect(const Boxd& rect);
+
+  /**
+   * Get the world-space bounding box of an entity (fill bounds only, not including stroke).
+   *
+   * @param entity Entity to get bounds for
+   * @return The world-space AABB, or std::nullopt if the entity has no shape
+   */
+  std::optional<Boxd> getWorldBounds(Entity entity);
 
   /**
    * Invalidate the rendering tree, forcing it to be recreated on the next render.
@@ -65,6 +90,15 @@ public:
   Entity instantiateSubtreeForStandaloneRender(Entity targetEntity, bool verbose);
 
 private:
+  /**
+   * Test whether a single entity is hit by the given point, applying pointer-events rules.
+   *
+   * @param entity Entity to test
+   * @param point Point in world coordinates
+   * @return true if the entity is hit
+   */
+  bool hitTestEntity(Entity entity, const Vector2d& point);
+
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.
    *

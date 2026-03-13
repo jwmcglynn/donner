@@ -632,6 +632,70 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
   return err;
 }
 
+ParseResult<CursorType> ParseCursor(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("auto")) {
+        return CursorType::Auto;
+      } else if (value.equalsLowercase("default")) {
+        return CursorType::Default;
+      } else if (value.equalsLowercase("none")) {
+        return CursorType::None;
+      } else if (value.equalsLowercase("pointer")) {
+        return CursorType::Pointer;
+      } else if (value.equalsLowercase("crosshair")) {
+        return CursorType::Crosshair;
+      } else if (value.equalsLowercase("move")) {
+        return CursorType::Move;
+      } else if (value.equalsLowercase("text")) {
+        return CursorType::Text;
+      } else if (value.equalsLowercase("wait")) {
+        return CursorType::Wait;
+      } else if (value.equalsLowercase("help")) {
+        return CursorType::Help;
+      } else if (value.equalsLowercase("not-allowed")) {
+        return CursorType::NotAllowed;
+      } else if (value.equalsLowercase("grab")) {
+        return CursorType::Grab;
+      } else if (value.equalsLowercase("grabbing")) {
+        return CursorType::Grabbing;
+      } else if (value.equalsLowercase("n-resize")) {
+        return CursorType::NResize;
+      } else if (value.equalsLowercase("e-resize")) {
+        return CursorType::EResize;
+      } else if (value.equalsLowercase("s-resize")) {
+        return CursorType::SResize;
+      } else if (value.equalsLowercase("w-resize")) {
+        return CursorType::WResize;
+      } else if (value.equalsLowercase("ne-resize")) {
+        return CursorType::NEResize;
+      } else if (value.equalsLowercase("nw-resize")) {
+        return CursorType::NWResize;
+      } else if (value.equalsLowercase("se-resize")) {
+        return CursorType::SEResize;
+      } else if (value.equalsLowercase("sw-resize")) {
+        return CursorType::SWResize;
+      } else if (value.equalsLowercase("col-resize")) {
+        return CursorType::ColResize;
+      } else if (value.equalsLowercase("row-resize")) {
+        return CursorType::RowResize;
+      } else if (value.equalsLowercase("zoom-in")) {
+        return CursorType::ZoomIn;
+      } else if (value.equalsLowercase("zoom-out")) {
+        return CursorType::ZoomOut;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid cursor value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
 constexpr std::array<std::pair<std::string_view, bool>, 70> kValidPresentationAttributeEntries{{
@@ -1042,6 +1106,15 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                          return ParsePointerEvents(params.components());
                        },
                        &registry.pointerEvents);
+                 }},  //
+                {"cursor",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseCursor(params.components());
+                       },
+                       &registry.cursor);
                  }},  //
                 {"marker-start",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

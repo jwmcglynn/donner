@@ -8,6 +8,7 @@
 #include "donner/css/Declaration.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipRule.h"
+#include "donner/svg/core/CursorType.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/FillRule.h"
 #include "donner/svg/core/Overflow.h"
@@ -96,6 +97,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `mask` | \ref mask | `none` |
  * | `filter` | \ref filter | `none` |
  * | `pointer-events` | \ref pointerEvents | `auto` |
+ * | `cursor` | \ref cursor | `auto` |
  * | `marker-start` | \ref markerStart | `none` |
  * | `marker-mid` | \ref markerMid | `none` |
  * | `marker-end` | \ref markerEnd | `none` |
@@ -242,6 +244,11 @@ public:
       "pointer-events",
       []() -> std::optional<PointerEvents> { return PointerEvents::VisiblePainted; }};
 
+  /// `cursor` property, which defines the mouse cursor to display when hovering over the element.
+  /// Defaults to \ref CursorType::Auto. Inherited.
+  Property<CursorType, PropertyCascade::Inherit> cursor{
+      "cursor", []() -> std::optional<CursorType> { return CursorType::Auto; }};
+
   //
   // Markers
   //
@@ -315,7 +322,7 @@ public:
                                  fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
                                  strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
-                                 markerStart, markerMid, markerEnd, fontFamily, fontSize);
+                                 cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize);
   }
 
   /**

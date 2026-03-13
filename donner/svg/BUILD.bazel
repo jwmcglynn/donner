@@ -144,6 +144,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/svg/components",
+        "//donner/svg/components:event_system",
         "//donner/svg/components/animation:components",
         "//donner/svg/core",
         "//donner/svg/parser:parser_core",

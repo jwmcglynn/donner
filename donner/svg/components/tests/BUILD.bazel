@@ -1,0 +1,25 @@
+load("//build_defs:rules.bzl", "donner_cc_test")
+
+donner_cc_test(
+    name = "event_system_tests",
+    srcs = [
+        "EventSystem_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/components:event_system",
+        "//donner/base/xml/components",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "spatial_grid_tests",
+    srcs = [
+        "SpatialGrid_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/components:spatial_grid",
+        "//donner/svg/components:components",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

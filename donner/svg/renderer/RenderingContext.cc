@@ -42,6 +42,7 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/components/SpatialGrid.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
@@ -573,6 +574,42 @@ void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranch
   }
 }
 
+/// Configuration for hit-testing based on the pointer-events property.
+struct HitTestConfig {
+  bool testFill;              ///< Whether to test fill intersection.
+  bool testStroke;            ///< Whether to test stroke intersection.
+  bool requireVisible;        ///< Whether element must be visible.
+  bool requirePaintedFill;    ///< Whether fill must be non-none.
+  bool requirePaintedStroke;  ///< Whether stroke must be non-none.
+};
+
+/// Returns the hit-test configuration for a given PointerEvents value.
+HitTestConfig configFromPointerEvents(PointerEvents pe) {
+  switch (pe) {
+    case PointerEvents::None:
+      return {false, false, false, false, false};  // Should be filtered before this call.
+    case PointerEvents::BoundingBox:
+      return {false, false, false, false, false};  // Handled separately.
+    case PointerEvents::VisiblePainted:
+      return {true, true, true, true, true};
+    case PointerEvents::VisibleFill:
+      return {true, false, true, false, false};
+    case PointerEvents::VisibleStroke:
+      return {false, true, true, false, false};
+    case PointerEvents::Visible:
+      return {true, true, true, false, false};
+    case PointerEvents::Painted:
+      return {true, true, false, true, true};
+    case PointerEvents::Fill:
+      return {true, false, false, false, false};
+    case PointerEvents::Stroke:
+      return {false, true, false, false, false};
+    case PointerEvents::All:
+      return {true, true, false, false, false};
+  }
+  UTILS_UNREACHABLE();
+}
+
 }  // namespace
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
@@ -596,57 +633,177 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
   instantiateRenderTreeWithPrecomputedTree(verbose);
 }
 
+bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (!instance) {
+    return false;
+  }
+
+  const ComputedStyleComponent& style =
+      StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
+  const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
+
+  if (pointerEvents == PointerEvents::None) {
+    return false;
+  }
+
+  const HitTestConfig config = configFromPointerEvents(pointerEvents);
+
+  // Check visibility requirement.
+  if (config.requireVisible && !instance->visible) {
+    return false;
+  }
+
+  const bool hasFillPaint = style.properties->fill.getRequired() != PaintServer::None();
+  const bool hasStrokePaint = style.properties->stroke.getRequired() != PaintServer::None();
+  const double strokeWidth =
+      hasStrokePaint ? style.properties->strokeWidth.getRequired().value : 0.0;
+
+  if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
+      bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
+    if (pointerEvents == PointerEvents::BoundingBox) {
+      return true;
+    }
+
+    const Vector2d pointInLocal =
+        LayoutSystem()
+            .getEntityFromWorldTransform(EntityHandle(registry_, entity))
+            .inverse()
+            .transformPosition(point);
+
+    // Test fill intersection.
+    if (config.testFill) {
+      const bool skipBecauseNotPainted = config.requirePaintedFill && !hasFillPaint;
+      if (!skipBecauseNotPainted &&
+          ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
+                                           style.properties->fillRule.getRequired())) {
+        return true;
+      }
+    }
+
+    // Test stroke intersection.
+    if (config.testStroke) {
+      const bool skipBecauseNotPainted = config.requirePaintedStroke && !hasStrokePaint;
+      if (!skipBecauseNotPainted &&
+          ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity), pointInLocal,
+                                             strokeWidth)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 Entity RenderingContext::findIntersecting(const Vector2d& point) {
   instantiateRenderTree(false, nullptr);
 
-  auto view = registry_.view<RenderingInstanceComponent>();
+  // Try using the spatial grid for accelerated lookup.
+  SpatialGrid grid;
+  grid.rebuild(registry_);
 
-  // Iterate in reverse order so that the last rendered element is tested first.
-  for (auto it = view.rbegin(); it != view.rend(); ++it) {
-    auto entity = *it;
-
-    // Skip if this shape doesn't respond to pointer events.
-    const ComputedStyleComponent& style =
-        StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
-    const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
-
-    // TODO(jwmcglynn): Handle different PointerEvents cases.
-    if (pointerEvents == PointerEvents::None) {
-      continue;
-    }
-
-    const bool matchFill = style.properties->fill.getRequired() != PaintServer::None();
-    const bool matchStroke = style.properties->stroke.getRequired() != PaintServer::None();
-    const double strokeWidth =
-        matchStroke ? style.properties->strokeWidth.getRequired().value : 0.0;
-
-    if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
-        bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
-      if (pointerEvents == PointerEvents::BoundingBox) {
+  if (grid.isBuilt()) {
+    // Use grid to narrow candidates, already sorted front-to-back.
+    const auto candidates = grid.query(point);
+    for (Entity entity : candidates) {
+      if (hitTestEntity(entity, point)) {
         return entity;
-      } else {
-        const Vector2d pointInLocal =
-            LayoutSystem()
-                .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-                .inverse()
-                .transformPosition(point);
-
-        // Match the path.
-        if (matchFill &&
-            ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                             style.properties->fillRule.getRequired())) {
-          return entity;
-        }
-
-        if (matchStroke && ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity),
-                                                              pointInLocal, strokeWidth)) {
-          return entity;
-        }
+      }
+    }
+  } else {
+    // Fall back to brute-force reverse scan for small documents.
+    auto view = registry_.view<RenderingInstanceComponent>();
+    for (auto it = view.rbegin(); it != view.rend(); ++it) {
+      if (hitTestEntity(*it, point)) {
+        return *it;
       }
     }
   }
 
   return entt::null;
+}
+
+std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point) {
+  instantiateRenderTree(false, nullptr);
+
+  std::vector<Entity> results;
+
+  SpatialGrid grid;
+  grid.rebuild(registry_);
+
+  if (grid.isBuilt()) {
+    const auto candidates = grid.query(point);
+    for (Entity entity : candidates) {
+      if (hitTestEntity(entity, point)) {
+        results.push_back(entity);
+      }
+    }
+  } else {
+    auto view = registry_.view<RenderingInstanceComponent>();
+    for (auto it = view.rbegin(); it != view.rend(); ++it) {
+      if (hitTestEntity(*it, point)) {
+        results.push_back(*it);
+      }
+    }
+  }
+
+  return results;
+}
+
+std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
+  instantiateRenderTree(false, nullptr);
+
+  std::vector<Entity> results;
+
+  SpatialGrid grid;
+  grid.rebuild(registry_);
+
+  if (grid.isBuilt()) {
+    const auto candidates = grid.queryRect(rect);
+    for (Entity entity : candidates) {
+      // For rect queries, check that the entity's AABB actually overlaps the query rect.
+      const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+      if (!instance || instance->dataEntity == entt::null) {
+        continue;
+      }
+
+      const auto bounds =
+          ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
+      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
+              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
+        results.push_back(entity);
+      }
+    }
+  } else {
+    // Brute-force scan in reverse draw order.
+    auto view = registry_.view<RenderingInstanceComponent>();
+    for (auto it = view.rbegin(); it != view.rend(); ++it) {
+      const auto& instance = view.get<RenderingInstanceComponent>(*it);
+      if (instance.dataEntity == entt::null) {
+        continue;
+      }
+
+      const auto bounds =
+          ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
+      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
+              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
+        results.push_back(*it);
+      }
+    }
+  }
+
+  return results;
+}
+
+std::optional<Boxd> RenderingContext::getWorldBounds(Entity entity) {
+  instantiateRenderTree(false, nullptr);
+
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (!instance || instance->dataEntity == entt::null) {
+    return std::nullopt;
+  }
+
+  return ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
 }
 
 void RenderingContext::invalidateRenderTree() {
