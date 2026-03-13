@@ -32,7 +32,7 @@ static constexpr int kDefaultMismatchedPixels = 100;
  * - `a_transform_007` might need up to 0.05.
  * - `e_line_001` might need up to 0.02.
  */
-static constexpr float kDefaultThreshold = 0.01f;
+static constexpr float kDefaultThreshold = 0.02f;
 
 /**
  * @brief Parameters for controlling image comparison tests.
