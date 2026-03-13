@@ -121,18 +121,6 @@ std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallba
 }
 
 /**
- * Parse special property attributes, currently used for `transform`.
- *
- * @param params Parameters for the property parse function.
- * @param name Name of the attribute to parse.
- * @param type Type of the element, if known.
- * @param handle Entity handle of the element, if known.
- */
-ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::string_view name,
-                                         std::optional<ElementType> type = std::nullopt,
-                                         EntityHandle handle = EntityHandle());
-
-/**
  * If the components contain only a single ident, returns an RcString for that ident's contents.
  *
  * @param components Component values, which should already be trimmed.

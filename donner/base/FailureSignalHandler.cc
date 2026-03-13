@@ -10,6 +10,7 @@
 
 #include <array>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string_view>

@@ -9,9 +9,13 @@
 #include "donner/base/SmallVector.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
+#include "donner/svg/parser/TransformParser.h"
+#include "donner/svg/properties/PresentationAttributeParsing.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg {
@@ -1259,6 +1263,46 @@ void PropertyRegistry::parseStyle(std::string_view str) {
     std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
   }
 }
+
+namespace {
+
+/// Parse special property attributes that are element-specific, such as `transform` and
+/// presentation attributes that are dispatched per element type.
+ParseResult<bool> ParseSpecialAttributes(parser::PropertyParseFnParams& params,
+                                         std::string_view name, std::optional<ElementType> type,
+                                         EntityHandle handle) {
+  if (StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
+    auto& transform = handle.get_or_emplace<components::TransformComponent>();
+    auto maybeError = parser::Parse(
+        params,
+        [](const parser::PropertyParseFnParams& params) {
+          if (const std::string_view* str =
+                  std::get_if<std::string_view>(&params.valueOrComponents)) {
+            return parser::TransformParser::Parse(*str).map<CssTransform>(
+                [](const Transformd& transform) { return CssTransform(transform); });
+          } else {
+            return parser::CssTransformParser::Parse(params.components());
+          }
+        },
+        &transform.transform);
+    if (maybeError) {
+      return std::move(maybeError.value());
+    }
+
+    return true;
+  }
+
+  if (!type.has_value()) {
+    // Stop processing if there is not an element type.
+    return false;
+  }
+
+  return ToConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
+    return parser::ParsePresentationAttribute<elementType()>(handle, name, params);
+  });
+}
+
+}  // namespace
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
                                                                std::string_view value,
