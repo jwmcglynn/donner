@@ -131,7 +131,6 @@ void displacementMap(const FloatPixmap& src, const FloatPixmap& map, FloatPixmap
   const float fscale = static_cast<float>(scale);
   const int xIdx = static_cast<int>(xCh);
   const int yIdx = static_cast<int>(yCh);
-  const int mapW = map.width();
   const bool xIsAlpha = (xCh == DisplacementChannel::A);
   const bool yIsAlpha = (yCh == DisplacementChannel::A);
 

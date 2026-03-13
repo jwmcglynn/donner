@@ -68,6 +68,14 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
           double pr, pg, pb, pa;
           fetchPixel(srcData, w, h, srcX, srcY, params.edgeMode, pr, pg, pb, pa);
 
+          if (params.preserveAlpha && pa > 0.0) {
+            // Per SVG spec: when preserveAlpha=true, convolve unpremultiplied color values.
+            const double invA = 1.0 / pa;
+            pr *= invA;
+            pg *= invA;
+            pb *= invA;
+          }
+
           sumR += weight * pr;
           sumG += weight * pg;
           sumB += weight * pb;
@@ -75,26 +83,27 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
         }
       }
 
-      // Per spec: bias is multiplied by the source alpha at (x,y).
-      // The formula is: result = sum/divisor + bias * ALPHA(x,y)
       const int centerIdx = (y * w + x) * 4;
       const double srcAlpha = srcData[centerIdx + 3] / 255.0;
 
-      // The convolution operates on premultiplied values.
-      double outR = sumR * invDivisor + params.bias * srcAlpha;
-      double outG = sumG * invDivisor + params.bias * srcAlpha;
-      double outB = sumB * invDivisor + params.bias * srcAlpha;
-      double outA = sumA * invDivisor + params.bias * srcAlpha;
-
+      double outR, outG, outB, outA;
       if (params.preserveAlpha) {
+        // preserveAlpha: convolution on unpremultiplied RGB, bias is unscaled, then re-premultiply.
+        outR = std::clamp(sumR * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
+        outG = std::clamp(sumG * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
+        outB = std::clamp(sumB * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
+      } else {
+        // Standard: convolution on premultiplied RGBA, bias scaled by source alpha.
+        outR = sumR * invDivisor + params.bias * srcAlpha;
+        outG = sumG * invDivisor + params.bias * srcAlpha;
+        outB = sumB * invDivisor + params.bias * srcAlpha;
+        outA = sumA * invDivisor + params.bias * srcAlpha;
+        outA = std::clamp(outA, 0.0, 1.0);
+        outR = std::clamp(outR, 0.0, outA);
+        outG = std::clamp(outG, 0.0, outA);
+        outB = std::clamp(outB, 0.0, outA);
       }
-
-      // Clamp to [0, 1].
-      outA = std::clamp(outA, 0.0, 1.0);
-      outR = std::clamp(outR, 0.0, outA);
-      outG = std::clamp(outG, 0.0, outA);
-      outB = std::clamp(outB, 0.0, outA);
 
       // Write premultiplied output.
       const int dstIdx = (y * w + x) * 4;
@@ -165,6 +174,13 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
           double pr, pg, pb, pa;
           fetchPixelFloat(srcData, w, h, srcX, srcY, params.edgeMode, pr, pg, pb, pa);
 
+          if (params.preserveAlpha && pa > 0.0) {
+            const double invA = 1.0 / pa;
+            pr *= invA;
+            pg *= invA;
+            pb *= invA;
+          }
+
           sumR += weight * pr;
           sumG += weight * pg;
           sumB += weight * pb;
@@ -175,20 +191,22 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
       const int centerIdx = (y * w + x) * 4;
       const double srcAlpha = srcData[centerIdx + 3];
 
-      double outR = sumR * invDivisor + params.bias * srcAlpha;
-      double outG = sumG * invDivisor + params.bias * srcAlpha;
-      double outB = sumB * invDivisor + params.bias * srcAlpha;
-      double outA = sumA * invDivisor + params.bias * srcAlpha;
-
+      double outR, outG, outB, outA;
       if (params.preserveAlpha) {
+        outR = std::clamp(sumR * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
+        outG = std::clamp(sumG * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
+        outB = std::clamp(sumB * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
+      } else {
+        outR = sumR * invDivisor + params.bias * srcAlpha;
+        outG = sumG * invDivisor + params.bias * srcAlpha;
+        outB = sumB * invDivisor + params.bias * srcAlpha;
+        outA = sumA * invDivisor + params.bias * srcAlpha;
+        outA = std::clamp(outA, 0.0, 1.0);
+        outR = std::clamp(outR, 0.0, outA);
+        outG = std::clamp(outG, 0.0, outA);
+        outB = std::clamp(outB, 0.0, outA);
       }
-
-      // Clamp to [0, 1].
-      outA = std::clamp(outA, 0.0, 1.0);
-      outR = std::clamp(outR, 0.0, outA);
-      outG = std::clamp(outG, 0.0, outA);
-      outB = std::clamp(outB, 0.0, outA);
 
       const int dstIdx = (y * w + x) * 4;
       dstData[dstIdx + 0] = static_cast<float>(outR);

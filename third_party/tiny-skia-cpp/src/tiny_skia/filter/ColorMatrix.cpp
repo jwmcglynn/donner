@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstddef>
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #endif
 
@@ -84,7 +84,7 @@ void colorMatrix(FloatPixmap& pixmap, const std::array<double, 20>& matrix) {
     m[j] = static_cast<float>(matrix[j]);
   }
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
   // Transpose the 5x4 matrix into column vectors for NEON vectorized multiply.
   // Each column contains the coefficients for one input component across all 4 outputs.
   const float32x4_t col_r = {m[0], m[5], m[10], m[15]};   // R coefficients

@@ -21,7 +21,7 @@
 #include "tiny_skia/wide/backend/Aarch64NeonU16x16T.h"
 #include "tiny_skia/wide/backend/X86Avx2FmaU16x16T.h"
 
-#if defined(__aarch64__) && defined(__ARM_NEON)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__aarch64__) && defined(__ARM_NEON)
 #include <arm_neon.h>
 #endif
 
@@ -1411,7 +1411,7 @@ void fusedBilinearPattern(Pipeline& pipeline) {
 
   if (ctx.useNearest) {
     // Nearest-neighbor: direct u8→u16, no float intermediate.
-#if defined(__aarch64__) && defined(__ARM_NEON)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__aarch64__) && defined(__ARM_NEON)
     uint16x8_t rLo, rHi, gLo, gHi, bLo, bHi, aLo, aHi;
 
     // Fast path: unit-stride in x (identity-like transform) — consecutive output pixels

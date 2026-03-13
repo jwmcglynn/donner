@@ -14,7 +14,7 @@
 #include <span>
 #include <vector>
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #endif
 
@@ -42,7 +42,7 @@ class FloatPixmap {
     const std::size_t count = src.size();
     std::vector<float> data(count);
     std::size_t i = 0;
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
     const float32x4_t scale = vdupq_n_f32(1.0f / 255.0f);
     // Process 16 bytes (4 RGBA pixels) at a time.
     for (; i + 16 <= count; i += 16) {
@@ -75,7 +75,7 @@ class FloatPixmap {
     const std::size_t count = data_.size();
     std::vector<std::uint8_t> bytes(count);
     std::size_t i = 0;
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
     const float32x4_t scale = vdupq_n_f32(255.0f);
     const float32x4_t half = vdupq_n_f32(0.5f);
     // Process 16 floats (4 RGBA pixels) at a time.

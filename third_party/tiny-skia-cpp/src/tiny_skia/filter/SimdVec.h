@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #define TINY_SKIA_SIMD_NEON 1
 #elif defined(__SSE2__)

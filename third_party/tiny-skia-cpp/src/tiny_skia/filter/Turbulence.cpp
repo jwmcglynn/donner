@@ -10,7 +10,7 @@
 #include <cstring>
 #include <utility>
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #endif
 
@@ -190,7 +190,7 @@ public:
     const float sx = sCurveF(rx0);
     const float sy = sCurveF(ry0);
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
     // Load 4-channel gradient vectors from SOA tables (contiguous float[4]).
     const float32x4_t gx00 = vld1q_f32(gradX4_[b00]);
     const float32x4_t gy00 = vld1q_f32(gradY4_[b00]);

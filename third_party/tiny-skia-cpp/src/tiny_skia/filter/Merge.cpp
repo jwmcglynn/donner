@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-#ifdef __ARM_NEON
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__ARM_NEON)
 #include <arm_neon.h>
 #endif
 
@@ -26,7 +26,7 @@ void merge(std::span<const Pixmap* const> layers, Pixmap& dst) {
     const std::size_t byteCount = std::min(src.size(), out.size());
     const std::size_t pixelCount = byteCount / 4;
 
-#ifdef __ARM_NEON
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__ARM_NEON)
     // Process 4 pixels (16 bytes) at a time with NEON.
     std::size_t i = 0;
     const std::size_t simdCount = pixelCount & ~3u;
