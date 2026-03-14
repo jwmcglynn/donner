@@ -212,7 +212,12 @@ void SVGElement::setStyle(std::string_view style) {
 void SVGElement::updateStyle(std::string_view style) {
   components::StyleSystem().updateStyle(handle_, style);
 
+  // TODO(jwmcglynn): Update the style attribute too
+  // handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
+
   markNeedsFullStyleRecompute(handle_);
+  invalidateComputedStyle(handle_);
   invalidateComputedStyleForDescendants(handle_);
 
   markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);

@@ -1,6 +1,44 @@
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
+    name = "event_system",
+    srcs = [
+        "EventSystem.cc",
+    ],
+    hdrs = [
+        "EventListenersComponent.h",
+        "EventSystem.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        ":components_core",
+        "//donner/base",
+        "//donner/base/xml/components",
+        "//donner/svg/core",
+    ],
+)
+
+donner_cc_library(
+    name = "spatial_grid",
+    srcs = [
+        "SpatialGrid.cc",
+    ],
+    hdrs = [
+        "SpatialGrid.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        ":components_core",
+        "//donner/base",
+        "//donner/svg/components/shape:shape_system",
+    ],
+)
+
+donner_cc_library(
     name = "svg_document_context",
     srcs = [
         "SVGDocumentContext.cc",
@@ -26,6 +64,7 @@ donner_cc_library(
         "ClassComponent.h",
         "ComputedClipPathsComponent.h",
         "DirtyFlagsComponent.h",
+        "LayerMembershipComponent.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
         "PathLengthComponent.h",

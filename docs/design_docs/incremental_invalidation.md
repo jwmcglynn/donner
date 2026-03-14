@@ -37,6 +37,8 @@ The following work is explicitly not included in this branch:
 - DOM mutations that affect a single element should not trigger full-document recomputation.
 - Style inheritance invalidation should cascade to descendants but not siblings or ancestors.
 - Layout invalidation (transforms, viewBox, size) should cascade only to the affected subtree.
+- The composited rendering layer system should receive fine-grained dirty notifications,
+  allowing per-layer re-rasterization without full document re-render.
 - Maintain pixel-perfect correctness: incremental output must match full recomputation output.
 
 ## Non-Goals
@@ -86,6 +88,10 @@ The codebase already has per-system invalidation methods, but they're incomplete
 | `LayoutSystem::invalidate(handle)` | Clears cached viewBox/transforms | Doesn't cascade to descendants |
 | `SVGGeometryElement::invalidate()` | Removes `ComputedPathComponent` | Doesn't invalidate paint/render |
 | `RenderingContext::invalidateRenderTree()` | Clears ALL render instances | Nuclear option — no granularity |
+
+The composited renderer (`CompositedRenderer`) already has fine-grained layer dirty tracking
+via `markEntityDirty(Entity)`, `markLayerDirty(uint32_t)`, and `invalidateAnimatedLayers()`.
+This design connects DOM mutations to that existing layer system.
 
 ### Dependency Graph
 
@@ -394,6 +400,11 @@ void SVGElement::appendChild(SVGElement child) {
 void SVGElement::markDirty(uint16_t flags) {
   auto& dirty = handle_.get_or_emplace<DirtyFlagsComponent>();
   dirty.flags |= flags;
+
+  // Notify composited renderer if present
+  if (auto* compositor = registry_.ctx().find<CompositedRenderer*>()) {
+    (*compositor)->markEntityDirty(handle_.entity());
+  }
 }
 
 /// Propagate Style dirty to all descendants (for inherited property changes).
@@ -414,6 +425,32 @@ void SVGElement::propagateWorldTransformDirtyToDescendants() {
   });
 }
 ```
+
+### Integration with Composited Renderer
+
+The composited renderer already tracks per-layer dirty state. The incremental invalidation
+system feeds into it naturally:
+
+```
+DOM mutation
+  └─→ markDirty(flags) on affected entities
+        └─→ CompositedRenderer::markEntityDirty(entity)
+              └─→ LayerMembershipComponent → layer ID
+                    └─→ layer.dirty = true
+
+Next render:
+  └─→ createComputedComponents() — only recomputes dirty entities
+  └─→ CompositedRenderer::renderFrame()
+        └─→ rasterizeLayer() — only dirty layers
+        └─→ composeLayers() — all layers (fast blit)
+```
+
+This means a single-element style change results in:
+1. Recompute style for ~1 entity (or N descendants if inherited)
+2. Re-rasterize ~1 layer
+3. Compose all layers (cheap)
+
+vs. today's: recompute everything, re-rasterize everything.
 
 ### Spatial Index Updates
 
@@ -506,7 +543,17 @@ Complete the incremental pipeline for remaining systems.
 - [ ] Render instance update only for RenderInstance-dirty entities
 - [ ] End-to-end test: DOM mutation → incremental recompute → render → pixel-perfect match
 
-### Phase 6: Spatial Index Incremental Updates
+### Phase 6: Composited Renderer Integration
+
+Connect incremental invalidation to the layer system.
+
+- [ ] `markDirty()` automatically calls `CompositedRenderer::markEntityDirty()` when
+  a compositor is active
+- [ ] Verify: single-element mutation → single dirty layer → single layer re-rasterization
+- [ ] Performance benchmark: measure speedup for single-element mutation in 100/500/1000
+  element documents
+
+### Phase 7: Spatial Index Incremental Updates
 
 Update the spatial grid incrementally instead of rebuilding.
 
@@ -595,6 +642,7 @@ For the common case (k=1, N=1000): ~1000x reduction in style/layout/paint work.
 - **Dirty flag unit tests**: Each mutation type sets the correct flags and propagates
   correctly.
 - **No-change fast path**: Verify that rendering without any mutation skips all recomputation.
+- **Composited integration tests**: Single-element mutation → single dirty layer.
 - **Performance benchmarks**: Measure per-frame time for incremental vs. full recomputation
   across document sizes (100, 500, 1000 elements).
 
