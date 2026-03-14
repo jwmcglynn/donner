@@ -78,6 +78,17 @@ donner_cc_library(
 )
 
 donner_cc_test(
+    name = "filter_graph_executor_tests",
+    srcs = [
+        "FilterGraphExecutor_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/renderer:filter_graph_executor",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_tests_impl",
     srcs = [
         "RendererAscii_tests.cc",
@@ -202,7 +213,8 @@ donner_cc_test(
         "@resvg-test-suite//:png",
         "@resvg-test-suite//:svg",
     ],
-    shard_count = 16,
+    shard_count = 32,
+    size = "large",
     tags = ["manual"],
     deps = [
         ":image_comparison_test_fixture",
