@@ -3,6 +3,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "core",
     srcs = [
+        "EditablePathSpline.cc",
         "PathSpline.cc",
         "PreserveAspectRatio.cc",
     ],
@@ -12,6 +13,7 @@ cc_library(
         "CssTransform.h",
         "CursorType.h",
         "Display.h",
+        "EditablePathSpline.h",
         "Event.h",
         "FillRule.h",
         "Gradient.h",

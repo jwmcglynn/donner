@@ -22,6 +22,7 @@ donner_cc_test(
         "CursorType_tests.cc",
         "Display_tests.cc",
         "DominantBaseline_tests.cc",
+        "EditablePathSpline_tests.cc",
         "Event_tests.cc",
         "FillRule_tests.cc",
         "Isolation_tests.cc",
