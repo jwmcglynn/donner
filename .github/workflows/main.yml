@@ -34,7 +34,7 @@ jobs:
 
       - name: Test
         run: |
-          bazelisk test --test_output=errors //...
+          bazelisk test --test_output=errors --local_test_jobs=2 //...
 
   macos:
     runs-on: macos-15

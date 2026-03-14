@@ -206,7 +206,8 @@ donner_cc_test(
         "@resvg-test-suite//:png",
         "@resvg-test-suite//:svg",
     ],
-    shard_count = 16,
+    shard_count = 32,
+    size = "large",
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
