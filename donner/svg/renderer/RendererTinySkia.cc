@@ -740,13 +740,6 @@ void RendererTinySkia::popFilterLayer() {
     const int localHeight =
         std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY)));
 
-    if (verbose_) {
-      std::cerr << "[TinySkia::popFilterLayer] TRANSFORMED PATH\n"
-                << "  filterRegion=" << filterRegion << " paddedRegion=" << paddedRegion << "\n"
-                << "  scaleX=" << scaleX << " scaleY=" << scaleY << " localSize=" << localWidth
-                << "x" << localHeight << "\n";
-    }
-
     // Allocate local-raster pixmap.
     tiny_skia::Pixmap localPixmap = createTransparentPixmap(localWidth, localHeight);
     if (localPixmap.width() == 0 || localPixmap.height() == 0) {
@@ -755,11 +748,14 @@ void RendererTinySkia::popFilterLayer() {
 
     {
       // Resample device pixels into local filter coordinates.
+      // Transform chain: device → filter (inverse of deviceFromFilter) → padded origin
+      // (translate) → local raster pixels (scale).
+      // Operator* convention: (A * B)(p) = B(A(p)), so A is applied first.
       const Transformd filterFromDevice = deviceFromFilter.inverse();
       const Transformd deviceToLocal =
-          Transformd::Scale(scaleX, scaleY) *
+          filterFromDevice *
           Transformd::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
-          filterFromDevice;
+          Transformd::Scale(scaleX, scaleY);
 
       {
         tiny_skia::PixmapPaint resamplePaint;
@@ -785,9 +781,12 @@ void RendererTinySkia::popFilterLayer() {
       ClipFilterOutputToRegion(localPixmap, localFilterRegion, localTransform);
 
       // Composite the filtered local raster back to the parent device pixmap.
+      // Transform chain: local raster → filter coords (inverse scale + translate back) → device.
+      // Operator* convention: (A * B)(p) = B(A(p)), so A is applied first.
       const Transformd deviceFromLocal =
-          deviceFromFilter * Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
-          Transformd::Scale(1.0 / scaleX, 1.0 / scaleY);
+          Transformd::Scale(1.0 / scaleX, 1.0 / scaleY) *
+          Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
+          deviceFromFilter;
 
       tiny_skia::PixmapPaint compositePaint;
       compositePaint.opacity = 1.0f;

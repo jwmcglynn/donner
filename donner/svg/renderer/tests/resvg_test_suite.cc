@@ -341,7 +341,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::Skip()},  // huge stdDev=1000, 207K px diff, 70s runtime
             {"e-feGaussianBlur-012.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   40000)},  // Rotated asymmetric blur, transformed path (38884px at 0.02)
+                                   200)},  // Rotated asymmetric blur, transformed path
         })),
     TestNameFromFilename);
 
@@ -505,12 +505,9 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold, 8000)},  // Subregion (7240px at 0.02)
             {"e-filter-019.svg",
              Params::WithThreshold(kDefaultThreshold, 4100)},  // inherited filter blur edge (3700px at 0.02)
-            {"e-filter-026.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   11000)},  // Transformed local-raster blur path (9971px at 0.02)
             {"e-filter-027.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   20000)},  // Skew transform + narrow filter region (18751px at 0.02)
+                                   6000)},  // Skew transform + narrow filter region (5406px at 0.02)
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha
             {"e-filter-034.svg", Params::Skip()},  // UB: in=FillPaint

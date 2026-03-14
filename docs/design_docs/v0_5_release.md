@@ -64,9 +64,9 @@ Root-cause and fix pixel differences to bring thresholds below 100px where possi
     filter-019 (16400→4100), filter-027 (21000→20000), filter-026 (12000→11000),
     feMerge-003 (10500→7000), feImage-007/008 (6600→4500), feImage-009 (18200→13500),
     feImage-010 (18900→14000), feDropShadow-001 (400→300), feDropShadow-002 (200→150).
-  - **Remaining high thresholds**: feGaussianBlur-012 (40000, rotated asymmetric blur),
+  - **Remaining high thresholds**: feGaussianBlur-012 (200, rotated asymmetric blur — fixed),
     feImage-012/021/024 (34000–36000, complex fragment refs), feFlood-008 (18000, OBB transform),
-    filter-011/026/027 (8000–20000, subregion/transform effects).
+    filter-011 (8000, subregion effects), filter-027 (6000, skew transform).
   - Root causes for remaining diffs (all architectural/fundamental, not reducible to <100px
     without major rework):
     - **feImage fragment references** (13 tests, 4K–36K px): 8-bit intermediate buffer for
@@ -256,17 +256,14 @@ architectural uint8 quantization.
   instead of uint8 `Pixmap`. This addresses the 4K–36K px diffs across 13 feImage tests.
   - The large diffs are from structural rendering differences (fragment rendering path), not
     interpolation precision. Requires a float rendering path in the renderer itself.
-- [ ] **Subregion CropRect architecture** — Adopt Skia-style `CropRect` wrapping: run filter
-  operations on expanded regions, then crop the output. This replaces the current mid-pipeline
-  `applySubregionClipping` that zeros pixels before downstream nodes can read them.
-  - For each node, expand the working region by the downstream kernel size.
-  - Apply subregion clipping only to the final node's output.
-  - Expected to fix filter-011 (7K), filter-019 (4K), filter-027 (19K).
-- [ ] **Local-space blur for rotated elements** — When an element has a rotation/skew transform
-  and an asymmetric blur (σX ≠ σY), apply the blur in element-local coordinates before
-  transforming to device space. This addresses feGaussianBlur-012 (39K px).
-  - Detect asymmetric + non-identity transform combinations in the renderer.
-  - Inverse-transform, blur, then re-apply transform.
+- [ ] **Subregion CropRect architecture** — Deferred to post-v0.5. Current approach hard-clips
+  subregion pixels after blur computation; resvg constrains the blur kernel to the subregion.
+  Remaining diffs are moderate (filter-011: 7K, filter-019: 4K, filter-027: 5K) and within
+  thresholds. Full fix requires architectural changes to all 17 filter primitives.
+- [x] **Local-space blur for rotated elements** — Fixed transform composition order in the
+  local-space blur path (row-vector convention: `(A*B)(p) = B(A(p))`). The `deviceToLocal`
+  and `deviceFromLocal` transforms were applying operations in reverse order.
+  - feGaussianBlur-012: 38884 → 116 px, filter-026: 9971 → ~0 px, filter-027: 18751 → 5406 px.
 - [ ] **Verify threshold reductions** — After each fix, re-run the full resvg test suite and
   tighten thresholds. Target: all tests below 1000px diffs where possible.
 
