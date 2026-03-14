@@ -1,9 +1,13 @@
 #pragma once
 /// @file
 
+#include <optional>
+
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/PathSpline.h"
 
 namespace donner::svg::components {
 
@@ -48,6 +52,34 @@ struct ComputedTextComponent {
     Lengthd dy;
     /// Rotation applied to each glyph in the span (degrees).
     double rotateDegrees = 0.0;
+
+    /// Per-character absolute X positions from \c x attribute lists. Indexed by character
+    /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph
+    /// advances naturally from the previous character.
+    std::vector<std::optional<Lengthd>> xList;
+    /// Per-character absolute Y positions from \c y attribute lists.
+    std::vector<std::optional<Lengthd>> yList;
+    /// Per-character relative X offsets from \c dx attribute lists.
+    std::vector<std::optional<Lengthd>> dxList;
+    /// Per-character relative Y offsets from \c dy attribute lists.
+    std::vector<std::optional<Lengthd>> dyList;
+    /// Per-character rotation in degrees from \c rotate attribute lists. Per SVG spec, the
+    /// last value repeats for all subsequent characters beyond the list length.
+    std::vector<double> rotateList;
+
+    /// CSS `baseline-shift` value for this span. Stored as a Lengthd where em units are relative
+    /// to the span's font-size. Positive = shift up (per CSS convention). Resolved to pixels in
+    /// the layout engine.
+    Lengthd baselineShift;
+
+    /// CSS `alignment-baseline` value for this span. When not Auto, overrides the
+    /// dominant-baseline for this specific inline element.
+    DominantBaseline alignmentBaseline = DominantBaseline::Auto;
+
+    /// If set, glyphs in this span are positioned along this path (for \ref xml_textPath).
+    std::optional<PathSpline> pathSpline;
+    /// Start offset along the path (resolved to pixels).
+    double pathStartOffset = 0.0;
   };
 
   // Computed spans with positioning data for rendering.

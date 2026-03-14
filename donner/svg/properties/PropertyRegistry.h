@@ -285,6 +285,28 @@ public:
       "dominant-baseline",
       []() -> std::optional<DominantBaseline> { return DominantBaseline::Auto; }};
 
+  /// `letter-spacing` property, extra spacing between characters. Inherited.
+  /// "normal" maps to 0. Defaults to 0 (normal).
+  Property<Lengthd, PropertyCascade::Inherit> letterSpacing{
+      "letter-spacing", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+
+  /// `word-spacing` property, extra spacing between words (U+0020 space characters). Inherited.
+  /// "normal" maps to 0. Defaults to 0 (normal).
+  Property<Lengthd, PropertyCascade::Inherit> wordSpacing{
+      "word-spacing", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+
+  /// `baseline-shift` property. Shifts the dominant baseline of the element.
+  /// Not inherited. "baseline" = 0, "sub"/"super" map to em-relative offsets.
+  /// Positive = shift up (per CSS). Stored as Lengthd.
+  Property<Lengthd> baselineShift{
+      "baseline-shift", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
+
+  /// `alignment-baseline` property. Specifies how an inline element aligns with its parent's
+  /// baseline. Uses the same enum as dominant-baseline. Not inherited.
+  Property<DominantBaseline> alignmentBaseline{
+      "alignment-baseline",
+      []() -> std::optional<DominantBaseline> { return DominantBaseline::Auto; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;

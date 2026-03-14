@@ -206,6 +206,12 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   params.textDecoration = properties.textDecoration.getRequired();
   params.dominantBaseline = properties.dominantBaseline.getRequired();
 
+  // Resolve letter-spacing and word-spacing to pixels.
+  params.letterSpacingPx = properties.letterSpacing.getRequired().toPixels(
+      params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+  params.wordSpacingPx = properties.wordSpacing.getRequired().toPixels(
+      params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+
   if (textComp) {
     params.textLength = textComp->textLength;
     params.lengthAdjust = textComp->lengthAdjust;

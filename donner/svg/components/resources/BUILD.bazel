@@ -34,7 +34,7 @@ donner_cc_library(
         "SubDocumentCache.h",
     ],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",

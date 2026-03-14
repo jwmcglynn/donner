@@ -185,6 +185,48 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
   return err;
 }
 
+/// Parse "baseline | sub | super | <length> | <percentage>" for baseline-shift.
+/// "sub" and "super" are converted to em-relative values matching typical browser rendering.
+/// Percentages are relative to font-size per SVG spec, converted to em units.
+/// Positive values shift the baseline up (per CSS convention).
+ParseResult<Lengthd> ParseBaselineShift(std::span<const css::ComponentValue> components,
+                                        bool allowUserUnits) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("baseline")) {
+        return Lengthd(0, Lengthd::Unit::None);
+      }
+      if (ident->value.equalsLowercase("sub")) {
+        // Subscript: shift down (~33% of font-size). Negative = down per CSS convention.
+        return Lengthd(-0.33, Lengthd::Unit::Em);
+      }
+      if (ident->value.equalsLowercase("super")) {
+        // Superscript: shift up (~40% of font-size). Positive = up per CSS convention.
+        return Lengthd(0.4, Lengthd::Unit::Em);
+      }
+    }
+    // Check for percentage: convert to em (percentage of font-size per SVG spec).
+    if (const auto* pct = components.front().tryGetToken<css::Token::Percentage>()) {
+      return Lengthd(pct->value / 100.0, Lengthd::Unit::Em);
+    }
+  }
+  return parser::ParseLengthPercentage(components, allowUserUnits);
+}
+
+/// Parse "normal | <length>" for letter-spacing and word-spacing.
+/// "normal" is treated as Lengthd(0).
+ParseResult<Lengthd> ParseSpacingValue(std::span<const css::ComponentValue> components,
+                                       bool allowUserUnits) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("normal")) {
+        return Lengthd(0, Lengthd::Unit::None);
+      }
+    }
+  }
+  return parser::ParseLengthPercentage(components, allowUserUnits);
+}
+
 ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -858,6 +900,42 @@ constexpr auto kProperties =
                          return ParseDominantBaseline(params.components());
                        },
                        &registry.dominantBaseline);
+                 }},  //
+                {"letter-spacing",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseSpacingValue(params.components(), params.allowUserUnits());
+                       },
+                       &registry.letterSpacing);
+                 }},  //
+                {"word-spacing",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseSpacingValue(params.components(), params.allowUserUnits());
+                       },
+                       &registry.wordSpacing);
+                 }},  //
+                {"baseline-shift",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseBaselineShift(params.components(), params.allowUserUnits());
+                       },
+                       &registry.baselineShift);
+                 }},  //
+                {"alignment-baseline",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseDominantBaseline(params.components());
+                       },
+                       &registry.alignmentBaseline);
                  }},  //
                 {"display",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

@@ -260,6 +260,25 @@ public:
   Boxd strokeMiterBounds(double strokeWidth, double miterLimit) const;
 
   /**
+   * Result of sampling the path at a given arc length distance.
+   */
+  struct PointOnPath {
+    Vector2d point;    ///< Position on the path.
+    Vector2d tangent;  ///< Un-normalized tangent vector at the point.
+    double angle;      ///< Tangent angle in radians (atan2).
+    bool valid;        ///< True if the distance was within the path length.
+  };
+
+  /**
+   * Sample the path at a given arc length distance from the start.
+   *
+   * @param distance Arc length distance from the start of the path.
+   * @return PointOnPath with position, tangent, and angle. If distance exceeds path length,
+   *         returns the endpoint with valid=false.
+   */
+  PointOnPath pointAtArcLength(double distance) const;
+
+  /**
    * Get a point on the spline.
    *
    * @param index Index of the command in the spline.
