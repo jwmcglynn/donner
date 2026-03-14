@@ -104,9 +104,11 @@ INSTANTIATE_TEST_SUITE_P(
     Display, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("a-display",  //
                                 {
-                                    {"a-display-005.svg", Params::Skip()},  // Not impl: <tspan>
+                                    {"a-display-005.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
                                     {"a-display-006.svg", Params::Skip()},  // Not impl: <tref>
-                                    {"a-display-009.svg", Params::Skip()},  // Not impl: <tspan>
+                                    {"a-display-009.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
                                 })),
     TestNameFromFilename);
 
@@ -121,11 +123,14 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-fill-010.svg", Params::Skip()},          // UB: rgb(int int int)
             {"a-fill-015.svg", Params::Skip()},          // UB: ICC color
             {"a-fill-027.svg", Params::Skip()},          // Not impl: Fallback with icc-color
-            {"a-fill-031.svg", Params::Skip()},          // Not impl: <text>
-            {"a-fill-032.svg", Params::Skip()},          // Not impl: <text>
-            {"a-fill-033.svg", Params::Skip()},          // Not impl: <pattern>, <text>
+            {"a-fill-031.svg",
+             Params::WithThreshold(kDefaultThreshold, 23000)},  // <text>
+            {"a-fill-032.svg",
+             Params::WithThreshold(kDefaultThreshold, 23000)},  // <text>
+            {"a-fill-033.svg", Params::Skip()},          // Not impl: <pattern> fill on text
             {"a-fill-opacity-004.svg", Params::Skip()},  // Not impl: `fill-opacity` affects pattern
-            {"a-fill-opacity-006.svg", Params::Skip()},  // Not impl: <text>
+            {"a-fill-opacity-006.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
         })),
     TestNameFromFilename);
 
@@ -176,7 +181,8 @@ INSTANTIATE_TEST_SUITE_P(Shape, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-shape",
                                                      {
                                                          {"a-shape-rendering-005.svg",
-                                                          Params::Skip()},  // Not impl: <text>
+                                                          Params::WithThreshold(
+                                                              kDefaultThreshold, 18000)},  // <text>
                                                          {"a-shape-rendering-008.svg",
                                                           Params::Skip()},  // Not impl: <marker>
                                                      })),
@@ -190,9 +196,12 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
-            {"a-stroke-007.svg", Params::Skip()},            // Not impl: <text>
-            {"a-stroke-008.svg", Params::Skip()},            // Not impl: <text>
-            {"a-stroke-009.svg", Params::Skip()},            // Not impl: <text>
+            {"a-stroke-007.svg",
+             Params::WithThreshold(kDefaultThreshold, 20000)},  // <text>
+            {"a-stroke-008.svg",
+             Params::WithThreshold(kDefaultThreshold, 22000)},  // <text>
+            {"a-stroke-009.svg",
+             Params::WithThreshold(kDefaultThreshold, 33000)},  // <text> stroke on complex text
             {"a-stroke-dasharray-005.svg", Params::Skip()},  // Not impl: "font-size"? "em" units
                                                              // (font-size="20" not impl)
             {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
@@ -205,7 +214,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
             {"a-stroke-opacity-004.svg",
              Params::Skip()},  // Not impl: <pattern> / stroke interaction
-            {"a-stroke-opacity-006.svg", Params::Skip()},  // Not impl: <text>
+            {"a-stroke-opacity-006.svg",
+             Params::WithThreshold(kDefaultThreshold, 21000)},  // <text>
             {"a-stroke-width-004.svg", Params::Skip()},    // UB: Nothing should be rendered
         })),
     TestNameFromFilename);
@@ -286,9 +296,12 @@ INSTANTIATE_TEST_SUITE_P(
     Visibility, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("a-visibility",  //
                                 {
-                                    {"a-visibility-003.svg", Params::Skip()},  // Not impl: <tspan>
-                                    {"a-visibility-004.svg", Params::Skip()},  // Not impl: <tspan>
-                                    {"a-visibility-007.svg", Params::Skip()},  // Not impl: <text>
+                                    {"a-visibility-003.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
+                                    {"a-visibility-004.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
+                                    {"a-visibility-007.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
                                 })),
     TestNameFromFilename);
 
@@ -323,11 +336,16 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-clipPath",
         {
-            {"e-clipPath-007.svg", Params::Skip()},  // Not impl: <text>
-            {"e-clipPath-009.svg", Params::Skip()},  // Not impl: <text>
-            {"e-clipPath-010.svg", Params::Skip()},  // Not impl: <text>
-            {"e-clipPath-011.svg", Params::Skip()},  // Not impl: <text>
-            {"e-clipPath-012.svg", Params::Skip()},  // Not impl: <text>
+            {"e-clipPath-007.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+            {"e-clipPath-009.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+            {"e-clipPath-010.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+            {"e-clipPath-011.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+            {"e-clipPath-012.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
             {"e-clipPath-034.svg",
              Params::WithThreshold(kDefaultThreshold, 160)},  // Nested clip-path AA (148px)
             {"e-clipPath-042.svg", Params::Skip()},           // UB: on root `<svg>` without size
@@ -340,7 +358,8 @@ INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-defs",
                                                      {
                                                          {"e-defs-007.svg",
-                                                          Params::Skip()},  // Not impl: <text>
+                                                          Params::WithThreshold(
+                                                              kDefaultThreshold, 18000)},  // <text>
                                                      })),
                          TestNameFromFilename);
 
@@ -674,8 +693,10 @@ INSTANTIATE_TEST_SUITE_P(
         "e-marker",
         {
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
-            {"e-marker-017.svg", Params::Skip()},  // Not impl: `text`
-            {"e-marker-018.svg", Params::Skip()},  // Not impl: `text`
+            {"e-marker-017.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+            {"e-marker-018.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
             {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image
             {"e-marker-022.svg", Params::Skip()},  // BUG: Nested
             {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
@@ -714,7 +735,8 @@ INSTANTIATE_TEST_SUITE_P(
         "e-pattern",
         {
             {"e-pattern-003.svg", Params::Skip()},                    // UB: overflow=visible
-            {"e-pattern-018.svg", Params::Skip()},                    // Not impl: <text>
+            {"e-pattern-018.svg",
+             Params::WithThreshold(kDefaultThreshold, 22000)},  // <text>
             {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},  // Nested pattern AA (768px)
             {"e-pattern-021.svg",
              Params::WithThreshold(0.2f)},  // Larger threshold due to recursive pattern seams.
@@ -897,7 +919,8 @@ INSTANTIATE_TEST_SUITE_P(
                                      Params::WithThreshold(kDefaultThreshold, 2000)},  // text-anchor
                                     {"e-textPath-020.svg",
                                      Params::WithThreshold(kDefaultThreshold, 8200)},  // Closed path
-                                    {"e-textPath-021.svg", Params::Skip()},   // Not impl: writing-mode=tb
+                                    {"e-textPath-021.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // writing-mode=tb
                                     {"e-textPath-022.svg",
                                      Params::WithThreshold(kDefaultThreshold, 4400)},  // tspan absolute pos
                                     {"e-textPath-023.svg",
@@ -910,13 +933,16 @@ INSTANTIATE_TEST_SUITE_P(
                                      Params::WithThreshold(kDefaultThreshold, 8600)},  // Path with ClosePath
                                     {"e-textPath-027.svg",
                                      Params::WithThreshold(kDefaultThreshold, 6600)},  // M L Z path
-                                    {"e-textPath-028.svg", Params::Skip()},   // Not impl: underline
+                                    {"e-textPath-028.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // underline
                                     {"e-textPath-029.svg",
                                      Params::WithThreshold(kDefaultThreshold, 4000)},  // With rotate
                                     {"e-textPath-030.svg",
                                      Params::WithThreshold(kDefaultThreshold, 5400)},  // Complex
-                                    {"e-textPath-031.svg", Params::Skip()},   // Not impl: letter-spacing
-                                    {"e-textPath-032.svg", Params::Skip()},   // Not impl: baseline-shift
+                                    {"e-textPath-031.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // letter-spacing
+                                    {"e-textPath-032.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // baseline-shift
                                     {"e-textPath-033.svg", Params::Skip()},   // UB: baseline-shift + rotate
                                     {"e-textPath-034.svg",
                                      Params::WithThreshold(kDefaultThreshold, 5000)},  // M A path
@@ -926,7 +952,8 @@ INSTANTIATE_TEST_SUITE_P(
                                      Params::WithThreshold(kDefaultThreshold, 4100)},  // transform on ref path
                                     {"e-textPath-037.svg",
                                      Params::WithThreshold(kDefaultThreshold, 4100)},  // transform outside ref
-                                    {"e-textPath-038.svg", Params::Skip()},   // Not impl: letter-spacing
+                                    {"e-textPath-038.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // letter-spacing
                                     {"e-textPath-039.svg",
                                      Params::WithThreshold(kDefaultThreshold, 1200)},  // Subpaths + startOffset
                                     {"e-textPath-040.svg", Params::Skip()},   // Not impl: filter on textPath
