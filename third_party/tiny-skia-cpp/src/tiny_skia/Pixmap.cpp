@@ -172,6 +172,13 @@ std::optional<Pixmap> Pixmap::fromSize(std::uint32_t width, std::uint32_t height
     return std::nullopt;
   }
 
+  // Defensive cap: reject allocations > 256MB to prevent bad_alloc crashes on
+  // memory-constrained CI runners (e.g., 7GB GitHub Actions Linux runners).
+  constexpr std::size_t kMaxAllocationBytes = 256 * 1024 * 1024;
+  if (len.value() > kMaxAllocationBytes) {
+    return std::nullopt;
+  }
+
   return Pixmap(std::vector<std::uint8_t>(len.value(), 0), size.value());
 }
 

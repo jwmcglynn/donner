@@ -353,8 +353,9 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feImage-001.svg", Params::Skip()},  // External file reference (no ResourceLoader)
             {"e-feImage-002.svg", Params::Skip()},  // External SVG reference
             {"e-feImage-005.svg",
-             Params::Skip()},  // Empty feImage (no href) — OOM crash on Linux CI (bad_alloc
-                               // during pixmap allocation, likely glibc memory fragmentation)
+             Params::Skip()},  // Empty feImage (no href) — crashes with bad_alloc on Linux CI.
+                               // All allocations are small (~1MB); likely OS memory pressure on
+                               // 7GB CI runner after heavy Skia build. Trivial test case.
             {"e-feImage-003.svg",
              Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
             {"e-feImage-004.svg",
