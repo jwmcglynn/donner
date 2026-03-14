@@ -5,6 +5,7 @@
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -52,6 +53,14 @@
 namespace donner::svg::components {
 
 namespace {
+
+/// Get or create the RenderTreeState in the registry context.
+RenderTreeState& getRenderTreeState(Registry& registry) {
+  if (!registry.ctx().contains<RenderTreeState>()) {
+    registry.ctx().emplace<RenderTreeState>();
+  }
+  return registry.ctx().get<RenderTreeState>();
+}
 
 /**
  * The current value of the context-fill and context-stroke paint servers, based on the rules
@@ -620,9 +629,18 @@ void RenderingContext::setInitialContextPaint(std::any fill, std::any stroke) {
 }
 
 void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
-  // TODO(jwmcglynn): Support partial invalidation, where we only recompute the subtree that has
-  // changed.
-  // Call ShadowTreeSystem::teardown() to destroy any existing shadow trees.
+  auto& renderState = getRenderTreeState(registry_);
+  const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
+
+  // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
+  // is required, skip all recomputation.
+  if (renderState.hasBeenBuilt && !renderState.needsFullRebuild && !hasDirtyEntities) {
+    return;
+  }
+
+  // Full rebuild path: tear down shadow trees and recompute everything.
+  // TODO(jwmcglynn): Support partial invalidation, where we only recompute dirty entities
+  // instead of the full tree.
   for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
     auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
     createShadowTreeSystem().teardown(registry_, shadow);
@@ -631,6 +649,11 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
   createComputedComponents(outWarnings);
   instantiateRenderTreeWithPrecomputedTree(verbose);
+
+  // Clear all dirty flags after full recomputation.
+  registry_.clear<DirtyFlagsComponent>();
+  renderState.needsFullRebuild = false;
+  renderState.hasBeenBuilt = true;
 }
 
 bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
@@ -809,6 +832,7 @@ std::optional<Boxd> RenderingContext::getWorldBounds(Entity entity) {
 void RenderingContext::invalidateRenderTree() {
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
+  getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
 // 1. Setup shadow trees

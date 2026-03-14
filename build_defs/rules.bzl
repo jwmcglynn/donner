@@ -278,7 +278,7 @@ _donner_perf_sensitive_cc_library = rule(
     fragments = ["cpp"],
 )
 
-def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **kwargs):
+def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, target_compatible_with = None, **kwargs):
     """
     Wrapper around a cc_library that is always compiled with optimizations.
 
@@ -297,8 +297,15 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **k
       name: Rule name.
       allow_debug_builds_config: A `selects.config_setting` that, if enabled,
         will allow this library to be built in debug mode.
+      target_compatible_with: Optional platform compatibility constraints, propagated
+        to all generated sub-targets.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
+    compat = {}
+    if target_compatible_with != None:
+        compat["target_compatible_with"] = target_compatible_with
+        kwargs["target_compatible_with"] = target_compatible_with
+
     if allow_debug_builds_config != None:
         _donner_perf_sensitive_cc_library(
             name = name + "_opt",
@@ -318,6 +325,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **k
             }),
             visibility = ["//donner:__subpackages__"],
             tags = ["perf_sensitive"],
+            **compat
         )
     else:
         _donner_perf_sensitive_cc_library(

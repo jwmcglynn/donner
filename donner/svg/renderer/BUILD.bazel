@@ -225,6 +225,7 @@ donner_cc_library(
 donner_perf_sensitive_cc_library(
     name = "skia_deps",
     allow_debug_builds_config = ":config_skia_debug",
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     defines = select({
         ":macos_coretext": ["DONNER_USE_CORETEXT"],
         ":linux_fontconfig": ["DONNER_USE_FREETYPE_WITH_FONTCONFIG"],
@@ -252,6 +253,7 @@ donner_perf_sensitive_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "tiny_skia_deps",
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     deps = [
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
     ],
@@ -259,6 +261,7 @@ donner_perf_sensitive_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "tiny_skia_filter_deps",
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     deps = [
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
@@ -268,6 +271,7 @@ donner_cc_library(
     name = "renderer_skia",
     srcs = ["RendererSkia.cc"],
     hdrs = ["RendererSkia.h"],
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     defines = select({
         ":text_shaping_enabled": ["DONNER_TEXT_SHAPING_ENABLED"],
         "//conditions:default": [],
@@ -319,6 +323,7 @@ donner_cc_library(
     srcs = ["RendererTinySkia.cc"],
     hdrs = ["RendererTinySkia.h"],
     visibility = ["//visibility:public"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     defines = select({
         ":filters_enabled": ["DONNER_FILTERS_ENABLED"],
         "//conditions:default": [],
