@@ -15,6 +15,7 @@
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/WritingMode.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/Visibility.h"
@@ -306,6 +307,11 @@ public:
   Property<DominantBaseline> alignmentBaseline{
       "alignment-baseline",
       []() -> std::optional<DominantBaseline> { return DominantBaseline::Auto; }};
+
+  /// `writing-mode` property, controlling text flow direction. Inherited.
+  Property<WritingMode, PropertyCascade::Inherit> writingMode{
+      "writing-mode",
+      []() -> std::optional<WritingMode> { return WritingMode::HorizontalTb; }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.

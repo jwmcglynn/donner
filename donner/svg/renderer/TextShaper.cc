@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/TextShaper.h"
 
+#include <cmath>
+
 #include <hb-ot.h>
 #include <hb.h>
 
@@ -301,11 +303,13 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       }
     }
 
+    const bool vertical = isVertical(params.writingMode);
+
     // Create HarfBuzz buffer and shape.
     hb_buffer_t* buf = hb_buffer_create();
     hb_buffer_add_utf8(buf, spanText.data(), static_cast<int>(spanText.size()), 0,
                        static_cast<int>(spanText.size()));
-    hb_buffer_set_direction(buf, HB_DIRECTION_LTR);
+    hb_buffer_set_direction(buf, vertical ? HB_DIRECTION_TTB : HB_DIRECTION_LTR);
     hb_buffer_set_script(buf, HB_SCRIPT_LATIN);
     hb_buffer_guess_segment_properties(buf);
 
@@ -325,59 +329,101 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         charIdx = byteToCharIdx[glyphInfos[gi].cluster];
       }
 
-      // Per-character absolute X positioning overrides the pen.
-      const bool hasAbsoluteX =
-          charIdx < span.xList.size() && span.xList[charIdx].has_value();
-      if (hasAbsoluteX) {
-        penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                              Lengthd::Extent::X);
-      }
-
-      // Per-character dx.
-      if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
-        penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                Lengthd::Extent::X);
-      }
-
-      // Per-character absolute Y positioning.
-      if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
-        penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                              Lengthd::Extent::Y) +
-               baselineShift;
-      }
-
-      // Per-character dy.
-      if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
-        penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+      if (vertical) {
+        // Vertical mode: primary advance along Y, cross-axis X.
+        // Per-character absolute Y (primary axis).
+        if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
+          penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::Y);
-      }
+        }
+        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
+          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::Y);
+        }
+        // Per-character absolute X (cross-axis).
+        if (charIdx < span.xList.size() && span.xList[charIdx].has_value()) {
+          penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::X);
+        }
+        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
+          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::X);
+        }
 
-      ShapedGlyph glyph;
-      glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
-      // HarfBuzz positions are in font units; scale to pixels.
-      glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * pixelScale;
-      glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * pixelScale;
-      glyph.xAdvance = static_cast<double>(glyphPositions[gi].x_advance) * pixelScale;
+        ShapedGlyph glyph;
+        glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
+        // HarfBuzz vertical: y_advance is negative (Y-up convention), negate for SVG Y-down.
+        glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * pixelScale;
+        glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * pixelScale;
+        glyph.yAdvance =
+            std::abs(static_cast<double>(glyphPositions[gi].y_advance) * pixelScale);
+        glyph.xAdvance = 0;
 
-      // Per-character rotation (last value repeats per SVG spec).
-      if (charIdx < span.rotateList.size()) {
-        glyph.rotateDegrees = span.rotateList[charIdx];
-      } else if (!span.rotateList.empty()) {
-        glyph.rotateDegrees = span.rotateList.back();
+        // Per-character rotation. HarfBuzz handles vertical glyph orientation via vert GSUB,
+        // so no blanket rotation is needed here (unlike the base tier).
+        if (charIdx < span.rotateList.size()) {
+          glyph.rotateDegrees = span.rotateList[charIdx];
+        } else if (!span.rotateList.empty()) {
+          glyph.rotateDegrees = span.rotateList.back();
+        } else {
+          glyph.rotateDegrees = span.rotateDegrees;
+        }
+
+        run.glyphs.push_back(glyph);
+
+        penY += glyph.yAdvance;
+        penY += params.letterSpacingPx;
+        if (glyphInfos[gi].cluster < spanText.size() &&
+            spanText[glyphInfos[gi].cluster] == ' ') {
+          penY += params.wordSpacingPx;
+        }
       } else {
-        glyph.rotateDegrees = span.rotateDegrees;
-      }
+        // Horizontal mode (existing path).
+        const bool hasAbsoluteX =
+            charIdx < span.xList.size() && span.xList[charIdx].has_value();
+        if (hasAbsoluteX) {
+          penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::X);
+        }
 
-      run.glyphs.push_back(glyph);
+        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
+          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::X);
+        }
 
-      penX += glyph.xAdvance;
+        if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
+          penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::Y) +
+                 baselineShift;
+        }
 
-      // CSS letter-spacing: extra space after every character.
-      penX += params.letterSpacingPx;
-      // CSS word-spacing: extra space after U+0020 (space) characters.
-      // Use the cluster byte offset to check the original character.
-      if (glyphInfos[gi].cluster < spanText.size() && spanText[glyphInfos[gi].cluster] == ' ') {
-        penX += params.wordSpacingPx;
+        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
+          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::Y);
+        }
+
+        ShapedGlyph glyph;
+        glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
+        glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * pixelScale;
+        glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * pixelScale;
+        glyph.xAdvance = static_cast<double>(glyphPositions[gi].x_advance) * pixelScale;
+
+        if (charIdx < span.rotateList.size()) {
+          glyph.rotateDegrees = span.rotateList[charIdx];
+        } else if (!span.rotateList.empty()) {
+          glyph.rotateDegrees = span.rotateList.back();
+        } else {
+          glyph.rotateDegrees = span.rotateDegrees;
+        }
+
+        run.glyphs.push_back(glyph);
+
+        penX += glyph.xAdvance;
+        penX += params.letterSpacingPx;
+        if (glyphInfos[gi].cluster < spanText.size() &&
+            spanText[glyphInfos[gi].cluster] == ' ') {
+          penX += params.wordSpacingPx;
+        }
       }
     }
 
@@ -412,32 +458,50 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
     // Apply textLength adjustment.
     if (params.textLength.has_value() && !run.glyphs.empty()) {
-      const double targetLength = params.textLength->toPixels(params.viewBox, params.fontMetrics,
-                                                              Lengthd::Extent::X);
-      const double naturalLength = penX - baseX;
+      const double targetLength = params.textLength->toPixels(
+          params.viewBox, params.fontMetrics,
+          vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+      const double naturalLength = vertical ? (penY - baseY) : (penX - baseX);
 
       if (naturalLength > 0.0 && targetLength > 0.0) {
         if (params.lengthAdjust == LengthAdjust::Spacing) {
           const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
           const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
           for (size_t i = 1; i < run.glyphs.size(); ++i) {
-            run.glyphs[i].xPosition += extraPerGap * static_cast<double>(i);
+            if (vertical) {
+              run.glyphs[i].yPosition += extraPerGap * static_cast<double>(i);
+            } else {
+              run.glyphs[i].xPosition += extraPerGap * static_cast<double>(i);
+            }
           }
-          penX = baseX + targetLength;
+          if (vertical) {
+            penY = baseY + targetLength;
+          } else {
+            penX = baseX + targetLength;
+          }
         } else {
           const double scaleFactor = targetLength / naturalLength;
           for (auto& g : run.glyphs) {
-            g.xPosition = baseX + (g.xPosition - baseX) * scaleFactor;
-            g.xAdvance *= scaleFactor;
+            if (vertical) {
+              g.yPosition = baseY + (g.yPosition - baseY) * scaleFactor;
+              g.yAdvance *= scaleFactor;
+            } else {
+              g.xPosition = baseX + (g.xPosition - baseX) * scaleFactor;
+              g.xAdvance *= scaleFactor;
+            }
           }
-          penX = baseX + targetLength;
+          if (vertical) {
+            penY = baseY + targetLength;
+          } else {
+            penX = baseX + targetLength;
+          }
         }
       }
     }
 
-    // Apply text-anchor adjustment.
+    // Apply text-anchor adjustment along the inline axis.
     if (params.textAnchor != TextAnchor::Start && !run.glyphs.empty()) {
-      const double totalAdvance = penX - baseX;
+      const double totalAdvance = vertical ? (penY - baseY) : (penX - baseX);
       double shift = 0.0;
       if (params.textAnchor == TextAnchor::Middle) {
         shift = -totalAdvance / 2.0;
@@ -445,7 +509,11 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         shift = -totalAdvance;
       }
       for (auto& g : run.glyphs) {
-        g.xPosition += shift;
+        if (vertical) {
+          g.yPosition += shift;
+        } else {
+          g.xPosition += shift;
+        }
       }
     }
 

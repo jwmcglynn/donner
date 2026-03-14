@@ -17,6 +17,7 @@
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/WritingMode.h"
 #include "donner/svg/core/FillRule.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PathSpline.h"
@@ -143,6 +144,8 @@ struct TextParams {
   TextAnchor textAnchor = TextAnchor::Start;
   TextDecoration textDecoration = TextDecoration::None;
   DominantBaseline dominantBaseline = DominantBaseline::Auto;
+  /// CSS `writing-mode` for this text element. Controls horizontal vs vertical text flow.
+  WritingMode writingMode = WritingMode::HorizontalTb;
   /// Extra spacing added after each character (CSS `letter-spacing`). 0 = normal.
   double letterSpacingPx = 0.0;
   /// Extra spacing added after each word/space character (CSS `word-spacing`). 0 = normal.

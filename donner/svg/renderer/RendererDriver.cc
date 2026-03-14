@@ -205,6 +205,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   params.textAnchor = properties.textAnchor.getRequired();
   params.textDecoration = properties.textDecoration.getRequired();
   params.dominantBaseline = properties.dominantBaseline.getRequired();
+  params.writingMode = properties.writingMode.getRequired();
 
   // Resolve letter-spacing and word-spacing to pixels.
   params.letterSpacingPx = properties.letterSpacing.getRequired().toPixels(

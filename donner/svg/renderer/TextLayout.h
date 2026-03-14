@@ -13,10 +13,11 @@ namespace donner::svg {
  * A single positioned glyph in a text run.
  */
 struct LayoutGlyph {
-  int glyphIndex = 0;   ///< stb_truetype glyph index.
-  double xPosition = 0; ///< Absolute X position for this glyph.
-  double yPosition = 0; ///< Absolute Y baseline position.
-  double xAdvance = 0;  ///< Advance width to next glyph (for reference).
+  int glyphIndex = 0;       ///< stb_truetype glyph index.
+  double xPosition = 0;     ///< Absolute X position for this glyph.
+  double yPosition = 0;     ///< Absolute Y baseline position.
+  double xAdvance = 0;      ///< Horizontal advance to next glyph.
+  double yAdvance = 0;      ///< Vertical advance (used in vertical writing modes).
   double rotateDegrees = 0; ///< Per-glyph rotation in degrees.
 };
 
