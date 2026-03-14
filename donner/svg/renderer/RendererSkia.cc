@@ -1256,7 +1256,7 @@ RendererSkia::RendererSkia(bool verbose) : verbose_(verbose) {
 #if defined(DONNER_USE_CORETEXT)
   fontMgr_ = SkFontMgr_New_CoreText(nullptr);
 #elif defined(DONNER_USE_FREETYPE_WITH_FONTCONFIG)
-  fontMgr_ = SkFontMgr_New_FontConfig(SkFontScanner_FT::Make().release());
+  fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #elif defined(DONNER_USE_FREETYPE)
   fontMgr_ = SkFontMgr_New_Custom_Empty();
 #endif
