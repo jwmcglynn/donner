@@ -560,6 +560,141 @@ double PathSpline::pathLength() const {
   return totalLength;
 }
 
+namespace {
+
+/**
+ * Measure the arc length of a cubic Bézier curve from t=0 to a given t parameter.
+ * Uses recursive subdivision for accuracy.
+ */
+double MeasureCubicPartial(const std::array<Vector2d, 4>& points, double tEnd, double tolerance,
+                           int depth = 0) {
+  if (depth > kMaxRecursionDepth || tEnd <= 0.0) {
+    return 0.0;
+  }
+  if (tEnd >= 1.0) {
+    return SubdivideAndMeasureCubic(points, tolerance);
+  }
+
+  // De Casteljau split at tEnd to get the left sub-curve [0, tEnd].
+  const auto lerp = [](const Vector2d& a, const Vector2d& b, double t) {
+    return a + (b - a) * t;
+  };
+  const Vector2d p01 = lerp(points[0], points[1], tEnd);
+  const Vector2d p12 = lerp(points[1], points[2], tEnd);
+  const Vector2d p23 = lerp(points[2], points[3], tEnd);
+  const Vector2d p012 = lerp(p01, p12, tEnd);
+  const Vector2d p123 = lerp(p12, p23, tEnd);
+  const Vector2d p0123 = lerp(p012, p123, tEnd);
+
+  const std::array<Vector2d, 4> left = {points[0], p01, p012, p0123};
+  return SubdivideAndMeasureCubic(left, tolerance);
+}
+
+/**
+ * Find the t parameter on a cubic Bézier where the arc length from start equals the target
+ * distance. Uses binary search.
+ *
+ * @param points Control points of the cubic.
+ * @param targetDist Target arc length distance.
+ * @param totalSegLen Total arc length of the segment (precomputed).
+ * @param tolerance Flatness tolerance for length measurement.
+ * @return The t parameter in [0, 1].
+ */
+double FindTForArcLength(const std::array<Vector2d, 4>& points, double targetDist,
+                         double totalSegLen, double tolerance) {
+  if (targetDist <= 0.0) {
+    return 0.0;
+  }
+  if (targetDist >= totalSegLen) {
+    return 1.0;
+  }
+
+  // Binary search for t.
+  double lo = 0.0;
+  double hi = 1.0;
+  // Start with a linear estimate.
+  double mid = targetDist / totalSegLen;
+
+  for (int iter = 0; iter < 30; ++iter) {
+    const double len = MeasureCubicPartial(points, mid, tolerance);
+    const double error = len - targetDist;
+    if (std::abs(error) < tolerance * 0.1) {
+      break;
+    }
+    if (error > 0.0) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+    mid = (lo + hi) * 0.5;
+  }
+
+  return mid;
+}
+
+}  // namespace
+
+PathSpline::PointOnPath PathSpline::pointAtArcLength(double distance) const {
+  if (commands_.empty() || distance < 0.0) {
+    return {{}, {}, 0.0, false};
+  }
+
+  double accumulated = 0.0;
+  Vector2d segStart;
+
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    const Command& command = commands_[i];
+
+    switch (command.type) {
+      case CommandType::MoveTo: {
+        segStart = points_[command.pointIndex];
+        break;
+      }
+      case CommandType::ClosePath: [[fallthrough]];
+      case CommandType::LineTo: {
+        const Vector2d& segEnd = points_[command.pointIndex];
+        const double segLen = segStart.distance(segEnd);
+
+        if (accumulated + segLen >= distance) {
+          // Target is within this segment.
+          const double remaining = distance - accumulated;
+          const double t = (segLen > 0.0) ? remaining / segLen : 0.0;
+          const Vector2d pt = segStart + (segEnd - segStart) * t;
+          const Vector2d tang = segEnd - segStart;
+          return {pt, tang, std::atan2(tang.y, tang.x), true};
+        }
+
+        accumulated += segLen;
+        segStart = segEnd;
+        break;
+      }
+      case CommandType::CurveTo: {
+        const std::array<Vector2d, 4> bezierPoints = {segStart, points_[command.pointIndex],
+                                                      points_[command.pointIndex + 1],
+                                                      points_[command.pointIndex + 2]};
+        const double segLen = SubdivideAndMeasureCubic(bezierPoints, kTolerance);
+
+        if (accumulated + segLen >= distance) {
+          // Target is within this cubic segment. Binary search for t.
+          const double remaining = distance - accumulated;
+          const double t = FindTForArcLength(bezierPoints, remaining, segLen, kTolerance);
+          const Vector2d pt = pointAt(i, t);
+          const Vector2d tang = tangentAt(i, t);
+          return {pt, tang, std::atan2(tang.y, tang.x), true};
+        }
+
+        accumulated += segLen;
+        segStart = points_[command.pointIndex + 2];
+        break;
+      }
+      default: UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
+    }
+  }
+
+  // Distance exceeds path length — return endpoint.
+  return {segStart, {}, 0.0, false};
+}
+
 Vector2d PathSpline::currentPoint() const {
   UTILS_RELEASE_ASSERT(!commands_.empty());
 

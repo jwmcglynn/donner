@@ -141,6 +141,10 @@ struct TextParams {
   TextAnchor textAnchor = TextAnchor::Start;
   TextDecoration textDecoration = TextDecoration::None;
   DominantBaseline dominantBaseline = DominantBaseline::Auto;
+  /// Extra spacing added after each character (CSS `letter-spacing`). 0 = normal.
+  double letterSpacingPx = 0.0;
+  /// Extra spacing added after each word/space character (CSS `word-spacing`). 0 = normal.
+  double wordSpacingPx = 0.0;
   /// If set, stretches or compresses text to fill the given length.
   std::optional<Lengthd> textLength;
   LengthAdjust lengthAdjust = LengthAdjust::Default;

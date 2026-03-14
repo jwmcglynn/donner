@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/TextLayout.h"
 
+#include "donner/base/MathUtils.h"
+
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
 
@@ -138,24 +140,94 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     const double baseX =
         span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
         span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+
+    // Resolve per-span baseline-shift using actual font size for em units.
+    // Positive CSS baseline-shift = shift up, which in SVG Y-down = subtract from Y.
+    FontMetrics spanFontMetrics = params.fontMetrics;
+    spanFontMetrics.fontSize = fontSizePx;
+    const double spanBaselineShiftPx =
+        span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+
+    // If alignment-baseline is set on this span, it overrides the text-level dominant-baseline.
+    double effectiveBaselineShift = baselineShift;
+    if (span.alignmentBaseline != DominantBaseline::Auto) {
+      effectiveBaselineShift = 0.0;
+      int ascent = 0;
+      int descent = 0;
+      int lineGap = 0;
+      stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
+      switch (span.alignmentBaseline) {
+        case DominantBaseline::Auto:
+        case DominantBaseline::Alphabetic:
+          break;
+        case DominantBaseline::Middle:
+        case DominantBaseline::Central:
+          effectiveBaselineShift = static_cast<double>(ascent + descent) * 0.5 * scale;
+          break;
+        case DominantBaseline::Hanging:
+          effectiveBaselineShift = static_cast<double>(ascent) * 0.8 * scale;
+          break;
+        case DominantBaseline::Mathematical:
+          effectiveBaselineShift = static_cast<double>(ascent) * 0.5 * scale;
+          break;
+        case DominantBaseline::TextTop:
+          effectiveBaselineShift = static_cast<double>(ascent) * scale;
+          break;
+        case DominantBaseline::TextBottom:
+        case DominantBaseline::Ideographic:
+          effectiveBaselineShift = static_cast<double>(descent) * scale;
+          break;
+      }
+    }
+
     const double baseY =
         span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
         span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-        baselineShift;
+        effectiveBaselineShift - spanBaselineShiftPx;
 
     double penX = baseX;
+    double penY = baseY;
 
     // Decode each codepoint, look up glyph, accumulate advance + kerning.
+    // charIdx tracks the codepoint index for per-character positioning.
     size_t byteIdx = 0;
     int prevGlyph = 0;
+    unsigned int charIdx = 0;
     while (byteIdx < spanText.size()) {
       const uint32_t codepoint = decodeUtf8(spanText, byteIdx);
       const int glyphIndex = stbtt_FindGlyphIndex(info, static_cast<int>(codepoint));
 
-      // Kern adjustment with previous glyph.
-      if (prevGlyph != 0 && glyphIndex != 0) {
-        const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
-        penX += static_cast<double>(kern) * scale;
+      // Per-character absolute X positioning overrides the pen.
+      const bool hasAbsoluteX =
+          charIdx < span.xList.size() && span.xList[charIdx].has_value();
+      if (hasAbsoluteX) {
+        penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                              Lengthd::Extent::X);
+      } else {
+        // Kern adjustment with previous glyph (only when not absolute-positioned).
+        if (prevGlyph != 0 && glyphIndex != 0) {
+          const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
+          penX += static_cast<double>(kern) * scale;
+        }
+      }
+
+      // Per-character dx.
+      if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
+        penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::X);
+      }
+
+      // Per-character absolute Y positioning.
+      if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
+        penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                              Lengthd::Extent::Y) +
+               baselineShift;
+      }
+
+      // Per-character dy.
+      if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
+        penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::Y);
       }
 
       // Advance width.
@@ -166,13 +238,63 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       LayoutGlyph glyph;
       glyph.glyphIndex = glyphIndex;
       glyph.xPosition = penX;
-      glyph.yPosition = baseY;
+      glyph.yPosition = penY;
       glyph.xAdvance = static_cast<double>(advanceWidth) * scale;
-      glyph.rotateDegrees = span.rotateDegrees;
+
+      // Per-character rotation (last value repeats per SVG spec).
+      if (charIdx < span.rotateList.size()) {
+        glyph.rotateDegrees = span.rotateList[charIdx];
+      } else if (!span.rotateList.empty()) {
+        glyph.rotateDegrees = span.rotateList.back();
+      } else {
+        glyph.rotateDegrees = span.rotateDegrees;
+      }
+
       run.glyphs.push_back(glyph);
 
       penX += glyph.xAdvance;
+
+      // CSS letter-spacing: extra space after every character.
+      penX += params.letterSpacingPx;
+      // CSS word-spacing: extra space after U+0020 (space) characters.
+      if (codepoint == 0x0020) {
+        penX += params.wordSpacingPx;
+      }
+
       prevGlyph = glyphIndex;
+      ++charIdx;
+    }
+
+    // If the span has path data, reposition glyphs along the path.
+    if (span.pathSpline && !run.glyphs.empty()) {
+      const auto& pathSpline = *span.pathSpline;
+      const double startOffset = span.pathStartOffset;
+
+      // Reposition each glyph at the midpoint of its advance along the path.
+      double advanceAccum = 0.0;
+      for (auto& g : run.glyphs) {
+        // Sample the path at the center of this glyph's advance width.
+        const double glyphMid = startOffset + advanceAccum + g.xAdvance * 0.5;
+        const auto sample = pathSpline.pointAtArcLength(glyphMid);
+
+        if (sample.valid) {
+          g.xPosition = sample.point.x;
+          g.yPosition = sample.point.y;
+          // Convert tangent angle to degrees and add the per-glyph rotation
+          // (already set from per-character rotateList or span.rotateDegrees).
+          g.rotateDegrees =
+              sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
+        } else {
+          // Past the end of the path — hide the glyph.
+          g.glyphIndex = 0;
+        }
+
+        advanceAccum += g.xAdvance;
+      }
+
+      // Skip textLength and text-anchor adjustments for path-based text.
+      runs.push_back(std::move(run));
+      continue;
     }
 
     // Apply textLength adjustment: stretch or compress glyph positions to fit the target length.

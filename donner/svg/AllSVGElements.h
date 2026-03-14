@@ -61,6 +61,7 @@
 #include "donner/svg/SVGSymbolElement.h"          // IWYU pragma: export
 #include "donner/svg/SVGTSpanElement.h"           // IWYU pragma: export
 #include "donner/svg/SVGTextElement.h"            // IWYU pragma: export
+#include "donner/svg/SVGTextPathElement.h"        // IWYU pragma: export
 #include "donner/svg/SVGUseElement.h"             // IWYU pragma: export
 
 // Types that are not fully-fledged SVG elements by themselves, so they aren't included in \ref
@@ -126,6 +127,7 @@ using AllSVGElements = entt::type_list<  //
     SVGSVGElement,                       //
     SVGSymbolElement,                    //
     SVGTextElement,                      //
+    SVGTextPathElement,                  //
     SVGTSpanElement,                     //
     SVGUseElement>;
 

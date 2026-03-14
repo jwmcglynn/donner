@@ -5,6 +5,7 @@ cc_library(
     hdrs = [
         "ComputedTextComponent.h",
         "TextComponent.h",
+        "TextPathComponent.h",
         "TextPositioningComponent.h",
         "TextRootComponent.h",
     ],
@@ -12,6 +13,7 @@ cc_library(
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
+        "//donner/svg/core",
         "//donner/svg/properties:property_parsing",
     ],
 )
@@ -31,5 +33,7 @@ cc_library(
         ":components",
         "//donner/base",
         "//donner/svg/components:components_core",
+        "//donner/svg/components/shape:shape_system",
+        "//donner/svg/graph",
     ],
 )

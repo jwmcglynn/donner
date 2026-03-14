@@ -3,6 +3,8 @@
 #include <hb-ot.h>
 #include <hb.h>
 
+#include "donner/base/MathUtils.h"
+
 namespace donner::svg {
 
 namespace {
@@ -226,14 +228,77 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     const double baseX =
         span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
         span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+
+    // Resolve per-span baseline-shift using actual font size for em units.
+    FontMetrics spanFontMetrics = params.fontMetrics;
+    spanFontMetrics.fontSize = fontSizePx;
+    const double spanBaselineShiftPx =
+        span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+
+    // If alignment-baseline is set on this span, it overrides the text-level dominant-baseline.
+    double effectiveBaselineShift = baselineShift;
+    if (span.alignmentBaseline != DominantBaseline::Auto) {
+      effectiveBaselineShift = 0.0;
+      hb_font_extents_t extents;
+      hb_font_get_h_extents(hbFont, &extents);
+      const double ascent = static_cast<double>(extents.ascender) * pixelScale;
+      const double descent = static_cast<double>(extents.descender) * pixelScale;
+      switch (span.alignmentBaseline) {
+        case DominantBaseline::Auto:
+        case DominantBaseline::Alphabetic:
+          break;
+        case DominantBaseline::Middle:
+        case DominantBaseline::Central:
+          effectiveBaselineShift = (ascent + descent) * 0.5;
+          break;
+        case DominantBaseline::Hanging:
+          effectiveBaselineShift = ascent * 0.8;
+          break;
+        case DominantBaseline::Mathematical:
+          effectiveBaselineShift = ascent * 0.5;
+          break;
+        case DominantBaseline::TextTop:
+          effectiveBaselineShift = ascent;
+          break;
+        case DominantBaseline::TextBottom:
+        case DominantBaseline::Ideographic:
+          effectiveBaselineShift = descent;
+          break;
+      }
+    }
+
     const double baseY =
         span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
         span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-        baselineShift;
+        effectiveBaselineShift - spanBaselineShiftPx;
 
     if (spanText.empty()) {
       runs.push_back(std::move(run));
       continue;
+    }
+
+    // Build byte-offset to character-index (codepoint index) map for cluster mapping.
+    std::vector<unsigned int> byteToCharIdx(spanText.size(), 0);
+    {
+      unsigned int ci = 0;
+      size_t bi = 0;
+      while (bi < spanText.size()) {
+        byteToCharIdx[bi] = ci;
+        const auto byte = static_cast<uint8_t>(spanText[bi]);
+        size_t len = 1;
+        if (byte >= 0xF0) {
+          len = 4;
+        } else if (byte >= 0xE0) {
+          len = 3;
+        } else if (byte >= 0xC0) {
+          len = 2;
+        }
+        for (size_t j = 1; j < len && bi + j < spanText.size(); ++j) {
+          byteToCharIdx[bi + j] = ci;
+        }
+        bi += len;
+        ++ci;
+      }
     }
 
     // Create HarfBuzz buffer and shape.
@@ -252,20 +317,98 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     const hb_glyph_position_t* glyphPositions = hb_buffer_get_glyph_positions(buf, &glyphCount);
 
     double penX = baseX;
+    double penY = baseY;
     for (unsigned int gi = 0; gi < glyphCount; ++gi) {
+      // Map glyph to character index via cluster byte offset.
+      unsigned int charIdx = 0;
+      if (glyphInfos[gi].cluster < byteToCharIdx.size()) {
+        charIdx = byteToCharIdx[glyphInfos[gi].cluster];
+      }
+
+      // Per-character absolute X positioning overrides the pen.
+      const bool hasAbsoluteX =
+          charIdx < span.xList.size() && span.xList[charIdx].has_value();
+      if (hasAbsoluteX) {
+        penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                              Lengthd::Extent::X);
+      }
+
+      // Per-character dx.
+      if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
+        penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::X);
+      }
+
+      // Per-character absolute Y positioning.
+      if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
+        penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                              Lengthd::Extent::Y) +
+               baselineShift;
+      }
+
+      // Per-character dy.
+      if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
+        penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::Y);
+      }
+
       ShapedGlyph glyph;
       glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
       // HarfBuzz positions are in font units; scale to pixels.
       glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * pixelScale;
-      glyph.yPosition = baseY - static_cast<double>(glyphPositions[gi].y_offset) * pixelScale;
+      glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * pixelScale;
       glyph.xAdvance = static_cast<double>(glyphPositions[gi].x_advance) * pixelScale;
-      glyph.rotateDegrees = span.rotateDegrees;
+
+      // Per-character rotation (last value repeats per SVG spec).
+      if (charIdx < span.rotateList.size()) {
+        glyph.rotateDegrees = span.rotateList[charIdx];
+      } else if (!span.rotateList.empty()) {
+        glyph.rotateDegrees = span.rotateList.back();
+      } else {
+        glyph.rotateDegrees = span.rotateDegrees;
+      }
+
       run.glyphs.push_back(glyph);
 
       penX += glyph.xAdvance;
+
+      // CSS letter-spacing: extra space after every character.
+      penX += params.letterSpacingPx;
+      // CSS word-spacing: extra space after U+0020 (space) characters.
+      // Use the cluster byte offset to check the original character.
+      if (glyphInfos[gi].cluster < spanText.size() && spanText[glyphInfos[gi].cluster] == ' ') {
+        penX += params.wordSpacingPx;
+      }
     }
 
     hb_buffer_destroy(buf);
+
+    // If the span has path data, reposition glyphs along the path.
+    if (span.pathSpline && !run.glyphs.empty()) {
+      const auto& pathSpline = *span.pathSpline;
+      const double startOffset = span.pathStartOffset;
+
+      double advanceAccum = 0.0;
+      for (auto& g : run.glyphs) {
+        const double glyphMid = startOffset + advanceAccum + g.xAdvance * 0.5;
+        const auto sample = pathSpline.pointAtArcLength(glyphMid);
+
+        if (sample.valid) {
+          g.xPosition = sample.point.x;
+          g.yPosition = sample.point.y;
+          // Combine path tangent angle with per-glyph rotation (already set from per-character
+          // rotateList or span.rotateDegrees).
+          g.rotateDegrees = sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
+        } else {
+          g.glyphIndex = 0;
+        }
+
+        advanceAccum += g.xAdvance;
+      }
+
+      runs.push_back(std::move(run));
+      continue;
+    }
 
     // Apply textLength adjustment.
     if (params.textLength.has_value() && !run.glyphs.empty()) {

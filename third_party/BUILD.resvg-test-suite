@@ -21,3 +21,15 @@ filegroup(
     ]),
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "fonts",
+    srcs = glob(
+        [
+            "fonts/*.ttf",
+            "fonts/*.otf",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

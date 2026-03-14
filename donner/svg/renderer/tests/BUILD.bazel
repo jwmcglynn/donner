@@ -62,6 +62,8 @@ donner_cc_library(
     deps = [
         ":renderer_image_test_utils",
         ":renderer_test_backend",
+        "//donner/css:core",
+        "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
@@ -202,6 +204,7 @@ donner_cc_test(
     ],
     data = [
         "//donner/svg/renderer/testdata",
+        "@resvg-test-suite//:fonts",
         "@resvg-test-suite//:images",
         "@resvg-test-suite//:png",
         "@resvg-test-suite//:svg",

@@ -32,7 +32,8 @@ protected:
 public:
   /// Returns true if the given element type can be cast to \ref SVGTextPositioningElement.
   static constexpr bool IsBaseOf(ElementType type) {
-    return type == ElementType::Text || type == ElementType::TSpan;
+    return type == ElementType::Text || type == ElementType::TextPath ||
+           type == ElementType::TSpan;
   }
 
   /**

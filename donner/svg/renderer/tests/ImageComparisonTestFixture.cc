@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "donner/css/FontFace.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
@@ -21,6 +23,76 @@
 namespace donner::svg {
 
 namespace {
+
+/**
+ * Derive a CSS font-family name from a font filename.
+ *
+ * Examples: "NotoSans-Regular.ttf" → "Noto Sans", "MPLUS1p-Regular.ttf" → "MPLUS1p"
+ *
+ * Splits the stem on '-' to get the base name, then inserts spaces before uppercase
+ * letters that follow lowercase letters (camelCase → space-separated).
+ */
+std::string fontFamilyFromFilename(const std::filesystem::path& path) {
+  std::string stem = path.stem().string();
+  // Strip weight/style suffix after the first '-'.
+  if (const auto dashPos = stem.find('-'); dashPos != std::string::npos) {
+    stem = stem.substr(0, dashPos);
+  }
+
+  // Insert spaces before uppercase letters that follow lowercase (CamelCase splitting).
+  std::string result;
+  for (size_t i = 0; i < stem.size(); ++i) {
+    if (i > 0 && std::isupper(static_cast<unsigned char>(stem[i])) &&
+        std::islower(static_cast<unsigned char>(stem[i - 1]))) {
+      result.push_back(' ');
+    }
+    result.push_back(stem[i]);
+  }
+  return result;
+}
+
+/// Load all TTF/OTF fonts from a directory and register them as @font-face rules on the document.
+void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::path& fontsDir) {
+  std::vector<css::FontFace> faces;
+
+  for (const auto& entry : std::filesystem::directory_iterator(fontsDir)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const auto ext = entry.path().extension().string();
+    if (ext != ".ttf" && ext != ".otf") {
+      continue;
+    }
+
+    // Read the font file.
+    std::ifstream fontFile(entry.path(), std::ios::binary);
+    if (!fontFile) {
+      continue;
+    }
+    fontFile.seekg(0, std::ios::end);
+    const auto size = fontFile.tellg();
+    fontFile.seekg(0);
+    std::vector<uint8_t> fontData(static_cast<size_t>(size));
+    fontFile.read(reinterpret_cast<char*>(fontData.data()), size);
+
+    const std::string family = fontFamilyFromFilename(entry.path());
+
+    css::FontFaceSource source;
+    source.kind = css::FontFaceSource::Kind::Data;
+    source.payload = std::move(fontData);
+
+    css::FontFace face;
+    face.familyName = RcString(family);
+    face.sources.push_back(std::move(source));
+    faces.push_back(std::move(face));
+  }
+
+  if (!faces.empty()) {
+    auto& resourceManager =
+        document.registry().ctx().get<components::ResourceManagerContext>();
+    resourceManager.addFontFaces(faces);
+  }
+}
 
 bool isEnabledFromEnv(const char* name, bool defaultValue) {
   const char* value = std::getenv(name);
@@ -482,7 +554,17 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
     return SVGDocument();
   }
 
-  return std::move(maybeResult.result());
+  SVGDocument document = std::move(maybeResult.result());
+
+  // If a resource directory is provided, load any fonts from its fonts/ subdirectory.
+  if (resourceDir) {
+    const std::filesystem::path fontsDir = *resourceDir / "fonts";
+    if (std::filesystem::is_directory(fontsDir)) {
+      registerFontsFromDirectory(document, fontsDir);
+    }
+  }
+
+  return document;
 }
 
 void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,

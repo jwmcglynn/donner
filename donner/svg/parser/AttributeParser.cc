@@ -31,6 +31,7 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/parser/AngleParser.h"
 #include "donner/svg/parser/ClockValueParser.h"
@@ -2281,6 +2282,98 @@ std::optional<ParseError> ParseAttribute<SVGTSpanElement>(SVGParserContext& cont
                                                           const XMLQualifiedNameRef& name,
                                                           std::string_view value) {
   if (name == XMLQualifiedNameRef("x")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setXList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("y")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setYList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("dx")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setDxList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("dy")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setDyList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("rotate")) {
+    SmallVector<double, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto angleRad = ParseAngleAttribute(context, token)) {
+            list.push_back(*angleRad * MathConstants<double>::kRadToDeg);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setRotateList(std::move(list));
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+/**
+ * Parses attributes for \ref xml_textPath elements.
+ */
+template <>
+std::optional<ParseError> ParseAttribute<SVGTextPathElement>(SVGParserContext& context,
+                                                             SVGTextPathElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
+    element.setHref(RcStringOrRef(value));
+  } else if (name == XMLQualifiedNameRef("startOffset")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setStartOffset(*length);
+    }
+  } else if (name == XMLQualifiedNameRef("method")) {
+    auto& comp = element.entityHandle().get_or_emplace<components::TextPathComponent>();
+    if (value == "align") {
+      comp.method = components::TextPathMethod::Align;
+    } else if (value == "stretch") {
+      comp.method = components::TextPathMethod::Stretch;
+    }
+  } else if (name == XMLQualifiedNameRef("side")) {
+    auto& comp = element.entityHandle().get_or_emplace<components::TextPathComponent>();
+    if (value == "left") {
+      comp.side = components::TextPathSide::Left;
+    } else if (value == "right") {
+      comp.side = components::TextPathSide::Right;
+    }
+  } else if (name == XMLQualifiedNameRef("spacing")) {
+    auto& comp = element.entityHandle().get_or_emplace<components::TextPathComponent>();
+    if (value == "auto") {
+      comp.spacing = components::TextPathSpacing::Auto;
+    } else if (value == "exact") {
+      comp.spacing = components::TextPathSpacing::Exact;
+    }
+  } else if (name == XMLQualifiedNameRef("x")) {
     SmallVector<Lengthd, 1> list;
     if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
           if (auto length = ParseLengthAttribute(context, token)) {
