@@ -172,10 +172,9 @@ std::optional<Pixmap> Pixmap::fromSize(std::uint32_t width, std::uint32_t height
     return std::nullopt;
   }
 
-  // Defensive cap: reject large allocations to prevent OOM crashes on memory-constrained
-  // systems. With -fno-exceptions, std::vector's allocator calls std::terminate instead of
-  // throwing std::bad_alloc, so we must reject before allocating.
-  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+  // Defensive cap: reject allocations > 256MB to prevent bad_alloc crashes on
+  // memory-constrained CI runners (e.g., 7GB GitHub Actions Linux runners).
+  constexpr std::size_t kMaxAllocationBytes = 256 * 1024 * 1024;
   if (len.value() > kMaxAllocationBytes) {
     return std::nullopt;
   }
