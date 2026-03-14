@@ -74,6 +74,43 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) && ctest --test-dir build
   ```
 
+## Transform Naming Convention
+
+Transforms use **destFromSource** naming to make coordinate space conversions explicit:
+- `entityFromWorldTransform` — converts world coordinates to entity-local coordinates
+- `deviceFromPattern` — converts pattern coordinates to device coordinates
+- `documentWorldFromCanvasTransform_` — converts canvas coordinates to document-world coordinates
+
+When writing new transform code, always use `destFromSource` form (e.g., `localFromDevice`, not `deviceToLocal`).
+
+## Text Rendering Build Configurations
+
+Text support has three build tiers. When making text-related changes, test all applicable configurations:
+
+| Config | Flag | Layout Engine | Description |
+|--------|------|--------------|-------------|
+| Base text | `--config=text` | stb_truetype (`TextLayout`) | Kern-table kerning, glyph outlines |
+| Text shaping | `--config=text-shaping` | HarfBuzz (`TextShaper`) | Full OpenType shaping (GSUB/GPOS) |
+| Skia backend | `--config=skia` | Skia internal | Skia's own text rendering |
+
+Example: `bazel test --config=text-shaping //donner/svg/renderer/tests:resvg_test_suite`
+
+Update golden images: `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:renderer_tests`
+
+## Pixel Diff Debugging Philosophy
+
+- Always aim to **root-cause** pixel diff issues, even if the code is in vendored libraries (e.g., tiny-skia-cpp).
+- Don't just bump thresholds — investigate WHY pixels differ and fix the underlying code when possible.
+- Enabling skipped tests with large thresholds is not useful without understanding the root cause.
+
+## Resvg Test Threshold Conventions
+
+- For pixel diffs <100, just **omit the entry** — the default `Params()` applies automatically via `getTestsWithPrefix`.
+- Only add an override entry with `Params::WithThreshold(kDefaultThreshold, N)` when diffs are >=100.
+- Don't add `{"test.svg", Params()}` entries — omit them entirely.
+- `Params::Skip()` for tests that can't pass yet.
+- For resvg tests labeled "UB" (undefined behavior): always `Params::Skip()` — the golden images have "UB" text overlaid so they aren't comparable.
+
 ## Development Notes
 
 - Format C++ code with `clang-format` and TypeScript/JSON/Markdown with `dprint`
@@ -89,6 +126,9 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   - Use `tools/doxygen.sh` to generate the docs.
   - The generated docs are in `generated-doxygen/html/`.
 - Use `tools/coverage.sh` to generate code coverage reports (if lcov is installed).
+- IDE may show false positive errors (`entt.hpp` not found, unknown `Registry` type) — these are
+  from missing Bazel-generated context and do not indicate real build failures. Always verify with
+  `bazel build`.
 - Renderer image-comparison failures support an LLM quiet mode.
   - When `LLM=1`, `ImageComparisonTestFixture` suppresses verbose backend rerender logs, pixel
     dumps, terminal previews, and echoed SVG contents.
