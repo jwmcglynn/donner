@@ -185,6 +185,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
         effectiveBaselineShift - spanBaselineShiftPx;
 
+    const bool vertical = isVertical(params.writingMode);
     double penX = baseX;
     double penY = baseY;
 
@@ -197,68 +198,124 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       const uint32_t codepoint = decodeUtf8(spanText, byteIdx);
       const int glyphIndex = stbtt_FindGlyphIndex(info, static_cast<int>(codepoint));
 
-      // Per-character absolute X positioning overrides the pen.
-      const bool hasAbsoluteX =
-          charIdx < span.xList.size() && span.xList[charIdx].has_value();
-      if (hasAbsoluteX) {
-        penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                              Lengthd::Extent::X);
-      } else {
-        // Kern adjustment with previous glyph (only when not absolute-positioned).
-        if (prevGlyph != 0 && glyphIndex != 0) {
-          const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
-          penX += static_cast<double>(kern) * scale;
-        }
-      }
-
-      // Per-character dx.
-      if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
-        penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                Lengthd::Extent::X);
-      }
-
-      // Per-character absolute Y positioning.
-      if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
-        penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                              Lengthd::Extent::Y) +
-               baselineShift;
-      }
-
-      // Per-character dy.
-      if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
-        penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+      if (vertical) {
+        // Vertical mode: primary advance is along Y, cross-axis is X.
+        // Per-character absolute Y overrides the pen along the primary axis.
+        const bool hasAbsoluteY =
+            charIdx < span.yList.size() && span.yList[charIdx].has_value();
+        if (hasAbsoluteY) {
+          penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::Y);
-      }
+        }
 
-      // Advance width.
-      int advanceWidth = 0;
-      int leftSideBearing = 0;
-      stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &leftSideBearing);
+        // Per-character dy (primary axis).
+        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
+          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::Y);
+        }
 
-      LayoutGlyph glyph;
-      glyph.glyphIndex = glyphIndex;
-      glyph.xPosition = penX;
-      glyph.yPosition = penY;
-      glyph.xAdvance = static_cast<double>(advanceWidth) * scale;
+        // Per-character absolute X (cross-axis).
+        if (charIdx < span.xList.size() && span.xList[charIdx].has_value()) {
+          penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::X);
+        }
 
-      // Per-character rotation (last value repeats per SVG spec).
-      if (charIdx < span.rotateList.size()) {
-        glyph.rotateDegrees = span.rotateList[charIdx];
-      } else if (!span.rotateList.empty()) {
-        glyph.rotateDegrees = span.rotateList.back();
+        // Per-character dx (cross-axis).
+        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
+          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::X);
+        }
+
+        LayoutGlyph glyph;
+        glyph.glyphIndex = glyphIndex;
+        glyph.xPosition = penX;
+        glyph.yPosition = penY;
+        // Vertical advance: use fontSizePx (em-square height). stb_truetype lacks vmtx.
+        glyph.yAdvance = fontSizePx;
+        glyph.xAdvance = 0;
+
+        // Rotation: non-CJK glyphs (codepoint < 0x2E80) get 90° CW rotation in vertical mode.
+        double baseRotation = (codepoint < 0x2E80) ? 90.0 : 0.0;
+        if (charIdx < span.rotateList.size()) {
+          glyph.rotateDegrees = span.rotateList[charIdx] + baseRotation;
+        } else if (!span.rotateList.empty()) {
+          glyph.rotateDegrees = span.rotateList.back() + baseRotation;
+        } else {
+          glyph.rotateDegrees = span.rotateDegrees + baseRotation;
+        }
+
+        run.glyphs.push_back(glyph);
+
+        penY += glyph.yAdvance;
+        penY += params.letterSpacingPx;
+        if (codepoint == 0x0020) {
+          penY += params.wordSpacingPx;
+        }
       } else {
-        glyph.rotateDegrees = span.rotateDegrees;
-      }
+        // Horizontal mode (existing path).
+        // Per-character absolute X positioning overrides the pen.
+        const bool hasAbsoluteX =
+            charIdx < span.xList.size() && span.xList[charIdx].has_value();
+        if (hasAbsoluteX) {
+          penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::X);
+        } else {
+          // Kern adjustment with previous glyph (only when not absolute-positioned).
+          if (prevGlyph != 0 && glyphIndex != 0) {
+            const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
+            penX += static_cast<double>(kern) * scale;
+          }
+        }
 
-      run.glyphs.push_back(glyph);
+        // Per-character dx.
+        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
+          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::X);
+        }
 
-      penX += glyph.xAdvance;
+        // Per-character absolute Y positioning.
+        if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
+          penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                Lengthd::Extent::Y) +
+                 baselineShift;
+        }
 
-      // CSS letter-spacing: extra space after every character.
-      penX += params.letterSpacingPx;
-      // CSS word-spacing: extra space after U+0020 (space) characters.
-      if (codepoint == 0x0020) {
-        penX += params.wordSpacingPx;
+        // Per-character dy.
+        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
+          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::Y);
+        }
+
+        // Advance width.
+        int advanceWidth = 0;
+        int leftSideBearing = 0;
+        stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &leftSideBearing);
+
+        LayoutGlyph glyph;
+        glyph.glyphIndex = glyphIndex;
+        glyph.xPosition = penX;
+        glyph.yPosition = penY;
+        glyph.xAdvance = static_cast<double>(advanceWidth) * scale;
+
+        // Per-character rotation (last value repeats per SVG spec).
+        if (charIdx < span.rotateList.size()) {
+          glyph.rotateDegrees = span.rotateList[charIdx];
+        } else if (!span.rotateList.empty()) {
+          glyph.rotateDegrees = span.rotateList.back();
+        } else {
+          glyph.rotateDegrees = span.rotateDegrees;
+        }
+
+        run.glyphs.push_back(glyph);
+
+        penX += glyph.xAdvance;
+
+        // CSS letter-spacing: extra space after every character.
+        penX += params.letterSpacingPx;
+        // CSS word-spacing: extra space after U+0020 (space) characters.
+        if (codepoint == 0x0020) {
+          penX += params.wordSpacingPx;
+        }
       }
 
       prevGlyph = glyphIndex;
@@ -299,36 +356,50 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
 
     // Apply textLength adjustment: stretch or compress glyph positions to fit the target length.
     if (params.textLength.has_value() && !run.glyphs.empty()) {
-      const double targetLength = params.textLength->toPixels(params.viewBox, params.fontMetrics,
-                                                              Lengthd::Extent::X);
-      const double naturalLength = penX - baseX;
+      const double targetLength = params.textLength->toPixels(
+          params.viewBox, params.fontMetrics,
+          vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+      const double naturalLength = vertical ? (penY - baseY) : (penX - baseX);
 
       if (naturalLength > 0.0 && targetLength > 0.0) {
         if (params.lengthAdjust == LengthAdjust::Spacing) {
-          // Distribute extra space evenly between glyphs.
           const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
           const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
           for (size_t gi = 1; gi < run.glyphs.size(); ++gi) {
-            run.glyphs[gi].xPosition += extraPerGap * static_cast<double>(gi);
+            if (vertical) {
+              run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
+            } else {
+              run.glyphs[gi].xPosition += extraPerGap * static_cast<double>(gi);
+            }
           }
-          // Update penX to reflect the new end position.
-          penX = baseX + targetLength;
+          if (vertical) {
+            penY = baseY + targetLength;
+          } else {
+            penX = baseX + targetLength;
+          }
         } else {
-          // SpacingAndGlyphs: scale all positions and advances uniformly.
           const double scaleFactor = targetLength / naturalLength;
           for (auto& g : run.glyphs) {
-            g.xPosition = baseX + (g.xPosition - baseX) * scaleFactor;
-            g.xAdvance *= scaleFactor;
+            if (vertical) {
+              g.yPosition = baseY + (g.yPosition - baseY) * scaleFactor;
+              g.yAdvance *= scaleFactor;
+            } else {
+              g.xPosition = baseX + (g.xPosition - baseX) * scaleFactor;
+              g.xAdvance *= scaleFactor;
+            }
           }
-          penX = baseX + targetLength;
+          if (vertical) {
+            penY = baseY + targetLength;
+          } else {
+            penX = baseX + targetLength;
+          }
         }
       }
     }
 
-    // Apply text-anchor adjustment: shift all glyph positions based on total advance.
+    // Apply text-anchor adjustment: shift all glyph positions along the inline axis.
     if (params.textAnchor != TextAnchor::Start && !run.glyphs.empty()) {
-      // Total advance is the distance from the first glyph to the end of the last glyph.
-      const double totalAdvance = penX - baseX;
+      const double totalAdvance = vertical ? (penY - baseY) : (penX - baseX);
       double shift = 0.0;
       if (params.textAnchor == TextAnchor::Middle) {
         shift = -totalAdvance / 2.0;
@@ -336,7 +407,11 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         shift = -totalAdvance;
       }
       for (auto& g : run.glyphs) {
-        g.xPosition += shift;
+        if (vertical) {
+          g.yPosition += shift;
+        } else {
+          g.xPosition += shift;
+        }
       }
     }
 

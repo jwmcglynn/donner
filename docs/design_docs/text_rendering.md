@@ -1130,20 +1130,27 @@ Word-spacing tests all at ~4K (within existing 4500 threshold).
 Tests 014-021 unchanged (nested/percentage shifts remain at pre-existing override thresholds).
 Test 013 improved to 6.3K. All tests pass within existing thresholds.
 
-#### Phase 11: writing-mode (Deferred)
+#### Phase 11: writing-mode (Done)
 
 **Goal:** Enable vertical text rendering.
 
-This is the most complex missing feature. It requires:
-1. `WritingMode` enum: `horizontal-tb` (default), `vertical-rl`, `vertical-lr`
-2. Glyph rotation (90 CW for horizontal glyphs in vertical mode)
-3. Vertical advance metrics from the `vmtx`/`vhea` font tables
-4. Baseline alignment changes for vertical text
-5. HarfBuzz `HB_DIRECTION_TTB` for the shaping tier
+- [x] Created `WritingMode` enum (`HorizontalTb`, `VerticalRl`, `VerticalLr`) in
+  `donner/svg/core/WritingMode.h` with `isVertical()` helper.
+- [x] Added `ParseWritingMode()` supporting both SVG1 (`lr-tb`, `lr`, `rl-tb`, `rl`, `tb-rl`,
+  `tb`, `tb-lr`) and CSS3 (`horizontal-tb`, `vertical-rl`, `vertical-lr`) values.
+- [x] Property registered as `Property<WritingMode, PropertyCascade::Inherit>`, threaded
+  through `TextParams`, populated in `toTextParams()`.
+- [x] Added `yAdvance` field to both `LayoutGlyph` and `ShapedGlyph` structs.
+- [x] TextLayout vertical mode: pen advances along Y using `fontSizePx` as vertical advance
+  (stb_truetype lacks vmtx tables). Non-CJK glyphs (codepoint < 0x2E80) get 90° CW rotation.
+  text-anchor and textLength operate along Y.
+- [x] TextShaper vertical mode: uses `HB_DIRECTION_TTB` for HarfBuzz shaping. Extracts
+  `y_advance` (negated for SVG Y-down). HarfBuzz handles vertical glyph orientation via `vert`
+  GSUB feature. text-anchor and textLength on Y.
 
-**Recommendation:** Defer to a dedicated phase after per-character positioning and spacing
-properties are complete. Writing-mode affects only 18 tests and requires architectural changes
-to the layout pipeline.
+**Measured outcome:** CJK vertical tests (013-015) at 1.8K-3.2K pixels. Latin vertical (005-006)
+at ~11.5K. Horizontal modes (001-004) unchanged at ~16K. All 18 tests pass within the existing
+17000 threshold in both base-text and text-shaping tiers.
 
 #### Phase 12: alignment-baseline (Done)
 

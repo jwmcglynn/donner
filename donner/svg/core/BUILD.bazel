@@ -32,6 +32,7 @@ cc_library(
         "TransformOrigin.h",
         "UserAgentStylesheet.h",
         "Visibility.h",
+        "WritingMode.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",

@@ -183,6 +183,42 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
   return err;
 }
 
+/// Parse writing-mode: SVG1 values (lr-tb, lr, rl-tb, rl, tb-rl, tb, tb-lr) and
+/// CSS3 values (horizontal-tb, vertical-rl, vertical-lr).
+ParseResult<WritingMode> ParseWritingMode(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+      // CSS3 values.
+      if (value.equalsLowercase("horizontal-tb")) {
+        return WritingMode::HorizontalTb;
+      }
+      if (value.equalsLowercase("vertical-rl")) {
+        return WritingMode::VerticalRl;
+      }
+      if (value.equalsLowercase("vertical-lr")) {
+        return WritingMode::VerticalLr;
+      }
+      // SVG1 values.
+      if (value.equalsLowercase("lr-tb") || value.equalsLowercase("lr") ||
+          value.equalsLowercase("rl-tb") || value.equalsLowercase("rl")) {
+        return WritingMode::HorizontalTb;
+      }
+      if (value.equalsLowercase("tb-rl") || value.equalsLowercase("tb")) {
+        return WritingMode::VerticalRl;
+      }
+      if (value.equalsLowercase("tb-lr")) {
+        return WritingMode::VerticalLr;
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid writing-mode value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 /// Parse "baseline | sub | super | <length> | <percentage>" for baseline-shift.
 /// "sub" and "super" are converted to em-relative values matching typical browser rendering.
 /// Percentages are relative to font-size per SVG spec, converted to em units.
@@ -996,6 +1032,15 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                          return ParseDominantBaseline(params.components());
                        },
                        &registry.alignmentBaseline);
+                 }},  //
+                {"writing-mode",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseWritingMode(params.components());
+                       },
+                       &registry.writingMode);
                  }},  //
                 {"display",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
