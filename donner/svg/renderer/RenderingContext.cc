@@ -11,6 +11,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
@@ -1078,6 +1079,18 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
+
+#ifdef DONNER_TEXT_ENABLED
+  // Create a shared FontManager in the registry context for font-relative unit resolution
+  // (ch, ex). This must happen after loadResources() so @font-face data is available.
+  {
+    auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
+    auto& fontManager = registry_.ctx().emplace<FontManager>();
+    for (const auto& face : resourceManager.fontFaces()) {
+      fontManager.addFontFace(face);
+    }
+  }
+#endif
 
   // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
   // after those styles are evaluated, and after which we need to compute the styles for that subset

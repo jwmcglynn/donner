@@ -214,12 +214,19 @@ donner_cc_library(
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
     visibility = ["//donner/svg:__subpackages__"],
+    defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//donner/svg/components",
         "//donner/svg/components:spatial_grid",
         "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/animation:components",
-    ],
+    ] + select({
+        ":text_enabled": ["//donner/svg/resources:font_manager"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_perf_sensitive_cc_library(
