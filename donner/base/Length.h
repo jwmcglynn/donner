@@ -179,10 +179,24 @@ struct Length {
       case Unit::Ex: return value * fontMetrics.exUnit();
       case Unit::Ch: return value * fontMetrics.chUnit();
       case Unit::Rem: return value * fontMetrics.rootFontSize;
-      case Unit::Vw: return value * viewBox.width() / 100.0;
-      case Unit::Vh: return value * viewBox.height() / 100.0;
-      case Unit::Vmin: return value * std::min(viewBox.width(), viewBox.height()) / 100.0;
-      case Unit::Vmax: return value * std::max(viewBox.width(), viewBox.height()) / 100.0;
+      case Unit::Vw: {
+        const double w = fontMetrics.viewportSize ? fontMetrics.viewportSize->x : viewBox.width();
+        return value * w / 100.0;
+      }
+      case Unit::Vh: {
+        const double h = fontMetrics.viewportSize ? fontMetrics.viewportSize->y : viewBox.height();
+        return value * h / 100.0;
+      }
+      case Unit::Vmin: {
+        const double w = fontMetrics.viewportSize ? fontMetrics.viewportSize->x : viewBox.width();
+        const double h = fontMetrics.viewportSize ? fontMetrics.viewportSize->y : viewBox.height();
+        return value * std::min(w, h) / 100.0;
+      }
+      case Unit::Vmax: {
+        const double w = fontMetrics.viewportSize ? fontMetrics.viewportSize->x : viewBox.width();
+        const double h = fontMetrics.viewportSize ? fontMetrics.viewportSize->y : viewBox.height();
+        return value * std::max(w, h) / 100.0;
+      }
     }
 
     UTILS_UNREACHABLE();
