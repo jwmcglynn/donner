@@ -34,6 +34,10 @@ cc_library(
     hdrs = [
         "ShapeSystem.h",
     ],
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     visibility = [
         "//donner/svg/components:__subpackages__",
         "//donner/svg/properties:__pkg__",
@@ -45,5 +49,11 @@ cc_library(
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:style_system",
-    ],
+    ] + select({
+        "//donner/svg/renderer:text_enabled": [
+            "//donner/svg/resources:font_manager",
+            "@stb//:truetype",
+        ],
+        "//conditions:default": [],
+    }),
 )

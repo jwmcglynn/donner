@@ -91,6 +91,38 @@ config_setting(
 )
 
 donner_cc_library(
+    name = "composited_renderer",
+    srcs = ["CompositedRenderer.cc"],
+    hdrs = ["CompositedRenderer.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":layer_decomposition",
+        ":renderer_driver",
+        ":renderer_interface",
+        ":renderer_utils",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/animation:components",
+    ],
+)
+
+donner_cc_library(
+    name = "layer_decomposition",
+    srcs = ["LayerDecomposition.cc"],
+    hdrs = [
+        "CompositingLayer.h",
+        "LayerDecomposition.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/components:components_core",
+        "//donner/svg/renderer/common",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_interface",
     hdrs = ["RendererInterface.h"],
     visibility = ["//visibility:public"],
@@ -168,9 +200,19 @@ donner_cc_library(
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
     visibility = ["//donner/svg:__subpackages__"],
+    defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//donner/svg/components",
-    ],
+        "//donner/svg/components:spatial_grid",
+        "//donner/svg/components/animation:animation_system",
+        "//donner/svg/components/animation:components",
+    ] + select({
+        ":text_enabled": ["//donner/svg/resources:font_manager"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_perf_sensitive_cc_library(

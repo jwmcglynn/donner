@@ -9,12 +9,23 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/resources/FontManager.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/shape/CircleComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/EllipseComponent.h"
+#include "donner/svg/components/shape/LineComponent.h"
+#include "donner/svg/components/shape/PathComponent.h"
+#include "donner/svg/components/shape/RectComponent.h"
+#include "donner/base/parser/LengthParser.h"
+#include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
@@ -31,6 +42,7 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/components/SpatialGrid.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
@@ -610,6 +622,42 @@ void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranch
   }
 }
 
+/// Configuration for hit-testing based on the pointer-events property.
+struct HitTestConfig {
+  bool testFill;              ///< Whether to test fill intersection.
+  bool testStroke;            ///< Whether to test stroke intersection.
+  bool requireVisible;        ///< Whether element must be visible.
+  bool requirePaintedFill;    ///< Whether fill must be non-none.
+  bool requirePaintedStroke;  ///< Whether stroke must be non-none.
+};
+
+/// Returns the hit-test configuration for a given PointerEvents value.
+HitTestConfig configFromPointerEvents(PointerEvents pe) {
+  switch (pe) {
+    case PointerEvents::None:
+      return {false, false, false, false, false};  // Should be filtered before this call.
+    case PointerEvents::BoundingBox:
+      return {false, false, false, false, false};  // Handled separately.
+    case PointerEvents::VisiblePainted:
+      return {true, true, true, true, true};
+    case PointerEvents::VisibleFill:
+      return {true, false, true, false, false};
+    case PointerEvents::VisibleStroke:
+      return {false, true, true, false, false};
+    case PointerEvents::Visible:
+      return {true, true, true, false, false};
+    case PointerEvents::Painted:
+      return {true, true, false, true, true};
+    case PointerEvents::Fill:
+      return {true, false, false, false, false};
+    case PointerEvents::Stroke:
+      return {false, true, false, false, false};
+    case PointerEvents::All:
+      return {true, true, false, false, false};
+  }
+  UTILS_UNREACHABLE();
+}
+
 }  // namespace
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
@@ -656,57 +704,177 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
   renderState.hasBeenBuilt = true;
 }
 
+bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (!instance) {
+    return false;
+  }
+
+  const ComputedStyleComponent& style =
+      StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
+  const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
+
+  if (pointerEvents == PointerEvents::None) {
+    return false;
+  }
+
+  const HitTestConfig config = configFromPointerEvents(pointerEvents);
+
+  // Check visibility requirement.
+  if (config.requireVisible && !instance->visible) {
+    return false;
+  }
+
+  const bool hasFillPaint = style.properties->fill.getRequired() != PaintServer::None();
+  const bool hasStrokePaint = style.properties->stroke.getRequired() != PaintServer::None();
+  const double strokeWidth =
+      hasStrokePaint ? style.properties->strokeWidth.getRequired().value : 0.0;
+
+  if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
+      bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
+    if (pointerEvents == PointerEvents::BoundingBox) {
+      return true;
+    }
+
+    const Vector2d pointInLocal =
+        LayoutSystem()
+            .getEntityFromWorldTransform(EntityHandle(registry_, entity))
+            .inverse()
+            .transformPosition(point);
+
+    // Test fill intersection.
+    if (config.testFill) {
+      const bool skipBecauseNotPainted = config.requirePaintedFill && !hasFillPaint;
+      if (!skipBecauseNotPainted &&
+          ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
+                                           style.properties->fillRule.getRequired())) {
+        return true;
+      }
+    }
+
+    // Test stroke intersection.
+    if (config.testStroke) {
+      const bool skipBecauseNotPainted = config.requirePaintedStroke && !hasStrokePaint;
+      if (!skipBecauseNotPainted &&
+          ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity), pointInLocal,
+                                             strokeWidth)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 Entity RenderingContext::findIntersecting(const Vector2d& point) {
   instantiateRenderTree(false, nullptr);
 
-  auto view = registry_.view<RenderingInstanceComponent>();
+  // Try using the spatial grid for accelerated lookup.
+  SpatialGrid grid;
+  grid.rebuild(registry_);
 
-  // Iterate in reverse order so that the last rendered element is tested first.
-  for (auto it = view.rbegin(); it != view.rend(); ++it) {
-    auto entity = *it;
-
-    // Skip if this shape doesn't respond to pointer events.
-    const ComputedStyleComponent& style =
-        StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
-    const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
-
-    // TODO(jwmcglynn): Handle different PointerEvents cases.
-    if (pointerEvents == PointerEvents::None) {
-      continue;
-    }
-
-    const bool matchFill = style.properties->fill.getRequired() != PaintServer::None();
-    const bool matchStroke = style.properties->stroke.getRequired() != PaintServer::None();
-    const double strokeWidth =
-        matchStroke ? style.properties->strokeWidth.getRequired().value : 0.0;
-
-    if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
-        bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
-      if (pointerEvents == PointerEvents::BoundingBox) {
+  if (grid.isBuilt()) {
+    // Use grid to narrow candidates, already sorted front-to-back.
+    const auto candidates = grid.query(point);
+    for (Entity entity : candidates) {
+      if (hitTestEntity(entity, point)) {
         return entity;
-      } else {
-        const Vector2d pointInLocal =
-            LayoutSystem()
-                .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-                .inverse()
-                .transformPosition(point);
-
-        // Match the path.
-        if (matchFill &&
-            ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                             style.properties->fillRule.getRequired())) {
-          return entity;
-        }
-
-        if (matchStroke && ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity),
-                                                              pointInLocal, strokeWidth)) {
-          return entity;
-        }
+      }
+    }
+  } else {
+    // Fall back to brute-force reverse scan for small documents.
+    auto view = registry_.view<RenderingInstanceComponent>();
+    for (auto it = view.rbegin(); it != view.rend(); ++it) {
+      if (hitTestEntity(*it, point)) {
+        return *it;
       }
     }
   }
 
   return entt::null;
+}
+
+std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point) {
+  instantiateRenderTree(false, nullptr);
+
+  std::vector<Entity> results;
+
+  SpatialGrid grid;
+  grid.rebuild(registry_);
+
+  if (grid.isBuilt()) {
+    const auto candidates = grid.query(point);
+    for (Entity entity : candidates) {
+      if (hitTestEntity(entity, point)) {
+        results.push_back(entity);
+      }
+    }
+  } else {
+    auto view = registry_.view<RenderingInstanceComponent>();
+    for (auto it = view.rbegin(); it != view.rend(); ++it) {
+      if (hitTestEntity(*it, point)) {
+        results.push_back(*it);
+      }
+    }
+  }
+
+  return results;
+}
+
+std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
+  instantiateRenderTree(false, nullptr);
+
+  std::vector<Entity> results;
+
+  SpatialGrid grid;
+  grid.rebuild(registry_);
+
+  if (grid.isBuilt()) {
+    const auto candidates = grid.queryRect(rect);
+    for (Entity entity : candidates) {
+      // For rect queries, check that the entity's AABB actually overlaps the query rect.
+      const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+      if (!instance || instance->dataEntity == entt::null) {
+        continue;
+      }
+
+      const auto bounds =
+          ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
+      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
+              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
+        results.push_back(entity);
+      }
+    }
+  } else {
+    // Brute-force scan in reverse draw order.
+    auto view = registry_.view<RenderingInstanceComponent>();
+    for (auto it = view.rbegin(); it != view.rend(); ++it) {
+      const auto& instance = view.get<RenderingInstanceComponent>(*it);
+      if (instance.dataEntity == entt::null) {
+        continue;
+      }
+
+      const auto bounds =
+          ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
+      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
+              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
+        results.push_back(*it);
+      }
+    }
+  }
+
+  return results;
+}
+
+std::optional<Boxd> RenderingContext::getWorldBounds(Entity entity) {
+  instantiateRenderTree(false, nullptr);
+
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (!instance || instance->dataEntity == entt::null) {
+    return std::nullopt;
+  }
+
+  return ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
 }
 
 void RenderingContext::invalidateRenderTree() {
@@ -761,8 +929,152 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
   StyleSystem().computeAllStyles(registry_, outWarnings);
 
+  // Advance animations after style computation but before layout.
+  {
+    const double documentTime =
+        registry_.ctx().get<SVGDocumentContext>().documentTime;
+    AnimationSystem().advance(registry_, documentTime, outWarnings);
+  }
+
+  // Apply animated value overrides to computed styles.
+  for (auto view = registry_.view<AnimatedValuesComponent, ComputedStyleComponent>();
+       auto entity : view) {
+    auto& animValues = view.get<AnimatedValuesComponent>(entity);
+    auto& computedStyle = view.get<ComputedStyleComponent>(entity);
+    if (computedStyle.properties.has_value()) {
+      for (const auto& [attrName, attrValue] : animValues.overrides) {
+        if (attrName == "transform") {
+          // Transform overrides need special handling: parse the transform string and
+          // store directly in TransformComponent (not through parsePresentationAttribute
+          // which requires an entity handle for this attribute).
+          auto result = parser::TransformParser::Parse(attrValue);
+          if (result.hasResult()) {
+            auto& transform =
+                registry_.get_or_emplace<components::TransformComponent>(entity);
+            transform.transform.set(CssTransform(result.result()),
+                                    css::Specificity::Override());
+          }
+        } else if (attrName == "d") {
+          // Path 'd' overrides need special handling: update PathComponent directly
+          // since 'd' is not a CSS property.
+          if (auto* pathComp = registry_.try_get<components::PathComponent>(entity)) {
+            pathComp->d.set(RcString(attrValue), css::Specificity::Override());
+            // Clear any spline override so the new 'd' string is re-parsed.
+            pathComp->splineOverride.reset();
+            // Invalidate computed path.
+            registry_.remove<components::ComputedPathComponent>(entity);
+          }
+        } else if (attrName == "cx" || attrName == "cy" || attrName == "r" ||
+                   attrName == "rx" || attrName == "ry" || attrName == "x" ||
+                   attrName == "y" || attrName == "width" || attrName == "height" ||
+                   attrName == "x1" || attrName == "y1" || attrName == "x2" ||
+                   attrName == "y2") {
+          // Geometry attribute override: parse as length and set on the shape component.
+          donner::parser::LengthParser::Options opts;
+          opts.unitOptional = true;
+          auto lengthResult = donner::parser::LengthParser::Parse(attrValue, opts);
+          if (!lengthResult.hasResult()) {
+            continue;
+          }
+          Lengthd len = lengthResult.result().length;
+          auto spec = css::Specificity::Override();
+          bool applied = false;
+
+          // Circle geometry.
+          if (auto* circle = registry_.try_get<components::CircleComponent>(entity)) {
+            if (attrName == "cx") {
+              circle->properties.cx.set(len, spec);
+              applied = true;
+            } else if (attrName == "cy") {
+              circle->properties.cy.set(len, spec);
+              applied = true;
+            } else if (attrName == "r") {
+              circle->properties.r.set(len, spec);
+              applied = true;
+            }
+          }
+          // Ellipse geometry.
+          if (auto* ellipse = registry_.try_get<components::EllipseComponent>(entity)) {
+            if (attrName == "cx") {
+              ellipse->properties.cx.set(len, spec);
+              applied = true;
+            } else if (attrName == "cy") {
+              ellipse->properties.cy.set(len, spec);
+              applied = true;
+            } else if (attrName == "rx") {
+              ellipse->properties.rx.set(len, spec);
+              applied = true;
+            } else if (attrName == "ry") {
+              ellipse->properties.ry.set(len, spec);
+              applied = true;
+            }
+          }
+          // Rect geometry.
+          if (auto* rect = registry_.try_get<components::RectComponent>(entity)) {
+            if (attrName == "x") {
+              rect->properties.x.set(len, spec);
+              applied = true;
+            } else if (attrName == "y") {
+              rect->properties.y.set(len, spec);
+              applied = true;
+            } else if (attrName == "width") {
+              rect->properties.width.set(len, spec);
+              applied = true;
+            } else if (attrName == "height") {
+              rect->properties.height.set(len, spec);
+              applied = true;
+            } else if (attrName == "rx") {
+              rect->properties.rx.set(len, spec);
+              applied = true;
+            } else if (attrName == "ry") {
+              rect->properties.ry.set(len, spec);
+              applied = true;
+            }
+          }
+          // Line geometry.
+          if (auto* line = registry_.try_get<components::LineComponent>(entity)) {
+            if (attrName == "x1") {
+              line->x1 = len;
+              applied = true;
+            } else if (attrName == "y1") {
+              line->y1 = len;
+              applied = true;
+            } else if (attrName == "x2") {
+              line->x2 = len;
+              applied = true;
+            } else if (attrName == "y2") {
+              line->y2 = len;
+              applied = true;
+            }
+          }
+          if (applied) {
+            // Invalidate computed components so the shape is re-converted.
+            registry_.remove<components::ComputedPathComponent>(entity);
+            registry_.remove<components::ComputedCircleComponent>(entity);
+            registry_.remove<components::ComputedEllipseComponent>(entity);
+            registry_.remove<components::ComputedRectComponent>(entity);
+          }
+        } else {
+          computedStyle.properties->parsePresentationAttribute(attrName, attrValue);
+        }
+      }
+    }
+  }
+
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
+
+#ifdef DONNER_TEXT_ENABLED
+  // Create a shared FontManager in the registry context for font-relative unit resolution
+  // (ch, ex). This must happen after loadResources() so @font-face data is available.
+  {
+    auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
+    auto& fontManager = registry_.ctx().emplace<FontManager>();
+    for (const auto& face : resourceManager.fontFaces()) {
+      fontManager.addFontFace(face);
+    }
+  }
+#endif
 
   // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
   // after those styles are evaluated, and after which we need to compute the styles for that subset

@@ -210,13 +210,12 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold, 15000)},  // Gradient stroke on text (radial)
             {"a-stroke-009.svg",
              Params::WithThreshold(kDefaultThreshold, 33000)},  // <text> stroke on complex text
-            {"a-stroke-dasharray-005.svg", Params::Skip()},  // Not impl: "font-size"? "em" units
-                                                             // (font-size="20" not impl)
+            // a-stroke-dasharray-005: em units on dasharray — toStrokeParams() resolves correctly.
             {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
             {"a-stroke-dasharray-009.svg", Params::Skip()},  // UB (negative sum)
             {"a-stroke-dasharray-013.svg",
              Params::WithThreshold(0.13f)},  // Larger threshold due to anti-aliasing artifacts.
-            {"a-stroke-dashoffset-004.svg", Params::Skip()},  // Not impl: dashoffset "em" units
+            // a-stroke-dashoffset-004: em units on dashoffset — toStrokeParams() resolves correctly.
             {"a-stroke-linejoin-004.svg",
              Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
@@ -798,9 +797,10 @@ INSTANTIATE_TEST_SUITE_P(
                                 {
                                     // em/ex/rem units work — FontMetrics carries computed
                                     // font-size and root font-size.
-                                    {"e-rect-029.svg", Params::Skip()},  // ch unit: 0.5em approx
-                                                                         // doesn't match actual "0"
-                                                                         // glyph width (47K diff)
+                                    {"e-rect-029.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 35500)},  // ch unit:
+                                    // uses fallback font "0" glyph (Noto Sans not loaded at
+                                    // shape computation time)
                                     // vw/vh and vmin/vmax units — no overrides needed, default
                                     // threshold applies (viewport units now resolve correctly).
                                 })),
