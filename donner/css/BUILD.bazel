@@ -81,6 +81,7 @@ donner_cc_test(
     name = "css_tests",
     srcs = [
         "tests/Color_tests.cc",
+        "tests/CssTypes_tests.cc",
         "tests/Declaration_tests.cc",
         "tests/OstreamOutput_tests.cc",
         "tests/Selector_tests.cc",

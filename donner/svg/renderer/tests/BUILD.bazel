@@ -230,6 +230,19 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "rendering_context_tests",
+    srcs = [
+        "RenderingContext_tests.cc",
+    ],
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resvg_test_suite_impl",
     size = "large",
     srcs = [
