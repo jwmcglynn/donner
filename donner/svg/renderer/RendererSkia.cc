@@ -1712,7 +1712,8 @@ void RendererSkia::popFilterLayer() {
   currentCanvas_->restore();
 }
 
-void RendererSkia::pushIsolatedLayer(double opacity) {
+void RendererSkia::pushIsolatedLayer(double opacity, MixBlendMode /*blendMode*/) {
+  // TODO: Apply blend mode to Skia saveLayerAlpha.
   if (currentCanvas_ == nullptr) {
     return;
   }

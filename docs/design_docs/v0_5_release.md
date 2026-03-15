@@ -313,19 +313,48 @@ Comprehensive text rendering improvements and test coverage expansion.
 - [x] **AGENTS.md updates** — Transform naming convention, text build configs, pixel diff
   philosophy, test threshold conventions, IDE false positive note.
 
-### Phase 14: Mask-on-Mask Rendering (Deferred)
+### Phase 14: Mask-on-Mask Rendering
 
 Correct mask luminance composition when a `<mask>` element has its own `mask=` attribute.
 
 - [x] **Chain resolution** — resolveMask() resolves parent mask chain with cycle detection.
 - [x] **Subtree caching** — instantiateOffscreenSubtree() handles already-traversed subtrees.
-- [x] **Render chain** — renderMask() pushes masks outermost-first with maskDepth tracking.
-- [x] **Render chain order** — Fixed to render innermost-first (matching view draw order),
-  not outermost-first. pushMask/popMask LIFO stack composes luminances correctly.
-- [ ] **View traversal conflict** — Multiple entities consume the same mask subtree entities
-  from the single-pass view iterator. Parent mask subtree entities get consumed by the wrong
-  entity. Requires either re-traversable mask subtrees or per-entity subtree copies.
-- [ ] **e-mask-025/026 tests** — Skipped. e-mask-027 needs shadow entity resolution (separate).
+- [x] **Render chain order** — renderMask() renders innermost-first (matching view draw order).
+  pushMask/popMask LIFO stack composes luminances correctly.
+- [x] **Per-entity parent mask shadow trees** — Added `ShadowBranchType::OffscreenParentMask`.
+  Phase 1 creates separate shadow trees on each masked entity for the parent mask, avoiding
+  view iterator sharing conflicts. e-mask-026: 160K→~0 pixels.
+- [x] **FontManager integration** — Stored in registry context after loadResources(). Used by
+  ShapeSystem for ch unit "0" glyph measurement via stb_truetype.
+- [x] **Stroke em units** — a-stroke-dasharray-005/a-stroke-dashoffset-004 were already working,
+  just incorrectly skipped. Both pass with 1px diff.
+- [x] **Enabled 5 disabled test categories** — a-font (44 passing), a-filter (17 passing),
+  a-flood (7 passing), a-dominant-baseline (1), a-clip (2). Plus 6 individual re-enabled tests
+  (color-interpolation-filters, fill-033, fill-opacity-004, shape-rendering-008,
+  stroke-opacity-004). ~76 new passing tests.
+- [ ] **e-mask-025** — Mutual recursion cycle detection works but rendering differs from reference.
+- [ ] **e-mask-027** — Shadow entity mask resolution (separate from mask-on-mask).
+
+### Test Coverage Gap Analysis
+
+**Current state: 1293 passing / 1506 total SVGs (86%)**
+
+123 tests explicitly skipped, 9 categories still disabled (~82 more tests),
+101 passing tests with >15K pixel diffs (font rendering baseline).
+
+| Gap | Tests | Effort | Status |
+|-----|-------|--------|--------|
+| **Font rendering baseline** | 101 >15K diff | Very High | Irreducible: stb_truetype vs FreeType glyph differences |
+| **SVG-in-image** | 17 skipped | High | `.svg`/`.svgz` as `<image>` needs sub-document pipeline |
+| **CSS blend modes** | ~20 disabled | Medium | `mix-blend-mode` not implemented |
+| **Filter backdrop** | ~21 disabled | Medium | `enable-background` / BackgroundImage input |
+| **Filter on use/marker/pattern** | 14 skipped | Medium | Filter application scope |
+| **`<switch>` + systemLanguage** | ~13 disabled | Medium | Conditional rendering |
+| **Mask-on-mask edge cases** | 2 skipped | Medium | Mutual recursion, shadow entity masks |
+| **color-interpolation on mask** | 1 skipped | Low | linearRGB mask composition (127K diff) |
+| **XML entities** | 3 skipped | Low | Parser feature |
+| **CSS @import, SVG version** | 3 skipped | Low | Parser/spec edge cases |
+| **a-direction / glyph-orientation** | ~4 disabled | Low | RTL/vertical text orientation |
 
 ### Phase 12: Release
 

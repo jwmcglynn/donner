@@ -237,7 +237,9 @@ INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-marker")), TestNameFromFilename);
 
 // TODO(filter): a-mark
-// TODO(filter): a-mix-blend-mode
+INSTANTIATE_TEST_SUITE_P(MixBlendMode, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-mix-blend-mode")),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Opacity, ImageComparisonTestFixture,

@@ -47,8 +47,8 @@ void Renderer::popClip() {
   impl_->popClip();
 }
 
-void Renderer::pushIsolatedLayer(double opacity) {
-  impl_->pushIsolatedLayer(opacity);
+void Renderer::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
+  impl_->pushIsolatedLayer(opacity, blendMode);
 }
 
 void Renderer::popIsolatedLayer() {

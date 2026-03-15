@@ -17,6 +17,7 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/WritingMode.h"
 #include "donner/svg/core/FillRule.h"
 #include "donner/svg/core/LengthAdjust.h"
@@ -200,10 +201,11 @@ public:
   virtual void popClip() = 0;
 
   /**
-   * Pushes an isolated compositing layer with the given opacity. Content drawn between
-   * pushIsolatedLayer and popIsolatedLayer is composited as a group at the specified opacity.
+   * Pushes an isolated compositing layer with the given opacity and blend mode. Content drawn
+   * between pushIsolatedLayer and popIsolatedLayer is composited as a group at the specified
+   * opacity using the specified blend mode.
    */
-  virtual void pushIsolatedLayer(double opacity) = 0;
+  virtual void pushIsolatedLayer(double opacity, MixBlendMode blendMode) = 0;
 
   /**
    * Pops the most recent isolated layer, compositing it with the given opacity.

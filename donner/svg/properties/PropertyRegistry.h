@@ -16,6 +16,7 @@
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/WritingMode.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
@@ -320,6 +321,12 @@ public:
       "writing-mode",
       []() -> std::optional<WritingMode> { return WritingMode::HorizontalTb; }};
 
+  /// `mix-blend-mode` property. Controls how an element composites with its backdrop.
+  /// Not inherited. Defaults to Normal (SourceOver).
+  Property<MixBlendMode> mixBlendMode{
+      "mix-blend-mode",
+      []() -> std::optional<MixBlendMode> { return MixBlendMode::Normal; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
@@ -350,7 +357,8 @@ public:
                                  fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
                                  strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
-                                 cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize);
+                                 cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize,
+                                 mixBlendMode);
   }
 
   /**

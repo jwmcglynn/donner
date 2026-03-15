@@ -32,6 +32,7 @@ cc_library(
         "TransformOrigin.h",
         "UserAgentStylesheet.h",
         "Visibility.h",
+        "MixBlendMode.h",
         "WritingMode.h",
     ],
     visibility = [

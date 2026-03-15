@@ -89,7 +89,7 @@ public:
   MOCK_METHOD(void, popTransform, (), (override));
   MOCK_METHOD(void, pushClip, (const ResolvedClip& clip), (override));
   MOCK_METHOD(void, popClip, (), (override));
-  MOCK_METHOD(void, pushIsolatedLayer, (double opacity), (override));
+  MOCK_METHOD(void, pushIsolatedLayer, (double opacity, MixBlendMode blendMode), (override));
   MOCK_METHOD(void, popIsolatedLayer, (), (override));
   MOCK_METHOD(void, pushFilterLayer,
               (const components::FilterGraph& filterGraph, const std::optional<Boxd>& filterRegion),

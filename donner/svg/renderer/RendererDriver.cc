@@ -381,9 +381,10 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
     const double opacity = style.properties->opacity.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0;
+    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
+    const bool hasIsolatedLayer = opacity < 1.0 || blendMode != MixBlendMode::Normal;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity);
+      renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
     std::optional<components::FilterGraph> filterGraph =
@@ -589,9 +590,10 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
     const double opacity = style.properties->opacity.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0;
+    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
+    const bool hasIsolatedLayer = opacity < 1.0 || blendMode != MixBlendMode::Normal;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity);
+      renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
     std::optional<components::FilterGraph> filterGraph =
@@ -870,9 +872,10 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
     const double opacity = style.properties->opacity.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0;
+    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
+    const bool hasIsolatedLayer = opacity < 1.0 || blendMode != MixBlendMode::Normal;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity);
+      renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
     std::optional<components::FilterGraph> filterGraph =
@@ -1347,7 +1350,7 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
   // Apply opacity as an isolated layer if needed.
   const bool needsOpacityLayer = opacity < 1.0;
   if (needsOpacityLayer) {
-    renderer_.pushIsolatedLayer(opacity);
+    renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
   }
 
   // Compute the base transform that maps sub-document coordinates into the parent canvas.
@@ -1411,7 +1414,7 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   // Apply opacity as an isolated layer if needed.
   const bool needsOpacityLayer = opacity < 1.0;
   if (needsOpacityLayer) {
-    renderer_.pushIsolatedLayer(opacity);
+    renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
   }
 
   // Set layerBaseTransform to position the target element at the <use> element's location.

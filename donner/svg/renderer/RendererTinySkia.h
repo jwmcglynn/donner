@@ -91,7 +91,7 @@ public:
    *
    * @param opacity Group opacity applied when the layer is composited back.
    */
-  void pushIsolatedLayer(double opacity) override;
+  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override;
 
   /// Pops the most recent isolated layer.
   void popIsolatedLayer() override;
@@ -229,6 +229,7 @@ private:
     std::optional<tiny_skia::Pixmap> fillPaintPixmap;
     std::optional<tiny_skia::Pixmap> strokePaintPixmap;
     double opacity = 1.0;
+    MixBlendMode blendMode = MixBlendMode::Normal;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
     Transformd deviceFromFilter;
@@ -252,8 +253,9 @@ private:
                                                                 const StrokeParams& stroke);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
   void compositePixmapInto(tiny_skia::Pixmap& destination, const tiny_skia::Pixmap& pixmap,
-                           double opacity);
-  void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity);
+                           double opacity, MixBlendMode blendMode = MixBlendMode::Normal);
+  void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity,
+                       MixBlendMode blendMode = MixBlendMode::Normal);
   void maybeWarnUnsupportedText();
 
   bool verbose_ = false;

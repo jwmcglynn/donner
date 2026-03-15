@@ -27,7 +27,7 @@ public:
 
   void popClip() override { renderer_.popClip(); }
 
-  void pushIsolatedLayer(double opacity) override { renderer_.pushIsolatedLayer(opacity); }
+  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override { renderer_.pushIsolatedLayer(opacity, blendMode); }
 
   void popIsolatedLayer() override { renderer_.popIsolatedLayer(); }
 

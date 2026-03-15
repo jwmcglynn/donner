@@ -183,6 +183,35 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
   return err;
 }
 
+/// Parse mix-blend-mode CSS keyword values.
+ParseResult<MixBlendMode> ParseMixBlendMode(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      const RcString& v = ident->value;
+      if (v.equalsLowercase("normal")) return MixBlendMode::Normal;
+      if (v.equalsLowercase("multiply")) return MixBlendMode::Multiply;
+      if (v.equalsLowercase("screen")) return MixBlendMode::Screen;
+      if (v.equalsLowercase("overlay")) return MixBlendMode::Overlay;
+      if (v.equalsLowercase("darken")) return MixBlendMode::Darken;
+      if (v.equalsLowercase("lighten")) return MixBlendMode::Lighten;
+      if (v.equalsLowercase("color-dodge")) return MixBlendMode::ColorDodge;
+      if (v.equalsLowercase("color-burn")) return MixBlendMode::ColorBurn;
+      if (v.equalsLowercase("hard-light")) return MixBlendMode::HardLight;
+      if (v.equalsLowercase("soft-light")) return MixBlendMode::SoftLight;
+      if (v.equalsLowercase("difference")) return MixBlendMode::Difference;
+      if (v.equalsLowercase("exclusion")) return MixBlendMode::Exclusion;
+      if (v.equalsLowercase("hue")) return MixBlendMode::Hue;
+      if (v.equalsLowercase("saturation")) return MixBlendMode::Saturation;
+      if (v.equalsLowercase("color")) return MixBlendMode::Color;
+      if (v.equalsLowercase("luminosity")) return MixBlendMode::Luminosity;
+    }
+  }
+  ParseError err;
+  err.reason = "Invalid mix-blend-mode value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 /// Parse writing-mode: SVG1 values (lr-tb, lr, rl-tb, rl, tb-rl, tb, tb-lr) and
 /// CSS3 values (horizontal-tb, vertical-rl, vertical-lr).
 ParseResult<WritingMode> ParseWritingMode(std::span<const css::ComponentValue> components) {
@@ -1032,6 +1061,15 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                          return ParseDominantBaseline(params.components());
                        },
                        &registry.alignmentBaseline);
+                 }},  //
+                {"mix-blend-mode",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseMixBlendMode(params.components());
+                       },
+                       &registry.mixBlendMode);
                  }},  //
                 {"writing-mode",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

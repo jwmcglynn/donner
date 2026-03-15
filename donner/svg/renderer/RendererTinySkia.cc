@@ -623,10 +623,11 @@ void RendererTinySkia::popClip() {
   clipStack_.pop_back();
 }
 
-void RendererTinySkia::pushIsolatedLayer(double opacity) {
+void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::IsolatedLayer;
   frame.opacity = opacity;
+  frame.blendMode = blendMode;
   const int width = static_cast<int>(currentPixmap().width());
   const int height = static_cast<int>(currentPixmap().height());
   frame.pixmap = createTransparentPixmap(width, height);
@@ -649,7 +650,7 @@ void RendererTinySkia::popIsolatedLayer() {
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
-  compositePixmap(frame.pixmap, frame.opacity);
+  compositePixmap(frame.pixmap, frame.opacity, frame.blendMode);
   if (!surfaceStack_.empty()) {
     SurfaceFrame& parent = surfaceStack_.back();
     if (frame.fillPaintPixmap.has_value() && parent.fillPaintPixmap.has_value()) {
@@ -1639,19 +1640,44 @@ tiny_skia::Pixmap RendererTinySkia::createTransparentPixmap(int width, int heigh
   return std::move(*maybePixmap);
 }
 
-void RendererTinySkia::compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity) {
-  compositePixmapInto(currentPixmap(), pixmap, opacity);
+void RendererTinySkia::compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity,
+                                       MixBlendMode blendMode) {
+  compositePixmapInto(currentPixmap(), pixmap, opacity, blendMode);
+}
+
+/// Map donner MixBlendMode to tiny_skia::BlendMode.
+static tiny_skia::BlendMode toTinyBlendMode(MixBlendMode mode) {
+  switch (mode) {
+    case MixBlendMode::Normal: return tiny_skia::BlendMode::SourceOver;
+    case MixBlendMode::Multiply: return tiny_skia::BlendMode::Multiply;
+    case MixBlendMode::Screen: return tiny_skia::BlendMode::Screen;
+    case MixBlendMode::Overlay: return tiny_skia::BlendMode::Overlay;
+    case MixBlendMode::Darken: return tiny_skia::BlendMode::Darken;
+    case MixBlendMode::Lighten: return tiny_skia::BlendMode::Lighten;
+    case MixBlendMode::ColorDodge: return tiny_skia::BlendMode::ColorDodge;
+    case MixBlendMode::ColorBurn: return tiny_skia::BlendMode::ColorBurn;
+    case MixBlendMode::HardLight: return tiny_skia::BlendMode::HardLight;
+    case MixBlendMode::SoftLight: return tiny_skia::BlendMode::SoftLight;
+    case MixBlendMode::Difference: return tiny_skia::BlendMode::Difference;
+    case MixBlendMode::Exclusion: return tiny_skia::BlendMode::Exclusion;
+    case MixBlendMode::Hue: return tiny_skia::BlendMode::Hue;
+    case MixBlendMode::Saturation: return tiny_skia::BlendMode::Saturation;
+    case MixBlendMode::Color: return tiny_skia::BlendMode::Color;
+    case MixBlendMode::Luminosity: return tiny_skia::BlendMode::Luminosity;
+  }
+  return tiny_skia::BlendMode::SourceOver;
 }
 
 void RendererTinySkia::compositePixmapInto(tiny_skia::Pixmap& destination,
-                                           const tiny_skia::Pixmap& pixmap, double opacity) {
+                                           const tiny_skia::Pixmap& pixmap, double opacity,
+                                           MixBlendMode blendMode) {
   if (opacity <= 0.0 || pixmap.width() == 0 || pixmap.height() == 0) {
     return;
   }
 
   tiny_skia::PixmapPaint paint;
   paint.opacity = NarrowToFloat(opacity);
-  paint.blendMode = tiny_skia::BlendMode::SourceOver;
+  paint.blendMode = toTinyBlendMode(blendMode);
   paint.quality = tiny_skia::FilterQuality::Nearest;
   paint.unpremulStore = &destination == &frame_;
 

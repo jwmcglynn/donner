@@ -85,7 +85,7 @@ public:
    *
    * @param opacity Group opacity applied when the layer is composited back.
    */
-  void pushIsolatedLayer(double opacity) override;
+  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override;
 
   /// Pops the most recent isolated layer.
   void popIsolatedLayer() override;
