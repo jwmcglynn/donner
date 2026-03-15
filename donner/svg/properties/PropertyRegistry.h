@@ -16,6 +16,7 @@
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/Isolation.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/WritingMode.h"
 #include "donner/svg/core/TextAnchor.h"
@@ -327,6 +328,11 @@ public:
       "mix-blend-mode",
       []() -> std::optional<MixBlendMode> { return MixBlendMode::Normal; }};
 
+  /// `isolation` property. Forces creation of a new stacking context.
+  /// Not inherited. Defaults to Auto.
+  Property<Isolation> isolation{
+      "isolation", []() -> std::optional<Isolation> { return Isolation::Auto; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
@@ -358,7 +364,7 @@ public:
                                  strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
                                  cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize,
-                                 mixBlendMode);
+                                 mixBlendMode, isolation);
   }
 
   /**

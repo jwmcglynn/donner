@@ -183,6 +183,20 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
   return err;
 }
 
+/// Parse CSS isolation property: auto | isolate.
+ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("auto")) return Isolation::Auto;
+      if (ident->value.equalsLowercase("isolate")) return Isolation::Isolate;
+    }
+  }
+  ParseError err;
+  err.reason = "Invalid isolation value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 /// Parse mix-blend-mode CSS keyword values.
 ParseResult<MixBlendMode> ParseMixBlendMode(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
@@ -1061,6 +1075,15 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                          return ParseDominantBaseline(params.components());
                        },
                        &registry.alignmentBaseline);
+                 }},  //
+                {"isolation",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseIsolation(params.components());
+                       },
+                       &registry.isolation);
                  }},  //
                 {"mix-blend-mode",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

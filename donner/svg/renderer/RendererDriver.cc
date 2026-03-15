@@ -382,7 +382,9 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     const double opacity = style.properties->opacity.getRequired();
     const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0 || blendMode != MixBlendMode::Normal;
+    const Isolation isolation = style.properties->isolation.getRequired();
+    const bool hasIsolatedLayer =
+        opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
@@ -591,7 +593,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     const double opacity = style.properties->opacity.getRequired();
     const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0 || blendMode != MixBlendMode::Normal;
+    const Isolation isolation = style.properties->isolation.getRequired();
+    const bool hasIsolatedLayer =
+        opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
@@ -873,7 +877,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     const double opacity = style.properties->opacity.getRequired();
     const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0 || blendMode != MixBlendMode::Normal;
+    const Isolation isolation = style.properties->isolation.getRequired();
+    const bool hasIsolatedLayer =
+        opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
