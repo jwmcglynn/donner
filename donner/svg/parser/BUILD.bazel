@@ -68,6 +68,7 @@ donner_cc_library(
     name = "parser_core",
     srcs = [
         "AngleParser.cc",
+        "ClockValueParser.cc",
         "CssTransformParser.cc",
         "LengthPercentageParser.cc",
         "Number2dParser.cc",
@@ -79,6 +80,7 @@ donner_cc_library(
     ],
     hdrs = [
         "AngleParser.h",
+        "ClockValueParser.h",
         "CssTransformParser.h",
         "LengthPercentageParser.h",
         "ListParser.h",
@@ -94,6 +96,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/parser",
         "//donner/css:core",
+        "//donner/svg/components/animation:components",
         "//donner/svg/core",
     ],
 )
@@ -101,7 +104,12 @@ donner_cc_library(
 donner_cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/AttributeParser_tests.cc",
+        "tests/AnimateElement_tests.cc",
+        "tests/AnimateMotionElement_tests.cc",
+        "tests/AnimateTransformElement_tests.cc",
         "tests/AngleParser_tests.cc",
+        "tests/ClockValueParser_tests.cc",
         "tests/CssTransformParser_tests.cc",
         "tests/LengthPercentageParser_tests.cc",
         "tests/ListParser_tests.cc",
@@ -109,6 +117,7 @@ donner_cc_test(
         "tests/PathParser_tests.cc",
         "tests/PointsListParser_tests.cc",
         "tests/PreserveAspectRatioParser_tests.cc",
+        "tests/SetElement_tests.cc",
         "tests/SVGParser_tests.cc",
         "tests/TransformParser_tests.cc",
         "tests/ViewBoxParser_tests.cc",
@@ -118,6 +127,8 @@ donner_cc_test(
         ":parser_core",
         "//donner/base:base_test_utils",
         "//donner/css/parser",
+        "//donner/svg/components/animation:animation_system",
+        "//donner/svg/components/animation:components",
         "//donner/svg/core/tests:core_test_utils",
         "//donner/svg/renderer:renderer_utils",
         "@com_google_gtest//:gtest_main",
@@ -176,5 +187,64 @@ donner_cc_fuzzer(
     corpus = "tests/list_parser_corpus",
     deps = [
         ":parser_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "clock_value_parser_fuzzer",
+    srcs = [
+        "tests/ClockValueParser_fuzzer.cc",
+    ],
+    corpus = "tests/clock_value_parser_corpus",
+    deps = [
+        ":parser_core",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "animate_motion_path_fuzzer",
+    srcs = [
+        "tests/AnimateMotionPath_fuzzer.cc",
+    ],
+    corpus = "tests/animate_motion_path_corpus",
+    deps = [
+        ":parser",
+        "//donner/svg/components/animation:animation_system",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "animate_transform_value_fuzzer",
+    srcs = [
+        "tests/AnimateTransformValue_fuzzer.cc",
+    ],
+    corpus = "tests/animate_transform_value_corpus",
+    deps = [
+        ":parser",
+        "//donner/svg/components/animation:animation_system",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "animate_value_fuzzer",
+    srcs = [
+        "tests/AnimateValue_fuzzer.cc",
+    ],
+    corpus = "tests/animate_value_corpus",
+    deps = [
+        ":parser",
+        "//donner/svg/components/animation:animation_system",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "syncbase_ref_fuzzer",
+    srcs = [
+        "tests/SyncbaseRef_fuzzer.cc",
+    ],
+    corpus = "tests/syncbase_ref_corpus",
+    deps = [
+        ":parser",
+        "//donner/svg/components/animation:animation_system",
     ],
 )
