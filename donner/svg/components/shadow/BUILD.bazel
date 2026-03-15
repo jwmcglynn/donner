@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "components",
@@ -33,5 +33,18 @@ donner_cc_library(
         ":components",
         "//donner/svg/components:components_core",
         "//donner/svg/components/style:components",
+    ],
+)
+
+donner_cc_test(
+    name = "shadow_tree_system_tests",
+    srcs = [
+        "tests/ShadowTreeSystem_tests.cc",
+    ],
+    deps = [
+        ":shadow_tree_system",
+        "//donner/base:base_test_utils",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
     ],
 )
