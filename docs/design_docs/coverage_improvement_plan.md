@@ -70,12 +70,12 @@ Quick wins that reduce the denominator without writing new tests.
 
 - [ ] **A1: Mark `FailureSignalHandler.cc` with LCOV_EXCL** — 224 lines of signal handling
   that cannot be exercised in unit tests.
-- [ ] **A2: Mark `operator<<` debug formatters** — Audit files with `operator<<` and add
-  `// LCOV_EXCL_LINE` to pure-debug ostream operators that only exist for gtest output.
-  Focus on `donner/svg/core/*.h` enum formatters and `donner/css/` type formatters.
-- [ ] **A3: Mark renderer error/fallback paths** — Add exclusions for error returns in
-  `RendererSkia.cc` and `RendererTinySkia.cc` that are unreachable under normal test
-  conditions (e.g., failed SkSurface creation, null canvas checks).
+- [ ] **A2: Test `operator<<` debug formatters** — Add unit tests that exercise `operator<<`
+  for enum types and data structures. Focus on `donner/svg/core/*.h` enum formatters and
+  `donner/css/` type formatters. Use `EXPECT_THAT(stream.str(), ...)` patterns.
+- [ ] **A3: Test renderer error/fallback paths** — Add unit tests that exercise error returns
+  in `RendererSkia.cc` and `RendererTinySkia.cc` (e.g., failed SkSurface creation, null
+  canvas checks, invalid dimensions, OOM-like conditions).
 - [ ] **A4: Verify tool files excluded** — Confirm `*_tool.cc` and `*_benchmark.cc` files
   are not included in the coverage denominator by the CI workflow. If they are, exclude
   them in the Bazel coverage invocation.

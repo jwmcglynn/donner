@@ -1,5 +1,6 @@
 /// @file FailureSignalHandler.cc
 /// Implementation of crash signal handlers with a fixed-buffer demangled stack trace.
+// LCOV_EXCL_START — Signal handlers cannot be safely exercised in unit tests.
 
 #include "donner/base/FailureSignalHandler.h"
 
@@ -222,3 +223,4 @@ void InstallFailureSignalHandler() {
 }
 
 }  // namespace donner
+// LCOV_EXCL_STOP
