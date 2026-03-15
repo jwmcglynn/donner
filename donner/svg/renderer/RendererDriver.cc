@@ -903,6 +903,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     // the filter output. The filter layer saves/clears the clip mask internally.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
+    // Mask is handled separately below; don't let pushClip see it.
+    const std::optional<components::ResolvedMask> entityMask = entityClip.mask;
+    entityClip.mask = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
@@ -912,6 +915,12 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       preRenderSvgFeImages(*filterGraph);
       preRenderFeImageFragments(*filterGraph, registry);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
+    }
+
+    // Render mask content, then transition to masked content layer.
+    const bool hasMask = entityMask.has_value() && entityMask->valid();
+    if (hasMask) {
+      renderMask(view, registry, instance, *entityMask);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -952,9 +961,13 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       deferred.hasIsolatedLayer = hasIsolatedLayer;
       deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
+      deferred.hasMask = hasMask;
       localDeferred.push_back(deferred);
     } else {
-      // Pop in reverse of push order: filter is innermost, then entity clip.
+      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
+      if (hasMask) {
+        renderer_.popMask();
+      }
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
       }
@@ -968,7 +981,10 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     while (!localDeferred.empty() && localDeferred.back().lastEntity == entity) {
       const DeferredPop& deferred = localDeferred.back();
-      // Pop in reverse of push order: filter is innermost, then entity clip.
+      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
+      if (deferred.hasMask) {
+        renderer_.popMask();
+      }
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
       }

@@ -124,9 +124,9 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-fill-015.svg", Params::Skip()},          // UB: ICC color
             {"a-fill-027.svg", Params::Skip()},          // Not impl: Fallback with icc-color
             {"a-fill-031.svg",
-             Params::WithThreshold(kDefaultThreshold, 23000)},  // <text>
+             Params::WithThreshold(kDefaultThreshold, 12000)},  // Gradient fill on text
             {"a-fill-032.svg",
-             Params::WithThreshold(kDefaultThreshold, 23000)},  // <text>
+             Params::WithThreshold(kDefaultThreshold, 23000)},  // Gradient fill on text (radial)
             {"a-fill-033.svg", Params::Skip()},          // Not impl: <pattern> fill on text
             {"a-fill-opacity-004.svg", Params::Skip()},  // Not impl: `fill-opacity` affects pattern
             {"a-fill-opacity-006.svg",
@@ -197,9 +197,9 @@ INSTANTIATE_TEST_SUITE_P(
         "a-stroke",
         {
             {"a-stroke-007.svg",
-             Params::WithThreshold(kDefaultThreshold, 20000)},  // <text>
+             Params::WithThreshold(kDefaultThreshold, 12000)},  // Gradient stroke on text
             {"a-stroke-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 22000)},  // <text>
+             Params::WithThreshold(kDefaultThreshold, 15000)},  // Gradient stroke on text (radial)
             {"a-stroke-009.svg",
              Params::WithThreshold(kDefaultThreshold, 33000)},  // <text> stroke on complex text
             {"a-stroke-dasharray-005.svg", Params::Skip()},  // Not impl: "font-size"? "em" units
@@ -215,7 +215,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-opacity-004.svg",
              Params::Skip()},  // Not impl: <pattern> / stroke interaction
             {"a-stroke-opacity-006.svg",
-             Params::WithThreshold(kDefaultThreshold, 21000)},  // <text>
+             Params::WithThreshold(kDefaultThreshold, 19000)},  // Stroke opacity on text
             {"a-stroke-width-004.svg", Params::Skip()},    // UB: Nothing should be rendered
         })),
     TestNameFromFilename);
@@ -709,9 +709,11 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-marker-018.svg",
              Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
             {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image
-            {"e-marker-022.svg", Params::Skip()},  // BUG: Nested
+            {"e-marker-022.svg",
+             Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
             {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
-            {"e-marker-044.svg", Params::Skip()},  // BUG: Multiple closepaths (M L L Z Z Z)
+            {"e-marker-044.svg",
+             Params::WithThreshold(kDefaultThreshold, 1200)},  // Multiple closepaths
             // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
             {"e-marker-045.svg", Params::WithGoldenOverride(
                                      "donner/svg/renderer/testdata/golden/resvg-e-marker-045.png")},
@@ -728,12 +730,16 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
-            {"e-mask-025.svg", Params::Skip()},  // BUG: Rendering issue, mask is clipped. Repros in
-                                                 // renderer_tool but not viewer.
-            {"e-mask-026.svg", Params::Skip()},  // BUG: Mask on self, also a bug in browsers
-            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child doesn't apply
-            {"e-mask-029.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
-            {"e-mask-030.svg", Params::Skip()},  // BUG: Crashes on serializing the skp
+            {"e-mask-025.svg", Params::Skip()},  // BUG: Mask-on-mask (recursive) — shadow tree
+                                                 // mask resolution needed
+            {"e-mask-026.svg", Params::Skip()},  // BUG: Mask-on-mask — mask element's own mask=
+                                                 // attr not resolved in shadow tree
+            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child — shadow tree entities
+                                                 // don't resolve nested masks
+            {"e-mask-029.svg",
+             Params::WithThreshold(kDefaultThreshold, 18000)},  // Mask with <image>
+            {"e-mask-030.svg",
+             Params::WithThreshold(kDefaultThreshold, 21000)},  // Mask with grayscale <image>
         })),
     TestNameFromFilename);
 
@@ -795,8 +801,8 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"e-rect-023.svg", Params::Skip()},  // Not impl: "ex" units
                                     {"e-rect-029.svg", Params::Skip()},  // Not impl: "rem" units
                                     {"e-rect-031.svg", Params::Skip()},  // Not impl: "ch" units
-                                    {"e-rect-034.svg", Params::Skip()},  // Bug? vw/vh
-                                    {"e-rect-036.svg", Params::Skip()},  // Bug? vmin/vmax
+                                    {"e-rect-034.svg", Params::Skip()},  // BUG: vw/vh units (137K diff)
+                                    {"e-rect-036.svg", Params::Skip()},  // BUG: vmin/vmax units (137K diff)
                                 })),
     TestNameFromFilename);
 
