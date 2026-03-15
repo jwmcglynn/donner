@@ -88,13 +88,20 @@ INSTANTIATE_TEST_SUITE_P(
         Params::WithThreshold(kDefaultThreshold, 8500))),
     TestNameFromFilename);
 
-// TODO: a-clip
+INSTANTIATE_TEST_SUITE_P(
+    Clip, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("a-clip",
+                                {
+                                    {"a-clip-001.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 77000)},  // Text clip
+                                })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Color, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-color",  //
                                                      {
-                                                         {"a-color-interpolation-filters-001.svg",
-                                                          Params::Skip()},  // Not impl: Filters
+                                                         // a-color-interpolation-filters-001 passes
+                                                         // with default threshold (72px diff).
                                                      })),
                          TestNameFromFilename);
 
@@ -112,7 +119,12 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-// TODO: a-dominant-baseline
+INSTANTIATE_TEST_SUITE_P(
+    DominantBaseline, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("a-dominant-baseline", {},
+                                Params::WithThreshold(kDefaultThreshold, 17000))),
+    TestNameFromFilename);
+
 // TODO: a-enable-background
 
 INSTANTIATE_TEST_SUITE_P(
@@ -127,16 +139,72 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold, 12000)},  // Gradient fill on text
             {"a-fill-032.svg",
              Params::WithThreshold(kDefaultThreshold, 23000)},  // Gradient fill on text (radial)
-            {"a-fill-033.svg", Params::Skip()},          // Not impl: <pattern> fill on text
-            {"a-fill-opacity-004.svg", Params::Skip()},  // Not impl: `fill-opacity` affects pattern
+            {"a-fill-033.svg",
+             Params::WithThreshold(kDefaultThreshold, 16500)},  // Pattern fill on text
+            // a-fill-opacity-004 passes with default threshold.
             {"a-fill-opacity-006.svg",
              Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
         })),
     TestNameFromFilename);
 
-// TODO(filter): a-filter
-// TODO(filter): a-flood
-// TODO(font): a-font
+INSTANTIATE_TEST_SUITE_P(
+    FilterAttrib, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "a-filter",
+        {
+            {"a-filter-002.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
+            {"a-filter-003.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
+            {"a-filter-004.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
+            {"a-filter-005.svg", Params::WithThreshold(kDefaultThreshold, 13000)},
+            {"a-filter-011.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
+            {"a-filter-012.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
+            {"a-filter-013.svg", Params::WithThreshold(kDefaultThreshold, 24500)},
+            {"a-filter-015.svg", Params::WithThreshold(kDefaultThreshold, 35500)},
+            {"a-filter-016.svg", Params::Skip()},  // 138K: filter on text group
+            {"a-filter-020.svg", Params::Skip()},  // 50K: filter region
+            {"a-filter-026.svg", Params::Skip()},  // 160K: filter on <use>
+            {"a-filter-027.svg", Params::Skip()},  // 160K: filter on <use>
+            {"a-filter-028.svg", Params::Skip()},  // 160K: filter on <use>
+            {"a-filter-029.svg", Params::Skip()},  // 160K: filter on nested group
+            {"a-filter-030.svg", Params::Skip()},  // 160K: filter on nested group
+            {"a-filter-031.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
+            {"a-filter-032.svg", Params::WithThreshold(kDefaultThreshold, 42000)},
+            {"a-filter-033.svg", Params::Skip()},  // 72K: complex filter chain
+            {"a-filter-034.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
+            {"a-filter-035.svg", Params::Skip()},  // 62K: filter inheritance
+            {"a-filter-036.svg", Params::Skip()},  // 62K: filter inheritance
+            {"a-filter-038.svg", Params::Skip()},  // 179K: in=BackgroundImage
+            {"a-filter-039.svg", Params::Skip()},  // 61K: complex filter
+            {"a-filter-040.svg", Params::Skip()},  // 186K: in=BackgroundAlpha
+            {"a-filter-041.svg", Params::Skip()},  // 160K: filter on marker
+            {"a-filter-042.svg", Params::Skip()},  // 160K: filter on pattern
+        },
+        Params::WithThreshold(kDefaultThreshold, 8000))),
+    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Flood, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("a-flood",
+                                {
+                                    {"a-flood-color-004.svg", Params::Skip()},  // 230K diff: ICC color
+                                })),
+    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    Font, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "a-font",
+        {
+            {"a-font-001.svg", Params::Skip()},  // Canvas size mismatch (400 vs 500)
+            {"a-font-size-003.svg", Params::WithThreshold(kDefaultThreshold, 20500)},
+            {"a-font-size-006.svg", Params::WithThreshold(kDefaultThreshold, 25000)},
+            {"a-font-size-013.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
+            {"a-font-weight-002.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"a-font-weight-003.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"a-font-weight-004.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"a-font-weight-005.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"a-font-weight-006.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+        },
+        Params::WithThreshold(kDefaultThreshold, 17000))),
+    TestNameFromFilename);
 // TODO(font): a-glyph-orientation
 // TODO(filter?): a-isolation
 INSTANTIATE_TEST_SUITE_P(
@@ -192,7 +260,8 @@ INSTANTIATE_TEST_SUITE_P(Shape, ImageComparisonTestFixture,
                                                           Params::WithThreshold(
                                                               kDefaultThreshold, 18000)},  // <text>
                                                          {"a-shape-rendering-008.svg",
-                                                          Params::Skip()},  // Not impl: <marker>
+                                                          Params::WithThreshold(
+                                                              kDefaultThreshold, 100)},  // marker
                                                      })),
                          TestNameFromFilename);
 
@@ -220,7 +289,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
             {"a-stroke-opacity-004.svg",
-             Params::Skip()},  // Not impl: <pattern> / stroke interaction
+             Params::WithThreshold(kDefaultThreshold, 100)},  // Pattern/stroke
             {"a-stroke-opacity-006.svg",
              Params::WithThreshold(kDefaultThreshold, 19000)},  // Stroke opacity on text
             {"a-stroke-width-004.svg", Params::Skip()},    // UB: Nothing should be rendered
@@ -726,7 +795,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-mask",
         {
-            {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
+            {"e-mask-017.svg", Params::Skip()},  // color-interpolation linearRGB (127K diff)
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
             {"e-mask-025.svg", Params::Skip()},  // BUG: Mask-on-mask (recursive) — shadow tree
                                                  // mask resolution needed
