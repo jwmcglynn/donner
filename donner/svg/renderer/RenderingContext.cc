@@ -511,10 +511,10 @@ public:
             resolvedRef->handle.get<MaskComponent>().maskContentUnits};
 
         // Check if the mask element itself has a mask= property (mask-on-mask).
-        // The mask element's own shadow tree was already created in Phase 1.
+        // Phase 1 created an OffscreenParentMask shadow tree on styleHandle for this.
         std::set<Entity> visited;
         visited.insert(resolvedRef->handle.entity());
-        resolveParentMaskChain(resolvedRef->handle, result, visited);
+        resolveParentMaskChain(styleHandle, resolvedRef->handle, result, visited);
 
         return result;
       }
@@ -524,8 +524,10 @@ public:
   }
 
   /// Walk the mask element's own mask= property chain and attach parent masks.
-  void resolveParentMaskChain(EntityHandle maskElementHandle, ResolvedMask& mask,
-                              std::set<Entity>& visited) {
+  /// Uses the entity's own OffscreenParentMask shadow tree (created in Phase 1) so each
+  /// masked entity gets its own copy of the parent mask subtree.
+  void resolveParentMaskChain(EntityHandle styleHandle, EntityHandle maskElementHandle,
+                              ResolvedMask& mask, std::set<Entity>& visited) {
     const auto* maskStyle = maskElementHandle.try_get<ComputedStyleComponent>();
     if (!maskStyle || !maskStyle->properties) {
       return;
@@ -547,24 +549,22 @@ public:
       return;
     }
 
-    // The mask element should have ComputedShadowTreeComponent from Phase 1
-    // (createComputedComponents populated it when it found the mask= property).
-    const auto* computedShadow = maskElementHandle.try_get<ComputedShadowTreeComponent>();
+    // Use the entity's own OffscreenParentMask shadow tree (created in Phase 1 on styleHandle).
+    // This gives each entity its own copy, avoiding view iterator sharing conflicts.
+    const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
     if (!computedShadow ||
-        !computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
+        !computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenParentMask)
+            .has_value()) {
       return;
     }
 
     auto parentSubtree =
-        instantiateOffscreenSubtree(maskElementHandle, ShadowBranchType::OffscreenMask);
+        instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenParentMask);
 
     auto parentMask = std::make_unique<ResolvedMask>();
     parentMask->reference = parentRef.value();
     parentMask->subtreeInfo = parentSubtree;
     parentMask->contentUnits = parentRef->handle.get<MaskComponent>().maskContentUnits;
-
-    // Recursively resolve the parent's own parent mask.
-    resolveParentMaskChain(parentRef->handle, *parentMask, visited);
 
     mask.parentMask = std::move(parentMask);
   }
@@ -1140,6 +1140,53 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
             std::string("Warning: Failed to resolve offscreen shadow tree target with href '") +
             ref.href + "'";
         outWarnings->emplace_back(std::move(err));
+      }
+    }
+  }
+
+  // Create parent mask shadow trees for mask-on-mask composition.
+  // For each entity with an OffscreenMask branch, check if the target mask element itself has
+  // a mask= property. If so, create an OffscreenParentMask branch on the same entity so it
+  // gets its own copy of the parent mask's shadow tree (not shared with other entities).
+  {
+    // Collect entities to process (can't modify OffscreenShadowTreeComponent while iterating).
+    std::vector<std::pair<Entity, RcString>> parentMaskEntries;
+    for (auto view = registry_.view<OffscreenShadowTreeComponent>(); auto entity : view) {
+      auto [offscreenTree] = view.get(entity);
+      // Only process entities that have an OffscreenMask branch.
+      if (auto maskTarget = offscreenTree.branchTargetEntity(registry_,
+                                                              ShadowBranchType::OffscreenMask)) {
+        // Check if the mask element has its own mask= property.
+        EntityHandle maskHandle(registry_, *maskTarget);
+        const auto* maskStyle = maskHandle.try_get<ComputedStyleComponent>();
+        if (maskStyle && maskStyle->properties) {
+          if (auto parentMask = maskStyle->properties->mask.get()) {
+            // Resolve the parent mask reference.
+            if (auto resolvedRef = parentMask->resolve(registry_);
+                resolvedRef && resolvedRef->handle.all_of<MaskComponent>()) {
+              parentMaskEntries.emplace_back(entity, parentMask->href);
+            }
+          }
+        }
+      }
+    }
+
+    // Create OffscreenParentMask branches and populate shadow trees.
+    for (const auto& [entity, parentHref] : parentMaskEntries) {
+      auto& offscreen = registry_.get<OffscreenShadowTreeComponent>(entity);
+      offscreen.setBranchHref(ShadowBranchType::OffscreenParentMask, parentHref);
+
+      if (auto targetEntity = offscreen.branchTargetEntity(registry_,
+                                                            ShadowBranchType::OffscreenParentMask)) {
+        auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
+        const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
+            EntityHandle(registry_, entity), computedShadow,
+            ShadowBranchType::OffscreenParentMask, targetEntity.value(), parentHref, outWarnings);
+        if (maybeInstanceIndex) {
+          const std::span<const Entity> shadowEntities =
+              computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
+          StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
+        }
       }
     }
   }

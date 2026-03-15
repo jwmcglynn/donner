@@ -740,10 +740,10 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-mask-017.svg", Params::Skip()},  // Not impl: color-interpolation
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
-            {"e-mask-025.svg", Params::Skip()},  // Mask-on-mask: chain resolved but luminance
-                                                 // composition needs renderer-level support
-            {"e-mask-026.svg", Params::Skip()},  // Mask-on-mask: same — nested pushMask doesn't
-                                                 // compose luminances correctly
+            {"e-mask-025.svg", Params::Skip()},  // Mask-on-mask mutual recursion: cycle
+                                                 // detection breaks chain but rendering differs
+            // e-mask-026: mask-on-mask passes with default threshold (per-entity parent mask
+            // shadow tree creates unique subtree for each masked element).
             {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child — shadow tree entities
                                                  // don't resolve nested masks
             {"e-mask-029.svg",

@@ -24,6 +24,7 @@ enum class ShadowBranchType {
   OffscreenFill,         //!< For 'fill' attributes.
   OffscreenStroke,       //!< For 'stroke' attributes.
   OffscreenMask,         //!< For mask contents, used for the 'mask' attribute.
+  OffscreenParentMask,   //!< For the mask element's own mask (mask-on-mask composition).
   OffscreenMarkerStart,  //!< For the 'marker-start' attribute.
   OffscreenMarkerMid,    //!< For the 'marker-mid' attribute.
   OffscreenMarkerEnd,    //!< For the 'marker-end' attribute.

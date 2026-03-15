@@ -1031,8 +1031,9 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   for (const components::ResolvedMask* m = &mask; m != nullptr; m = m->parentMask.get()) {
     chain.push_back(m);
   }
-  // Reverse so outermost (root of chain) is rendered first.
-  std::reverse(chain.begin(), chain.end());
+  // Render in chain order (innermost first) to match the view's draw order.
+  // The pushMask/popMask stack handles composition correctly: each popMask applies
+  // its luminance to the content, and the LIFO stack naturally composes them.
 
   const Boxd shapeLocalBounds =
       components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
