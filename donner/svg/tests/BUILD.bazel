@@ -9,6 +9,7 @@ donner_cc_test(
     name = "svg_tests_impl",
     srcs = [
         "ElementStyle_tests.cc",
+        "ElementType_tests.cc",
         "SVGCircleElement_tests.cc",
         "SVGClipPathElement_tests.cc",
         "SVGDefsElement_tests.cc",

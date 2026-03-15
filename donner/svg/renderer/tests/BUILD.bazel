@@ -4,6 +4,7 @@ load(
     "donner_cc_test",
     "donner_transitioned_test",
     "renderer_backend_compatible_with",
+    "renderer_backend_compatible_with",
 )
 
 donner_cc_library(
@@ -159,6 +160,31 @@ alias(
     name = "renderer_public_api_tests",
     actual = ":renderer_public_api_tests_tiny_skia",
     testonly = 1,
+)
+
+donner_cc_test(
+    name = "renderer_error_paths_tests",
+    srcs = [
+        "RendererErrorPaths_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_ascii_tests",
+    srcs = [
+        "RendererAscii_tests.cc",
+    ],
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
+    deps = [
+        ":renderer_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_cc_test(
