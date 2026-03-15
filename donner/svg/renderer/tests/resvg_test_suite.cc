@@ -105,10 +105,10 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix("a-display",  //
                                 {
                                     {"a-display-005.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
+                                     Params::WithThreshold(kDefaultThreshold, 17000)},
                                     {"a-display-006.svg", Params::Skip()},  // Not impl: <tref>
                                     {"a-display-009.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
+                                     Params::WithThreshold(kDefaultThreshold, 8000)},
                                 })),
     TestNameFromFilename);
 
@@ -153,8 +153,16 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     LetterSpacing, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-letter-spacing", {},
-                                Params::WithThreshold(kDefaultThreshold, 17000))),
+    ValuesIn(getTestsWithPrefix(
+        "a-letter-spacing",
+        {
+            {"a-letter-spacing-007.svg", Params::WithThreshold(kDefaultThreshold, 3500)},
+            {"a-letter-spacing-008.svg", Params::WithThreshold(kDefaultThreshold, 2000)},
+            {"a-letter-spacing-009.svg", Params::WithThreshold(kDefaultThreshold, 4500)},
+            {"a-letter-spacing-010.svg", Params::WithThreshold(kDefaultThreshold, 1500)},
+            {"a-letter-spacing-011.svg", Params::WithThreshold(kDefaultThreshold, 3500)},
+        },
+        Params::WithThreshold(kDefaultThreshold, 17000))),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
@@ -297,11 +305,11 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix("a-visibility",  //
                                 {
                                     {"a-visibility-003.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
+                                     Params::WithThreshold(kDefaultThreshold, 4000)},
                                     {"a-visibility-004.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <tspan>
+                                     Params::WithThreshold(kDefaultThreshold, 4000)},
                                     {"a-visibility-007.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+                                     Params::WithThreshold(kDefaultThreshold, 3500)},
                                 })),
     TestNameFromFilename);
 
@@ -320,6 +328,10 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-writing-mode",
         {
+            {"a-writing-mode-011.svg", Params::WithThreshold(kDefaultThreshold, 9500)},
+            {"a-writing-mode-013.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
+            {"a-writing-mode-014.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
+            {"a-writing-mode-015.svg", Params::WithThreshold(kDefaultThreshold, 2500)},
             {"a-writing-mode-016.svg", Params::Skip()},  // UB: tb with rotate
             {"a-writing-mode-017.svg", Params::Skip()},  // UB: tb with rotate and underline
         },
@@ -359,7 +371,7 @@ INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
                                                      {
                                                          {"e-defs-007.svg",
                                                           Params::WithThreshold(
-                                                              kDefaultThreshold, 18000)},  // <text>
+                                                              kDefaultThreshold, 6500)},
                                                      })),
                          TestNameFromFilename);
 
@@ -693,10 +705,8 @@ INSTANTIATE_TEST_SUITE_P(
         "e-marker",
         {
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
-            {"e-marker-017.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
-            {"e-marker-018.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+            {"e-marker-017.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
+            {"e-marker-018.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
             {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image
             {"e-marker-022.svg",
              Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
@@ -867,25 +877,27 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-text-",
         {
-            {"e-text-011.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // Rotate
-            {"e-text-012.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // Per-char rotate
-            {"e-text-014.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // Per-char rotate (excess values)
-            {"e-text-018.svg",
-             Params::WithThreshold(kDefaultThreshold, 24000)},  // Escaped text (HTML entities)
-            {"e-text-027.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // Emoji (color font)
-            {"e-text-030.svg",
-             Params::WithThreshold(kDefaultThreshold, 15500)},  // Arabic RTL text
-            {"e-text-033.svg",
-             Params::WithThreshold(kDefaultThreshold, 14000)},  // Underline + pattern + rotate
-            {"e-text-034.svg",
-             Params::WithThreshold(kDefaultThreshold, 20500)},  // Rotate with complex text
-            {"e-text-042.svg", Params::Skip()},                 // UB: grapheme split by tspan
-            {"e-text-043.svg",
-             Params::WithThreshold(kDefaultThreshold, 19000)},  // xml:lang=ja
+            {"e-text-011.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"e-text-012.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"e-text-014.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"e-text-018.svg", Params::WithThreshold(kDefaultThreshold, 24000)},
+            {"e-text-019.svg", Params::WithThreshold(kDefaultThreshold, 8000)},
+            {"e-text-021.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
+            {"e-text-022.svg", Params::WithThreshold(kDefaultThreshold, 2500)},
+            {"e-text-025.svg", Params::WithThreshold(kDefaultThreshold, 3000)},
+            {"e-text-026.svg", Params::WithThreshold(kDefaultThreshold, 2500)},
+            {"e-text-027.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
+            {"e-text-028.svg", Params::WithThreshold(kDefaultThreshold, 5500)},
+            {"e-text-030.svg", Params::WithThreshold(kDefaultThreshold, 15500)},
+            {"e-text-031.svg", Params::WithThreshold(kDefaultThreshold, 11500)},
+            {"e-text-033.svg", Params::WithThreshold(kDefaultThreshold, 10500)},
+            {"e-text-034.svg", Params::WithThreshold(kDefaultThreshold, 19000)},
+            {"e-text-035.svg", Params::WithThreshold(kDefaultThreshold, 4500)},
+            {"e-text-036.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
+            {"e-text-037.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
+            {"e-text-039.svg", Params::WithThreshold(kDefaultThreshold, 11000)},
+            {"e-text-042.svg", Params::Skip()},  // UB: grapheme split by tspan
+            {"e-text-043.svg", Params::WithThreshold(kDefaultThreshold, 19000)},
         },
         Params::WithThreshold(kDefaultThreshold, 17500))),
     TestNameFromFilename);
@@ -976,22 +988,29 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-tspan",
         {
-            {"e-tspan-013.svg",
-             Params::WithThreshold(kDefaultThreshold, 32000)},  // Pseudo-multi-line
-            {"e-tspan-020.svg",
-             Params::WithThreshold(kDefaultThreshold, 17500)},  // SVG 2: mask on tspan
-            {"e-tspan-022.svg",
-             Params::WithThreshold(kDefaultThreshold, 45000)},  // SVG 2: filter on tspan
-            {"e-tspan-024.svg",
-             Params::WithThreshold(kDefaultThreshold, 25500)},  // Cross-tspan shaping (weight)
-            {"e-tspan-027.svg",
-             Params::WithThreshold(kDefaultThreshold, 14000)},  // Multiple coordinates
-            {"e-tspan-028.svg",
-             Params::WithThreshold(kDefaultThreshold, 15500)},  // Mixed font-size
-            {"e-tspan-029.svg",
-             Params::WithThreshold(kDefaultThreshold, 14500)},  // Rotate + display:none
-            {"e-tspan-031.svg",
-             Params::WithThreshold(kDefaultThreshold, 15000)},  // Nested whitespaces
+            {"e-tspan-004.svg", Params::WithThreshold(kDefaultThreshold, 7500)},
+            {"e-tspan-005.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
+            {"e-tspan-006.svg", Params::WithThreshold(kDefaultThreshold, 11000)},
+            {"e-tspan-007.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
+            {"e-tspan-008.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
+            {"e-tspan-009.svg", Params::WithThreshold(kDefaultThreshold, 9500)},
+            {"e-tspan-010.svg", Params::WithThreshold(kDefaultThreshold, 8500)},
+            {"e-tspan-011.svg", Params::WithThreshold(kDefaultThreshold, 1500)},
+            {"e-tspan-013.svg", Params::WithThreshold(kDefaultThreshold, 32000)},
+            {"e-tspan-014.svg", Params::WithThreshold(kDefaultThreshold, 9500)},
+            {"e-tspan-016.svg", Params::WithThreshold(kDefaultThreshold, 7000)},
+            {"e-tspan-017.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
+            {"e-tspan-018.svg", Params::WithThreshold(kDefaultThreshold, 7000)},
+            {"e-tspan-020.svg", Params::WithThreshold(kDefaultThreshold, 17500)},
+            {"e-tspan-022.svg", Params::WithThreshold(kDefaultThreshold, 45000)},
+            {"e-tspan-024.svg", Params::WithThreshold(kDefaultThreshold, 25500)},
+            {"e-tspan-025.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
+            {"e-tspan-026.svg", Params::WithThreshold(kDefaultThreshold, 7500)},
+            {"e-tspan-027.svg", Params::WithThreshold(kDefaultThreshold, 14000)},
+            {"e-tspan-028.svg", Params::WithThreshold(kDefaultThreshold, 15500)},
+            {"e-tspan-029.svg", Params::WithThreshold(kDefaultThreshold, 14500)},
+            {"e-tspan-030.svg", Params::WithThreshold(kDefaultThreshold, 6000)},
+            {"e-tspan-031.svg", Params::WithThreshold(kDefaultThreshold, 15000)},
         },
         Params::WithThreshold(kDefaultThreshold, 17000))),
     TestNameFromFilename);
