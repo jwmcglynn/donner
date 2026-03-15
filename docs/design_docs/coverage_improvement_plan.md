@@ -96,14 +96,14 @@ These are currently exercised only indirectly via integration tests.
   inheritance, specificity resolution, and `!important` handling.
 - [x] **B4: `FilterSystem_tests.cc`** (663 + 96 lines) — Test filter graph construction,
   primitive chaining, filter region computation. Include `FilterPrimitiveComponent`.
-- [ ] **B5: `ShadowTreeSystem_tests.cc`** (254 lines) — Test `<use>` element shadow tree
+- [x] **B5: `ShadowTreeSystem_tests.cc`** (254 lines) — Test `<use>` element shadow tree
   instantiation, attribute inheritance into shadow trees, cycle detection.
 - [x] **B6: `AnimationSystem_tests.cc`** (1,376 lines) — Test timing model (begin/end/dur/
   repeatCount), value interpolation, animation sandwich composition, freeze/remove behavior.
   This is the largest single untested file.
-- [ ] **B7: `TextSystem_tests.cc`** (230 lines) — Test text chunk formation, bidirectional
+- [x] **B7: `TextSystem_tests.cc`** (230 lines) — Test text chunk formation, bidirectional
   algorithm setup, text measurement.
-- [ ] **B8: Expand `LayoutSystem_tests.cc`** (855 lines, only 262 tested) — Add tests for
+- [x] **B8: Expand `LayoutSystem_tests.cc`** (855 lines, only 262 tested) — Add tests for
   viewport computation, viewBox transforms, preserveAspectRatio, nested SVG layout.
 
 ### Phase C: AttributeParser Tests (est. +2–4% coverage)
