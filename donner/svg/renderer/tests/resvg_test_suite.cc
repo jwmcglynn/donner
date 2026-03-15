@@ -797,10 +797,11 @@ INSTANTIATE_TEST_SUITE_P(
     Rect, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-rect",
                                 {
-                                    {"e-rect-022.svg", Params::Skip()},  // Not impl: "em" units
-                                    {"e-rect-023.svg", Params::Skip()},  // Not impl: "ex" units
-                                    {"e-rect-029.svg", Params::Skip()},  // Not impl: "rem" units
-                                    {"e-rect-031.svg", Params::Skip()},  // Not impl: "ch" units
+                                    // em/ex/rem units work — FontMetrics carries computed
+                                    // font-size and root font-size.
+                                    {"e-rect-029.svg", Params::Skip()},  // ch unit: 0.5em approx
+                                                                         // doesn't match actual "0"
+                                                                         // glyph width (47K diff)
                                     // vw/vh and vmin/vmax units — no overrides needed, default
                                     // threshold applies (viewport units now resolve correctly).
                                 })),
