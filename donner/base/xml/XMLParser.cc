@@ -228,6 +228,32 @@ public:
         maxEntityDepth_(options.maxEntityDepth),
         maxEntitySubstitutions_(options.maxEntitySubstitutions) {}
 
+  /// Emit a token to the callback if one is configured.
+  void emitToken(XMLTokenType type, size_t offset, size_t length) {
+    if (options_.tokenCallback) {
+      options_.tokenCallback(type, offset, length);
+    }
+  }
+
+  /// Emit a token from a source offset range.
+  void emitTokenFromOffset(XMLTokenType type, const FileOffset& start, const FileOffset& end) {
+    if (options_.tokenCallback && start.offset.has_value() && end.offset.has_value()) {
+      options_.tokenCallback(type, *start.offset, *end.offset - *start.offset);
+    }
+  }
+
+  /// Get the current byte offset in the source string.
+  size_t currentByteOffset() const {
+    if (remaining_.empty()) {
+      return str_.size();
+    }
+    const std::string_view chunk = remaining_.firstChunk();
+    if (chunk.data() >= str_.data() && chunk.data() < str_.data() + str_.size()) {
+      return static_cast<size_t>(chunk.data() - str_.data());
+    }
+    return str_.size();
+  }
+
   bool isWhitespace(char ch) const {
     // Whitespace is defined by multiple specs, but both match.
     //
@@ -737,6 +763,11 @@ private:
 
     const ChunkedString commentStr = maybeComment.value();
 
+    // Emit comment token spanning from <!-- to -->.
+    if (startOffset.offset.has_value()) {
+      emitToken(XMLTokenType::Comment, *startOffset.offset, currentByteOffset() - *startOffset.offset);
+    }
+
     // If Comment nodes are enabled
     if (options_.parseComments) {
       XMLNode commentNode = XMLNode::CreateCommentNode(document_, commentStr.toSingleRcString());
@@ -860,6 +891,8 @@ private:
    * Read raw text (PCDATA) until `<` or `\0`
    */
   std::optional<ParseError> parseAndAppendData(XMLNode& node) {
+    const size_t textStart = currentByteOffset();
+
     // Expand all entities in the current text chunk
     auto maybeData = consumePCDataOnce();
     if (maybeData.hasError()) {
@@ -869,6 +902,8 @@ private:
     ChunkedString& dataStr = maybeData.result();
 
     if (!dataStr.empty()) {
+      emitToken(XMLTokenType::TextContent, textStart, currentByteOffset() - textStart);
+
       const RcString dataStrAllocated = dataStr.toSingleRcString();
 
       // Create new data node
@@ -890,6 +925,11 @@ private:
     auto maybeCData = consumeContentsUntilEndString("]]>");
     if (!maybeCData) {
       return createParseError("CDATA node does not end with ']]>'");
+    }
+
+    // Emit CDATA token spanning from <![CDATA[ to ]]>.
+    if (startOffset.offset.has_value()) {
+      emitToken(XMLTokenType::CData, *startOffset.offset, currentByteOffset() - *startOffset.offset);
     }
 
     const ChunkedString& cdataStr = maybeCData.value();
@@ -982,7 +1022,13 @@ private:
    * Parsing an element of form `<tag ...>` or `<tag .../>`.
    */
   ParseResult<XMLNode> parseElement(FileOffset startOffset) {
+    // Emit tag open token for the '<' (1 byte at startOffset).
+    if (startOffset.offset.has_value()) {
+      emitToken(XMLTokenType::TagOpen, *startOffset.offset, 1);
+    }
+
     // Extract element name
+    const size_t nameStart = currentByteOffset();
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
       ParseError err;
@@ -990,6 +1036,7 @@ private:
       err.location = maybeName.error().location;
       return err;
     }
+    emitToken(XMLTokenType::TagName, nameStart, currentByteOffset() - nameStart);
 
     // Create element node
     XMLNode element = XMLNode::CreateElementNode(document_, maybeName.result());
@@ -1004,13 +1051,16 @@ private:
     }
 
     // Determine ending type
+    const size_t closeStart = currentByteOffset();
     if (tryConsume(remaining_, ">")) {
+      emitToken(XMLTokenType::TagClose, closeStart, 1);
+
       if (auto maybeError = parseNodeContents(element)) {
         return std::move(maybeError.value());
       }
 
     } else if (tryConsume(remaining_, "/>")) {
-      // Self-closing tag
+      emitToken(XMLTokenType::TagClose, closeStart, 2);
     } else {
       return createParseError("Node not closed with '>' or '/>'");
     }
@@ -1108,8 +1158,13 @@ private:
 
       if (nextChar == '<') {
         if (tryConsume(remaining_, "</")) {  // Node closing
+          // Emit token for "</" (2 bytes).
+          const size_t closeTagOpenOffset = currentByteOffset() - 2;
+          emitToken(XMLTokenType::TagOpen, closeTagOpenOffset, 2);
+
           const FileOffset closingTagStart = currentOffsetWithLineNumber(remaining_);
 
+          const size_t nameStart = currentByteOffset();
           auto maybeClosingName = consumeQualifiedName();
           if (maybeClosingName.hasError()) {
             ParseError err;
@@ -1117,6 +1172,7 @@ private:
             err.location = maybeClosingName.error().location;
             return err;
           }
+          emitToken(XMLTokenType::TagName, nameStart, currentByteOffset() - nameStart);
 
           if (node.tagName() != maybeClosingName.result()) {
             return createParseError("Mismatched closing tag", closingTagStart);
@@ -1124,9 +1180,11 @@ private:
 
           skipWhitespace(remaining_);
 
+          const size_t closeOffset = currentByteOffset();
           if (!tryConsume(remaining_, ">")) {
             return createParseError("Expected '>' for closing tag");
           }
+          emitToken(XMLTokenType::TagClose, closeOffset, 1);
 
           return std::nullopt;  // Node closed, finished parsing contents
         } else {
@@ -1166,6 +1224,7 @@ private:
       return std::optional<ParsedAttribute>(std::nullopt);
     }
 
+    const size_t nameStart = currentByteOffset();
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
       ParseError err;
@@ -1173,6 +1232,7 @@ private:
       err.location = maybeName.error().location;
       return err;
     }
+    emitToken(XMLTokenType::AttributeName, nameStart, currentByteOffset() - nameStart);
 
     const XMLQualifiedNameRef& name = maybeName.result();
 
@@ -1180,9 +1240,11 @@ private:
     skipWhitespace(remaining_);
 
     // Skip =
+    const size_t eqStart = currentByteOffset();
     if (!tryConsume(remaining_, "=")) {
       return createParseError("Attribute name without value, expected '=' followed by a string");
     }
+    emitToken(XMLTokenType::AttributeEquals, eqStart, 1);
 
     // Skip whitespace after =
     skipWhitespace(remaining_);
@@ -1193,6 +1255,7 @@ private:
       return createParseError("Attribute value not enclosed in quotes, expected \" or '");
     }
 
+    const size_t valueStart = currentByteOffset();
     const char quote = maybeQuote.value();
     remaining_.remove_prefix(1);
 
@@ -1211,6 +1274,7 @@ private:
         return createParseError("Attribute value not closed with '\"'");
       }
     }
+    emitToken(XMLTokenType::AttributeValue, valueStart, currentByteOffset() - valueStart);
 
     ParsedAttribute result{name, maybeValue.result().toSingleRcString()};
     return std::make_optional(result);

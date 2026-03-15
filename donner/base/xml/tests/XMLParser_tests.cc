@@ -1073,4 +1073,123 @@ TEST_F(XMLParserTests, EntityContainingNode) {
   EXPECT_EQ(elementNode->tagName(), "rect");
 }
 
+// --- Token callback tests ---
+
+struct RecordedToken {
+  XMLTokenType type;
+  size_t offset;
+  size_t length;
+  std::string text;
+};
+
+std::vector<RecordedToken> parseWithTokens(std::string_view xml) {
+  std::vector<RecordedToken> tokens;
+  XMLParser::Options options;
+  options.parseComments = true;
+  options.tokenCallback = [&](XMLTokenType type, size_t offset, size_t length) {
+    tokens.push_back(RecordedToken{
+        .type = type,
+        .offset = offset,
+        .length = length,
+        .text = std::string(xml.substr(offset, length)),
+    });
+  };
+
+  auto result = XMLParser::Parse(xml, options);
+  EXPECT_FALSE(result.hasError()) << result.error().reason;
+  return tokens;
+}
+
+TEST(XMLParserTokenTest, SimpleElementEmitsTagAndNameTokens) {
+  const auto tokens = parseWithTokens(R"(<rect/>)");
+
+  ASSERT_GE(tokens.size(), 3u);
+  EXPECT_EQ(tokens[0].type, XMLTokenType::TagOpen);
+  EXPECT_EQ(tokens[0].text, "<");
+  EXPECT_EQ(tokens[1].type, XMLTokenType::TagName);
+  EXPECT_EQ(tokens[1].text, "rect");
+  EXPECT_EQ(tokens[2].type, XMLTokenType::TagClose);
+  EXPECT_EQ(tokens[2].text, "/>");
+}
+
+TEST(XMLParserTokenTest, ElementWithAttributesEmitsAllTokenTypes) {
+  const auto tokens = parseWithTokens(R"(<rect fill="red" width="10"/>)");
+
+  // Expected tokens: < rect fill = "red" width = "10" />
+  ASSERT_GE(tokens.size(), 9u);
+  EXPECT_EQ(tokens[0].type, XMLTokenType::TagOpen);
+  EXPECT_EQ(tokens[1].type, XMLTokenType::TagName);
+  EXPECT_EQ(tokens[1].text, "rect");
+  EXPECT_EQ(tokens[2].type, XMLTokenType::AttributeName);
+  EXPECT_EQ(tokens[2].text, "fill");
+  EXPECT_EQ(tokens[3].type, XMLTokenType::AttributeEquals);
+  EXPECT_EQ(tokens[4].type, XMLTokenType::AttributeValue);
+  EXPECT_EQ(tokens[4].text, R"("red")");
+  EXPECT_EQ(tokens[5].type, XMLTokenType::AttributeName);
+  EXPECT_EQ(tokens[5].text, "width");
+  EXPECT_EQ(tokens[6].type, XMLTokenType::AttributeEquals);
+  EXPECT_EQ(tokens[7].type, XMLTokenType::AttributeValue);
+  EXPECT_EQ(tokens[7].text, R"("10")");
+  EXPECT_EQ(tokens[8].type, XMLTokenType::TagClose);
+  EXPECT_EQ(tokens[8].text, "/>");
+}
+
+TEST(XMLParserTokenTest, NestedElementsEmitOpenAndCloseTagTokens) {
+  const auto tokens = parseWithTokens(R"(<svg><rect/></svg>)");
+
+  // Expected: < svg > < rect /> </ svg >
+  std::vector<XMLTokenType> types;
+  for (const auto& t : tokens) {
+    types.push_back(t.type);
+  }
+
+  // Opening <svg>
+  EXPECT_EQ(types[0], XMLTokenType::TagOpen);    // <
+  EXPECT_EQ(types[1], XMLTokenType::TagName);    // svg
+  EXPECT_EQ(types[2], XMLTokenType::TagClose);   // >
+
+  // Self-closing <rect/>
+  EXPECT_EQ(types[3], XMLTokenType::TagOpen);    // <
+  EXPECT_EQ(types[4], XMLTokenType::TagName);    // rect
+  EXPECT_EQ(types[5], XMLTokenType::TagClose);   // />
+
+  // Closing </svg>
+  EXPECT_EQ(types[6], XMLTokenType::TagOpen);    // </
+  EXPECT_EQ(types[7], XMLTokenType::TagName);    // svg
+  EXPECT_EQ(types[8], XMLTokenType::TagClose);   // >
+}
+
+TEST(XMLParserTokenTest, CommentEmitsCommentToken) {
+  const auto tokens = parseWithTokens(R"(<root><!-- hello --></root>)");
+
+  bool foundComment = false;
+  for (const auto& t : tokens) {
+    if (t.type == XMLTokenType::Comment) {
+      EXPECT_EQ(t.text, "<!-- hello -->");
+      foundComment = true;
+    }
+  }
+  EXPECT_TRUE(foundComment) << "Expected a Comment token";
+}
+
+TEST(XMLParserTokenTest, TextContentEmitsTextToken) {
+  const auto tokens = parseWithTokens(R"(<root>hello world</root>)");
+
+  bool foundText = false;
+  for (const auto& t : tokens) {
+    if (t.type == XMLTokenType::TextContent) {
+      EXPECT_EQ(t.text, "hello world");
+      foundText = true;
+    }
+  }
+  EXPECT_TRUE(foundText) << "Expected a TextContent token";
+}
+
+TEST(XMLParserTokenTest, NoCallbackProducesNoTokens) {
+  // Parse without a callback — should work normally.
+  XMLParser::Options options;
+  auto result = XMLParser::Parse(R"(<rect fill="red"/>)", options);
+  EXPECT_FALSE(result.hasError());
+}
+
 }  // namespace donner::xml

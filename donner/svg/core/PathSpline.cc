@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <optional>
 
@@ -526,6 +527,76 @@ void PathSpline::appendJoin(const PathSpline& spline, bool asInternalPath) {
       moveToPointIndex_ = newCmd.pointIndex;
     }
   }
+}
+
+namespace {
+
+/// Append a coordinate value to a char buffer, using integer format when possible.
+void appendCoord(std::vector<char>& buf, double value) {
+  char tmp[32];
+  int len;
+  if (value == std::floor(value) && std::abs(value) < 1e15) {
+    len = std::snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(value));
+  } else {
+    len = std::snprintf(tmp, sizeof(tmp), "%g", value);
+  }
+  buf.insert(buf.end(), tmp, tmp + len);
+}
+
+void appendPoint(std::vector<char>& buf, const Vector2d& point) {
+  appendCoord(buf, point.x);
+  buf.push_back(' ');
+  appendCoord(buf, point.y);
+}
+
+}  // namespace
+
+RcString PathSpline::toSVGPathData() const {
+  if (commands_.empty()) {
+    return RcString("");
+  }
+
+  // Estimate output size: ~20 chars per command.
+  std::vector<char> buf;
+  buf.reserve(commands_.size() * 20);
+
+  bool first = true;
+  for (const Command& cmd : commands_) {
+    if (!first) {
+      buf.push_back(' ');
+    }
+    first = false;
+
+    switch (cmd.type) {
+      case CommandType::MoveTo:
+        buf.push_back('M');
+        buf.push_back(' ');
+        appendPoint(buf, points_[cmd.pointIndex]);
+        break;
+
+      case CommandType::LineTo:
+        buf.push_back('L');
+        buf.push_back(' ');
+        appendPoint(buf, points_[cmd.pointIndex]);
+        break;
+
+      case CommandType::CurveTo:
+        buf.push_back('C');
+        buf.push_back(' ');
+        appendPoint(buf, points_[cmd.pointIndex]);
+        buf.push_back(' ');
+        appendPoint(buf, points_[cmd.pointIndex + 1]);
+        buf.push_back(' ');
+        appendPoint(buf, points_[cmd.pointIndex + 2]);
+        break;
+
+      case CommandType::ClosePath:
+        buf.push_back('Z');
+        break;
+    }
+  }
+
+  return RcString::fromVector(std::move(buf));
 }
 
 double PathSpline::pathLength() const {

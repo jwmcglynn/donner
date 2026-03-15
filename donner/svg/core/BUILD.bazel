@@ -6,6 +6,7 @@ cc_library(
         "EditablePathSpline.cc",
         "PathSpline.cc",
         "PreserveAspectRatio.cc",
+        "SVGTransformSerialize.cc",
     ],
     hdrs = [
         "ClipPathUnits.h",
@@ -27,6 +28,7 @@ cc_library(
         "PointerEvents.h",
         "PreserveAspectRatio.h",
         "ProcessingMode.h",
+        "SVGTransformSerialize.h",
         "Stroke.h",
         "TextAnchor.h",
         "TextDecoration.h",

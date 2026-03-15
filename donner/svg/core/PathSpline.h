@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/core/FillRule.h"
@@ -227,6 +228,13 @@ public:
    * Returns the commands in the spline.
    */
   const std::vector<Command>& commands() const { return commands_; }
+
+  /**
+   * Serialize the spline to an SVG path `d` attribute string.
+   *
+   * Produces output like `"M 10 10 L 80 20 C 30 10 70 10 90 50 Z"`.
+   */
+  [[nodiscard]] RcString toSVGPathData() const;
 
   /**
    * Returns the length of the spline.

@@ -72,6 +72,7 @@ donner_cc_library(
     hdrs = [
         "AllSVGElements.h",
         "DonnerController.h",
+        "SVGElementNames.h",
         "SVGAnimateElement.h",
         "SVGAnimateMotionElement.h",
         "SVGAnimateTransformElement.h",

@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <functional>
 #include <string_view>
 
 #include "donner/base/ParseResult.h"
@@ -9,6 +10,31 @@
 #include "donner/base/xml/XMLNode.h"
 
 namespace donner::xml {
+
+/// Token types emitted by the XML parser when a token callback is configured.
+enum class XMLTokenType {
+  TagOpen,          ///< `<` or `</` — opening punctuation of a tag.
+  TagClose,         ///< `>` or `/>` — closing punctuation of a tag.
+  TagName,          ///< Element name (e.g. `rect`, `svg`).
+  AttributeName,    ///< Attribute name (e.g. `fill`, `width`).
+  AttributeEquals,  ///< `=` between attribute name and value.
+  AttributeValue,   ///< Attribute value including quotes (e.g. `"red"`).
+  Comment,          ///< Comment including delimiters (`<!-- ... -->`).
+  CData,            ///< CDATA section including delimiters (`<![CDATA[ ... ]]>`).
+  TextContent,      ///< Text content between tags.
+  XmlDeclaration,   ///< XML declaration (`<?xml ... ?>`).
+  ProcessingInstruction,  ///< Processing instruction (`<?target ... ?>`).
+  Doctype,          ///< DOCTYPE declaration (`<!DOCTYPE ...>`).
+};
+
+/**
+ * Callback invoked for each token during XML parsing.
+ *
+ * @param type The token type.
+ * @param offset Byte offset into the original XML string where this token starts.
+ * @param length Length of the token in bytes.
+ */
+using XMLTokenCallback = std::function<void(XMLTokenType type, size_t offset, size_t length)>;
 
 /**
  * Parses an XML document from a string.
@@ -22,7 +48,7 @@ public:
    */
   struct Options {
     /// Default options.
-    constexpr Options() {}
+    Options() {}
 
     /**
      * Parse all nodes in the XML document, including comments, the doctype node, and processing
@@ -80,6 +106,16 @@ public:
      * error.
      */
     uint64_t maxEntitySubstitutions = 1'000;
+
+    /**
+     * Optional callback invoked for each token during parsing. Enables syntax highlighting and
+     * structured editing use cases without a separate tokenizer. The callback receives the token
+     * type and its byte offset/length in the original input string.
+     *
+     * When set, the parser emits tokens for tag opens/closes, element names, attribute names,
+     * attribute values, comments, CDATA, text content, and declarations.
+     */
+    XMLTokenCallback tokenCallback;
   };
 
   /**

@@ -34,6 +34,7 @@ donner_cc_test(
         "Overflow_tests.cc",
         "PathSpline_tests.cc",
         "PointerEvents_tests.cc",
+        "SVGTransformSerialize_tests.cc",
         "PreserveAspectRatio_tests.cc",
         "Stroke_tests.cc",
         "TextAnchor_tests.cc",

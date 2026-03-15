@@ -1385,4 +1385,61 @@ TEST(PathSpline, IsOnPathZeroStrokeWidth) {
   EXPECT_FALSE(spline.isOnPath(Vector2d(5, 0.0001), 0.0));
 }
 
+// --- toSVGPathData tests ---
+
+TEST(PathSplineSerializeTest, EmptySplineProducesEmptyString) {
+  PathSpline spline;
+  EXPECT_EQ(std::string_view(spline.toSVGPathData()), "");
+}
+
+TEST(PathSplineSerializeTest, LinePathSerializesCorrectly) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(10, 20));
+  spline.lineTo(Vector2d(80, 30));
+
+  EXPECT_EQ(std::string_view(spline.toSVGPathData()), "M 10 20 L 80 30");
+}
+
+TEST(PathSplineSerializeTest, CubicPathSerializesCorrectly) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(10, 50));
+  spline.curveTo(Vector2d(30, 10), Vector2d(70, 10), Vector2d(90, 50));
+
+  EXPECT_EQ(std::string_view(spline.toSVGPathData()), "M 10 50 C 30 10 70 10 90 50");
+}
+
+TEST(PathSplineSerializeTest, ClosedPathSerializesWithZ) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(0, 0));
+  spline.lineTo(Vector2d(10, 0));
+  spline.lineTo(Vector2d(10, 10));
+  spline.closePath();
+
+  EXPECT_EQ(std::string_view(spline.toSVGPathData()), "M 0 0 L 10 0 L 10 10 Z");
+}
+
+TEST(PathSplineSerializeTest, FractionalCoordinatesSerialize) {
+  PathSpline spline;
+  spline.moveTo(Vector2d(1.5, 2.75));
+  spline.lineTo(Vector2d(3.125, 4.5));
+
+  const std::string result(spline.toSVGPathData());
+  EXPECT_THAT(result, testing::HasSubstr("1.5"));
+  EXPECT_THAT(result, testing::HasSubstr("2.75"));
+}
+
+TEST(PathSplineSerializeTest, RoundTripStringFormat) {
+  PathSpline original;
+  original.moveTo(Vector2d(10, 10));
+  original.lineTo(Vector2d(80, 20));
+  original.curveTo(Vector2d(30, 50), Vector2d(70, 50), Vector2d(90, 10));
+  original.closePath();
+
+  const std::string result(original.toSVGPathData());
+  EXPECT_THAT(result, testing::StartsWith("M 10 10"));
+  EXPECT_THAT(result, testing::HasSubstr("L 80 20"));
+  EXPECT_THAT(result, testing::HasSubstr("C 30 50 70 50 90 10"));
+  EXPECT_THAT(result, testing::EndsWith("Z"));
+}
+
 }  // namespace donner::svg

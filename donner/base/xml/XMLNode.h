@@ -285,6 +285,17 @@ public:
   SmallVector<XMLQualifiedNameRef, 10> attributes() const;
 
   /**
+   * Serialize this node and its subtree to an XML string.
+   *
+   * Produces well-formed XML output. Element nodes include their attributes and children.
+   * Self-closing syntax is used for elements without children.
+   *
+   * @param indentLevel Current indentation depth (2 spaces per level). Use 0 for no indentation.
+   * @return The serialized XML string.
+   */
+  [[nodiscard]] RcString serializeToString(int indentLevel = 0) const;
+
+  /**
    * Get the namespace URI of an attribute prefix, if it exists.
    *
    * @param prefix Prefix of the attribute to get the namespace URI for.

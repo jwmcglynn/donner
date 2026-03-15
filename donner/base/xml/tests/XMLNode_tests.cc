@@ -343,4 +343,70 @@ TEST_F(XMLNodeTests, GetAttributeLocationInvalid) {
   EXPECT_THAT(node.getAttributeLocation(mismatchedXml, "attr"), Eq(std::nullopt));
 }
 
+// --- serializeToString tests ---
+
+TEST(XMLNodeSerializeTest, SelfClosingElement) {
+  auto result = XMLParser::Parse(R"(<root/>)");
+  ASSERT_FALSE(result.hasError());
+  auto element = result.result().root().firstChild();
+  ASSERT_TRUE(element.has_value());
+
+  EXPECT_EQ(std::string_view(element->serializeToString()), R"(<root/>)");
+}
+
+TEST(XMLNodeSerializeTest, ElementWithAttributes) {
+  auto result = XMLParser::Parse(R"(<rect fill="red" width="10"/>)");
+  ASSERT_FALSE(result.hasError());
+  auto element = result.result().root().firstChild();
+  ASSERT_TRUE(element.has_value());
+
+  const std::string serialized(element->serializeToString());
+  EXPECT_THAT(serialized, testing::HasSubstr("fill=\"red\""));
+  EXPECT_THAT(serialized, testing::HasSubstr("width=\"10\""));
+  EXPECT_THAT(serialized, testing::StartsWith("<rect"));
+  EXPECT_THAT(serialized, testing::EndsWith("/>"));
+}
+
+TEST(XMLNodeSerializeTest, ElementWithTextContent) {
+  auto result = XMLParser::Parse(R"(<title>Hello World</title>)");
+  ASSERT_FALSE(result.hasError());
+  auto element = result.result().root().firstChild();
+  ASSERT_TRUE(element.has_value());
+
+  EXPECT_EQ(std::string_view(element->serializeToString()), "<title>Hello World</title>");
+}
+
+TEST(XMLNodeSerializeTest, NestedElements) {
+  auto result = XMLParser::Parse(R"(<svg><rect/><circle/></svg>)");
+  ASSERT_FALSE(result.hasError());
+  auto element = result.result().root().firstChild();
+  ASSERT_TRUE(element.has_value());
+
+  const std::string serialized(element->serializeToString());
+  EXPECT_THAT(serialized, testing::StartsWith("<svg>"));
+  EXPECT_THAT(serialized, testing::HasSubstr("<rect/>"));
+  EXPECT_THAT(serialized, testing::HasSubstr("<circle/>"));
+  EXPECT_THAT(serialized, testing::EndsWith("</svg>"));
+}
+
+TEST(XMLNodeSerializeTest, AttributeValueEscaping) {
+  XMLDocument doc;
+  XMLNode element = XMLNode::CreateElementNode(doc, XMLQualifiedName(RcString("test")));
+  element.setAttribute(XMLQualifiedName(RcString("data")), R"(a&b<c"d)");
+
+  const std::string serialized(element.serializeToString());
+  EXPECT_THAT(serialized, testing::HasSubstr("data=\"a&amp;b&lt;c&quot;d\""));
+}
+
+TEST(XMLNodeSerializeTest, CommentNode) {
+  auto result = XMLParser::Parse(R"(<root><!-- hello --></root>)",
+                                 XMLParser::Options::ParseAll());
+  ASSERT_FALSE(result.hasError());
+  auto element = result.result().root().firstChild();
+  ASSERT_TRUE(element.has_value());
+
+  const std::string serialized(element->serializeToString());
+  EXPECT_THAT(serialized, testing::HasSubstr("<!-- hello -->"));
+}
+
 }  // namespace donner::xml

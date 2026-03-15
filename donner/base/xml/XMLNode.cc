@@ -264,4 +264,123 @@ Entity XMLNode::CreateEntity(Registry& registry, Type type, const XMLQualifiedNa
   return EntityHandle(registry, entity);
 }
 
+namespace {
+
+/// Escape XML special characters in text content.
+void appendEscaped(std::vector<char>& buf, std::string_view text) {
+  for (const char c : text) {
+    switch (c) {
+      case '&': buf.insert(buf.end(), {'&', 'a', 'm', 'p', ';'}); break;
+      case '<': buf.insert(buf.end(), {'&', 'l', 't', ';'}); break;
+      case '>': buf.insert(buf.end(), {'&', 'g', 't', ';'}); break;
+      case '"': buf.insert(buf.end(), {'&', 'q', 'u', 'o', 't', ';'}); break;
+      default: buf.push_back(c); break;
+    }
+  }
+}
+
+void appendIndent(std::vector<char>& buf, int level) {
+  for (int i = 0; i < level * 2; ++i) {
+    buf.push_back(' ');
+  }
+}
+
+void appendString(std::vector<char>& buf, std::string_view str) {
+  buf.insert(buf.end(), str.begin(), str.end());
+}
+
+void serializeNodeImpl(const XMLNode& node, std::vector<char>& buf, int indent) {
+  switch (node.type()) {
+    case XMLNode::Type::Element: {
+      appendIndent(buf, indent);
+      buf.push_back('<');
+      const auto tag = node.tagName();
+      appendString(buf, tag.toString());
+
+      // Attributes.
+      for (const auto& attrName : node.attributes()) {
+        buf.push_back(' ');
+        appendString(buf, attrName.toString());
+        buf.push_back('=');
+        buf.push_back('"');
+        if (auto val = node.getAttribute(attrName)) {
+          appendEscaped(buf, *val);
+        }
+        buf.push_back('"');
+      }
+
+      // Children.
+      auto child = node.firstChild();
+      if (!child.has_value()) {
+        // Self-closing.
+        appendString(buf, "/>");
+      } else {
+        buf.push_back('>');
+
+        // Check if only text children (inline content).
+        bool hasElementChildren = false;
+        for (auto c = child; c.has_value(); c = c->nextSibling()) {
+          if (c->type() == XMLNode::Type::Element) {
+            hasElementChildren = true;
+            break;
+          }
+        }
+
+        if (hasElementChildren) {
+          buf.push_back('\n');
+          for (auto c = child; c.has_value(); c = c->nextSibling()) {
+            serializeNodeImpl(*c, buf, indent + 1);
+            buf.push_back('\n');
+          }
+          appendIndent(buf, indent);
+        } else {
+          // Inline text children.
+          for (auto c = child; c.has_value(); c = c->nextSibling()) {
+            serializeNodeImpl(*c, buf, 0);
+          }
+        }
+
+        appendString(buf, "</");
+        appendString(buf, tag.toString());
+        buf.push_back('>');
+      }
+      break;
+    }
+    case XMLNode::Type::Data: {
+      if (auto val = node.value()) {
+        appendEscaped(buf, *val);
+      }
+      break;
+    }
+    case XMLNode::Type::CData: {
+      appendString(buf, "<![CDATA[");
+      if (auto val = node.value()) {
+        appendString(buf, *val);
+      }
+      appendString(buf, "]]>");
+      break;
+    }
+    case XMLNode::Type::Comment: {
+      appendIndent(buf, indent);
+      appendString(buf, "<!--");
+      if (auto val = node.value()) {
+        appendString(buf, *val);
+      }
+      appendString(buf, "-->");
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+}  // namespace
+
+RcString XMLNode::serializeToString(int indentLevel) const {
+  std::vector<char> buf;
+  buf.reserve(256);
+  serializeNodeImpl(*this, buf, indentLevel);
+  return RcString::fromVector(std::move(buf));
+}
+
 }  // namespace donner::xml
