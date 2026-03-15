@@ -1023,27 +1023,44 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
   const stbtt_fontinfo* info = nullptr;
   float scale = 0.0f;
+  const float fontSizePx = static_cast<float>(
+      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
-  // Resolve fill color from TextParams (already resolved by the driver).
-  const css::RGBA fillRgba = params.fillColor.rgba();
-  tiny_skia::Paint fillPaint;
-  fillPaint.shader =
-      toTinyColor(css::RGBA(fillRgba.r, fillRgba.g, fillRgba.b,
-                            static_cast<uint8_t>(NarrowToFloat(fillRgba.a) * params.opacity)));
-  fillPaint.antiAlias = antialias_;
+  // Compute text bounding box from glyph positions for objectBoundingBox gradient mapping.
+  Boxd textBounds;
+  {
+    double minX = std::numeric_limits<double>::max();
+    double minY = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
+    double maxY = std::numeric_limits<double>::lowest();
+    for (const auto& run : runs) {
+      for (const auto& glyph : run.glyphs) {
+        if (glyph.glyphIndex == 0) {
+          continue;
+        }
+        minX = std::min(minX, glyph.xPosition);
+        maxX = std::max(maxX, glyph.xPosition + std::max(glyph.xAdvance, glyph.yAdvance));
+        minY = std::min(minY, glyph.yPosition - static_cast<double>(fontSizePx));
+        maxY = std::max(maxY, glyph.yPosition);
+      }
+    }
+    if (minX < maxX && minY < maxY) {
+      textBounds = Boxd({minX, minY}, {maxX, maxY});
+    }
+  }
+
+  // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
+  // These read from paint_ (set by setPaint()) which the driver already populated.
+  std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(textBounds);
 
   // Check if we have a stroke.
   const bool hasStroke = params.strokeParams.strokeWidth > 0.0;
-  tiny_skia::Paint strokePaint;
+  std::optional<tiny_skia::Paint> strokePaint;
   tiny_skia::Stroke tinyStroke;
   if (hasStroke) {
-    const css::RGBA strokeRgba = params.strokeColor.rgba();
-    strokePaint.shader =
-        toTinyColor(css::RGBA(strokeRgba.r, strokeRgba.g, strokeRgba.b,
-                              static_cast<uint8_t>(NarrowToFloat(strokeRgba.a) * params.opacity)));
-    strokePaint.antiAlias = antialias_;
+    strokePaint = makeStrokePaint(textBounds, params.strokeParams);
     tinyStroke.width = NarrowToFloat(params.strokeParams.strokeWidth);
     tinyStroke.miterLimit = NarrowToFloat(params.strokeParams.miterLimit);
     tinyStroke.lineCap = toTinyLineCap(params.strokeParams.lineCap);
@@ -1053,8 +1070,6 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
   for (const auto& run : runs) {
     if (run.font != FontHandle() && fontManager.fontInfo(run.font)) {
       info = fontManager.fontInfo(run.font);
-      const float fontSizePx = static_cast<float>(params.fontSize.toPixels(
-          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
       scale = fontManager.scaleForPixelHeight(run.font, fontSizePx);
     }
 
@@ -1089,13 +1104,15 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       auto pixmapView = currentPixmapView();
 
       // Fill.
-      tiny_skia::Painter::fillPath(pixmapView, tinyPath, fillPaint,
-                                   tiny_skia::FillRule::Winding,
-                                   toTinyTransform(glyphTransform), mask);
+      if (fillPaint) {
+        tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint,
+                                     tiny_skia::FillRule::Winding,
+                                     toTinyTransform(glyphTransform), mask);
+      }
 
       // Stroke.
-      if (hasStroke) {
-        tiny_skia::Painter::strokePath(pixmapView, tinyPath, strokePaint, tinyStroke,
+      if (hasStroke && strokePaint) {
+        tiny_skia::Painter::strokePath(pixmapView, tinyPath, *strokePaint, tinyStroke,
                                        toTinyTransform(glyphTransform), mask);
       }
     }
@@ -1139,9 +1156,11 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       const tiny_skia::Path tinyDecoPath = toTinyPath(decoPath);
       auto pixmapView = currentPixmapView();
 
-      tiny_skia::Painter::fillPath(pixmapView, tinyDecoPath, fillPaint,
-                                   tiny_skia::FillRule::Winding,
-                                   toTinyTransform(currentTransform_), mask);
+      if (fillPaint) {
+        tiny_skia::Painter::fillPath(pixmapView, tinyDecoPath, *fillPaint,
+                                     tiny_skia::FillRule::Winding,
+                                     toTinyTransform(currentTransform_), mask);
+      }
     }
   }
 #else

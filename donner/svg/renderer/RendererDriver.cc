@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 
+#include <any>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -20,6 +22,7 @@
 #include "donner/svg/components/paint/MarkerComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -315,14 +318,39 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity);
     }
 
-    const bool hasFilterLayer = instance.resolvedFilter.has_value();
-    if (hasFilterLayer) {
-      const std::span<const FilterEffect> effects =
-          resolveFilterEffects(registry, instance.resolvedFilter.value());
-      renderer_.pushFilterLayer(effects);
+    std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      // Compute the user-space to pixel-space scale factor from the viewBox and canvas dimensions.
+      // Lighting filters need this to transform light positions from SVG attribute values to the
+      // pixel-space pixmap coordinates.
+      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+      if (viewBox.width() > 0 && viewBox.height() > 0) {
+        filterGraph->userToPixelScale =
+            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      }
     }
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    // Per SVG spec, an empty or invalid filter reference makes the element invisible.
+    const bool filterHidesElement =
+        instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     // Clip paths are in entity-local coordinates.
+    // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
+    // Push entity clip BEFORE filter so it's the outer layer: clip-path clips the filter output,
+    // not the SourceGraphic input. The filter layer saves/clears the clip mask so the
+    // SourceGraphic is rendered unclipped.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     // Mask is handled separately below; don't let pushClip see it.
@@ -331,6 +359,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     // Render mask content, then transition to masked content layer.
@@ -364,7 +398,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
-    if (instance.visible) {
+    if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
@@ -476,11 +510,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       if (hasMask) {
         renderer_.popMask();
       }
-      if (hasEntityClip) {
-        renderer_.popClip();
-      }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (hasEntityClip) {
+        renderer_.popClip();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -496,11 +531,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       if (deferred.hasMask) {
         renderer_.popMask();
       }
-      if (deferred.hasEntityClip) {
-        renderer_.popClip();
-      }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (deferred.hasEntityClip) {
+        renderer_.popClip();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -553,18 +589,52 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity);
     }
 
-    const bool hasFilterLayer = instance.resolvedFilter.has_value();
-    if (hasFilterLayer) {
-      const std::span<const FilterEffect> effects =
-          resolveFilterEffects(registry, instance.resolvedFilter.value());
-      renderer_.pushFilterLayer(effects);
+    std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+      if (viewBox.width() > 0 && viewBox.height() > 0) {
+        filterGraph->userToPixelScale =
+            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      }
     }
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    const bool filterHidesElement =
+        instance.resolvedFilter.has_value() && !hasFilterLayer;
 
+    // Per SVG spec: paint → filter → clip-path. Push clip before filter so clip applies to
+    // the filter output. The filter layer saves/clears the clip mask internally.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
+    // Mask is handled separately below; don't let pushClip see it.
+    const std::optional<components::ResolvedMask> entityMask = entityClip.mask;
+    entityClip.mask = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
+    }
+
+    // Render mask content, then transition to masked content layer.
+    const bool hasMask = entityMask.has_value() && entityMask->valid();
+    if (hasMask) {
+      renderMask(view, registry, instance, *entityMask);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -586,7 +656,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
-    if (instance.visible) {
+    if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
@@ -629,13 +699,18 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       deferred.hasIsolatedLayer = hasIsolatedLayer;
       deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
+      deferred.hasMask = hasMask;
       localDeferred.push_back(deferred);
     } else {
-      if (hasEntityClip) {
-        renderer_.popClip();
+      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
+      if (hasMask) {
+        renderer_.popMask();
       }
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (hasEntityClip) {
+        renderer_.popClip();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -644,11 +719,15 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     while (!localDeferred.empty() && localDeferred.back().lastEntity == entity) {
       const DeferredPop& deferred = localDeferred.back();
-      if (deferred.hasEntityClip) {
-        renderer_.popClip();
+      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
+      if (deferred.hasMask) {
+        renderer_.popMask();
       }
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
+      }
+      if (deferred.hasEntityClip) {
+        renderer_.popClip();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -1075,6 +1154,166 @@ void RendererDriver::setSubDocumentContextPaint(
 void RendererDriver::clearSubDocumentContextPaint(SVGDocument& subDocument) {
   if (subDocument.registry().ctx().contains<components::RenderingContext>()) {
     subDocument.registry().ctx().get<components::RenderingContext>().clearInitialContextPaint();
+  }
+}
+
+void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGraph,
+                                                Registry& registry) {
+  // Lazily create the recursion guard set if needed.
+  std::unordered_set<entt::id_type> localGuard;
+  const bool ownsGuard = (feImageFragmentGuard_ == nullptr);
+  if (ownsGuard) {
+    feImageFragmentGuard_ = &localGuard;
+  }
+
+  for (auto& node : filterGraph.nodes) {
+    auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
+    if (!imageNode || imageNode->fragmentId.empty() || !imageNode->imageData.empty()) {
+      continue;
+    }
+
+    // Look up the referenced element by ID.
+    const auto& docCtx = registry.ctx().get<const components::SVGDocumentContext>();
+    const Entity targetEntity = docCtx.getEntityById(imageNode->fragmentId);
+    if (targetEntity == entt::null) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Fragment '" << imageNode->fragmentId
+                  << "' not found\n";
+      }
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Recursion guard: skip if this entity is already being rendered as an feImage fragment.
+    const auto entityId = entt::to_integral(targetEntity);
+    if (feImageFragmentGuard_->count(entityId) > 0) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Skipping recursive reference to '"
+                  << imageNode->fragmentId << "'\n";
+      }
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Create an offscreen renderer at the same canvas size.
+    auto offscreen = renderer_.createOffscreenInstance();
+    if (!offscreen) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Backend does not support offscreen rendering\n";
+      }
+      continue;
+    }
+
+    // Add to recursion guard before rendering.
+    feImageFragmentGuard_->insert(entityId);
+
+    // Check if the element is in the normal render tree.
+    const auto* targetInstance =
+        registry.try_get<components::RenderingInstanceComponent>(targetEntity);
+
+    // For elements NOT in the render tree (e.g., inside <defs>), create a temporary
+    // standalone render tree for the target subtree.
+    const bool needsStandaloneRender = (targetInstance == nullptr);
+    Entity standaloneLastEntity = entt::null;
+    if (needsStandaloneRender) {
+      if (!registry.ctx().contains<components::RenderingContext>()) {
+        registry.ctx().emplace<components::RenderingContext>(registry);
+      }
+      auto& renderCtx = registry.ctx().get<components::RenderingContext>();
+      standaloneLastEntity =
+          renderCtx.instantiateSubtreeForStandaloneRender(targetEntity, verbose_);
+      // Re-query after instantiation.
+      targetInstance = registry.try_get<components::RenderingInstanceComponent>(targetEntity);
+    }
+
+    if (targetInstance == nullptr) {
+      feImageFragmentGuard_->erase(entityId);
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Determine the last entity in the subtree for traverseRange.
+    Entity lastEntity;
+    if (needsStandaloneRender) {
+      lastEntity = standaloneLastEntity;
+    } else if (targetInstance->subtreeInfo) {
+      lastEntity = targetInstance->subtreeInfo->lastRenderedEntity;
+    } else {
+      lastEntity = targetEntity;
+    }
+
+    // Begin frame with same viewport.
+    RenderViewport viewport;
+    viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
+    viewport.devicePixelRatio = 1.0;
+    offscreen->beginFrame(viewport);
+
+    // Create a sub-driver for offscreen rendering and share the recursion guard.
+    RendererDriver subDriver(*offscreen, verbose_);
+    subDriver.renderingSize_ = renderingSize_;
+    subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
+
+    {
+      RenderingInstanceView subView(registry);
+      subDriver.traverseRange(subView, registry, targetEntity, lastEntity);
+    }
+
+    offscreen->endFrame();
+
+    // Capture the rendered pixels.
+    RendererBitmap snapshot = offscreen->takeSnapshot();
+    if (!snapshot.empty()) {
+      imageNode->imageWidth = snapshot.dimensions.x;
+      imageNode->imageHeight = snapshot.dimensions.y;
+
+      // Convert to tightly packed RGBA.
+      const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
+      if (snapshot.rowBytes == tightRowBytes) {
+        imageNode->imageData = std::move(snapshot.pixels);
+      } else {
+        imageNode->imageData.resize(tightRowBytes * snapshot.dimensions.y);
+        for (int y = 0; y < snapshot.dimensions.y; ++y) {
+          std::memcpy(imageNode->imageData.data() + y * tightRowBytes,
+                      snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
+        }
+      }
+    }
+
+    // Remove from recursion guard after rendering.
+    feImageFragmentGuard_->erase(entityId);
+
+    // If we created standalone render instances, remove them to restore the original state.
+    if (needsStandaloneRender) {
+      // Collect all entities that have RenderingInstanceComponent with draw orders >= the
+      // standalone instances. Since standalone instances were added after the main render tree,
+      // they have the highest draw orders. We can find them by checking if they existed before.
+      // Simplest approach: iterate all instances and remove any on non-renderable entities.
+      std::vector<Entity> toRemove;
+      for (auto entity : registry.view<components::RenderingInstanceComponent>()) {
+        // If the entity's data handle has Nonrenderable behavior, it was added by standalone render.
+        const auto* behavior =
+            registry.try_get<components::RenderingBehaviorComponent>(entity);
+        if (behavior && behavior->behavior == components::RenderingBehavior::Nonrenderable) {
+          toRemove.push_back(entity);
+        }
+      }
+      // Also check shadow entities — the target and its children may be shadow entities
+      // whose light entities are Nonrenderable.
+      if (registry.all_of<components::RenderingInstanceComponent>(targetEntity)) {
+        toRemove.push_back(targetEntity);
+      }
+      for (Entity e : toRemove) {
+        registry.remove<components::RenderingInstanceComponent>(e);
+      }
+    }
+
+    // Clear fragmentId since we've rendered to pixels.
+    imageNode->fragmentId = RcString();
+  }
+
+  // Clean up owned guard.
+  if (ownsGuard) {
+    feImageFragmentGuard_ = nullptr;
   }
 }
 

@@ -33,9 +33,8 @@ class FloatPixmap {
       return std::nullopt;
     }
     const std::size_t count = static_cast<std::size_t>(width) * height * 4;
-    // Defensive cap: reject large allocations to prevent OOM crashes on memory-constrained
-    // systems. With -fno-exceptions, OOM calls std::terminate instead of throwing.
-    constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+    // Defensive cap: reject allocations > 256MB (matching Pixmap::fromSize).
+    constexpr std::size_t kMaxAllocationBytes = 256 * 1024 * 1024;
     if (count * sizeof(float) > kMaxAllocationBytes) {
       return std::nullopt;
     }

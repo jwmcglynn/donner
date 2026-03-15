@@ -136,7 +136,7 @@ void displacementMap(const FloatPixmap& src, const FloatPixmap& map, FloatPixmap
 
   // Precompute displacement values to avoid per-pixel division for unpremultiply.
   const std::size_t pixelCount = static_cast<std::size_t>(w) * h;
-  constexpr std::size_t kMaxPixels = 64 * 1024 * 1024 / sizeof(float);
+  constexpr std::size_t kMaxPixels = 256 * 1024 * 1024 / sizeof(float);
   if (pixelCount > kMaxPixels) {
     return;  // Allocation too large, skip displacement.
   }
