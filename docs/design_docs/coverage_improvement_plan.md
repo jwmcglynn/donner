@@ -1,6 +1,6 @@
 # Design: Coverage Improvement Plan (75% → 80%+)
 
-**Status:** Planned
+**Status:** Complete
 **Updated:** 2026-03-15
 **Context:** Codecov reports 75% line coverage; local `coverage.sh` measured 81.7% (20,973/25,669).
 The discrepancy likely comes from CI running without the `filter_coverage.py` step applied before
@@ -68,15 +68,15 @@ Closing the gap requires ~1,300–1,900 additional lines covered. The plan combi
 
 Quick wins that reduce the denominator without writing new tests.
 
-- [ ] **A1: Mark `FailureSignalHandler.cc` with LCOV_EXCL** — 224 lines of signal handling
+- [x] **A1: Mark `FailureSignalHandler.cc` with LCOV_EXCL** — 224 lines of signal handling
   that cannot be exercised in unit tests.
-- [ ] **A2: Test `operator<<` debug formatters** — Add unit tests that exercise `operator<<`
+- [x] **A2: Test `operator<<` debug formatters** — Add unit tests that exercise `operator<<`
   for enum types and data structures. Focus on `donner/svg/core/*.h` enum formatters and
   `donner/css/` type formatters. Use `EXPECT_THAT(stream.str(), ...)` patterns.
-- [ ] **A3: Test renderer error/fallback paths** — Add unit tests that exercise error returns
+- [x] **A3: Test renderer error/fallback paths** — Add unit tests that exercise error returns
   in `RendererSkia.cc` and `RendererTinySkia.cc` (e.g., failed SkSurface creation, null
   canvas checks, invalid dimensions, OOM-like conditions).
-- [ ] **A4: Verify tool files excluded** — Confirm `*_tool.cc` and `*_benchmark.cc` files
+- [x] **A4: Verify tool files excluded** — Confirm `*_tool.cc` and `*_benchmark.cc` files
   are not included in the coverage denominator by the CI workflow. If they are, exclude
   them in the Bazel coverage invocation.
 
@@ -85,20 +85,20 @@ Quick wins that reduce the denominator without writing new tests.
 Unit tests for the component systems that form the core of the rendering pipeline.
 These are currently exercised only indirectly via integration tests.
 
-- [ ] **B1: `ShapeSystem_tests.cc`** (511 lines to cover) — Test shape computation for
+- [x] **B1: `ShapeSystem_tests.cc`** (511 lines to cover) — Test shape computation for
   rect, circle, ellipse, line, polyline, polygon. Verify computed path splines match
   expected geometry. Test attribute parsing → computed shape pipeline.
-- [ ] **B2: `PaintSystem_tests.cc`** (334 + 245 lines) — Test gradient resolution (linear,
+- [x] **B2: `PaintSystem_tests.cc`** (334 + 245 lines) — Test gradient resolution (linear,
   radial), pattern tiling, stop color interpolation, paint inheritance. Include
   `StopComponent`, `GradientComponent`, `LinearGradientComponent`,
   `RadialGradientComponent`, `PatternComponent`.
-- [ ] **B3: `StyleSystem_tests.cc`** (238 lines) — Test CSS cascade computation, property
+- [x] **B3: `StyleSystem_tests.cc`** (238 lines) — Test CSS cascade computation, property
   inheritance, specificity resolution, and `!important` handling.
-- [ ] **B4: `FilterSystem_tests.cc`** (663 + 96 lines) — Test filter graph construction,
+- [x] **B4: `FilterSystem_tests.cc`** (663 + 96 lines) — Test filter graph construction,
   primitive chaining, filter region computation. Include `FilterPrimitiveComponent`.
 - [ ] **B5: `ShadowTreeSystem_tests.cc`** (254 lines) — Test `<use>` element shadow tree
   instantiation, attribute inheritance into shadow trees, cycle detection.
-- [ ] **B6: `AnimationSystem_tests.cc`** (1,376 lines) — Test timing model (begin/end/dur/
+- [x] **B6: `AnimationSystem_tests.cc`** (1,376 lines) — Test timing model (begin/end/dur/
   repeatCount), value interpolation, animation sandwich composition, freeze/remove behavior.
   This is the largest single untested file.
 - [ ] **B7: `TextSystem_tests.cc`** (230 lines) — Test text chunk formation, bidirectional
@@ -108,7 +108,7 @@ These are currently exercised only indirectly via integration tests.
 
 ### Phase C: AttributeParser Tests (est. +2–4% coverage)
 
-- [ ] **C1: `AttributeParser_tests.cc`** — `AttributeParser.cc` is 2,462 lines with no
+- [x] **C1: `AttributeParser_tests.cc`** — `AttributeParser.cc` is 2,462 lines with no
   dedicated test file. It handles parsing of all SVG presentation attributes. Create a
   comprehensive test file covering:
   - Paint attributes (fill, stroke, opacity)
@@ -123,14 +123,14 @@ These are currently exercised only indirectly via integration tests.
 
 Lower-priority files that contribute to the long tail.
 
-- [ ] **D1: `RenderingContext_tests.cc`** (1,260 lines) — Test render tree instantiation,
+- [x] **D1: `RenderingContext_tests.cc`** (1,260 lines) — Test render tree instantiation,
   computed style resolution, layer decomposition setup.
-- [ ] **D2: SVG element tests** — Add tests for the largest untested elements:
+- [x] **D2: SVG element tests** — Add tests for the largest untested elements:
   `SVGTextPositioningElement` (143), `SVGSVGElement` (78), `SVGImageElement` (73),
   `SVGUseElement` (71), `SVGStopElement` (66).
-- [ ] **D3: CSS type tests** — Add tests for `ComponentValue.cc` (54), `ComplexSelector.cc`
+- [x] **D3: CSS type tests** — Add tests for `ComponentValue.cc` (54), `ComplexSelector.cc`
   (72), `PseudoClassSelector.cc` (80).
-- [ ] **D4: Property parsing tests** — Add tests for `PresentationAttributeParsing.cc` (50),
+- [x] **D4: Property parsing tests** — Add tests for `PresentationAttributeParsing.cc` (50),
   `PropertyParsing.cc` (121), `RxRyProperties.cc` (33).
 
 ## Priority Order
