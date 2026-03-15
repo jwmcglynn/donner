@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <memory>
 #include <optional>
 
 #include "donner/base/Box.h"
@@ -72,6 +73,9 @@ struct ResolvedMask {
   std::optional<SubtreeInfo> subtreeInfo;
   /// The mask content units to use for this mask.
   MaskContentUnits contentUnits;
+  /// If the mask element itself has a `mask` attribute, this holds the resolved parent mask.
+  /// Forms a chain for nested mask-on-mask composition. Null if no parent mask.
+  std::unique_ptr<ResolvedMask> parentMask;
 
   /// Returns true if the reference is valid, or false if this the \ref xml_mask did not
   /// properly resolve.

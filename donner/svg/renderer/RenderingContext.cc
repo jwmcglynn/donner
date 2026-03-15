@@ -2,6 +2,7 @@
 
 #include <any>
 #include <optional>
+#include <set>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -253,7 +254,7 @@ public:
       if (auto resolved =
               resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
           resolved.valid()) {
-        instance.mask = resolved;
+        instance.mask = std::move(resolved);
       }
     }
 
@@ -428,6 +429,19 @@ public:
     }
 
     Entity firstEntity = computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value());
+
+    // Check if this subtree was already traversed (e.g., for mask-on-mask chains where the
+    // same mask element's shadow tree is referenced multiple times). If the first entity
+    // already has RenderingInstanceComponent, skip re-traversal to avoid assertion failures.
+    if (registry_.try_get<RenderingInstanceComponent>(firstEntity)) {
+      // Already traversed — find the last entity from the cached SubtreeInfo on the root.
+      const auto& rootInst = registry_.get<RenderingInstanceComponent>(firstEntity);
+      if (rootInst.subtreeInfo) {
+        return SubtreeInfo{firstEntity, rootInst.subtreeInfo->lastRenderedEntity, 0};
+      }
+      return SubtreeInfo{firstEntity, firstEntity, 0};
+    }
+
     Entity lastEntity = entt::null;
     traverseTree(firstEntity, &lastEntity);
 
@@ -491,16 +505,68 @@ public:
       if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
           computedShadow &&
           computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
-        {
-          return ResolvedMask{
-              resolvedRef.value(),
-              instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
-              resolvedRef->handle.get<MaskComponent>().maskContentUnits};
-        }
+        ResolvedMask result{
+            resolvedRef.value(),
+            instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
+            resolvedRef->handle.get<MaskComponent>().maskContentUnits};
+
+        // Check if the mask element itself has a mask= property (mask-on-mask).
+        // The mask element's own shadow tree was already created in Phase 1.
+        std::set<Entity> visited;
+        visited.insert(resolvedRef->handle.entity());
+        resolveParentMaskChain(resolvedRef->handle, result, visited);
+
+        return result;
       }
     }
 
     return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};
+  }
+
+  /// Walk the mask element's own mask= property chain and attach parent masks.
+  void resolveParentMaskChain(EntityHandle maskElementHandle, ResolvedMask& mask,
+                              std::set<Entity>& visited) {
+    const auto* maskStyle = maskElementHandle.try_get<ComputedStyleComponent>();
+    if (!maskStyle || !maskStyle->properties) {
+      return;
+    }
+
+    auto maskProp = maskStyle->properties->mask.get();
+    if (!maskProp) {
+      return;
+    }
+
+    // Resolve the parent mask reference.
+    auto parentRef = maskProp->resolve(registry_);
+    if (!parentRef || !IsValidMask(parentRef->handle)) {
+      return;
+    }
+
+    // Cycle detection: if we've already visited this mask element, stop.
+    if (!visited.insert(parentRef->handle.entity()).second) {
+      return;
+    }
+
+    // The mask element should have ComputedShadowTreeComponent from Phase 1
+    // (createComputedComponents populated it when it found the mask= property).
+    const auto* computedShadow = maskElementHandle.try_get<ComputedShadowTreeComponent>();
+    if (!computedShadow ||
+        !computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
+      return;
+    }
+
+    auto parentSubtree =
+        instantiateOffscreenSubtree(maskElementHandle, ShadowBranchType::OffscreenMask);
+
+    auto parentMask = std::make_unique<ResolvedMask>();
+    parentMask->reference = parentRef.value();
+    parentMask->subtreeInfo = parentSubtree;
+    parentMask->contentUnits = parentRef->handle.get<MaskComponent>().maskContentUnits;
+
+    // Recursively resolve the parent's own parent mask.
+    resolveParentMaskChain(parentRef->handle, *parentMask, visited);
+
+    mask.parentMask = std::move(parentMask);
   }
 
   ResolvedMarker resolveMarker(EntityHandle styleHandle, const Reference& reference,

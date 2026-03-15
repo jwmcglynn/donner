@@ -105,7 +105,9 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
                             const components::ComputedStyleComponent& style, Registry& registry) {
   ResolvedClip clip;
   clip.clipRect = instance.clipRect;
-  clip.mask = instance.mask;
+  // Note: mask is NOT copied here — it's extracted separately by the caller via
+  // entityClip.mask before being moved out. This avoids copying the non-copyable
+  // ResolvedMask (which contains std::unique_ptr<ResolvedMask> parentMask chain).
 
   if (const auto* clipPaths =
           instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>()) {
@@ -410,8 +412,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
-    const std::optional<components::ResolvedMask> entityMask = entityClip.mask;
-    entityClip.mask = std::nullopt;
+    // Mask is handled separately from clip — access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
@@ -423,11 +424,11 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
-    const bool hasMask = entityMask.has_value() && entityMask->valid();
+    int maskDepth = 0;
     bool subtreeConsumedBySubRendering = false;
 
-    if (hasMask) {
-      renderMask(view, registry, instance, *entityMask);
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
       subtreeConsumedBySubRendering = true;
     }
 
@@ -481,10 +482,10 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       deferred.hasIsolatedLayer = hasIsolatedLayer;
       deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
-      deferred.hasMask = hasMask;
+      deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
-      if (hasMask) {
+      for (int mi = 0; mi < maskDepth; ++mi) {
         renderer_.popMask();
       }
       if (hasFilterLayer) {
@@ -503,7 +504,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
       const DeferredPop& deferred = subtreeMarkers_.back();
-      if (deferred.hasMask) {
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
         renderer_.popMask();
       }
       if (deferred.hasFilterLayer) {
@@ -526,7 +527,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   // a subtree root whose deferred pop hasn't fired yet).
   while (!subtreeMarkers_.empty()) {
     const DeferredPop& deferred = subtreeMarkers_.back();
-    if (deferred.hasMask) {
+    for (int mi = 0; mi < deferred.maskDepth; ++mi) {
       renderer_.popMask();
     }
     if (deferred.hasFilterLayer) {
@@ -581,7 +582,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       const Transformd combined = layerBaseTransform_ * instance.entityFromWorldTransform;
       std::cout << "[traverse] entity=" << entt::to_integral(entity)
                 << " visible=" << instance.visible
-                << " hasMask=" << instance.mask.has_value()
+                << " maskDepth=" << instance.mask.has_value()
                 << " hasSubtree=" << instance.subtreeInfo.has_value()
                 << " transform=" << combined << "\n";
     }
@@ -629,8 +630,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     // Mask is handled separately below; don't let pushClip see it.
-    const std::optional<components::ResolvedMask> entityMask = entityClip.mask;
-    entityClip.mask = std::nullopt;
+    // Mask is handled separately from clip — access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
@@ -643,12 +643,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     }
 
     // Render mask content, then transition to masked content layer.
-    const bool hasMask = entityMask.has_value() && entityMask->valid();
+    int maskDepth = 0;
     // Track whether mask/pattern rendering consumed the element's subtree entities.
     bool subtreeConsumedBySubRendering = false;
 
-    if (hasMask) {
-      renderMask(view, registry, instance, *entityMask);
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
       subtreeConsumedBySubRendering = true;
     }
 
@@ -789,10 +789,10 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       deferred.hasIsolatedLayer = hasIsolatedLayer;
       deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
-      deferred.hasMask = hasMask;
+      deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
-      if (hasMask) {
+      for (int mi = 0; mi < maskDepth; ++mi) {
         renderer_.popMask();
       }
       // Pop in reverse of push order: filter is innermost, then entity clip.
@@ -813,7 +813,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Pop deferred subtree layers when we reach their last entity.
     while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
       const DeferredPop& deferred = subtreeMarkers_.back();
-      if (deferred.hasMask) {
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
         renderer_.popMask();
       }
       // Pop in reverse of push order: filter is innermost, then entity clip.
@@ -904,8 +904,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately below; don't let pushClip see it.
-    const std::optional<components::ResolvedMask> entityMask = entityClip.mask;
-    entityClip.mask = std::nullopt;
+    // Mask is handled separately from clip — access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
@@ -918,9 +917,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
 
     // Render mask content, then transition to masked content layer.
-    const bool hasMask = entityMask.has_value() && entityMask->valid();
-    if (hasMask) {
-      renderMask(view, registry, instance, *entityMask);
+    int maskDepth = 0;
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -961,11 +960,11 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       deferred.hasIsolatedLayer = hasIsolatedLayer;
       deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
-      deferred.hasMask = hasMask;
+      deferred.maskDepth = maskDepth;
       localDeferred.push_back(deferred);
     } else {
       // Pop in reverse of push order: mask innermost, then filter, clip, layer.
-      if (hasMask) {
+      for (int mi = 0; mi < maskDepth; ++mi) {
         renderer_.popMask();
       }
       if (hasFilterLayer) {
@@ -982,7 +981,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     while (!localDeferred.empty() && localDeferred.back().lastEntity == entity) {
       const DeferredPop& deferred = localDeferred.back();
       // Pop in reverse of push order: mask innermost, then filter, clip, layer.
-      if (deferred.hasMask) {
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
         renderer_.popMask();
       }
       if (deferred.hasFilterLayer) {
@@ -1009,84 +1008,103 @@ void RendererDriver::skipUntil(RenderingInstanceView& view, Entity endEntity) {
   }
 }
 
-void RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
-                                const components::RenderingInstanceComponent& instance,
-                                const components::ResolvedMask& mask) {
+int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
+                               const components::RenderingInstanceComponent& instance,
+                               const components::ResolvedMask& mask) {
   if (!mask.subtreeInfo) {
-    return;
+    return 0;
   }
 
   const EntityHandle maskHandle = mask.reference.handle;
   if (!maskHandle.valid()) {
-    return;
+    return 0;
   }
 
   const auto* maskComponent = maskHandle.try_get<components::MaskComponent>();
   if (maskComponent == nullptr) {
-    return;
+    return 0;
   }
 
-  // Compute mask bounds.
+  // Collect the mask chain outermost-first: [grandparent, parent, primary].
+  // The chain is stored as primary->parentMask->parentMask->...
+  SmallVector<const components::ResolvedMask*, 3> chain;
+  for (const components::ResolvedMask* m = &mask; m != nullptr; m = m->parentMask.get()) {
+    chain.push_back(m);
+  }
+  // Reverse so outermost (root of chain) is rendered first.
+  std::reverse(chain.begin(), chain.end());
+
   const Boxd shapeLocalBounds =
       components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
 
-  std::optional<Boxd> maskBounds;
-  if (!maskComponent->useAutoBounds()) {
-    Boxd maskUnitsBounds;
-    if (maskComponent->maskUnits == MaskUnits::ObjectBoundingBox) {
-      maskUnitsBounds = shapeLocalBounds;
-    } else {
-      maskUnitsBounds = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  // Render each mask in the chain, outermost first.
+  for (const auto* m : chain) {
+    if (!m->subtreeInfo || !m->reference.handle.valid()) {
+      continue;
     }
 
-    const Lengthd x = maskComponent->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd y = maskComponent->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd width = maskComponent->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-    const Lengthd height = maskComponent->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+    const auto* mc = m->reference.handle.try_get<components::MaskComponent>();
+    if (!mc) {
+      continue;
+    }
 
-    const double xPx = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
-    const double yPx = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
-    const double wPx = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
-    const double hPx = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+    std::optional<Boxd> maskBounds;
+    if (!mc->useAutoBounds()) {
+      Boxd maskUnitsBounds;
+      if (mc->maskUnits == MaskUnits::ObjectBoundingBox) {
+        maskUnitsBounds = shapeLocalBounds;
+      } else {
+        maskUnitsBounds = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+      }
 
-    maskBounds = Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+      const Lengthd x = mc->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+      const Lengthd y = mc->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+      const Lengthd width = mc->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+      const Lengthd height = mc->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+      const double xPx = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double yPx = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+      const double wPx = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double hPx = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+
+      maskBounds = Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+    }
+
+    if (verbose_) {
+      std::cout << "[renderMask] chain depth=" << chain.size()
+                << " maskBounds=" << (maskBounds ? "yes" : "none")
+                << "\n  layerBase=" << layerBaseTransform_
+                << "\n  entityFromWorld=" << instance.entityFromWorldTransform
+                << "\n  maskContentUnits="
+                << (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox ? "OBB"
+                                                                                : "userSpace")
+                << "\n";
+    }
+    renderer_.pushMask(maskBounds);
+
+    const Transformd savedLayerBase = layerBaseTransform_;
+    layerBaseTransform_ = instance.entityFromWorldTransform;
+
+    if (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
+      const Transformd userSpaceFromMaskContent =
+          Transformd::Scale(shapeLocalBounds.size()) *
+          Transformd::Translate(shapeLocalBounds.topLeft);
+      layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
+    }
+
+    if (!shapeLocalBounds.isEmpty()) {
+      traverseRange(view, registry, m->subtreeInfo->firstRenderedEntity,
+                    m->subtreeInfo->lastRenderedEntity);
+    } else {
+      skipUntil(view, m->subtreeInfo->lastRenderedEntity);
+    }
+
+    layerBaseTransform_ = savedLayerBase;
+    renderer_.transitionMaskToContent();
   }
 
-  if (verbose_) {
-    std::cout << "[renderMask] maskBounds=" << (maskBounds ? "yes" : "none")
-              << "\n  layerBase=" << layerBaseTransform_
-              << "\n  entityFromWorld=" << instance.entityFromWorldTransform
-              << "\n  maskContentUnits=" << (maskComponent->maskContentUnits == MaskContentUnits::ObjectBoundingBox ? "OBB" : "userSpace")
-              << "\n";
-  }
-  renderer_.pushMask(maskBounds);
-
-  // Save and override layerBaseTransform for mask content rendering.
-  const Transformd savedLayerBase = layerBaseTransform_;
-  layerBaseTransform_ = instance.entityFromWorldTransform;
-
-  // Apply maskContentUnits transform.
-  if (maskComponent->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
-    const Transformd userSpaceFromMaskContent =
-        Transformd::Scale(shapeLocalBounds.size()) *
-        Transformd::Translate(shapeLocalBounds.topLeft);
-    layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
-  }
-
-  // Render mask subtree.
-  if (!shapeLocalBounds.isEmpty()) {
-    traverseRange(view, registry, mask.subtreeInfo->firstRenderedEntity,
-                  mask.subtreeInfo->lastRenderedEntity);
-  } else {
-    skipUntil(view, mask.subtreeInfo->lastRenderedEntity);
-  }
-
-  layerBaseTransform_ = savedLayerBase;
-
-  renderer_.transitionMaskToContent();
-
-  // Restore the entity transform after mask rendering.
   renderer_.setTransform(instance.entityFromWorldTransform);
+  return static_cast<int>(chain.size());
 }
 
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,

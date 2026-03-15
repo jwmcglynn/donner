@@ -63,9 +63,9 @@ private:
                   const components::ResolvedMarker& marker, const Vector2d& vertexPosition,
                   const Vector2d& direction, MarkerOrient::MarkerType markerOrientType,
                   const components::ComputedStyleComponent& style);
-  void renderMask(RenderingInstanceView& view, Registry& registry,
-                  const components::RenderingInstanceComponent& instance,
-                  const components::ResolvedMask& mask);
+  int renderMask(RenderingInstanceView& view, Registry& registry,
+                 const components::RenderingInstanceComponent& instance,
+                 const components::ResolvedMask& mask);
   void renderPattern(RenderingInstanceView& view, Registry& registry,
                      const components::RenderingInstanceComponent& instance,
                      const components::PaintResolvedReference& ref, bool forStroke);
@@ -85,7 +85,7 @@ private:
     bool hasIsolatedLayer = false;
     bool hasFilterLayer = false;
     bool hasEntityClip = false;
-    bool hasMask = false;
+    int maskDepth = 0;
   };
 
   RendererInterface& renderer_;
