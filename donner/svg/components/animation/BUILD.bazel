@@ -3,61 +3,48 @@ load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 donner_cc_library(
     name = "components",
     hdrs = [
-        "FilterComponent.h",
-        "FilterPrimitiveComponent.h",
-        "FilterUnits.h",
-    ],
-    visibility = [
-        "//donner/svg:__subpackages__",
-    ],
-    deps = [
-        ":filter_effect",
-        "//donner/base",
-    ],
-)
-
-donner_cc_library(
-    name = "filter_effect",
-    srcs = [
-        "FilterEffect.cc",
-    ],
-    hdrs = [
-        "FilterEffect.h",
+        "AnimateMotionComponent.h",
+        "AnimateTransformComponent.h",
+        "AnimateValueComponent.h",
+        "AnimatedValuesComponent.h",
+        "AnimationStateComponent.h",
+        "AnimationTimingComponent.h",
+        "ClockValue.h",
+        "SetAnimationComponent.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",
     ],
     deps = [
         "//donner/base",
-        "//donner/svg/graph",
     ],
 )
 
 donner_cc_library(
-    name = "filter_system",
-    srcs = [
-        "FilterSystem.cc",
-    ],
-    hdrs = [
-        "FilterSystem.h",
-    ],
+    name = "animation_system",
+    srcs = ["AnimationSystem.cc"],
+    hdrs = ["AnimationSystem.h"],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",
         "//donner/base",
+        "//donner/base/xml/components",
         "//donner/svg/components:components_core",
+        "//donner/svg/components:svg_document_context",
+        "//donner/svg/core",
+        "//donner/svg/parser:parser_core",
     ],
 )
 
 donner_cc_test(
-    name = "filter_system_tests",
+    name = "animation_system_tests",
     srcs = [
-        "tests/FilterSystem_tests.cc",
+        "tests/AnimationSystem_tests.cc",
     ],
     deps = [
-        ":filter_system",
+        ":animation_system",
         "//donner/base:base_test_utils",
         "//donner/svg/components/style:style_system",
         "//donner/svg/parser",
