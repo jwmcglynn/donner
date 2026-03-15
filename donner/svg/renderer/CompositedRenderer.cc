@@ -223,6 +223,33 @@ bool CompositedRenderer::setEntityLayerTransform(Entity entity, const Transformd
   return false;
 }
 
+bool CompositedRenderer::setEntityLayerDocumentTransform(Entity entity,
+                                                         const Transformd& documentTransform) {
+  assert(document_ != nullptr && "Must call prepare() before setEntityLayerDocumentTransform()");
+
+  // Convert the document-space transform to canvas pixel space using the viewBox mapping.
+  // For a translation (dx_doc, dy_doc), the canvas translation is:
+  //   dx_canvas = dx_doc * canvasSize.x / viewBox.width
+  //   dy_canvas = dy_doc * canvasSize.y / viewBox.height
+  const auto viewBox = document_->svgElement().viewBox();
+  if (!viewBox.has_value() || viewBox->width() <= 0.0 || viewBox->height() <= 0.0) {
+    // No viewBox or degenerate — assume 1:1 mapping.
+    return setEntityLayerTransform(entity, documentTransform);
+  }
+
+  const double scaleX = static_cast<double>(canvasSize_.x) / viewBox->width();
+  const double scaleY = static_cast<double>(canvasSize_.y) / viewBox->height();
+
+  // Transform the document-space transform into canvas space by scaling the translation
+  // components. For a pure translation this is exact; for rotation/scale this is an
+  // approximation that works for interactive drag feedback.
+  Transformd canvasTransform = documentTransform;
+  canvasTransform.data[4] *= scaleX;  // tx
+  canvasTransform.data[5] *= scaleY;  // ty
+
+  return setEntityLayerTransform(entity, canvasTransform);
+}
+
 void CompositedRenderer::setLayerOpacity(uint32_t layerId, double opacity) {
   if (layerId < layers_.layers.size()) {
     layers_.layers[layerId].compositionOpacity = opacity;
@@ -343,14 +370,14 @@ void CompositedRenderer::rasterizeLayer(CompositingLayer& layer) {
     }
   }
 
-  // Set up viewport sized to the layer's content bounds.
-  const Boxd& bounds = layer.bounds;
+  // Render at full canvas size to match single-pass pixel grid alignment. This ensures
+  // anti-aliased edges produce identical coverage regardless of layer decomposition.
   RenderViewport viewport;
-  viewport.size = Vector2d(bounds.width(), bounds.height());
+  viewport.size = Vector2d(canvasSize_.x, canvasSize_.y);
   viewport.devicePixelRatio = 1.0;
 
-  // Translate so layer content starts at (0,0) in the pixmap.
-  const Transformd layerBaseTransform = Transformd::Translate(-bounds.topLeft.x, -bounds.topLeft.y);
+  // No base transform — entities render at their original canvas positions.
+  const Transformd layerBaseTransform;
 
   // Render the layer's entity range into the offscreen renderer.
   RendererDriver layerDriver(*cache.offscreen, verbose_);
@@ -409,13 +436,12 @@ void CompositedRenderer::composeLayers() {
       rebuildCachedImage(cache);
     }
 
-    // Position the layer pixmap at its bounds origin, then apply any composition transform
-    // (e.g., drag offset for interactive editing).
-    const Boxd& layerBounds = layers_.layers[i].bounds;
+    // Each layer pixmap is full-canvas-sized with content at its original position.
+    // Apply any composition transform (e.g., drag offset for interactive editing).
     renderer_.setTransform(layers_.layers[i].compositionTransform);
 
     ImageParams params;
-    params.targetRect = layerBounds;
+    params.targetRect = Boxd::WithSize(Vector2d(canvasSize_.x, canvasSize_.y));
     params.opacity = layers_.layers[i].compositionOpacity;
 
     renderer_.drawImage(cache.cachedImage, params);

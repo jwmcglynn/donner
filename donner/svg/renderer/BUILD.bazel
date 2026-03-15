@@ -108,7 +108,7 @@ donner_cc_library(
     name = "composited_renderer",
     srcs = ["CompositedRenderer.cc"],
     hdrs = ["CompositedRenderer.h"],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = ["//visibility:public"],
     deps = [
         ":layer_decomposition",
         ":renderer_driver",

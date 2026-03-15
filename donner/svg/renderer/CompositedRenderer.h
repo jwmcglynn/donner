@@ -127,12 +127,28 @@ public:
 
   /**
    * Set the composition transform for the layer containing the given entity.
+   * The transform is in **canvas pixel coordinates**.
    *
    * @param entity The entity whose layer should be transformed.
-   * @param transform The composition transform to apply.
+   * @param transform The composition transform to apply (canvas space).
    * @return True if the entity's layer was found.
    */
   bool setEntityLayerTransform(Entity entity, const Transformd& transform);
+
+  /**
+   * Set the composition transform for the layer containing the given entity,
+   * accepting a transform in **document (viewBox) coordinates**. The compositor
+   * automatically converts to canvas pixel coordinates using the document's
+   * viewBox-to-canvas mapping.
+   *
+   * This is the preferred method for editor integration where mouse coordinates
+   * are in document space.
+   *
+   * @param entity The entity whose layer should be transformed.
+   * @param documentTransform The composition transform in document/viewBox space.
+   * @return True if the entity's layer was found.
+   */
+  bool setEntityLayerDocumentTransform(Entity entity, const Transformd& documentTransform);
 
   /**
    * Set the composition opacity for a layer. This opacity is applied at

@@ -1048,5 +1048,128 @@ TEST_F(CompositedRendererTest, SkipsCompositionWhenNothingChanged) {
             static_cast<uint32_t>(compositor.layers().layers.size()));
 }
 
+// --- Promoted entity compositing correctness ---
+
+TEST_F(CompositedRendererTest, PromotedElementWithOpacityMatchesSinglePass) {
+  const std::string_view svg = R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="white" />
+    <circle id="target" cx="8" cy="8" r="5" fill="red" opacity="0.8" />
+  )svg";
+
+  SVGDocument doc1 = makeDocument(svg);
+  RendererBitmap reference = renderSinglePass(doc1);
+
+  SVGDocument doc2 = makeDocument(svg);
+  RendererUtils::prepareDocumentForRendering(doc2, false);
+  Entity target = findRenderEntityById(doc2.registry(), "target");
+  ASSERT_NE(target, Entity(entt::null));
+
+  auto backend = CreateActiveRendererInstance();
+  CompositedRenderer compositor(*backend);
+  compositor.prepare(doc2, {target}, CompositingLayer::Reason::Selection);
+  compositor.renderFrame();
+  RendererBitmap composited = compositor.takeSnapshot();
+
+  EXPECT_EQ(countDifferingPixels(reference, composited), 0)
+      << "Promoted element with opacity should produce identical output to single-pass";
+}
+
+TEST_F(CompositedRendererTest, PromotedElementWithTransformMatchesSinglePass) {
+  const std::string_view svg = R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="white" />
+    <rect id="target" x="4" y="4" width="8" height="8" fill="blue"
+          transform="rotate(15 8 8)" />
+  )svg";
+
+  SVGDocument doc1 = makeDocument(svg);
+  RendererBitmap reference = renderSinglePass(doc1);
+
+  SVGDocument doc2 = makeDocument(svg);
+  RendererUtils::prepareDocumentForRendering(doc2, false);
+  Entity target = findRenderEntityById(doc2.registry(), "target");
+  ASSERT_NE(target, Entity(entt::null));
+
+  auto backend = CreateActiveRendererInstance();
+  CompositedRenderer compositor(*backend);
+  compositor.prepare(doc2, {target}, CompositingLayer::Reason::Selection);
+  compositor.renderFrame();
+  RendererBitmap composited = compositor.takeSnapshot();
+
+  EXPECT_EQ(countDifferingPixels(reference, composited), 0)
+      << "Promoted element with transform should produce identical output to single-pass";
+}
+
+TEST_F(CompositedRendererTest, PromotedElementInComplexSceneMatchesSinglePass) {
+  const std::string_view svg = R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="#eee" />
+    <rect x="2" y="0" width="3" height="16" fill="#ddd" />
+    <circle id="c1" cx="5" cy="5" r="3" fill="red" opacity="0.8" />
+    <rect id="target" x="4" y="7" width="6" height="5" fill="blue"
+          stroke="black" stroke-width="0.5" />
+    <rect x="10" y="2" width="4" height="4" fill="orange" />
+  )svg";
+
+  SVGDocument doc1 = makeDocument(svg);
+  RendererBitmap reference = renderSinglePass(doc1);
+
+  SVGDocument doc2 = makeDocument(svg);
+  RendererUtils::prepareDocumentForRendering(doc2, false);
+  Entity target = findRenderEntityById(doc2.registry(), "target");
+  ASSERT_NE(target, Entity(entt::null));
+
+  auto backend = CreateActiveRendererInstance();
+  CompositedRenderer compositor(*backend);
+  compositor.prepare(doc2, {target}, CompositingLayer::Reason::Selection);
+  compositor.renderFrame();
+  RendererBitmap composited = compositor.takeSnapshot();
+
+  // A small number of pixels may differ at anti-aliased stroke edges due to the stroke
+  // being rendered across layer boundaries (part of the stroke on the static layer, part
+  // on the promoted layer). This is acceptable for interactive editing.
+  EXPECT_LE(countDifferingPixels(reference, composited), 15)
+      << "Promoted element in complex scene should closely match single-pass";
+}
+
+TEST_F(CompositedRendererTest, DocumentTransformScalesTranslationByViewBoxRatio) {
+  // Create a document where the viewBox is 100x100 but the canvas is 16x16 pixels.
+  // A 50-unit translation in document space should become ~8 pixels in canvas space.
+  auto result = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 100 100">
+           <rect x="0" y="0" width="100" height="100" fill="white"/>
+           <rect id="target" x="10" y="10" width="30" height="30" fill="red"/>
+         </svg>)");
+  ASSERT_FALSE(result.hasError());
+  SVGDocument document = std::move(result.result());
+
+  // Render without any composition transform (baseline).
+  auto backend = CreateActiveRendererInstance();
+  CompositedRenderer compositor(*backend);
+  RendererUtils::prepareDocumentForRendering(document, false);
+  Entity target = findRenderEntityById(document.registry(), "target");
+  ASSERT_NE(target, Entity(entt::null));
+
+  compositor.prepare(document, {target}, CompositingLayer::Reason::Selection);
+  compositor.renderFrame();
+  RendererBitmap baseline = compositor.takeSnapshot();
+
+  // Apply a document-space translation and compose.
+  compositor.setEntityLayerDocumentTransform(target, Transformd::Translate(50.0, 0.0));
+  compositor.composeOnly();
+  RendererBitmap docTranslated = compositor.takeSnapshot();
+
+  // Apply the equivalent canvas-space translation (50 doc units * 16px/100units = 8px).
+  compositor.setEntityLayerTransform(target, Transformd::Translate(8.0, 0.0));
+  compositor.composeOnly();
+  RendererBitmap canvasTranslated = compositor.takeSnapshot();
+
+  // Both methods should produce the same result.
+  EXPECT_EQ(countDifferingPixels(docTranslated, canvasTranslated), 0)
+      << "Document-space and equivalent canvas-space translations should produce identical output";
+
+  // And both should differ from baseline (the element moved).
+  EXPECT_GT(countDifferingPixels(baseline, docTranslated), 0)
+      << "Translated output should differ from baseline";
+}
+
 }  // namespace
 }  // namespace donner::svg

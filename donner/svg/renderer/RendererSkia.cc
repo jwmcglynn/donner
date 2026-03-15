@@ -1273,7 +1273,8 @@ void RendererSkia::beginFrame(const RenderViewport& viewport) {
   const int pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
 
   bitmap_.allocPixels(
-      SkImageInfo::MakeN32(pixelWidth, pixelHeight, SkAlphaType::kUnpremul_SkAlphaType));
+      SkImageInfo::MakeN32(pixelWidth, pixelHeight, SkAlphaType::kPremul_SkAlphaType));
+  bitmap_.eraseColor(SK_ColorTRANSPARENT);
 
   if (externalCanvas_ != nullptr) {
     currentCanvas_ = externalCanvas_;
