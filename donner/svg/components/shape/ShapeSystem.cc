@@ -16,16 +16,38 @@ namespace donner::svg::components {
 
 namespace {
 
-/// Create a FontMetrics with viewport size from the document context, so that vw/vh/vmin/vmax
-/// CSS units resolve correctly against the canvas size.
-FontMetrics fontMetricsWithViewport(Registry& registry) {
+/// Create a FontMetrics with viewport size and font-size context, so that CSS units
+/// (em/ex/ch/rem/vw/vh/vmin/vmax) resolve correctly.
+FontMetrics fontMetricsForElement(Registry& registry,
+                                  const ComputedStyleComponent& style) {
   FontMetrics metrics;
+
   if (auto* ctx = registry.ctx().find<SVGDocumentContext>()) {
+    // Viewport size for vw/vh/vmin/vmax.
     if (ctx->canvasSize) {
-      metrics.viewportSize =
-          Vector2d(static_cast<double>(ctx->canvasSize->x), static_cast<double>(ctx->canvasSize->y));
+      metrics.viewportSize = Vector2d(static_cast<double>(ctx->canvasSize->x),
+                                      static_cast<double>(ctx->canvasSize->y));
+    }
+
+    // Root font-size for rem units.
+    if (ctx->rootEntity != entt::null) {
+      if (const auto* rootStyle = registry.try_get<ComputedStyleComponent>(ctx->rootEntity)) {
+        if (rootStyle->properties) {
+          // Use default FontMetrics for resolving root font-size (avoids circular dependency).
+          metrics.rootFontSize = rootStyle->properties->fontSize.getRequired().toPixels(
+              Boxd(), FontMetrics(), Lengthd::Extent::Mixed);
+        }
+      }
     }
   }
+
+  // Element's computed font-size for em/ex/ch units.
+  if (style.properties) {
+    // Resolve font-size using default metrics (font-size itself can't be em-relative to itself).
+    metrics.fontSize = style.properties->fontSize.getRequired().toPixels(
+        Boxd(), FontMetrics(), Lengthd::Extent::Mixed);
+  }
+
   return metrics;
 }
 
@@ -155,9 +177,9 @@ ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
 void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
                                               std::vector<ParseError>* outWarnings) {
   ForEachShape<AllShapes>([&]<typename ShapeType>() {
-    const FontMetrics metrics = fontMetricsWithViewport(registry);
     for (auto view = registry.view<ShapeType, ComputedStyleComponent>(); auto entity : view) {
       auto [shape, style] = view.get(entity);
+      const FontMetrics metrics = fontMetricsForElement(registry, style);
       createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, metrics,
                                    outWarnings);
     }
