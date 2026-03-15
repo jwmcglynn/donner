@@ -801,8 +801,8 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"e-rect-023.svg", Params::Skip()},  // Not impl: "ex" units
                                     {"e-rect-029.svg", Params::Skip()},  // Not impl: "rem" units
                                     {"e-rect-031.svg", Params::Skip()},  // Not impl: "ch" units
-                                    {"e-rect-034.svg", Params::Skip()},  // BUG: vw/vh units (137K diff)
-                                    {"e-rect-036.svg", Params::Skip()},  // BUG: vmin/vmax units (137K diff)
+                                    // vw/vh and vmin/vmax units — no overrides needed, default
+                                    // threshold applies (viewport units now resolve correctly).
                                 })),
     TestNameFromFilename);
 

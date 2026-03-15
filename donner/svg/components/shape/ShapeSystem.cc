@@ -3,6 +3,7 @@
 #include <concepts>
 
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
@@ -14,6 +15,19 @@
 namespace donner::svg::components {
 
 namespace {
+
+/// Create a FontMetrics with viewport size from the document context, so that vw/vh/vmin/vmax
+/// CSS units resolve correctly against the canvas size.
+FontMetrics fontMetricsWithViewport(Registry& registry) {
+  FontMetrics metrics;
+  if (auto* ctx = registry.ctx().find<SVGDocumentContext>()) {
+    if (ctx->canvasSize) {
+      metrics.viewportSize =
+          Vector2d(static_cast<double>(ctx->canvasSize->x), static_cast<double>(ctx->canvasSize->y));
+    }
+  }
+  return metrics;
+}
 
 /**
  * Parse the string of the 'd' presentation attribute out of CSS, which can be parsed with \ref
@@ -141,9 +155,10 @@ ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
 void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
                                               std::vector<ParseError>* outWarnings) {
   ForEachShape<AllShapes>([&]<typename ShapeType>() {
+    const FontMetrics metrics = fontMetricsWithViewport(registry);
     for (auto view = registry.view<ShapeType, ComputedStyleComponent>(); auto entity : view) {
       auto [shape, style] = view.get(entity);
-      createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, FontMetrics(),
+      createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, metrics,
                                    outWarnings);
     }
 
