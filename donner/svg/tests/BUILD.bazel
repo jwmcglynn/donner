@@ -6,6 +6,7 @@ donner_cc_test(
         "ElementStyle_tests.cc",
         "ElementType_tests.cc",
         "SVGDocument_tests.cc",
+        "SVGElementPublicApi_tests.cc",
         "SVGElement_tests.cc",
         "SVGFilterElement_tests.cc",
         "SVGPathElement_tests.cc",
