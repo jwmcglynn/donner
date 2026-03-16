@@ -1,7 +1,7 @@
 # Design: v0.5 Release
 
 **Status:** In Progress
-**Updated:** 2026-03-15
+**Updated:** 2026-03-16
 
 ## Summary
 
@@ -29,16 +29,16 @@ fuzzers, and ensuring CI is green.
 - `<a>` and `<switch>` element support (v1.0).
 - 100% resvg test suite pass rate (known gaps are documented).
 - Upstream contributions (resvg harness integration is v1.0).
+- Deprecated SVG 1.1 features: `enable-background`, `BackgroundImage`/`BackgroundAlpha` filter
+  inputs, SVG fonts, `<cursor>`, `<altGlyph>`, `<tref>`, CSS `clip` rect. These are removed in
+  SVG 2 and will not be implemented. See [unsupported_svg1_features.md](../../docs/unsupported_svg1_features.md).
 
 ## Next Steps
 
-Phases 1–11 and 13 are complete. Phase 11 (`<textPath>`) shipped with 37 passing resvg tests.
-Phase 13 (Text Properties & Test Coverage) shipped per-character positioning, CSS text
-properties, writing-mode, gradient text, allocation guards, viewport/font-relative units, and
-enabled 36 previously-skipped tests. Remaining work:
+Phases 1–11, 13, and 14 are complete. Remaining work:
 
-- **Phase 14: Mask-on-Mask Rendering** — Needs renderer-level luminance mask multiplication API.
-  Infrastructure (chain resolution, cycle detection, subtree caching) is complete.
+- **Phase 15: Pixel Diff Burndown** — Reduce all non-text test thresholds to ≤500px. Triage
+  each high-diff test, fix bugs, document irreducible architectural limitations.
 - **Phase 12: Release** — Final test pass, merge, tag, release notes.
 - **Deferred:** Selective per-entity recomputation (Phase 9), float feImage fragments (Phase 10),
   SubregionCropRect architecture, `ch` unit glyph measurement, bidirectional text.
@@ -337,17 +337,17 @@ Correct mask luminance composition when a `<mask>` element has its own `mask=` a
 
 ### Test Coverage Gap Analysis
 
-**Current state: 1293 passing / 1506 total SVGs (86%)**
+**Current state: ~1310 passing / 1506 total SVGs (87%)**
 
-123 tests explicitly skipped, 9 categories still disabled (~82 more tests),
+~107 tests explicitly skipped, 9 categories still disabled (~82 more tests),
 101 passing tests with >15K pixel diffs (font rendering baseline).
 
 | Gap | Tests | Effort | Status |
 |-----|-------|--------|--------|
 | **Font rendering baseline** | 101 >15K diff | Very High | Irreducible: stb_truetype vs FreeType glyph differences |
-| **SVG-in-image** | 17 skipped | High | `.svg`/`.svgz` as `<image>` needs sub-document pipeline |
-| **CSS blend modes** | ~20 disabled | Medium | `mix-blend-mode` not implemented |
-| **Filter backdrop** | ~21 disabled | Medium | `enable-background` / BackgroundImage input |
+| **SVG-in-image** | ~~17 skipped~~ 2 skipped | ~~High~~ Done | Fixed: 15 SVG image + 1 marker test enabled |
+| **CSS blend modes** | ~20 disabled | Medium | `mix-blend-mode` works; `isolation:isolate` subtree bracketing fixed |
+| **Filter backdrop** | ~21 disabled | N/A | `enable-background` / BackgroundImage — deprecated in SVG 2, won't implement |
 | **Filter on use/marker/pattern** | 14 skipped | Medium | Filter application scope |
 | **`<switch>` + systemLanguage** | ~13 disabled | Medium | Conditional rendering |
 | **Mask-on-mask edge cases** | 2 skipped | Medium | Mutual recursion, shadow entity masks |
@@ -355,6 +355,81 @@ Correct mask luminance composition when a `<mask>` element has its own `mask=` a
 | **XML entities** | 3 skipped | Low | Parser feature |
 | **CSS @import, SVG version** | 3 skipped | Low | Parser/spec edge cases |
 | **a-direction / glyph-orientation** | ~4 disabled | Low | RTL/vertical text orientation |
+
+### Phase 15: Pixel Diff Burndown (Target: ≤500px)
+
+Reduce all test thresholds to ≤500px pixel differences. Text tests are exempt from the 500px
+target due to irreducible stb_truetype vs FreeType glyph rasterization differences, but should
+still be investigated for non-font-related improvements.
+
+**Non-text tests > 500px (must fix):**
+
+| Test | Current | Root Cause |
+|------|---------|-----------|
+| ~~`a-isolation-001`~~ | ~~62000~~ 0 | **Fixed:** layerDepth missing for isolation/blend-mode |
+| `a-filter-002/003/004` | 28000 | Filter on text (compounds font + filter diffs) |
+| `a-filter-005` | 13000 | Filter on text |
+| `a-filter-011/012` | 17000 | Filter on text |
+| `a-filter-013` | 24500 | Filter on text |
+| `a-filter-015` | 35500 | Filter on text |
+| `a-filter-031/032/034` | 33000–42000 | Filter on text |
+| `a-filter-037` | 43000 | Filter on text (negative values) |
+| `a-filter-038` | 145000 | url() + grayscale() color space |
+| `a-filter-039` | 8000 | Two url() filter refs |
+| `e-feConvolveMatrix-014` | 7000 | Filter region boundary edges |
+| ~~`e-feImage-006/012/013/014/017/023`~~ | ~~9500–36000~~ 0 | **Fixed:** filter region origin offset |
+| `e-feImage-007/008` | 4500 | OBB subregion bilinear diffs |
+| `e-feImage-009/010` | 12500–13000 | Subregion coordinate diffs |
+| `e-feImage-019/021` | 26200–34200 | Transform interaction (skewX) |
+| `e-feImage-024` | 22000 | Chained fragment refs |
+| `e-feSpecularLighting-003` | 58000 | resvg golden bug (R=0 channel) |
+| `e-filter-011` | 8000 | Subregion clipping |
+| `e-filter-019` | 4100 | Inherited filter blur edge |
+| `e-filter-027` | 6000 | Skew transform + narrow filter region |
+| `e-feTurbulence-019` | 1100 | Noise precision |
+| `e-defs-007` | 6500 | Unknown |
+| `e-marker-017` | 17000 | Text in marker |
+| `e-marker-022` | 3000 | Nested markers |
+| `e-marker-018` | 1000 | Marker rendering |
+| `e-marker-033` | 1200 | Multiple closepaths |
+| `e-mask-030` | 18000 | Mask with `<image>` |
+| `e-mask-031` | 21000 | Mask with grayscale `<image>` |
+| `e-pattern-018` | 22000 | Text in pattern |
+| `e-pattern-020` | 800 | Nested pattern AA |
+| `e-feDiffuseLighting-009` | 750 | Transformed diffuse lighting |
+
+**Text tests > 500px (investigate, may be irreducible):**
+
+~90 tests with 1500–45000px diffs from stb_truetype vs FreeType baseline. These include
+e-text-*, e-tspan-*, e-textPath-*, a-font-*, a-text-*, a-letter-spacing-*, a-writing-mode-*,
+a-kerning-*, a-unicode-*, a-visibility-*, a-word-spacing-*, a-text-decoration-*, and text-related
+entries in a-fill-*, a-stroke-*, a-opacity-*, a-display-*, e-clipPath-*, a-alignment-baseline-*,
+a-dominant-baseline-*.
+
+- [x] **Fix isolation compositing** — `a-isolation-001` (62K→0) — `RenderingContext` wasn't
+  incrementing `layerDepth` for `isolation:isolate` / `mix-blend-mode`, so the isolated layer was
+  pushed and immediately popped without bracketing children.
+- [x] **Fix feImage fragment ref offset** — 6 tests (006/012/013/014/017/023): 9K–36K→0 — Fragment
+  pre-rendering needed `+filterRegion.topLeft` translation to align with filter pixmap coordinates.
+- [x] **Enable SVG-as-image** — 15 image tests + 1 marker test enabled by fixing `drawSubDocument`
+  viewBox-to-canvas transform scaling (Transformd left-first composition order). Also added SVG
+  content detection for data URIs without MIME type.
+- [x] **Fix image rendering in traverseRange** — `<image>` elements inside markers/patterns/masks
+  were silently not rendered (traverseRange lacked LoadedSVGImageComponent/LoadedImageComponent
+  handling).
+- [ ] **Fix feImage subregion/transform diffs** — 7 remaining feImage tests (007–010, 019, 021,
+  024) at 1.5K–34K from OBB subregion and skew transform coordinate mapping issues.
+- [ ] **Fix filter-on-text rendering** — `a-filter-*` tests — likely a subset of the text
+  font diff amplified by filter processing. Determine how much is font vs filter.
+- [ ] **Fix feSpecularLighting-003** — 58K diff appears to be a resvg golden bug (R=0 channel).
+  If confirmed, override with our own golden or document as upstream issue.
+- [ ] **Fix a-filter-038** — 145K diff from url() + grayscale() CSS filter list color space issue.
+- [ ] **Reduce marker/mask/pattern diffs** — Investigate non-text diffs in markers, masks, and
+  patterns.
+- [ ] **Tighten all thresholds** — After fixes, re-run full suite and set thresholds to actual
+  diff + 10% margin. Remove entries that drop below default threshold.
+- [ ] **Document irreducible diffs** — For each remaining threshold > 500px, add a comment
+  explaining why it cannot be reduced further.
 
 ### Phase 12: Release
 
