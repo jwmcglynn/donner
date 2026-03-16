@@ -78,6 +78,7 @@ donner_cc_test(
     srcs = [
         "FilterGraphExecutor_tests.cc",
     ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     deps = [
         "//donner/svg/renderer:filter_graph_executor",
         "@com_google_gtest//:gtest_main",
@@ -225,6 +226,7 @@ donner_cc_test(
 
 donner_cc_test(
     name = "resvg_test_suite",
+    size = "large",
     srcs = [
         "resvg_test_suite.cc",
     ],
@@ -236,7 +238,6 @@ donner_cc_test(
         "@resvg-test-suite//:svg",
     ],
     shard_count = 16,
-    size = "large",
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",

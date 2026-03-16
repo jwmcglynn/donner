@@ -114,6 +114,29 @@ struct ResolvedClip {
   Transformd clipPathUnitsTransform;
   std::optional<components::ResolvedMask> mask;
 
+  ResolvedClip() = default;
+  ResolvedClip(ResolvedClip&&) = default;
+  ResolvedClip& operator=(ResolvedClip&&) = default;
+
+  /// Deep copy (clones mask chain).
+  ResolvedClip(const ResolvedClip& other)
+      : clipRect(other.clipRect),
+        clipPaths(other.clipPaths),
+        clipPathUnitsTransform(other.clipPathUnitsTransform),
+        mask(other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
+                        : std::nullopt) {}
+
+  ResolvedClip& operator=(const ResolvedClip& other) {
+    if (this != &other) {
+      clipRect = other.clipRect;
+      clipPaths = other.clipPaths;
+      clipPathUnitsTransform = other.clipPathUnitsTransform;
+      mask = other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
+                        : std::nullopt;
+    }
+    return *this;
+  }
+
   [[nodiscard]] bool empty() const { return !clipRect.has_value() && clipPaths.empty() && !mask; }
 };
 

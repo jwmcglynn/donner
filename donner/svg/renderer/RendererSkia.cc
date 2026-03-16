@@ -48,10 +48,8 @@
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/graph/Reference.h"
-#include "donner/svg/renderer/FilterGraphExecutor.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-#include "tiny_skia/Painter.h"
 
 // Embedded resources
 #include "embed_resources/PublicSansFont.h"
@@ -101,6 +99,19 @@ SkPath toSkia(const PathSpline& spline);
 
 SkTileMode toSkia(GradientSpreadMethod spreadMethod);
 
+/// Premultiply straight-alpha RGBA pixels for Skia consumption.
+std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
+  std::vector<std::uint8_t> result(rgbaPixels.size());
+  for (std::size_t i = 0; i + 3 < rgbaPixels.size(); i += 4) {
+    const float a = rgbaPixels[i + 3] / 255.0f;
+    result[i + 0] = static_cast<std::uint8_t>(rgbaPixels[i + 0] * a);
+    result[i + 1] = static_cast<std::uint8_t>(rgbaPixels[i + 1] * a);
+    result[i + 2] = static_cast<std::uint8_t>(rgbaPixels[i + 2] * a);
+    result[i + 3] = rgbaPixels[i + 3];
+  }
+  return result;
+}
+
 void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
   if (clip.clipRect.has_value()) {
     canvas->clipRect(toSkia(*clip.clipRect));
@@ -147,47 +158,6 @@ void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
   canvas->clipPath(fullPath, SkClipOp::kIntersect, true);
 }
 
-bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
-  if (filterGraph.nodes.empty() ||
-      filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-    return false;
-  }
-
-  bool hasBlur = false;
-  for (const components::FilterNode& node : filterGraph.nodes) {
-    const bool isBlur =
-        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
-        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
-    const bool isOffset =
-        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
-    if (!isBlur && !isOffset) {
-      return false;
-    }
-    hasBlur |= isBlur;
-
-    if (node.result.has_value() || node.x.has_value() || node.y.has_value() ||
-        node.width.has_value() || node.height.has_value()) {
-      return false;
-    }
-
-    if (node.inputs.size() > 1u) {
-      return false;
-    }
-    if (node.inputs.size() == 1u) {
-      const auto& input = node.inputs.front();
-      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
-        continue;
-      }
-      const auto* stdInput = std::get_if<components::FilterStandardInput>(&input.value);
-      if (stdInput == nullptr || *stdInput != components::FilterStandardInput::SourceGraphic) {
-        return false;
-      }
-    }
-  }
-
-  return hasBlur;
-}
-
 bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
                             components::FilterStandardInput input) {
   for (const components::FilterNode& node : filterGraph.nodes) {
@@ -198,86 +168,7 @@ bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
       }
     }
   }
-
   return false;
-}
-
-bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
-  for (const auto& node : filterGraph.nodes) {
-    bool anisotropic = false;
-    std::visit(
-        [&](const auto& primitive) {
-          using T = std::decay_t<decltype(primitive)>;
-          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
-            anisotropic = !NearEquals(primitive.stdDeviationX, primitive.stdDeviationY, 1e-6);
-          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
-            anisotropic = !NearEquals(primitive.stdDeviationX, primitive.stdDeviationY, 1e-6);
-          }
-        },
-        node.primitive);
-
-    if (anisotropic) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
-                                  const Transformd& deviceFromFilter) {
-  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
-  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
-  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
-  if (!NearZero(dot, 1e-6)) {
-    return true;
-  }
-
-  const bool hasRotation =
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
-  return hasRotation && graphHasAnisotropicBlur(filterGraph);
-}
-
-double computeBlurPadding(const components::FilterGraph& filterGraph) {
-  double maxSigma = 0.0;
-  for (const auto& node : filterGraph.nodes) {
-    std::visit(
-        [&](const auto& primitive) {
-          using T = std::decay_t<decltype(primitive)>;
-          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
-            maxSigma = std::max({maxSigma, primitive.stdDeviationX, primitive.stdDeviationY});
-          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
-            maxSigma = std::max({maxSigma, primitive.stdDeviationX, primitive.stdDeviationY});
-          }
-        },
-        node.primitive);
-  }
-  return maxSigma * 3.0 + 1.0;
-}
-
-tiny_skia::Transform toTinyTransform(const Transformd& transform) {
-  return tiny_skia::Transform::fromRow(
-      NarrowToFloat(transform.data[0]), NarrowToFloat(transform.data[1]),
-      NarrowToFloat(transform.data[2]), NarrowToFloat(transform.data[3]),
-      NarrowToFloat(transform.data[4]), NarrowToFloat(transform.data[5]));
-}
-
-std::optional<tiny_skia::Pixmap> readSurfaceToPixmap(const sk_sp<SkSurface>& surface, int width,
-                                                     int height) {
-  const auto size = tiny_skia::IntSize::fromWH(static_cast<std::uint32_t>(width),
-                                               static_cast<std::uint32_t>(height));
-  if (!size.has_value()) {
-    return std::nullopt;
-  }
-
-  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4u, 0);
-  const SkImageInfo info =
-      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-  if (!surface->readPixels(info, pixels.data(), static_cast<std::size_t>(width) * 4u, 0, 0)) {
-    return std::nullopt;
-  }
-
-  return tiny_skia::Pixmap::fromVec(std::move(pixels), *size);
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,131 +1477,10 @@ void RendererSkia::popFilterLayer() {
     return;
   }
 
-  const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
-  const int height = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
-  const auto size = tiny_skia::IntSize::fromWH(static_cast<std::uint32_t>(width),
-                                               static_cast<std::uint32_t>(height));
-  if (!size.has_value()) {
-    currentCanvas_ = state.parentCanvas;
-    return;
-  }
-
-  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4u, 0);
-  const SkImageInfo info =
-      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-  if (!state.surface->readPixels(info, pixels.data(), static_cast<std::size_t>(width) * 4u, 0, 0)) {
-    currentCanvas_ = state.parentCanvas;
-    return;
-  }
-
-  auto maybePixmap = tiny_skia::Pixmap::fromVec(std::move(pixels), *size);
-  if (!maybePixmap.has_value()) {
-    currentCanvas_ = state.parentCanvas;
-    return;
-  }
-
-  std::optional<tiny_skia::Pixmap> fillPaintPixmap;
-  if (state.fillPaintSurface != nullptr) {
-    fillPaintPixmap = readSurfaceToPixmap(state.fillPaintSurface, width, height);
-  }
-
-  std::optional<tiny_skia::Pixmap> strokePaintPixmap;
-  if (state.strokePaintSurface != nullptr) {
-    strokePaintPixmap = readSurfaceToPixmap(state.strokePaintSurface, width, height);
-  }
-
-  const bool useTransformedBlurPath =
-      state.filterRegion.has_value() && state.filterRegion->width() > 0 &&
-      state.filterRegion->height() > 0 && !NearZero(state.deviceFromFilter.determinant()) &&
-      isEligibleForTransformedBlurPath(state.filterGraph) &&
-      shouldUseTransformedBlurPath(state.filterGraph, state.deviceFromFilter);
-
-  if (useTransformedBlurPath) {
-    const Boxd& filterRegion = *state.filterRegion;
-    const double scaleX =
-        std::max(1.0, state.deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
-    const double scaleY =
-        std::max(1.0, state.deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
-    const double blurPadding = computeBlurPadding(state.filterGraph);
-    const Boxd paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
-                            filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
-
-    const int localWidth = std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX)));
-    const int localHeight =
-        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY)));
-
-    auto maybeLocalPixmap = tiny_skia::Pixmap::fromSize(static_cast<std::uint32_t>(localWidth),
-                                                        static_cast<std::uint32_t>(localHeight));
-    if (maybeLocalPixmap.has_value()) {
-      tiny_skia::Pixmap localPixmap = std::move(*maybeLocalPixmap);
-      localPixmap.fill(tiny_skia::Color::transparent);
-
-      const Transformd filterFromDevice = state.deviceFromFilter.inverse();
-      const Transformd deviceToLocal =
-          Transformd::Scale(scaleX, scaleY) *
-          Transformd::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
-          filterFromDevice;
-
-      tiny_skia::PixmapPaint resamplePaint;
-      resamplePaint.opacity = 1.0f;
-      resamplePaint.blendMode = tiny_skia::BlendMode::Source;
-      resamplePaint.quality = tiny_skia::FilterQuality::Bilinear;
-      auto localView = localPixmap.mutableView();
-      tiny_skia::Painter::drawPixmap(localView, 0, 0, maybePixmap->view(), resamplePaint,
-                                     toTinyTransform(deviceToLocal));
-
-      const Transformd localDeviceFromFilter = Transformd::Scale(scaleX, scaleY);
-      const Boxd localFilterRegion(
-          Vector2d(blurPadding, blurPadding),
-          Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
-      ApplyFilterGraphToPixmap(localPixmap, state.filterGraph, localDeviceFromFilter,
-                               localFilterRegion, false);
-      ClipFilterOutputToRegion(localPixmap, localFilterRegion, localDeviceFromFilter);
-
-      const Transformd deviceFromLocal =
-          state.deviceFromFilter *
-          Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
-          Transformd::Scale(1.0 / scaleX, 1.0 / scaleY);
-
-      const std::vector<std::uint8_t> localPixels = localPixmap.release();
-      const SkImageInfo localInfo =
-          SkImageInfo::Make(localWidth, localHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-      const SkPixmap localSkPixmap(localInfo, localPixels.data(),
-                                   static_cast<std::size_t>(localWidth) * 4u);
-      sk_sp<SkImage> localImage = SkImages::RasterFromPixmapCopy(localSkPixmap);
-
-      currentCanvas_ = state.parentCanvas;
-      if (localImage != nullptr) {
-        currentCanvas_->save();
-        currentCanvas_->resetMatrix();
-        currentCanvas_->concat(toSkiaMatrix(deviceFromLocal));
-        currentCanvas_->drawImage(localImage, 0.0f, 0.0f, SkSamplingOptions(SkFilterMode::kLinear),
-                                  nullptr);
-        currentCanvas_->restore();
-        return;
-      }
-    }
-  }
-
-  ApplyFilterGraphToPixmap(*maybePixmap, state.filterGraph, state.deviceFromFilter,
-                           state.filterRegion, true,
-                           fillPaintPixmap.has_value() ? &*fillPaintPixmap : nullptr,
-                           strokePaintPixmap.has_value() ? &*strokePaintPixmap : nullptr);
-  ClipFilterOutputToRegion(*maybePixmap, state.filterRegion, state.deviceFromFilter);
-
-  const std::vector<std::uint8_t> filteredPixels = maybePixmap->release();
-  const SkPixmap pixmap(info, filteredPixels.data(), static_cast<std::size_t>(width) * 4u);
-  sk_sp<SkImage> filteredImage = SkImages::RasterFromPixmapCopy(pixmap);
-
+  // All SVG filter primitives are lowered to native Skia SkImageFilter in
+  // buildNativeSkiaFilterDAG(). If we reach here, the lowering failed for an
+  // unexpected reason — just restore the canvas and discard the filter output.
   currentCanvas_ = state.parentCanvas;
-  if (filteredImage == nullptr) {
-    return;
-  }
-
-  currentCanvas_->save();
-  currentCanvas_->resetMatrix();
-  currentCanvas_->drawImage(filteredImage, 0.0f, 0.0f);
-  currentCanvas_->restore();
 }
 
 void RendererSkia::pushIsolatedLayer(double opacity, MixBlendMode /*blendMode*/) {
@@ -1773,11 +1543,30 @@ void RendererSkia::transitionMaskToContent() {
   MaskLayerState& state = maskLayerStack_.back();
   const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
   const int height = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
-  std::optional<tiny_skia::Pixmap> maskPixmap =
-      readSurfaceToPixmap(state.maskSurface, width, height);
-  if (maskPixmap.has_value()) {
-    state.maskAlpha =
-        tiny_skia::Mask::fromPixmap(maskPixmap->view(), tiny_skia::MaskType::Luminance);
+
+  // Read the mask surface and convert to a luminance alpha mask.
+  // SVG luminance formula: L = 0.2126*R + 0.7152*G + 0.0722*B, scaled by alpha.
+  {
+    const SkImageInfo info =
+        SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
+    if (state.maskSurface->readPixels(info, rgba.data(), static_cast<size_t>(width) * 4, 0, 0)) {
+      const size_t pixelCount = static_cast<size_t>(width) * height;
+      state.maskAlpha.resize(pixelCount);
+      for (size_t i = 0; i < pixelCount; ++i) {
+        // Pixels are premultiplied RGBA. Un-premultiply to get straight alpha,
+        // compute luminance, then multiply by alpha for the final mask value.
+        const float r = rgba[i * 4 + 0];
+        const float g = rgba[i * 4 + 1];
+        const float b = rgba[i * 4 + 2];
+        const float a = rgba[i * 4 + 3];
+        // For premultiplied input, luminance of the straight-alpha color is:
+        //   L = (0.2126*R + 0.7152*G + 0.0722*B) / A * A = 0.2126*R + 0.7152*G + 0.0722*B
+        // (premultiplied R,G,B already have alpha baked in)
+        const float luminance = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        state.maskAlpha[i] = static_cast<uint8_t>(std::clamp(luminance, 0.0f, 255.0f));
+      }
+    }
   }
 
   state.contentSurface = SkSurfaces::Raster(
@@ -1815,21 +1604,33 @@ void RendererSkia::popMask() {
     return;
   }
 
-  std::optional<tiny_skia::Pixmap> contentPixmap =
-      readSurfaceToPixmap(state.contentSurface, width, height);
-  if (!contentPixmap.has_value()) {
+  // Read content pixels and apply the luminance mask by multiplying each
+  // pixel's alpha channel by the corresponding mask alpha value.
+  const SkImageInfo info =
+      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+  std::vector<uint8_t> contentPixels(static_cast<size_t>(width) * height * 4);
+  if (!state.contentSurface->readPixels(info, contentPixels.data(),
+                                        static_cast<size_t>(width) * 4, 0, 0)) {
     return;
   }
 
-  if (state.maskAlpha.has_value()) {
-    auto contentView = contentPixmap->mutableView();
-    tiny_skia::Painter::applyMask(contentView, *state.maskAlpha);
+  if (!state.maskAlpha.empty()) {
+    const size_t pixelCount = static_cast<size_t>(width) * height;
+    for (size_t i = 0; i < pixelCount; ++i) {
+      const uint16_t maskA = state.maskAlpha[i];
+      // Scale all premultiplied RGBA channels by mask alpha / 255.
+      contentPixels[i * 4 + 0] =
+          static_cast<uint8_t>((contentPixels[i * 4 + 0] * maskA + 127) / 255);
+      contentPixels[i * 4 + 1] =
+          static_cast<uint8_t>((contentPixels[i * 4 + 1] * maskA + 127) / 255);
+      contentPixels[i * 4 + 2] =
+          static_cast<uint8_t>((contentPixels[i * 4 + 2] * maskA + 127) / 255);
+      contentPixels[i * 4 + 3] =
+          static_cast<uint8_t>((contentPixels[i * 4 + 3] * maskA + 127) / 255);
+    }
   }
 
-  const SkImageInfo info =
-      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-  const std::vector<std::uint8_t> maskedPixels = contentPixmap->release();
-  const SkPixmap pixmap(info, maskedPixels.data(), static_cast<std::size_t>(width) * 4u);
+  const SkPixmap pixmap(info, contentPixels.data(), static_cast<size_t>(width) * 4);
   sk_sp<SkImage> maskedImage = SkImages::RasterFromPixmapCopy(pixmap);
   if (maskedImage == nullptr) {
     return;

@@ -100,10 +100,10 @@ CONDITIONAL_TARGETS: Dict[str, str] = {
     "donner_svg_tests_svg_renderer_ascii_tests": _SKIA,
     # TinySkia backend
     "donner_svg_renderer_renderer_tiny_skia": _TINY_SKIA,
-    # tiny-skia lib (built when backend=tiny_skia or filters enabled)
-    "tiny_skia": f"{_TINY_SKIA} OR DONNER_FILTERS",
+    # tiny-skia lib
+    "tiny_skia": _TINY_SKIA,
     # Filters (tiny-skia filter graph executor)
-    "donner_svg_renderer_filter_graph_executor": "DONNER_FILTERS",
+    "donner_svg_renderer_filter_graph_executor": f"{_TINY_SKIA} AND DONNER_FILTERS",
     # Text rendering
     "donner_svg_renderer_text_layout": "DONNER_TEXT",
     "donner_svg_resources_font_manager": "DONNER_TEXT",

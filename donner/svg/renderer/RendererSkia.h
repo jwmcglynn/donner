@@ -13,7 +13,6 @@
 #include "include/core/SkGraphics.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkSurface.h"
-#include "tiny_skia/Mask.h"
 
 namespace donner::svg {
 
@@ -287,7 +286,8 @@ private:
     sk_sp<SkSurface> maskSurface;
     sk_sp<SkSurface> contentSurface;
     SkCanvas* parentCanvas = nullptr;
-    std::optional<tiny_skia::Mask> maskAlpha;
+    /// Luminance alpha mask: one byte per pixel, computed from the mask surface.
+    std::vector<uint8_t> maskAlpha;
   };
 
   std::vector<ClipStackEntry> activeClips_;
