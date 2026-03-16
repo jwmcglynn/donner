@@ -157,24 +157,16 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-filter-012.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
             {"a-filter-013.svg", Params::WithThreshold(kDefaultThreshold, 24500)},
             {"a-filter-015.svg", Params::WithThreshold(kDefaultThreshold, 35500)},
-            {"a-filter-016.svg", Params::Skip()},  // 138K: filter on text group
-            {"a-filter-020.svg", Params::Skip()},  // 50K: filter region
-            {"a-filter-026.svg", Params::Skip()},  // 160K: filter on <use>
-            {"a-filter-027.svg", Params::Skip()},  // 160K: filter on <use>
-            {"a-filter-028.svg", Params::Skip()},  // 160K: filter on <use>
-            {"a-filter-029.svg", Params::Skip()},  // 160K: filter on nested group
-            {"a-filter-030.svg", Params::Skip()},  // 160K: filter on nested group
+            // a-filter-016 (drop-shadow), 020 (blur(1mm)), 026-030 (hue-rotate),
+            // 033/035/036 (CSS color functions), 041 (grayscale+opacity), 042 (invalid url)
+            // pass with default threshold.
             {"a-filter-031.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
             {"a-filter-032.svg", Params::WithThreshold(kDefaultThreshold, 42000)},
-            {"a-filter-033.svg", Params::Skip()},  // 72K: complex filter chain
             {"a-filter-034.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
-            {"a-filter-035.svg", Params::Skip()},  // 62K: filter inheritance
-            {"a-filter-036.svg", Params::Skip()},  // 62K: filter inheritance
+            {"a-filter-037.svg", Params::WithThreshold(kDefaultThreshold, 43000)},  // Negative values + text
             {"a-filter-038.svg", Params::Skip()},  // 179K: in=BackgroundImage
-            {"a-filter-039.svg", Params::Skip()},  // 61K: complex filter
+            {"a-filter-039.svg", Params::WithThreshold(kDefaultThreshold, 8000)},  // Two url() refs
             {"a-filter-040.svg", Params::Skip()},  // 186K: in=BackgroundAlpha
-            {"a-filter-041.svg", Params::Skip()},  // 160K: filter on marker
-            {"a-filter-042.svg", Params::Skip()},  // 160K: filter on pattern
         },
         Params::WithThreshold(kDefaultThreshold, 8000))),
     TestNameFromFilename);

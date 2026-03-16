@@ -232,10 +232,11 @@ public:
   // Filter
   //
 
-  /// `filter` property, which determines the filter effect to apply to the element. Defaults to
-  /// none.
-  Property<FilterEffect> filter{
-      "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
+  /// `filter` property, which determines the filter effect(s) to apply to the element. Defaults to
+  /// an empty list (no filter). Supports CSS filter function lists like `blur(5px) grayscale()`.
+  Property<std::vector<FilterEffect>> filter{
+      "filter",
+      []() -> std::optional<std::vector<FilterEffect>> { return std::vector<FilterEffect>(); }};
 
   //
   // Interaction

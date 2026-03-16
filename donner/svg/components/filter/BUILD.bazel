@@ -37,6 +37,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
+        "//donner/css",
         "//donner/svg/graph",
     ],
 )

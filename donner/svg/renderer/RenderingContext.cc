@@ -227,14 +227,15 @@ public:
       std::cout << "\n";
     }
 
-    const bool hasFilterEffect = !properties.filter.getRequired().is<FilterEffect::None>();
+    const std::vector<FilterEffect>& filterEffects = properties.filter.getRequired();
+    const bool hasFilterEffect = !filterEffects.empty();
 
     if (properties.visibility.getRequired() != Visibility::Visible) {
       instance.visible = false;
     }
 
     if (hasFilterEffect) {
-      instance.resolvedFilter = resolveFilter(dataHandle, properties.filter.getRequired());
+      instance.resolvedFilter = resolveFilter(dataHandle, filterEffects);
     }
 
     if (properties.clipPath.get()) {
@@ -584,22 +585,25 @@ public:
     return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt, MarkerUnits::Default};
   }
 
-  ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {
-    if (filter.is<FilterEffect::ElementReference>()) {
-      const FilterEffect::ElementReference& ref = filter.get<FilterEffect::ElementReference>();
+  ResolvedFilterEffect resolveFilter(EntityHandle dataHandle,
+                                     const std::vector<FilterEffect>& filters) {
+    // If the list is exactly one element reference, resolve it directly to keep the existing
+    // ResolvedReference path (which provides filter region info from the <filter> element).
+    if (filters.size() == 1 && filters.front().is<FilterEffect::ElementReference>()) {
+      const FilterEffect::ElementReference& ref =
+          filters.front().get<FilterEffect::ElementReference>();
 
       if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
           resolvedRef && resolvedRef->handle.all_of<ComputedFilterComponent>()) {
         return resolvedRef.value();
       } else {
-        // Empty result.
         return std::vector<FilterEffect>();
       }
-    } else {
-      std::vector<FilterEffect> result;
-      result.push_back(filter);
-      return result;
     }
+
+    // For lists of filter functions (possibly including url() references), return the vector
+    // directly. The renderer will handle resolution of element references within the list.
+    return filters;
   }
 
 private:

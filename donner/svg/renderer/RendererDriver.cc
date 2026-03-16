@@ -149,20 +149,162 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   return clip;
 }
 
+/// Convert an absolute Lengthd to pixel value. For relative units (em, %, etc.) falls back
+/// to the raw value.
+double lengthToPixels(const Lengthd& length) {
+  switch (length.unit) {
+    case Lengthd::Unit::None:
+    case Lengthd::Unit::Px: return length.value;
+    case Lengthd::Unit::In: return length.value * 96.0;
+    case Lengthd::Unit::Cm: return length.value * 96.0 / 2.54;
+    case Lengthd::Unit::Mm: return length.value * 96.0 / 25.4;
+    case Lengthd::Unit::Q: return length.value * 96.0 / (2.54 * 40.0);
+    case Lengthd::Unit::Pt: return length.value * 96.0 / 72.0;
+    case Lengthd::Unit::Pc: return length.value * 96.0 / 6.0;
+    default: return length.value;  // Relative units: best-effort fallback.
+  }
+}
+
 std::optional<components::FilterGraph> resolveFilterGraph(
-    Registry& registry, const components::ResolvedFilterEffect& filter) {
+    Registry& registry, const components::ResolvedFilterEffect& filter,
+    css::RGBA currentColor = css::RGBA(0, 0, 0, 0xFF)) {
   if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
-    // Convert legacy inline effects to a FilterGraph.
+    // Convert CSS filter functions to a FilterGraph.
+    // Per CSS Filter Effects Level 1, CSS filter shorthand functions use sRGB color space.
     components::FilterGraph graph;
+    graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
     for (const FilterEffect& effect : *effects) {
       std::visit(
           [&](const auto& e) {
             using T = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
+            if constexpr (std::is_same_v<T, FilterEffect::None>) {
+              // No-op.
+            } else if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
               components::FilterNode node;
               node.primitive = components::filter_primitive::GaussianBlur{
-                  .stdDeviationX = e.stdDeviationX.value,
-                  .stdDeviationY = e.stdDeviationY.value,
+                  .stdDeviationX = lengthToPixels(e.stdDeviationX),
+                  .stdDeviationY = lengthToPixels(e.stdDeviationY),
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::ElementReference>) {
+              // Resolve the element reference and copy its filter graph nodes.
+              if (auto resolvedRef = e.reference.resolve(registry);
+                  resolvedRef && resolvedRef->handle.template all_of<
+                                     components::ComputedFilterComponent>()) {
+                if (const auto* computed =
+                        registry.try_get<components::ComputedFilterComponent>(*resolvedRef)) {
+                  for (const auto& refNode : computed->filterGraph.nodes) {
+                    graph.nodes.push_back(refNode);
+                  }
+                }
+              }
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::HueRotate>) {
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::HueRotate,
+                  .values = {e.angleDegrees},
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Brightness>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcR = {.type = components::filter_primitive::ComponentTransfer::FuncType::Linear,
+                          .slope = e.amount,
+                          .intercept = 0.0};
+              ct.funcG = ct.funcR;
+              ct.funcB = ct.funcR;
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Contrast>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcR = {.type = components::filter_primitive::ComponentTransfer::FuncType::Linear,
+                          .slope = e.amount,
+                          .intercept = -(0.5 * e.amount) + 0.5};
+              ct.funcG = ct.funcR;
+              ct.funcB = ct.funcR;
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Grayscale>) {
+              // grayscale(n) = saturate(1 - n)
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::Saturate,
+                  .values = {1.0 - e.amount},
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Invert>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcR = {
+                  .type = components::filter_primitive::ComponentTransfer::FuncType::Table,
+                  .tableValues = {e.amount, 1.0 - e.amount},
+              };
+              ct.funcG = ct.funcR;
+              ct.funcB = ct.funcR;
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::FilterOpacity>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcA = {.type = components::filter_primitive::ComponentTransfer::FuncType::Linear,
+                          .slope = e.amount,
+                          .intercept = 0.0};
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Saturate>) {
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::Saturate,
+                  .values = {e.amount},
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Sepia>) {
+              // Sepia matrix per CSS Filter Effects Level 1 spec.
+              const double s = e.amount;
+              components::FilterNode node;
+              // clang-format off
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::Matrix,
+                  .values = {
+                      0.393 + 0.607 * (1.0 - s), 0.769 - 0.769 * (1.0 - s), 0.189 - 0.189 * (1.0 - s), 0, 0,
+                      0.349 - 0.349 * (1.0 - s), 0.686 + 0.314 * (1.0 - s), 0.168 - 0.168 * (1.0 - s), 0, 0,
+                      0.272 - 0.272 * (1.0 - s), 0.534 - 0.534 * (1.0 - s), 0.131 + 0.869 * (1.0 - s), 0, 0,
+                      0, 0, 0, 1, 0,
+                  },
+              };
+              // clang-format on
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::DropShadow>) {
+              // Resolve currentColor to the element's computed color property value.
+              const css::RGBA resolvedRGBA = e.color.resolve(currentColor, 1.0f);
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::DropShadow{
+                  .dx = lengthToPixels(e.offsetX),
+                  .dy = lengthToPixels(e.offsetY),
+                  .stdDeviationX = lengthToPixels(e.stdDeviation),
+                  .stdDeviationY = lengthToPixels(e.stdDeviation),
+                  .floodColor = css::Color(resolvedRGBA),
+                  .floodOpacity = static_cast<double>(resolvedRGBA.a) / 255.0,
               };
               node.inputs.push_back(components::FilterInput{});
               graph.nodes.push_back(std::move(node));
@@ -189,7 +331,31 @@ std::optional<Boxd> computeFilterRegion(
     const components::RenderingInstanceComponent& instance) {
   const auto* reference = std::get_if<ResolvedReference>(&filter);
   if (!reference) {
-    return std::nullopt;  // CSS inline filter functions don't have explicit filter regions.
+    // For CSS filter function lists, check if any entry is a url() reference.
+    // url() references need a filter region; pure CSS functions don't.
+    const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter);
+    if (!effects) {
+      return std::nullopt;
+    }
+
+    const bool hasUrlReference = std::any_of(effects->begin(), effects->end(), [](const auto& e) {
+      return e.template is<FilterEffect::ElementReference>();
+    });
+    if (!hasUrlReference) {
+      return std::nullopt;  // Pure CSS filter functions: no filter region clipping.
+    }
+
+    // Mixed list with url() references: use the default filter region.
+    const std::optional<Boxd> shapeBounds =
+        components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+    if (!shapeBounds) {
+      return std::nullopt;
+    }
+    const double bx = shapeBounds->topLeft.x;
+    const double by = shapeBounds->topLeft.y;
+    const double bw = shapeBounds->width();
+    const double bh = shapeBounds->height();
+    return Boxd::FromXYWH(bx - 0.1 * bw, by - 0.1 * bh, 1.2 * bw, 1.2 * bh);
   }
 
   const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference);
@@ -391,7 +557,8 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
-            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
+                                 style.properties->color.getRequired().rgba())
             : std::nullopt;
     const std::optional<Boxd> filterRegion =
         instance.resolvedFilter.has_value()
@@ -602,7 +769,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
-            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
+                                 style.properties->color.getRequired().rgba())
             : std::nullopt;
     const std::optional<Boxd> filterRegion =
         instance.resolvedFilter.has_value()
@@ -886,7 +1054,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
-            ? resolveFilterGraph(registry, instance.resolvedFilter.value())
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
+                                 style.properties->color.getRequired().rgba())
             : std::nullopt;
     const std::optional<Boxd> filterRegion =
         instance.resolvedFilter.has_value()
