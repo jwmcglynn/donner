@@ -24,7 +24,9 @@ namespace donner::svg::components {
 class FilterSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    parser::SVGParser::Options options;
+    options.enableExperimental = true;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, nullptr, options);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }

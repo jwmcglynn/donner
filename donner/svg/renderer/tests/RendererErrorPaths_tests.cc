@@ -83,9 +83,10 @@ TEST(RendererImageIOTest, WritePngToFileAndVerify) {
 }
 
 TEST(RendererImageIOTest, WritePngWithCustomStride) {
-  // 2x2 image with a stride of 4 pixels (extra padding).
-  std::vector<uint8_t> pixels(4 * 2 * 4, 200);  // 4 pixels per row × 2 rows
-  std::vector<uint8_t> encoded = RendererImageIO::writeRgbaPixelsToPngMemory(pixels, 2, 2, 4);
+  // 2x2 image with stride equal to width (no extra padding).
+  // The API asserts that rgbaPixels.size() == width * height * 4.
+  std::vector<uint8_t> pixels(2 * 2 * 4, 200);  // 2 pixels per row × 2 rows × 4 bytes/pixel
+  std::vector<uint8_t> encoded = RendererImageIO::writeRgbaPixelsToPngMemory(pixels, 2, 2, 2);
   EXPECT_FALSE(encoded.empty());
 }
 
