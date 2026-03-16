@@ -165,9 +165,8 @@ TEST(FontManagerTest, AddFontFaceWithDataSource) {
 
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
-  source.payload =
-      std::vector<uint8_t>(embedded::kPublicSansMediumOtf.begin(),
-                           embedded::kPublicSansMediumOtf.end());
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
   face.sources.push_back(std::move(source));
 
   mgr.addFontFace(face);

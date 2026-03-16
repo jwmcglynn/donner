@@ -173,8 +173,8 @@ std::optional<Pixmap> Pixmap::fromSize(std::uint32_t width, std::uint32_t height
   }
 
   // Defensive cap: reject large allocations to prevent OOM crashes on memory-constrained
-  // systems (e.g., 7GB CI runners). With -fno-exceptions, std::vector's allocator calls
-  // std::terminate instead of throwing std::bad_alloc, so we must reject before allocating.
+  // systems. With -fno-exceptions, std::vector's allocator calls std::terminate instead of
+  // throwing std::bad_alloc, so we must reject before allocating.
   constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
   if (len.value() > kMaxAllocationBytes) {
     return std::nullopt;

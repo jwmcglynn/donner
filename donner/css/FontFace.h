@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <memory>
 #include <variant>
 #include <vector>
 
@@ -23,8 +24,10 @@ struct FontFaceSource {
   /// Font source kind.
   Kind kind;
 
-  /// The payload of the source, which can be a URL or raw data (already parsed from the data URL).
-  std::variant<RcString, std::vector<uint8_t>> payload;
+  /// The payload of the source, which can be a URL or shared font data bytes. Using shared_ptr
+  /// for the data variant avoids deep-copying font bytes (~13MB per font set) when FontFace
+  /// objects are copied across documents, preventing glibc heap fragmentation in test suites.
+  std::variant<RcString, std::shared_ptr<const std::vector<uint8_t>>> payload;
 
   /// Format hint, if provided, e.g. "woff2" or "opentype".
   RcString formatHint;

@@ -1879,8 +1879,9 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
       }
       for (const auto& source : face.sources) {
         if (source.kind == css::FontFaceSource::Kind::Data) {
-          const auto& data = std::get<std::vector<uint8_t>>(source.payload);
-          typeface = fontMgr_->makeFromData(SkData::MakeWithCopy(data.data(), data.size()));
+          const auto& dataPtr =
+              std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
+          typeface = fontMgr_->makeFromData(SkData::MakeWithCopy(dataPtr->data(), dataPtr->size()));
           if (typeface) {
             break;
           }
