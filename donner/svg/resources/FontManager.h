@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -154,6 +155,8 @@ private:
    * @return A valid FontHandle on success, or an invalid handle on failure.
    */
   FontHandle loadRawFont(std::vector<uint8_t> data);
+  FontHandle loadRawFont(std::shared_ptr<const std::vector<uint8_t>> sharedData);
+  FontHandle loadFontDataShared(const std::shared_ptr<const std::vector<uint8_t>>& data);
 
   /**
    * Internal: load a WOFF 1.0 font by parsing and reconstructing the sfnt byte stream.
