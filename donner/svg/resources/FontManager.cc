@@ -148,8 +148,9 @@ FontHandle FontManager::findFont(std::string_view family) {
       FontHandle handle;
 
       if (source.kind == css::FontFaceSource::Kind::Data) {
-        const auto& data = std::get<std::vector<uint8_t>>(source.payload);
-        handle = loadFontData(data);
+        const auto& dataPtr =
+            std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
+        handle = loadFontData(*dataPtr);
       }
       // Note: Kind::Url and Kind::Local are not handled here yet.
       // URL loading requires a ResourceLoaderInterface which we'll integrate in a future phase.

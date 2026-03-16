@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -52,9 +53,22 @@ std::string fontFamilyFromFilename(const std::filesystem::path& path) {
 }
 
 /// Load all TTF/OTF fonts from a directory and register them as @font-face rules on the document.
-void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::path& fontsDir) {
-  std::vector<css::FontFace> faces;
+/// Cache of font faces loaded from a directory, keyed by directory path.
+/// Prevents re-reading 14MB of font files for every test in a shard, which causes glibc
+/// heap fragmentation leading to std::bad_alloc on Linux CI after ~80 tests.
+std::map<std::string, std::vector<css::FontFace>>& fontCache() {
+  static std::map<std::string, std::vector<css::FontFace>> cache;
+  return cache;
+}
 
+const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::path& fontsDir) {
+  const std::string key = fontsDir.string();
+  auto it = fontCache().find(key);
+  if (it != fontCache().end()) {
+    return it->second;
+  }
+
+  std::vector<css::FontFace> faces;
   for (const auto& entry : std::filesystem::directory_iterator(fontsDir)) {
     if (!entry.is_regular_file()) {
       continue;
@@ -64,7 +78,6 @@ void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::pa
       continue;
     }
 
-    // Read the font file.
     std::ifstream fontFile(entry.path(), std::ios::binary);
     if (!fontFile) {
       continue;
@@ -79,7 +92,7 @@ void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::pa
 
     css::FontFaceSource source;
     source.kind = css::FontFaceSource::Kind::Data;
-    source.payload = std::move(fontData);
+    source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData));
 
     css::FontFace face;
     face.familyName = RcString(family);
@@ -87,6 +100,11 @@ void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::pa
     faces.push_back(std::move(face));
   }
 
+  return fontCache().emplace(key, std::move(faces)).first->second;
+}
+
+void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::path& fontsDir) {
+  const auto& faces = loadFontsFromDirectory(fontsDir);
   if (!faces.empty()) {
     auto& resourceManager =
         document.registry().ctx().get<components::ResourceManagerContext>();

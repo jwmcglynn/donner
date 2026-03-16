@@ -59,8 +59,9 @@ TEST(StylesheetParser, FontFaceDataUrl) {
   EXPECT_EQ(sheet.fontFaces()[0].familyName, "datafont");
   ASSERT_EQ(sheet.fontFaces()[0].sources.size(), 1u);
   EXPECT_EQ(sheet.fontFaces()[0].sources[0].kind, FontFaceSource::Kind::Data);
-  EXPECT_THAT(std::get<std::vector<uint8_t>>(sheet.fontFaces()[0].sources[0].payload),
-              testing::ElementsAre('t', 'e', 's', 't'));
+  const auto& dataPtr =
+      std::get<std::shared_ptr<const std::vector<uint8_t>>>(sheet.fontFaces()[0].sources[0].payload);
+  EXPECT_THAT(*dataPtr, testing::ElementsAre('t', 'e', 's', 't'));
 }
 
 }  // namespace donner::css::parser

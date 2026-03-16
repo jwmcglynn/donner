@@ -38,13 +38,14 @@ std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url
   if (parsedUrl.kind == DataUrlParser::Result::Kind::Data) {
     FontFaceSource source;
     source.kind = FontFaceSource::Kind::Data;
-    source.payload = std::move(std::get<std::vector<uint8_t>>(parsedUrl.payload));
+    source.payload = std::make_shared<const std::vector<uint8_t>>(
+        std::move(std::get<std::vector<uint8_t>>(parsedUrl.payload)));
     source.formatHint = parsedUrl.mimeType;
     return source;
   } else if (parsedUrl.kind == DataUrlParser::Result::Kind::ExternalUrl) {
     FontFaceSource source;
     source.kind = FontFaceSource::Kind::Url;
-    source.payload = parsedUrl.payload;
+    source.payload = std::get<RcString>(parsedUrl.payload);
 
     return source;
   }

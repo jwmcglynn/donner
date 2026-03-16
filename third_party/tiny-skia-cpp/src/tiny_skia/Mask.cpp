@@ -14,6 +14,10 @@ std::optional<Mask> Mask::fromSize(std::uint32_t width, std::uint32_t height) {
   }
 
   const auto dataLen = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+  if (dataLen > kMaxAllocationBytes) {
+    return std::nullopt;
+  }
   return Mask(std::vector<std::uint8_t>(dataLen, 0), size.value());
 }
 
