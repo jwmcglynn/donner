@@ -120,8 +120,10 @@ std::vector<uint8_t> reconstructSfnt(const fonts::WoffFont& woff) {
 }  // namespace
 
 struct FontManager::LoadedFont {
-  std::vector<uint8_t> data;  // Owns the font file bytes (stb_truetype references them).
-  stbtt_fontinfo info{};      // stb_truetype parsed font handle.
+  std::vector<uint8_t> ownedData;  // Owns font bytes (for WOFF-reconstructed sfnt data).
+  std::shared_ptr<const std::vector<uint8_t>> sharedData;  // Shared ref (for raw TTF/OTF).
+  const uint8_t* dataPtr = nullptr;  // Points into either ownedData or sharedData.
+  stbtt_fontinfo info{};             // stb_truetype parsed font handle.
 };
 
 FontManager::FontManager() = default;
@@ -150,7 +152,7 @@ FontHandle FontManager::findFont(std::string_view family) {
       if (source.kind == css::FontFaceSource::Kind::Data) {
         const auto& dataPtr =
             std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
-        handle = loadFontData(*dataPtr);
+        handle = loadFontDataShared(dataPtr);
       }
       // Note: Kind::Url and Kind::Local are not handled here yet.
       // URL loading requires a ResourceLoaderInterface which we'll integrate in a future phase.
@@ -195,6 +197,34 @@ FontHandle FontManager::loadFontData(std::span<const uint8_t> data) {
   return loadRawFont(std::move(owned));
 }
 
+FontHandle FontManager::loadFontDataShared(
+    const std::shared_ptr<const std::vector<uint8_t>>& data) {
+  if (data->size() < 4) {
+    return FontHandle();
+  }
+
+  const uint32_t magic = readBE32(data->data());
+
+  // WOFF fonts need decompression/reconstruction, so they create new owned buffers.
+  if (magic == kWoffMagic) {
+    return loadWoff1(*data);
+  }
+
+  if (magic == kWoff2Magic) {
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+    return loadWoff2(*data);
+#else
+    std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
+                 "Build with --config=text-woff2 to enable.\n";
+    return FontHandle();
+#endif
+  }
+
+  // Raw TTF/OTF: share the data via shared_ptr (no copy). stb_truetype holds a pointer
+  // into the data, and the shared_ptr keeps it alive.
+  return loadRawFont(data);
+}
+
 const stbtt_fontinfo* FontManager::fontInfo(FontHandle handle) const {
   if (!handle || handle.index() < 0 ||
       static_cast<size_t>(handle.index()) >= fonts_.size()) {
@@ -220,7 +250,10 @@ std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
     return {};
   }
   const auto& font = fonts_[static_cast<size_t>(handle.index())];
-  return {font->data.data(), font->data.size()};
+  if (font->sharedData) {
+    return {font->sharedData->data(), font->sharedData->size()};
+  }
+  return {font->ownedData.data(), font->ownedData.size()};
 }
 
 FontHandle FontManager::fallbackFont() {
@@ -240,9 +273,25 @@ FontHandle FontManager::fallbackFont() {
 
 FontHandle FontManager::loadRawFont(std::vector<uint8_t> data) {
   auto font = std::make_unique<LoadedFont>();
-  font->data = std::move(data);
+  font->ownedData = std::move(data);
+  font->dataPtr = font->ownedData.data();
 
-  if (!stbtt_InitFont(&font->info, font->data.data(), 0)) {
+  if (!stbtt_InitFont(&font->info, font->dataPtr, 0)) {
+    std::cerr << "FontManager: stbtt_InitFont failed for raw font data\n";
+    return FontHandle();
+  }
+
+  const int index = static_cast<int>(fonts_.size());
+  fonts_.push_back(std::move(font));
+  return FontHandle(index);
+}
+
+FontHandle FontManager::loadRawFont(std::shared_ptr<const std::vector<uint8_t>> sharedData) {
+  auto font = std::make_unique<LoadedFont>();
+  font->sharedData = std::move(sharedData);
+  font->dataPtr = font->sharedData->data();
+
+  if (!stbtt_InitFont(&font->info, font->dataPtr, 0)) {
     std::cerr << "FontManager: stbtt_InitFont failed for raw font data\n";
     return FontHandle();
   }
