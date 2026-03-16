@@ -82,12 +82,14 @@ donner_cc_test(
     srcs = [
         "tests/Color_tests.cc",
         "tests/CssTypes_tests.cc",
+        "tests/Declaration_tests.cc",
         "tests/OstreamOutput_tests.cc",
         "tests/Selector_tests.cc",
         "tests/Specificity_tests.cc",
     ],
     deps = [
         ":core",
+        ":css",
         ":selector_test_utils",
         "//donner/base:base_test_utils",
         "//donner/base/element:fake_element",

@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/FileOffset.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Selector.h"
 #include "donner/css/Specificity.h"
@@ -20,46 +21,40 @@ namespace donner::css {
 
 // --- ComponentValue ---
 
-TEST(ComponentValueTest, DefaultConstruct) {
-  ComponentValue value;
-  // Should be default-constructible without crashing.
-  (void)value;
-}
-
 TEST(ComponentValueTest, TokenValue) {
-  Token token = Token(Token::Ident{"hello"});
+  Token token(Token::Ident(RcString("hello")), 0);
   ComponentValue value(token);
   EXPECT_TRUE(std::holds_alternative<Token>(value.value));
 }
 
 TEST(ComponentValueTest, FunctionValue) {
-  Function func("rgb", {});
+  Function func("rgb", FileOffset::Offset(0));
   ComponentValue value(std::move(func));
-  EXPECT_TRUE(std::holds_alternative<std::unique_ptr<Function>>(value.value));
+  EXPECT_TRUE(std::holds_alternative<Function>(value.value));
 }
 
 TEST(ComponentValueTest, SimpleBlockValue) {
-  SimpleBlock block(Token(Token::OpenParen{}), {});
+  SimpleBlock block(Token::indexOf<Token::Parenthesis>(), FileOffset::Offset(0));
   ComponentValue value(std::move(block));
-  EXPECT_TRUE(std::holds_alternative<std::unique_ptr<SimpleBlock>>(value.value));
+  EXPECT_TRUE(std::holds_alternative<SimpleBlock>(value.value));
 }
 
 // --- Function ---
 
 TEST(CssFunctionTest, EqualityByName) {
-  Function a("rgb", {});
-  Function b("rgb", {});
+  Function a("rgb", FileOffset::Offset(0));
+  Function b("rgb", FileOffset::Offset(0));
   EXPECT_EQ(a, b);
 }
 
 TEST(CssFunctionTest, InequalityByName) {
-  Function a("rgb", {});
-  Function b("hsl", {});
+  Function a("rgb", FileOffset::Offset(0));
+  Function b("hsl", FileOffset::Offset(0));
   EXPECT_NE(a, b);
 }
 
 TEST(CssFunctionTest, OstreamOutput) {
-  Function func("rgb", {});
+  Function func("rgb", FileOffset::Offset(0));
   std::ostringstream os;
   os << func;
   EXPECT_THAT(os.str(), testing::HasSubstr("rgb"));
@@ -68,21 +63,21 @@ TEST(CssFunctionTest, OstreamOutput) {
 // --- SimpleBlock ---
 
 TEST(SimpleBlockTest, OstreamOutputParen) {
-  SimpleBlock block(Token(Token::OpenParen{}), {});
+  SimpleBlock block(Token::indexOf<Token::Parenthesis>(), FileOffset::Offset(0));
   std::ostringstream os;
   os << block;
   EXPECT_THAT(os.str(), testing::HasSubstr("("));
 }
 
 TEST(SimpleBlockTest, OstreamOutputBracket) {
-  SimpleBlock block(Token(Token::OpenSquare{}), {});
+  SimpleBlock block(Token::indexOf<Token::SquareBracket>(), FileOffset::Offset(0));
   std::ostringstream os;
   os << block;
   EXPECT_THAT(os.str(), testing::HasSubstr("["));
 }
 
 TEST(SimpleBlockTest, OstreamOutputBrace) {
-  SimpleBlock block(Token(Token::OpenCurly{}), {});
+  SimpleBlock block(Token::indexOf<Token::CurlyBracket>(), FileOffset::Offset(0));
   std::ostringstream os;
   os << block;
   EXPECT_THAT(os.str(), testing::HasSubstr("{"));
@@ -91,12 +86,11 @@ TEST(SimpleBlockTest, OstreamOutputBrace) {
 // --- ComplexSelector specificity ---
 
 TEST(ComplexSelectorTest, ParseAndComputeSpecificity) {
-  // Parse a simple selector and verify specificity.
   auto result = parser::SelectorParser::Parse("#id .class element");
   ASSERT_TRUE(result.hasResult());
 
   const auto& selector = result.result();
-  auto specificity = selector.computeMaxSpecificity();
+  auto specificity = selector.maxSpecificity();
   // #id = (1,0,0), .class = (0,1,0), element = (0,0,1) => (1,1,1)
   EXPECT_EQ(specificity.a, 1);
   EXPECT_EQ(specificity.b, 1);
@@ -107,7 +101,7 @@ TEST(ComplexSelectorTest, ClassOnlySpecificity) {
   auto result = parser::SelectorParser::Parse(".foo.bar");
   ASSERT_TRUE(result.hasResult());
 
-  auto specificity = result.result().computeMaxSpecificity();
+  auto specificity = result.result().maxSpecificity();
   EXPECT_EQ(specificity.a, 0);
   EXPECT_EQ(specificity.b, 2);
   EXPECT_EQ(specificity.c, 0);
@@ -117,7 +111,7 @@ TEST(ComplexSelectorTest, TypeOnlySpecificity) {
   auto result = parser::SelectorParser::Parse("div");
   ASSERT_TRUE(result.hasResult());
 
-  auto specificity = result.result().computeMaxSpecificity();
+  auto specificity = result.result().maxSpecificity();
   EXPECT_EQ(specificity.a, 0);
   EXPECT_EQ(specificity.b, 0);
   EXPECT_EQ(specificity.c, 1);
@@ -127,7 +121,7 @@ TEST(ComplexSelectorTest, UniversalSelectorSpecificity) {
   auto result = parser::SelectorParser::Parse("*");
   ASSERT_TRUE(result.hasResult());
 
-  auto specificity = result.result().computeMaxSpecificity();
+  auto specificity = result.result().maxSpecificity();
   EXPECT_EQ(specificity.a, 0);
   EXPECT_EQ(specificity.b, 0);
   EXPECT_EQ(specificity.c, 0);
@@ -136,44 +130,40 @@ TEST(ComplexSelectorTest, UniversalSelectorSpecificity) {
 // --- PseudoClassSelector ---
 
 TEST(PseudoClassSelectorTest, BasicPseudoClassSpecificity) {
-  // :hover -> specificity (0, 1, 0)
   auto result = parser::SelectorParser::Parse(":hover");
   ASSERT_TRUE(result.hasResult());
 
-  auto specificity = result.result().computeMaxSpecificity();
+  auto specificity = result.result().maxSpecificity();
   EXPECT_EQ(specificity.a, 0);
   EXPECT_EQ(specificity.b, 1);
   EXPECT_EQ(specificity.c, 0);
 }
 
 TEST(PseudoClassSelectorTest, WhereSpecificity) {
-  // :where(.foo) -> specificity (0, 0, 0) per spec
   auto result = parser::SelectorParser::Parse(":where(.foo)");
   ASSERT_TRUE(result.hasResult());
 
-  auto specificity = result.result().computeMaxSpecificity();
+  auto specificity = result.result().maxSpecificity();
   EXPECT_EQ(specificity.a, 0);
   EXPECT_EQ(specificity.b, 0);
   EXPECT_EQ(specificity.c, 0);
 }
 
 TEST(PseudoClassSelectorTest, IsSpecificity) {
-  // :is(.foo, #bar) -> max specificity of arguments = (1, 0, 0)
   auto result = parser::SelectorParser::Parse(":is(.foo, #bar)");
   ASSERT_TRUE(result.hasResult());
 
-  auto specificity = result.result().computeMaxSpecificity();
+  auto specificity = result.result().maxSpecificity();
   EXPECT_EQ(specificity.a, 1);
   EXPECT_EQ(specificity.b, 0);
   EXPECT_EQ(specificity.c, 0);
 }
 
 TEST(PseudoClassSelectorTest, NotSpecificity) {
-  // :not(.foo) -> specificity of argument = (0, 1, 0)
   auto result = parser::SelectorParser::Parse(":not(.foo)");
   ASSERT_TRUE(result.hasResult());
 
-  auto specificity = result.result().computeMaxSpecificity();
+  auto specificity = result.result().maxSpecificity();
   EXPECT_EQ(specificity.a, 0);
   EXPECT_EQ(specificity.b, 1);
   EXPECT_EQ(specificity.c, 0);

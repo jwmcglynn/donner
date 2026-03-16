@@ -213,7 +213,7 @@ donner_cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = ["//visibility:public"],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],

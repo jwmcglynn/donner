@@ -52,6 +52,11 @@ struct Declaration {
   bool operator==(const Declaration& other) const = default;
 
   /**
+   * Serialize the declaration to a CSS string, e.g. `"fill: red"` or `"opacity: 0.5 !important"`.
+   */
+  [[nodiscard]] RcString toRcString() const;
+
+  /**
    * Output a human-readable representation of the declaration to a stream.
    *
    * @param os Output stream.

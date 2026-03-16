@@ -1,8 +1,13 @@
 #pragma once
 /// @file
 
+#include <cmath>
+#include <cstdio>
+#include <vector>
+
 #include "donner/base/Box.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 
 namespace donner {
@@ -203,6 +208,33 @@ struct Length {
   }
 
   /**
+   * Serialize the length to an SVG/CSS-compatible string.
+   *
+   * Produces output like `"10"`, `"10px"`, `"50%"`, `"3.5em"`.
+   * Unitless zero is serialized as just `"0"`.
+   */
+  [[nodiscard]] RcString toRcString() const {
+    std::vector<char> buf;
+    buf.reserve(16);
+
+    // Format the numeric value.
+    char tmp[32];
+    int len;
+    if (value == std::floor(value) && std::abs(value) < 1e15) {
+      len = std::snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(value));
+    } else {
+      len = std::snprintf(tmp, sizeof(tmp), "%g", value);
+    }
+    buf.insert(buf.end(), tmp, tmp + len);
+
+    // Append the unit suffix.
+    const std::string_view suffix = unitSuffix(unit);
+    buf.insert(buf.end(), suffix.begin(), suffix.end());
+
+    return RcString::fromVector(std::move(buf));
+  }
+
+  /**
    * ostream-output operator for Length.
    *
    * @param os The ostream to write to.
@@ -211,6 +243,30 @@ struct Length {
    */
   friend std::ostream& operator<<(std::ostream& os, const Length<T>& length) {
     return os << length.value << length.unit;
+  }
+
+  /// Get the CSS unit suffix string for a LengthUnit.
+  static constexpr std::string_view unitSuffix(LengthUnit u) {
+    switch (u) {
+      case LengthUnit::None: return "";
+      case LengthUnit::Percent: return "%";
+      case LengthUnit::Cm: return "cm";
+      case LengthUnit::Mm: return "mm";
+      case LengthUnit::Q: return "q";
+      case LengthUnit::In: return "in";
+      case LengthUnit::Pc: return "pc";
+      case LengthUnit::Pt: return "pt";
+      case LengthUnit::Px: return "px";
+      case LengthUnit::Em: return "em";
+      case LengthUnit::Ex: return "ex";
+      case LengthUnit::Ch: return "ch";
+      case LengthUnit::Rem: return "rem";
+      case LengthUnit::Vw: return "vw";
+      case LengthUnit::Vh: return "vh";
+      case LengthUnit::Vmin: return "vmin";
+      case LengthUnit::Vmax: return "vmax";
+    }
+    return "";
   }
 
 private:

@@ -45,7 +45,7 @@ TEST_F(TextSystemTest, BasicTextElement) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -66,7 +66,7 @@ TEST_F(TextSystemTest, TextWithTspan) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -87,7 +87,7 @@ TEST_F(TextSystemTest, PositioningInheritedFromRoot) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -108,7 +108,7 @@ TEST_F(TextSystemTest, PerCharacterPositioning) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -136,7 +136,7 @@ TEST_F(TextSystemTest, DxDyPositioning) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -165,7 +165,7 @@ TEST_F(TextSystemTest, RotateAttribute) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -187,7 +187,7 @@ TEST_F(TextSystemTest, EmptyTextElement) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -208,7 +208,7 @@ TEST_F(TextSystemTest, MultipleTspanWithPositioning) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -237,7 +237,7 @@ TEST_F(TextSystemTest, TextPathReference) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -262,7 +262,7 @@ TEST_F(TextSystemTest, TextPathWithStartOffset) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -283,7 +283,7 @@ TEST_F(TextSystemTest, Utf8MultibyteCounting) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entity();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);

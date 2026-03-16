@@ -28,33 +28,33 @@ protected:
 // --- instantiateRenderTree ---
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeBasic) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect x="10" y="10" width="80" height="80" fill="red"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeVerbose) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect width="50" height="50" fill="blue"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(true, nullptr);
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeWarnings) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect width="50" height="50" fill="red"/>
     </svg>
-  )");
+  )xml");
 
   std::vector<ParseError> warnings;
   RenderingContext ctx(document.registry());
@@ -62,14 +62,14 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeWarnings) {
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeMultipleShapes) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <rect x="10" y="10" width="40" height="40" fill="red"/>
       <circle cx="100" cy="100" r="30" fill="blue"/>
       <ellipse cx="160" cy="50" rx="20" ry="30" fill="green"/>
       <line x1="0" y1="0" x2="200" y2="200" stroke="black"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
@@ -78,40 +78,40 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeMultipleShapes) {
 // --- Hit testing ---
 
 TEST_F(RenderingContextTest, FindIntersectingHitsRect) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="10" y="10" width="80" height="80" fill="red"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
-  EXPECT_NE(hit, entt::null);
+  EXPECT_NE(hit, Entity(entt::null));
 }
 
 TEST_F(RenderingContextTest, FindIntersectingMissesEmptyArea) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect x="50" y="50" width="40" height="40" fill="red"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 
   Entity hit = ctx.findIntersecting(Vector2d(5, 5));
-  EXPECT_EQ(hit, entt::null);
+  EXPECT_EQ(hit, Entity(entt::null));
 }
 
 TEST_F(RenderingContextTest, FindAllIntersecting) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect x="0" y="0" width="100" height="100" fill="red"/>
       <rect x="25" y="25" width="50" height="50" fill="blue"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
@@ -123,18 +123,18 @@ TEST_F(RenderingContextTest, FindAllIntersecting) {
 // --- World bounds ---
 
 TEST_F(RenderingContextTest, GetWorldBoundsRect) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="10" y="20" width="30" height="40" fill="red"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 
   auto element = document.querySelector("#r");
   ASSERT_TRUE(element.has_value());
-  auto bounds = ctx.getWorldBounds(element->entity());
+  auto bounds = ctx.getWorldBounds(element->entityHandle().entity());
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, 10.0, 1.0);
   EXPECT_NEAR(bounds->topLeft.y, 20.0, 1.0);
@@ -143,25 +143,25 @@ TEST_F(RenderingContextTest, GetWorldBoundsRect) {
 }
 
 TEST_F(RenderingContextTest, GetWorldBoundsInvalidEntity) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"/>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 
-  auto bounds = ctx.getWorldBounds(entt::null);
+  auto bounds = ctx.getWorldBounds(Entity(entt::null));
   EXPECT_FALSE(bounds.has_value());
 }
 
 // --- Invalidation ---
 
 TEST_F(RenderingContextTest, InvalidateAndReinstantiate) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect x="10" y="10" width="80" height="80" fill="red"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
@@ -172,25 +172,25 @@ TEST_F(RenderingContextTest, InvalidateAndReinstantiate) {
 // --- Complex documents ---
 
 TEST_F(RenderingContextTest, GroupedElements) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <g transform="translate(50, 50)">
         <rect id="r" x="0" y="0" width="50" height="50" fill="red"/>
       </g>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 
-  auto bounds = ctx.getWorldBounds(document.querySelector("#r")->entity());
+  auto bounds = ctx.getWorldBounds(document.querySelector("#r")->entityHandle().entity());
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, 50.0, 1.0);
   EXPECT_NEAR(bounds->topLeft.y, 50.0, 1.0);
 }
 
 TEST_F(RenderingContextTest, GradientAndClipPath) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
         <linearGradient id="g">
@@ -203,28 +203,28 @@ TEST_F(RenderingContextTest, GradientAndClipPath) {
       </defs>
       <rect width="100" height="100" fill="url(#g)" clip-path="url(#cp)"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 }
 
 TEST_F(RenderingContextTest, UseElement) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <defs>
         <rect id="template" width="20" height="20" fill="green"/>
       </defs>
       <use href="#template" x="50" y="50"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 }
 
 TEST_F(RenderingContextTest, FilterElement) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
         <filter id="blur">
@@ -233,32 +233,32 @@ TEST_F(RenderingContextTest, FilterElement) {
       </defs>
       <rect width="80" height="80" fill="red" filter="url(#blur)"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 }
 
 TEST_F(RenderingContextTest, DisplayNoneNotIntersectable) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect x="0" y="0" width="100" height="100" fill="red" style="display: none"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
-  EXPECT_EQ(hit, entt::null);
+  EXPECT_EQ(hit, Entity(entt::null));
 }
 
 TEST_F(RenderingContextTest, RectIntersection) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <rect x="50" y="50" width="100" height="100" fill="blue"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
@@ -268,7 +268,7 @@ TEST_F(RenderingContextTest, RectIntersection) {
 }
 
 TEST_F(RenderingContextTest, MaskElement) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"xml(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
         <mask id="m">
@@ -277,7 +277,7 @@ TEST_F(RenderingContextTest, MaskElement) {
       </defs>
       <rect width="100" height="100" fill="red" mask="url(#m)"/>
     </svg>
-  )");
+  )xml");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
