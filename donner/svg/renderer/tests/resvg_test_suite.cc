@@ -164,9 +164,10 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-filter-032.svg", Params::WithThreshold(kDefaultThreshold, 42000)},
             {"a-filter-034.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
             {"a-filter-037.svg", Params::WithThreshold(kDefaultThreshold, 43000)},  // Negative values + text
-            {"a-filter-038.svg", Params::Skip()},  // 179K: in=BackgroundImage
+            {"a-filter-038.svg",
+             Params::WithThreshold(kDefaultThreshold, 145000)},  // url() + grayscale() color space
             {"a-filter-039.svg", Params::WithThreshold(kDefaultThreshold, 8000)},  // Two url() refs
-            {"a-filter-040.svg", Params::Skip()},  // 186K: in=BackgroundAlpha
+            {"a-filter-040.svg", Params::Skip()},  // UB: same url() twice
         },
         Params::WithThreshold(kDefaultThreshold, 8000))),
     TestNameFromFilename);

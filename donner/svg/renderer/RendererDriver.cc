@@ -190,13 +190,20 @@ std::optional<components::FilterGraph> resolveFilterGraph(
 
             } else if constexpr (std::is_same_v<T, FilterEffect::ElementReference>) {
               // Resolve the element reference and copy its filter graph nodes.
+              // Preserve the source filter's color space on each copied node so that
+              // url() nodes run in the <filter> element's color space (typically linearRGB)
+              // while CSS function nodes use the graph-level sRGB.
               if (auto resolvedRef = e.reference.resolve(registry);
                   resolvedRef && resolvedRef->handle.template all_of<
                                      components::ComputedFilterComponent>()) {
                 if (const auto* computed =
                         registry.try_get<components::ComputedFilterComponent>(*resolvedRef)) {
-                  for (const auto& refNode : computed->filterGraph.nodes) {
-                    graph.nodes.push_back(refNode);
+                  const auto srcColorSpace = computed->filterGraph.colorInterpolationFilters;
+                  for (auto refNode : computed->filterGraph.nodes) {
+                    if (!refNode.colorInterpolationFilters.has_value()) {
+                      refNode.colorInterpolationFilters = srcColorSpace;
+                    }
+                    graph.nodes.push_back(std::move(refNode));
                   }
                 }
               }
