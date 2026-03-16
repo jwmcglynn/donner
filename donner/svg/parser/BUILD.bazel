@@ -104,6 +104,7 @@ donner_cc_library(
 donner_cc_test(
     name = "parser_tests",
     srcs = [
+        "tests/AttributeParser_tests.cc",
         "tests/AnimateElement_tests.cc",
         "tests/AnimateMotionElement_tests.cc",
         "tests/AnimateTransformElement_tests.cc",

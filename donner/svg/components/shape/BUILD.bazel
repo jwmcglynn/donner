@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:rules.bzl", "donner_cc_test")
 
 cc_library(
     name = "components",
@@ -56,4 +57,18 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+)
+
+donner_cc_test(
+    name = "shape_system_tests",
+    srcs = [
+        "tests/ShapeSystem_tests.cc",
+    ],
+    deps = [
+        ":shape_system",
+        "//donner/base:base_test_utils",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
