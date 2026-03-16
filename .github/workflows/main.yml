@@ -32,6 +32,9 @@ jobs:
         run: |
           bazelisk build //...
 
+      - name: Free memory for tests
+        run: bazelisk shutdown
+
       - name: Test
         run: |
           bazelisk test --test_output=errors --local_test_jobs=2 //...

@@ -241,7 +241,7 @@ void morphology(const Pixmap& src, Pixmap& dst, MorphologyOp op, int radiusX, in
 
   const std::size_t totalBytes = static_cast<std::size_t>(w) * h * 4;
   // Guard against OOM.
-  constexpr std::size_t kMaxAllocationBytes = 256 * 1024 * 1024;
+  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
   if (totalBytes > kMaxAllocationBytes) {
     return;
   }
@@ -274,7 +274,7 @@ void morphology(const FloatPixmap& src, FloatPixmap& dst, MorphologyOp op, int r
 
   const std::size_t totalFloats = static_cast<std::size_t>(w) * h * 4;
   // Guard against OOM: buffer + scratch + transposed = 3 * totalFloats * sizeof(float).
-  constexpr std::size_t kMaxAllocBytes = 256 * 1024 * 1024;
+  constexpr std::size_t kMaxAllocBytes = 64 * 1024 * 1024;
   if (totalFloats * sizeof(float) * 3 > kMaxAllocBytes) {
     return;
   }
