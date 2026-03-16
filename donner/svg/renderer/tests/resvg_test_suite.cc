@@ -123,7 +123,7 @@ INSTANTIATE_TEST_SUITE_P(DominantBaseline, ImageComparisonTestFixture,
                                                                            17000))),
                          TestNameFromFilename);
 
-// TODO: a-enable-background
+// a-enable-background: Deprecated in SVG 2, not implemented. See docs/unsupported_svg1_features.md.
 
 INSTANTIATE_TEST_SUITE_P(
     Fill, ImageComparisonTestFixture,
@@ -709,8 +709,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-027.svg",
              Params::WithThreshold(kDefaultThreshold, 6000)},  // Skew transform + narrow filter
                                                                // region (5406px at 0.02)
-            {"e-filter-032.svg", Params::Skip()},              // in=BackgroundImage
-            {"e-filter-033.svg", Params::Skip()},              // in=BackgroundAlpha
+            {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage (deprecated SVG 1.1)
+            {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha (deprecated SVG 1.1)
             {"e-filter-034.svg", Params::Skip()},              // UB: in=FillPaint
             {"e-filter-035.svg", Params::Skip()},              // UB: in=StrokePaint
             {"e-filter-036.svg", Params::Skip()},              // UB: in=FillPaint gradient
@@ -728,25 +728,10 @@ INSTANTIATE_TEST_SUITE_P(
     Image, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-image",
                                 {
-                                    {"e-image-003.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-006.svg", Params::Skip()},  // Not impl: .svgz image
-                                    {"e-image-007.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-008.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-017.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-018.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-019.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-020.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-021.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-022.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-023.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-024.svg", Params::Skip()},  // Not impl: .svg imageg
-                                    {"e-image-029.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-030.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-031.svg", Params::Skip()},  // Not impl: .svg image
+                                    {"e-image-029.svg", Params::Skip()},  // UB: No width and height
+                                    {"e-image-030.svg", Params::Skip()},  // UB: No width
+                                    {"e-image-031.svg", Params::Skip()},  // UB: No height
                                     {"e-image-032.svg", Params::Skip()},  // UB: Float size
-                                    {"e-image-033.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-034.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-039.svg", Params::Skip()},  // Not impl: .svg image
                                     {"e-image-040.svg", Params::Skip()},  // Not impl: External URLs
                                     {"e-image-041.svg", Params::Skip()},  // Not impl: External URLs
                                 },
@@ -781,7 +766,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
             {"e-marker-017.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
             {"e-marker-018.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
-            {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image
+            {"e-marker-019.svg", Params::WithThreshold(kDefaultThreshold, 19000)},
             {"e-marker-022.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
             {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
             {"e-marker-044.svg",

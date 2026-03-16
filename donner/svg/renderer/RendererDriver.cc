@@ -885,7 +885,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
             auto* subDoc = std::any_cast<SVGDocument>(svgImage->subDocument);
             if (subDoc != nullptr) {
-              drawSubDocument(*subDoc, sizedElement->bounds, aspectRatio, opacity);
+              drawSubDocument(*subDoc, sizedElement->bounds, aspectRatio, opacity,
+                              layerBaseTransform_ * instance.entityFromWorldTransform);
             }
           }
         }
@@ -912,11 +913,15 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                      style.properties->opacity.getRequired());
             } else {
               // Whole-document reference: render the entire sub-document.
+              // For <use>, the entity's position is already captured via the renderer's
+              // current transform (used by pushClip). Only pass the layer base transform
+              // to include parent device scaling without the <use> element's own position.
               const Vector2i subDocSize = subDoc->canvasSize();
               const Boxd viewportBounds =
                   Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
               drawSubDocument(*subDoc, viewportBounds, PreserveAspectRatio::Default(),
-                              style.properties->opacity.getRequired());
+                              style.properties->opacity.getRequired(),
+                              layerBaseTransform_);
             }
           }
         }
@@ -1514,13 +1519,12 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
 }
 
 void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewportBounds,
-                                     const PreserveAspectRatio& aspectRatio, double opacity) {
+                                     const PreserveAspectRatio& aspectRatio, double opacity,
+                                     const Transformd& parentAbsoluteTransform) {
   // Prepare the sub-document's render tree (styles, layout, resources).
   RendererUtils::prepareDocumentForRendering(subDocument, verbose_);
 
   // Determine the sub-document's intrinsic size for preserveAspectRatio mapping.
-  // Per SVG2 spec, the <image> element's preserveAspectRatio controls scaling, and
-  // the referenced SVG's root preserveAspectRatio is overridden to 'none'.
   const Vector2i subDocSize = subDocument.canvasSize();
   const Boxd subDocRect = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
 
@@ -1535,14 +1539,22 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
     renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
   }
 
-  // Compute the base transform that maps sub-document coordinates into the parent canvas.
+  // Compute the base transform that maps sub-document coordinates into device space.
   // This composes:
-  //   1. preserveAspectRatio mapping from sub-doc intrinsic size to the <image> viewport
-  //   2. The sub-document's own viewBox-to-document transform
+  //   1. The parent element's absolute device transform (document-to-device scaling)
+  //   2. preserveAspectRatio mapping from sub-doc viewport to the <image> bounds
+  //   3. The sub-document's own viewBox-to-document transform
   // traverse() will compose this with each sub-document entity's entityFromWorldTransform.
   const Transformd subDocFromLocal =
       aspectRatio.elementContentFromViewBoxTransform(viewportBounds, subDocRect);
-  const Transformd baseTransform = subDocFromLocal * subDocument.documentFromCanvasTransform();
+  const Transformd docFromCanvas = subDocument.documentFromCanvasTransform();
+  // Compose the transform chain. Transformd operator* uses left-first order: A * B = "apply A,
+  // then B". The sub-doc root entity's entityFromWorldTransform already includes docFromCanvas^-1
+  // (mapping from document to canvas/device space). Including docFromCanvas here cancels that out,
+  // so the net result maps sub-doc element coordinates through subDocFromLocal (to parent document
+  // space), then through parentAbsoluteTransform (to device space).
+  const Transformd baseTransform =
+      subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
 
   // Save and override layerBaseTransform for sub-document rendering.
   const Transformd savedLayerBase = layerBaseTransform_;

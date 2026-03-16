@@ -70,7 +70,8 @@ private:
                      const components::RenderingInstanceComponent& instance,
                      const components::PaintResolvedReference& ref, bool forStroke);
   void drawSubDocument(SVGDocument& subDocument, const Boxd& viewportBounds,
-                       const PreserveAspectRatio& aspectRatio, double opacity);
+                       const PreserveAspectRatio& aspectRatio, double opacity,
+                       const Transformd& parentAbsoluteTransform);
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transformd& parentAbsoluteTransform, double opacity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph);

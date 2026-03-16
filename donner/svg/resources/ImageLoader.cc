@@ -6,6 +6,28 @@ namespace donner::svg {
 
 namespace {
 
+/// Detect if file contents look like SVG (XML starting with '<') or SVGZ (gzip magic bytes).
+bool LooksLikeSvgContent(const std::vector<uint8_t>& data) {
+  // Skip leading whitespace.
+  size_t i = 0;
+  while (i < data.size() && (data[i] == ' ' || data[i] == '\t' || data[i] == '\r' ||
+                              data[i] == '\n')) {
+    ++i;
+  }
+  if (i >= data.size()) {
+    return false;
+  }
+  // Check for XML start tag.
+  if (data[i] == '<') {
+    return true;
+  }
+  // Check for gzip magic bytes (SVGZ).
+  if (data.size() >= 2 && data[0] == 0x1F && data[1] == 0x8B) {
+    return true;
+  }
+  return false;
+}
+
 std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
                                                       const std::vector<uint8_t>& fileContents) {
   // Allow known formats and an empty mime type (stb_image will auto-detect)
@@ -48,7 +70,9 @@ ImageLoader::Result ImageLoader::fromUri(std::string_view uri) {
   UrlLoader::Result& urlResult = std::get<UrlLoader::Result>(urlResultOrError);
 
   // Route SVG content to a separate path: return raw bytes for the caller to parse.
-  if (urlResult.mimeType == "image/svg+xml") {
+  // Also detect SVG when no MIME type is specified (e.g., `data:;base64,...`).
+  if (urlResult.mimeType == "image/svg+xml" ||
+      (urlResult.mimeType.empty() && LooksLikeSvgContent(urlResult.data))) {
     return SvgImageContent{std::move(urlResult.data)};
   }
 
