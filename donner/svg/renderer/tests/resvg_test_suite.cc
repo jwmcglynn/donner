@@ -166,7 +166,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-filter-037.svg", Params::WithThreshold(kDefaultThreshold, 43000)},  // Negative values + text
             {"a-filter-038.svg",
              Params::WithThreshold(kDefaultThreshold, 145000)},  // url() + grayscale() color space
-            {"a-filter-039.svg", Params::WithThreshold(kDefaultThreshold, 8000)},  // Two url() refs
+            {"a-filter-039.svg",
+             Params::WithThreshold(kDefaultThreshold, 10500)},  // Two url() refs (8K mac, 10K linux)
             {"a-filter-040.svg", Params::Skip()},  // UB: same url() twice
         },
         Params::WithThreshold(kDefaultThreshold, 8000))),
