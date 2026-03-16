@@ -39,6 +39,14 @@ SVGDocument ParseSVG(std::string_view input) {
   return std::move(maybeResult).result();
 }
 
+SVGDocument ParseSVGExperimental(std::string_view input) {
+  SVGParser::Options options;
+  options.enableExperimental = true;
+  auto maybeResult = SVGParser::ParseSVG(input, nullptr, options);
+  EXPECT_THAT(maybeResult, NoParseError());
+  return std::move(maybeResult).result();
+}
+
 template <typename T>
 T QueryElement(SVGDocument& document, const char* selector) {
   auto element = document.querySelector(selector);
@@ -248,7 +256,7 @@ TEST(AttributeParserTest, StopOffsetClamped) {
 // --- Filter attributes ---
 
 TEST(AttributeParserTest, FilterAttributes) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVGExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
         <filter id="f" x="-20%" y="-20%" width="140%" height="140%">

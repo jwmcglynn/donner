@@ -22,7 +22,9 @@ namespace donner::svg::components {
 class TextSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseAndCompute(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    parser::SVGParser::Options options;
+    options.enableExperimental = true;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, nullptr, options);
     EXPECT_THAT(maybeResult, NoParseError());
     auto document = std::move(maybeResult).result();
 
@@ -70,9 +72,11 @@ TEST_F(TextSystemTest, TextWithTspan) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  EXPECT_THAT(computed->spans, SizeIs(2));
-  EXPECT_EQ(computed->spans[0].text, "First");
-  EXPECT_EQ(computed->spans[1].text, "Second");
+  // The root <text> element produces a span (with its own text content, possibly empty),
+  // followed by one span per <tspan> child.
+  ASSERT_THAT(computed->spans, SizeIs(3));
+  EXPECT_EQ(computed->spans[1].text, "First");
+  EXPECT_EQ(computed->spans[2].text, "Second");
 }
 
 // --- Text positioning: x, y inherited from root ---
@@ -91,11 +95,12 @@ TEST_F(TextSystemTest, PositioningInheritedFromRoot) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(1));
+  // Root span + tspan child span.
+  ASSERT_THAT(computed->spans, SizeIs(2));
 
   // The tspan should inherit x/y from the root <text> element.
-  EXPECT_DOUBLE_EQ(computed->spans[0].x.value, 15.0);
-  EXPECT_DOUBLE_EQ(computed->spans[0].y.value, 25.0);
+  EXPECT_DOUBLE_EQ(computed->spans[1].x.value, 15.0);
+  EXPECT_DOUBLE_EQ(computed->spans[1].y.value, 25.0);
 }
 
 // --- Per-character positioning ---
@@ -140,9 +145,10 @@ TEST_F(TextSystemTest, DxDyPositioning) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(1));
+  // Root span + tspan child span.
+  ASSERT_THAT(computed->spans, SizeIs(2));
 
-  auto& span = computed->spans[0];
+  auto& span = computed->spans[1];
   ASSERT_EQ(span.dxList.size(), 2u);
   ASSERT_EQ(span.dyList.size(), 2u);
   EXPECT_TRUE(span.dxList[0].has_value());
@@ -169,9 +175,10 @@ TEST_F(TextSystemTest, RotateAttribute) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(1));
+  // Root span + tspan child span.
+  ASSERT_THAT(computed->spans, SizeIs(2));
 
-  auto& span = computed->spans[0];
+  auto& span = computed->spans[1];
   ASSERT_THAT(span.rotateList, SizeIs(2));
   EXPECT_DOUBLE_EQ(span.rotateList[0], 45.0);
   EXPECT_DOUBLE_EQ(span.rotateList[1], 90.0);
@@ -191,7 +198,9 @@ TEST_F(TextSystemTest, EmptyTextElement) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  EXPECT_THAT(computed->spans, IsEmpty());
+  // The root <text> element itself produces a single span even when empty.
+  ASSERT_THAT(computed->spans, SizeIs(1));
+  EXPECT_EQ(computed->spans[0].text, "");
 }
 
 // --- Multiple tspan with individual positioning ---
@@ -212,14 +221,15 @@ TEST_F(TextSystemTest, MultipleTspanWithPositioning) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(3));
+  // Root span + 3 tspan children.
+  ASSERT_THAT(computed->spans, SizeIs(4));
 
-  EXPECT_DOUBLE_EQ(computed->spans[0].x.value, 10.0);
-  EXPECT_DOUBLE_EQ(computed->spans[0].y.value, 20.0);
-  EXPECT_DOUBLE_EQ(computed->spans[1].x.value, 30.0);
-  EXPECT_DOUBLE_EQ(computed->spans[1].y.value, 40.0);
-  EXPECT_DOUBLE_EQ(computed->spans[2].x.value, 50.0);
-  EXPECT_DOUBLE_EQ(computed->spans[2].y.value, 60.0);
+  EXPECT_DOUBLE_EQ(computed->spans[1].x.value, 10.0);
+  EXPECT_DOUBLE_EQ(computed->spans[1].y.value, 20.0);
+  EXPECT_DOUBLE_EQ(computed->spans[2].x.value, 30.0);
+  EXPECT_DOUBLE_EQ(computed->spans[2].y.value, 40.0);
+  EXPECT_DOUBLE_EQ(computed->spans[3].x.value, 50.0);
+  EXPECT_DOUBLE_EQ(computed->spans[3].y.value, 60.0);
 }
 
 // --- textPath reference ---
@@ -241,10 +251,11 @@ TEST_F(TextSystemTest, TextPathReference) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(1));
+  // Root span + textPath child span.
+  ASSERT_THAT(computed->spans, SizeIs(2));
 
-  // The span should have a path spline attached.
-  EXPECT_TRUE(computed->spans[0].pathSpline.has_value());
+  // The textPath span should have a path spline attached.
+  EXPECT_TRUE(computed->spans[1].pathSpline.has_value());
 }
 
 // --- textPath with startOffset ---
@@ -266,11 +277,12 @@ TEST_F(TextSystemTest, TextPathWithStartOffset) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(1));
+  // Root span + textPath child span.
+  ASSERT_THAT(computed->spans, SizeIs(2));
 
   // 50% of a 100-unit path should be ~50.
-  EXPECT_TRUE(computed->spans[0].pathSpline.has_value());
-  EXPECT_NEAR(computed->spans[0].pathStartOffset, 50.0, 1.0);
+  EXPECT_TRUE(computed->spans[1].pathSpline.has_value());
+  EXPECT_NEAR(computed->spans[1].pathStartOffset, 50.0, 1.0);
 }
 
 // --- UTF-8 multibyte characters ---
@@ -296,11 +308,13 @@ TEST_F(TextSystemTest, Utf8MultibyteCounting) {
 // --- No warnings for valid text ---
 
 TEST_F(TextSystemTest, NoWarningsForValidText) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
   auto maybeResult = parser::SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <text x="10" y="20">Hello World</text>
     </svg>
-  )");
+  )", nullptr, options);
   ASSERT_TRUE(maybeResult.hasResult());
   auto document = std::move(maybeResult).result();
 

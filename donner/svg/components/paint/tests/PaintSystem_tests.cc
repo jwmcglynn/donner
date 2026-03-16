@@ -12,6 +12,10 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowBranch.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -33,9 +37,25 @@ protected:
 
   SVGDocument ParseAndCompute(std::string_view input) {
     auto document = ParseSVG(input);
-    StyleSystem().computeAllStyles(document.registry(), nullptr);
-    paintSystem.createShadowTrees(document.registry(), nullptr);
-    paintSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+    auto& registry = document.registry();
+    StyleSystem().computeAllStyles(registry, nullptr);
+    paintSystem.createShadowTrees(registry, nullptr);
+
+    // Instantiate shadow trees (needed for gradient/pattern href inheritance).
+    for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
+      auto [shadowTreeComponent] = view.get(entity);
+      if (auto targetEntity = shadowTreeComponent.mainTargetEntity(registry)) {
+        auto& shadow = registry.get_or_emplace<ComputedShadowTreeComponent>(entity);
+        ShadowTreeSystem().populateInstance(EntityHandle(registry, entity), shadow,
+                                           ShadowBranchType::Main, targetEntity.value(),
+                                           shadowTreeComponent.mainHref().value(), nullptr);
+      }
+    }
+
+    // Re-compute styles to include shadow tree entities.
+    StyleSystem().computeAllStyles(registry, nullptr);
+
+    paintSystem.instantiateAllComputedComponents(registry, nullptr);
     return document;
   }
 
