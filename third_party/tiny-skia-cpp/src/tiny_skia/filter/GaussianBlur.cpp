@@ -344,7 +344,7 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edg
   }
 
   // Guard against OOM: each buffer is width*height*4 bytes.
-  constexpr std::size_t kMaxAllocationBytes = 256 * 1024 * 1024;
+  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
   const std::size_t bufferSize = static_cast<std::size_t>(width) * height * 4;
   if (bufferSize > kMaxAllocationBytes) {
     return;
@@ -404,7 +404,7 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
   }
 
   // Guard against OOM: each buffer is width*height*4 floats.
-  constexpr std::size_t kMaxAllocationBytes = 256 * 1024 * 1024;
+  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
   const std::size_t bufferSize = static_cast<std::size_t>(width) * height * 4 * sizeof(float);
   if (bufferSize > kMaxAllocationBytes) {
     return;
