@@ -172,6 +172,9 @@ bool ParseXYWidthHeight(SVGParserContext& context, T element, const XMLQualified
  * Standard keywords: SourceGraphic, SourceAlpha, FillPaint, StrokePaint.
  * Any other non-empty string is treated as a named result reference.
  *
+ * BackgroundImage and BackgroundAlpha are deprecated in SVG 2 and not supported.
+ * They are parsed as named references (which won't resolve, producing transparent black).
+ *
  * @param value Attribute value.
  * @return The parsed FilterInput.
  */
@@ -191,6 +194,9 @@ components::FilterInput ParseFilterInput(std::string_view value) {
   if (value == "StrokePaint") {
     return FilterInput{FilterStandardInput::StrokePaint};
   }
+  // BackgroundImage and BackgroundAlpha were SVG 1.1 filter inputs, deprecated in SVG 2.
+  // They fall through to Named (unresolved → transparent black), which is the correct SVG 2
+  // behavior.
   return FilterInput{FilterInput::Named{RcString(value)}};
 }
 
