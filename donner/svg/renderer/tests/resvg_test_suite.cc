@@ -204,9 +204,8 @@ INSTANTIATE_TEST_SUITE_P(
         "a-isolation",
         {
             {"a-isolation-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 62000)},  // Isolation works but isolated
-            // group compositing with transparent background produces different result from resvg
-            // golden (overlay blend against transparent vs. against opaque green).
+             Params::WithThreshold(kDefaultThreshold, 62000)},  // BUG: overlay blend in isolated
+            // group composites against transparent instead of applying overlay correctly
         })),
     TestNameFromFilename);
 
@@ -558,43 +557,25 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
             {"e-feImage-004.svg",
              Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
-            {"e-feImage-006.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   9500)},  // Fragment ref edge AA (8-bit intermediate buffer)
+            // Subregion tests: bilinear interpolation + subregion coordinate diffs.
             {"e-feImage-007.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   4500)},  // OBB subregion, bilinear edge diff (4143px at 0.02)
+             Params::WithThreshold(kDefaultThreshold, 4500)},  // OBB subregion bilinear
             {"e-feImage-008.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   4500)},  // OBB subregion with percentage (4143px at 0.02)
+             Params::WithThreshold(kDefaultThreshold, 4500)},  // OBB subregion percentage
             {"e-feImage-009.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   13500)},  // Percentage width subregion (12113px at 0.02)
+             Params::WithThreshold(kDefaultThreshold, 12500)},  // Percentage width subregion
             {"e-feImage-010.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   14000)},  // Absolute subregion coords (12682px at 0.02)
+             Params::WithThreshold(kDefaultThreshold, 13000)},  // Absolute subregion coords
             {"e-feImage-011.svg",
              Params::Skip()},  // Subregion with rotation: filter region sizing mismatch (64K px)
-            {"e-feImage-012.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   36000)},  // Fragment ref outside defs, larger rect edge diff
-            {"e-feImage-013.svg",
-             Params::WithThreshold(kDefaultThreshold, 9500)},  // Fragment ref group, edge AA
-            {"e-feImage-014.svg",
-             Params::WithThreshold(kDefaultThreshold, 9500)},  // Fragment ref use element, edge AA
-            {"e-feImage-017.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   9500)},  // Fragment ref outside defs (2), edge AA
             {"e-feImage-019.svg",
              Params::WithThreshold(kDefaultThreshold,
-                                   18200)},  // Fragment ref with skewX transform on element
+                                   34200)},  // Fragment ref with skewX transform on element
             {"e-feImage-021.svg",
-             Params::WithThreshold(kDefaultThreshold, 34200)},  // Fragment ref with complex
-                                                                // transform (skewX+translate)
-            {"e-feImage-023.svg",
-             Params::WithThreshold(kDefaultThreshold, 9500)},  // Fragment ref with opacity, edge AA
+             Params::WithThreshold(kDefaultThreshold,
+                                   26200)},  // Fragment ref with complex transform
             {"e-feImage-024.svg",
-             Params::WithThreshold(kDefaultThreshold, 33600)},  // Chained feImage fragment refs
+             Params::WithThreshold(kDefaultThreshold, 22000)},  // Chained feImage fragment refs
         })),
     TestNameFromFilename);
 

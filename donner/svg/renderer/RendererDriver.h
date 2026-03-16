@@ -75,7 +75,8 @@ private:
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transformd& parentAbsoluteTransform, double opacity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph);
-  void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry);
+  void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry,
+                                   const std::optional<Boxd>& filterRegion);
   static void setSubDocumentContextPaint(
       SVGDocument& subDocument, const components::ResolvedPaintServer& contextFill,
       const components::ResolvedPaintServer& contextStroke);

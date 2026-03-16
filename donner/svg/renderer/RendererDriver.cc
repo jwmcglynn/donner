@@ -597,7 +597,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry);
+      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -819,7 +819,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry);
+      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -1109,7 +1109,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry);
+      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -1762,7 +1762,8 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
 }
 
 void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGraph,
-                                                Registry& registry) {
+                                                Registry& registry,
+                                                const std::optional<Boxd>& filterRegion) {
   // Lazily create the recursion guard set if needed.
   std::unordered_set<entt::id_type> localGuard;
   const bool ownsGuard = (feImageFragmentGuard_ == nullptr);
@@ -1856,6 +1857,15 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     RendererDriver subDriver(*offscreen, verbose_);
     subDriver.renderingSize_ = renderingSize_;
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
+
+    // Offset the fragment rendering so its coordinates align with the filter pixel space.
+    // The filter graph executor places the fragment image at (0,0). Without offset, the
+    // fragment renders at absolute canvas coordinates, but the filter expects coordinates
+    // relative to the filter region's origin.
+    if (filterRegion.has_value()) {
+      subDriver.layerBaseTransform_ =
+          Transformd::Translate(filterRegion->topLeft.x, filterRegion->topLeft.y);
+    }
 
     {
       RenderingInstanceView subView(registry);
