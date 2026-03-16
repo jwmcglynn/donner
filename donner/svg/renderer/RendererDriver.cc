@@ -421,39 +421,43 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                                       ? preserveAspectRatioComp->preserveAspectRatio
                                                       : PreserveAspectRatio::Default();
 
-          SVGDocument subDocument = SVGDocument::CreateFromHandle(svgImage->subDocument);
-          drawSubDocument(subDocument, sizedElement->bounds, aspectRatio,
-                          style.properties->opacity.getRequired(),
-                          layerBaseTransform_ * instance.entityFromWorldTransform);
+          if (svgImage->subDocument) {
+            SVGDocument subDocument = SVGDocument::CreateFromHandle(svgImage->subDocument);
+            drawSubDocument(subDocument, sizedElement->bounds, aspectRatio, opacity,
+                            layerBaseTransform_ * instance.entityFromWorldTransform);
+          }
         }
       } else if (const auto* externalUse =
                      instance.dataHandle(registry).try_get<components::ExternalUseComponent>()) {
         // External SVG sub-document referenced by <use>.
         // Pass the <use> element's fill/stroke as context-fill/context-stroke
         // for the sub-document (SVG2 context paint inheritance).
-        SVGDocument subDocument = SVGDocument::CreateFromHandle(externalUse->subDocument);
-        setSubDocumentContextPaint(subDocument, instance.resolvedFill,
-                                   instance.resolvedStroke);
+        if (externalUse->subDocument) {
+          SVGDocument subDocument = SVGDocument::CreateFromHandle(externalUse->subDocument);
+          setSubDocumentContextPaint(subDocument, instance.resolvedFill,
+                                     instance.resolvedStroke);
 
-        if (!externalUse->fragment.empty()) {
-          // Fragment reference: render only the referenced element from the sub-document.
-          // Pass the <use> element's absolute transform so the fragment is positioned
-          // at the <use> element's location in the parent document.
-          const Transformd parentAbsoluteTransform =
-              layerBaseTransform_ * instance.entityFromWorldTransform;
-          drawSubDocumentElement(subDocument, externalUse->fragment,
-                                 parentAbsoluteTransform, style.properties->opacity.getRequired());
-        } else {
-          // Whole-document reference: render the entire sub-document.
-          // Include the <use> element's transform so the sub-document is positioned correctly.
-          const Vector2i subDocSize = subDocument.canvasSize();
-          const Boxd viewportBounds = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
-          drawSubDocument(subDocument, viewportBounds, PreserveAspectRatio::Default(),
-                          style.properties->opacity.getRequired(),
-                          layerBaseTransform_ * instance.entityFromWorldTransform);
+          if (!externalUse->fragment.empty()) {
+            // Fragment reference: render only the referenced element from the sub-document.
+            // Pass the <use> element's absolute transform so the fragment is positioned
+            // at the <use> element's location in the parent document.
+            const Transformd parentAbsoluteTransform =
+                layerBaseTransform_ * instance.entityFromWorldTransform;
+            drawSubDocumentElement(subDocument, externalUse->fragment, parentAbsoluteTransform,
+                                   opacity);
+          } else {
+            // Whole-document reference: render the entire sub-document.
+            // For <use>, the entity's position is already captured via the renderer's current
+            // transform (used by pushClip). Only pass the layer base transform to include parent
+            // device scaling without the <use> element's own position.
+            const Vector2i subDocSize = subDocument.canvasSize();
+            const Boxd viewportBounds = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
+            drawSubDocument(subDocument, viewportBounds, PreserveAspectRatio::Default(), opacity,
+                            layerBaseTransform_);
+          }
+
+          clearSubDocumentContextPaint(subDocument);
         }
-
-        clearSubDocumentContextPaint(subDocument);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -1075,8 +1079,13 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
   const Transformd subDocFromLocal =
       aspectRatio.elementContentFromViewBoxTransform(viewportBounds, subDocRect);
   const Transformd docFromCanvas = subDocument.documentFromCanvasTransform();
-  // Transformd operator* is left-first: A * B means "apply A, then B".
-  const Transformd baseTransform = subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
+  // Compose the transform chain. Transformd operator* uses left-first order: A * B = "apply A,
+  // then B". The sub-doc root entity's entityFromWorldTransform already includes docFromCanvas^-1
+  // (mapping from document to canvas/device space). Including docFromCanvas here cancels that out,
+  // so the net result maps sub-doc element coordinates through subDocFromLocal (to parent document
+  // space), then through parentAbsoluteTransform (to device space).
+  const Transformd baseTransform =
+      subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
 
   // Save and override layerBaseTransform for sub-document rendering.
   const Transformd savedLayerBase = layerBaseTransform_;

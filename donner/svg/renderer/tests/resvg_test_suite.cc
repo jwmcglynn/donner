@@ -125,7 +125,7 @@ INSTANTIATE_TEST_SUITE_P(
                                 Params::WithThreshold(kDefaultThreshold, 17000))),
     TestNameFromFilename);
 
-// TODO: a-enable-background
+// a-enable-background: Deprecated in SVG 2, not implemented. See docs/unsupported_svg1_features.md.
 
 INSTANTIATE_TEST_SUITE_P(
     Fill, ImageComparisonTestFixture,
@@ -714,18 +714,17 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold,
                                    11000)},  // Transformed local-raster blur path (9971px at 0.02)
             {"e-filter-027.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   20000)},  // Skew transform + narrow filter region (18751px at 0.02)
-            {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage
-            {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha
+             Params::WithThreshold(kDefaultThreshold, 6000)},  // Skew transform + narrow filter
+                                                               // region (5406px at 0.02)
+            {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage (deprecated SVG 1.1)
+            {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha (deprecated SVG 1.1)
             {"e-filter-034.svg", Params::Skip()},  // UB: in=FillPaint
             {"e-filter-035.svg", Params::Skip()},  // UB: in=StrokePaint
             {"e-filter-036.svg", Params::Skip()},  // UB: in=FillPaint gradient
             {"e-filter-037.svg", Params::Skip()},  // UB: in=FillPaint pattern
             {"e-filter-038.svg", Params::Skip()},  // UB: in=FillPaint on group
-            // e-filter-056.svg: fixed invalid named result fallback (was 97500px, now <100)
-            {"e-filter-060.svg", Params::Skip()},               // Filter on root svg (227K px diff)
-            {"e-filter-065.svg", Params::Skip()},               // UB: in=FillPaint on empty group
+            {"e-filter-060.svg", Params::Skip()},  // UB: Filter on the root `svg`
+            {"e-filter-065.svg", Params::Skip()},  // UB: in=FillPaint on empty group
         })),
     TestNameFromFilename);
 
@@ -736,10 +735,9 @@ INSTANTIATE_TEST_SUITE_P(
     Image, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-image",
                                 {
-                                    {"e-image-006.svg", Params::Skip()},  // Not impl: .svgz image
-                                    {"e-image-029.svg", Params::Skip()},  // UB: missing dimensions
-                                    {"e-image-030.svg", Params::Skip()},  // UB: missing width
-                                    {"e-image-031.svg", Params::Skip()},  // UB: missing height
+                                    {"e-image-029.svg", Params::Skip()},  // UB: No width and height
+                                    {"e-image-030.svg", Params::Skip()},  // UB: No width
+                                    {"e-image-031.svg", Params::Skip()},  // UB: No height
                                     {"e-image-032.svg", Params::Skip()},  // UB: Float size
                                     {"e-image-040.svg", Params::Skip()},  // Not impl: External URLs
                                     {"e-image-041.svg", Params::Skip()},  // Not impl: External URLs
@@ -775,7 +773,11 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
             {"e-marker-017.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
             {"e-marker-018.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
-            {"e-marker-019.svg", Params::Skip()},  // Not impl: .svg image
+            {"e-marker-019.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-e-marker-019.png")},  // We (correctly)
+                                                                     // apply opacity
+                                                                     // on image
             {"e-marker-022.svg",
              Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
             {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
