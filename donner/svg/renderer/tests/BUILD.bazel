@@ -85,6 +85,7 @@ donner_cc_test(
     srcs = [
         "FilterGraphExecutor_tests.cc",
     ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     deps = [
         "//donner/svg/renderer:filter_graph_executor",
         "@com_google_gtest//:gtest_main",
@@ -255,8 +256,7 @@ donner_cc_test(
         "@resvg-test-suite//:png",
         "@resvg-test-suite//:svg",
     ],
-    shard_count = 32,
-    size = "large",
+    shard_count = 16,
     tags = ["manual"],
     deps = [
         ":image_comparison_test_fixture",

@@ -154,6 +154,7 @@ donner_cc_library(
     name = "filter_graph_executor",
     srcs = ["FilterGraphExecutor.cc"],
     hdrs = ["FilterGraphExecutor.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         "//donner/base",
@@ -270,7 +271,6 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
-        ":filter_graph_executor",
         ":renderer_driver",
         ":renderer_image_io",
         ":renderer_interface",

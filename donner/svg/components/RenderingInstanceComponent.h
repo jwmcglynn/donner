@@ -76,6 +76,14 @@ struct ResolvedMask {
   /// Returns true if the reference is valid, or false if this the \ref xml_mask did not
   /// properly resolve.
   bool valid() const { return reference.valid(); }
+
+  /// Deep copy (clones the parentMask chain).
+  ResolvedMask deepCopy() const {
+    ResolvedMask copy{reference, subtreeInfo, contentUnits,
+                      parentMask ? std::make_unique<ResolvedMask>(parentMask->deepCopy())
+                                 : nullptr};
+    return copy;
+  }
 };
 
 struct ResolvedMarker {
