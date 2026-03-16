@@ -766,7 +766,10 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
             {"e-marker-017.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
             {"e-marker-018.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
-            {"e-marker-019.svg", Params::WithThreshold(kDefaultThreshold, 19000)},
+            {"e-marker-019.svg",
+             Params::WithThreshold(kDefaultThreshold, 19000)},  // SVG image in marker at small
+                                                                 // scale (32x32), cross-renderer
+                                                                 // differences in complex paths
             {"e-marker-022.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
             {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
             {"e-marker-044.svg",

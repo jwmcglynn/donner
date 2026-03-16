@@ -873,6 +873,13 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           const auto* sizedElement =
               instance.dataHandle(registry)
                   .try_get<components::ComputedSizedElementComponent>();
+          if (verbose_) {
+            std::cout << "[svg-image] sizedElement=" << (sizedElement != nullptr);
+            if (sizedElement) {
+              std::cout << " bounds=" << sizedElement->bounds;
+            }
+            std::cout << "\n";
+          }
           if (sizedElement != nullptr) {
             const auto* preserveAspectRatioComp =
                 instance.dataHandle(registry)
@@ -1141,6 +1148,61 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         renderer_.drawText(*text, textParams);
+      } else if (const auto* svgImage =
+                     instance.dataHandle(registry)
+                         .try_get<components::LoadedSVGImageComponent>()) {
+        if (svgImage->subDocument != nullptr) {
+          const auto* sizedElement =
+              instance.dataHandle(registry)
+                  .try_get<components::ComputedSizedElementComponent>();
+          if (sizedElement != nullptr) {
+            const auto* preserveAspectRatioComp =
+                instance.dataHandle(registry)
+                    .try_get<components::PreserveAspectRatioComponent>();
+            const PreserveAspectRatio aspectRatio =
+                preserveAspectRatioComp != nullptr
+                    ? preserveAspectRatioComp->preserveAspectRatio
+                    : PreserveAspectRatio::Default();
+
+            auto* subDoc = std::any_cast<SVGDocument>(svgImage->subDocument);
+            if (subDoc != nullptr) {
+              drawSubDocument(*subDoc, sizedElement->bounds, aspectRatio,
+                              style.properties->opacity.getRequired(),
+                              layerBaseTransform_ * instance.entityFromWorldTransform);
+            }
+          }
+        }
+      } else if (const auto* image =
+                     instance.dataHandle(registry)
+                         .try_get<components::LoadedImageComponent>()) {
+        const std::optional<ImageParams> imageParams =
+            toImageParams(instance, style, *image, registry);
+        if (imageParams.has_value()) {
+          const auto* sizedElement =
+              instance.dataHandle(registry)
+                  .try_get<components::ComputedSizedElementComponent>();
+          const auto* preserveAspectRatio =
+              instance.dataHandle(registry)
+                  .try_get<components::PreserveAspectRatioComponent>();
+
+          if (sizedElement != nullptr) {
+            ResolvedClip imageClip;
+            imageClip.clipRect = sizedElement->bounds;
+            renderer_.pushClip(imageClip);
+
+            const PreserveAspectRatio par = preserveAspectRatio != nullptr
+                                                ? preserveAspectRatio->preserveAspectRatio
+                                                : PreserveAspectRatio::Default();
+            const Transformd imageFromLocal = par.elementContentFromViewBoxTransform(
+                sizedElement->bounds, imageParams->targetRect);
+            renderer_.pushTransform(imageFromLocal);
+            renderer_.drawImage(*image->image, *imageParams);
+            renderer_.popTransform();
+            renderer_.popClip();
+          } else {
+            renderer_.drawImage(*image->image, *imageParams);
+          }
+        }
       }
     }
 
