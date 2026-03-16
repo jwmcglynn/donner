@@ -203,9 +203,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-isolation",
         {
-            {"a-isolation-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 62000)},  // BUG: overlay blend in isolated
-            // group composites against transparent instead of applying overlay correctly
+            // a-isolation-001 and 002 now pass with 0 diffs — omit overrides.
         })),
     TestNameFromFilename);
 

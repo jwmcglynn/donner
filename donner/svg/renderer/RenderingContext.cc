@@ -311,6 +311,12 @@ public:
       layerDepth += 2;
     }
 
+    if (properties.mixBlendMode.getRequired() != MixBlendMode::Normal ||
+        properties.isolation.getRequired() == Isolation::Isolate) {
+      instance.isolatedLayer = true;
+      ++layerDepth;
+    }
+
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
     const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
 
