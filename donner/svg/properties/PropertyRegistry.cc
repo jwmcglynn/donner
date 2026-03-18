@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "donner/base/CompileTimeMap.h"
+#include "donner/base/MathUtils.h"
 #include "donner/base/SmallVector.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
@@ -16,7 +17,6 @@
 #include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/parser/TransformParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg {
@@ -622,61 +622,381 @@ ParseResult<Reference> ParseReference(std::string_view tag,
   return err;
 }
 
-ParseResult<FilterEffect> ParseFilter(std::span<const css::ComponentValue> components) {
-  // TODO(https://github.com/jwmcglynn/donner/issues/151): Handle parsing a list of filter effects
-  // https://www.w3.org/TR/filter-effects/#FilterProperty
+/// Parse a CSS angle value from a Dimension token, converting to degrees.
+std::optional<double> ParseAngleDegrees(const css::Token::Dimension& dimension) {
+  const RcString& suffix = dimension.suffixString;
+  if (suffix.equalsLowercase("deg")) {
+    return dimension.value;
+  } else if (suffix.equalsLowercase("grad")) {
+    return dimension.value / 400.0 * 360.0;
+  } else if (suffix.equalsLowercase("rad")) {
+    return dimension.value * MathConstants<double>::kRadToDeg;
+  } else if (suffix.equalsLowercase("turn")) {
+    return dimension.value * 360.0;
+  }
+  return std::nullopt;
+}
+
+/// Parse a number-or-percentage argument from a filter function's values.
+/// Returns the amount as a decimal (e.g. 50% → 0.5, 2 → 2.0).
+/// If values are empty, returns the default value.
+ParseResult<double> ParseNumberPercentage(std::span<const css::ComponentValue> values,
+                                          double defaultValue) {
+  if (values.empty()) {
+    return defaultValue;
+  }
+
+  std::span<const css::ComponentValue> remaining = values;
+  SkipWhitespace(remaining);
+
+  if (remaining.empty()) {
+    return defaultValue;
+  }
+
+  const auto& arg = remaining.front();
+  if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
+    return number->value;
+  } else if (const auto* percentage = arg.tryGetToken<css::Token::Percentage>()) {
+    return percentage->value / 100.0;
+  }
+
+  ParseError err;
+  err.reason = "Expected number or percentage";
+  err.location = arg.sourceOffset();
+  return err;
+}
+
+/// Parse a single CSS filter function and return the corresponding FilterEffect.
+ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
+  if (function.name.equalsLowercase("blur")) {
+    if (function.values.empty()) {
+      return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px),
+                                             Lengthd(0.0, Lengthd::Unit::Px)});
+    }
+    std::span<const css::ComponentValue> remaining = function.values;
+    SkipWhitespace(remaining);
+    if (remaining.empty()) {
+      return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px),
+                                             Lengthd(0.0, Lengthd::Unit::Px)});
+    }
+    const auto& arg = remaining.front();
+    if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
+      if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
+        ParseError err;
+        err.reason = "Invalid unit on blur length";
+        err.location = arg.sourceOffset();
+        return err;
+      }
+      const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
+      return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
+    }
+    // Accept bare 0 as 0px.
+    if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
+      if (number->value == 0.0) {
+        return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px),
+                                               Lengthd(0.0, Lengthd::Unit::Px)});
+      }
+    }
+    ParseError err;
+    err.reason = "Invalid blur value";
+    err.location = arg.sourceOffset();
+    return err;
+  }
+
+  if (function.name.equalsLowercase("hue-rotate")) {
+    if (function.values.empty()) {
+      return FilterEffect(FilterEffect::HueRotate{0.0});
+    }
+    std::span<const css::ComponentValue> remaining = function.values;
+    SkipWhitespace(remaining);
+    if (remaining.empty()) {
+      return FilterEffect(FilterEffect::HueRotate{0.0});
+    }
+    const auto& arg = remaining.front();
+    if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
+      if (auto degrees = ParseAngleDegrees(*dimension)) {
+        return FilterEffect(FilterEffect::HueRotate{*degrees});
+      }
+      ParseError err;
+      err.reason = "Invalid angle unit for hue-rotate";
+      err.location = arg.sourceOffset();
+      return err;
+    }
+    // Accept bare 0 as 0deg.
+    if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
+      if (number->value == 0.0) {
+        return FilterEffect(FilterEffect::HueRotate{0.0});
+      }
+    }
+    ParseError err;
+    err.reason = "Invalid hue-rotate value";
+    err.location = arg.sourceOffset();
+    return err;
+  }
+
+  if (function.name.equalsLowercase("brightness")) {
+    auto result = ParseNumberPercentage(function.values, 1.0);
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+    // CSS Filter Effects Level 1: brightness() does not allow negative values.
+    if (result.result() < 0.0) {
+      ParseError err;
+      err.reason = "Negative value not allowed for brightness()";
+      err.location = function.sourceOffset;
+      return err;
+    }
+    return FilterEffect(FilterEffect::Brightness{result.result()});
+  }
+
+  if (function.name.equalsLowercase("contrast")) {
+    auto result = ParseNumberPercentage(function.values, 1.0);
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+    // CSS Filter Effects Level 1: contrast() does not allow negative values.
+    if (result.result() < 0.0) {
+      ParseError err;
+      err.reason = "Negative value not allowed for contrast()";
+      err.location = function.sourceOffset;
+      return err;
+    }
+    return FilterEffect(FilterEffect::Contrast{result.result()});
+  }
+
+  if (function.name.equalsLowercase("grayscale")) {
+    auto result = ParseNumberPercentage(function.values, 1.0);
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+    return FilterEffect(FilterEffect::Grayscale{std::clamp(result.result(), 0.0, 1.0)});
+  }
+
+  if (function.name.equalsLowercase("invert")) {
+    auto result = ParseNumberPercentage(function.values, 1.0);
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+    return FilterEffect(FilterEffect::Invert{std::clamp(result.result(), 0.0, 1.0)});
+  }
+
+  if (function.name.equalsLowercase("opacity")) {
+    auto result = ParseNumberPercentage(function.values, 1.0);
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+    return FilterEffect(FilterEffect::FilterOpacity{std::clamp(result.result(), 0.0, 1.0)});
+  }
+
+  if (function.name.equalsLowercase("saturate")) {
+    auto result = ParseNumberPercentage(function.values, 1.0);
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+    // CSS Filter Effects Level 1: saturate() does not allow negative values.
+    if (result.result() < 0.0) {
+      ParseError err;
+      err.reason = "Negative value not allowed for saturate()";
+      err.location = function.sourceOffset;
+      return err;
+    }
+    return FilterEffect(FilterEffect::Saturate{result.result()});
+  }
+
+  if (function.name.equalsLowercase("sepia")) {
+    auto result = ParseNumberPercentage(function.values, 1.0);
+    if (result.hasError()) {
+      return std::move(result.error());
+    }
+    return FilterEffect(FilterEffect::Sepia{std::clamp(result.result(), 0.0, 1.0)});
+  }
+
+  if (function.name.equalsLowercase("drop-shadow")) {
+    // Syntax: drop-shadow(<color>? <offset-x> <offset-y> <blur-radius>? <color>?)
+    std::span<const css::ComponentValue> remaining = function.values;
+    SkipWhitespace(remaining);
+
+    css::Color color{css::Color::CurrentColor{}};
+    bool foundColor = false;
+
+    // Try to parse leading color (named color, hex, or color function).
+    // ColorParser::Parse requires exactly one ComponentValue, so pass only the first token.
+    if (!remaining.empty()) {
+      std::span<const css::ComponentValue> singleToken = remaining.subspan(0, 1);
+      auto colorResult = css::parser::ColorParser::Parse(singleToken);
+      if (!colorResult.hasError()) {
+        color = colorResult.result();
+        foundColor = true;
+        remaining = remaining.subspan(1);
+        SkipWhitespace(remaining);
+      }
+    }
+
+    // Helper to parse a length value (dimension or unitless number).
+    auto parseLengthArg = [](std::span<const css::ComponentValue>& rem)
+        -> std::optional<Lengthd> {
+      if (rem.empty()) {
+        return std::nullopt;
+      }
+      const auto& arg = rem.front();
+      if (const auto* dim = arg.tryGetToken<css::Token::Dimension>()) {
+        if (dim->suffixUnit && *dim->suffixUnit != Lengthd::Unit::Percent) {
+          rem = rem.subspan(1);
+          return Lengthd(dim->value, *dim->suffixUnit);
+        }
+      } else if (const auto* num = arg.tryGetToken<css::Token::Number>()) {
+        rem = rem.subspan(1);
+        return Lengthd(num->value, Lengthd::Unit::None);
+      }
+      return std::nullopt;
+    };
+
+    // Parse offset-x (required).
+    auto offsetX = parseLengthArg(remaining);
+    if (!offsetX) {
+      ParseError err;
+      err.reason = "Expected offset-x for drop-shadow";
+      if (!remaining.empty()) {
+        err.location = remaining.front().sourceOffset();
+      }
+      return err;
+    }
+    SkipWhitespace(remaining);
+
+    // Parse offset-y (required).
+    auto offsetY = parseLengthArg(remaining);
+    if (!offsetY) {
+      ParseError err;
+      err.reason = "Expected offset-y for drop-shadow";
+      if (!remaining.empty()) {
+        err.location = remaining.front().sourceOffset();
+      }
+      return err;
+    }
+    SkipWhitespace(remaining);
+
+    // Parse optional blur-radius.
+    Lengthd stdDeviation(0.0, Lengthd::Unit::Px);
+    if (auto blur = parseLengthArg(remaining)) {
+      stdDeviation = *blur;
+      SkipWhitespace(remaining);
+    }
+
+    // Try to parse trailing color if not found yet.
+    if (!foundColor && !remaining.empty()) {
+      std::span<const css::ComponentValue> singleToken = remaining.subspan(0, 1);
+      auto colorResult = css::parser::ColorParser::Parse(singleToken);
+      if (!colorResult.hasError()) {
+        color = colorResult.result();
+        remaining = remaining.subspan(1);
+        SkipWhitespace(remaining);
+      }
+    }
+
+    // Reject if there are extra tokens (per spec, invalid functions are ignored).
+    if (!remaining.empty()) {
+      ParseError err;
+      err.reason = "Unexpected extra values in drop-shadow()";
+      err.location = remaining.front().sourceOffset();
+      return err;
+    }
+
+    return FilterEffect(FilterEffect::DropShadow{*offsetX, *offsetY, stdDeviation, color});
+  }
+
+  ParseError err;
+  err.reason = "Unknown filter function '" + std::string(function.name) + "'";
+  err.location = function.sourceOffset;
+  return err;
+}
+
+ParseResult<std::vector<FilterEffect>> ParseFilter(
+    std::span<const css::ComponentValue> components) {
   if (components.empty()) {
     ParseError err;
     err.reason = "Invalid filter value";
     return err;
   }
 
-  const css::ComponentValue& firstComponent = components.front();
-  if (firstComponent.is<css::Token>()) {
-    const auto& token = firstComponent.get<css::Token>();
-    if (token.is<css::Token::Ident>()) {
-      const RcString& name = token.get<css::Token::Ident>().value;
+  std::span<const css::ComponentValue> remaining = components;
+  SkipWhitespace(remaining);
 
-      if (name.equalsLowercase("none")) {
-        return FilterEffect(FilterEffect::None());
-      }
-    } else if (token.is<css::Token::Url>()) {
-      const auto& url = token.get<css::Token::Url>();
-
-      return FilterEffect(FilterEffect::ElementReference(url.value));
-    }
-  } else if (firstComponent.is<css::Function>()) {
-    const auto& function = firstComponent.get<css::Function>();
-    if (function.name.equalsLowercase("blur")) {
-      // Parse optional length value as the stdDeviation.
-      if (function.values.empty()) {
-        return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px)});
-      } else if (function.values.size() == 1) {
-        const auto& arg = function.values.front();
-        if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
-          if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
-            ParseError err;
-            err.reason = "Invalid unit on length";
-            err.location = arg.sourceOffset();
-            return err;
-          } else {
-            const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
-            return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
-          }
-        } else {
-          ParseError err;
-          err.reason = "Invalid blur value";
-          err.location = arg.sourceOffset();
-          return err;
-        }
+  // Check for "none" keyword.
+  if (remaining.size() == 1 || (remaining.size() >= 1 && remaining.front().is<css::Token>())) {
+    const auto& first = remaining.front();
+    if (const auto* ident = first.tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("none")) {
+        return std::vector<FilterEffect>();
       }
     }
   }
 
-  ParseError err;
-  err.reason = "Invalid filter value";
-  err.location = firstComponent.sourceOffset();
-  return err;
+  // Parse list of filter functions and/or url() references.
+  std::vector<FilterEffect> effects;
+  while (!remaining.empty()) {
+    SkipWhitespace(remaining);
+    if (remaining.empty()) {
+      break;
+    }
+
+    const css::ComponentValue& component = remaining.front();
+
+    if (component.is<css::Token>()) {
+      const auto& token = component.get<css::Token>();
+      if (token.is<css::Token::Url>()) {
+        const auto& url = token.get<css::Token::Url>();
+        effects.emplace_back(FilterEffect::ElementReference(url.value));
+        remaining = remaining.subspan(1);
+        continue;
+      }
+      // url("...") with quotes is parsed as a function token.
+    }
+
+    if (component.is<css::Function>()) {
+      const auto& function = component.get<css::Function>();
+      // Handle url("...") with quoted argument.
+      if (function.name.equalsLowercase("url")) {
+        if (!function.values.empty()) {
+          std::span<const css::ComponentValue> funcValues = function.values;
+          SkipWhitespace(funcValues);
+          if (!funcValues.empty()) {
+            if (const auto* str = funcValues.front().tryGetToken<css::Token::String>()) {
+              effects.emplace_back(FilterEffect::ElementReference(str->value));
+              remaining = remaining.subspan(1);
+              continue;
+            }
+          }
+        }
+      }
+
+      auto result = ParseFilterFunction(function);
+      if (result.hasError()) {
+        return std::move(result.error());
+      }
+      effects.push_back(std::move(result.result()));
+      remaining = remaining.subspan(1);
+      continue;
+    }
+
+    // Skip comma separators if present.
+    if (component.isToken<css::Token::Comma>()) {
+      remaining = remaining.subspan(1);
+      continue;
+    }
+
+    ParseError err;
+    err.reason = "Invalid filter value";
+    err.location = component.sourceOffset();
+    return err;
+  }
+
+  if (effects.empty()) {
+    ParseError err;
+    err.reason = "Invalid filter value";
+    return err;
+  }
+
+  return effects;
 }
 
 ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValue> components) {
@@ -880,6 +1200,9 @@ constexpr auto kProperties =
                              std::string name;
                              bool first = true;
                              for (const auto& cv : item) {
+                               if (cv.isToken<css::Token::Whitespace>()) {
+                                 continue;  // Skip whitespace between idents in unquoted names.
+                               }
                                if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
                                  if (!first) {
                                    name.push_back(' ');
@@ -1317,14 +1640,40 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   }
 }
 
-namespace {
+ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
+                                                               std::string_view value,
+                                                               EntityHandle handle) {
+  /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not necessarily
+   * the same. There may need to be a second mapping.
+   */
+  /* For attributes, fields may be unitless, in which case they are specified in "user units",
+   * see https://www.w3.org/TR/SVG2/coords.html#TermUserUnits. For this case, the spec says to
+   * adjust the grammar to modify things like <length> to [<length> | <number>], see
+   * https://www.w3.org/TR/SVG2/types.html#syntax.
+   *
+   * In practice, we propagate an "AllowUserUnits" flag. "User units" are specified as being
+   * equivalent to pixels.
+   */
 
-/// Parse special property attributes that are element-specific, such as `transform` and
-/// presentation attributes that are dispatched per element type.
-ParseResult<bool> ParseSpecialAttributes(parser::PropertyParseFnParams& params,
-                                         std::string_view name, std::optional<ElementType> type,
-                                         EntityHandle handle) {
-  if (StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
+  if (!kValidPresentationAttributes.contains(name)) {
+    return false;
+  }
+
+  parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
+
+  const PropertyParseFn* parseFn = kProperties.find(name);
+  if (parseFn != nullptr) {
+    auto maybeError = (*parseFn)(*this, params);
+    if (maybeError.has_value()) {
+      return std::move(maybeError.value());
+    }
+
+    return true;
+  }
+
+  // Handle 'transform' as a special case — it's stored in TransformComponent, not PropertyRegistry.
+  if (handle != EntityHandle() &&
+      StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
     auto& transform = handle.get_or_emplace<components::TransformComponent>();
     auto maybeError = parser::Parse(
         params,
@@ -1345,53 +1694,7 @@ ParseResult<bool> ParseSpecialAttributes(parser::PropertyParseFnParams& params,
     return true;
   }
 
-  if (!type.has_value()) {
-    // Stop processing if there is not an element type.
-    return false;
-  }
-
-  return ToConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
-    return parser::ParsePresentationAttribute<elementType()>(handle, name, params);
-  });
-}
-
-}  // namespace
-
-ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
-                                                               std::string_view value,
-                                                               std::optional<ElementType> type,
-                                                               EntityHandle handle) {
-  /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not necessarily
-   * the same. There may need to be a second mapping.
-   */
-  /* For attributes, fields may be unitless, in which case they are specified in "user units",
-   * see https://www.w3.org/TR/SVG2/coords.html#TermUserUnits. For this case, the spec says to
-   * adjust the grammar to modify things like <length> to [<length> | <number>], see
-   * https://www.w3.org/TR/SVG2/types.html#syntax.
-   *
-   * In practice, we propagate an "AllowUserUnits" flag. "User units" are specified as being
-   * equivalent to pixels.
-   */
-  assert((!type.has_value() || (type.has_value() && handle != EntityHandle())) &&
-         "If a type is specified, entity handle must be set");
-
-  if (!kValidPresentationAttributes.contains(name)) {
-    return false;
-  }
-
-  parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
-
-  const PropertyParseFn* parseFn = kProperties.find(name);
-  if (parseFn != nullptr) {
-    auto maybeError = (*parseFn)(*this, params);
-    if (maybeError.has_value()) {
-      return std::move(maybeError.value());
-    }
-
-    return true;
-  }
-
-  return ParseSpecialAttributes(params, name, type, handle);
+  return false;
 }
 
 bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {

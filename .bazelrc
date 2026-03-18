@@ -52,10 +52,14 @@ common:skia --//donner/svg/renderer:renderer_backend=skia
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 common:dev --//build_defs:disable_backend_test_transition=true
 
-# Text rendering features
+# Filter effects
+common:no-filters --//donner/svg/renderer:filters=false
+
+# Text rendering features:
+#   --config=text         Simple text (stb_truetype only)
+#   --config=text-full    Full text (FreeType + HarfBuzz + WOFF2)
 common:text --//donner/svg/renderer:text=true
-common:text-woff2 --//donner/svg/renderer:text=true --//donner/svg/renderer:text_woff2=true
-common:text-shaping --//donner/svg/renderer:text=true --//donner/svg/renderer:text_shaping=true
+common:text-full --//donner/svg/renderer:text=true --//donner/svg/renderer:text_full=true
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++

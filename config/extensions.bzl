@@ -6,26 +6,30 @@ Usage in a downstream project's MODULE.bazel:
     donner.configure(
         renderer = "tiny_skia",
         text = True,
+        text_full = True,
     )
     use_repo(donner, "donner_config")
 
 All options have built-in defaults, so calling donner.configure() with no
 arguments (or not calling it at all) produces the same result as the
 hardcoded defaults.
+
+Text rendering tiers:
+  - text=False:              No text rendering.
+  - text=True:               Simple text (stb_truetype only — TTF/OTF, kern-table kerning).
+  - text=True, text_full=True: Full text (FreeType hinted outlines, HarfBuzz GSUB/GPOS, WOFF2).
 """
 
 _DEFAULTS = dict(
     renderer = "tiny_skia",
     text = True,
-    text_woff2 = True,
-    text_shaping = False,
+    text_full = False,
 )
 
 _configure = tag_class(attrs = {
     "renderer": attr.string(default = _DEFAULTS["renderer"], values = ["skia", "tiny_skia"]),
     "text": attr.bool(default = _DEFAULTS["text"]),
-    "text_woff2": attr.bool(default = _DEFAULTS["text_woff2"]),
-    "text_shaping": attr.bool(default = _DEFAULTS["text_shaping"]),
+    "text_full": attr.bool(default = _DEFAULTS["text_full"]),
 })
 
 def _donner_config_repo_impl(rctx):
@@ -34,14 +38,12 @@ def _donner_config_repo_impl(rctx):
 DONNER_CONFIG = {{
     "renderer": {renderer},
     "text": {text},
-    "text_woff2": {text_woff2},
-    "text_shaping": {text_shaping},
+    "text_full": {text_full},
 }}
 """.format(
         renderer = repr(rctx.attr.renderer),
         text = repr(rctx.attr.text),
-        text_woff2 = repr(rctx.attr.text_woff2),
-        text_shaping = repr(rctx.attr.text_shaping),
+        text_full = repr(rctx.attr.text_full),
     ))
 
 _donner_config_repo = repository_rule(
@@ -49,8 +51,7 @@ _donner_config_repo = repository_rule(
     attrs = {
         "renderer": attr.string(default = _DEFAULTS["renderer"]),
         "text": attr.bool(default = _DEFAULTS["text"]),
-        "text_woff2": attr.bool(default = _DEFAULTS["text_woff2"]),
-        "text_shaping": attr.bool(default = _DEFAULTS["text_shaping"]),
+        "text_full": attr.bool(default = _DEFAULTS["text_full"]),
     },
 )
 
@@ -63,8 +64,7 @@ def _donner_impl(module_ctx):
                 cfg = dict(
                     renderer = tag.renderer,
                     text = tag.text,
-                    text_woff2 = tag.text_woff2,
-                    text_shaping = tag.text_shaping,
+                    text_full = tag.text_full,
                 )
 
     _donner_config_repo(name = "donner_config", **cfg)

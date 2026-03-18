@@ -77,7 +77,7 @@ donner_cc_library(
     srcs = ["FontManager.cc"],
     hdrs = ["FontManager.h"],
     defines = select({
-        "//donner/svg/renderer:text_woff2_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
+        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
         "//conditions:default": [],
     }),
     visibility = ["//donner/svg:__subpackages__"],
@@ -87,7 +87,7 @@ donner_cc_library(
         "//third_party/public-sans",
         "@stb//:truetype",
     ] + select({
-        "//donner/svg/renderer:text_woff2_enabled": ["//donner/base/fonts:woff2_parser"],
+        "//donner/svg/renderer:text_full_enabled": ["//donner/base/fonts:woff2_parser"],
         "//conditions:default": [],
     }),
 )
@@ -100,7 +100,7 @@ donner_cc_test(
         "//donner/base/fonts:testdata/valid-001.woff2",
     ],
     defines = select({
-        "//donner/svg/renderer:text_woff2_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
+        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
         "//conditions:default": [],
     }),
     deps = [

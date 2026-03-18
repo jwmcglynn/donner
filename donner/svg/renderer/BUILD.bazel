@@ -19,19 +19,12 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
-# Enable WOFF2 font support (requires text). Adds woff2 + Brotli dependencies.
-# Override with --//donner/svg/renderer:text_woff2=true or via donner.configure(text_woff2 = True).
+# Enable full text rendering (requires text). Adds FreeType (hinted outlines),
+# HarfBuzz (GSUB/GPOS shaping), and WOFF2 support.
+# Override with --//donner/svg/renderer:text_full=true or via donner.configure(text_full = True).
 bool_flag(
-    name = "text_woff2",
-    build_setting_default = DONNER_CONFIG.get("text_woff2", False),
-    visibility = ["//visibility:public"],
-)
-
-# Enable HarfBuzz text shaping (requires text). Adds full OpenType GSUB/GPOS support.
-# Override with --//donner/svg/renderer:text_shaping=true or via donner.configure(text_shaping = True).
-bool_flag(
-    name = "text_shaping",
-    build_setting_default = DONNER_CONFIG.get("text_shaping", False),
+    name = "text_full",
+    build_setting_default = DONNER_CONFIG.get("text_full", False),
     visibility = ["//visibility:public"],
 )
 
@@ -61,15 +54,9 @@ config_setting(
 )
 
 config_setting(
-    name = "text_woff2_enabled",
-    flag_values = {":text_woff2": "true"},
-    visibility = ["//visibility:public"],
-)
-
-config_setting(
-    name = "text_shaping_enabled",
+    name = "text_full_enabled",
     flag_values = {
-        ":text_shaping": "true",
+        ":text_full": "true",
         ":text": "true",
     },
     visibility = ["//visibility:public"],
@@ -91,45 +78,27 @@ config_setting(
 )
 
 donner_cc_library(
-    name = "composited_renderer",
-    srcs = ["CompositedRenderer.cc"],
-    hdrs = ["CompositedRenderer.h"],
+    name = "stroke_params",
+    hdrs = ["StrokeParams.h"],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
-        ":layer_decomposition",
-        ":renderer_driver",
-        ":renderer_interface",
-        ":renderer_utils",
-        "//donner/base",
-        "//donner/svg",
-        "//donner/svg/components:components_core",
-        "//donner/svg/components/animation:components",
-    ],
-)
-
-donner_cc_library(
-    name = "layer_decomposition",
-    srcs = ["LayerDecomposition.cc"],
-    hdrs = [
-        "CompositingLayer.h",
-        "LayerDecomposition.h",
-    ],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        "//donner/base",
-        "//donner/svg/components:components_core",
-        "//donner/svg/renderer/common",
+        "//donner/svg/core",
     ],
 )
 
 donner_cc_library(
     name = "renderer_interface",
-    hdrs = ["RendererInterface.h"],
+    hdrs = [
+        "RendererInterface.h",
+        "StrokeParams.h",
+    ],
     visibility = ["//visibility:public"],
     deps = [
+        ":stroke_params",
         "//donner/base",
         "//donner/css:core",
         "//donner/svg/components",
+        "//donner/svg/components/filter:components",
         "//donner/svg/core",
         "//donner/svg/resources:image_resource",
     ],
@@ -147,20 +116,6 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/renderer/common",
-    ],
-)
-
-donner_cc_library(
-    name = "filter_graph_executor",
-    srcs = ["FilterGraphExecutor.cc"],
-    hdrs = ["FilterGraphExecutor.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-    deps = [
-        "//donner/base",
-        "//donner/svg",
-        ":tiny_skia_deps",
-        ":tiny_skia_filter_deps",
     ],
 )
 
@@ -200,18 +155,21 @@ donner_cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
-    visibility = ["//donner/svg:__subpackages__"],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
+    }) + select({
+        ":text_full_enabled": ["DONNER_TEXT_FULL"],
+        "//conditions:default": [],
     }),
+    visibility = ["//visibility:public"],
     deps = [
         "//donner/svg/components",
-        "//donner/svg/components:spatial_grid",
-        "//donner/svg/components/animation:animation_system",
-        "//donner/svg/components/animation:components",
     ] + select({
-        ":text_enabled": ["//donner/svg/resources:font_manager"],
+        ":text_enabled": [
+            "//donner/svg/resources:font_manager",
+            "//donner/svg/text:text_engine",
+        ],
         "//conditions:default": [],
     }),
 )
@@ -219,7 +177,6 @@ donner_cc_library(
 donner_perf_sensitive_cc_library(
     name = "skia_deps",
     allow_debug_builds_config = ":config_skia_debug",
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     defines = select({
         ":macos_coretext": ["DONNER_USE_CORETEXT"],
         ":linux_fontconfig": ["DONNER_USE_FREETYPE_WITH_FONTCONFIG"],
@@ -229,6 +186,7 @@ donner_perf_sensitive_cc_library(
         ":linux_fontconfig": ["-lfontconfig"],
         "//conditions:default": [],
     }),
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         "@skia//:core",
         "@skia//:pathops",
@@ -253,23 +211,15 @@ donner_perf_sensitive_cc_library(
     ],
 )
 
-donner_perf_sensitive_cc_library(
-    name = "tiny_skia_filter_deps",
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
-    deps = [
-        "@tiny-skia-cpp//src/tiny_skia/filter",
-    ],
-)
-
 donner_cc_library(
     name = "renderer_skia",
     srcs = ["RendererSkia.cc"],
     hdrs = ["RendererSkia.h"],
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     defines = select({
-        ":text_shaping_enabled": ["DONNER_TEXT_SHAPING_ENABLED"],
+        ":text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         ":renderer_driver",
         ":renderer_image_io",
@@ -280,34 +230,8 @@ donner_cc_library(
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",
+        "//donner/svg/text:text_engine",
         "//third_party/public-sans",
-    ] + select({
-        ":text_shaping_enabled": [":text_shaper"],
-        "//conditions:default": [],
-    }),
-)
-
-donner_cc_library(
-    name = "text_layout",
-    srcs = ["TextLayout.cc"],
-    hdrs = ["TextLayout.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":renderer_interface",
-        "//donner/svg/resources:font_manager",
-        "@stb//:truetype",
-    ],
-)
-
-donner_cc_library(
-    name = "text_shaper",
-    srcs = ["TextShaper.cc"],
-    hdrs = ["TextShaper.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":renderer_interface",
-        "//donner/svg/resources:font_manager",
-        "@harfbuzz",
     ],
 )
 
@@ -315,15 +239,15 @@ donner_cc_library(
     name = "renderer_tiny_skia",
     srcs = ["RendererTinySkia.cc"],
     hdrs = ["RendererTinySkia.h"],
-    visibility = ["//visibility:public"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }) + select({
-        ":text_shaping_enabled": ["DONNER_TEXT_SHAPING_ENABLED"],
+        ":text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//visibility:public"],
     deps = [
         ":renderer_driver",
         ":renderer_image_io",
@@ -332,8 +256,10 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
     ] + select({
-        ":text_shaping_enabled": [":text_shaper"],
-        ":text_enabled": [":text_layout"],
+        ":text_enabled": ["//donner/svg/text:text_engine"],
+        "//conditions:default": [],
+    }) + select({
+        ":text_enabled": ["//donner/svg/text:text_layout_params"],
         "//conditions:default": [],
     }),
 )

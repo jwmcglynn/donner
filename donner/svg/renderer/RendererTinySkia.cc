@@ -20,7 +20,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
-#ifdef DONNER_TEXT_SHAPING_ENABLED
+#ifdef DONNER_TEXT_FULL
 #include "donner/svg/renderer/TextShaper.h"
 #else
 #include "donner/svg/renderer/TextLayout.h"
@@ -135,6 +135,32 @@ tiny_skia::Path toTinyPath(const PathSpline& spline) {
   }
 
   return builder.finish().value_or(tiny_skia::Path());
+}
+
+PathSpline transformPathSpline(const PathSpline& spline, const Transformd& transform) {
+  PathSpline result;
+  const std::vector<Vector2d>& points = spline.points();
+
+  for (const PathSpline::Command& command : spline.commands()) {
+    switch (command.type) {
+      case PathSpline::CommandType::MoveTo:
+        result.moveTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case PathSpline::CommandType::LineTo:
+        result.lineTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case PathSpline::CommandType::CurveTo:
+        result.curveTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]),
+                       transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case PathSpline::CommandType::ClosePath:
+        result.closePath();
+        break;
+    }
+  }
+
+  return result;
 }
 
 inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
@@ -1013,7 +1039,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     }
   }
 
-#ifdef DONNER_TEXT_SHAPING_ENABLED
+#ifdef DONNER_TEXT_FULL
   TextShaper shaper(fontManager);
   std::vector<ShapedTextRun> runs = shaper.layout(text, params);
 #else
@@ -1046,7 +1072,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
         maxY = std::max(maxY, glyph.yPosition);
       }
     }
-    if (minX < maxX && minY < maxY) {
+  if (minX < maxX && minY < maxY) {
       textBounds = Boxd({minX, minY}, {maxX, maxY});
     }
   }
@@ -1054,6 +1080,16 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
   std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(textBounds);
+  const auto makeSolidFillPaint = [&](const css::Color& color) {
+    tiny_skia::Paint paint = makeBasePaint(antialias_);
+    paint.unpremulStore = surfaceStack_.empty();
+
+    css::RGBA rgba = color.rgba();
+    rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) *
+                                             params.opacity * paintOpacity_));
+    paint.shader = toTinyColor(rgba);
+    return paint;
+  };
 
   // Check if we have a stroke.
   const bool hasStroke = params.strokeParams.strokeWidth > 0.0;
@@ -1067,14 +1103,21 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     tinyStroke.lineJoin = toTinyLineJoin(params.strokeParams.lineJoin);
   }
 
-  for (const auto& run : runs) {
-    if (run.font != FontHandle() && fontManager.fontInfo(run.font)) {
-      info = fontManager.fontInfo(run.font);
+  for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
+    const auto& run = runs[runIndex];
+    if (run.font != FontHandle()) {
+      info = fontManager.fontInfo(run.font);  // nullptr for bitmap-only fonts.
       scale = fontManager.scaleForPixelHeight(run.font, fontSizePx);
     }
 
-    if (!info || scale == 0.0f) {
+    const bool isBitmapFont = run.font && fontManager.isBitmapOnly(run.font);
+    if (!isBitmapFont && (!info || scale == 0.0f)) {
       continue;
+    }
+
+    std::optional<tiny_skia::Paint> spanFillPaint = fillPaint;
+    if (runIndex < text.spans.size() && text.spans[runIndex].fillColor.has_value()) {
+      spanFillPaint = makeSolidFillPaint(*text.spans[runIndex].fillColor);
     }
 
     for (const auto& glyph : run.glyphs) {
@@ -1082,38 +1125,87 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
         continue;  // .notdef glyph, skip.
       }
 
-#ifdef DONNER_TEXT_SHAPING_ENABLED
-      PathSpline glyphPath = shaper.glyphOutline(run.font, glyph.glyphIndex, scale);
-#else
-      PathSpline glyphPath = glyphToPathSpline(info, glyph.glyphIndex, scale);
-#endif
+#ifdef DONNER_TEXT_FULL
+      PathSpline glyphPath;
+      if (!isBitmapFont) {
+        glyphPath = shaper.glyphOutline(run.font, glyph.glyphIndex, scale);
+      }
+
+      // For bitmap fonts (color emoji), extract and draw the bitmap directly.
+      if (glyphPath.empty()) {
+        auto bitmap = shaper.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        if (bitmap) {
+          // Premultiply alpha for correct blending.
+          std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
+          auto maybePixmap = tiny_skia::Pixmap::fromVec(
+              std::move(premul),
+              tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
+                                 static_cast<uint32_t>(bitmap->height)));
+          if (!maybePixmap.has_value()) {
+            continue;
+          }
+
+          // Compute target rect in document space: position with bearing, scaled size.
+          const double targetX = glyph.xPosition + bitmap->bearingX;
+          const double targetY = glyph.yPosition - bitmap->bearingY;
+          const double targetW = static_cast<double>(bitmap->width) * bitmap->scale;
+          const double targetH = static_cast<double>(bitmap->height) * bitmap->scale;
+
+          // Use the same transform pattern as drawImage: Scale * Translate * currentTransform_.
+          const double imgScaleX = targetW / static_cast<double>(bitmap->width);
+          const double imgScaleY = targetH / static_cast<double>(bitmap->height);
+          const Transformd imageFromLocal =
+              Transformd::Scale(imgScaleX, imgScaleY) *
+              Transformd::Translate(Vector2d(targetX, targetY)) * currentTransform_;
+
+          tiny_skia::PixmapPaint paint;
+          paint.opacity = NarrowToFloat(paintOpacity_);
+          paint.blendMode = tiny_skia::BlendMode::SourceOver;
+          paint.quality = tiny_skia::FilterQuality::Bilinear;
+          paint.unpremulStore = surfaceStack_.empty();
+
+          const tiny_skia::Mask* mask =
+              currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+          auto pixmapView = currentPixmapView();
+          tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
+                                         toTinyTransform(imageFromLocal), mask);
+          continue;
+        }
+      }
+
       if (glyphPath.empty()) {
         continue;
       }
+#else
+      PathSpline glyphPath = glyphToPathSpline(info, glyph.glyphIndex, scale);
+      if (glyphPath.empty()) {
+        continue;
+      }
+#endif
 
-      // Build transform: translate glyph to position, optionally rotate.
-      Transformd glyphTransform =
-          currentTransform_ * Transformd::Translate(glyph.xPosition, glyph.yPosition);
+      // Place glyph geometry in document space, then let the renderer's current transform map it
+      // to device space. This avoids relying on composed affine semantics that differ from TinySkia's.
+      Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
       if (glyph.rotateDegrees != 0.0) {
-        glyphTransform =
-            glyphTransform * Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi /
-                                                180.0);
+        glyphFromLocal = Transformd::Rotate(glyph.rotateDegrees *
+                                            MathConstants<double>::kPi / 180.0) *
+                         glyphFromLocal;
       }
 
-      const tiny_skia::Path tinyPath = toTinyPath(glyphPath);
+      const tiny_skia::Path tinyPath = toTinyPath(transformPathSpline(glyphPath, glyphFromLocal));
       auto pixmapView = currentPixmapView();
 
       // Fill.
-      if (fillPaint) {
-        tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint,
+      if (spanFillPaint) {
+        tiny_skia::Painter::fillPath(pixmapView, tinyPath, *spanFillPaint,
                                      tiny_skia::FillRule::Winding,
-                                     toTinyTransform(glyphTransform), mask);
+                                     toTinyTransform(currentTransform_), mask);
       }
 
       // Stroke.
       if (hasStroke && strokePaint) {
         tiny_skia::Painter::strokePath(pixmapView, tinyPath, *strokePaint, tinyStroke,
-                                       toTinyTransform(glyphTransform), mask);
+                                       toTinyTransform(currentTransform_), mask);
       }
     }
 
@@ -1124,42 +1216,123 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       int lineGap = 0;
       stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
 
-      const double firstX = run.glyphs.front().xPosition;
-      const double lastX = run.glyphs.back().xPosition + run.glyphs.back().xAdvance;
-      const double baseY = run.glyphs.front().yPosition;
-      const double lineWidth = lastX - firstX;
-
-      // Decoration line thickness: ~1/18 of font size (common heuristic).
-      const double thickness =
-          static_cast<double>(ascent - descent) * scale / 18.0;
-
-      double decoY = baseY;
-      if (params.textDecoration == TextDecoration::Underline) {
-        // Below baseline at about 1/6 of descender depth.
-        decoY = baseY - static_cast<double>(descent) * scale * 0.4;
-      } else if (params.textDecoration == TextDecoration::Overline) {
-        // At the ascender line.
-        decoY = baseY - static_cast<double>(ascent) * scale;
-      } else if (params.textDecoration == TextDecoration::LineThrough) {
-        // Through the middle of the x-height (approximate as ascent * 0.35).
-        decoY = baseY - static_cast<double>(ascent) * scale * 0.35;
+      // Read underline position/thickness from the font's 'post' table (offsets 8 and 10).
+      // underlinePosition is negative in font units (below baseline).
+      double fontUnderlinePos = 0.0;
+      double fontUnderlineThick = 0.0;
+      {
+        // Locate the 'post' table in the TrueType table directory.
+        const unsigned char* data = info->data;
+        const int fontstart = info->fontstart;
+        const int numTables = (data[fontstart + 4] << 8) | data[fontstart + 5];
+        for (int i = 0; i < numTables; ++i) {
+          const int tableDir = fontstart + 12 + i * 16;
+          if (data[tableDir] == 'p' && data[tableDir + 1] == 'o' && data[tableDir + 2] == 's' &&
+              data[tableDir + 3] == 't') {
+            const unsigned int postOffset = static_cast<unsigned int>(data[tableDir + 8]) << 24 |
+                                            static_cast<unsigned int>(data[tableDir + 9]) << 16 |
+                                            static_cast<unsigned int>(data[tableDir + 10]) << 8 |
+                                            static_cast<unsigned int>(data[tableDir + 11]);
+            // post table: offset 8 = underlinePosition (int16), offset 10 = underlineThickness
+            // (int16).
+            fontUnderlinePos =
+                static_cast<double>(static_cast<int16_t>((data[postOffset + 8] << 8) |
+                                                         data[postOffset + 9]));
+            fontUnderlineThick =
+                static_cast<double>(static_cast<int16_t>((data[postOffset + 10] << 8) |
+                                                         data[postOffset + 11]));
+            break;
+          }
+        }
       }
 
-      // Build a thin rectangle path for the decoration line.
-      PathSpline decoPath;
-      decoPath.moveTo(Vector2d(firstX, decoY));
-      decoPath.lineTo(Vector2d(firstX + lineWidth, decoY));
-      decoPath.lineTo(Vector2d(firstX + lineWidth, decoY + thickness));
-      decoPath.lineTo(Vector2d(firstX, decoY + thickness));
-      decoPath.closePath();
+      // Post table metrics are in font design units — scale by fontSize/unitsPerEm, not by
+      // stbtt_ScaleForPixelHeight (which normalizes to ascent-descent height instead of em).
+      const float emScale = stbtt_ScaleForMappingEmToPixels(info, fontSizePx);
+      // Use font metrics for thickness, with heuristic fallback.
+      const double thickness = fontUnderlineThick > 0.0
+                                   ? fontUnderlineThick * emScale
+                                   : static_cast<double>(ascent - descent) * scale / 18.0;
 
-      const tiny_skia::Path tinyDecoPath = toTinyPath(decoPath);
-      auto pixmapView = currentPixmapView();
+      // Compute vertical offset from baseline for the decoration type.
+      // In our Y-down coordinate system, positive = below baseline.
+      double decoOffsetY = 0.0;
+      if (params.textDecoration == TextDecoration::Underline) {
+        // fontUnderlinePos is typically negative (below baseline in font coords).
+        // Negate it since we need positive = downward in our coord system.
+        decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * emScale
+                                              : -static_cast<double>(descent) * scale * 0.4;
+      } else if (params.textDecoration == TextDecoration::Overline) {
+        decoOffsetY = -static_cast<double>(ascent) * scale;
+      } else if (params.textDecoration == TextDecoration::LineThrough) {
+        decoOffsetY = -static_cast<double>(ascent) * scale * 0.35;
+      }
 
-      if (fillPaint) {
-        tiny_skia::Painter::fillPath(pixmapView, tinyDecoPath, *fillPaint,
-                                     tiny_skia::FillRule::Winding,
-                                     toTinyTransform(currentTransform_), mask);
+      // The post table's underlinePosition is the center of the stroke, so offset the
+      // rectangle top edge by half the thickness to center the stroke on that position.
+      const double decoTopY = decoOffsetY - thickness / 2.0;
+
+      // Check if any glyph has rotation — if so, draw per-glyph decoration segments.
+      const bool hasRotation = std::any_of(
+          run.glyphs.begin(), run.glyphs.end(),
+          [](const auto& g) { return g.rotateDegrees != 0.0; });
+
+      if (hasRotation) {
+        // Per-glyph decoration: each segment is a rectangle under the glyph, rotated with it.
+        for (const auto& glyph : run.glyphs) {
+          if (glyph.glyphIndex == 0 || glyph.xAdvance <= 0.0) {
+            continue;
+          }
+
+          // Build a horizontal rectangle in glyph-local space (before rotation).
+          PathSpline segPath;
+          segPath.moveTo(Vector2d(0.0, decoTopY));
+          segPath.lineTo(Vector2d(glyph.xAdvance, decoTopY));
+          segPath.lineTo(Vector2d(glyph.xAdvance, decoTopY + thickness));
+          segPath.lineTo(Vector2d(0.0, decoTopY + thickness));
+          segPath.closePath();
+
+          // Apply the same transform as the glyph: rotate then translate.
+          Transformd segTransform = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+          if (glyph.rotateDegrees != 0.0) {
+            segTransform = Transformd::Rotate(glyph.rotateDegrees *
+                                              MathConstants<double>::kPi / 180.0) *
+                           segTransform;
+          }
+
+          const tiny_skia::Path tinySegPath =
+              toTinyPath(transformPathSpline(segPath, segTransform));
+          auto pixmapView = currentPixmapView();
+
+          if (spanFillPaint) {
+            tiny_skia::Painter::fillPath(pixmapView, tinySegPath, *spanFillPaint,
+                                         tiny_skia::FillRule::Winding,
+                                         toTinyTransform(currentTransform_), mask);
+          }
+        }
+      } else {
+        // No rotation: draw a single horizontal decoration line across the run.
+        const double firstX = run.glyphs.front().xPosition;
+        const double lastX = run.glyphs.back().xPosition + run.glyphs.back().xAdvance;
+        const double baseY = run.glyphs.front().yPosition;
+        const double lineWidth = lastX - firstX;
+        const double decoY = baseY + decoTopY;
+
+        PathSpline decoPath;
+        decoPath.moveTo(Vector2d(firstX, decoY));
+        decoPath.lineTo(Vector2d(firstX + lineWidth, decoY));
+        decoPath.lineTo(Vector2d(firstX + lineWidth, decoY + thickness));
+        decoPath.lineTo(Vector2d(firstX, decoY + thickness));
+        decoPath.closePath();
+
+        const tiny_skia::Path tinyDecoPath = toTinyPath(decoPath);
+        auto pixmapView = currentPixmapView();
+
+        if (spanFillPaint) {
+          tiny_skia::Painter::fillPath(pixmapView, tinyDecoPath, *spanFillPaint,
+                                       tiny_skia::FillRule::Winding,
+                                       toTinyTransform(currentTransform_), mask);
+        }
       }
     }
   }

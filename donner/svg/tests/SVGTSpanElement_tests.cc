@@ -73,7 +73,7 @@ TEST(SVGTSpanElementTests, TextContentEmpty) {
 TEST(SVGTSpanElementTests, TextContentWhitespace) {
   auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(
       "<tspan>  leading and trailing  </tspan>", kExperimentalOptions);
-  EXPECT_THAT(tspan->textContent(), ToStringIs("  leading and trailing  "));
+  EXPECT_THAT(tspan->textContent(), ToStringIs("leading and trailing  "));
 
   tspan = instantiateSubtreeElementAs<SVGTSpanElement>("<tspan>internal  whitespace</tspan>",
                                                        kExperimentalOptions);

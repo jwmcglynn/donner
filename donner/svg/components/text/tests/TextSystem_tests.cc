@@ -121,10 +121,10 @@ TEST_F(TextSystemTest, PerCharacterPositioning) {
 
   auto& span = computed->spans[0];
   ASSERT_EQ(span.xList.size(), 3u);
-  EXPECT_TRUE(span.xList[0].has_value());
+  EXPECT_FALSE(span.xList[0].has_value());
   EXPECT_TRUE(span.xList[1].has_value());
   EXPECT_TRUE(span.xList[2].has_value());
-  EXPECT_DOUBLE_EQ(span.xList[0]->value, 10.0);
+  EXPECT_DOUBLE_EQ(span.x.value, 10.0);
   EXPECT_DOUBLE_EQ(span.xList[1]->value, 20.0);
   EXPECT_DOUBLE_EQ(span.xList[2]->value, 30.0);
 }
@@ -151,12 +151,34 @@ TEST_F(TextSystemTest, DxDyPositioning) {
   auto& span = computed->spans[1];
   ASSERT_EQ(span.dxList.size(), 2u);
   ASSERT_EQ(span.dyList.size(), 2u);
-  EXPECT_TRUE(span.dxList[0].has_value());
+  EXPECT_FALSE(span.dxList[0].has_value());
   EXPECT_TRUE(span.dxList[1].has_value());
-  EXPECT_DOUBLE_EQ(span.dxList[0]->value, 5.0);
   EXPECT_DOUBLE_EQ(span.dxList[1]->value, 10.0);
-  EXPECT_DOUBLE_EQ(span.dyList[0]->value, 2.0);
+  EXPECT_FALSE(span.dyList[0].has_value());
   EXPECT_DOUBLE_EQ(span.dyList[1]->value, 4.0);
+}
+
+TEST_F(TextSystemTest, RootDxDyBecomesScalarStartPosition) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" dx="33" dy="100">Text</text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(1));
+
+  const auto& span = computed->spans[0];
+  EXPECT_DOUBLE_EQ(span.dx.value, 33.0);
+  EXPECT_DOUBLE_EQ(span.dy.value, 100.0);
+  ASSERT_EQ(span.dxList.size(), 4u);
+  ASSERT_EQ(span.dyList.size(), 4u);
+  EXPECT_FALSE(span.dxList[0].has_value());
+  EXPECT_FALSE(span.dyList[0].has_value());
 }
 
 // --- Rotation ---
@@ -285,6 +307,49 @@ TEST_F(TextSystemTest, TextPathWithStartOffset) {
   EXPECT_NEAR(computed->spans[1].pathStartOffset, 50.0, 1.0);
 }
 
+TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+         viewBox="0 0 200 200">
+      <defs>
+        <path id="path1" d="M 20 100 C 35 135 85 135 80 100"/>
+        <path id="path2" d="M 120 100 C 115 65 165 65 180 100"/>
+      </defs>
+      <text id="t" x="20" y="60">
+        Some
+        <textPath xlink:href="#path1">very</textPath>
+        <tspan fill="green">long</tspan>
+        <textPath xlink:href="#path2">text</textPath>
+        .
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  std::vector<std::string> nonEmptyTexts;
+  std::vector<bool> nonEmptyOnPath;
+  std::vector<std::optional<css::RGBA>> nonEmptyFillColors;
+  for (const auto& span : computed->spans) {
+    if (span.text.empty()) {
+      continue;
+    }
+
+    nonEmptyTexts.push_back(span.text.str());
+    nonEmptyOnPath.push_back(span.pathSpline.has_value());
+    nonEmptyFillColors.push_back(span.fillColor ? std::optional(span.fillColor->rgba())
+                                                : std::nullopt);
+  }
+
+  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "very", "long", "text", "."));
+  EXPECT_THAT(nonEmptyOnPath, testing::ElementsAre(false, true, false, true, false));
+  EXPECT_THAT(nonEmptyFillColors[2], testing::Optional(css::RGBA(0, 128, 0, 255)));
+}
+
 // --- UTF-8 multibyte characters ---
 
 TEST_F(TextSystemTest, Utf8MultibyteCounting) {
@@ -314,7 +379,8 @@ TEST_F(TextSystemTest, NoWarningsForValidText) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <text x="10" y="20">Hello World</text>
     </svg>
-  )", nullptr, options);
+  )",
+                                                 nullptr, options);
   ASSERT_TRUE(maybeResult.hasResult());
   auto document = std::move(maybeResult).result();
 

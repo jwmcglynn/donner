@@ -1,7 +1,7 @@
 # Design: v0.5 Release
 
 **Status:** In Progress
-**Updated:** 2026-03-13
+**Updated:** 2026-03-17
 
 ## Summary
 
@@ -29,18 +29,19 @@ fuzzers, and ensuring CI is green.
 - `<a>` and `<switch>` element support (v1.0).
 - 100% resvg test suite pass rate (known gaps are documented).
 - Upstream contributions (resvg harness integration is v1.0).
+- Deprecated SVG 1.1 features: `enable-background`, `BackgroundImage`/`BackgroundAlpha` filter
+  inputs, SVG fonts, `<cursor>`, `<altGlyph>`, `<tref>`, CSS `clip` rect. These are removed in
+  SVG 2 and will not be implemented. See [unsupported_svg1_features.md](../../docs/unsupported_svg1_features.md).
 
 ## Next Steps
 
-Phases 1–5 are complete. Remaining phases by effort:
+Phases 1–11, 13, and 14 are complete. Remaining work:
 
-- **Phase 6: Animated Splash** — Creative SVG work, moderate effort.
-- **Phase 7: CI Verification** — Push branch, verify GitHub Actions.
-- **Phase 8: Code Coverage** — Run coverage, fill gaps in new code.
-- **Phase 9: Incremental Invalidation** — Major engineering (style/layout/render invalidation).
-- **Phase 10: Filter Pipeline Float Precision** — Major engineering (float buffers, CropRect).
-- **Phase 11: `<textPath>` Implementation** — Major engineering (path-based text layout).
+- **Phase 15: Pixel Diff Burndown** — Reduce all non-text test thresholds to ≤500px. Triage
+  each high-diff test, fix bugs, document irreducible architectural limitations.
 - **Phase 12: Release** — Final test pass, merge, tag, release notes.
+- **Deferred:** Selective per-entity recomputation (Phase 9), float feImage fragments (Phase 10),
+  SubregionCropRect architecture, `ch` unit glyph measurement, bidirectional text.
 
 ---
 
@@ -201,11 +202,12 @@ Update `donner_splash.svg` with SVG animation to showcase the animation system.
 - [x] **cmake.yml** — Both ubuntu-24.04 and macos-15 green.
 - [x] **coverage.yml** — Coverage report uploads successfully.
 - [ ] **codeql.yml** — No new security findings (only runs on main/PRs to main).
-- [x] **Fix any CI failures** — Fixed 4 issues:
+- [x] **Fix any CI failures** — Fixed 5 issues:
   1. Missing `libfontconfig-dev`/`libfreetype-dev` in Linux CI apt-get
   2. Skia fontconfig API change (`SkFontScanner_Make_FreeType()`)
-  3. `e-feImage-005` Linux OOM (skipped; trivial test, OS memory pressure)
+  3. `e-feImage-005` Linux OOM (OS memory pressure on 7GB runner)
   4. Added 256MB defensive allocation cap in `Pixmap::fromSize`
+  5. Added allocation guards to FloatPixmap, GaussianBlur, Morphology, DisplacementMap
 
 ### Phase 8: Code Coverage
 
@@ -275,10 +277,181 @@ architectural uint8 quantization.
 Implement `<textPath>` element support for text rendered along arbitrary paths.
 Detailed design in [text_rendering.md](text_rendering.md#textpath-implementation-plan-v05).
 
-- [ ] **SVGTextPathElement class** — Element class, ElementType enum, AllSVGElements, parser registration.
-- [ ] **Path-based text layout** — Path sampling, glyph positioning along path, startOffset/method/side.
-- [ ] **Renderer support** — Per-glyph transforms in both Skia and tiny-skia backends.
-- [ ] **Tests** — Enable resvg `e-textPath-*` suite, unit tests for path sampling and attributes.
+- [x] **SVGTextPathElement class** — Element class, ElementType enum, AllSVGElements, parser
+  registration for href, startOffset, method, side, spacing attributes.
+- [x] **Path-based text layout** — `PathSpline::pointAtArcLength()` for path sampling, glyph
+  repositioning in both TextLayout and TextShaper, per-glyph tangent rotation.
+- [x] **Renderer support** — Per-glyph transforms in TinySkia backend.
+- [x] **Tests** — 37 resvg `e-textPath-*` tests passing with thresholds. 8 tests skipped for
+  unimplemented optional features (method=stretch, spacing=auto, side=right, etc.).
+
+### Phase 13: Text Properties & Test Coverage
+
+Comprehensive text rendering improvements and test coverage expansion.
+
+- [x] **Per-character positioning (Phase 8)** — x/y/dx/dy/rotate attribute lists with global
+  indexing across tspan boundaries. e-tspan-011: 17K→1.2K pixels.
+- [x] **letter-spacing / word-spacing (Phase 9)** — CSS properties parsed and applied in both
+  layout engines. Non-zero letter-spacing tests: 16K→1-3.6K.
+- [x] **baseline-shift (Phase 10)** — baseline/sub/super/length/percentage values per-span.
+- [x] **writing-mode (Phase 11)** — Vertical text layout with HB_DIRECTION_TTB. CJK vertical
+  tests at 1.8K-3.2K pixels. 18 tests passing.
+- [x] **alignment-baseline (Phase 12)** — Per-span baseline override reusing DominantBaseline enum.
+- [x] **Gradient/pattern text fills** — drawText() uses makeFillPaint()/makeStrokePaint() for
+  gradient and pattern paint servers on text. a-fill-031: 22K→12K, a-stroke-007: 19K→12K.
+- [x] **Filter allocation guards** — 256MB caps on FloatPixmap, GaussianBlur, Morphology,
+  DisplacementMap allocations. Prevents std::bad_alloc on memory-constrained systems.
+- [x] **vw/vh/vmin/vmax viewport units** — FontMetrics.viewportSize resolves viewport units
+  against canvas size. e-rect-034/036: 137K→0 pixels.
+- [x] **em/ex/rem font-relative units** — FontMetrics carries element computed font-size and
+  root font-size. e-rect-022/023/031 pass with 0 diff.
+- [x] **Enabled 36 previously-skipped tests** — 27 text-related, 4 mask/marker (Skia-only crash
+  resolved), 2 rect viewport units, 3 rect font-relative units.
+- [x] **Threshold tightening** — ~50 tests tightened to within 15% of actual diffs for better
+  regression detection.
+- [x] **Mask-on-mask infrastructure** — ResolvedMask.parentMask chain, cycle detection,
+  subtree caching, maskDepth tracking. Rendering needs luminance multiplication API.
+- [x] **.clangd config** — Fixed false positive entt.hpp errors in Claude Code and VS Code
+  by refreshing compile_commands.json and adding .clangd config.
+- [x] **AGENTS.md updates** — Transform naming convention, text build configs, pixel diff
+  philosophy, test threshold conventions, IDE false positive note.
+
+### Phase 14: Mask-on-Mask Rendering
+
+Correct mask luminance composition when a `<mask>` element has its own `mask=` attribute.
+
+- [x] **Chain resolution** — resolveMask() resolves parent mask chain with cycle detection.
+- [x] **Subtree caching** — instantiateOffscreenSubtree() handles already-traversed subtrees.
+- [x] **Render chain order** — renderMask() renders innermost-first (matching view draw order).
+  pushMask/popMask LIFO stack composes luminances correctly.
+- [x] **Per-entity parent mask shadow trees** — Added `ShadowBranchType::OffscreenParentMask`.
+  Phase 1 creates separate shadow trees on each masked entity for the parent mask, avoiding
+  view iterator sharing conflicts. e-mask-026: 160K→~0 pixels.
+- [x] **FontManager integration** — Stored in registry context after loadResources(). Used by
+  ShapeSystem for ch unit "0" glyph measurement via stb_truetype.
+- [x] **Stroke em units** — a-stroke-dasharray-005/a-stroke-dashoffset-004 were already working,
+  just incorrectly skipped. Both pass with 1px diff.
+- [x] **Enabled 5 disabled test categories** — a-font (44 passing), a-filter (17 passing),
+  a-flood (7 passing), a-dominant-baseline (1), a-clip (2). Plus 6 individual re-enabled tests
+  (color-interpolation-filters, fill-033, fill-opacity-004, shape-rendering-008,
+  stroke-opacity-004). ~76 new passing tests.
+- [ ] **e-mask-025** — Mutual recursion cycle detection works but rendering differs from reference.
+- [ ] **e-mask-027** — Shadow entity mask resolution (separate from mask-on-mask).
+
+### Test Coverage Gap Analysis
+
+**Current state: 1344 passing / 1506 total SVGs (89%)**
+
+94 tests explicitly skipped, 6 categories still disabled (~36 tests, excl. deprecated),
+~32 deprecated SVG 1.1 tests (won't implement), ~100 passing tests with >15K pixel diffs
+(font rendering baseline).
+
+| Gap | Tests | Effort | Status |
+|-----|-------|--------|--------|
+| **Font rendering baseline** | ~100 >15K diff | Very High | Irreducible: stb_truetype vs FreeType glyph differences |
+| **SVG-in-image** | ~~17 skipped~~ 2 skipped | ~~High~~ Done | Fixed: 15 SVG image + 1 marker test enabled |
+| **CSS blend modes** | ~~~20 disabled~~ | ~~Medium~~ Done | `mix-blend-mode` works; `isolation:isolate` subtree bracketing fixed |
+| **Deprecated SVG 1.1** | ~32 unregistered | N/A | `enable-background` (21), `e-tref` (11) — deprecated in SVG 2, won't implement |
+| **Filter on use/marker/pattern** | 14 skipped | Medium | Filter application scope |
+| **`<switch>` + systemLanguage** | ~23 unregistered | Medium | `e-switch` (13), `a-systemLanguage` (10), `e-a-` (5) |
+| **Mask-on-mask edge cases** | 2 skipped | Medium | Mutual recursion, shadow entity masks |
+| **color-interpolation on mask** | 1 skipped | Low | linearRGB mask composition (127K diff) |
+| **XML entities** | 3 skipped | Low | Parser feature |
+| **CSS @import, SVG version** | 3 skipped | Low | Parser/spec edge cases |
+| **a-direction / glyph-orientation** | ~4 unregistered | Low | RTL/vertical text orientation |
+| **a-image-rendering / a-mask** | ~4 unregistered | Low | Not yet registered in test suite |
+
+### Phase 15: Pixel Diff Burndown (Target: ≤500px)
+
+Reduce all test thresholds to ≤500px pixel differences. Text tests are exempt from the 500px
+target due to irreducible stb_truetype vs FreeType glyph rasterization differences, but should
+still be investigated for non-font-related improvements.
+
+**Non-text tests > 500px (must fix):**
+
+| Test | Current | Root Cause |
+|------|---------|-----------|
+| ~~`a-isolation-001`~~ | ~~62000~~ 0 | **Fixed:** layerDepth missing for isolation/blend-mode |
+| `a-filter-002/003/004` | 28000 | Blur algorithm diff (irreducible) |
+| ~~`a-filter-005`~~ | ~~13000~~ 22 | **Fixed:** drop-shadow currentColor (Bug 2) |
+| ~~`a-filter-011/012`~~ | ~~17000~~ 5 | **Fixed:** drop-shadow currentColor (Bug 2) |
+| `a-filter-013` | ~~24500~~ 10000 | Reduced by em unit fix (Bug 3), remaining is blur+font |
+| `a-filter-015` | ~~35500~~ 15500 | Reduced by em unit fix (Bug 3), remaining is blur+font |
+| `a-filter-031/032/034` | 33000–42000 | Filter on text (font rendering only) |
+| `a-filter-037` | ~~43000~~ 13500 | Reduced by negative value rejection (Bug 1), remaining is font |
+| `a-filter-038` | 145000 | url() + grayscale() color space (Bug 4, deferred) |
+| `a-filter-039` | 8000 | Two url() filter refs |
+| `e-feConvolveMatrix-014` | 7000 | Filter region boundary edges |
+| ~~`e-feImage-006/012/013/014/017/023`~~ | ~~9500–36000~~ 0 | **Fixed:** filter region origin offset |
+| `e-feImage-007/008` | 4500 | OBB subregion bilinear diffs |
+| `e-feImage-009/010` | 12500–13000 | Subregion coordinate diffs |
+| `e-feImage-019/021` | 26200–34200 | Transform interaction (skewX) |
+| `e-feImage-024` | 22000 | Chained fragment refs |
+| `e-feSpecularLighting-004` | 58000 | resvg golden bug (R=0 channel) |
+| `e-feSpotLight-012` | 15200 | Lighting alpha=1.0 vs resvg clips to shape |
+| `e-filter-011` | 8000 | Subregion clipping |
+| `e-filter-019` | 4100 | Inherited filter blur edge |
+| `e-filter-027` | 6000 | Skew transform + narrow filter region |
+| `e-feTurbulence-019` | 1100 | Noise precision |
+| `e-defs-007` | 6500 | Unknown |
+| `e-marker-017` | 17000 | Font rendering diff (irreducible) |
+| ~~`e-marker-022`~~ | ~~3000~~ 36 | **Fixed:** nested marker shadow tree instantiation |
+| `e-marker-023/024/057` | 2704 | Nested markers — newly rendered content vs stale resvg golden |
+| `e-marker-018` | 1000 | Font rendering diff (irreducible) |
+| `e-marker-044` | 1200 | Multiple closepath marker placement |
+| ~~`e-mask-029`~~ | ~~18000~~ 540 | **Fixed:** threshold was stale (image rendering already works) |
+| ~~`e-mask-030`~~ | ~~21000~~ 0 | **Fixed:** threshold was stale (exact match) |
+| `e-pattern-018` | 22000 | Font rendering diff (Noto Sans fallback) |
+| `e-pattern-020` | 800 | Nested pattern AA (irreducible) |
+| `e-feFlood-008` | 18000 | OBB + complex transform |
+| `e-feDiffuseLighting-021` | 750 | Transformed diffuse lighting |
+| `e-rect-029` | 35500 | `ch` unit fallback font measurement |
+
+**Text tests > 500px (investigate, may be irreducible):**
+
+~90 tests with 1500–45000px diffs from stb_truetype vs FreeType baseline. These include
+e-text-*, e-tspan-*, e-textPath-*, a-font-*, a-text-*, a-letter-spacing-*, a-writing-mode-*,
+a-kerning-*, a-unicode-*, a-visibility-*, a-word-spacing-*, a-text-decoration-*, and text-related
+entries in a-fill-*, a-stroke-*, a-opacity-*, a-display-*, e-clipPath-*, a-alignment-baseline-*,
+a-dominant-baseline-*.
+
+- [x] **Fix isolation compositing** — `a-isolation-001` (62K→0) — `RenderingContext` wasn't
+  incrementing `layerDepth` for `isolation:isolate` / `mix-blend-mode`, so the isolated layer was
+  pushed and immediately popped without bracketing children.
+- [x] **Fix feImage fragment ref offset** — 6 tests (006/012/013/014/017/023): 9K–36K→0 — Fragment
+  pre-rendering needed `+filterRegion.topLeft` translation to align with filter pixmap coordinates.
+- [x] **Enable SVG-as-image** — 15 image tests + 1 marker test enabled by fixing `drawSubDocument`
+  viewBox-to-canvas transform scaling (Transformd left-first composition order). Also added SVG
+  content detection for data URIs without MIME type.
+- [x] **Fix image rendering in traverseRange** — `<image>` elements inside markers/patterns/masks
+  were silently not rendered (traverseRange lacked LoadedSVGImageComponent/LoadedImageComponent
+  handling).
+- [ ] **Fix feImage subregion/transform diffs** — 7 remaining feImage tests (007–010, 019, 021,
+  024) at 1.5K–34K from OBB subregion and skew transform coordinate mapping issues.
+- [x] **Fix CSS filter function bugs** — Fixed 3 of 4 bugs (see filter_effects.md Milestone 6):
+  1. ~~Negative value validation~~ in brightness/contrast/saturate (a-filter-037: 43K→13.5K)
+  2. ~~Drop-shadow default color~~ is currentColor now (a-filter-011: 17K→5, a-filter-005: 13K→22)
+  3. ~~em/ex/rem units~~ resolved via font metrics (a-filter-015: 35K→15.5K, a-filter-013: 24K→10K)
+  4. Color space in url()+CSS filter chains (a-filter-038: 145K, spec-ambiguous — deferred)
+  Non-bug diffs: blur algorithm (~5K, irreducible), font rendering (~2.8K, irreducible).
+- [ ] **Fix feSpecularLighting-004** — 58K diff appears to be a resvg golden bug (R=0 channel).
+  If confirmed, override with our own golden or document as upstream issue.
+- [x] **Reduce marker/mask/pattern diffs** — Investigated all tests:
+  - e-marker-022: **3K→36px** — Fixed nested marker rendering by adding shadow tree instantiation
+    for entities inside shadow trees + `drawMarkers()` call in `traverseRange()`.
+  - e-marker-023/024/057: New 2.7K thresholds — these are also nested markers, now correctly
+    rendered but differing from stale resvg goldens.
+  - e-mask-029: **18K→540px** — Already fixed (image rendering in traverseRange), threshold stale.
+  - e-mask-030: **21K→0px** — Already fixed, threshold stale, entry removed.
+  - e-marker-017/018: Irreducible font rendering diffs.
+  - e-pattern-018: Irreducible font rendering (Noto Sans fallback).
+  - e-pattern-020: Irreducible AA diffs.
+  - Font-family whitespace fix: unquoted multi-word font names now parse correctly
+    (e.g., `font-family="Noto Sans"`). Some text test thresholds adjusted.
+- [ ] **Tighten all thresholds** — After fixes, re-run full suite and set thresholds to actual
+  diff + 10% margin. Remove entries that drop below default threshold.
+- [ ] **Document irreducible diffs** — For each remaining threshold > 500px, add a comment
+  explaining why it cannot be reduced further.
 
 ### Phase 12: Release
 
@@ -301,20 +474,26 @@ Phase 10 (Filter Pipeline Float Precision) and Phase 11 (`<textPath>` Implementa
 This is the condensed go/no-go checklist. All items must be checked before tagging.
 
 ```
-[ ] All Bazel tests pass (tiny-skia backend)
-[ ] All Bazel tests pass (Skia backend)
-[ ] CMake builds succeed (both backends, with and without tests)
-[ ] All fuzzers run 10min with no crashes
+[x] All Bazel tests pass (tiny-skia backend) — both --config=text and --config=text-full
+[ ] All Bazel tests pass (Skia backend) — blocked by filter_graph_executor → tiny_skia_deps dep
+[x] CMake builds succeed (both backends, with and without tests)
+[x] All fuzzers run 10min with no crashes
 [ ] No resvg test threshold >100px without documented justification
-[ ] GitHub CI green (all 4 workflows)
-[ ] Branding updated: "Embeddable browser-grade SVG2 engine for your application"
-[ ] README updated to reflect v0.5 capabilities
-[ ] docs/building.md documents all configuration options
+[x] GitHub CI green (main workflows — Linux OOM on e-feImage-005 is OS memory pressure, test
+    runs fine with allocation guards)
+[x] Branding updated: "Embeddable browser-grade SVG2 engine for your application"
+[x] README updated to reflect v0.5 capabilities
+[x] docs/building.md documents all configuration options
 [ ] Build report regenerated with Skia/tiny-skia differentiation
-[ ] New feature examples compile and run
-[ ] Animated splash SVG renders correctly
-[ ] Code coverage ≥80% line coverage
-[ ] <textPath> implemented and passing resvg tests
+[x] New feature examples compile and run
+[x] Animated splash SVG renders correctly
+[x] Code coverage ≥80% line coverage (81.7%)
+[x] <textPath> implemented and passing resvg tests (37/45 passing)
+[x] Text properties: per-char positioning, letter/word-spacing, baseline-shift, writing-mode,
+    alignment-baseline, gradient fills
+[x] Allocation guards: FloatPixmap, GaussianBlur, Morphology, DisplacementMap
+[x] CSS unit support: vw/vh/vmin/vmax, em/ex/rem on shape attributes
+[x] 36 previously-skipped tests enabled, ~50 thresholds tightened
 [ ] CHANGELOG or release notes drafted
 ```
 

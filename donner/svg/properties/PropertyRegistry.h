@@ -6,19 +6,24 @@
 #include "donner/base/SmallVector.h"
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
-#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipRule.h"
+#include "donner/svg/core/CursorType.h"
 #include "donner/svg/core/Display.h"
+#include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/FillRule.h"
+#include "donner/svg/core/FontStretch.h"
+#include "donner/svg/core/FontStyle.h"
+#include "donner/svg/core/FontVariant.h"
+#include "donner/svg/core/Isolation.h"
+#include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
-#include "donner/svg/core/TransformOrigin.h"
-#include "donner/svg/core/DominantBaseline.h"
-#include "donner/svg/core/WritingMode.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/Visibility.h"
+#include "donner/svg/core/WritingMode.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"  // IWYU pragma: keep, used for parser::UnparsedProperty
@@ -95,8 +100,8 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `clip-path` | \ref clipPath | `none` |
  * | `clip-rule` | \ref clipRule | `nonzero` |
  * | `mask` | \ref mask | `none` |
- * | `filter` | \ref filter | `none` |
  * | `pointer-events` | \ref pointerEvents | `auto` |
+ * | `cursor` | \ref cursor | `auto` |
  * | `marker-start` | \ref markerStart | `none` |
  * | `marker-mid` | \ref markerMid | `none` |
  * | `marker-end` | \ref markerEnd | `none` |
@@ -224,16 +229,6 @@ public:
   Property<Reference, PropertyCascade::None> mask{
       "mask", []() -> std::optional<Reference> { return std::nullopt; }};
 
-  //
-  // Filter
-  //
-
-  /// `filter` property, which determines the filter effect to apply to the element. Defaults to
-  /// none.
-  Property<FilterEffect> filter{
-      "filter", []() -> std::optional<FilterEffect> { return FilterEffect::None(); }};
-
-  //
   // Interaction
   //
 
@@ -242,6 +237,11 @@ public:
   Property<PointerEvents, PropertyCascade::Inherit> pointerEvents{
       "pointer-events",
       []() -> std::optional<PointerEvents> { return PointerEvents::VisiblePainted; }};
+
+  /// `cursor` property, which defines the mouse cursor to display when hovering over the element.
+  /// Defaults to \ref CursorType::Auto. Inherited.
+  Property<CursorType, PropertyCascade::Inherit> cursor{
+      "cursor", []() -> std::optional<CursorType> { return CursorType::Auto; }};
 
   //
   // Markers
@@ -266,8 +266,42 @@ public:
       }};
 
   /// `font-size` property, which determines the font size for text content. Inherited.
+  /// Initial value is `medium`, which maps to the UA default font size (12px).
   Property<Lengthd, PropertyCascade::Inherit> fontSize{
-      "font-size", []() -> std::optional<Lengthd> { return Lengthd(16, Lengthd::Unit::Px); }};
+      "font-size", []() -> std::optional<Lengthd> { return Lengthd(12, Lengthd::Unit::Px); }};
+
+  /// Sentinel value for the `bolder` relative keyword, resolved during cascade.
+  static constexpr int kFontWeightBolder = -1;
+  /// Sentinel value for the `lighter` relative keyword, resolved during cascade.
+  static constexpr int kFontWeightLighter = -2;
+
+  /// `font-weight` property, which determines the font weight (boldness) for text content.
+  /// Inherited. Value is a numeric weight (100-900), where 400=normal and 700=bold.
+  /// The relative keywords `bolder`/`lighter` are stored as sentinel values and resolved
+  /// by \ref resolveFontWeight() during style cascade.
+  Property<int, PropertyCascade::Inherit> fontWeight{"font-weight",
+                                                     []() -> std::optional<int> { return 400; }};
+
+  /// `font-style` property, which determines the style (normal/italic/oblique) for text content.
+  /// Inherited. Defaults to \ref FontStyle::Normal.
+  Property<FontStyle, PropertyCascade::Inherit> fontStyle{
+      "font-style", []() -> std::optional<FontStyle> { return FontStyle::Normal; }};
+
+  /// Sentinel value for the `narrower` relative keyword, resolved during cascade.
+  static constexpr int kFontStretchNarrower = -1;
+  /// Sentinel value for the `wider` relative keyword, resolved during cascade.
+  static constexpr int kFontStretchWider = -2;
+
+  /// `font-stretch` property, which determines the width (condensed/expanded) for text content.
+  /// Inherited. Stored as the underlying integer of \ref FontStretch for sentinel support.
+  /// Defaults to \ref FontStretch::Normal (5).
+  Property<int, PropertyCascade::Inherit> fontStretch{
+      "font-stretch", []() -> std::optional<int> { return static_cast<int>(FontStretch::Normal); }};
+
+  /// `font-variant` shorthand property (SVG 1.1 subset: normal | small-caps).
+  /// Inherited. Defaults to \ref FontVariant::Normal.
+  Property<FontVariant, PropertyCascade::Inherit> fontVariant{
+      "font-variant", []() -> std::optional<FontVariant> { return FontVariant::Normal; }};
 
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
@@ -277,8 +311,7 @@ public:
   /// `text-decoration` property, which determines decoration lines drawn on text.
   /// Not inherited. Defaults to \ref TextDecoration::None.
   Property<TextDecoration> textDecoration{
-      "text-decoration",
-      []() -> std::optional<TextDecoration> { return TextDecoration::None; }};
+      "text-decoration", []() -> std::optional<TextDecoration> { return TextDecoration::None; }};
 
   /// `dominant-baseline` property, which determines the baseline alignment for text.
   /// Not inherited. Defaults to \ref DominantBaseline::Auto.
@@ -310,8 +343,17 @@ public:
 
   /// `writing-mode` property, controlling text flow direction. Inherited.
   Property<WritingMode, PropertyCascade::Inherit> writingMode{
-      "writing-mode",
-      []() -> std::optional<WritingMode> { return WritingMode::HorizontalTb; }};
+      "writing-mode", []() -> std::optional<WritingMode> { return WritingMode::HorizontalTb; }};
+
+  /// `mix-blend-mode` property. Controls how an element composites with its backdrop.
+  /// Not inherited. Defaults to Normal (SourceOver).
+  Property<MixBlendMode> mixBlendMode{
+      "mix-blend-mode", []() -> std::optional<MixBlendMode> { return MixBlendMode::Normal; }};
+
+  /// `isolation` property. Forces creation of a new stacking context.
+  /// Not inherited. Defaults to Auto.
+  Property<Isolation> isolation{"isolation",
+                                []() -> std::optional<Isolation> { return Isolation::Auto; }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
@@ -339,11 +381,13 @@ public:
    * To get the size of the tuple, use \ref numProperties().
    */
   auto allProperties() const {
-    return std::forward_as_tuple(color, display, opacity, visibility, overflow, transformOrigin,
-                                 fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
-                                 strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
-                                 strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
-                                 markerStart, markerMid, markerEnd, fontFamily, fontSize);
+    return std::forward_as_tuple(
+        color, display, opacity, visibility, overflow, transformOrigin, fill, fillRule, fillOpacity,
+        stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
+        strokeDasharray, strokeDashoffset, clipPath, clipRule, mask, pointerEvents, cursor,
+        markerStart, markerMid, markerEnd, fontFamily, fontSize, fontWeight, fontStyle, fontStretch,
+        fontVariant, textAnchor, textDecoration, dominantBaseline, writingMode, letterSpacing,
+        wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation);
   }
 
   /**
@@ -404,6 +448,33 @@ public:
   [[nodiscard]] PropertyRegistry inheritFrom(
       const PropertyRegistry& parent,
       PropertyInheritOptions options = PropertyInheritOptions::All) const;
+
+  /**
+   * Resolve font-size from relative units (em, %, ex) to absolute pixels. Must be called after CSS
+   * cascade with the parent's computed font-size, since font-size percentages and em units resolve
+   * against the parent (not the viewBox).
+   *
+   * @param parentFontSizePx The parent element's computed font-size in pixels. Use 16.0 (CSS
+   *   initial value) for the root element.
+   */
+  void resolveFontSize(double parentFontSizePx);
+
+  /**
+   * Resolve relative font-weight keywords (`bolder`/`lighter`) against the parent's
+   * computed font-weight.
+   *
+   * @param parentFontWeight The parent element's computed font-weight (100-900). Use 400 for root.
+   */
+  void resolveFontWeight(int parentFontWeight);
+
+  /**
+   * Resolve relative font-stretch keywords (`narrower`/`wider`) against the parent's
+   * computed font-stretch value.
+   *
+   * @param parentFontStretch The parent element's computed font-stretch (as int). Use
+   *   static_cast<int>(FontStretch::Normal) for root.
+   */
+  void resolveFontStretch(int parentFontStretch);
 
   /**
    * Parse a single declaration, adding it to the property registry.

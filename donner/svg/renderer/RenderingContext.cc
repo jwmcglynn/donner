@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RenderingContext.h"
 
 #include <optional>
+#include <set>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -9,23 +10,10 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
-#include "donner/svg/resources/FontManager.h"
-#include "donner/svg/components/animation/AnimatedValuesComponent.h"
-#include "donner/svg/components/animation/AnimationSystem.h"
-#include "donner/svg/components/filter/FilterComponent.h"
-#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
-#include "donner/svg/components/shape/CircleComponent.h"
-#include "donner/svg/components/shape/ComputedPathComponent.h"
-#include "donner/svg/components/shape/EllipseComponent.h"
-#include "donner/svg/components/shape/LineComponent.h"
-#include "donner/svg/components/shape/PathComponent.h"
-#include "donner/svg/components/shape/RectComponent.h"
-#include "donner/base/parser/LengthParser.h"
-#include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
@@ -35,6 +23,17 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shape/CircleComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/EllipseComponent.h"
+#include "donner/svg/components/shape/LineComponent.h"
+#include "donner/svg/components/shape/PathComponent.h"
+#include "donner/svg/components/shape/RectComponent.h"
+#include "donner/svg/graph/Reference.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/TextEngine.h"
+#endif
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -42,7 +41,6 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
-#include "donner/svg/components/SpatialGrid.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
@@ -109,8 +107,12 @@ bool IsValidMarker(EntityHandle handle) {
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
-                                const ContextPaintServers& initialContext = {})
-      : registry_(registry), verbose_(verbose), contextPaintServers_(initialContext) {
+                                const ContextPaintServers& initialContext = {},
+                                bool ignoreNonrenderable = false)
+      : registry_(registry),
+        verbose_(verbose),
+        ignoreNonrenderable_(ignoreNonrenderable),
+        contextPaintServers_(initialContext) {
     // Get the LayoutSystem from the registry context if available
     LayoutSystem* layoutSystem = nullptr;
     if (registry_.ctx().contains<LayoutSystem*>()) {
@@ -152,7 +154,7 @@ public:
     }
 
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
-      if (behavior->behavior == RenderingBehavior::Nonrenderable) {
+      if (behavior->behavior == RenderingBehavior::Nonrenderable && !ignoreNonrenderable_) {
         return;
       } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
         traverseChildren = false;
@@ -223,14 +225,8 @@ public:
       std::cout << "\n";
     }
 
-    const bool hasFilterEffect = !properties.filter.getRequired().is<FilterEffect::None>();
-
     if (properties.visibility.getRequired() != Visibility::Visible) {
       instance.visible = false;
-    }
-
-    if (hasFilterEffect) {
-      instance.resolvedFilter = resolveFilter(dataHandle, properties.filter.getRequired());
     }
 
     if (properties.clipPath.get()) {
@@ -251,7 +247,7 @@ public:
       if (auto resolved =
               resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
           resolved.valid()) {
-        instance.mask = resolved;
+        instance.mask = std::move(resolved);
       }
     }
 
@@ -287,11 +283,6 @@ public:
     // Create a new layer if opacity is less than 1 or if there is an effect that requires an
     // isolated group.
     if (properties.opacity.getRequired() < 1.0) {
-      instance.isolatedLayer = true;
-      ++layerDepth;
-    }
-
-    if (instance.resolvedFilter) {
       instance.isolatedLayer = true;
       ++layerDepth;
     }
@@ -468,6 +459,19 @@ public:
     }
 
     Entity firstEntity = computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value());
+
+    // Check if this subtree was already traversed (e.g., for mask-on-mask chains where the
+    // same mask element's shadow tree is referenced multiple times). If the first entity
+    // already has RenderingInstanceComponent, skip re-traversal to avoid assertion failures.
+    if (registry_.try_get<RenderingInstanceComponent>(firstEntity)) {
+      // Already traversed — find the last entity from the cached SubtreeInfo on the root.
+      const auto& rootInst = registry_.get<RenderingInstanceComponent>(firstEntity);
+      if (rootInst.subtreeInfo) {
+        return SubtreeInfo{firstEntity, rootInst.subtreeInfo->lastRenderedEntity, 0};
+      }
+      return SubtreeInfo{firstEntity, firstEntity, 0};
+    }
+
     Entity lastEntity = entt::null;
     traverseTree(firstEntity, &lastEntity);
 
@@ -531,12 +535,10 @@ public:
       if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
           computedShadow &&
           computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
-        {
-          return ResolvedMask{
-              resolvedRef.value(),
-              instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
-              resolvedRef->handle.get<MaskComponent>().maskContentUnits};
-        }
+        return ResolvedMask{
+            resolvedRef.value(),
+            instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
+            resolvedRef->handle.get<MaskComponent>().maskContentUnits};
       }
     }
 
@@ -557,28 +559,11 @@ public:
     return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt, MarkerUnits::Default};
   }
 
-  ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {
-    if (filter.is<FilterEffect::ElementReference>()) {
-      const FilterEffect::ElementReference& ref = filter.get<FilterEffect::ElementReference>();
-
-      if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
-          resolvedRef && resolvedRef->handle.all_of<ComputedFilterComponent>()) {
-        return resolvedRef.value();
-      } else {
-        // Empty result.
-        return std::vector<FilterEffect>();
-      }
-    } else {
-      std::vector<FilterEffect> result;
-      result.push_back(filter);
-      return result;
-    }
-  }
-
 private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  Registry& registry_;  //!< Registry being operated on for rendering..
-  bool verbose_;        //!< If true, enable verbose logging.
+  Registry& registry_;        //!< Registry being operated on for rendering..
+  bool verbose_;              //!< If true, enable verbose logging.
+  bool ignoreNonrenderable_;  //!< If true, skip the Nonrenderable behavior check.
 
   int drawOrder_ = 0;                       //!< The current draw order index.
   Entity lastRenderedEntity_ = entt::null;  //!< The last entity rendered.
@@ -638,22 +623,14 @@ HitTestConfig configFromPointerEvents(PointerEvents pe) {
       return {false, false, false, false, false};  // Should be filtered before this call.
     case PointerEvents::BoundingBox:
       return {false, false, false, false, false};  // Handled separately.
-    case PointerEvents::VisiblePainted:
-      return {true, true, true, true, true};
-    case PointerEvents::VisibleFill:
-      return {true, false, true, false, false};
-    case PointerEvents::VisibleStroke:
-      return {false, true, true, false, false};
-    case PointerEvents::Visible:
-      return {true, true, true, false, false};
-    case PointerEvents::Painted:
-      return {true, true, false, true, true};
-    case PointerEvents::Fill:
-      return {true, false, false, false, false};
-    case PointerEvents::Stroke:
-      return {false, true, false, false, false};
-    case PointerEvents::All:
-      return {true, true, false, false, false};
+    case PointerEvents::VisiblePainted: return {true, true, true, true, true};
+    case PointerEvents::VisibleFill: return {true, false, true, false, false};
+    case PointerEvents::VisibleStroke: return {false, true, true, false, false};
+    case PointerEvents::Visible: return {true, true, true, false, false};
+    case PointerEvents::Painted: return {true, true, false, true, true};
+    case PointerEvents::Fill: return {true, false, false, false, false};
+    case PointerEvents::Stroke: return {false, true, false, false, false};
+    case PointerEvents::All: return {true, true, false, false, false};
   }
   UTILS_UNREACHABLE();
 }
@@ -681,7 +658,23 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
   // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
   // is required, skip all recomputation.
-  if (renderState.hasBeenBuilt && !renderState.needsFullRebuild && !hasDirtyEntities) {
+  if (renderState.hasBeenBuilt && renderState.hasComputedComponents &&
+      !renderState.needsFullRebuild && !hasDirtyEntities) {
+    return;
+  }
+
+  ensureComputedComponents(outWarnings);
+  instantiateRenderTreeWithPrecomputedTree(verbose);
+
+  renderState.hasComputedComponents = true;
+  renderState.hasBeenBuilt = true;
+}
+
+void RenderingContext::ensureComputedComponents(std::vector<ParseError>* outWarnings) {
+  auto& renderState = getRenderTreeState(registry_);
+  const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
+
+  if (renderState.hasComputedComponents && !renderState.needsFullRebuild && !hasDirtyEntities) {
     return;
   }
 
@@ -693,11 +686,11 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
     createShadowTreeSystem().teardown(registry_, shadow);
   }
   registry_.clear<ComputedShadowTreeComponent>();
+  registry_.clear<RenderingInstanceComponent>();
+  registry_.clear<ComputedClipPathsComponent>();
 
   createComputedComponents(outWarnings);
-  instantiateRenderTreeWithPrecomputedTree(verbose);
 
-  // Clear all dirty flags after full recomputation.
   registry_.clear<DirtyFlagsComponent>();
   renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
@@ -736,11 +729,10 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
       return true;
     }
 
-    const Vector2d pointInLocal =
-        LayoutSystem()
-            .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-            .inverse()
-            .transformPosition(point);
+    const Vector2d pointInLocal = LayoutSystem()
+                                      .getEntityFromWorldTransform(EntityHandle(registry_, entity))
+                                      .inverse()
+                                      .transformPosition(point);
 
     // Test fill intersection.
     if (config.testFill) {
@@ -769,25 +761,11 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
 Entity RenderingContext::findIntersecting(const Vector2d& point) {
   instantiateRenderTree(false, nullptr);
 
-  // Try using the spatial grid for accelerated lookup.
-  SpatialGrid grid;
-  grid.rebuild(registry_);
-
-  if (grid.isBuilt()) {
-    // Use grid to narrow candidates, already sorted front-to-back.
-    const auto candidates = grid.query(point);
-    for (Entity entity : candidates) {
-      if (hitTestEntity(entity, point)) {
-        return entity;
-      }
-    }
-  } else {
-    // Fall back to brute-force reverse scan for small documents.
-    auto view = registry_.view<RenderingInstanceComponent>();
-    for (auto it = view.rbegin(); it != view.rend(); ++it) {
-      if (hitTestEntity(*it, point)) {
-        return *it;
-      }
+  // Brute-force reverse scan.
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    if (hitTestEntity(*it, point)) {
+      return *it;
     }
   }
 
@@ -799,22 +777,10 @@ std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point)
 
   std::vector<Entity> results;
 
-  SpatialGrid grid;
-  grid.rebuild(registry_);
-
-  if (grid.isBuilt()) {
-    const auto candidates = grid.query(point);
-    for (Entity entity : candidates) {
-      if (hitTestEntity(entity, point)) {
-        results.push_back(entity);
-      }
-    }
-  } else {
-    auto view = registry_.view<RenderingInstanceComponent>();
-    for (auto it = view.rbegin(); it != view.rend(); ++it) {
-      if (hitTestEntity(*it, point)) {
-        results.push_back(*it);
-      }
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    if (hitTestEntity(*it, point)) {
+      results.push_back(*it);
     }
   }
 
@@ -826,40 +792,20 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
 
   std::vector<Entity> results;
 
-  SpatialGrid grid;
-  grid.rebuild(registry_);
-
-  if (grid.isBuilt()) {
-    const auto candidates = grid.queryRect(rect);
-    for (Entity entity : candidates) {
-      // For rect queries, check that the entity's AABB actually overlaps the query rect.
-      const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
-      if (!instance || instance->dataEntity == entt::null) {
-        continue;
-      }
-
-      const auto bounds =
-          ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
-      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
-              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
-        results.push_back(entity);
-      }
+  // Brute-force scan in reverse draw order.
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    const auto& instance = view.get<RenderingInstanceComponent>(*it);
+    if (instance.dataEntity == entt::null) {
+      continue;
     }
-  } else {
-    // Brute-force scan in reverse draw order.
-    auto view = registry_.view<RenderingInstanceComponent>();
-    for (auto it = view.rbegin(); it != view.rend(); ++it) {
-      const auto& instance = view.get<RenderingInstanceComponent>(*it);
-      if (instance.dataEntity == entt::null) {
-        continue;
-      }
 
-      const auto bounds =
-          ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
-      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
-              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
-        results.push_back(*it);
-      }
+    const auto bounds =
+        ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
+    if (bounds && bounds->topLeft.x <= rect.bottomRight.x &&
+        bounds->bottomRight.x >= rect.topLeft.x && bounds->topLeft.y <= rect.bottomRight.y &&
+        bounds->bottomRight.y >= rect.topLeft.y) {
+      results.push_back(*it);
     }
   }
 
@@ -929,150 +875,19 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
   StyleSystem().computeAllStyles(registry_, outWarnings);
 
-  // Advance animations after style computation but before layout.
-  {
-    const double documentTime =
-        registry_.ctx().get<SVGDocumentContext>().documentTime;
-    AnimationSystem().advance(registry_, documentTime, outWarnings);
-  }
-
-  // Apply animated value overrides to computed styles.
-  for (auto view = registry_.view<AnimatedValuesComponent, ComputedStyleComponent>();
-       auto entity : view) {
-    auto& animValues = view.get<AnimatedValuesComponent>(entity);
-    auto& computedStyle = view.get<ComputedStyleComponent>(entity);
-    if (computedStyle.properties.has_value()) {
-      for (const auto& [attrName, attrValue] : animValues.overrides) {
-        if (attrName == "transform") {
-          // Transform overrides need special handling: parse the transform string and
-          // store directly in TransformComponent (not through parsePresentationAttribute
-          // which requires an entity handle for this attribute).
-          auto result = parser::TransformParser::Parse(attrValue);
-          if (result.hasResult()) {
-            auto& transform =
-                registry_.get_or_emplace<components::TransformComponent>(entity);
-            transform.transform.set(CssTransform(result.result()),
-                                    css::Specificity::Override());
-          }
-        } else if (attrName == "d") {
-          // Path 'd' overrides need special handling: update PathComponent directly
-          // since 'd' is not a CSS property.
-          if (auto* pathComp = registry_.try_get<components::PathComponent>(entity)) {
-            pathComp->d.set(RcString(attrValue), css::Specificity::Override());
-            // Clear any spline override so the new 'd' string is re-parsed.
-            pathComp->splineOverride.reset();
-            // Invalidate computed path.
-            registry_.remove<components::ComputedPathComponent>(entity);
-          }
-        } else if (attrName == "cx" || attrName == "cy" || attrName == "r" ||
-                   attrName == "rx" || attrName == "ry" || attrName == "x" ||
-                   attrName == "y" || attrName == "width" || attrName == "height" ||
-                   attrName == "x1" || attrName == "y1" || attrName == "x2" ||
-                   attrName == "y2") {
-          // Geometry attribute override: parse as length and set on the shape component.
-          donner::parser::LengthParser::Options opts;
-          opts.unitOptional = true;
-          auto lengthResult = donner::parser::LengthParser::Parse(attrValue, opts);
-          if (!lengthResult.hasResult()) {
-            continue;
-          }
-          Lengthd len = lengthResult.result().length;
-          auto spec = css::Specificity::Override();
-          bool applied = false;
-
-          // Circle geometry.
-          if (auto* circle = registry_.try_get<components::CircleComponent>(entity)) {
-            if (attrName == "cx") {
-              circle->properties.cx.set(len, spec);
-              applied = true;
-            } else if (attrName == "cy") {
-              circle->properties.cy.set(len, spec);
-              applied = true;
-            } else if (attrName == "r") {
-              circle->properties.r.set(len, spec);
-              applied = true;
-            }
-          }
-          // Ellipse geometry.
-          if (auto* ellipse = registry_.try_get<components::EllipseComponent>(entity)) {
-            if (attrName == "cx") {
-              ellipse->properties.cx.set(len, spec);
-              applied = true;
-            } else if (attrName == "cy") {
-              ellipse->properties.cy.set(len, spec);
-              applied = true;
-            } else if (attrName == "rx") {
-              ellipse->properties.rx.set(len, spec);
-              applied = true;
-            } else if (attrName == "ry") {
-              ellipse->properties.ry.set(len, spec);
-              applied = true;
-            }
-          }
-          // Rect geometry.
-          if (auto* rect = registry_.try_get<components::RectComponent>(entity)) {
-            if (attrName == "x") {
-              rect->properties.x.set(len, spec);
-              applied = true;
-            } else if (attrName == "y") {
-              rect->properties.y.set(len, spec);
-              applied = true;
-            } else if (attrName == "width") {
-              rect->properties.width.set(len, spec);
-              applied = true;
-            } else if (attrName == "height") {
-              rect->properties.height.set(len, spec);
-              applied = true;
-            } else if (attrName == "rx") {
-              rect->properties.rx.set(len, spec);
-              applied = true;
-            } else if (attrName == "ry") {
-              rect->properties.ry.set(len, spec);
-              applied = true;
-            }
-          }
-          // Line geometry.
-          if (auto* line = registry_.try_get<components::LineComponent>(entity)) {
-            if (attrName == "x1") {
-              line->x1 = len;
-              applied = true;
-            } else if (attrName == "y1") {
-              line->y1 = len;
-              applied = true;
-            } else if (attrName == "x2") {
-              line->x2 = len;
-              applied = true;
-            } else if (attrName == "y2") {
-              line->y2 = len;
-              applied = true;
-            }
-          }
-          if (applied) {
-            // Invalidate computed components so the shape is re-converted.
-            registry_.remove<components::ComputedPathComponent>(entity);
-            registry_.remove<components::ComputedCircleComponent>(entity);
-            registry_.remove<components::ComputedEllipseComponent>(entity);
-            registry_.remove<components::ComputedRectComponent>(entity);
-          }
-        } else {
-          computedStyle.properties->parsePresentationAttribute(attrName, attrValue);
-        }
-      }
-    }
-  }
-
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
 
 #ifdef DONNER_TEXT_ENABLED
-  // Create a shared FontManager in the registry context for font-relative unit resolution
-  // (ch, ex). This must happen after loadResources() so @font-face data is available.
+  // Create shared font registry + text engine in the registry context.
+  // This must happen after loadResources() so @font-face data is available.
   {
     auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
-    auto& fontManager = registry_.ctx().emplace<FontManager>();
+    auto& fontManager = registry_.ctx().emplace<FontManager>(registry_);
     for (const auto& face : resourceManager.fontFaces()) {
       fontManager.addFontFace(face);
     }
+    registry_.ctx().emplace<TextEngine>(fontManager, registry_);
   }
 #endif
 
@@ -1141,6 +956,85 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     }
   }
 
+  // Instantiate nested marker shadow trees for entities inside shadow trees.
+  // The first pass (above) only checks entities with pre-existing ComputedStyleComponent.
+  // Shadow tree entities get their styles computed after populateInstance, so we need a second
+  // pass to create marker shadow trees for those newly-styled entities (e.g., paths inside
+  // markers that have their own marker-start/mid/end properties for nested markers).
+  {
+    // Collect shadow entities that need marker shadow trees (can't modify registry while
+    // iterating views).
+    struct MarkerWork {
+      Entity shadowEntity;
+      ShadowBranchType branchType;
+      Reference reference;
+    };
+    std::vector<MarkerWork> nestedMarkerWork;
+
+    for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
+      const auto& computedShadow = view.get<ComputedShadowTreeComponent>(entity);
+      const auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(entity);
+      if (!offscreen) {
+        continue;
+      }
+      for (auto [branchType, ref] : offscreen->branches()) {
+        const std::optional<size_t> instanceIndex = computedShadow.findOffscreenShadow(branchType);
+        if (!instanceIndex) {
+          continue;
+        }
+        for (const Entity shadowEntity : computedShadow.offscreenShadowEntities(*instanceIndex)) {
+          const auto* shadowStyle = registry_.try_get<ComputedStyleComponent>(shadowEntity);
+          if (!shadowStyle || !shadowStyle->properties) {
+            continue;
+          }
+          const auto& props = shadowStyle->properties.value();
+          if (auto m = props.markerStart.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerStart, m.value()});
+          }
+          if (auto m = props.markerMid.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerMid, m.value()});
+          }
+          if (auto m = props.markerEnd.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerEnd, m.value()});
+          }
+        }
+      }
+    }
+
+    for (const auto& work : nestedMarkerWork) {
+      InstantiateMarkerShadowTree(registry_, work.shadowEntity, work.branchType, work.reference,
+                                  outWarnings);
+    }
+
+    // Populate and style the newly-created nested marker shadow trees.
+    for (const auto& work : nestedMarkerWork) {
+      auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(work.shadowEntity);
+      if (!offscreen) {
+        continue;
+      }
+      auto targetEntity = offscreen->branchTargetEntity(registry_, work.branchType);
+      if (!targetEntity) {
+        continue;
+      }
+      auto& computedShadow =
+          registry_.get_or_emplace<ComputedShadowTreeComponent>(work.shadowEntity);
+      if (computedShadow.findOffscreenShadow(work.branchType).has_value()) {
+        continue;  // Already instantiated.
+      }
+      const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
+          EntityHandle(registry_, work.shadowEntity), computedShadow, work.branchType,
+          targetEntity.value(), work.reference.href, outWarnings);
+      if (maybeInstanceIndex) {
+        const std::span<const Entity> shadowEntities =
+            computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
+        StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
+      }
+    }
+  }
+
   LayoutSystem().instantiateAllComputedComponents(registry_, outWarnings);
 
   TextSystem().instantiateAllComputedComponents(registry_, outWarnings);
@@ -1148,8 +1042,6 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 
   PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
-
-  FilterSystem().instantiateAllComputedComponents(registry_, outWarnings);
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {

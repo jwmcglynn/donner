@@ -3,6 +3,7 @@
 
 #include <optional>
 
+#include "donner/css/Color.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
@@ -44,14 +45,25 @@ struct ComputedTextComponent {
     std::size_t end;
     /// Absolute X position for the first glyph of the span.
     Lengthd x;
+    /// True when \ref x should reset the current text position for this span.
+    bool hasX = false;
     /// Absolute Y baseline position for the span.
     Lengthd y;
+    /// True when \ref y should reset the current text position for this span.
+    bool hasY = false;
     /// Relative X shift applied to the span.
     Lengthd dx;
+    /// True when \ref dx should shift the current text position for this span.
+    bool hasDx = false;
     /// Relative Y shift applied to the span.
     Lengthd dy;
+    /// True when \ref dy should shift the current text position for this span.
+    bool hasDy = false;
     /// Rotation applied to each glyph in the span (degrees).
     double rotateDegrees = 0.0;
+
+    /// Resolved solid fill color for this span, if one is available from computed style.
+    std::optional<css::Color> fillColor;
 
     /// Per-character absolute X positions from \c x attribute lists. Indexed by character
     /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph

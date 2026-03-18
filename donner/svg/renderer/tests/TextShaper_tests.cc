@@ -3,6 +3,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <fstream>
+
+#include "donner/base/tests/Runfiles.h"
+#include "donner/css/FontFace.h"
+#include "donner/svg/renderer/TextLayout.h"
+
 namespace donner::svg {
 
 namespace {
@@ -15,7 +21,9 @@ components::ComputedTextComponent makeSimpleText(const std::string& str) {
   span.start = 0;
   span.end = str.size();
   span.x = Lengthd(10.0, Lengthd::Unit::None);
+  span.hasX = true;
   span.y = Lengthd(50.0, Lengthd::Unit::None);
+  span.hasY = true;
   span.dx = Lengthd(0.0, Lengthd::Unit::None);
   span.dy = Lengthd(0.0, Lengthd::Unit::None);
   text.spans.push_back(std::move(span));
@@ -80,6 +88,37 @@ TEST(TextShaperTest, AdvanceWidthIsPositive) {
   EXPECT_GT(runs[0].glyphs[0].xAdvance, 0.0);
 }
 
+TEST(TextShaperTest, SpanWithoutExplicitPositionContinuesFromPreviousSpan) {
+  FontManager mgr;
+  TextShaper shaper(mgr);
+
+  components::ComputedTextComponent text;
+
+  components::ComputedTextComponent::TextSpan span1;
+  span1.text = RcString("AB");
+  span1.start = 0;
+  span1.end = 2;
+  span1.x = Lengthd(10.0, Lengthd::Unit::None);
+  span1.hasX = true;
+  span1.y = Lengthd(50.0, Lengthd::Unit::None);
+  span1.hasY = true;
+  text.spans.push_back(std::move(span1));
+
+  components::ComputedTextComponent::TextSpan span2;
+  span2.text = RcString("CD");
+  span2.start = 0;
+  span2.end = 2;
+  text.spans.push_back(std::move(span2));
+
+  const auto runs = shaper.layout(text, makeTextParams(16.0));
+  ASSERT_EQ(runs.size(), 2u);
+  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  ASSERT_EQ(runs[1].glyphs.size(), 2u);
+
+  EXPECT_GT(runs[1].glyphs[0].xPosition, runs[0].glyphs.back().xPosition);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].yPosition, runs[0].glyphs.back().yPosition);
+}
+
 TEST(TextShaperTest, LargerFontSizeProducesLargerAdvance) {
   FontManager mgr;
   TextShaper shaper(mgr);
@@ -126,7 +165,9 @@ TEST(TextShaperTest, EmptyText) {
   span.start = 0;
   span.end = 0;
   span.x = Lengthd(10.0, Lengthd::Unit::None);
+  span.hasX = true;
   span.y = Lengthd(50.0, Lengthd::Unit::None);
+  span.hasY = true;
   span.dx = Lengthd(0.0, Lengthd::Unit::None);
   span.dy = Lengthd(0.0, Lengthd::Unit::None);
   text.spans.push_back(std::move(span));
@@ -168,6 +209,202 @@ TEST(TextShaperTest, GlyphOutlineProducesPath) {
   EXPECT_FALSE(spline.empty());
   EXPECT_GT(spline.commands().size(), 0u);
   EXPECT_GT(spline.points().size(), 0u);
+}
+
+TEST(TextShaperTest, GlyphOutlineBoundsMatchTextLayout) {
+  FontManager mgr;
+  TextLayout layout(mgr);
+  TextShaper shaper(mgr);
+
+  FontHandle font = mgr.fallbackFont();
+  ASSERT_TRUE(static_cast<bool>(font));
+
+  auto text = makeSimpleText("T");
+  auto params = makeTextParams(64.0);
+  const auto layoutRuns = layout.layout(text, params);
+  const auto shapedRuns = shaper.layout(text, params);
+
+  ASSERT_EQ(layoutRuns.size(), 1u);
+  ASSERT_EQ(shapedRuns.size(), 1u);
+  ASSERT_EQ(layoutRuns[0].glyphs.size(), 1u);
+  ASSERT_EQ(shapedRuns[0].glyphs.size(), 1u);
+
+  const stbtt_fontinfo* info = mgr.fontInfo(font);
+  ASSERT_NE(info, nullptr);
+
+  const float scale = mgr.scaleForPixelHeight(font, 64.0f);
+  const PathSpline layoutSpline =
+      glyphToPathSpline(info, layoutRuns[0].glyphs[0].glyphIndex, scale);
+  const PathSpline shapedSpline =
+      shaper.glyphOutline(font, shapedRuns[0].glyphs[0].glyphIndex, scale);
+
+  ASSERT_FALSE(layoutSpline.empty());
+  ASSERT_FALSE(shapedSpline.empty());
+
+  const Boxd layoutBounds = layoutSpline.bounds();
+  const Boxd shapedBounds = shapedSpline.bounds();
+  EXPECT_NEAR(shapedBounds.topLeft.x, layoutBounds.topLeft.x, 2.0);
+  EXPECT_NEAR(shapedBounds.topLeft.y, layoutBounds.topLeft.y, 2.0);
+  EXPECT_NEAR(shapedBounds.bottomRight.x, layoutBounds.bottomRight.x, 2.0);
+  EXPECT_NEAR(shapedBounds.bottomRight.y, layoutBounds.bottomRight.y, 2.0);
+}
+
+TEST(TextShaperTest, GlyphOutlineClosesMultipleContours) {
+  FontManager mgr;
+  TextShaper shaper(mgr);
+
+  auto text = makeSimpleText("e");
+  auto params = makeTextParams(64.0);
+  const auto runs = shaper.layout(text, params);
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 1u);
+
+  FontHandle font = runs[0].font;
+  ASSERT_TRUE(static_cast<bool>(font));
+
+  const float scale = mgr.scaleForPixelHeight(font, 64.0f);
+  const PathSpline spline = shaper.glyphOutline(font, runs[0].glyphs[0].glyphIndex, scale);
+  ASSERT_FALSE(spline.empty());
+
+  size_t moveCount = 0;
+  size_t closeCount = 0;
+  for (const auto& command : spline.commands()) {
+    if (command.type == PathSpline::CommandType::MoveTo) {
+      ++moveCount;
+    } else if (command.type == PathSpline::CommandType::ClosePath) {
+      ++closeCount;
+    }
+  }
+
+  EXPECT_GE(moveCount, 2u);
+  EXPECT_EQ(closeCount, moveCount);
+}
+
+/// Load a font from the resvg test suite's fonts directory and register it.
+FontHandle loadResvgFont(FontManager& mgr, const std::string& fontFilename,
+                         const std::string& familyName) {
+  const std::string fontsDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "fonts");
+  const std::string fontPath = fontsDir + "/" + fontFilename;
+  std::ifstream file(fontPath, std::ios::binary);
+  if (!file) {
+    return {};
+  }
+  file.seekg(0, std::ios::end);
+  const auto size = file.tellg();
+  file.seekg(0);
+  auto fontData = std::make_shared<const std::vector<uint8_t>>(static_cast<size_t>(size));
+  file.read(reinterpret_cast<char*>(const_cast<uint8_t*>(fontData->data())), size);
+
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = fontData;
+
+  css::FontFace face;
+  face.familyName = RcString(familyName);
+  face.sources.push_back(std::move(source));
+
+  mgr.addFontFace(face);
+  return mgr.findFont(RcString(familyName));
+}
+
+// Test Arabic text shaping with per-character Y coordinates.
+// Validates glyph IDs and positions for "الويب" with y="140 150 160 170"
+// to determine whether chunk boundaries produce different joining forms.
+TEST(TextShaperTest, ArabicPerCharacterY_GlyphIdsAndPositions) {
+  FontManager mgr;
+  TextShaper shaper(mgr);
+
+  FontHandle amiri = loadResvgFont(mgr, "Amiri-Regular.ttf", "Amiri");
+  ASSERT_TRUE(static_cast<bool>(amiri)) << "Could not load Amiri font";
+
+  const std::string arabicText = "\xd8\xa7\xd9\x84\xd9\x88\xd9\x8a\xd8\xa8";  // الويب
+  auto params = makeTextParams(48.0);
+  params.fontFamilies = {RcString("Amiri")};
+
+  // Case 1: No per-character coords (single chunk, all connected forms).
+  auto textNoCoords = makeSimpleText(arabicText);
+  textNoCoords.spans[0].x = Lengthd(50.0, Lengthd::Unit::None);
+  textNoCoords.spans[0].y = Lengthd(60.0, Lengthd::Unit::None);
+
+  const auto runsNoCoords = shaper.layout(textNoCoords, params);
+  ASSERT_EQ(runsNoCoords.size(), 1u);
+  ASSERT_EQ(runsNoCoords[0].glyphs.size(), 5u) << "Expected 5 glyphs for 5 Arabic characters";
+
+  // Case 2: Per-character Y coords (multiple chunks).
+  // y="140 150 160 170" → yList[0]=nullopt(reset), yList[1]=150, yList[2]=160, yList[3]=170
+  components::ComputedTextComponent textWithCoords;
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString(arabicText);
+    span.start = 0;
+    span.end = arabicText.size();
+    span.x = Lengthd(50.0, Lengthd::Unit::None);
+    span.hasX = true;
+    span.y = Lengthd(140.0, Lengthd::Unit::None);
+    span.hasY = true;
+    // yList: [nullopt, 150, 160, 170, nullopt] (5 characters)
+    span.yList.resize(5);
+    span.yList[0] = std::nullopt;  // reset, span.y handles first char
+    span.yList[1] = Lengthd(150.0, Lengthd::Unit::None);
+    span.yList[2] = Lengthd(160.0, Lengthd::Unit::None);
+    span.yList[3] = Lengthd(170.0, Lengthd::Unit::None);
+    span.yList[4] = std::nullopt;
+    // xList: all nullopt
+    span.xList.resize(5);
+    textWithCoords.spans.push_back(std::move(span));
+  }
+
+  const auto runsWithCoords = shaper.layout(textWithCoords, params);
+  ASSERT_EQ(runsWithCoords.size(), 1u);
+  ASSERT_EQ(runsWithCoords[0].glyphs.size(), 5u);
+
+  // Print glyph details for both cases.
+  std::cout << "\n=== Arabic per-char Y test ===\n";
+  std::cout << "No per-char coords (single chunk):\n";
+  for (size_t i = 0; i < runsNoCoords[0].glyphs.size(); ++i) {
+    const auto& g = runsNoCoords[0].glyphs[i];
+    std::cout << "  gi=" << i << " glyphId=" << g.glyphIndex << " x=" << g.xPosition
+              << " y=" << g.yPosition << " xAdv=" << g.xAdvance << "\n";
+  }
+
+  std::cout << "\nWith per-char Y coords (chunks {ba}, {ya}, {waw}, {lam,alef}):\n";
+  for (size_t i = 0; i < runsWithCoords[0].glyphs.size(); ++i) {
+    const auto& g = runsWithCoords[0].glyphs[i];
+    std::cout << "  gi=" << i << " glyphId=" << g.glyphIndex << " x=" << g.xPosition
+              << " y=" << g.yPosition << " xAdv=" << g.xAdvance << "\n";
+  }
+
+  // Compare: do glyph IDs differ between the two cases?
+  bool anyGlyphIdDiffers = false;
+  for (size_t i = 0; i < 5; ++i) {
+    if (runsNoCoords[0].glyphs[i].glyphIndex != runsWithCoords[0].glyphs[i].glyphIndex) {
+      anyGlyphIdDiffers = true;
+    }
+  }
+  std::cout << "\nGlyph IDs differ between cases: " << (anyGlyphIdDiffers ? "YES" : "NO") << "\n";
+
+  // With per-char coords + RTL, layout switches to LTR (DOM order).
+  // Glyphs are now: alef, lam, waw, ya, ba — each shaped individually.
+  // All glyphs should differ from the no-coords case (different joining context).
+  // Note: glyph order changed from visual RTL to DOM LTR, so indices don't
+  // correspond to the same characters between the two runs.
+
+  // Validate Y positions: with per-char coords on RTL text, layout switches to LTR
+  // (DOM order). charIdx maps y values in DOM order:
+  //   alef(charIdx=0)→y=140, lam(1)→150, waw(2)→160, ya(3)→170, ba(4)→inherits 170.
+  // Glyphs are now in DOM order: alef, lam, waw, ya, ba.
+  EXPECT_NEAR(runsWithCoords[0].glyphs[0].yPosition, 140.0, 1.0) << "alef at y=140 (span.y)";
+  EXPECT_NEAR(runsWithCoords[0].glyphs[1].yPosition, 150.0, 1.0) << "lam at y=150";
+  EXPECT_NEAR(runsWithCoords[0].glyphs[2].yPosition, 160.0, 1.0) << "waw at y=160";
+  EXPECT_NEAR(runsWithCoords[0].glyphs[3].yPosition, 170.0, 1.0) << "ya at y=170";
+  EXPECT_NEAR(runsWithCoords[0].glyphs[4].yPosition, 170.0, 1.0) << "ba inherits y=170";
+
+  // X positions should start at x=50 and increase monotonically (LTR DOM order).
+  EXPECT_NEAR(runsWithCoords[0].glyphs[0].xPosition, 50.0, 1.0) << "First glyph (alef) at x=50";
+  for (size_t i = 1; i < 5; ++i) {
+    EXPECT_GT(runsWithCoords[0].glyphs[i].xPosition, runsWithCoords[0].glyphs[i - 1].xPosition)
+        << "Glyph " << i << " should be to the right of glyph " << (i - 1);
+  }
 }
 
 }  // namespace donner::svg

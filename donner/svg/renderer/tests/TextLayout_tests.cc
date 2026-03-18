@@ -18,7 +18,9 @@ components::ComputedTextComponent makeSimpleText(const std::string& str) {
   span.start = 0;
   span.end = str.size();
   span.x = Lengthd(10.0, Lengthd::Unit::None);
+  span.hasX = true;
   span.y = Lengthd(50.0, Lengthd::Unit::None);
+  span.hasY = true;
   span.dx = Lengthd(0.0, Lengthd::Unit::None);
   span.dy = Lengthd(0.0, Lengthd::Unit::None);
   text.spans.push_back(std::move(span));
@@ -82,7 +84,9 @@ TEST(TextLayoutTest, MultipleSpans) {
   span1.start = 0;
   span1.end = 2;
   span1.x = Lengthd(10.0, Lengthd::Unit::None);
+  span1.hasX = true;
   span1.y = Lengthd(50.0, Lengthd::Unit::None);
+  span1.hasY = true;
   span1.dx = Lengthd(0.0, Lengthd::Unit::None);
   span1.dy = Lengthd(0.0, Lengthd::Unit::None);
   text.spans.push_back(std::move(span1));
@@ -93,7 +97,9 @@ TEST(TextLayoutTest, MultipleSpans) {
   span2.start = 0;
   span2.end = 2;
   span2.x = Lengthd(80.0, Lengthd::Unit::None);
+  span2.hasX = true;
   span2.y = Lengthd(60.0, Lengthd::Unit::None);
+  span2.hasY = true;
   span2.dx = Lengthd(0.0, Lengthd::Unit::None);
   span2.dy = Lengthd(0.0, Lengthd::Unit::None);
   text.spans.push_back(std::move(span2));
@@ -114,6 +120,37 @@ TEST(TextLayoutTest, MultipleSpans) {
   EXPECT_DOUBLE_EQ(runs[1].glyphs[0].yPosition, 60.0);
 }
 
+TEST(TextLayoutTest, SpanWithoutExplicitPositionContinuesFromPreviousSpan) {
+  FontManager mgr;
+  TextLayout layout(mgr);
+
+  components::ComputedTextComponent text;
+
+  components::ComputedTextComponent::TextSpan span1;
+  span1.text = RcString("AB");
+  span1.start = 0;
+  span1.end = 2;
+  span1.x = Lengthd(10.0, Lengthd::Unit::None);
+  span1.hasX = true;
+  span1.y = Lengthd(50.0, Lengthd::Unit::None);
+  span1.hasY = true;
+  text.spans.push_back(std::move(span1));
+
+  components::ComputedTextComponent::TextSpan span2;
+  span2.text = RcString("CD");
+  span2.start = 0;
+  span2.end = 2;
+  text.spans.push_back(std::move(span2));
+
+  const auto runs = layout.layout(text, makeTextParams(16.0));
+  ASSERT_EQ(runs.size(), 2u);
+  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  ASSERT_EQ(runs[1].glyphs.size(), 2u);
+
+  EXPECT_GT(runs[1].glyphs[0].xPosition, runs[0].glyphs.back().xPosition);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].yPosition, runs[0].glyphs.back().yPosition);
+}
+
 TEST(TextLayoutTest, DxDyOffset) {
   FontManager mgr;
   TextLayout layout(mgr);
@@ -124,9 +161,13 @@ TEST(TextLayoutTest, DxDyOffset) {
   span.start = 0;
   span.end = 1;
   span.x = Lengthd(10.0, Lengthd::Unit::None);
+  span.hasX = true;
   span.y = Lengthd(50.0, Lengthd::Unit::None);
+  span.hasY = true;
   span.dx = Lengthd(5.0, Lengthd::Unit::None);
+  span.hasDx = true;
   span.dy = Lengthd(3.0, Lengthd::Unit::None);
+  span.hasDy = true;
   text.spans.push_back(std::move(span));
 
   auto params = makeTextParams(16.0);
@@ -150,7 +191,9 @@ TEST(TextLayoutTest, Rotation) {
   span.start = 0;
   span.end = 1;
   span.x = Lengthd(10.0, Lengthd::Unit::None);
+  span.hasX = true;
   span.y = Lengthd(50.0, Lengthd::Unit::None);
+  span.hasY = true;
   span.dx = Lengthd(0.0, Lengthd::Unit::None);
   span.dy = Lengthd(0.0, Lengthd::Unit::None);
   span.rotateDegrees = 45.0;
@@ -174,7 +217,9 @@ TEST(TextLayoutTest, EmptyText) {
   span.start = 0;
   span.end = 0;
   span.x = Lengthd(10.0, Lengthd::Unit::None);
+  span.hasX = true;
   span.y = Lengthd(50.0, Lengthd::Unit::None);
+  span.hasY = true;
   span.dx = Lengthd(0.0, Lengthd::Unit::None);
   span.dy = Lengthd(0.0, Lengthd::Unit::None);
   text.spans.push_back(std::move(span));

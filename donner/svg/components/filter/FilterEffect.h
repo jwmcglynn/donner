@@ -4,13 +4,16 @@
 #include <variant>
 
 #include "donner/base/Length.h"
+#include "donner/css/Color.h"
 #include "donner/svg/graph/Reference.h"
 
 namespace donner::svg {
 
 /**
- * Filter effect container, which can contain a reference to another filter effect, or a filter
- * effect itself (of any type).
+ * Filter effect container, which can contain a reference to another filter effect, or a CSS filter
+ * function (such as `blur()`, `grayscale()`, etc).
+ *
+ * @see https://www.w3.org/TR/filter-effects/#FilterProperty
  */
 struct FilterEffect {
   /// No effect.
@@ -20,11 +23,10 @@ struct FilterEffect {
   };
 
   /// Blur effect, which applies a gaussian blur with the given standard deviation.
-
   struct Blur {
-    /// X-component of the standard deviation of the blur, in pixels.
+    /// X-component of the standard deviation of the blur.
     Lengthd stdDeviationX;
-    /// Y-component of the standard deviation of the blur, in pixels.
+    /// Y-component of the standard deviation of the blur.
     Lengthd stdDeviationY;
 
     /// Equality operator.
@@ -42,10 +44,86 @@ struct FilterEffect {
     bool operator==(const ElementReference&) const = default;
   };
 
+  /// CSS `hue-rotate(<angle>)` filter function.
+  struct HueRotate {
+    double angleDegrees = 0.0;  ///< Rotation angle in degrees.
+
+    /// Equality operator.
+    bool operator==(const HueRotate&) const = default;
+  };
+
+  /// CSS `brightness(<number-percentage>)` filter function.
+  struct Brightness {
+    double amount = 1.0;  ///< Multiplier (1.0 = no change).
+
+    /// Equality operator.
+    bool operator==(const Brightness&) const = default;
+  };
+
+  /// CSS `contrast(<number-percentage>)` filter function.
+  struct Contrast {
+    double amount = 1.0;  ///< Multiplier (1.0 = no change).
+
+    /// Equality operator.
+    bool operator==(const Contrast&) const = default;
+  };
+
+  /// CSS `grayscale(<number-percentage>)` filter function.
+  struct Grayscale {
+    double amount = 1.0;  ///< Amount (0.0 = no change, 1.0 = fully grayscale).
+
+    /// Equality operator.
+    bool operator==(const Grayscale&) const = default;
+  };
+
+  /// CSS `invert(<number-percentage>)` filter function.
+  struct Invert {
+    double amount = 1.0;  ///< Amount (0.0 = no change, 1.0 = fully inverted).
+
+    /// Equality operator.
+    bool operator==(const Invert&) const = default;
+  };
+
+  /// CSS `opacity(<number-percentage>)` filter function.
+  struct FilterOpacity {
+    double amount = 1.0;  ///< Amount (1.0 = fully opaque, 0.0 = transparent).
+
+    /// Equality operator.
+    bool operator==(const FilterOpacity&) const = default;
+  };
+
+  /// CSS `saturate(<number-percentage>)` filter function.
+  struct Saturate {
+    double amount = 1.0;  ///< Multiplier (1.0 = no change).
+
+    /// Equality operator.
+    bool operator==(const Saturate&) const = default;
+  };
+
+  /// CSS `sepia(<number-percentage>)` filter function.
+  struct Sepia {
+    double amount = 1.0;  ///< Amount (0.0 = no change, 1.0 = fully sepia).
+
+    /// Equality operator.
+    bool operator==(const Sepia&) const = default;
+  };
+
+  /// CSS `drop-shadow()` filter function.
+  struct DropShadow {
+    Lengthd offsetX{0.0, Lengthd::Unit::Px};       ///< Horizontal offset.
+    Lengthd offsetY{0.0, Lengthd::Unit::Px};       ///< Vertical offset.
+    Lengthd stdDeviation{0.0, Lengthd::Unit::Px};  ///< Blur standard deviation.
+    css::Color color{css::Color::CurrentColor{}};  ///< Shadow color (default: currentColor).
+
+    /// Equality operator.
+    bool operator==(const DropShadow&) const = default;
+  };
+
   /**
    * Variant containing all supported effects.
    */
-  using Type = std::variant<None, Blur, ElementReference>;
+  using Type = std::variant<None, Blur, ElementReference, HueRotate, Brightness, Contrast,
+                            Grayscale, Invert, FilterOpacity, Saturate, Sepia, DropShadow>;
 
   /// Filter effect variant value, contains the current effect.
   Type value;
@@ -108,5 +186,8 @@ struct FilterEffect {
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const FilterEffect& filter);
 };
+
+/// Ostream output operator for a vector of filter effects.
+std::ostream& operator<<(std::ostream& os, const std::vector<FilterEffect>& filters);
 
 }  // namespace donner::svg

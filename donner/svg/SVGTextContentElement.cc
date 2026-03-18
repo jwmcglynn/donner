@@ -77,6 +77,19 @@ void SVGTextContentElement::appendText(std::string_view text) {
   } else {
     textComponent.text = textComponent.text + text;
   }
+
+  if (textComponent.textChunks.empty()) {
+    textComponent.textChunks.push_back(RcString(text));
+  } else if (textComponent.textChunks.back().empty()) {
+    textComponent.textChunks.back() = RcString(text);
+  } else {
+    textComponent.textChunks.back() = textComponent.textChunks.back() + text;
+  }
+}
+
+void SVGTextContentElement::advanceTextChunk() {
+  auto& textComponent = handle_.get<components::TextComponent>();
+  textComponent.textChunks.push_back(RcString(""));
 }
 
 RcString SVGTextContentElement::textContent() const {

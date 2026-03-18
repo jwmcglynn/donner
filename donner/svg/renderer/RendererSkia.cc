@@ -32,7 +32,7 @@
 #error \
     "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
 #endif
-#ifdef DONNER_TEXT_SHAPING_ENABLED
+#ifdef DONNER_TEXT_FULL
 #include "donner/svg/renderer/TextShaper.h"
 #include "donner/svg/resources/FontManager.h"
 #endif
@@ -1841,6 +1841,16 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   SkPaint fillPaint = basePaint(antialias_, params.opacity * paintOpacity_);
   fillPaint.setStyle(SkPaint::kFill_Style);
   fillPaint.setColor(toSkia(params.fillColor.rgba()));
+  const auto makeSolidFillPaint = [&](const css::Color& color) {
+    SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
+    paint.setStyle(SkPaint::kFill_Style);
+
+    css::RGBA rgba = color.rgba();
+    rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) *
+                                             params.opacity * paintOpacity_));
+    paint.setColor(toSkia(rgba));
+    return paint;
+  };
 
   // Resolve stroke paint.
   const bool hasStroke = params.strokeParams.strokeWidth > 0.0;
@@ -1903,7 +1913,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   SkFont font(typeface, fontSizePx);
   font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
-#ifdef DONNER_TEXT_SHAPING_ENABLED
+#ifdef DONNER_TEXT_FULL
   // When text shaping is enabled, use TextShaper for layout and drawGlyphs() for rendering.
   // This provides full OpenType GSUB/GPOS support with identical shaping across backends.
   {
@@ -1935,9 +1945,15 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
     SkFont shapedFont(shapedTypeface, fontSizePx);
     shapedFont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
-    for (const auto& run : runs) {
+    for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
+      const auto& run = runs[runIndex];
       if (run.glyphs.empty()) {
         continue;
+      }
+
+      SkPaint spanFillPaint = fillPaint;
+      if (runIndex < text.spans.size() && text.spans[runIndex].fillColor.has_value()) {
+        spanFillPaint = makeSolidFillPaint(*text.spans[runIndex].fillColor);
       }
 
       // Convert shaped glyphs to Skia arrays.
@@ -1963,7 +1979,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
           if (hasStroke) {
             currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, strokePaint);
           }
-          currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, fillPaint);
+          currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, spanFillPaint);
           currentCanvas_->restore();
         }
       } else {
@@ -1973,7 +1989,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
                                      shapedFont, strokePaint);
         }
         currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
-                                   shapedFont, fillPaint);
+                                   shapedFont, spanFillPaint);
       }
 
       // Draw text-decoration lines.
@@ -2008,7 +2024,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
         if (hasStroke) {
           currentCanvas_->drawRect(decoRect, strokePaint);
         }
-        currentCanvas_->drawRect(decoRect, fillPaint);
+        currentCanvas_->drawRect(decoRect, spanFillPaint);
       }
     }
   }
@@ -2046,6 +2062,11 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   }
 
   for (const auto& span : text.spans) {
+    SkPaint spanFillPaint = fillPaint;
+    if (span.fillColor.has_value()) {
+      spanFillPaint = makeSolidFillPaint(*span.fillColor);
+    }
+
     SkScalar x = static_cast<SkScalar>(
         span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
         span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
@@ -2091,7 +2112,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
         if (hasStroke) {
           currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, strokePaint);
         }
-        currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, fillPaint);
+        currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, spanFillPaint);
         currentCanvas_->restore();
         penX += widths[i];
       }
@@ -2103,7 +2124,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
                                        strokePaint);
       }
       currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, font,
-                                     fillPaint);
+                                     spanFillPaint);
     }
 
     // Draw text-decoration lines.
@@ -2134,7 +2155,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
       if (hasStroke) {
         currentCanvas_->drawRect(decoRect, strokePaint);
       }
-      currentCanvas_->drawRect(decoRect, fillPaint);
+      currentCanvas_->drawRect(decoRect, spanFillPaint);
     }
   }
 #endif

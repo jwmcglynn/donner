@@ -1,41 +1,107 @@
 // @file
 #include "donner/svg/components/text/TextSystem.h"
 
+#include <algorithm>
+#include <functional>
+
+#include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
-#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/graph/Reference.h"
+#include "donner/svg/properties/PaintServer.h"
 
 namespace donner::svg::components {
 
 namespace {
 
-/// Count the number of Unicode codepoints in a UTF-8 string.
-size_t countUtf8Codepoints(std::string_view str) {
+/// Count the number of UTF-16 code units in a UTF-8 string.
+/// The SVG DOM uses UTF-16 indexing for per-character attributes (x, y, dx, dy, rotate).
+/// Supplementary characters (U+10000+, encoded as 4 UTF-8 bytes) count as 2 (surrogate pair).
+size_t countUtf16CodeUnits(std::string_view str) {
   size_t count = 0;
   size_t i = 0;
   while (i < str.size()) {
     const auto byte = static_cast<uint8_t>(str[i]);
     if (byte < 0x80) {
       i += 1;
+      count += 1;
     } else if ((byte & 0xE0) == 0xC0) {
       i += 2;
+      count += 1;
     } else if ((byte & 0xF0) == 0xE0) {
       i += 3;
+      count += 1;
     } else if ((byte & 0xF8) == 0xF0) {
       i += 4;
+      count += 2;  // Supplementary character = surrogate pair in UTF-16.
     } else {
       i += 1;  // Invalid leading byte, skip.
+      count += 1;
     }
-    ++count;
   }
   return count;
+}
+
+RcString collapseTextWhitespace(std::string_view rawText, bool preserveSpaces) {
+  std::string collapsed;
+  collapsed.reserve(rawText.size());
+
+  char previous = '\0';
+  for (char ch : rawText) {
+    if (ch == '\r' || ch == '\n' || ch == '\t') {
+      ch = ' ';
+    }
+
+    if (!preserveSpaces && ch == ' ' && previous == ' ') {
+      continue;
+    }
+
+    collapsed.push_back(ch);
+    previous = ch;
+  }
+
+  return RcString(collapsed);
+}
+
+/// Check if the given entity or any of its ancestors has xml:space="preserve".
+bool hasXmlSpacePreserve(Registry& registry, Entity entity) {
+  using donner::components::AttributesComponent;
+  using donner::components::TreeComponent;
+
+  Entity current = entity;
+  while (current != entt::null) {
+    if (auto* attrs = registry.try_get<AttributesComponent>(current)) {
+      auto value = attrs->getAttribute(xml::XMLQualifiedNameRef("xml", "space"));
+      if (value.has_value()) {
+        return *value == "preserve";
+      }
+    }
+    if (auto* tree = registry.try_get<TreeComponent>(current)) {
+      current = tree->parent();
+    } else {
+      break;
+    }
+  }
+  return false;
+}
+
+void removeLeadingSpace(RcString& text) {
+  if (!text.empty() && text.data()[0] == ' ') {
+    text = RcString(text.data() + 1, text.size() - 1);
+  }
+}
+
+void removeTrailingSpace(RcString& text) {
+  if (!text.empty() && text.data()[text.size() - 1] == ' ') {
+    text = RcString(text.data(), text.size() - 1);
+  }
 }
 
 }  // namespace
@@ -44,7 +110,7 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
                                                   std::vector<ParseError>* outWarnings) {
   auto view = registry.view<TextRootComponent, TextComponent, TextPositioningComponent>();
   for (auto entity : view) {
-    auto [textComponent, positioningComponent] = view.get(entity);
+    const auto& positioningComponent = view.get<TextPositioningComponent>(entity);
     auto& computed = registry.get_or_emplace<ComputedTextComponent>(entity);
 
     computed.spans.clear();
@@ -52,34 +118,44 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
     // Global character index across all spans within this <text> element.
     // Used to map root-level positioning lists to per-character positions.
     size_t globalCharIndex = 0;
-
-    auto appendSpan = [&](EntityHandle handle, const TextComponent& text,
-                          const TextPositioningComponent& pos) {
+    auto appendSpan = [&](EntityHandle handle, const RcString& spanText,
+                          const TextPositioningComponent& pos, bool applyElementPositioning) {
       ComputedTextComponent::TextSpan span;
-      span.text = text.text;
+      span.text = spanText;
       span.start = 0;
-      span.end = static_cast<std::size_t>(text.text.size());
+      span.end = static_cast<std::size_t>(spanText.size());
 
       // Set scalar positions for backwards compatibility (initial pen position).
       if (!pos.x.empty()) {
         span.x = pos.x[0];
+        span.hasX = applyElementPositioning;
       } else if (!positioningComponent.x.empty()) {
         span.x = positioningComponent.x[0];
       }
       if (!pos.y.empty()) {
         span.y = pos.y[0];
+        span.hasY = applyElementPositioning;
       } else if (!positioningComponent.y.empty()) {
         span.y = positioningComponent.y[0];
       }
       if (!pos.dx.empty()) {
         span.dx = pos.dx[0];
+        span.hasDx = applyElementPositioning;
       } else if (!positioningComponent.dx.empty()) {
         span.dx = positioningComponent.dx[0];
       }
       if (!pos.dy.empty()) {
         span.dy = pos.dy[0];
+        span.hasDy = applyElementPositioning;
       } else if (!positioningComponent.dy.empty()) {
         span.dy = positioningComponent.dy[0];
+      }
+
+      if (handle.entity() == entity) {
+        span.hasX = applyElementPositioning && !positioningComponent.x.empty();
+        span.hasY = applyElementPositioning && !positioningComponent.y.empty();
+        span.hasDx = applyElementPositioning && !positioningComponent.dx.empty();
+        span.hasDy = applyElementPositioning && !positioningComponent.dy.empty();
       }
 
       if (!pos.rotateDegrees.empty()) {
@@ -91,7 +167,7 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       // Populate per-character positioning lists.
       // Each character gets a value from its own element's list first, falling back to the root
       // text element's list at the global character index.
-      const size_t charCount = countUtf8Codepoints(text.text);
+      const size_t charCount = countUtf16CodeUnits(spanText);
 
       span.xList.resize(charCount);
       span.yList.resize(charCount);
@@ -126,6 +202,16 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
         }
       }
 
+      // The scalar x/y/dx/dy fields already represent the first applicable values for the first
+      // rendered character in the subtree. Clear the first per-character entries so layout does
+      // not apply them a second time.
+      if (charCount > 0 && globalCharIndex == 0) {
+        span.xList[0].reset();
+        span.yList[0].reset();
+        span.dxList[0].reset();
+        span.dyList[0].reset();
+      }
+
       // Rotate: local values take priority; per SVG spec last value repeats in layout.
       if (!pos.rotateDegrees.empty()) {
         span.rotateList.assign(pos.rotateDegrees.begin(), pos.rotateDegrees.end());
@@ -155,6 +241,13 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       if (style && style->properties) {
         span.baselineShift = style->properties->baselineShift.getRequired();
         span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
+
+        const css::RGBA currentColor = style->properties->color.getRequired().rgba();
+        const float fillOpacity = static_cast<float>(style->properties->fillOpacity.getRequired());
+        const PaintServer fill = style->properties->fill.getRequired();
+        if (const auto* solid = std::get_if<PaintServer::Solid>(&fill.value)) {
+          span.fillColor = css::Color(solid->color.resolve(currentColor, fillOpacity));
+        }
       }
 
       // Check if this element or an ancestor is a textPath element.
@@ -174,14 +267,106 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       computed.spans.push_back(span);
     };
 
-    EntityHandle handle(registry, entity);
-    donner::components::ForAllChildrenRecursive(handle, [&](EntityHandle cur) {
-      if (!cur.all_of<TextComponent, TextPositioningComponent>()) {
+    struct PendingSpan {
+      EntityHandle handle;
+      RcString text;
+      bool applyElementPositioning;
+      size_t depth;
+      bool preserveSpaces;
+    };
+
+    std::vector<PendingSpan> pendingSpans;
+
+    std::function<void(EntityHandle, size_t)> collectSpans = [&](EntityHandle handle,
+                                                                 size_t depth) {
+      if (!handle.all_of<TextComponent, TextPositioningComponent>()) {
         return;
       }
 
-      appendSpan(cur, cur.get<TextComponent>(), cur.get<TextPositioningComponent>());
-    });
+      // Skip nested <text> elements — per SVG spec, <text> inside <text> is invalid
+      // and should not render. Only <tspan> children are processed.
+      if (depth > 0 && handle.all_of<TextRootComponent>()) {
+        return;
+      }
+
+      const auto& text = handle.get<TextComponent>();
+      const bool preserveSpaces = hasXmlSpacePreserve(registry, handle.entity());
+
+      size_t chunkIndex = 0;
+      bool emittedFirstChunk = false;
+      auto emitChunk = [&](const RcString& chunk) {
+        if (!emittedFirstChunk || !chunk.empty()) {
+          pendingSpans.push_back(PendingSpan{handle, collapseTextWhitespace(chunk, preserveSpaces),
+                                             !emittedFirstChunk, depth, preserveSpaces});
+          emittedFirstChunk = true;
+        }
+      };
+
+      if (text.textChunks.empty()) {
+        emitChunk(text.text);
+      } else {
+        emitChunk(text.textChunks[0]);
+      }
+
+      donner::components::ForAllChildren(handle, [&](EntityHandle child) {
+        collectSpans(child, depth + 1);
+
+        ++chunkIndex;
+        if (chunkIndex < text.textChunks.size()) {
+          emitChunk(text.textChunks[chunkIndex]);
+        }
+      });
+    };
+
+    collectSpans(EntityHandle(registry, entity), 0);
+
+    if (!pendingSpans.empty()) {
+      // With xml:space="preserve", skip all inter-span space normalization.
+      if (!pendingSpans.front().preserveSpaces) {
+        removeLeadingSpace(pendingSpans.front().text);
+      }
+
+      std::optional<size_t> lastNonEmpty;
+      for (size_t i = 0; i + 1 < pendingSpans.size(); ++i) {
+        size_t currentIndex = i;
+        if (pendingSpans[currentIndex].text.empty() && lastNonEmpty.has_value()) {
+          currentIndex = *lastNonEmpty;
+        }
+
+        RcString& current = pendingSpans[currentIndex].text;
+        RcString& next = pendingSpans[i + 1].text;
+        if (next.empty()) {
+          continue;
+        }
+
+        if (!pendingSpans[currentIndex].preserveSpaces && !pendingSpans[i + 1].preserveSpaces) {
+          const bool currentEndsWithSpace =
+              !current.empty() && current.data()[current.size() - 1] == ' ';
+          const bool nextStartsWithSpace = next.data()[0] == ' ';
+
+          if (pendingSpans[currentIndex].depth < pendingSpans[i + 1].depth) {
+            if (nextStartsWithSpace) {
+              removeLeadingSpace(next);
+            }
+          } else if (currentEndsWithSpace && nextStartsWithSpace) {
+            removeTrailingSpace(current);
+          }
+        }
+
+        if (!current.empty()) {
+          lastNonEmpty = currentIndex;
+        }
+      }
+
+      if (!pendingSpans.back().preserveSpaces) {
+        removeTrailingSpace(pendingSpans.back().text);
+      }
+    }
+
+    for (const PendingSpan& pending : pendingSpans) {
+      const auto& pos = pending.handle.get<TextPositioningComponent>();
+      appendSpan(pending.handle, pending.text, pos, pending.applyElementPositioning);
+    }
   }
 }
 
