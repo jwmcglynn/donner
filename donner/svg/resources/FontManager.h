@@ -111,9 +111,15 @@ public:
    * Access the stb_truetype font info for a handle.
    *
    * @param handle A valid FontHandle obtained from findFont() or loadFontData().
-   * @return Pointer to the stbtt_fontinfo, or nullptr if the handle is invalid.
+   * @return Pointer to the stbtt_fontinfo, or nullptr if the handle is invalid or bitmap-only.
    */
   const stbtt_fontinfo* fontInfo(FontHandle handle) const;
+
+  /**
+   * Returns true if the font is bitmap-only (e.g., CBDT color emoji).
+   * These fonts have no glyf outlines and require FreeType for rendering.
+   */
+  bool isBitmapOnly(FontHandle handle) const;
 
   /**
    * Get the scale factor to produce a font whose EM-square maps to the given pixel height.
@@ -139,6 +145,19 @@ public:
    * Get the number of registered @font-face rules.
    */
   size_t numFaces() const { return faces_.size(); }
+
+  /**
+   * Get the family name of a registered @font-face rule by index.
+   *
+   * @param index Index into the registered faces (0 to numFaces()-1).
+   * @return The family name, or empty string_view if index is out of range.
+   */
+  std::string_view faceFamilyName(size_t index) const {
+    if (index < faces_.size()) {
+      return faces_[index].familyName;
+    }
+    return {};
+  }
 
   /**
    * Get the handle for the embedded fallback font (Public Sans).

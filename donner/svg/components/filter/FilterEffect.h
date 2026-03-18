@@ -113,7 +113,7 @@ struct FilterEffect {
     Lengthd offsetX{0.0, Lengthd::Unit::Px};       ///< Horizontal offset.
     Lengthd offsetY{0.0, Lengthd::Unit::Px};       ///< Vertical offset.
     Lengthd stdDeviation{0.0, Lengthd::Unit::Px};  ///< Blur standard deviation.
-    css::Color color{css::RGBA(0, 0, 0, 0xFF)};    ///< Shadow color (default: black).
+    css::Color color{css::Color::CurrentColor{}};  ///< Shadow color (default: currentColor).
 
     /// Equality operator.
     bool operator==(const DropShadow&) const = default;

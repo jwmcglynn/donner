@@ -1167,6 +1167,87 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     }
   }
 
+  // Instantiate nested marker shadow trees for entities inside shadow trees.
+  // The first pass (above) only checks entities with pre-existing ComputedStyleComponent.
+  // Shadow tree entities get their styles computed after populateInstance, so we need a second
+  // pass to create marker shadow trees for those newly-styled entities (e.g., paths inside
+  // markers that have their own marker-start/mid/end properties for nested markers).
+  {
+    // Collect shadow entities that need marker shadow trees (can't modify registry while
+    // iterating views).
+    struct MarkerWork {
+      Entity shadowEntity;
+      ShadowBranchType branchType;
+      Reference reference;
+    };
+    std::vector<MarkerWork> nestedMarkerWork;
+
+    for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
+      const auto& computedShadow = view.get<ComputedShadowTreeComponent>(entity);
+      const auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(entity);
+      if (!offscreen) {
+        continue;
+      }
+      for (auto [branchType, ref] : offscreen->branches()) {
+        const std::optional<size_t> instanceIndex =
+            computedShadow.findOffscreenShadow(branchType);
+        if (!instanceIndex) {
+          continue;
+        }
+        for (const Entity shadowEntity :
+             computedShadow.offscreenShadowEntities(*instanceIndex)) {
+          const auto* shadowStyle = registry_.try_get<ComputedStyleComponent>(shadowEntity);
+          if (!shadowStyle || !shadowStyle->properties) {
+            continue;
+          }
+          const auto& props = shadowStyle->properties.value();
+          if (auto m = props.markerStart.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerStart, m.value()});
+          }
+          if (auto m = props.markerMid.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerMid, m.value()});
+          }
+          if (auto m = props.markerEnd.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerEnd, m.value()});
+          }
+        }
+      }
+    }
+
+    for (const auto& work : nestedMarkerWork) {
+      InstantiateMarkerShadowTree(registry_, work.shadowEntity, work.branchType, work.reference,
+                                  outWarnings);
+    }
+
+    // Populate and style the newly-created nested marker shadow trees.
+    for (const auto& work : nestedMarkerWork) {
+      auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(work.shadowEntity);
+      if (!offscreen) {
+        continue;
+      }
+      auto targetEntity = offscreen->branchTargetEntity(registry_, work.branchType);
+      if (!targetEntity) {
+        continue;
+      }
+      auto& computedShadow =
+          registry_.get_or_emplace<ComputedShadowTreeComponent>(work.shadowEntity);
+      if (computedShadow.findOffscreenShadow(work.branchType).has_value()) {
+        continue;  // Already instantiated.
+      }
+      const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
+          EntityHandle(registry_, work.shadowEntity), computedShadow, work.branchType,
+          targetEntity.value(), work.reference.href, outWarnings);
+      if (maybeInstanceIndex) {
+        const std::span<const Entity> shadowEntities =
+            computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
+        StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
+      }
+    }
+  }
+
   // Create parent mask shadow trees for mask-on-mask composition.
   // For each entity with an OffscreenMask branch, check if the target mask element itself has
   // a mask= property. If so, create an OffscreenParentMask branch on the same entity so it

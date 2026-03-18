@@ -383,7 +383,7 @@ std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFe
 }
 
 std::optional<std::string> skipReasonIfUnsupported(const ImageComparisonParams& params) {
-  if (params.skip) {
+  if (params.shouldSkip()) {
     return std::string("Test case disabled");
   }
 
@@ -461,7 +461,7 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
     }
   });
 
-  if (info.param.params.skip) {
+  if (info.param.params.shouldSkip()) {
     return "DISABLED_" + name;
   } else {
     return name;
@@ -664,9 +664,9 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   const int mismatchedPixels = pixelmatch::pixelmatch(goldenImage.data, snapshot.pixels, diffImage,
                                                       width, height, strideInPixels, options);
 
-  if (mismatchedPixels > params.maxMismatchedPixels) {
+  if (mismatchedPixels > params.effectiveMaxMismatchedPixels()) {
     std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
-              << params.maxMismatchedPixels << " max)\n";
+              << params.effectiveMaxMismatchedPixels() << " max)\n";
 
     const std::filesystem::path actualImagePath =
         std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
@@ -774,7 +774,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     std::cout << "PASS";
     if (mismatchedPixels != 0) {
       std::cout << " (" << mismatchedPixels << " pixels differ, out of "
-                << params.maxMismatchedPixels << " max)";
+                << params.effectiveMaxMismatchedPixels() << " max)";
     }
     std::cout << "\n";
   }

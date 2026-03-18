@@ -1,0 +1,7 @@
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -2,3 +2,4 @@
+     name = "freetype",
+     version = "2.13.3.bcr.1",
+ )
++bazel_dep(name = "libpng", version = "1.6.44")

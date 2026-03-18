@@ -1,7 +1,7 @@
 # Design: v0.5 Release
 
 **Status:** In Progress
-**Updated:** 2026-03-16
+**Updated:** 2026-03-17
 
 ## Summary
 
@@ -337,24 +337,26 @@ Correct mask luminance composition when a `<mask>` element has its own `mask=` a
 
 ### Test Coverage Gap Analysis
 
-**Current state: ~1310 passing / 1506 total SVGs (87%)**
+**Current state: 1344 passing / 1506 total SVGs (89%)**
 
-~107 tests explicitly skipped, 9 categories still disabled (~82 more tests),
-101 passing tests with >15K pixel diffs (font rendering baseline).
+94 tests explicitly skipped, 6 categories still disabled (~36 tests, excl. deprecated),
+~32 deprecated SVG 1.1 tests (won't implement), ~100 passing tests with >15K pixel diffs
+(font rendering baseline).
 
 | Gap | Tests | Effort | Status |
 |-----|-------|--------|--------|
-| **Font rendering baseline** | 101 >15K diff | Very High | Irreducible: stb_truetype vs FreeType glyph differences |
+| **Font rendering baseline** | ~100 >15K diff | Very High | Irreducible: stb_truetype vs FreeType glyph differences |
 | **SVG-in-image** | ~~17 skipped~~ 2 skipped | ~~High~~ Done | Fixed: 15 SVG image + 1 marker test enabled |
-| **CSS blend modes** | ~20 disabled | Medium | `mix-blend-mode` works; `isolation:isolate` subtree bracketing fixed |
-| **Filter backdrop** | ~21 disabled | N/A | `enable-background` / BackgroundImage — deprecated in SVG 2, won't implement |
+| **CSS blend modes** | ~~~20 disabled~~ | ~~Medium~~ Done | `mix-blend-mode` works; `isolation:isolate` subtree bracketing fixed |
+| **Deprecated SVG 1.1** | ~32 unregistered | N/A | `enable-background` (21), `e-tref` (11) — deprecated in SVG 2, won't implement |
 | **Filter on use/marker/pattern** | 14 skipped | Medium | Filter application scope |
-| **`<switch>` + systemLanguage** | ~13 disabled | Medium | Conditional rendering |
+| **`<switch>` + systemLanguage** | ~23 unregistered | Medium | `e-switch` (13), `a-systemLanguage` (10), `e-a-` (5) |
 | **Mask-on-mask edge cases** | 2 skipped | Medium | Mutual recursion, shadow entity masks |
 | **color-interpolation on mask** | 1 skipped | Low | linearRGB mask composition (127K diff) |
 | **XML entities** | 3 skipped | Low | Parser feature |
 | **CSS @import, SVG version** | 3 skipped | Low | Parser/spec edge cases |
-| **a-direction / glyph-orientation** | ~4 disabled | Low | RTL/vertical text orientation |
+| **a-direction / glyph-orientation** | ~4 unregistered | Low | RTL/vertical text orientation |
+| **a-image-rendering / a-mask** | ~4 unregistered | Low | Not yet registered in test suite |
 
 ### Phase 15: Pixel Diff Burndown (Target: ≤500px)
 
@@ -367,14 +369,14 @@ still be investigated for non-font-related improvements.
 | Test | Current | Root Cause |
 |------|---------|-----------|
 | ~~`a-isolation-001`~~ | ~~62000~~ 0 | **Fixed:** layerDepth missing for isolation/blend-mode |
-| `a-filter-002/003/004` | 28000 | Filter on text (compounds font + filter diffs) |
-| `a-filter-005` | 13000 | Filter on text |
-| `a-filter-011/012` | 17000 | Filter on text |
-| `a-filter-013` | 24500 | Filter on text |
-| `a-filter-015` | 35500 | Filter on text |
-| `a-filter-031/032/034` | 33000–42000 | Filter on text |
-| `a-filter-037` | 43000 | Filter on text (negative values) |
-| `a-filter-038` | 145000 | url() + grayscale() color space |
+| `a-filter-002/003/004` | 28000 | Blur algorithm diff (irreducible) |
+| ~~`a-filter-005`~~ | ~~13000~~ 22 | **Fixed:** drop-shadow currentColor (Bug 2) |
+| ~~`a-filter-011/012`~~ | ~~17000~~ 5 | **Fixed:** drop-shadow currentColor (Bug 2) |
+| `a-filter-013` | ~~24500~~ 10000 | Reduced by em unit fix (Bug 3), remaining is blur+font |
+| `a-filter-015` | ~~35500~~ 15500 | Reduced by em unit fix (Bug 3), remaining is blur+font |
+| `a-filter-031/032/034` | 33000–42000 | Filter on text (font rendering only) |
+| `a-filter-037` | ~~43000~~ 13500 | Reduced by negative value rejection (Bug 1), remaining is font |
+| `a-filter-038` | 145000 | url() + grayscale() color space (Bug 4, deferred) |
 | `a-filter-039` | 8000 | Two url() filter refs |
 | `e-feConvolveMatrix-014` | 7000 | Filter region boundary edges |
 | ~~`e-feImage-006/012/013/014/017/023`~~ | ~~9500–36000~~ 0 | **Fixed:** filter region origin offset |
@@ -382,21 +384,25 @@ still be investigated for non-font-related improvements.
 | `e-feImage-009/010` | 12500–13000 | Subregion coordinate diffs |
 | `e-feImage-019/021` | 26200–34200 | Transform interaction (skewX) |
 | `e-feImage-024` | 22000 | Chained fragment refs |
-| `e-feSpecularLighting-003` | 58000 | resvg golden bug (R=0 channel) |
+| `e-feSpecularLighting-004` | 58000 | resvg golden bug (R=0 channel) |
+| `e-feSpotLight-012` | 15200 | Lighting alpha=1.0 vs resvg clips to shape |
 | `e-filter-011` | 8000 | Subregion clipping |
 | `e-filter-019` | 4100 | Inherited filter blur edge |
 | `e-filter-027` | 6000 | Skew transform + narrow filter region |
 | `e-feTurbulence-019` | 1100 | Noise precision |
 | `e-defs-007` | 6500 | Unknown |
-| `e-marker-017` | 17000 | Text in marker |
-| `e-marker-022` | 3000 | Nested markers |
-| `e-marker-018` | 1000 | Marker rendering |
-| `e-marker-033` | 1200 | Multiple closepaths |
-| `e-mask-030` | 18000 | Mask with `<image>` |
-| `e-mask-031` | 21000 | Mask with grayscale `<image>` |
-| `e-pattern-018` | 22000 | Text in pattern |
-| `e-pattern-020` | 800 | Nested pattern AA |
-| `e-feDiffuseLighting-009` | 750 | Transformed diffuse lighting |
+| `e-marker-017` | 17000 | Font rendering diff (irreducible) |
+| ~~`e-marker-022`~~ | ~~3000~~ 36 | **Fixed:** nested marker shadow tree instantiation |
+| `e-marker-023/024/057` | 2704 | Nested markers — newly rendered content vs stale resvg golden |
+| `e-marker-018` | 1000 | Font rendering diff (irreducible) |
+| `e-marker-044` | 1200 | Multiple closepath marker placement |
+| ~~`e-mask-029`~~ | ~~18000~~ 540 | **Fixed:** threshold was stale (image rendering already works) |
+| ~~`e-mask-030`~~ | ~~21000~~ 0 | **Fixed:** threshold was stale (exact match) |
+| `e-pattern-018` | 22000 | Font rendering diff (Noto Sans fallback) |
+| `e-pattern-020` | 800 | Nested pattern AA (irreducible) |
+| `e-feFlood-008` | 18000 | OBB + complex transform |
+| `e-feDiffuseLighting-021` | 750 | Transformed diffuse lighting |
+| `e-rect-029` | 35500 | `ch` unit fallback font measurement |
 
 **Text tests > 500px (investigate, may be irreducible):**
 
@@ -419,13 +425,26 @@ a-dominant-baseline-*.
   handling).
 - [ ] **Fix feImage subregion/transform diffs** — 7 remaining feImage tests (007–010, 019, 021,
   024) at 1.5K–34K from OBB subregion and skew transform coordinate mapping issues.
-- [ ] **Fix filter-on-text rendering** — `a-filter-*` tests — likely a subset of the text
-  font diff amplified by filter processing. Determine how much is font vs filter.
-- [ ] **Fix feSpecularLighting-003** — 58K diff appears to be a resvg golden bug (R=0 channel).
+- [x] **Fix CSS filter function bugs** — Fixed 3 of 4 bugs (see filter_effects.md Milestone 6):
+  1. ~~Negative value validation~~ in brightness/contrast/saturate (a-filter-037: 43K→13.5K)
+  2. ~~Drop-shadow default color~~ is currentColor now (a-filter-011: 17K→5, a-filter-005: 13K→22)
+  3. ~~em/ex/rem units~~ resolved via font metrics (a-filter-015: 35K→15.5K, a-filter-013: 24K→10K)
+  4. Color space in url()+CSS filter chains (a-filter-038: 145K, spec-ambiguous — deferred)
+  Non-bug diffs: blur algorithm (~5K, irreducible), font rendering (~2.8K, irreducible).
+- [ ] **Fix feSpecularLighting-004** — 58K diff appears to be a resvg golden bug (R=0 channel).
   If confirmed, override with our own golden or document as upstream issue.
-- [ ] **Fix a-filter-038** — 145K diff from url() + grayscale() CSS filter list color space issue.
-- [ ] **Reduce marker/mask/pattern diffs** — Investigate non-text diffs in markers, masks, and
-  patterns.
+- [x] **Reduce marker/mask/pattern diffs** — Investigated all tests:
+  - e-marker-022: **3K→36px** — Fixed nested marker rendering by adding shadow tree instantiation
+    for entities inside shadow trees + `drawMarkers()` call in `traverseRange()`.
+  - e-marker-023/024/057: New 2.7K thresholds — these are also nested markers, now correctly
+    rendered but differing from stale resvg goldens.
+  - e-mask-029: **18K→540px** — Already fixed (image rendering in traverseRange), threshold stale.
+  - e-mask-030: **21K→0px** — Already fixed, threshold stale, entry removed.
+  - e-marker-017/018: Irreducible font rendering diffs.
+  - e-pattern-018: Irreducible font rendering (Noto Sans fallback).
+  - e-pattern-020: Irreducible AA diffs.
+  - Font-family whitespace fix: unquoted multi-word font names now parse correctly
+    (e.g., `font-family="Noto Sans"`). Some text test thresholds adjusted.
 - [ ] **Tighten all thresholds** — After fixes, re-run full suite and set thresholds to actual
   diff + 10% margin. Remove entries that drop below default threshold.
 - [ ] **Document irreducible diffs** — For each remaining threshold > 500px, add a comment

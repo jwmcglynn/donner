@@ -159,7 +159,12 @@ donner_cc_test(
 donner_cc_test(
     name = "text_shaper_tests",
     srcs = ["TextShaper_tests.cc"],
+    data = [
+        "@resvg-test-suite//:fonts",
+    ],
     deps = [
+        "//donner/base:base_test_utils",
+        "//donner/svg/renderer:text_layout",
         "//donner/svg/renderer:text_shaper",
         "@com_google_gtest//:gtest_main",
     ],

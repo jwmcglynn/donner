@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/TextLayout.h"
 
+#include <cmath>
+
 #include "donner/base/MathUtils.h"
 
 #define STBTT_DEF extern
@@ -60,6 +62,53 @@ uint32_t decodeUtf8(const std::string_view str, size_t& i) {
   // Invalid leading byte.
   i += 1;
   return 0xFFFD;
+}
+
+/**
+ * Returns true if the codepoint is a Unicode combining mark (General Category M).
+ * Combining marks should not consume per-character attribute slots (x, y, rotate, etc.)
+ * since they form grapheme clusters with their preceding base character.
+ */
+/**
+ * Returns true if the codepoint is a non-spacing character that does not start a new
+ * addressable character (grapheme cluster) for SVG per-character attributes.
+ * Includes combining marks, zero-width joiners, and variation selectors.
+ */
+bool isNonSpacing(uint32_t cp) {
+  // Combining marks (General Category M).
+  if ((cp >= 0x0300 && cp <= 0x036F) ||   // Combining Diacritical Marks
+      (cp >= 0x0483 && cp <= 0x0489) ||   // Cyrillic combining
+      (cp >= 0x0591 && cp <= 0x05C7) ||   // Hebrew combining
+      (cp >= 0x0610 && cp <= 0x061A) ||   // Arabic combining
+      (cp >= 0x064B && cp <= 0x065F) ||   // Arabic combining
+      (cp >= 0x0670 && cp == 0x0670) ||   // Arabic superscript alef
+      (cp >= 0x06D6 && cp <= 0x06ED) ||   // Arabic combining
+      (cp >= 0x0730 && cp <= 0x074A) ||   // Syriac combining
+      (cp >= 0x0E31 && cp == 0x0E31) ||   // Thai combining
+      (cp >= 0x0E34 && cp <= 0x0E3A) ||   // Thai combining
+      (cp >= 0x0EB1 && cp == 0x0EB1) ||   // Lao combining
+      (cp >= 0x0EB4 && cp <= 0x0EBC) ||   // Lao combining
+      (cp >= 0x1AB0 && cp <= 0x1AFF) ||   // Combining Diacritical Marks Extended
+      (cp >= 0x1DC0 && cp <= 0x1DFF) ||   // Combining Diacritical Marks Supplement
+      (cp >= 0x20D0 && cp <= 0x20FF) ||   // Combining Diacritical Marks for Symbols
+      (cp >= 0xFE20 && cp <= 0xFE2F)) {   // Combining Half Marks
+    return true;
+  }
+
+  // Zero-width joiners and format characters used in emoji/ligature sequences.
+  if (cp == 0x200C ||                      // Zero Width Non-Joiner
+      cp == 0x200D ||                      // Zero Width Joiner (emoji ZWJ sequences)
+      cp == 0x034F) {                      // Combining Grapheme Joiner
+    return true;
+  }
+
+  // Variation selectors (emoji style selectors, ideographic variation sequences).
+  if ((cp >= 0xFE00 && cp <= 0xFE0F) ||   // Variation Selectors (VS1-VS16)
+      (cp >= 0xE0100 && cp <= 0xE01EF)) {  // Variation Selectors Supplement
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace
@@ -129,17 +178,16 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
   }
 
   std::vector<LayoutTextRun> runs;
+  bool haveCurrentPosition = false;
+  double currentPenX = 0.0;
+  double currentPenY = 0.0;
+  int prevSpanLastGlyph = 0;  // Last glyph of previous span, for cross-span kerning.
 
   for (const auto& span : text.spans) {
     LayoutTextRun run;
     run.font = font;
 
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
-
-    // Resolve span positioning.
-    const double baseX =
-        span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
-        span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
 
     // Resolve per-span baseline-shift using actual font size for em units.
     // Positive CSS baseline-shift = shift up, which in SVG Y-down = subtract from Y.
@@ -180,22 +228,47 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       }
     }
 
-    const double baseY =
-        span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-        span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-        effectiveBaselineShift - spanBaselineShiftPx;
-
     const bool vertical = isVertical(params.writingMode);
-    double penX = baseX;
-    double penY = baseY;
+    double penX = haveCurrentPosition ? currentPenX : 0.0;
+    if (span.hasX) {
+      penX = span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+    }
+    if (span.hasDx) {
+      penX += span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+    }
+
+    const double defaultY = effectiveBaselineShift - spanBaselineShiftPx;
+    double penY = haveCurrentPosition ? currentPenY : defaultY;
+    if (span.hasY) {
+      penY = span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) + defaultY;
+    }
+    if (span.hasDy) {
+      penY += span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+    }
+
+    const double runStartX = penX;
+    const double runStartY = penY;
 
     // Decode each codepoint, look up glyph, accumulate advance + kerning.
-    // charIdx tracks the codepoint index for per-character positioning.
+    // charIdx tracks the addressable character index (grapheme cluster) for per-character
+    // positioning attributes (x, y, dx, dy, rotate). Non-spacing characters and characters
+    // following a ZWJ do not advance this index.
     size_t byteIdx = 0;
-    int prevGlyph = 0;
+    int prevGlyph = prevSpanLastGlyph;
     unsigned int charIdx = 0;
+    bool firstCodepoint = true;
+    bool prevWasZwj = false;
     while (byteIdx < spanText.size()) {
       const uint32_t codepoint = decodeUtf8(spanText, byteIdx);
+      const bool combining = isNonSpacing(codepoint) || prevWasZwj;
+      prevWasZwj = (codepoint == 0x200D);
+      // Advance charIdx before non-combining characters (except the first), so combining marks
+      // share the same index as their preceding base character.
+      // UTF-16 surrogate pairs consume 2 indices for supplementary characters (U+10000+).
+      if (!combining && !firstCodepoint) {
+        charIdx += (codepoint >= 0x10000) ? 2 : 1;
+      }
+      firstCodepoint = false;
       const int glyphIndex = stbtt_FindGlyphIndex(info, static_cast<int>(codepoint));
 
       if (vertical) {
@@ -256,11 +329,15 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         // Per-character absolute X positioning overrides the pen.
         const bool hasAbsoluteX =
             charIdx < span.xList.size() && span.xList[charIdx].has_value();
+        const bool hasAbsoluteY =
+            charIdx < span.yList.size() && span.yList[charIdx].has_value();
+
         if (hasAbsoluteX) {
           penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::X);
-        } else {
-          // Kern adjustment with previous glyph (only when not absolute-positioned).
+        } else if (!hasAbsoluteY) {
+          // Kern adjustment with previous glyph. Suppress kerning when a new text chunk
+          // starts, which happens when the character has an absolute x OR y value.
           if (prevGlyph != 0 && glyphIndex != 0) {
             const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
             penX += static_cast<double>(kern) * scale;
@@ -274,7 +351,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         }
 
         // Per-character absolute Y positioning.
-        if (charIdx < span.yList.size() && span.yList[charIdx].has_value()) {
+        if (hasAbsoluteY) {
           penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::Y) +
                  baselineShift;
@@ -319,7 +396,6 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       }
 
       prevGlyph = glyphIndex;
-      ++charIdx;
     }
 
     // If the span has path data, reposition glyphs along the path.
@@ -335,8 +411,11 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         const auto sample = pathSpline.pointAtArcLength(glyphMid);
 
         if (sample.valid) {
-          g.xPosition = sample.point.x;
-          g.yPosition = sample.point.y;
+          // Shift the glyph origin back along the tangent by half its advance so the
+          // glyph's visual center (not its left edge) sits at the path midpoint.
+          const double halfAdv = g.xAdvance * 0.5;
+          g.xPosition = sample.point.x - halfAdv * std::cos(sample.angle);
+          g.yPosition = sample.point.y - halfAdv * std::sin(sample.angle);
           // Convert tangent angle to degrees and add the per-glyph rotation
           // (already set from per-character rotateList or span.rotateDegrees).
           g.rotateDegrees =
@@ -349,6 +428,17 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         advanceAccum += g.xAdvance;
       }
 
+      const auto endSample = pathSpline.pointAtArcLength(startOffset + advanceAccum);
+      if (endSample.valid) {
+        currentPenX = endSample.point.x;
+        currentPenY = endSample.point.y;
+        haveCurrentPosition = true;
+      } else {
+        currentPenX = 0.0;
+        currentPenY = 0.0;
+        haveCurrentPosition = true;
+      }
+
       // Skip textLength and text-anchor adjustments for path-based text.
       runs.push_back(std::move(run));
       continue;
@@ -359,7 +449,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       const double targetLength = params.textLength->toPixels(
           params.viewBox, params.fontMetrics,
           vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
-      const double naturalLength = vertical ? (penY - baseY) : (penX - baseX);
+      const double naturalLength = vertical ? (penY - runStartY) : (penX - runStartX);
 
       if (naturalLength > 0.0 && targetLength > 0.0) {
         if (params.lengthAdjust == LengthAdjust::Spacing) {
@@ -373,25 +463,25 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
             }
           }
           if (vertical) {
-            penY = baseY + targetLength;
+            penY = runStartY + targetLength;
           } else {
-            penX = baseX + targetLength;
+            penX = runStartX + targetLength;
           }
         } else {
           const double scaleFactor = targetLength / naturalLength;
           for (auto& g : run.glyphs) {
             if (vertical) {
-              g.yPosition = baseY + (g.yPosition - baseY) * scaleFactor;
+              g.yPosition = runStartY + (g.yPosition - runStartY) * scaleFactor;
               g.yAdvance *= scaleFactor;
             } else {
-              g.xPosition = baseX + (g.xPosition - baseX) * scaleFactor;
+              g.xPosition = runStartX + (g.xPosition - runStartX) * scaleFactor;
               g.xAdvance *= scaleFactor;
             }
           }
           if (vertical) {
-            penY = baseY + targetLength;
+            penY = runStartY + targetLength;
           } else {
-            penX = baseX + targetLength;
+            penX = runStartX + targetLength;
           }
         }
       }
@@ -399,7 +489,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
 
     // Apply text-anchor adjustment: shift all glyph positions along the inline axis.
     if (params.textAnchor != TextAnchor::Start && !run.glyphs.empty()) {
-      const double totalAdvance = vertical ? (penY - baseY) : (penX - baseX);
+      const double totalAdvance = vertical ? (penY - runStartY) : (penX - runStartX);
       double shift = 0.0;
       if (params.textAnchor == TextAnchor::Middle) {
         shift = -totalAdvance / 2.0;
@@ -415,6 +505,10 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       }
     }
 
+    currentPenX = penX;
+    currentPenY = penY;
+    haveCurrentPosition = true;
+    prevSpanLastGlyph = prevGlyph;
     runs.push_back(std::move(run));
   }
 

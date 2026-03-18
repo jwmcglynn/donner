@@ -781,6 +781,13 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     if (result.hasError()) {
       return std::move(result.error());
     }
+    // CSS Filter Effects Level 1: brightness() does not allow negative values.
+    if (result.result() < 0.0) {
+      ParseError err;
+      err.reason = "Negative value not allowed for brightness()";
+      err.location = function.sourceOffset;
+      return err;
+    }
     return FilterEffect(FilterEffect::Brightness{result.result()});
   }
 
@@ -788,6 +795,13 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     auto result = ParseNumberPercentage(function.values, 1.0);
     if (result.hasError()) {
       return std::move(result.error());
+    }
+    // CSS Filter Effects Level 1: contrast() does not allow negative values.
+    if (result.result() < 0.0) {
+      ParseError err;
+      err.reason = "Negative value not allowed for contrast()";
+      err.location = function.sourceOffset;
+      return err;
     }
     return FilterEffect(FilterEffect::Contrast{result.result()});
   }
@@ -821,6 +835,13 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     if (result.hasError()) {
       return std::move(result.error());
     }
+    // CSS Filter Effects Level 1: saturate() does not allow negative values.
+    if (result.result() < 0.0) {
+      ParseError err;
+      err.reason = "Negative value not allowed for saturate()";
+      err.location = function.sourceOffset;
+      return err;
+    }
     return FilterEffect(FilterEffect::Saturate{result.result()});
   }
 
@@ -837,7 +858,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     std::span<const css::ComponentValue> remaining = function.values;
     SkipWhitespace(remaining);
 
-    css::Color color{css::RGBA(0, 0, 0, 0xFF)};
+    css::Color color{css::Color::CurrentColor{}};
     bool foundColor = false;
 
     // Try to parse leading color (named color, hex, or color function).
@@ -1283,6 +1304,9 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                              std::string name;
                              bool first = true;
                              for (const auto& cv : item) {
+                               if (cv.isToken<css::Token::Whitespace>()) {
+                                 continue;  // Skip whitespace between idents in unquoted names.
+                               }
                                if (auto ident = cv.tryGetToken<css::Token::Ident>()) {
                                  if (!first) {
                                    name.push_back(' ');

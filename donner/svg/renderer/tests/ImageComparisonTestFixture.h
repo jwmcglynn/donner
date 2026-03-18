@@ -45,6 +45,11 @@ struct ImageComparisonParams {
   float threshold = kDefaultThreshold;
   /// Maximum number of pixels that can exceed the threshold.
   int maxMismatchedPixels = kDefaultMismatchedPixels;
+  /// Override for maxMismatchedPixels when running without HarfBuzz text shaping
+  /// (DONNER_TEXT_FULL not defined). -1 means use maxMismatchedPixels for all configs.
+  int simpleTextMaxMismatchedPixels = -1;
+  /// If true, skip this test when running without HarfBuzz (simple text).
+  bool skipSimpleText = false;
   /// If true, count anti-aliased pixels as mismatches instead of suppressing them.
   bool includeAntiAliasing = false;
   /// If true, skip this test case.
@@ -97,9 +102,11 @@ struct ImageComparisonParams {
    * @brief Creates parameters with an overridden golden image filename.
    *
    * @param filename The filename to use for the golden image.
+   * @param threshold Optional per-pixel difference threshold to use with the override.
    * @return ImageComparisonParams configured with the golden override.
    */
-  static ImageComparisonParams WithGoldenOverride(std::string_view filename) {
+  static ImageComparisonParams WithGoldenOverride(std::string_view filename,
+                                                  float threshold = kDefaultThreshold) {
     ImageComparisonParams result;
     result.overrideGoldenFilename = filename;
     return result;
@@ -180,6 +187,71 @@ struct ImageComparisonParams {
     }
 
     return *this;
+  }
+
+  /**
+   * @brief Sets a separate maxMismatchedPixels for simple text (without HarfBuzz shaping).
+   *
+   * When DONNER_TEXT_FULL is not defined, this value is used instead of maxMismatchedPixels.
+   * This allows tests that require text shaping (combining marks, ligatures, etc.) to have
+   * a looser threshold for simple text while keeping a strict threshold for HarfBuzz.
+   *
+   * @param pixels The max mismatched pixels for simple text.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& withSimpleTextMaxPixels(int pixels) {
+    simpleTextMaxMismatchedPixels = pixels;
+    return *this;
+  }
+
+  /**
+   * @brief Sets the max mismatched pixels for this test case.
+   *
+   * @param pixels The max mismatched pixels.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& withMaxPixelsDifferent(int pixels) {
+    maxMismatchedPixels = pixels;
+    return *this;
+  }
+
+  /**
+   * @brief Skip this test entirely when running without HarfBuzz (simple text).
+   *
+   * Use this for tests that require text-full features (e.g., color emoji fonts that
+   * can't be loaded by stb_truetype at all).
+   *
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& onlyTextFull() {
+    skipSimpleText = true;
+    return *this;
+  }
+
+  /**
+   * @brief Returns the effective maxMismatchedPixels for the active text config.
+   */
+  int effectiveMaxMismatchedPixels() const {
+#ifdef DONNER_TEXT_FULL
+    return maxMismatchedPixels;
+#else
+    return simpleTextMaxMismatchedPixels >= 0 ? simpleTextMaxMismatchedPixels : maxMismatchedPixels;
+#endif
+  }
+
+  /**
+   * @brief Returns true if this test should be skipped for the active text config.
+   */
+  bool shouldSkip() const {
+    if (skip) {
+      return true;
+    }
+#ifndef DONNER_TEXT_FULL
+    if (skipSimpleText) {
+      return true;
+    }
+#endif
+    return false;
   }
 };
 

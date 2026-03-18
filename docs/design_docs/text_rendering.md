@@ -36,10 +36,9 @@ Full OpenType shaping (GSUB/GPOS via HarfBuzz) is available as an opt-in `text_s
 
 ## Non-Goals
 
-- Complex script support (Arabic, Devanagari, etc.) or bidirectional text.
+- Full bidirectional text (mixed LTR/RTL in a single `<text>` element via the Unicode Bidi algorithm).
 - Vertical writing modes (`writing-mode: vertical-rl`).
 - SVG fonts (`<font>` element — deprecated in SVG2).
-- `<textPath>` rendering (path layout is a separate milestone).
 - Font subsetting or optimization.
 - System font discovery for TinySkia (embedded/loaded fonts only).
 
@@ -1273,3 +1272,76 @@ Both backends need to render glyphs with per-glyph transforms:
 - Enable resvg `e-textPath-*` test suite (currently `// TODO(text): e-textPath`).
 - Unit tests for path sampling, startOffset, method, side attributes.
 - Edge cases: zero-length paths, single-point paths, very long text overflowing path.
+
+## RTL Text and Complex Scripts (Phase 7) {#rtl}
+
+**Status:** In progress
+**Prerequisite:** text-full (HarfBuzz + FreeType)
+
+### Current State
+
+- HarfBuzz auto-detects script and direction from text content (Arabic → RTL, Latin → LTR).
+- GSUB joining forms work correctly — Arabic characters connect properly in the top line of e-text-030 (no per-character coordinates).
+- Per-character coordinate lists (`x`, `y`, `dx`, `dy`) break for RTL because the pen direction isn't reversed.
+
+### Problem: RTL Pen Direction
+
+For LTR text, the pen starts at `x` and moves RIGHT via positive `x_advance`:
+```
+penX = x
+for each glyph:
+    draw at penX
+    penX += x_advance  // positive, moves right
+```
+
+For RTL text with HarfBuzz, glyphs are output in VISUAL order (left to right for rendering), but the pen should still logically move from the START position rightward while the glyphs are placed right-to-left. HarfBuzz handles this by:
+1. Outputting glyphs in visual order
+2. Giving positive `x_advance` values (width of each glyph)
+3. The caller is responsible for RTL layout
+
+The SVG spec says `x` specifies the position of the first character's start edge. For RTL, the first character's start edge is on the RIGHT. So `x=50` means the rightmost character starts at x=50.
+
+### What's Done
+
+- **Script auto-detection**: Removed hardcoded `HB_DIRECTION_LTR` / `HB_SCRIPT_LATIN`. Now `hb_buffer_guess_segment_properties()` auto-detects script and direction. Arabic GSUB joining forms (connected cursive) now work correctly.
+- **Basic RTL layout**: HarfBuzz outputs glyphs in visual order (left-to-right) with positive `x_advance`. The existing pen-based loop works without modification — `penX` starts at `x` (which SVG defines as the start of text, NOT the right edge for RTL) and advances right through visual glyphs. Tested: top line of e-text-030 renders correctly.
+
+### Remaining: Per-character coordinates with RTL
+
+**Problem**: When `y="140 150 160 170"` is applied to RTL text "الويب", the y values are consumed in LOGICAL order (y[0]→ا, y[1]→ل, ...) via `byteToCharIdx` cluster mapping. But HarfBuzz outputs glyphs in VISUAL order (ب first, ا last). The glyph loop's `penY` carries forward in VISUAL order, not logical order. This means:
+
+- glyph[0] = ب (charIdx=4): yList[4]=nullopt → uses default y=140 (**wrong**, should inherit y=170)
+- glyph[4] = ا (charIdx=0): yList[0]=nullopt → uses whatever penY was left at (**wrong**, should be y=140)
+
+The y values ARE applied to the correct LOGICAL characters, but the PEN CARRY between glyphs goes in the wrong direction. For LTR, carry-forward matches logical order. For RTL, carry-forward is reversed.
+
+**Attempted approaches that didn't work**:
+1. Pre-propagating y values forward in logical order — made things worse because it overwrote correct nullopt entries with wrong inherited values.
+2. Reversing pen direction (penX -= totalAdvance) — broke the basic layout since HarfBuzz visual output is already left-to-right.
+
+**Correct approach (not yet implemented)**:
+The per-character y/x overrides need to be pre-resolved in LOGICAL order into a dense array, then looked up by charIdx during visual-order processing. The key difference from propagation: only INHERIT values in logical order (so ب gets y=170 from ي), but DON'T override the initial penY for the first visual glyph.
+
+This requires careful handling of:
+1. The initial penY from span.y (used for characters before the first explicit y in logical order)
+2. Forward inheritance in logical order
+3. The first visual glyph (which may be the LAST logical character) needing the inherited value, not span.y
+
+#### Test Coverage
+
+- `e-text-030`: Arabic text with and without per-character y coordinates
+- `e-text-035`: BIDI reordering (mixed Arabic + Latin)
+- `e-text-036`: Arabic text with `rotate` and `text-anchor`
+- `e-text-040`: Arabic text with `fill-rule=evenodd`
+
+## Color Emoji (Phase 8) {#color-emoji}
+
+**Status:** Implemented (text-full only)
+**See also:** [color_emoji.md](color_emoji.md)
+
+CBDT/CBLC color bitmap emoji support via FreeType. Enabled by adding libpng to the FreeType build via `single_version_override` patches. Key components:
+- FontManager accepts bitmap-only fonts (no glyf table)
+- TextShaper extracts BGRA bitmaps via `FT_Load_Glyph(FT_LOAD_COLOR)`
+- RendererTinySkia renders bitmaps as scaled images via `drawPixmap`
+- UTF-16 code unit indexing for per-character coordinate lists (matching SVG DOM)
+- Low surrogate coordinate consumption for supplementary characters

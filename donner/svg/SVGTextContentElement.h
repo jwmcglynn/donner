@@ -133,6 +133,13 @@ public:
   void appendText(std::string_view text);
 
   /**
+   * Start a new direct-text chunk after an intervening child element.
+   *
+   * This preserves the ordering of mixed text and child elements for layout.
+   */
+  void advanceTextChunk();
+
+  /**
    * Get the raw text content concatenated from all child text nodes.
    *
    * @return Text content string.

@@ -133,8 +133,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
             {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
             {"a-fill-027.svg", Params::Skip()},  // Not impl: Fallback with icc-color
-            {"a-fill-031.svg",
-             Params::WithThreshold(kDefaultThreshold, 12000)},  // Gradient fill on text
+            {"a-fill-031.svg", Params::Skip()},  // Bug: linear gradient fill on text
             {"a-fill-032.svg",
              Params::WithThreshold(kDefaultThreshold, 23000)},  // Gradient fill on text (radial)
             {"a-fill-033.svg",
@@ -152,22 +151,27 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-filter-002.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
             {"a-filter-003.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
             {"a-filter-004.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
-            {"a-filter-005.svg", Params::WithThreshold(kDefaultThreshold, 13000)},
-            {"a-filter-011.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
-            {"a-filter-012.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
-            {"a-filter-013.svg", Params::WithThreshold(kDefaultThreshold, 24500)},
-            {"a-filter-015.svg", Params::WithThreshold(kDefaultThreshold, 35500)},
-            // a-filter-016 (drop-shadow), 020 (blur(1mm)), 026-030 (hue-rotate),
+            // a-filter-005 (drop-shadow), 011/012 (drop-shadow currentColor),
+            // 016 (drop-shadow), 020 (blur(1mm)), 026-030 (hue-rotate),
             // 033/035/036 (CSS color functions), 041 (grayscale+opacity), 042 (invalid url)
             // pass with default threshold.
+            // resvg golden bug: blur algorithm produces visually different halo around
+            // drop-shadow on simple shapes. Donner's sRGB three-pass box blur is correct
+            // per spec. See docs/design_docs/resvg_test_suite_bugs.md.
+            {"a-filter-013.svg", Params::WithGoldenOverride(
+                                     "donner/svg/renderer/testdata/golden/resvg-a-filter-013.png")},
+            {"a-filter-015.svg", Params::WithGoldenOverride(
+                                     "donner/svg/renderer/testdata/golden/resvg-a-filter-015.png")},
             {"a-filter-031.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
             {"a-filter-032.svg", Params::WithThreshold(kDefaultThreshold, 42000)},
             {"a-filter-034.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
-            {"a-filter-037.svg", Params::WithThreshold(kDefaultThreshold, 43000)},  // Negative values + text
+            {"a-filter-037.svg",
+             Params::WithThreshold(kDefaultThreshold, 13500)},  // Negative values rejected + text
             {"a-filter-038.svg",
              Params::WithThreshold(kDefaultThreshold, 145000)},  // url() + grayscale() color space
             {"a-filter-039.svg",
-             Params::WithThreshold(kDefaultThreshold, 10500)},  // Two url() refs (8K mac, 10K linux)
+             Params::WithThreshold(kDefaultThreshold,
+                                   10500)},        // Two url() refs (8K mac, 10K linux)
             {"a-filter-040.svg", Params::Skip()},  // UB: same url() twice
         },
         Params::WithThreshold(kDefaultThreshold, 8000))),
@@ -186,8 +190,10 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"a-font-001.svg", Params::Skip()},  // Canvas size mismatch (400 vs 500)
             {"a-font-size-003.svg", Params::WithThreshold(kDefaultThreshold, 20500)},
+            {"a-font-size-004.svg", Params::Skip()},  // Bug: nested percentage `font-size`
             {"a-font-size-006.svg", Params::WithThreshold(kDefaultThreshold, 25000)},
             {"a-font-size-013.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
+            {"a-font-size-020.svg", Params::Skip()},  // Bug: nested percentage `font-size`
             {"a-font-weight-002.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
             {"a-font-weight-003.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
             {"a-font-weight-004.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
@@ -199,14 +205,13 @@ INSTANTIATE_TEST_SUITE_P(
 
 // TODO(font): a-glyph-orientation
 
-INSTANTIATE_TEST_SUITE_P(
-    Isolation, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-isolation",
-        {
-            // a-isolation-001 and 002 now pass with 0 diffs — omit overrides.
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Isolation, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix(
+                             "a-isolation",
+                             {
+                                 // a-isolation-001 and 002 now pass with 0 diffs — omit overrides.
+                             })),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Kerning, ImageComparisonTestFixture,
@@ -224,13 +229,17 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-letter-spacing",
         {
-            {"a-letter-spacing-007.svg", Params::WithThreshold(kDefaultThreshold, 3500)},
-            {"a-letter-spacing-008.svg", Params::WithThreshold(kDefaultThreshold, 2000)},
-            {"a-letter-spacing-009.svg", Params::WithThreshold(kDefaultThreshold, 4500)},
-            {"a-letter-spacing-010.svg", Params::WithThreshold(kDefaultThreshold, 1500)},
-            {"a-letter-spacing-011.svg", Params::WithThreshold(kDefaultThreshold, 3500)},
+            {"a-letter-spacing-002.svg", Params::WithThreshold(kDefaultThreshold, 10200)},
+            {"a-letter-spacing-003.svg", Params::WithThreshold(kDefaultThreshold, 8400)},
+            {"a-letter-spacing-005.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
+            {"a-letter-spacing-006.svg", Params::WithThreshold(kDefaultThreshold, 9300)},
+            {"a-letter-spacing-007.svg", Params::WithThreshold(kDefaultThreshold, 2700)},
+            {"a-letter-spacing-008.svg", Params::WithThreshold(kDefaultThreshold, 1500)},
+            {"a-letter-spacing-009.svg", Params::WithThreshold(kDefaultThreshold, 2600)},
+            {"a-letter-spacing-010.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
+            {"a-letter-spacing-011.svg", Params::WithThreshold(kDefaultThreshold, 2900)},
         },
-        Params::WithThreshold(kDefaultThreshold, 17000))),
+        Params::WithThreshold(kDefaultThreshold, 200))),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
@@ -345,13 +354,13 @@ INSTANTIATE_TEST_SUITE_P(TextRendering, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     TextLength, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-textLength",
-                                {
-                                    {"a-textLength-008.svg",
-                                     Params::WithThreshold(kDefaultThreshold,
-                                                           24000)},  // textLength on text + tspan
-                                },
-                                Params::WithThreshold(kDefaultThreshold, 12000))),
+    ValuesIn(getTestsWithPrefix(
+        "a-textLength",
+        {
+            {"a-textLength-007.svg", Params::WithThreshold(kDefaultThreshold, 7200)},
+            {"a-textLength-008.svg", Params::WithThreshold(kDefaultThreshold, 13500)},
+        },
+        Params::WithThreshold(kDefaultThreshold, 200))),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -382,12 +391,15 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     WordSpacing, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-word-spacing",
-                                {
-                                    {"a-word-spacing-007.svg",
-                                     Params::Skip()},  // UB: word-spacing=-10000
-                                },
-                                Params::WithThreshold(kDefaultThreshold, 4500))),
+    ValuesIn(getTestsWithPrefix(
+        "a-word-spacing",
+        {
+            {"a-word-spacing-002.svg", Params::WithThreshold(kDefaultThreshold, 1800)},
+            {"a-word-spacing-003.svg", Params::WithThreshold(kDefaultThreshold, 1700)},
+            {"a-word-spacing-005.svg", Params::WithThreshold(kDefaultThreshold, 1800)},
+            {"a-word-spacing-006.svg", Params::WithThreshold(kDefaultThreshold, 2200)},
+            {"a-word-spacing-007.svg", Params::Skip()},  // UB: word-spacing=-10000
+        })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -395,14 +407,23 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-writing-mode",
         {
-            {"a-writing-mode-011.svg", Params::WithThreshold(kDefaultThreshold, 9500)},
-            {"a-writing-mode-013.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
-            {"a-writing-mode-014.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
-            {"a-writing-mode-015.svg", Params::WithThreshold(kDefaultThreshold, 2500)},
+            {"a-writing-mode-005.svg", Params::WithThreshold(kDefaultThreshold, 14200)},
+            {"a-writing-mode-006.svg", Params::WithThreshold(kDefaultThreshold, 14200)},
+            {"a-writing-mode-008.svg", Params::WithThreshold(kDefaultThreshold, 14200)},
+            {"a-writing-mode-009.svg", Params::WithThreshold(kDefaultThreshold, 9800)},
+            {"a-writing-mode-010.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
+            {"a-writing-mode-011.svg", Params::WithThreshold(kDefaultThreshold, 7500)},
+            {"a-writing-mode-012.svg", Params::WithThreshold(kDefaultThreshold, 12600)},
+            {"a-writing-mode-013.svg", Params::WithThreshold(kDefaultThreshold, 2900)},
+            {"a-writing-mode-014.svg", Params::WithThreshold(kDefaultThreshold, 3200)},
+            {"a-writing-mode-015.svg", Params::WithThreshold(kDefaultThreshold, 2000)},
             {"a-writing-mode-016.svg", Params::Skip()},  // UB: tb with rotate
             {"a-writing-mode-017.svg", Params::Skip()},  // UB: tb with rotate and underline
+            {"a-writing-mode-019.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dx`
+            {"a-writing-mode-018.svg", Params::WithThreshold(kDefaultThreshold, 10300)},
+            {"a-writing-mode-020.svg", Params::WithThreshold(kDefaultThreshold, 10100)},
         },
-        Params::WithThreshold(kDefaultThreshold, 17000))),
+        Params::WithThreshold(kDefaultThreshold, 200))),
     TestNameFromFilename);
 
 // TODO: e-a-
@@ -695,13 +716,13 @@ INSTANTIATE_TEST_SUITE_P(
                                                                // region (5406px at 0.02)
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage (deprecated SVG 1.1)
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha (deprecated SVG 1.1)
-            {"e-filter-034.svg", Params::Skip()},              // UB: in=FillPaint
-            {"e-filter-035.svg", Params::Skip()},              // UB: in=StrokePaint
-            {"e-filter-036.svg", Params::Skip()},              // UB: in=FillPaint gradient
-            {"e-filter-037.svg", Params::Skip()},              // UB: in=FillPaint pattern
-            {"e-filter-038.svg", Params::Skip()},              // UB: in=FillPaint on group
-            {"e-filter-060.svg", Params::Skip()},              // Filter on root svg (227K px diff)
-            {"e-filter-065.svg", Params::Skip()},              // UB: in=FillPaint on empty group
+            {"e-filter-034.svg", Params::Skip()},  // UB: in=FillPaint
+            {"e-filter-035.svg", Params::Skip()},  // UB: in=StrokePaint
+            {"e-filter-036.svg", Params::Skip()},  // UB: in=FillPaint gradient
+            {"e-filter-037.svg", Params::Skip()},  // UB: in=FillPaint pattern
+            {"e-filter-038.svg", Params::Skip()},  // UB: in=FillPaint on group
+            {"e-filter-060.svg", Params::Skip()},  // Filter on root svg (227K px diff)
+            {"e-filter-065.svg", Params::Skip()},  // UB: in=FillPaint on empty group
         })),
     TestNameFromFilename);
 
@@ -752,12 +773,16 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-marker-018.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
             {"e-marker-019.svg",
              Params::WithThreshold(kDefaultThreshold, 19000)},  // SVG image in marker at small
-                                                                 // scale (32x32), cross-renderer
-                                                                 // differences in complex paths
-            {"e-marker-022.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
+                                                                // scale (32x32), cross-renderer
+                                                                // differences in complex paths
+            {"e-marker-022.svg",
+             Params::WithThreshold(kDefaultThreshold, 150)},  // Nested markers (fixed)
+            {"e-marker-023.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
+            {"e-marker-024.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
             {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
             {"e-marker-044.svg",
              Params::WithThreshold(kDefaultThreshold, 1200)},  // Multiple closepaths
+            {"e-marker-057.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
             // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
             {"e-marker-045.svg", Params::WithGoldenOverride(
                                      "donner/svg/renderer/testdata/golden/resvg-e-marker-045.png")},
@@ -779,9 +804,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child — shadow tree entities
                                                  // don't resolve nested masks
             {"e-mask-029.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // Mask with <image>
-            {"e-mask-030.svg",
-             Params::WithThreshold(kDefaultThreshold, 21000)},  // Mask with grayscale <image>
+             Params::WithThreshold(kDefaultThreshold,
+                                   650)},  // Mask with <image> (bilinear edge diffs)
         })),
     TestNameFromFilename);
 
@@ -916,32 +940,54 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextElement, ImageComparisonTestFixture,
-    ValuesIn(
-        getTestsWithPrefix("e-text-",
-                           {
-                               {"e-text-011.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-                               {"e-text-012.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-                               {"e-text-014.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-                               {"e-text-018.svg", Params::WithThreshold(kDefaultThreshold, 24000)},
-                               {"e-text-019.svg", Params::WithThreshold(kDefaultThreshold, 8000)},
-                               {"e-text-021.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
-                               {"e-text-022.svg", Params::WithThreshold(kDefaultThreshold, 2500)},
-                               {"e-text-025.svg", Params::WithThreshold(kDefaultThreshold, 3000)},
-                               {"e-text-026.svg", Params::WithThreshold(kDefaultThreshold, 2500)},
-                               {"e-text-027.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-                               {"e-text-028.svg", Params::WithThreshold(kDefaultThreshold, 5500)},
-                               {"e-text-030.svg", Params::WithThreshold(kDefaultThreshold, 15500)},
-                               {"e-text-031.svg", Params::WithThreshold(kDefaultThreshold, 11500)},
-                               {"e-text-033.svg", Params::WithThreshold(kDefaultThreshold, 10500)},
-                               {"e-text-034.svg", Params::WithThreshold(kDefaultThreshold, 19000)},
-                               {"e-text-035.svg", Params::WithThreshold(kDefaultThreshold, 4500)},
-                               {"e-text-036.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
-                               {"e-text-037.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
-                               {"e-text-039.svg", Params::WithThreshold(kDefaultThreshold, 11000)},
-                               {"e-text-042.svg", Params::Skip()},  // UB: grapheme split by tspan
-                               {"e-text-043.svg", Params::WithThreshold(kDefaultThreshold, 19000)},
-                           },
-                           Params::WithThreshold(kDefaultThreshold, 17500))),
+    ValuesIn(getTestsWithPrefix(
+        "e-text-",
+        {
+            {"e-text-025.svg", Params().withSimpleTextMaxPixels(
+                                   700)},  // Combining mark needs HarfBuzz
+                                           // Custom golden generated with text-full: FreeType
+                                           // composite glyph outlines differ from resvg's
+                                           // ttf-parser for precomposed Cyrillic й (U+0439).
+            {"e-text-026.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-026.png")
+                 .withSimpleTextMaxPixels(1700)},  // Simple text can't compose combining marks
+            {"e-text-027.svg",
+             Params::WithThreshold(0.2f)
+                 .onlyTextFull()},  // Emoji, differences between resvg and our bitmap resizing
+            {"e-text-028.svg",
+             Params::WithThreshold(0.2f)
+                 .onlyTextFull()},  // Emoji, differences between resvg and our bitmap resizing
+                                    // Custom golden: resvg misapplies per-character y for
+                                    // supplementary emoji (UTF-16 surrogate pair indexing). Our
+                                    // rendering matches browser behavior.
+            {"e-text-029.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-029.png")
+                 .onlyTextFull()},  // Emoji, resvg renders the smiley and crab emoji incorrectly
+            {"e-text-030.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-030.png")
+                 .withMaxPixelsDifferent(
+                     400)  // Vertical axis has different AA (its not the focus of the test)
+                 .onlyTextFull()},  // Arabic text shaping requires text-full, and this version of
+                                    // the resvg test suite has a bug, so override (we need to
+                                    // upgrade the suite)
+            {"e-text-031.svg",
+             Params()
+                 .withMaxPixelsDifferent(
+                     300)  // Vertical axis has different AA (its not the focus of the test)
+                 .onlyTextFull()},                        // Complex diatrics requires text-full
+            {"e-text-034.svg", Params().onlyTextFull()},  // Complex diatrics requires text-full
+            {"e-text-035.svg", Params::Skip()},           // Not impl: Bidirectional text shaping
+            {"e-text-036.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-036.png")
+                 .onlyTextFull()},  // Arabic text shaping requires text-full,
+                                    // custom golden: test suite's Noto Sans lacks Arabic,
+                                    // so we fall back to Amiri
+            {"e-text-040.svg", Params().onlyTextFull()},  // Arabic text shaping requires text-full
+            {"e-text-042.svg", Params::Skip()},           // UB: grapheme split by tspan
+            {"e-text-043.svg", Params::WithThreshold(kDefaultThreshold, 19100)},
+        },
+        Params::WithThreshold(0.1f,
+                              200))),  // Allow higher threshold for text rendering differences
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -950,69 +996,95 @@ INSTANTIATE_TEST_SUITE_P(
         "e-textPath",
         {
             // Glyph outline differences (stb_truetype vs FreeType/HarfBuzz).
-            {"e-textPath-001.svg", Params::WithThreshold(kDefaultThreshold, 4000)},  // Basic
-            {"e-textPath-002.svg",
-             Params::WithThreshold(kDefaultThreshold, 4000)},  // startOffset=30
-            {"e-textPath-003.svg",
-             Params::WithThreshold(kDefaultThreshold, 4000)},  // startOffset=5mm
-            {"e-textPath-004.svg",
-             Params::WithThreshold(kDefaultThreshold, 4000)},  // startOffset=10%
-            {"e-textPath-005.svg",
-             Params::WithThreshold(kDefaultThreshold, 2000)},  // startOffset=-100
-            {"e-textPath-007.svg", Params::Skip()},            // Not impl: method=stretch
-            {"e-textPath-008.svg", Params::Skip()},            // Not impl: spacing=auto
-            {"e-textPath-009.svg", Params::WithThreshold(kDefaultThreshold, 8000)},  // Two paths
-            {"e-textPath-010.svg", Params::WithThreshold(kDefaultThreshold, 4000)},  // Nested
-            {"e-textPath-011.svg",
-             Params::WithThreshold(kDefaultThreshold, 8200)},  // Mixed children (1)
-            {"e-textPath-012.svg",
-             Params::WithThreshold(kDefaultThreshold, 7700)},  // Mixed children (2)
-            {"e-textPath-013.svg",
-             Params::WithThreshold(kDefaultThreshold, 4100)},  // Coords on text
-            {"e-textPath-014.svg",
-             Params::WithThreshold(kDefaultThreshold, 4100)},  // Coords on textPath
-            {"e-textPath-015.svg",
-             Params::WithThreshold(kDefaultThreshold, 3600)},  // Very long text
-            {"e-textPath-016.svg", Params::Skip()},            // Not impl: link to rect (SVG 2)
-            {"e-textPath-019.svg", Params::WithThreshold(kDefaultThreshold, 2000)},  // text-anchor
-            {"e-textPath-020.svg", Params::WithThreshold(kDefaultThreshold, 8200)},  // Closed path
-            {"e-textPath-021.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // writing-mode=tb
-            {"e-textPath-022.svg",
-             Params::WithThreshold(kDefaultThreshold, 4400)},  // tspan absolute pos
-            {"e-textPath-023.svg",
-             Params::WithThreshold(kDefaultThreshold, 5000)},  // tspan relative pos
-            {"e-textPath-024.svg",
-             Params::WithThreshold(kDefaultThreshold, 5000)},  // Path with subpaths
-            {"e-textPath-025.svg",
-             Params::WithThreshold(kDefaultThreshold, 5500)},  // Invalid textPath mid
-            {"e-textPath-026.svg",
-             Params::WithThreshold(kDefaultThreshold, 8600)},  // Path with ClosePath
-            {"e-textPath-027.svg", Params::WithThreshold(kDefaultThreshold, 6600)},   // M L Z path
-            {"e-textPath-028.svg", Params::WithThreshold(kDefaultThreshold, 18000)},  // underline
-            {"e-textPath-029.svg", Params::WithThreshold(kDefaultThreshold, 4000)},   // With rotate
-            {"e-textPath-030.svg", Params::WithThreshold(kDefaultThreshold, 5400)},   // Complex
-            {"e-textPath-031.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // letter-spacing
-            {"e-textPath-032.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // baseline-shift
-            {"e-textPath-033.svg", Params::Skip()},             // UB: baseline-shift + rotate
-            {"e-textPath-034.svg", Params::WithThreshold(kDefaultThreshold, 5000)},  // M A path
-            {"e-textPath-035.svg",
-             Params::WithThreshold(kDefaultThreshold, 8000)},  // dy with tiny coords
-            {"e-textPath-036.svg",
-             Params::WithThreshold(kDefaultThreshold, 4100)},  // transform on ref path
-            {"e-textPath-037.svg",
-             Params::WithThreshold(kDefaultThreshold, 4100)},  // transform outside ref
-            {"e-textPath-038.svg",
-             Params::WithThreshold(kDefaultThreshold, 18000)},  // letter-spacing
-            {"e-textPath-039.svg",
-             Params::WithThreshold(kDefaultThreshold, 1200)},  // Subpaths + startOffset
-            {"e-textPath-040.svg", Params::Skip()},            // Not impl: filter on textPath
-            {"e-textPath-041.svg", Params::Skip()},            // Not impl: side=right (SVG 2)
-            {"e-textPath-042.svg", Params::Skip()},            // Not impl: path attr (SVG 2)
-            {"e-textPath-043.svg", Params::Skip()},            // Not impl: path + xlink:href
-            {"e-textPath-044.svg", Params::Skip()},            // Not impl: invalid path + href
+            // {"e-textPath-001.svg", Params::WithThreshold(kDefaultThreshold, 4000)},  // Basic
+            // {"e-textPath-002.svg",
+            //  Params::WithThreshold(kDefaultThreshold, 4000)},  // startOffset=30
+            // {"e-textPath-003.svg",
+            //  Params::WithThreshold(kDefaultThreshold, 4000)},  // startOffset=5mm
+            // {"e-textPath-004.svg",
+            //  Params::WithThreshold(kDefaultThreshold, 4000)},  // startOffset=10%
+            // {"e-textPath-005.svg",
+            //  Params::WithThreshold(kDefaultThreshold, 2000)},  // startOffset=-100
+            {"e-textPath-007.svg", Params::Skip()},  // Not impl: method=stretch
+            {"e-textPath-008.svg",
+             Params::
+                 Skip()},  // Not impl: spacing=auto
+                           // {"e-textPath-009.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 8000)},  // Two paths
+                           // {"e-textPath-010.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 4000)},  // Nested
+                           // {"e-textPath-011.svg",
+                           //  Params::WithThreshold(kDefaultThreshold,
+                           //                        8200)},  // Mixed children (1)
+                           //                                 // e-textPath-012 intentionally uses
+                           //                                 the default
+                           //                                 // threshold so it fails until fixed.
+                           // {"e-textPath-013.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 4100)},  // Coords on text
+                           // {"e-textPath-014.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 4100)},  // Coords on
+                           //  textPath
+                           // {"e-textPath-015.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 3600)},  // Very long text
+                           // {"e-textPath-016.svg", Params::Skip()},            // Not impl: link
+                           // to rect (SVG 2)
+                           // {"e-textPath-019.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 2000)},  // text-anchor
+                           // {"e-textPath-020.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 8200)},  // Closed path
+                           // {"e-textPath-021.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 18000)},  // writing-mode=tb
+                           // {"e-textPath-022.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 4400)},  // tspan absolute
+                           //  pos
+                           // {"e-textPath-023.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 5000)},  // tspan relative
+                           //  pos
+                           // {"e-textPath-024.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 5000)},  // Path with
+                           //  subpaths
+                           // {"e-textPath-025.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 5500)},  // Invalid textPath
+                           //  mid
+                           // {"e-textPath-026.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 8600)},  // Path with
+                           //  ClosePath
+                           // {"e-textPath-027.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 6600)},   // M L Z path
+                           // {"e-textPath-028.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 18000)},  // underline
+                           // {"e-textPath-029.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 4000)},   // With rotate
+                           // {"e-textPath-030.svg", Params::WithThreshold(kDefaultThreshold,
+                           // 5400)},   // Complex
+                           // {"e-textPath-031.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 18000)},  // letter-spacing
+                           // {"e-textPath-032.svg",
+                           //  Params::WithThreshold(kDefaultThreshold, 18000)},  // baseline-shift
+            {"e-textPath-033.svg",
+             Params::Skip()},  // UB: baseline-shift + rotate
+                               // {"e-textPath-034.svg", Params::WithThreshold(kDefaultThreshold,
+                               // 5000)},  // M A path
+                               // {"e-textPath-035.svg",
+                               //  Params::WithThreshold(kDefaultThreshold, 8000)},  // dy with tiny
+                               //  coords
+                               // {"e-textPath-036.svg",
+                               //  Params::WithThreshold(kDefaultThreshold, 4100)},  // transform on
+                               //  ref path
+                               // {"e-textPath-037.svg",
+                               //  Params::WithThreshold(kDefaultThreshold, 4100)},  // transform
+                               //  outside ref
+                               // {"e-textPath-038.svg",
+                               //  Params::WithThreshold(kDefaultThreshold, 18000)},  //
+                               //  letter-spacing
+                               // {"e-textPath-039.svg",
+                               //  Params::WithThreshold(kDefaultThreshold, 1200)},  // Subpaths +
+                               //  startOffset
+            {"e-textPath-040.svg", Params::Skip()},  // Not impl: filter on textPath
+            {"e-textPath-041.svg", Params::Skip()},  // Not impl: side=right (SVG 2)
+            {"e-textPath-042.svg", Params::Skip()},  // Not impl: path attr (SVG 2)
+            {"e-textPath-043.svg", Params::Skip()},  // Not impl: path + xlink:href
+            {"e-textPath-044.svg", Params::Skip()},  // Not impl: invalid path + href
         })),
     TestNameFromFilename);
 

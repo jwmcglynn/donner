@@ -765,7 +765,8 @@ private:
 
     // Emit comment token spanning from <!-- to -->.
     if (startOffset.offset.has_value()) {
-      emitToken(XMLTokenType::Comment, *startOffset.offset, currentByteOffset() - *startOffset.offset);
+      emitToken(XMLTokenType::Comment, *startOffset.offset,
+                currentByteOffset() - *startOffset.offset);
     }
 
     // If Comment nodes are enabled
@@ -929,7 +930,8 @@ private:
 
     // Emit CDATA token spanning from <![CDATA[ to ]]>.
     if (startOffset.offset.has_value()) {
-      emitToken(XMLTokenType::CData, *startOffset.offset, currentByteOffset() - *startOffset.offset);
+      emitToken(XMLTokenType::CData, *startOffset.offset,
+                currentByteOffset() - *startOffset.offset);
     }
 
     const ChunkedString& cdataStr = maybeCData.value();
@@ -1205,6 +1207,7 @@ private:
       } else {
         // Data node
         remaining_ = contentsStart;
+        skipWhitespace(remaining_);
 
         if (auto maybeError = parseAndAppendData(node)) {
           return maybeError;  // Propagate error

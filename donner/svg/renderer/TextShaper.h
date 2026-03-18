@@ -80,6 +80,28 @@ public:
    */
   PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale);
 
+  /**
+   * Bitmap glyph data extracted from a color font (e.g., CBDT emoji).
+   */
+  struct BitmapGlyph {
+    std::vector<uint8_t> rgbaPixels;  ///< RGBA pixel data (premultiplied alpha).
+    int width = 0;                    ///< Bitmap width in pixels.
+    int height = 0;                   ///< Bitmap height in pixels.
+    double bearingX = 0;              ///< Horizontal offset from glyph origin.
+    double bearingY = 0;              ///< Vertical offset from baseline (positive = up).
+    double scale = 1.0;               ///< Scale factor to apply (bitmap ppem vs requested size).
+  };
+
+  /**
+   * Extract a bitmap glyph from a color font (CBDT/CBLC).
+   *
+   * @param font Font handle.
+   * @param glyphIndex Glyph index to extract.
+   * @param requestedScale The fontSizePx / upem scale for the desired size.
+   * @return The bitmap glyph data, or std::nullopt if the glyph is not a bitmap.
+   */
+  std::optional<BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex, float requestedScale);
+
 private:
   FontManager& fontManager_;
 

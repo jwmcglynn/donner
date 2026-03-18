@@ -32,11 +32,13 @@ cc_library(
     ],
     # HB_TINY strips many features for binary size. We override HB_NO_DRAW
     # (set by HB_TINY) because we need the draw API for glyph outline extraction.
+    # HAVE_FREETYPE enables hb-ft.cc for FreeType-backed hinted glyph outlines.
     defines = [
         "HB_TINY",
         "HB_NO_MT",
         "HAVE_STDBOOL_H",
         "HAVE_CONFIG_OVERRIDE_H",
+        "HAVE_FREETYPE",
     ],
     local_defines = [
         # Cannot un-define via defines, so we use a workaround in the source.
@@ -44,4 +46,7 @@ cc_library(
     includes = ["src"],
     visibility = ["//visibility:public"],
     alwayslink = True,
+    deps = [
+        "@freetype//:freetype",
+    ],
 )

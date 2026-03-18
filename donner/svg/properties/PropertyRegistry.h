@@ -365,7 +365,8 @@ public:
                                  strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
                                  cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize,
-                                 mixBlendMode, isolation);
+                                 textAnchor, textDecoration, dominantBaseline, writingMode,
+                                 letterSpacing, wordSpacing, mixBlendMode, isolation);
   }
 
   /**

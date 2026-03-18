@@ -259,6 +259,26 @@ TEST_F(XMLParserTests, ParseData) {
   EXPECT_THAT(child.value(), Eq("abcd"));
 }
 
+TEST_F(XMLParserTests, WhitespaceOnlyDataBetweenChildrenNotPreserved) {
+  auto maybeNode = parseAndGetFirstNode(R"(<node>  <a/>  <b/>  </node>)");
+  ASSERT_TRUE(maybeNode.has_value());
+
+  const XMLNode node = std::move(maybeNode.value());
+
+  auto child = node.firstChild();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Element);
+  EXPECT_THAT(child->tagName(), Eq("a"));
+
+  child = child->nextSibling();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Element);
+  EXPECT_THAT(child->tagName(), Eq("b"));
+
+  child = child->nextSibling();
+  ASSERT_FALSE(child.has_value());
+}
+
 TEST_F(XMLParserTests, ParseCData) {
   auto maybeNode = parseAndGetFirstNode(R"(<![CDATA[abcd]]>)");
   ASSERT_TRUE(maybeNode.has_value());
@@ -1144,19 +1164,19 @@ TEST(XMLParserTokenTest, NestedElementsEmitOpenAndCloseTagTokens) {
   }
 
   // Opening <svg>
-  EXPECT_EQ(types[0], XMLTokenType::TagOpen);    // <
-  EXPECT_EQ(types[1], XMLTokenType::TagName);    // svg
-  EXPECT_EQ(types[2], XMLTokenType::TagClose);   // >
+  EXPECT_EQ(types[0], XMLTokenType::TagOpen);   // <
+  EXPECT_EQ(types[1], XMLTokenType::TagName);   // svg
+  EXPECT_EQ(types[2], XMLTokenType::TagClose);  // >
 
   // Self-closing <rect/>
-  EXPECT_EQ(types[3], XMLTokenType::TagOpen);    // <
-  EXPECT_EQ(types[4], XMLTokenType::TagName);    // rect
-  EXPECT_EQ(types[5], XMLTokenType::TagClose);   // />
+  EXPECT_EQ(types[3], XMLTokenType::TagOpen);   // <
+  EXPECT_EQ(types[4], XMLTokenType::TagName);   // rect
+  EXPECT_EQ(types[5], XMLTokenType::TagClose);  // />
 
   // Closing </svg>
-  EXPECT_EQ(types[6], XMLTokenType::TagOpen);    // </
-  EXPECT_EQ(types[7], XMLTokenType::TagName);    // svg
-  EXPECT_EQ(types[8], XMLTokenType::TagClose);   // >
+  EXPECT_EQ(types[6], XMLTokenType::TagOpen);   // </
+  EXPECT_EQ(types[7], XMLTokenType::TagName);   // svg
+  EXPECT_EQ(types[8], XMLTokenType::TagClose);  // >
 }
 
 TEST(XMLParserTokenTest, CommentEmitsCommentToken) {
@@ -1183,6 +1203,19 @@ TEST(XMLParserTokenTest, TextContentEmitsTextToken) {
     }
   }
   EXPECT_TRUE(foundText) << "Expected a TextContent token";
+}
+
+TEST(XMLParserTokenTest, WhitespaceBetweenChildrenEmitsNoText) {
+  const auto tokens = parseWithTokens(R"(<root><a/>  <b/></root>)");
+
+  bool foundWhitespaceText = false;
+  for (const auto& t : tokens) {
+    if (t.type == XMLTokenType::TextContent && t.text == "  ") {
+      foundWhitespaceText = true;
+    }
+  }
+
+  EXPECT_FALSE(foundWhitespaceText) << "Expected no whitespace-only TextContent token";
 }
 
 TEST(XMLParserTokenTest, NoCallbackProducesNoTokens) {

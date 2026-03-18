@@ -149,28 +149,19 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   return clip;
 }
 
-/// Convert an absolute Lengthd to pixel value. For relative units (em, %, etc.) falls back
-/// to the raw value.
-double lengthToPixels(const Lengthd& length) {
-  switch (length.unit) {
-    case Lengthd::Unit::None:
-    case Lengthd::Unit::Px: return length.value;
-    case Lengthd::Unit::In: return length.value * 96.0;
-    case Lengthd::Unit::Cm: return length.value * 96.0 / 2.54;
-    case Lengthd::Unit::Mm: return length.value * 96.0 / 25.4;
-    case Lengthd::Unit::Q: return length.value * 96.0 / (2.54 * 40.0);
-    case Lengthd::Unit::Pt: return length.value * 96.0 / 72.0;
-    case Lengthd::Unit::Pc: return length.value * 96.0 / 6.0;
-    default: return length.value;  // Relative units: best-effort fallback.
-  }
+/// Convert a Lengthd to pixel value, resolving relative units (em, ex, rem, etc.) via font
+/// metrics.
+double lengthToPixels(const Lengthd& length, const Boxd& viewBox, const FontMetrics& fontMetrics) {
+  return length.toPixels(viewBox, fontMetrics);
 }
 
 std::optional<components::FilterGraph> resolveFilterGraph(
-    Registry& registry, const components::ResolvedFilterEffect& filter,
-    css::RGBA currentColor = css::RGBA(0, 0, 0, 0xFF)) {
+    Registry& registry, const components::ResolvedFilterEffect& filter, css::RGBA currentColor,
+    const Boxd& viewBox, const FontMetrics& fontMetrics) {
   if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
     // Convert CSS filter functions to a FilterGraph.
-    // Per CSS Filter Effects Level 1, CSS filter shorthand functions use sRGB color space.
+    // CSS Filter Effects Level 1 §8: shorthand filter functions use sRGB color space for
+    // interpolation, unlike SVG filter elements which default to linearRGB.
     components::FilterGraph graph;
     graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
     for (const FilterEffect& effect : *effects) {
@@ -182,8 +173,8 @@ std::optional<components::FilterGraph> resolveFilterGraph(
             } else if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
               components::FilterNode node;
               node.primitive = components::filter_primitive::GaussianBlur{
-                  .stdDeviationX = lengthToPixels(e.stdDeviationX),
-                  .stdDeviationY = lengthToPixels(e.stdDeviationY),
+                  .stdDeviationX = lengthToPixels(e.stdDeviationX, viewBox, fontMetrics),
+                  .stdDeviationY = lengthToPixels(e.stdDeviationY, viewBox, fontMetrics),
               };
               node.inputs.push_back(components::FilterInput{});
               graph.nodes.push_back(std::move(node));
@@ -306,10 +297,10 @@ std::optional<components::FilterGraph> resolveFilterGraph(
               const css::RGBA resolvedRGBA = e.color.resolve(currentColor, 1.0f);
               components::FilterNode node;
               node.primitive = components::filter_primitive::DropShadow{
-                  .dx = lengthToPixels(e.offsetX),
-                  .dy = lengthToPixels(e.offsetY),
-                  .stdDeviationX = lengthToPixels(e.stdDeviation),
-                  .stdDeviationY = lengthToPixels(e.stdDeviation),
+                  .dx = lengthToPixels(e.offsetX, viewBox, fontMetrics),
+                  .dy = lengthToPixels(e.offsetY, viewBox, fontMetrics),
+                  .stdDeviationX = lengthToPixels(e.stdDeviation, viewBox, fontMetrics),
+                  .stdDeviationY = lengthToPixels(e.stdDeviation, viewBox, fontMetrics),
                   .floodColor = css::Color(resolvedRGBA),
                   .floodOpacity = static_cast<double>(resolvedRGBA.a) / 255.0,
               };
@@ -443,7 +434,13 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   params.fontFamilies = properties.fontFamily.getRequired();
   params.fontSize = properties.fontSize.getRequired();
   params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  params.fontMetrics = FontMetrics();
+  // Resolve font size so that em/ex units in text positioning attributes resolve correctly.
+  {
+    const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double fontSizePx =
+        params.fontSize.toPixels(params.viewBox, baseFontMetrics, Lengthd::Extent::Mixed);
+    params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
+  }
   params.textAnchor = properties.textAnchor.getRequired();
   params.textDecoration = properties.textDecoration.getRequired();
   params.dominantBaseline = properties.dominantBaseline.getRequired();
@@ -562,10 +559,18 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
+    const Boxd filterViewBox =
+        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double filterFontSizePx =
+        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
+
     std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
             ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
-                                 style.properties->color.getRequired().rgba())
+                                 style.properties->color.getRequired().rgba(), filterViewBox,
+                                 filterFontMetrics)
             : std::nullopt;
     const std::optional<Boxd> filterRegion =
         instance.resolvedFilter.has_value()
@@ -577,10 +582,9 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
         filterGraph->elementBoundingBox =
             components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
       }
-      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-      if (viewBox.width() > 0 && viewBox.height() > 0) {
-        filterGraph->userToPixelScale =
-            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
+        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
+                                                 renderingSize_.y / filterViewBox.height());
       }
     }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
@@ -774,10 +778,18 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
+    const Boxd filterViewBox =
+        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double filterFontSizePx =
+        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
+
     std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
             ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
-                                 style.properties->color.getRequired().rgba())
+                                 style.properties->color.getRequired().rgba(), filterViewBox,
+                                 filterFontMetrics)
             : std::nullopt;
     const std::optional<Boxd> filterRegion =
         instance.resolvedFilter.has_value()
@@ -792,10 +804,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       // Compute the user-space to pixel-space scale factor from the viewBox and canvas dimensions.
       // Lighting filters need this to transform light positions from SVG attribute values to the
       // pixel-space pixmap coordinates.
-      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-      if (viewBox.width() > 0 && viewBox.height() > 0) {
-        filterGraph->userToPixelScale =
-            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
+        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
+                                                 renderingSize_.y / filterViewBox.height());
       }
     }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
@@ -1071,10 +1082,18 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
+    const Boxd filterViewBox =
+        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double filterFontSizePx =
+        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
+
     std::optional<components::FilterGraph> filterGraph =
         instance.resolvedFilter.has_value()
             ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
-                                 style.properties->color.getRequired().rgba())
+                                 style.properties->color.getRequired().rgba(), filterViewBox,
+                                 filterFontMetrics)
             : std::nullopt;
     const std::optional<Boxd> filterRegion =
         instance.resolvedFilter.has_value()
@@ -1086,10 +1105,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         filterGraph->elementBoundingBox =
             components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
       }
-      const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-      if (viewBox.width() > 0 && viewBox.height() > 0) {
-        filterGraph->userToPixelScale =
-            Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
+        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
+                                                 renderingSize_.y / filterViewBox.height());
       }
     }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
@@ -1142,6 +1160,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        drawMarkers(view, registry, instance, *path, style);
       } else if (const auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp =

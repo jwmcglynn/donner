@@ -3,7 +3,7 @@
 **Status:** In Progress (Milestones 1-5 functionally complete; remaining work is debt reduction)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-07
-**Last Updated:** 2026-03-11
+**Last Updated:** 2026-03-17
 **Tracking:** [#151](https://github.com/jwmcglynn/donner/issues/151)
 
 ## Summary
@@ -329,11 +329,89 @@ Less common but required for full spec compliance.
 - [ ] Partition graphs into maximal native Skia subgraphs and CPU fallback islands
 - [x] Keep unsupported graphs on the shared executor until native lowering is behaviorally correct
 
-### Milestone 6: CSS shorthand filter functions
+### Milestone 6: CSS shorthand filter function conformance
 
-- [ ] Parse CSS `filter` property function syntax: `blur()`, `brightness()`, `contrast()`, `drop-shadow()`, `grayscale()`, `hue-rotate()`, `invert()`, `opacity()`, `saturate()`, `sepia()`
-- [ ] Map each function to equivalent filter graph nodes
-- [ ] Support chained function lists (e.g., `filter: blur(5px) brightness(1.2)`)
+CSS shorthand filter functions (`blur()`, `brightness()`, `drop-shadow()`, etc.) are parsed and
+mapped to filter graph nodes. This milestone tracks the conformance bugs found during the v0.5
+filter-on-text pixel diff burndown.
+
+**Investigation findings (2026-03-16):**
+
+The `a-filter-*` resvg tests apply CSS filter functions to text elements. Most diffs fall into
+distinct categories:
+
+- **No-diff tests:** a-filter-006/007/008/009/010/014 (0–1px) — invalid filter syntax, both
+  renderers show unfiltered content. a-filter-017–030, 041–043 (0px) — simple filters on rects,
+  exact match.
+- **Font-only diffs:** a-filter-031–036 (~2.8K px each) — color-adjust functions on rects with
+  text labels. The diff is entirely from stb_truetype vs FreeType glyph differences. Irreducible.
+- **Blur algorithm diffs:** a-filter-002/003/004 (~5K px) — `drop-shadow()` on circles. The
+  three-pass box blur approximation in tiny-skia-cpp produces slightly different blur halos than
+  resvg. Small per-pixel diffs (~1–3 values) across the entire halo. Irreducible without matching
+  resvg's exact blur implementation.
+
+**Bugs found:**
+
+1. **Negative value validation** (a-filter-037, 42K px) — `brightness()`, `contrast()`, and
+   `saturate()` accept negative values. Per CSS Filter Effects Level 1, negative values are not
+   allowed and should make the function (and thus the entire filter list) invalid. Donner applies
+   them, producing wrong colors; resvg ignores the invalid filter.
+   - File: `donner/svg/properties/PropertyRegistry.cc` lines 779–824
+   - Fix: Return parse error for negative values in these three functions.
+
+2. **Drop-shadow default color** (a-filter-011, 16K px) — The CSS spec says the default shadow
+   color is `currentColor`, not black. Donner defaults to `css::RGBA(0, 0, 0, 0xFF)`.
+   `a-filter-012` uses explicit `currentColor` and has only 5px diff, confirming the resolution
+   path works.
+   - Files: `donner/svg/properties/PropertyRegistry.cc` line 840,
+     `donner/svg/components/filter/FilterEffect.h` line 116
+   - Fix: Change default from `css::RGBA(0, 0, 0, 0xFF)` to `css::Color::CurrentColor{}`.
+
+3. **Relative units in CSS filter lengths** (a-filter-015, 35K px) — `lengthToPixels()` in
+   `RendererDriver.cc` returns raw values for `em`/`ex`/`rem` units instead of resolving them
+   against the element's computed font size. For `drop-shadow(blue 0.2em 0.3em 0.1em)` with
+   `font-size="64"`, offsets become 0.2px instead of 12.8px.
+   - File: `donner/svg/renderer/RendererDriver.cc` lines 152–166
+   - Fix: Plumb font metrics into `resolveFilterGraph()` so `lengthToPixels()` can resolve
+     `em` = computed font size, `rem` = root font size, `ex` = x-height.
+
+4. **Color space in url()+CSS filter chains** (a-filter-038, 145K px) — When
+   `filter="url(#f) grayscale()"` is used, the `url()` graph inherits `linearRGB` (SVG default)
+   but the `grayscale()` CSS function uses `sRGB` (CSS default). The spec is ambiguous about
+   chained `url()` + CSS functions. The per-pixel diff is ~7 values (~2.7%), but it affects every
+   pixel in the rect.
+   - File: `donner/svg/renderer/RendererDriver.cc` lines 191–207
+   - Fix: Needs spec interpretation decision. Lowest priority.
+
+**Implementation plan:**
+
+- [x] Parse CSS `filter` property function syntax: `blur()`, `brightness()`, `contrast()`,
+  `drop-shadow()`, `grayscale()`, `hue-rotate()`, `invert()`, `opacity()`, `saturate()`, `sepia()`
+- [x] Map each function to equivalent filter graph nodes
+- [x] Support chained function lists (e.g., `filter: blur(5px) brightness(1.2)`)
+- [x] **Bug 1: Reject negative values** in `brightness()`, `contrast()`, `saturate()` parsing.
+  In `PropertyRegistry.cc` (lines 779–824), after `ParseNumberPercentage` succeeds, check
+  `result.result() < 0.0` and return `ParseError`. This makes the entire `filter` property
+  invalid, causing the element to render unfiltered (matching spec). Result: a-filter-037
+  42K→0px.
+- [x] **Bug 2: Drop-shadow default color → currentColor.** Changed default from
+  `css::RGBA(0, 0, 0, 0xFF)` to `css::Color::CurrentColor{}` in `FilterEffect.h` line 116
+  (struct default) and `PropertyRegistry.cc` line 840 (parse default). The resolution path
+  (`resolveFilterGraph()` → `e.color.resolve(currentColor, 1.0f)`) substitutes the element's
+  computed color for `CurrentColor`. Result: a-filter-011 16K→~5px (font diff only).
+- [x] **Bug 3: Resolve relative units in CSS filter lengths.** Replaced `lengthToPixels()`
+  (absolute-only) with `Lengthd::toPixels(viewBox, fontMetrics)` (full unit resolution). Added
+  `FontMetrics` and `Boxd viewBox` parameters to `resolveFilterGraph()`. At each call site,
+  compute font metrics following the `toStrokeParams()` pattern: get viewBox from `LayoutSystem`,
+  resolve `fontSize` from `style.properties->fontSize`, build `FontMetrics` using
+  `FontMetrics::DefaultsWithFontSize()`. Reference: `fontMetricsForElement()` in
+  `ShapeSystem.cc` for the full pattern including root font size and viewport size resolution.
+  Result: a-filter-015 35K→~5K (remaining diff is font rendering).
+- [ ] **Bug 4: Color space in url()+CSS chains** — Deferred. Spec-ambiguous: when
+  `filter="url(#f) grayscale()"` is used, the `url()` graph uses linearRGB (SVG default) but
+  the CSS function uses sRGB (CSS default). Documented as known limitation (a-filter-038: 145K).
+- [x] Tighten `a-filter-*` test thresholds after fixes. Reductions: a-filter-037 (43K→0,
+  override removed), a-filter-011 (17K→~5K), a-filter-015 (35K→~5K), a-filter-013 (24K→~5K).
 
 ### Milestone 7: Polish and conformance
 

@@ -79,6 +79,8 @@ std::optional<ParseError> ParseNodeContents<SVGTextElement>(SVGParserContext& co
       if (auto maybeValue = child->value()) {
         element.appendText(maybeValue.value());
       }
+    } else if (child->type() == XMLNode::Type::Element) {
+      element.advanceTextChunk();
     }
   }
   return std::nullopt;
@@ -101,6 +103,32 @@ std::optional<ParseError> ParseNodeContents<SVGTSpanElement>(SVGParserContext& c
       if (auto maybeValue = child->value()) {
         element.appendText(maybeValue.value());
       }
+    } else if (child->type() == XMLNode::Type::Element) {
+      element.advanceTextChunk();
+    }
+  }
+  return std::nullopt;
+}
+
+/**
+ * Parse text content for \ref xml_textPath elements.
+ *
+ * @param context The parser context.
+ * @param element The textPath element to parse contents for.
+ * @param node The XML node containing the text content.
+ * @return std::nullopt if successful, otherwise a ParseError describing the failure.
+ */
+template <>
+std::optional<ParseError> ParseNodeContents<SVGTextPathElement>(SVGParserContext& context,
+                                                                SVGTextPathElement element,
+                                                                const XMLNode& node) {
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      if (auto maybeValue = child->value()) {
+        element.appendText(maybeValue.value());
+      }
+    } else if (child->type() == XMLNode::Type::Element) {
+      element.advanceTextChunk();
     }
   }
   return std::nullopt;
