@@ -254,7 +254,9 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     // positioning attributes (x, y, dx, dy, rotate). Non-spacing characters and characters
     // following a ZWJ do not advance this index.
     size_t byteIdx = 0;
-    int prevGlyph = prevSpanLastGlyph;
+    // Suppress cross-span kerning when this span starts a new text chunk
+    // (has explicit x or y position).
+    int prevGlyph = (span.hasX || span.hasY) ? 0 : prevSpanLastGlyph;
     unsigned int charIdx = 0;
     bool firstCodepoint = true;
     bool prevWasZwj = false;

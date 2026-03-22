@@ -1088,37 +1088,8 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    TspanElement, ImageComparisonTestFixture,
-    ValuesIn(
-        getTestsWithPrefix("e-tspan",
-                           {
-                               {"e-tspan-004.svg", Params::WithThreshold(kDefaultThreshold, 7500)},
-                               {"e-tspan-005.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
-                               {"e-tspan-006.svg", Params::WithThreshold(kDefaultThreshold, 11000)},
-                               {"e-tspan-007.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
-                               {"e-tspan-008.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
-                               {"e-tspan-009.svg", Params::WithThreshold(kDefaultThreshold, 9500)},
-                               {"e-tspan-010.svg", Params::WithThreshold(kDefaultThreshold, 8500)},
-                               {"e-tspan-011.svg", Params::WithThreshold(kDefaultThreshold, 1500)},
-                               {"e-tspan-013.svg", Params::WithThreshold(kDefaultThreshold, 32000)},
-                               {"e-tspan-014.svg", Params::WithThreshold(kDefaultThreshold, 9500)},
-                               {"e-tspan-016.svg", Params::WithThreshold(kDefaultThreshold, 7000)},
-                               {"e-tspan-017.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
-                               {"e-tspan-018.svg", Params::WithThreshold(kDefaultThreshold, 7000)},
-                               {"e-tspan-020.svg", Params::WithThreshold(kDefaultThreshold, 17500)},
-                               {"e-tspan-022.svg", Params::WithThreshold(kDefaultThreshold, 45000)},
-                               {"e-tspan-024.svg", Params::WithThreshold(kDefaultThreshold, 25500)},
-                               {"e-tspan-025.svg", Params::WithThreshold(kDefaultThreshold, 9000)},
-                               {"e-tspan-026.svg", Params::WithThreshold(kDefaultThreshold, 7500)},
-                               {"e-tspan-027.svg", Params::WithThreshold(kDefaultThreshold, 14000)},
-                               {"e-tspan-028.svg", Params::WithThreshold(kDefaultThreshold, 15500)},
-                               {"e-tspan-029.svg", Params::WithThreshold(kDefaultThreshold, 14500)},
-                               {"e-tspan-030.svg", Params::WithThreshold(kDefaultThreshold, 6000)},
-                               {"e-tspan-031.svg", Params::WithThreshold(kDefaultThreshold, 15000)},
-                           },
-                           Params::WithThreshold(kDefaultThreshold, 17000))),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(TspanElement, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-tspan")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Use, ImageComparisonTestFixture,

@@ -370,13 +370,13 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(
   return ParseSVG(source, outWarnings, options, std::move(settings));
 }
 
-ParseResult<SVGDocument> SVGParser::ParseSVG(
-    std::string_view source, std::vector<ParseError>* outWarnings, SVGParser::Options options,
-    SVGDocument::Settings settings) noexcept {
+ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
+                                             std::vector<ParseError>* outWarnings,
+                                             SVGParser::Options options,
+                                             SVGDocument::Settings settings) noexcept {
   // Inject the SVG parse callback for sub-document loading, unless we're already in secure mode
   // (sub-documents cannot load their own sub-documents).
-  if (!settings.svgParseCallback &&
-      settings.processingMode == ProcessingMode::DynamicInteractive) {
+  if (!settings.svgParseCallback && settings.processingMode == ProcessingMode::DynamicInteractive) {
     settings.svgParseCallback = [](const std::vector<uint8_t>& svgContent,
                                    std::vector<ParseError>* warnings) -> std::optional<std::any> {
       SVGDocument::Settings subSettings;
@@ -437,9 +437,10 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(
   }
 }
 
-ParseResult<SVGDocument> SVGParser::ParseXMLDocument(
-    xml::XMLDocument&& xmlDocument, std::vector<ParseError>* outWarnings,
-    SVGParser::Options options, SVGDocument::Settings settings) noexcept {
+ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocument,
+                                                     std::vector<ParseError>* outWarnings,
+                                                     SVGParser::Options options,
+                                                     SVGDocument::Settings settings) noexcept {
   SVGParserContext context(std::string_view(), outWarnings, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
   if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {

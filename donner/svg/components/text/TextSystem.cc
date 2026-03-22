@@ -177,25 +177,29 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       for (size_t ci = 0; ci < charCount; ++ci) {
         const size_t globalIdx = globalCharIndex + ci;
 
-        if (ci < pos.x.size()) {
+        // Only apply pos.x/y/dx/dy[ci] for the element's first chunk
+        // (applyElementPositioning=true). For continuation chunks (text after child
+        // elements), pos values at local index ci were already consumed by the first
+        // chunk. Fall through to globalIdx indexing for the root's coordinate lists.
+        if (applyElementPositioning && ci < pos.x.size()) {
           span.xList[ci] = pos.x[ci];
         } else if (globalIdx < positioningComponent.x.size()) {
           span.xList[ci] = positioningComponent.x[globalIdx];
         }
 
-        if (ci < pos.y.size()) {
+        if (applyElementPositioning && ci < pos.y.size()) {
           span.yList[ci] = pos.y[ci];
         } else if (globalIdx < positioningComponent.y.size()) {
           span.yList[ci] = positioningComponent.y[globalIdx];
         }
 
-        if (ci < pos.dx.size()) {
+        if (applyElementPositioning && ci < pos.dx.size()) {
           span.dxList[ci] = pos.dx[ci];
         } else if (globalIdx < positioningComponent.dx.size()) {
           span.dxList[ci] = positioningComponent.dx[globalIdx];
         }
 
-        if (ci < pos.dy.size()) {
+        if (applyElementPositioning && ci < pos.dy.size()) {
           span.dyList[ci] = pos.dy[ci];
         } else if (globalIdx < positioningComponent.dy.size()) {
           span.dyList[ci] = positioningComponent.dy[globalIdx];
