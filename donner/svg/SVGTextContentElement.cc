@@ -79,16 +79,23 @@ void SVGTextContentElement::appendText(std::string_view text) {
   }
 
   if (textComponent.textChunks.empty()) {
-    textComponent.textChunks.push_back(RcString(text));
+    textComponent.textChunks.emplace_back(text);
   } else if (textComponent.textChunks.back().empty()) {
     textComponent.textChunks.back() = RcString(text);
   } else {
-    textComponent.textChunks.back() = textComponent.textChunks.back() + text;
+    textComponent.textChunks.emplace_back(text);
   }
 }
 
 void SVGTextContentElement::advanceTextChunk() {
   auto& textComponent = handle_.get<components::TextComponent>();
+  // Ensure chunk[0] exists for "text before this child element". When the XML parser
+  // strips whitespace-only text nodes, no appendText is called before the first
+  // advanceTextChunk, leaving textChunks empty. Without this guard, text after the
+  // child element would end up in chunk[0] instead of chunk[1+], breaking DOM order.
+  if (textComponent.textChunks.empty()) {
+    textComponent.textChunks.push_back(RcString(""));
+  }
   textComponent.textChunks.push_back(RcString(""));
 }
 
