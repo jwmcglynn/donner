@@ -63,7 +63,14 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
         for (int kx = 0; kx < params.orderX; ++kx) {
           const int srcX = x - params.targetX + kx;
           const int srcY = y - params.targetY + ky;
-          const double weight = params.kernel[ky * params.orderX + kx];
+
+          // SVG spec note: "the kernel matrix is rotated 180 degrees relative to the
+          // source and destination images in order to match convolution theory."  Read
+          // the kernel in reversed order (180° rotation) so that the mathematical
+          // convolution convention is followed while keeping the window position
+          // unchanged.
+          const double weight =
+              params.kernel[(params.orderY - 1 - ky) * params.orderX + (params.orderX - 1 - kx)];
 
           double pr, pg, pb, pa;
           fetchPixel(srcData, w, h, srcX, srcY, params.edgeMode, pr, pg, pb, pa);
@@ -169,7 +176,14 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
         for (int kx = 0; kx < params.orderX; ++kx) {
           const int srcX = x - params.targetX + kx;
           const int srcY = y - params.targetY + ky;
-          const double weight = params.kernel[ky * params.orderX + kx];
+
+          // SVG spec note: "the kernel matrix is rotated 180 degrees relative to the
+          // source and destination images in order to match convolution theory."  Read
+          // the kernel in reversed order (180° rotation) so that the mathematical
+          // convolution convention is followed while keeping the window position
+          // unchanged.
+          const double weight =
+              params.kernel[(params.orderY - 1 - ky) * params.orderX + (params.orderX - 1 - kx)];
 
           double pr, pg, pb, pa;
           fetchPixelFloat(srcData, w, h, srcX, srcY, params.edgeMode, pr, pg, pb, pa);

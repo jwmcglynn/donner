@@ -463,32 +463,16 @@ INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(FeBlend, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feBlend")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeColorMatrix, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feColorMatrix",
-        {
-            // Float pipeline diffs: identity-like filters (no-op) show gradient rendering
-            // differences (~10945px) since the float sRGB↔linear round-trip is lossless.
-            // Non-trivial filters improved significantly with float precision.
-            // All feColorMatrix diffs are from resvg's uint8 sRGB↔linear quantization vs our
-            // float pipeline. Diffs are small per-pixel (below YIQ 0.05) but numerous because
-            // the test gradient has many unique colors affected by quantization.
-            {"e-feColorMatrix-001.svg", Params::WithThreshold(0.05f)},  // type=matrix
-            {"e-feColorMatrix-002.svg", Params::WithThreshold(0.05f)},  // identity matrix
-            {"e-feColorMatrix-003.svg", Params::WithThreshold(0.05f)},  // identity matrix
-            {"e-feColorMatrix-004.svg", Params::WithThreshold(0.05f)},  // identity matrix
-            {"e-feColorMatrix-005.svg", Params::WithThreshold(0.05f)},  // identity matrix
-            {"e-feColorMatrix-006.svg", Params::WithThreshold(0.05f)},  // non-normalized values
-            {"e-feColorMatrix-007.svg", Params::WithThreshold(0.05f)},  // saturate
-            {"e-feColorMatrix-008.svg", Params::Skip()},                // saturate -0.5 (UB)
-            {"e-feColorMatrix-009.svg", Params::Skip()},                // saturate 99999 (UB)
-            {"e-feColorMatrix-010.svg", Params::WithThreshold(0.05f)},  // identity saturate
-            {"e-feColorMatrix-011.svg", Params::WithThreshold(0.05f)},  // hueRotate(30)
-            {"e-feColorMatrix-012.svg", Params::WithThreshold(0.05f)},  // hueRotate(0) identity
-            {"e-feColorMatrix-015.svg", Params::WithThreshold(0.05f)},  // no attrs identity
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeColorMatrix, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix(
+                             "e-feColorMatrix",
+                             {
+                                 {"e-feColorMatrix-008.svg", Params::Skip()},  // UB: saturate -0.5
+                                 {"e-feColorMatrix-009.svg", Params::Skip()},  // UB: saturate 99999
+                             },
+                             // Slightly increase the threshold due to small color conversion diffs.
+                             Params::WithThreshold(0.03f))),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FeComponentTransfer, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feComponentTransfer")),
@@ -502,17 +486,13 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-feConvolveMatrix",
         {
-            {"e-feConvolveMatrix-014.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   7000)},  // filter region boundary edges (6584px)
-            {"e-feConvolveMatrix-015.svg", Params::Skip()},  // UB: bias=0.5 (79K px diff)
-            {"e-feConvolveMatrix-016.svg", Params::Skip()},  // UB: bias=-0.5 (89K px diff)
-            {"e-feConvolveMatrix-017.svg", Params::Skip()},  // UB: bias=9999 (33K px diff)
-            {"e-feConvolveMatrix-018.svg", Params::WithThreshold(kDefaultThreshold, 0)},
+            {"e-feConvolveMatrix-015.svg", Params::Skip()},  // UB: bias=0.5
+            {"e-feConvolveMatrix-016.svg", Params::Skip()},  // UB: bias=-0.5
+            {"e-feConvolveMatrix-017.svg", Params::Skip()},  // UB: bias=9999
             {"e-feConvolveMatrix-022.svg",
-             Params::WithThreshold(kDefaultThreshold, 220)},  // edgeMode=wrap (187px)
-            {"e-feConvolveMatrix-023.svg",
-             Params::Skip()},  // UB: wrap with oversized kernel (37K px diff)
+             Params::WithThreshold(kDefaultThreshold,
+                                   200)},  // Minor algorithm differences on edge handling (180px)
+            {"e-feConvolveMatrix-023.svg", Params::Skip()},  // UB: wrap with oversized kernel
         })),
     TestNameFromFilename);
 
