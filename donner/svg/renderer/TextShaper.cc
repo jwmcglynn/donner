@@ -751,8 +751,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
         // Cross-span kerning: HarfBuzz shapes each span separately, so kerning between
         // the last glyph of the previous span and the first of this span is lost. Apply
-        // it manually, unless a new text chunk starts (absolute x or y).
-        if (gi == 0 && prevSpanLastCodepoint != 0 && !hasAbsoluteX && !hasAbsoluteY) {
+        // it manually, unless a new text chunk starts (explicit position or startsNewChunk).
+        if (gi == 0 && prevSpanLastCodepoint != 0 && !span.startsNewChunk && !hasAbsoluteX &&
+            !hasAbsoluteY) {
           // Cross-span GPOS kerning: shape the pair of Unicode codepoints to get the
           // kerning that HarfBuzz would apply if they were in the same buffer.
           const uint32_t curCodepoint =
