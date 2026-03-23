@@ -1337,6 +1337,30 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                        },
                        &registry.fontSize);
                  }},  //
+                {"font-weight",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params)
+                           -> ParseResult<int> {
+                         const auto& components = params.components();
+                         if (components.size() == 1) {
+                           const auto& comp = components.front();
+                           if (const auto* ident = comp.tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("normal")) return 400;
+                             if (ident->value.equalsLowercase("bold")) return 700;
+                           } else if (const auto* num = comp.tryGetToken<css::Token::Number>()) {
+                             if (num->value >= 1 && num->value <= 1000) {
+                               return static_cast<int>(num->value);
+                             }
+                           }
+                         }
+                         ParseError err;
+                         err.reason = "Invalid font-weight value";
+                         return err;
+                       },
+                       &registry.fontWeight);
+                 }},  //
                 {"text-anchor",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(

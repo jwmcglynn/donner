@@ -160,32 +160,45 @@ void FontManager::addFontFace(const css::FontFace& face) {
 }
 
 FontHandle FontManager::findFont(std::string_view family) {
-  // Check cache first.
-  const std::string familyStr(family);
-  if (auto it = cache_.find(familyStr); it != cache_.end()) {
+  return findFont(family, 400);
+}
+
+FontHandle FontManager::findFont(std::string_view family, int weight) {
+  // Check cache first (keyed by family + weight).
+  const std::string cacheKey = std::string(family) + ":" + std::to_string(weight);
+  if (auto it = cache_.find(cacheKey); it != cache_.end()) {
     return it->second;
   }
 
-  // Walk @font-face rules looking for a matching family.
+  // Walk @font-face rules looking for the best matching family + weight.
+  // First pass: exact weight match. Second pass: closest weight.
+  const css::FontFace* bestFace = nullptr;
+  int bestDelta = std::numeric_limits<int>::max();
+
   for (const auto& face : faces_) {
     if (face.familyName != family) {
       continue;
     }
+    const int delta = std::abs(face.fontWeight - weight);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestFace = &face;
+      if (delta == 0) {
+        break;  // Exact match.
+      }
+    }
+  }
 
-    for (const auto& source : face.sources) {
+  if (bestFace) {
+    for (const auto& source : bestFace->sources) {
       FontHandle handle;
-
       if (source.kind == css::FontFaceSource::Kind::Data) {
         const auto& dataPtr =
             std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
         handle = loadFontDataShared(dataPtr);
       }
-      // Note: Kind::Url and Kind::Local are not handled here yet.
-      // URL loading requires a ResourceLoaderInterface which we'll integrate in a future phase.
-      // Local system fonts are not supported for TinySkia (no system font access).
-
       if (handle) {
-        cache_[familyStr] = handle;
+        cache_[cacheKey] = handle;
         return handle;
       }
     }
@@ -193,7 +206,7 @@ FontHandle FontManager::findFont(std::string_view family) {
 
   // Fall back to the embedded Public Sans font.
   FontHandle fb = fallbackFont();
-  cache_[familyStr] = fb;
+  cache_[cacheKey] = fb;
   return fb;
 }
 

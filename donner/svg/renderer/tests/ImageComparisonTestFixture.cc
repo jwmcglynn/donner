@@ -33,6 +33,26 @@ namespace {
  * Splits the stem on '-' to get the base name, then inserts spaces before uppercase
  * letters that follow lowercase letters (camelCase → space-separated).
  */
+/// Parse CSS font-weight from a font filename suffix (e.g., "Bold" → 700).
+int fontWeightFromFilename(const std::filesystem::path& path) {
+  std::string stem = path.stem().string();
+  const auto dashPos = stem.find('-');
+  if (dashPos == std::string::npos) {
+    return 400;
+  }
+  const std::string suffix = stem.substr(dashPos + 1);
+  if (suffix == "Thin") return 100;
+  if (suffix == "ExtraLight" || suffix == "UltraLight") return 200;
+  if (suffix == "Light") return 300;
+  if (suffix == "Regular") return 400;
+  if (suffix == "Medium") return 500;
+  if (suffix == "SemiBold" || suffix == "DemiBold") return 600;
+  if (suffix == "Bold") return 700;
+  if (suffix == "ExtraBold" || suffix == "UltraBold") return 800;
+  if (suffix == "Black" || suffix == "Heavy") return 900;
+  return 400;
+}
+
 std::string fontFamilyFromFilename(const std::filesystem::path& path) {
   std::string stem = path.stem().string();
   // Strip weight/style suffix after the first '-'.
@@ -96,6 +116,7 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
 
     css::FontFace face;
     face.familyName = RcString(family);
+    face.fontWeight = fontWeightFromFilename(entry.path());
     face.sources.push_back(std::move(source));
     faces.push_back(std::move(face));
   }

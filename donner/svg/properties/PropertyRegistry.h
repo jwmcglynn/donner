@@ -279,6 +279,11 @@ public:
   Property<Lengthd, PropertyCascade::Inherit> fontSize{
       "font-size", []() -> std::optional<Lengthd> { return Lengthd(16, Lengthd::Unit::Px); }};
 
+  /// `font-weight` property, which determines the font weight (boldness) for text content.
+  /// Inherited. Value is a numeric weight (100-900), where 400=normal and 700=bold.
+  Property<int, PropertyCascade::Inherit> fontWeight{
+      "font-weight", []() -> std::optional<int> { return 400; }};
+
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
   Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
@@ -365,8 +370,8 @@ public:
                                  strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
                                  strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
                                  cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize,
-                                 textAnchor, textDecoration, dominantBaseline, writingMode,
-                                 letterSpacing, wordSpacing, mixBlendMode, isolation);
+                                 fontWeight, textAnchor, textDecoration, dominantBaseline,
+                                 writingMode, letterSpacing, wordSpacing, mixBlendMode, isolation);
   }
 
   /**

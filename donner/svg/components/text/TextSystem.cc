@@ -245,6 +245,7 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       if (style && style->properties) {
         span.baselineShift = style->properties->baselineShift.getRequired();
         span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
+        span.fontWeight = style->properties->fontWeight.getRequired();
 
         const css::RGBA currentColor = style->properties->color.getRequired().rgba();
         const float fillOpacity = static_cast<float>(style->properties->fillOpacity.getRequired());

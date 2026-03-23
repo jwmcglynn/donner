@@ -362,7 +362,35 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
   for (const auto& span : text.spans) {
     ShapedTextRun run;
-    run.font = font;
+
+    // Per-span font resolution: if the span's font-weight differs from the default,
+    // find a weight-matched font.
+    FontHandle spanFont = font;
+    if (span.fontWeight != 400) {
+      for (const auto& family : params.fontFamilies) {
+        FontHandle candidate = fontManager_.findFont(family, span.fontWeight);
+        if (candidate) {
+          spanFont = candidate;
+          break;
+        }
+      }
+    }
+    run.font = spanFont;
+
+    // Ensure the HarfBuzz font is created for this span's font.
+    hb_font_t* spanHbFont = getHbFont(spanFont);
+    if (!spanHbFont) {
+      spanHbFont = hbFont;
+      run.font = font;
+    }
+    // Set the FreeType face size for this span's font (may differ from the default font).
+    if (spanFont != font && spanHbFont) {
+      FT_Face spanFtFace = hb_ft_font_get_face(spanHbFont);
+      if (spanFtFace && FT_IS_SCALABLE(spanFtFace)) {
+        FT_Set_Char_Size(spanFtFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
+        hb_ft_font_changed(spanHbFont);
+      }
+    }
 
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
@@ -602,7 +630,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
                               (layoutLTR && !isMultiChar) ? HB_DIRECTION_LTR : detectedDirection);
       hb_buffer_set_script(chunkBuf, detectedScript);
       hb_buffer_set_language(chunkBuf, detectedLanguage);
-      hb_shape(hbFont, chunkBuf, nullptr, 0);
+      hb_shape(spanHbFont, chunkBuf, nullptr, 0);
 
       unsigned int chunkGlyphCount = 0;
       const hb_glyph_info_t* chunkInfos = hb_buffer_get_glyph_infos(chunkBuf, &chunkGlyphCount);
@@ -767,7 +795,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           // Get the nominal advance (without GPOS kerning) for the previous glyph.
           const unsigned int prevGlyphId = static_cast<unsigned int>(run.glyphs.back().glyphIndex);
           const double nominalAdvance =
-              static_cast<double>(hb_font_get_glyph_h_advance(hbFont, prevGlyphId)) * pixelScale;
+              static_cast<double>(hb_font_get_glyph_h_advance(spanHbFont, prevGlyphId)) * pixelScale;
           const double shapedAdvance = run.glyphs.back().xAdvance;
           // The difference is the kerning that shouldn't cross the chunk boundary.
           penX += (nominalAdvance - shapedAdvance);

@@ -65,6 +65,9 @@ struct ComputedTextComponent {
     /// Resolved solid fill color for this span, if one is available from computed style.
     std::optional<css::Color> fillColor;
 
+    /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
+    int fontWeight = 400;
+
     /// Per-character absolute X positions from \c x attribute lists. Indexed by character
     /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph
     /// advances naturally from the previous character.

@@ -42,6 +42,7 @@ struct FontFaceSource {
 struct FontFace {
   RcString familyName;                  ///< font-family descriptor
   std::vector<FontFaceSource> sources;  ///< ordered src list
+  int fontWeight = 400;                 ///< font-weight descriptor (100-900, 400=normal, 700=bold)
 };
 
 }  // namespace donner::css
