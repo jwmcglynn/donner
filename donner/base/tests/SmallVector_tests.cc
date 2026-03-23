@@ -744,4 +744,112 @@ TEST(SmallVector, FrontAndBack) {
   EXPECT_THAT(vec, ElementsAre(10, 2, 3, 4, 50));
 }
 
+/**
+ * Tests resize() growing with trivial types.
+ */
+TEST(SmallVector, ResizeGrowTrivial) {
+  SmallVector<int, 4> vec = {1, 2};
+  vec.resize(5);
+  EXPECT_EQ(vec.size(), 5);
+  EXPECT_EQ(vec[0], 1);
+  EXPECT_EQ(vec[1], 2);
+  EXPECT_EQ(vec[2], 0);
+  EXPECT_EQ(vec[3], 0);
+  EXPECT_EQ(vec[4], 0);
+}
+
+/**
+ * Tests resize() shrinking with trivial types.
+ */
+TEST(SmallVector, ResizeShrinkTrivial) {
+  SmallVector<int, 4> vec = {1, 2, 3, 4, 5};
+  vec.resize(2);
+  EXPECT_EQ(vec.size(), 2);
+  EXPECT_EQ(vec[0], 1);
+  EXPECT_EQ(vec[1], 2);
+}
+
+/**
+ * Tests resize() growing with non-trivial types.
+ */
+TEST(SmallVector, ResizeGrowNonTrivial) {
+  SmallVector<std::string, 2> vec;
+  vec.push_back("hello");
+  vec.resize(3);
+  EXPECT_EQ(vec.size(), 3);
+  EXPECT_EQ(vec[0], "hello");
+  EXPECT_EQ(vec[1], "");
+  EXPECT_EQ(vec[2], "");
+}
+
+/**
+ * Tests resize() shrinking with non-trivial types.
+ */
+TEST(SmallVector, ResizeShrinkNonTrivial) {
+  SmallVector<std::string, 2> vec;
+  vec.push_back("hello");
+  vec.push_back("world");
+  vec.push_back("test");
+  vec.resize(1);
+  EXPECT_EQ(vec.size(), 1);
+  EXPECT_EQ(vec[0], "hello");
+}
+
+/**
+ * Tests resize() to the same size does nothing.
+ */
+TEST(SmallVector, ResizeSameSize) {
+  SmallVector<int, 4> vec = {1, 2, 3};
+  vec.resize(3);
+  EXPECT_EQ(vec.size(), 3);
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3));
+}
+
+/**
+ * Tests resize() to zero.
+ */
+TEST(SmallVector, ResizeToZero) {
+  SmallVector<std::string, 2> vec;
+  vec.push_back("hello");
+  vec.push_back("world");
+  vec.resize(0);
+  EXPECT_TRUE(vec.empty());
+}
+
+/**
+ * Tests assign() with an iterator range.
+ */
+TEST(SmallVector, AssignRange) {
+  SmallVector<int, 4> vec = {1, 2, 3};
+  std::vector<int> source = {10, 20, 30, 40, 50};
+  vec.assign(source.begin(), source.end());
+  EXPECT_EQ(vec.size(), 5);
+  EXPECT_THAT(vec, ElementsAre(10, 20, 30, 40, 50));
+}
+
+/**
+ * Tests assign() replaces existing contents.
+ */
+TEST(SmallVector, AssignReplacesContents) {
+  SmallVector<std::string, 2> vec;
+  vec.push_back("old1");
+  vec.push_back("old2");
+  vec.push_back("old3");
+
+  std::vector<std::string> source = {"new1", "new2"};
+  vec.assign(source.begin(), source.end());
+  EXPECT_EQ(vec.size(), 2);
+  EXPECT_THAT(vec, ElementsAre("new1", "new2"));
+}
+
+/**
+ * Tests assign() with empty range.
+ */
+TEST(SmallVector, AssignEmptyRange) {
+  SmallVector<int, 4> vec = {1, 2, 3};
+  std::vector<int> empty;
+  vec.assign(empty.begin(), empty.end());
+  EXPECT_TRUE(vec.empty());
+}
+
 }  // namespace donner
