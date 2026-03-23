@@ -8,14 +8,12 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
-#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/graph/Reference.h"
-#include "donner/svg/properties/PaintServer.h"
 
 namespace donner::svg::components {
 
@@ -189,28 +187,9 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
 
       globalCharIndex += charCount;
 
-      // Read baseline-shift from the element's computed style, or its parent's.
-      // baseline-shift is a CSS property (not inherited), so check this entity first.
-      auto* style = handle.try_get<ComputedStyleComponent>();
-      if (!style || !style->properties) {
-        const auto& tree = handle.get<donner::components::TreeComponent>();
-        if (tree.parent() != entt::null) {
-          EntityHandle parentHandle(registry, tree.parent());
-          style = parentHandle.try_get<ComputedStyleComponent>();
-        }
-      }
-      if (style && style->properties) {
-        span.baselineShift = style->properties->baselineShift.getRequired();
-        span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
-        span.fontWeight = style->properties->fontWeight.getRequired();
-
-        const css::RGBA currentColor = style->properties->color.getRequired().rgba();
-        const float fillOpacity = static_cast<float>(style->properties->fillOpacity.getRequired());
-        const PaintServer fill = style->properties->fill.getRequired();
-        if (const auto* solid = std::get_if<PaintServer::Solid>(&fill.value)) {
-          span.fillColor = css::Color(solid->color.resolve(currentColor, fillOpacity));
-        }
-      }
+      // Store a back-reference to the source entity so the renderer can look up
+      // ComputedStyleComponent for fill, opacity, font-weight, clip-path, etc.
+      span.sourceEntity = handle.entity();
 
       // Check if this element or an ancestor is a textPath element.
       // Text content inside <textPath> is on child nodes, so walk up to find TextPathComponent.

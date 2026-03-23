@@ -348,7 +348,7 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
 
   std::vector<std::string> nonEmptyTexts;
   std::vector<bool> nonEmptyOnPath;
-  std::vector<std::optional<css::RGBA>> nonEmptyFillColors;
+  std::vector<bool> nonEmptyHasSource;
   for (const auto& span : computed->spans) {
     if (span.text.empty()) {
       continue;
@@ -356,13 +356,13 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
 
     nonEmptyTexts.push_back(span.text.str());
     nonEmptyOnPath.push_back(span.pathSpline.has_value());
-    nonEmptyFillColors.push_back(span.fillColor ? std::optional(span.fillColor->rgba())
-                                                : std::nullopt);
+    nonEmptyHasSource.push_back(span.sourceEntity != entt::null);
   }
 
   EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "very", "long", "text", "."));
   EXPECT_THAT(nonEmptyOnPath, testing::ElementsAre(false, true, false, true, false));
-  EXPECT_THAT(nonEmptyFillColors[2], testing::Optional(css::RGBA(0, 128, 0, 255)));
+  // All spans should have a source entity for style resolution.
+  EXPECT_THAT(nonEmptyHasSource, testing::ElementsAre(true, true, true, true, true));
 }
 
 // --- UTF-8 multibyte characters ---

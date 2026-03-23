@@ -1021,6 +1021,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-tspan",
         {
+<<<<<<< HEAD
             {"e-tspan-011.svg", Params::Skip()},  // Whitespace-only text nodes lost in
                                                   // preserve context (XML parser)
             {"e-tspan-016.svg",
@@ -1037,6 +1038,11 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-tspan-031.svg",
              Params().withMaxPixelsDifferent(400)},  // Vertical axis has different AA
                                                      // (its not the focus of the test)
+=======
+            {"e-tspan-031.svg",
+             Params().withMaxPixelsDifferent(
+                 400)},  // Vertical axis has different AA (its not the focus of the test)
+>>>>>>> 7c521524 (TextSpan sourceEntity + per-tspan opacity + global text-anchor)
         })),
     TestNameFromFilename);
 

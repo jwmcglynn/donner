@@ -30,8 +30,8 @@ uint32_t decodeUtf8(const std::string_view str, size_t& i) {
       i = str.size();
       return 0xFFFD;
     }
-    const uint32_t cp = (static_cast<uint32_t>(byte & 0x1F) << 6) |
-                        (static_cast<uint32_t>(str[i + 1]) & 0x3F);
+    const uint32_t cp =
+        (static_cast<uint32_t>(byte & 0x1F) << 6) | (static_cast<uint32_t>(str[i + 1]) & 0x3F);
     i += 2;
     return cp;
   }
@@ -76,34 +76,34 @@ uint32_t decodeUtf8(const std::string_view str, size_t& i) {
  */
 bool isNonSpacing(uint32_t cp) {
   // Combining marks (General Category M).
-  if ((cp >= 0x0300 && cp <= 0x036F) ||   // Combining Diacritical Marks
-      (cp >= 0x0483 && cp <= 0x0489) ||   // Cyrillic combining
-      (cp >= 0x0591 && cp <= 0x05C7) ||   // Hebrew combining
-      (cp >= 0x0610 && cp <= 0x061A) ||   // Arabic combining
-      (cp >= 0x064B && cp <= 0x065F) ||   // Arabic combining
-      (cp >= 0x0670 && cp == 0x0670) ||   // Arabic superscript alef
-      (cp >= 0x06D6 && cp <= 0x06ED) ||   // Arabic combining
-      (cp >= 0x0730 && cp <= 0x074A) ||   // Syriac combining
-      (cp >= 0x0E31 && cp == 0x0E31) ||   // Thai combining
-      (cp >= 0x0E34 && cp <= 0x0E3A) ||   // Thai combining
-      (cp >= 0x0EB1 && cp == 0x0EB1) ||   // Lao combining
-      (cp >= 0x0EB4 && cp <= 0x0EBC) ||   // Lao combining
-      (cp >= 0x1AB0 && cp <= 0x1AFF) ||   // Combining Diacritical Marks Extended
-      (cp >= 0x1DC0 && cp <= 0x1DFF) ||   // Combining Diacritical Marks Supplement
-      (cp >= 0x20D0 && cp <= 0x20FF) ||   // Combining Diacritical Marks for Symbols
-      (cp >= 0xFE20 && cp <= 0xFE2F)) {   // Combining Half Marks
+  if ((cp >= 0x0300 && cp <= 0x036F) ||  // Combining Diacritical Marks
+      (cp >= 0x0483 && cp <= 0x0489) ||  // Cyrillic combining
+      (cp >= 0x0591 && cp <= 0x05C7) ||  // Hebrew combining
+      (cp >= 0x0610 && cp <= 0x061A) ||  // Arabic combining
+      (cp >= 0x064B && cp <= 0x065F) ||  // Arabic combining
+      (cp >= 0x0670 && cp == 0x0670) ||  // Arabic superscript alef
+      (cp >= 0x06D6 && cp <= 0x06ED) ||  // Arabic combining
+      (cp >= 0x0730 && cp <= 0x074A) ||  // Syriac combining
+      (cp >= 0x0E31 && cp == 0x0E31) ||  // Thai combining
+      (cp >= 0x0E34 && cp <= 0x0E3A) ||  // Thai combining
+      (cp >= 0x0EB1 && cp == 0x0EB1) ||  // Lao combining
+      (cp >= 0x0EB4 && cp <= 0x0EBC) ||  // Lao combining
+      (cp >= 0x1AB0 && cp <= 0x1AFF) ||  // Combining Diacritical Marks Extended
+      (cp >= 0x1DC0 && cp <= 0x1DFF) ||  // Combining Diacritical Marks Supplement
+      (cp >= 0x20D0 && cp <= 0x20FF) ||  // Combining Diacritical Marks for Symbols
+      (cp >= 0xFE20 && cp <= 0xFE2F)) {  // Combining Half Marks
     return true;
   }
 
   // Zero-width joiners and format characters used in emoji/ligature sequences.
-  if (cp == 0x200C ||                      // Zero Width Non-Joiner
-      cp == 0x200D ||                      // Zero Width Joiner (emoji ZWJ sequences)
-      cp == 0x034F) {                      // Combining Grapheme Joiner
+  if (cp == 0x200C ||  // Zero Width Non-Joiner
+      cp == 0x200D ||  // Zero Width Joiner (emoji ZWJ sequences)
+      cp == 0x034F) {  // Combining Grapheme Joiner
     return true;
   }
 
   // Variation selectors (emoji style selectors, ideographic variation sequences).
-  if ((cp >= 0xFE00 && cp <= 0xFE0F) ||   // Variation Selectors (VS1-VS16)
+  if ((cp >= 0xFE00 && cp <= 0xFE0F) ||    // Variation Selectors (VS1-VS16)
       (cp >= 0xE0100 && cp <= 0xE01EF)) {  // Variation Selectors Supplement
     return true;
   }
@@ -150,8 +150,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     // ascent > 0 (above baseline), descent < 0 (below baseline), in font units.
     switch (params.dominantBaseline) {
       case DominantBaseline::Auto:
-      case DominantBaseline::Alphabetic:
-        break;
+      case DominantBaseline::Alphabetic: break;
       case DominantBaseline::Middle:
       case DominantBaseline::Central:
         // Center of the em box: (ascent + descent) / 2 above the alphabetic baseline.
@@ -206,8 +205,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
       switch (span.alignmentBaseline) {
         case DominantBaseline::Auto:
-        case DominantBaseline::Alphabetic:
-          break;
+        case DominantBaseline::Alphabetic: break;
         case DominantBaseline::Middle:
         case DominantBaseline::Central:
           effectiveBaselineShift = static_cast<double>(ascent + descent) * 0.5 * scale;
@@ -297,29 +295,28 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       if (vertical) {
         // Vertical mode: primary advance is along Y, cross-axis is X.
         // Per-character absolute Y overrides the pen along the primary axis.
-        const bool hasAbsoluteY =
-            charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+        const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
         if (hasAbsoluteY) {
-          penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                Lengthd::Extent::Y);
+          penY =
+              yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
         }
 
         // Per-character dy (primary axis).
         if (charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
           penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::Y);
+                                                 Lengthd::Extent::Y);
         }
 
         // Per-character absolute X (cross-axis).
         if (charIdx < xListLocal.size() && xListLocal[charIdx].has_value()) {
-          penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                Lengthd::Extent::X);
+          penX =
+              xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         }
 
         // Per-character dx (cross-axis).
         if (charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
           penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::X);
+                                                 Lengthd::Extent::X);
         }
 
         LayoutGlyph glyph;
@@ -350,14 +347,12 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       } else {
         // Horizontal mode (existing path).
         // Per-character absolute X positioning overrides the pen.
-        const bool hasAbsoluteX =
-            charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
-        const bool hasAbsoluteY =
-            charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+        const bool hasAbsoluteX = charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
+        const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
 
         if (hasAbsoluteX) {
-          penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                Lengthd::Extent::X);
+          penX =
+              xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         } else if (!hasAbsoluteY) {
           // Kern adjustment with previous glyph. Suppress kerning when a new text chunk
           // starts, which happens when the character has an absolute x OR y value.
@@ -370,20 +365,20 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         // Per-character dx.
         if (charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
           penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::X);
+                                                 Lengthd::Extent::X);
         }
 
         // Per-character absolute Y positioning.
         if (hasAbsoluteY) {
           penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                Lengthd::Extent::Y) +
+                                               Lengthd::Extent::Y) +
                  defaultY;
         }
 
         // Per-character dy.
         if (charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
           penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::Y);
+                                                 Lengthd::Extent::Y);
         }
 
         // Advance width.
@@ -419,10 +414,6 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       prevGlyph = glyphIndex;
     }
 
-    // Compute run start from first glyph's actual position (after per-character positioning).
-    const double runStartX = run.glyphs.empty() ? penX : run.glyphs[0].xPosition;
-    const double runStartY = run.glyphs.empty() ? penY : run.glyphs[0].yPosition;
-
     // If the span has path data, reposition glyphs along the path.
     if (span.pathSpline && !run.glyphs.empty()) {
       const auto& pathSpline = *span.pathSpline;
@@ -443,8 +434,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
           g.yPosition = sample.point.y - halfAdv * std::sin(sample.angle);
           // Convert tangent angle to degrees and add the per-glyph rotation
           // (already set from per-character rotateList).
-          g.rotateDegrees =
-              sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
+          g.rotateDegrees = sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
         } else {
           // Past the end of the path — hide the glyph.
           g.glyphIndex = 0;
@@ -469,72 +459,93 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       continue;
     }
 
-    // Apply textLength adjustment: stretch or compress glyph positions to fit the target length.
-    if (params.textLength.has_value() && !run.glyphs.empty()) {
-      const double targetLength = params.textLength->toPixels(
-          params.viewBox, params.fontMetrics,
-          vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
-      const double naturalLength = vertical ? (penY - runStartY) : (penX - runStartX);
-
-      if (naturalLength > 0.0 && targetLength > 0.0) {
-        if (params.lengthAdjust == LengthAdjust::Spacing) {
-          const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
-          const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
-          for (size_t gi = 1; gi < run.glyphs.size(); ++gi) {
-            if (vertical) {
-              run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
-            } else {
-              run.glyphs[gi].xPosition += extraPerGap * static_cast<double>(gi);
-            }
-          }
-          if (vertical) {
-            penY = runStartY + targetLength;
-          } else {
-            penX = runStartX + targetLength;
-          }
-        } else {
-          const double scaleFactor = targetLength / naturalLength;
-          for (auto& g : run.glyphs) {
-            if (vertical) {
-              g.yPosition = runStartY + (g.yPosition - runStartY) * scaleFactor;
-              g.yAdvance *= scaleFactor;
-            } else {
-              g.xPosition = runStartX + (g.xPosition - runStartX) * scaleFactor;
-              g.xAdvance *= scaleFactor;
-            }
-          }
-          if (vertical) {
-            penY = runStartY + targetLength;
-          } else {
-            penX = runStartX + targetLength;
-          }
-        }
-      }
-    }
-
-    // Apply text-anchor adjustment: shift all glyph positions along the inline axis.
-    if (params.textAnchor != TextAnchor::Start && !run.glyphs.empty()) {
-      const double totalAdvance = vertical ? (penY - runStartY) : (penX - runStartX);
-      double shift = 0.0;
-      if (params.textAnchor == TextAnchor::Middle) {
-        shift = -totalAdvance / 2.0;
-      } else if (params.textAnchor == TextAnchor::End) {
-        shift = -totalAdvance;
-      }
-      for (auto& g : run.glyphs) {
-        if (vertical) {
-          g.yPosition += shift;
-        } else {
-          g.xPosition += shift;
-        }
-      }
-    }
-
     currentPenX = penX;
     currentPenY = penY;
     haveCurrentPosition = true;
     prevSpanLastGlyph = prevGlyph;
     runs.push_back(std::move(run));
+  }
+
+  // text-anchor and textLength apply to the entire text element (all runs),
+  // not per-span. Compute the global extent from the first glyph of the first
+  // non-empty run to the final pen position.
+  if (!runs.empty()) {
+    const bool vertical = isVertical(params.writingMode);
+
+    double globalStartX = currentPenX;
+    double globalStartY = currentPenY;
+    for (const auto& r : runs) {
+      if (!r.glyphs.empty()) {
+        globalStartX = r.glyphs[0].xPosition;
+        globalStartY = r.glyphs[0].yPosition;
+        break;
+      }
+    }
+
+    const double globalNaturalLength =
+        vertical ? (currentPenY - globalStartY) : (currentPenX - globalStartX);
+
+    // Apply textLength adjustment across all runs.
+    if (params.textLength.has_value() && globalNaturalLength > 0.0) {
+      const double targetLength = params.textLength->toPixels(
+          params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+
+      if (targetLength > 0.0) {
+        size_t totalGlyphs = 0;
+        for (const auto& r : runs) {
+          totalGlyphs += r.glyphs.size();
+        }
+
+        if (params.lengthAdjust == LengthAdjust::Spacing) {
+          const size_t numGaps = totalGlyphs > 1 ? totalGlyphs - 1 : 1;
+          const double extraPerGap =
+              (targetLength - globalNaturalLength) / static_cast<double>(numGaps);
+          size_t glyphIdx = 0;
+          for (auto& r : runs) {
+            for (auto& g : r.glyphs) {
+              if (vertical) {
+                g.yPosition += extraPerGap * static_cast<double>(glyphIdx);
+              } else {
+                g.xPosition += extraPerGap * static_cast<double>(glyphIdx);
+              }
+              ++glyphIdx;
+            }
+          }
+        } else {
+          const double scaleFactor = targetLength / globalNaturalLength;
+          for (auto& r : runs) {
+            for (auto& g : r.glyphs) {
+              if (vertical) {
+                g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
+                g.yAdvance *= scaleFactor;
+              } else {
+                g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
+                g.xAdvance *= scaleFactor;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Apply text-anchor adjustment across all runs.
+    if (params.textAnchor != TextAnchor::Start) {
+      double shift = 0.0;
+      if (params.textAnchor == TextAnchor::Middle) {
+        shift = -globalNaturalLength / 2.0;
+      } else if (params.textAnchor == TextAnchor::End) {
+        shift = -globalNaturalLength;
+      }
+      for (auto& r : runs) {
+        for (auto& g : r.glyphs) {
+          if (vertical) {
+            g.yPosition += shift;
+          } else {
+            g.xPosition += shift;
+          }
+        }
+      }
+    }
   }
 
   return runs;
@@ -598,8 +609,7 @@ PathSpline glyphToPathSpline(const stbtt_fontinfo* info, int glyphIndex, float s
         break;
       }
 
-      default:
-        break;
+      default: break;
     }
   }
 

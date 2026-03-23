@@ -440,8 +440,8 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         dxList[0].reset();
       }
       if (!yList.empty() && yList[0].has_value()) {
-        penY = yList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-               defaultY;
+        penY =
+            yList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) + defaultY;
         yList[0].reset();
       }
       if (!dyList.empty() && dyList[0].has_value()) {
@@ -458,8 +458,6 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       runs.push_back(std::move(run));
       continue;
     }
-
-    // runStartX/runStartY are computed after the glyph loop from the first glyph's position.
 
     // Build byte-offset to addressable-character-index map for cluster mapping.
     // The SVG DOM uses UTF-16 indexing for per-character attributes (x, y, dx, dy).
@@ -570,7 +568,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     for (unsigned int i = 0; i < cpCount && !hasPerCharCoords; ++i) {
       const unsigned int ci = byteToCharIdx[logicalByteOffsets[i]];
       if (ci > 0 && ((ci < xList.size() && xList[ci].has_value()) ||
-                      (ci < yList.size() && yList[ci].has_value()))) {
+                     (ci < yList.size() && yList[ci].has_value()))) {
         hasPerCharCoords = true;
       }
     }
@@ -704,16 +702,14 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           penY = yList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
         }
         if (charIdx < dyList.size() && dyList[charIdx].has_value()) {
-          penY += dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::Y);
+          penY += dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
         }
         // Per-character absolute X (cross-axis).
         if (charIdx < xList.size() && xList[charIdx].has_value()) {
           penX = xList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         }
         if (charIdx < dxList.size() && dxList[charIdx].has_value()) {
-          penX += dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::X);
+          penX += dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         }
 
         ShapedGlyph glyph;
@@ -804,7 +800,8 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           // Get the nominal advance (without GPOS kerning) for the previous glyph.
           const unsigned int prevGlyphId = static_cast<unsigned int>(run.glyphs.back().glyphIndex);
           const double nominalAdvance =
-              static_cast<double>(hb_font_get_glyph_h_advance(spanHbFont, prevGlyphId)) * pixelScale;
+              static_cast<double>(hb_font_get_glyph_h_advance(spanHbFont, prevGlyphId)) *
+              pixelScale;
           const double shapedAdvance = run.glyphs.back().xAdvance;
           // The difference is the kerning that shouldn't cross the chunk boundary.
           penX += (nominalAdvance - shapedAdvance);
@@ -815,8 +812,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         }
 
         if (charIdx < dxList.size() && dxList[charIdx].has_value()) {
-          penX += dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::X);
+          penX += dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         }
 
         // Check for chunk Y override (RTL multi-char chunks in layoutLTR mode).
@@ -829,8 +825,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         }
 
         if (charIdx < dyList.size() && dyList[charIdx].has_value()) {
-          penY += dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::Y);
+          penY += dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
         }
 
         ShapedGlyph glyph;
@@ -905,10 +900,6 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       lastCodepoint = decodeCodepointAt(spanText, glyphInfos[glyphCount - 1].cluster);
     }
 
-    // Compute run start from first glyph's actual position (after per-character positioning).
-    const double runStartX = run.glyphs.empty() ? penX : run.glyphs[0].xPosition;
-    const double runStartY = run.glyphs.empty() ? penY : run.glyphs[0].yPosition;
-
     // If the span has path data, reposition glyphs along the path.
     if (span.pathSpline && !run.glyphs.empty()) {
       const auto& pathSpline = *span.pathSpline;
@@ -950,71 +941,95 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       continue;
     }
 
-    // Apply textLength adjustment.
-    if (params.textLength.has_value() && !run.glyphs.empty()) {
-      const double targetLength = params.textLength->toPixels(
-          params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
-      const double naturalLength = vertical ? (penY - runStartY) : (penX - runStartX);
-
-      if (naturalLength > 0.0 && targetLength > 0.0) {
-        if (params.lengthAdjust == LengthAdjust::Spacing) {
-          const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
-          const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
-          for (size_t i = 1; i < run.glyphs.size(); ++i) {
-            if (vertical) {
-              run.glyphs[i].yPosition += extraPerGap * static_cast<double>(i);
-            } else {
-              run.glyphs[i].xPosition += extraPerGap * static_cast<double>(i);
-            }
-          }
-          if (vertical) {
-            penY = runStartY + targetLength;
-          } else {
-            penX = runStartX + targetLength;
-          }
-        } else {
-          const double scaleFactor = targetLength / naturalLength;
-          for (auto& g : run.glyphs) {
-            if (vertical) {
-              g.yPosition = runStartY + (g.yPosition - runStartY) * scaleFactor;
-              g.yAdvance *= scaleFactor;
-            } else {
-              g.xPosition = runStartX + (g.xPosition - runStartX) * scaleFactor;
-              g.xAdvance *= scaleFactor;
-            }
-          }
-          if (vertical) {
-            penY = runStartY + targetLength;
-          } else {
-            penX = runStartX + targetLength;
-          }
-        }
-      }
-    }
-
-    // Apply text-anchor adjustment along the inline axis.
-    if (params.textAnchor != TextAnchor::Start && !run.glyphs.empty()) {
-      const double totalAdvance = vertical ? (penY - runStartY) : (penX - runStartX);
-      double shift = 0.0;
-      if (params.textAnchor == TextAnchor::Middle) {
-        shift = -totalAdvance / 2.0;
-      } else if (params.textAnchor == TextAnchor::End) {
-        shift = -totalAdvance;
-      }
-      for (auto& g : run.glyphs) {
-        if (vertical) {
-          g.yPosition += shift;
-        } else {
-          g.xPosition += shift;
-        }
-      }
-    }
-
     currentPenX = penX;
     currentPenY = penY;
     haveCurrentPosition = true;
     prevSpanLastCodepoint = lastCodepoint;
     runs.push_back(std::move(run));
+  }
+
+  // text-anchor and textLength apply to the entire text element (all runs),
+  // not per-span. Compute the global extent from the first glyph of the first
+  // non-empty run to the final pen position.
+  if (!runs.empty()) {
+    const bool vertical = isVertical(params.writingMode);
+
+    // Find the global start position from the first glyph across all runs.
+    double globalStartX = currentPenX;
+    double globalStartY = currentPenY;
+    for (const auto& r : runs) {
+      if (!r.glyphs.empty()) {
+        globalStartX = r.glyphs[0].xPosition;
+        globalStartY = r.glyphs[0].yPosition;
+        break;
+      }
+    }
+
+    const double globalNaturalLength =
+        vertical ? (currentPenY - globalStartY) : (currentPenX - globalStartX);
+
+    // Apply textLength adjustment across all runs.
+    if (params.textLength.has_value() && globalNaturalLength > 0.0) {
+      const double targetLength = params.textLength->toPixels(
+          params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+
+      if (targetLength > 0.0) {
+        // Count total glyphs for spacing mode.
+        size_t totalGlyphs = 0;
+        for (const auto& r : runs) {
+          totalGlyphs += r.glyphs.size();
+        }
+
+        if (params.lengthAdjust == LengthAdjust::Spacing) {
+          const size_t numGaps = totalGlyphs > 1 ? totalGlyphs - 1 : 1;
+          const double extraPerGap =
+              (targetLength - globalNaturalLength) / static_cast<double>(numGaps);
+          size_t glyphIdx = 0;
+          for (auto& r : runs) {
+            for (auto& g : r.glyphs) {
+              if (vertical) {
+                g.yPosition += extraPerGap * static_cast<double>(glyphIdx);
+              } else {
+                g.xPosition += extraPerGap * static_cast<double>(glyphIdx);
+              }
+              ++glyphIdx;
+            }
+          }
+        } else {
+          const double scaleFactor = targetLength / globalNaturalLength;
+          for (auto& r : runs) {
+            for (auto& g : r.glyphs) {
+              if (vertical) {
+                g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
+                g.yAdvance *= scaleFactor;
+              } else {
+                g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
+                g.xAdvance *= scaleFactor;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Apply text-anchor adjustment across all runs.
+    if (params.textAnchor != TextAnchor::Start) {
+      double shift = 0.0;
+      if (params.textAnchor == TextAnchor::Middle) {
+        shift = -globalNaturalLength / 2.0;
+      } else if (params.textAnchor == TextAnchor::End) {
+        shift = -globalNaturalLength;
+      }
+      for (auto& r : runs) {
+        for (auto& g : r.glyphs) {
+          if (vertical) {
+            g.yPosition += shift;
+          } else {
+            g.xPosition += shift;
+          }
+        }
+      }
+    }
   }
 
   return runs;
