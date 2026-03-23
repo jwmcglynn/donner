@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <unordered_map>
 
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -116,6 +117,11 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
     // Global character index across all spans within this <text> element.
     // Used to map root-level positioning lists to per-character positions.
     size_t globalCharIndex = 0;
+
+    // Per-entity subtree character offset: tracks how many characters have been seen
+    // within each element's subtree, for cascading per-character coordinate lookups.
+    std::unordered_map<Entity, size_t> entitySubtreeCharOffset;
+
     auto appendSpan = [&](EntityHandle handle, const RcString& spanText,
                           const TextPositioningComponent& pos, bool applyElementPositioning) {
       ComputedTextComponent::TextSpan span;
@@ -139,36 +145,56 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       span.dxList.resize(listSize);
       span.dyList.resize(listSize);
 
+      // Helper: for a given character index ci, walk up from the span's element
+      // through ancestors to find the first applicable positioning value. Each
+      // ancestor's list is indexed by the character's offset within that ancestor's
+      // subtree (tracked in entitySubtreeCharOffset).
+      auto findAncestorValue =
+          [&](size_t ci, const auto& getList) -> std::optional<Lengthd> {
+        // First try the element's own list (only for the first chunk).
+        const auto& elemList = getList(pos);
+        if (applyElementPositioning && ci < elemList.size()) {
+          return elemList[ci];
+        }
+
+        // Walk up ancestors from parent to root.
+        Entity current = handle.entity();
+        while (current != entt::null) {
+          auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+          if (!tree || tree->parent() == entt::null) {
+            break;
+          }
+          current = tree->parent();
+
+          auto* ancestorPos = registry.try_get<TextPositioningComponent>(current);
+          if (!ancestorPos) {
+            continue;
+          }
+          const auto& ancestorList = getList(*ancestorPos);
+          if (ancestorList.empty()) {
+            continue;
+          }
+
+          // The character's index within this ancestor's subtree.
+          // Missing entries default to 0 (start of subtree).
+          size_t ancestorIdx = entitySubtreeCharOffset[current] + ci;
+          if (ancestorIdx < ancestorList.size()) {
+            return ancestorList[ancestorIdx];
+          }
+        }
+        return std::nullopt;
+      };
+
+      auto getX = [](const TextPositioningComponent& p) -> const auto& { return p.x; };
+      auto getY = [](const TextPositioningComponent& p) -> const auto& { return p.y; };
+      auto getDx = [](const TextPositioningComponent& p) -> const auto& { return p.dx; };
+      auto getDy = [](const TextPositioningComponent& p) -> const auto& { return p.dy; };
+
       for (size_t ci = 0; ci < listSize; ++ci) {
-        const size_t globalIdx = globalCharIndex + ci;
-
-        // Only apply pos.x/y/dx/dy[ci] for the element's first chunk
-        // (applyElementPositioning=true). For continuation chunks (text after child
-        // elements), pos values at local index ci were already consumed by the first
-        // chunk. Fall through to globalIdx indexing for the root's coordinate lists.
-        if (applyElementPositioning && ci < pos.x.size()) {
-          span.xList[ci] = pos.x[ci];
-        } else if (globalIdx < positioningComponent.x.size()) {
-          span.xList[ci] = positioningComponent.x[globalIdx];
-        }
-
-        if (applyElementPositioning && ci < pos.y.size()) {
-          span.yList[ci] = pos.y[ci];
-        } else if (globalIdx < positioningComponent.y.size()) {
-          span.yList[ci] = positioningComponent.y[globalIdx];
-        }
-
-        if (applyElementPositioning && ci < pos.dx.size()) {
-          span.dxList[ci] = pos.dx[ci];
-        } else if (globalIdx < positioningComponent.dx.size()) {
-          span.dxList[ci] = positioningComponent.dx[globalIdx];
-        }
-
-        if (applyElementPositioning && ci < pos.dy.size()) {
-          span.dyList[ci] = pos.dy[ci];
-        } else if (globalIdx < positioningComponent.dy.size()) {
-          span.dyList[ci] = positioningComponent.dy[globalIdx];
-        }
+        span.xList[ci] = findAncestorValue(ci, getX);
+        span.yList[ci] = findAncestorValue(ci, getY);
+        span.dxList[ci] = findAncestorValue(ci, getDx);
+        span.dyList[ci] = findAncestorValue(ci, getDy);
       }
 
       // Rotate: local values take priority; per SVG spec last value repeats in layout.
@@ -186,6 +212,20 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       }
 
       globalCharIndex += charCount;
+
+      // Update per-ancestor subtree character offsets: add charCount to every
+      // ancestor so that subsequent spans know their offset within each ancestor.
+      {
+        Entity current = handle.entity();
+        while (current != entt::null) {
+          entitySubtreeCharOffset[current] += charCount;
+          auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+          if (!tree || tree->parent() == entt::null) {
+            break;
+          }
+          current = tree->parent();
+        }
+      }
 
       // Store a back-reference to the source entity so the renderer can look up
       // ComputedStyleComponent for fill, opacity, font-weight, clip-path, etc.

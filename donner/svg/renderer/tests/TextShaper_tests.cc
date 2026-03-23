@@ -398,4 +398,95 @@ TEST(TextShaperTest, ArabicPerCharacterY_GlyphIdsAndPositions) {
   }
 }
 
+// Debug test: check glyph positions for e-tspan-027 pattern.
+// <text x="33"><tspan y="100 110 120 130">T<tspan y="50">ex</tspan></tspan>t</text>
+TEST(TextShaperTest, NestedTspanMultipleYCoordinates) {
+  FontManager mgr;
+  TextShaper shaper(mgr);
+
+  components::ComputedTextComponent text;
+
+  // Span 0: root empty (x=33, y=100 from tspan1 cascade)
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("");
+    span.start = 0;
+    span.end = 0;
+    span.startsNewChunk = true;
+    span.xList.push_back(Lengthd(33.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    text.spans.push_back(std::move(span));
+  }
+  // Span 1: tspan1 "T" (y=100)
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("T");
+    span.start = 0;
+    span.end = 1;
+    span.startsNewChunk = true;
+    span.xList.push_back(Lengthd(33.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    text.spans.push_back(std::move(span));
+  }
+  // Span 2: tspan2 "ex" (y=50, 120)
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("ex");
+    span.start = 0;
+    span.end = 2;
+    span.startsNewChunk = true;
+    span.xList.resize(2);  // no x values
+    span.yList.resize(2);
+    span.yList[0] = Lengthd(50.0, Lengthd::Unit::None);
+    span.yList[1] = Lengthd(120.0, Lengthd::Unit::None);
+    text.spans.push_back(std::move(span));
+  }
+  // Span 3: root continuation "t" (no explicit position, continues from "x")
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("t");
+    span.start = 0;
+    span.end = 1;
+    span.startsNewChunk = false;
+    span.xList.resize(1);
+    span.yList.resize(1);
+    text.spans.push_back(std::move(span));
+  }
+
+  auto params = makeTextParams(64.0);
+  auto runs = shaper.layout(text, params);
+
+  // Print positions for debugging.
+  const char* labels[] = {"(empty)", "T", "e", "x", "t"};
+  int li = 0;
+  for (size_t ri = 0; ri < runs.size(); ++ri) {
+    for (const auto& g : runs[ri].glyphs) {
+      std::cout << "  " << labels[li + 1] << ": x=" << g.xPosition << " y=" << g.yPosition
+                << " xAdv=" << g.xAdvance << "\n";
+      ++li;
+    }
+  }
+
+  // Basic checks: T at x=33, y=100. e at y=50. x at y=120.
+  ASSERT_EQ(runs.size(), 4u);
+  ASSERT_EQ(runs[1].glyphs.size(), 1u);  // T
+  ASSERT_EQ(runs[2].glyphs.size(), 2u);  // ex
+  ASSERT_EQ(runs[3].glyphs.size(), 1u);  // t
+
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].xPosition, 33.0);
+  EXPECT_DOUBLE_EQ(runs[1].glyphs[0].yPosition, 100.0);
+  EXPECT_DOUBLE_EQ(runs[2].glyphs[0].yPosition, 50.0);   // e
+  EXPECT_DOUBLE_EQ(runs[2].glyphs[1].yPosition, 120.0);  // x
+
+  // x positions: e should continue from T, x should continue from e.
+  double afterT = runs[1].glyphs[0].xPosition + runs[1].glyphs[0].xAdvance;
+  EXPECT_NEAR(runs[2].glyphs[0].xPosition, afterT, 1.0) << "e should continue from T";
+
+  double afterE = runs[2].glyphs[0].xPosition + runs[2].glyphs[0].xAdvance;
+  EXPECT_NEAR(runs[2].glyphs[1].xPosition, afterE, 1.0) << "x should continue from e";
+
+  double afterX = runs[2].glyphs[1].xPosition + runs[2].glyphs[1].xAdvance;
+  EXPECT_NEAR(runs[3].glyphs[0].xPosition, afterX, 2.0) << "t should continue from x";
+}
+
 }  // namespace donner::svg
