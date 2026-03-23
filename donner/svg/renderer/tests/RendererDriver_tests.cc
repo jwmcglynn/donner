@@ -226,10 +226,9 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
     span.text = RcString("hi");
     span.start = 0;
     span.end = 2;
-    span.x = Lengthd(2, Lengthd::Unit::None);
-    span.hasX = true;
-    span.y = Lengthd(3, Lengthd::Unit::None);
-    span.hasY = true;
+    span.xList.push_back(Lengthd(2, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(3, Lengthd::Unit::None));
+    span.startsNewChunk = true;
     text.spans.push_back(std::move(span));
     document.registry().emplace<components::ComputedTextComponent>(textEntity, text);
   });

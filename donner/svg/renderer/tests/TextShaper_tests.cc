@@ -20,12 +20,9 @@ components::ComputedTextComponent makeSimpleText(const std::string& str) {
   span.text = RcString(str);
   span.start = 0;
   span.end = str.size();
-  span.x = Lengthd(10.0, Lengthd::Unit::None);
-  span.hasX = true;
-  span.y = Lengthd(50.0, Lengthd::Unit::None);
-  span.hasY = true;
-  span.dx = Lengthd(0.0, Lengthd::Unit::None);
-  span.dy = Lengthd(0.0, Lengthd::Unit::None);
+  span.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span.startsNewChunk = true;
   text.spans.push_back(std::move(span));
   return text;
 }
@@ -98,10 +95,9 @@ TEST(TextShaperTest, SpanWithoutExplicitPositionContinuesFromPreviousSpan) {
   span1.text = RcString("AB");
   span1.start = 0;
   span1.end = 2;
-  span1.x = Lengthd(10.0, Lengthd::Unit::None);
-  span1.hasX = true;
-  span1.y = Lengthd(50.0, Lengthd::Unit::None);
-  span1.hasY = true;
+  span1.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span1.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span1.startsNewChunk = true;
   text.spans.push_back(std::move(span1));
 
   components::ComputedTextComponent::TextSpan span2;
@@ -164,12 +160,9 @@ TEST(TextShaperTest, EmptyText) {
   span.text = RcString("");
   span.start = 0;
   span.end = 0;
-  span.x = Lengthd(10.0, Lengthd::Unit::None);
-  span.hasX = true;
-  span.y = Lengthd(50.0, Lengthd::Unit::None);
-  span.hasY = true;
-  span.dx = Lengthd(0.0, Lengthd::Unit::None);
-  span.dy = Lengthd(0.0, Lengthd::Unit::None);
+  span.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span.startsNewChunk = true;
   text.spans.push_back(std::move(span));
 
   auto params = makeTextParams(16.0);
@@ -323,34 +316,32 @@ TEST(TextShaperTest, ArabicPerCharacterY_GlyphIdsAndPositions) {
 
   // Case 1: No per-character coords (single chunk, all connected forms).
   auto textNoCoords = makeSimpleText(arabicText);
-  textNoCoords.spans[0].x = Lengthd(50.0, Lengthd::Unit::None);
-  textNoCoords.spans[0].y = Lengthd(60.0, Lengthd::Unit::None);
+  textNoCoords.spans[0].xList[0] = Lengthd(50.0, Lengthd::Unit::None);
+  textNoCoords.spans[0].yList[0] = Lengthd(60.0, Lengthd::Unit::None);
 
   const auto runsNoCoords = shaper.layout(textNoCoords, params);
   ASSERT_EQ(runsNoCoords.size(), 1u);
   ASSERT_EQ(runsNoCoords[0].glyphs.size(), 5u) << "Expected 5 glyphs for 5 Arabic characters";
 
   // Case 2: Per-character Y coords (multiple chunks).
-  // y="140 150 160 170" → yList[0]=nullopt(reset), yList[1]=150, yList[2]=160, yList[3]=170
+  // y="140 150 160 170" → yList[0]=140, yList[1]=150, yList[2]=160, yList[3]=170
   components::ComputedTextComponent textWithCoords;
   {
     components::ComputedTextComponent::TextSpan span;
     span.text = RcString(arabicText);
     span.start = 0;
     span.end = arabicText.size();
-    span.x = Lengthd(50.0, Lengthd::Unit::None);
-    span.hasX = true;
-    span.y = Lengthd(140.0, Lengthd::Unit::None);
-    span.hasY = true;
-    // yList: [nullopt, 150, 160, 170, nullopt] (5 characters)
+    span.startsNewChunk = true;
+    // xList: only index 0 has explicit position
+    span.xList.resize(5);
+    span.xList[0] = Lengthd(50.0, Lengthd::Unit::None);
+    // yList: [140, 150, 160, 170, nullopt] (5 characters)
     span.yList.resize(5);
-    span.yList[0] = std::nullopt;  // reset, span.y handles first char
+    span.yList[0] = Lengthd(140.0, Lengthd::Unit::None);
     span.yList[1] = Lengthd(150.0, Lengthd::Unit::None);
     span.yList[2] = Lengthd(160.0, Lengthd::Unit::None);
     span.yList[3] = Lengthd(170.0, Lengthd::Unit::None);
     span.yList[4] = std::nullopt;
-    // xList: all nullopt
-    span.xList.resize(5);
     textWithCoords.spans.push_back(std::move(span));
   }
 
@@ -393,7 +384,7 @@ TEST(TextShaperTest, ArabicPerCharacterY_GlyphIdsAndPositions) {
   // (DOM order). charIdx maps y values in DOM order:
   //   alef(charIdx=0)→y=140, lam(1)→150, waw(2)→160, ya(3)→170, ba(4)→inherits 170.
   // Glyphs are now in DOM order: alef, lam, waw, ya, ba.
-  EXPECT_NEAR(runsWithCoords[0].glyphs[0].yPosition, 140.0, 1.0) << "alef at y=140 (span.y)";
+  EXPECT_NEAR(runsWithCoords[0].glyphs[0].yPosition, 140.0, 1.0) << "alef at y=140 (yList[0])";
   EXPECT_NEAR(runsWithCoords[0].glyphs[1].yPosition, 150.0, 1.0) << "lam at y=150";
   EXPECT_NEAR(runsWithCoords[0].glyphs[2].yPosition, 160.0, 1.0) << "waw at y=160";
   EXPECT_NEAR(runsWithCoords[0].glyphs[3].yPosition, 170.0, 1.0) << "ya at y=170";

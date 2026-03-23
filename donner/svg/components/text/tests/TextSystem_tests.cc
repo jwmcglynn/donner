@@ -98,9 +98,13 @@ TEST_F(TextSystemTest, PositioningInheritedFromRoot) {
   // Root span + tspan child span.
   ASSERT_THAT(computed->spans, SizeIs(2));
 
-  // The tspan should inherit x/y from the root <text> element.
-  EXPECT_DOUBLE_EQ(computed->spans[1].x.value, 15.0);
-  EXPECT_DOUBLE_EQ(computed->spans[1].y.value, 25.0);
+  // The tspan should inherit x/y from the root <text> element via xList/yList.
+  ASSERT_FALSE(computed->spans[1].xList.empty());
+  ASSERT_TRUE(computed->spans[1].xList[0].has_value());
+  EXPECT_DOUBLE_EQ(computed->spans[1].xList[0]->value, 15.0);
+  ASSERT_FALSE(computed->spans[1].yList.empty());
+  ASSERT_TRUE(computed->spans[1].yList[0].has_value());
+  EXPECT_DOUBLE_EQ(computed->spans[1].yList[0]->value, 25.0);
 }
 
 // --- Per-character positioning ---
@@ -121,11 +125,12 @@ TEST_F(TextSystemTest, PerCharacterPositioning) {
 
   auto& span = computed->spans[0];
   ASSERT_EQ(span.xList.size(), 3u);
-  EXPECT_FALSE(span.xList[0].has_value());
+  // xList[0] now holds the span-start value (was previously cleared).
+  EXPECT_TRUE(span.xList[0].has_value());
+  EXPECT_DOUBLE_EQ(span.xList[0]->value, 10.0);
   EXPECT_TRUE(span.xList[1].has_value());
-  EXPECT_TRUE(span.xList[2].has_value());
-  EXPECT_DOUBLE_EQ(span.x.value, 10.0);
   EXPECT_DOUBLE_EQ(span.xList[1]->value, 20.0);
+  EXPECT_TRUE(span.xList[2].has_value());
   EXPECT_DOUBLE_EQ(span.xList[2]->value, 30.0);
 }
 
@@ -151,10 +156,13 @@ TEST_F(TextSystemTest, DxDyPositioning) {
   auto& span = computed->spans[1];
   ASSERT_EQ(span.dxList.size(), 2u);
   ASSERT_EQ(span.dyList.size(), 2u);
-  EXPECT_FALSE(span.dxList[0].has_value());
+  // dxList[0] now holds the span-start value (was previously cleared).
+  EXPECT_TRUE(span.dxList[0].has_value());
+  EXPECT_DOUBLE_EQ(span.dxList[0]->value, 5.0);
   EXPECT_TRUE(span.dxList[1].has_value());
   EXPECT_DOUBLE_EQ(span.dxList[1]->value, 10.0);
-  EXPECT_FALSE(span.dyList[0].has_value());
+  EXPECT_TRUE(span.dyList[0].has_value());
+  EXPECT_DOUBLE_EQ(span.dyList[0]->value, 2.0);
   EXPECT_DOUBLE_EQ(span.dyList[1]->value, 4.0);
 }
 
@@ -173,12 +181,13 @@ TEST_F(TextSystemTest, RootDxDyBecomesScalarStartPosition) {
   ASSERT_THAT(computed->spans, SizeIs(1));
 
   const auto& span = computed->spans[0];
-  EXPECT_DOUBLE_EQ(span.dx.value, 33.0);
-  EXPECT_DOUBLE_EQ(span.dy.value, 100.0);
   ASSERT_EQ(span.dxList.size(), 4u);
   ASSERT_EQ(span.dyList.size(), 4u);
-  EXPECT_FALSE(span.dxList[0].has_value());
-  EXPECT_FALSE(span.dyList[0].has_value());
+  // dxList[0]/dyList[0] now hold the span-start values (no longer cleared).
+  EXPECT_TRUE(span.dxList[0].has_value());
+  EXPECT_DOUBLE_EQ(span.dxList[0]->value, 33.0);
+  EXPECT_TRUE(span.dyList[0].has_value());
+  EXPECT_DOUBLE_EQ(span.dyList[0]->value, 100.0);
 }
 
 // --- Rotation ---
@@ -246,12 +255,18 @@ TEST_F(TextSystemTest, MultipleTspanWithPositioning) {
   // Root span + 3 tspan children.
   ASSERT_THAT(computed->spans, SizeIs(4));
 
-  EXPECT_DOUBLE_EQ(computed->spans[1].x.value, 10.0);
-  EXPECT_DOUBLE_EQ(computed->spans[1].y.value, 20.0);
-  EXPECT_DOUBLE_EQ(computed->spans[2].x.value, 30.0);
-  EXPECT_DOUBLE_EQ(computed->spans[2].y.value, 40.0);
-  EXPECT_DOUBLE_EQ(computed->spans[3].x.value, 50.0);
-  EXPECT_DOUBLE_EQ(computed->spans[3].y.value, 60.0);
+  ASSERT_TRUE(computed->spans[1].hasExplicitX());
+  EXPECT_DOUBLE_EQ(computed->spans[1].xList[0]->value, 10.0);
+  ASSERT_TRUE(computed->spans[1].hasExplicitY());
+  EXPECT_DOUBLE_EQ(computed->spans[1].yList[0]->value, 20.0);
+  ASSERT_TRUE(computed->spans[2].hasExplicitX());
+  EXPECT_DOUBLE_EQ(computed->spans[2].xList[0]->value, 30.0);
+  ASSERT_TRUE(computed->spans[2].hasExplicitY());
+  EXPECT_DOUBLE_EQ(computed->spans[2].yList[0]->value, 40.0);
+  ASSERT_TRUE(computed->spans[3].hasExplicitX());
+  EXPECT_DOUBLE_EQ(computed->spans[3].xList[0]->value, 50.0);
+  ASSERT_TRUE(computed->spans[3].hasExplicitY());
+  EXPECT_DOUBLE_EQ(computed->spans[3].yList[0]->value, 60.0);
 }
 
 // --- textPath reference ---
@@ -390,6 +405,108 @@ TEST_F(TextSystemTest, NoWarningsForValidText) {
   TextSystem().instantiateAllComputedComponents(registry, &warnings);
 
   EXPECT_THAT(warnings, IsEmpty());
+}
+
+// --- List-only positioning (no scalar fields) ---
+
+TEST_F(TextSystemTest, ListOnlyPositioning) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <text id="t" x="10" y="20">Hello</text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(1));
+
+  const auto& span = computed->spans[0];
+  // xList[0] and yList[0] hold the span-start position.
+  ASSERT_TRUE(span.hasExplicitX());
+  EXPECT_DOUBLE_EQ(span.xList[0]->value, 10.0);
+  ASSERT_TRUE(span.hasExplicitY());
+  EXPECT_DOUBLE_EQ(span.yList[0]->value, 20.0);
+  EXPECT_TRUE(span.startsNewChunk);
+}
+
+// --- No double-application of dx ---
+
+TEST_F(TextSystemTest, NoDoubleApplication) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" dx="5">A</text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(1));
+
+  const auto& span = computed->spans[0];
+  // dx should appear exactly once in dxList[0], not in a separate scalar field.
+  ASSERT_GE(span.dxList.size(), 1u);
+  ASSERT_TRUE(span.dxList[0].has_value());
+  EXPECT_DOUBLE_EQ(span.dxList[0]->value, 5.0);
+}
+
+// --- Child tspan preserves dyList[0] ---
+
+TEST_F(TextSystemTest, ChildTspanPreservesListZero) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20">
+        <tspan dy="7">A</tspan>
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  // Root span + tspan child span.
+  ASSERT_THAT(computed->spans, SizeIs(2));
+
+  // The tspan's dyList[0] should retain dy=7 (not be cleared).
+  const auto& span = computed->spans[1];
+  ASSERT_GE(span.dyList.size(), 1u);
+  ASSERT_TRUE(span.dyList[0].has_value());
+  EXPECT_DOUBLE_EQ(span.dyList[0]->value, 7.0);
+}
+
+// --- startsNewChunk flag ---
+
+TEST_F(TextSystemTest, StartsNewChunk) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20">
+        <tspan>Continuation</tspan>
+        <tspan x="50">NewChunk</tspan>
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  // Root span + 2 tspan children.
+  ASSERT_THAT(computed->spans, SizeIs(3));
+
+  // Root span starts a new chunk (has x and y).
+  EXPECT_TRUE(computed->spans[0].startsNewChunk);
+  // First tspan has no explicit position — continuation.
+  EXPECT_FALSE(computed->spans[1].startsNewChunk);
+  // Second tspan has explicit x — new chunk.
+  EXPECT_TRUE(computed->spans[2].startsNewChunk);
 }
 
 }  // namespace donner::svg::components

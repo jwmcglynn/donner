@@ -17,12 +17,9 @@ components::ComputedTextComponent makeSimpleText(const std::string& str) {
   span.text = RcString(str);
   span.start = 0;
   span.end = str.size();
-  span.x = Lengthd(10.0, Lengthd::Unit::None);
-  span.hasX = true;
-  span.y = Lengthd(50.0, Lengthd::Unit::None);
-  span.hasY = true;
-  span.dx = Lengthd(0.0, Lengthd::Unit::None);
-  span.dy = Lengthd(0.0, Lengthd::Unit::None);
+  span.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span.startsNewChunk = true;
   text.spans.push_back(std::move(span));
   return text;
 }
@@ -83,12 +80,9 @@ TEST(TextLayoutTest, MultipleSpans) {
   span1.text = RcString("AB");
   span1.start = 0;
   span1.end = 2;
-  span1.x = Lengthd(10.0, Lengthd::Unit::None);
-  span1.hasX = true;
-  span1.y = Lengthd(50.0, Lengthd::Unit::None);
-  span1.hasY = true;
-  span1.dx = Lengthd(0.0, Lengthd::Unit::None);
-  span1.dy = Lengthd(0.0, Lengthd::Unit::None);
+  span1.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span1.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span1.startsNewChunk = true;
   text.spans.push_back(std::move(span1));
 
   // Second span at a different position.
@@ -96,12 +90,9 @@ TEST(TextLayoutTest, MultipleSpans) {
   span2.text = RcString("CD");
   span2.start = 0;
   span2.end = 2;
-  span2.x = Lengthd(80.0, Lengthd::Unit::None);
-  span2.hasX = true;
-  span2.y = Lengthd(60.0, Lengthd::Unit::None);
-  span2.hasY = true;
-  span2.dx = Lengthd(0.0, Lengthd::Unit::None);
-  span2.dy = Lengthd(0.0, Lengthd::Unit::None);
+  span2.xList.push_back(Lengthd(80.0, Lengthd::Unit::None));
+  span2.yList.push_back(Lengthd(60.0, Lengthd::Unit::None));
+  span2.startsNewChunk = true;
   text.spans.push_back(std::move(span2));
 
   auto params = makeTextParams(16.0);
@@ -130,10 +121,9 @@ TEST(TextLayoutTest, SpanWithoutExplicitPositionContinuesFromPreviousSpan) {
   span1.text = RcString("AB");
   span1.start = 0;
   span1.end = 2;
-  span1.x = Lengthd(10.0, Lengthd::Unit::None);
-  span1.hasX = true;
-  span1.y = Lengthd(50.0, Lengthd::Unit::None);
-  span1.hasY = true;
+  span1.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span1.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span1.startsNewChunk = true;
   text.spans.push_back(std::move(span1));
 
   components::ComputedTextComponent::TextSpan span2;
@@ -160,14 +150,11 @@ TEST(TextLayoutTest, DxDyOffset) {
   span.text = RcString("A");
   span.start = 0;
   span.end = 1;
-  span.x = Lengthd(10.0, Lengthd::Unit::None);
-  span.hasX = true;
-  span.y = Lengthd(50.0, Lengthd::Unit::None);
-  span.hasY = true;
-  span.dx = Lengthd(5.0, Lengthd::Unit::None);
-  span.hasDx = true;
-  span.dy = Lengthd(3.0, Lengthd::Unit::None);
-  span.hasDy = true;
+  span.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span.dxList.push_back(Lengthd(5.0, Lengthd::Unit::None));
+  span.dyList.push_back(Lengthd(3.0, Lengthd::Unit::None));
+  span.startsNewChunk = true;
   text.spans.push_back(std::move(span));
 
   auto params = makeTextParams(16.0);
@@ -190,13 +177,10 @@ TEST(TextLayoutTest, Rotation) {
   span.text = RcString("A");
   span.start = 0;
   span.end = 1;
-  span.x = Lengthd(10.0, Lengthd::Unit::None);
-  span.hasX = true;
-  span.y = Lengthd(50.0, Lengthd::Unit::None);
-  span.hasY = true;
-  span.dx = Lengthd(0.0, Lengthd::Unit::None);
-  span.dy = Lengthd(0.0, Lengthd::Unit::None);
-  span.rotateDegrees = 45.0;
+  span.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span.rotateList.push_back(45.0);
+  span.startsNewChunk = true;
   text.spans.push_back(std::move(span));
 
   auto params = makeTextParams(16.0);
@@ -216,12 +200,9 @@ TEST(TextLayoutTest, EmptyText) {
   span.text = RcString("");
   span.start = 0;
   span.end = 0;
-  span.x = Lengthd(10.0, Lengthd::Unit::None);
-  span.hasX = true;
-  span.y = Lengthd(50.0, Lengthd::Unit::None);
-  span.hasY = true;
-  span.dx = Lengthd(0.0, Lengthd::Unit::None);
-  span.dy = Lengthd(0.0, Lengthd::Unit::None);
+  span.xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  span.startsNewChunk = true;
   text.spans.push_back(std::move(span));
 
   auto params = makeTextParams(16.0);

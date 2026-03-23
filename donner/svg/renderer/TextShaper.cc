@@ -422,25 +422,35 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     }
 
     double penX = haveCurrentPosition ? currentPenX : 0.0;
-    if (span.hasX) {
-      penX = span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-    }
-    if (span.hasDx) {
-      penX += span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-    }
-
     const double defaultY = effectiveBaselineShift - spanBaselineShiftPx;
     double penY = haveCurrentPosition ? currentPenY : defaultY;
-    if (span.hasY) {
-      penY = span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) + defaultY;
-    }
-    if (span.hasDy) {
-      penY += span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+    // Copy positioning lists so span-start can consume index 0 without
+    // double-applying in the glyph loop.
+    auto xList = span.xList;
+    auto yList = span.yList;
+    auto dxList = span.dxList;
+    auto dyList = span.dyList;
+    if (span.startsNewChunk || !haveCurrentPosition) {
+      if (!xList.empty() && xList[0].has_value()) {
+        penX = xList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+        xList[0].reset();
+      }
+      if (!dxList.empty() && dxList[0].has_value()) {
+        penX += dxList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+        dxList[0].reset();
+      }
+      if (!yList.empty() && yList[0].has_value()) {
+        penY = yList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
+               defaultY;
+        yList[0].reset();
+      }
+      if (!dyList.empty() && dyList[0].has_value()) {
+        penY += dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+        dyList[0].reset();
+      }
     }
 
-    const double runStartX = penX;
-    const double runStartY = penY;
-
+    // For empty spans, span-start already applied positioning — just propagate.
     if (spanText.empty()) {
       currentPenX = penX;
       currentPenY = penY;
@@ -448,6 +458,8 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       runs.push_back(std::move(run));
       continue;
     }
+
+    // runStartX/runStartY are computed after the glyph loop from the first glyph's position.
 
     // Build byte-offset to addressable-character-index map for cluster mapping.
     // The SVG DOM uses UTF-16 indexing for per-character attributes (x, y, dx, dy).
@@ -499,8 +511,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
     const bool vertical = isVertical(params.writingMode);
 
-    const auto& yList = span.yList;
-    const auto& xList = span.xList;
+    // xList and yList are mutable copies created above (span-start consumed index 0).
 
     // Per-character coordinates create text chunks. Characters within a chunk
     // connect via cursive joining; characters across chunks don't.
@@ -553,11 +564,13 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     // When RTL text has per-char coords, Chrome/resvg lay out characters LTR
     // (in DOM order) rather than visual RTL order.
     // Use byteToCharIdx for UTF-16-indexed lookups since xList/yList use UTF-16 indexing.
+    // Skip index 0: xList[0]/yList[0] always hold the span-start position (not a
+    // per-character override). Only indices > 0 indicate true per-character coordinates.
     bool hasPerCharCoords = false;
     for (unsigned int i = 0; i < cpCount && !hasPerCharCoords; ++i) {
       const unsigned int ci = byteToCharIdx[logicalByteOffsets[i]];
-      if ((ci < xList.size() && xList[ci].has_value()) ||
-          (ci < yList.size() && yList[ci].has_value())) {
+      if (ci > 0 && ((ci < xList.size() && xList[ci].has_value()) ||
+                      (ci < yList.size() && yList[ci].has_value()))) {
         hasPerCharCoords = true;
       }
     }
@@ -581,11 +594,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         const unsigned int cpIdx = (isRTL && !layoutLTR) ? (cpCount - 1 - vi) : vi;
         // Map codepoint index to UTF-16 character index for xList/yList.
         const unsigned int ci = byteToCharIdx[logicalByteOffsets[cpIdx]];
-        // xList[0]/yList[0] are cleared by TextSystem (scalar span.x/y handles them).
-        // The first logical character still has an explicit position if span.hasX/hasY.
         const bool hasExplicit = (ci < xList.size() && xList[ci].has_value()) ||
                                  (ci < yList.size() && yList[ci].has_value()) ||
-                                 (cpIdx == 0 && (span.hasX || span.hasY));
+                                 (cpIdx == 0 && span.startsNewChunk);
         if (hasExplicit) {
           if (!seenFirstExplicit) {
             seenFirstExplicit = true;  // First explicit → defines initial chunk, no split.
@@ -661,7 +672,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         if (firstLi < yList.size() && yList[firstLi].has_value()) {
           const double chunkY =
               yList[firstLi]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-              baselineShift;
+              defaultY;
           // Tag all glyphs in this chunk with the override Y by recording the
           // range [chunkGlyphStart, chunkGlyphStart + chunkGlyphCount).
           for (unsigned int gi2 = chunkGlyphStart; gi2 < chunkGlyphStart + chunkGlyphCount; ++gi2) {
@@ -692,16 +703,16 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         if (charIdx < yList.size() && yList[charIdx].has_value()) {
           penY = yList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
         }
-        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
-          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dyList.size() && dyList[charIdx].has_value()) {
+          penY += dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                  Lengthd::Extent::Y);
         }
         // Per-character absolute X (cross-axis).
         if (charIdx < xList.size() && xList[charIdx].has_value()) {
           penX = xList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         }
-        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
-          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dxList.size() && dxList[charIdx].has_value()) {
+          penX += dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                  Lengthd::Extent::X);
         }
 
@@ -723,8 +734,6 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
             glyph.rotateDegrees = span.rotateList[rotIdx];
           } else if (!span.rotateList.empty()) {
             glyph.rotateDegrees = span.rotateList.back();
-          } else {
-            glyph.rotateDegrees = span.rotateDegrees;
           }
         }
 
@@ -805,8 +814,8 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           penX = xList[posIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         }
 
-        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
-          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dxList.size() && dxList[charIdx].has_value()) {
+          penX += dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                  Lengthd::Extent::X);
         }
 
@@ -816,11 +825,11 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           penY = yOverrideIt->second;
         } else if (hasAbsoluteY) {
           penY = yList[posIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-                 baselineShift;
+                 defaultY;
         }
 
-        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
-          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dyList.size() && dyList[charIdx].has_value()) {
+          penY += dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                  Lengthd::Extent::Y);
         }
 
@@ -841,8 +850,6 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
             glyph.rotateDegrees = span.rotateList[rotIdx];
           } else if (!span.rotateList.empty()) {
             glyph.rotateDegrees = span.rotateList.back();
-          } else {
-            glyph.rotateDegrees = span.rotateDegrees;
           }
         }
 
@@ -875,7 +882,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
             if (lowIdx < yList.size() && yList[lowIdx].has_value()) {
               penY =
                   yList[lowIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-                  baselineShift;
+                  defaultY;
             }
             if (lowIdx < xList.size() && xList[lowIdx].has_value()) {
               penX =
@@ -898,6 +905,10 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       lastCodepoint = decodeCodepointAt(spanText, glyphInfos[glyphCount - 1].cluster);
     }
 
+    // Compute run start from first glyph's actual position (after per-character positioning).
+    const double runStartX = run.glyphs.empty() ? penX : run.glyphs[0].xPosition;
+    const double runStartY = run.glyphs.empty() ? penY : run.glyphs[0].yPosition;
+
     // If the span has path data, reposition glyphs along the path.
     if (span.pathSpline && !run.glyphs.empty()) {
       const auto& pathSpline = *span.pathSpline;
@@ -915,7 +926,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           g.xPosition = sample.point.x - halfAdv * std::cos(sample.angle);
           g.yPosition = sample.point.y - halfAdv * std::sin(sample.angle);
           // Combine path tangent angle with per-glyph rotation (already set from per-character
-          // rotateList or span.rotateDegrees).
+          // rotateList).
           g.rotateDegrees = sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
         } else {
           g.glyphIndex = 0;

@@ -2069,13 +2069,25 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
       spanFillPaint = makeSolidFillPaint(*span.fillColor);
     }
 
-    SkScalar x = static_cast<SkScalar>(
-        span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
-        span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
-    const SkScalar y = static_cast<SkScalar>(
-        span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-        span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y)) +
-        baselineShift;
+    SkScalar x = 0;
+    if (span.hasExplicitX()) {
+      x = static_cast<SkScalar>(
+          span.xList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
+    }
+    if (!span.dxList.empty() && span.dxList[0].has_value()) {
+      x += static_cast<SkScalar>(
+          span.dxList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
+    }
+    SkScalar y = baselineShift;
+    if (span.hasExplicitY()) {
+      y = static_cast<SkScalar>(
+          span.yList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y)) +
+          baselineShift;
+    }
+    if (!span.dyList.empty() && span.dyList[0].has_value()) {
+      y += static_cast<SkScalar>(
+          span.dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y));
+    }
 
     // Use the span slice, not the full text string.
     const char* spanData = span.text.data() + span.start;
@@ -2091,7 +2103,8 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
       }
     }
 
-    if (span.rotateDegrees != 0.0) {
+    const double rotateDeg = span.rotateList.empty() ? 0.0 : span.rotateList[0];
+    if (rotateDeg != 0.0) {
       // Per-glyph rotation: convert to glyphs and draw individually.
       const int glyphCount = font.countText(spanData, spanLen, SkTextEncoding::kUTF8);
       if (glyphCount <= 0) {
@@ -2109,7 +2122,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
       for (int i = 0; i < glyphCount; ++i) {
         currentCanvas_->save();
         currentCanvas_->translate(penX, y);
-        currentCanvas_->rotate(static_cast<SkScalar>(span.rotateDegrees));
+        currentCanvas_->rotate(static_cast<SkScalar>(rotateDeg));
         // SVG stroke is drawn first (behind fill), then fill on top.
         if (hasStroke) {
           currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, strokePaint);
