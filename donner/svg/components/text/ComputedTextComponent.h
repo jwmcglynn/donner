@@ -43,24 +43,10 @@ struct ComputedTextComponent {
     std::size_t start;
     /// Byte index (exclusive) one past the last code unit of the span within \c text.
     std::size_t end;
-    /// Absolute X position for the first glyph of the span.
-    Lengthd x;
-    /// True when \ref x should reset the current text position for this span.
-    bool hasX = false;
-    /// Absolute Y baseline position for the span.
-    Lengthd y;
-    /// True when \ref y should reset the current text position for this span.
-    bool hasY = false;
-    /// Relative X shift applied to the span.
-    Lengthd dx;
-    /// True when \ref dx should shift the current text position for this span.
-    bool hasDx = false;
-    /// Relative Y shift applied to the span.
-    Lengthd dy;
-    /// True when \ref dy should shift the current text position for this span.
-    bool hasDy = false;
-    /// Rotation applied to each glyph in the span (degrees).
-    double rotateDegrees = 0.0;
+
+    /// True when this span starts a new text chunk (has explicit x or y positioning).
+    /// A new chunk resets the current text position and suppresses cross-span kerning.
+    bool startsNewChunk = false;
 
     /// Resolved solid fill color for this span, if one is available from computed style.
     std::optional<css::Color> fillColor;
@@ -70,17 +56,22 @@ struct ComputedTextComponent {
 
     /// Per-character absolute X positions from \c x attribute lists. Indexed by character
     /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph
-    /// advances naturally from the previous character.
-    std::vector<std::optional<Lengthd>> xList;
+    /// advances naturally from the previous character. Index 0 holds the span-start position.
+    SmallVector<std::optional<Lengthd>, 1> xList;
     /// Per-character absolute Y positions from \c y attribute lists.
-    std::vector<std::optional<Lengthd>> yList;
+    SmallVector<std::optional<Lengthd>, 1> yList;
     /// Per-character relative X offsets from \c dx attribute lists.
-    std::vector<std::optional<Lengthd>> dxList;
+    SmallVector<std::optional<Lengthd>, 1> dxList;
     /// Per-character relative Y offsets from \c dy attribute lists.
-    std::vector<std::optional<Lengthd>> dyList;
+    SmallVector<std::optional<Lengthd>, 1> dyList;
     /// Per-character rotation in degrees from \c rotate attribute lists. Per SVG spec, the
     /// last value repeats for all subsequent characters beyond the list length.
-    std::vector<double> rotateList;
+    SmallVector<double, 1> rotateList;
+
+    /// Returns true if xList[0] has an explicit value.
+    bool hasExplicitX() const { return !xList.empty() && xList[0].has_value(); }
+    /// Returns true if yList[0] has an explicit value.
+    bool hasExplicitY() const { return !yList.empty() && yList[0].has_value(); }
 
     /// CSS `baseline-shift` value for this span. Stored as a Lengthd where em units are relative
     /// to the span's font-size. Positive = shift up (per CSS convention). Resolved to pixels in

@@ -125,56 +125,23 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       span.start = 0;
       span.end = static_cast<std::size_t>(spanText.size());
 
-      // Set scalar positions for backwards compatibility (initial pen position).
-      if (!pos.x.empty()) {
-        span.x = pos.x[0];
-        span.hasX = applyElementPositioning;
-      } else if (!positioningComponent.x.empty()) {
-        span.x = positioningComponent.x[0];
-      }
-      if (!pos.y.empty()) {
-        span.y = pos.y[0];
-        span.hasY = applyElementPositioning;
-      } else if (!positioningComponent.y.empty()) {
-        span.y = positioningComponent.y[0];
-      }
-      if (!pos.dx.empty()) {
-        span.dx = pos.dx[0];
-        span.hasDx = applyElementPositioning;
-      } else if (!positioningComponent.dx.empty()) {
-        span.dx = positioningComponent.dx[0];
-      }
-      if (!pos.dy.empty()) {
-        span.dy = pos.dy[0];
-        span.hasDy = applyElementPositioning;
-      } else if (!positioningComponent.dy.empty()) {
-        span.dy = positioningComponent.dy[0];
-      }
-
-      if (handle.entity() == entity) {
-        span.hasX = applyElementPositioning && !positioningComponent.x.empty();
-        span.hasY = applyElementPositioning && !positioningComponent.y.empty();
-        span.hasDx = applyElementPositioning && !positioningComponent.dx.empty();
-        span.hasDy = applyElementPositioning && !positioningComponent.dy.empty();
-      }
-
-      if (!pos.rotateDegrees.empty()) {
-        span.rotateDegrees = pos.rotateDegrees[0];
-      } else if (!positioningComponent.rotateDegrees.empty()) {
-        span.rotateDegrees = positioningComponent.rotateDegrees[0];
-      }
+      // Determine if this span starts a new text chunk (has its own explicit x or y).
+      span.startsNewChunk = applyElementPositioning && (!pos.x.empty() || !pos.y.empty());
 
       // Populate per-character positioning lists.
       // Each character gets a value from its own element's list first, falling back to the root
       // text element's list at the global character index.
+      // Ensure at least 1 entry even for empty text, so empty spans can propagate position
+      // changes to subsequent spans.
       const size_t charCount = countUtf16CodeUnits(spanText);
+      const size_t listSize = std::max(charCount, size_t(1));
 
-      span.xList.resize(charCount);
-      span.yList.resize(charCount);
-      span.dxList.resize(charCount);
-      span.dyList.resize(charCount);
+      span.xList.resize(listSize);
+      span.yList.resize(listSize);
+      span.dxList.resize(listSize);
+      span.dyList.resize(listSize);
 
-      for (size_t ci = 0; ci < charCount; ++ci) {
+      for (size_t ci = 0; ci < listSize; ++ci) {
         const size_t globalIdx = globalCharIndex + ci;
 
         // Only apply pos.x/y/dx/dy[ci] for the element's first chunk
@@ -204,16 +171,6 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
         } else if (globalIdx < positioningComponent.dy.size()) {
           span.dyList[ci] = positioningComponent.dy[globalIdx];
         }
-      }
-
-      // The scalar x/y/dx/dy fields already represent the first applicable values for the first
-      // rendered character in the subtree. Clear the first per-character entries so layout does
-      // not apply them a second time.
-      if (charCount > 0 && globalCharIndex == 0) {
-        span.xList[0].reset();
-        span.yList[0].reset();
-        span.dxList[0].reset();
-        span.dyList[0].reset();
       }
 
       // Rotate: local values take priority; per SVG spec last value repeats in layout.

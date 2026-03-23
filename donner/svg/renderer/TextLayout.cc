@@ -230,33 +230,54 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
 
     const bool vertical = isVertical(params.writingMode);
     double penX = haveCurrentPosition ? currentPenX : 0.0;
-    if (span.hasX) {
-      penX = span.x.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-    }
-    if (span.hasDx) {
-      penX += span.dx.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-    }
-
     const double defaultY = effectiveBaselineShift - spanBaselineShiftPx;
     double penY = haveCurrentPosition ? currentPenY : defaultY;
-    if (span.hasY) {
-      penY = span.y.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) + defaultY;
-    }
-    if (span.hasDy) {
-      penY += span.dy.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+
+    // Apply span-start positioning from xList[0]/yList[0], then clear index 0
+    // so the glyph loop doesn't double-apply. This replaces the old scalar
+    // hasX/hasY/hasDx/hasDy span-start code.
+    // Copy positioning lists so span-start can consume index 0 without
+    // double-applying in the glyph loop.
+    SmallVector<std::optional<Lengthd>, 1> xListLocal = span.xList;
+    SmallVector<std::optional<Lengthd>, 1> yListLocal = span.yList;
+    SmallVector<std::optional<Lengthd>, 1> dxListLocal = span.dxList;
+    SmallVector<std::optional<Lengthd>, 1> dyListLocal = span.dyList;
+    if (span.startsNewChunk || !haveCurrentPosition) {
+      if (!xListLocal.empty() && xListLocal[0].has_value()) {
+        penX = xListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+        xListLocal[0].reset();
+      }
+      if (!dxListLocal.empty() && dxListLocal[0].has_value()) {
+        penX += dxListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+        dxListLocal[0].reset();
+      }
+      if (!yListLocal.empty() && yListLocal[0].has_value()) {
+        penY = yListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
+               defaultY;
+        yListLocal[0].reset();
+      }
+      if (!dyListLocal.empty() && dyListLocal[0].has_value()) {
+        penY += dyListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+        dyListLocal[0].reset();
+      }
     }
 
-    const double runStartX = penX;
-    const double runStartY = penY;
+    // For empty spans, span-start already applied positioning — just propagate.
+    if (spanText.empty()) {
+      currentPenX = penX;
+      currentPenY = penY;
+      haveCurrentPosition = true;
+      runs.push_back(std::move(run));
+      continue;
+    }
 
     // Decode each codepoint, look up glyph, accumulate advance + kerning.
     // charIdx tracks the addressable character index (grapheme cluster) for per-character
     // positioning attributes (x, y, dx, dy, rotate). Non-spacing characters and characters
     // following a ZWJ do not advance this index.
     size_t byteIdx = 0;
-    // Suppress cross-span kerning when this span starts a new text chunk
-    // (has explicit x or y position).
-    int prevGlyph = (span.hasX || span.hasY) ? 0 : prevSpanLastGlyph;
+    // Suppress cross-span kerning when this span starts a new text chunk.
+    int prevGlyph = span.startsNewChunk ? 0 : prevSpanLastGlyph;
     unsigned int charIdx = 0;
     bool firstCodepoint = true;
     bool prevWasZwj = false;
@@ -277,27 +298,27 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         // Vertical mode: primary advance is along Y, cross-axis is X.
         // Per-character absolute Y overrides the pen along the primary axis.
         const bool hasAbsoluteY =
-            charIdx < span.yList.size() && span.yList[charIdx].has_value();
+            charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
         if (hasAbsoluteY) {
-          penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+          penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::Y);
         }
 
         // Per-character dy (primary axis).
-        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
-          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
+          penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                   Lengthd::Extent::Y);
         }
 
         // Per-character absolute X (cross-axis).
-        if (charIdx < span.xList.size() && span.xList[charIdx].has_value()) {
-          penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < xListLocal.size() && xListLocal[charIdx].has_value()) {
+          penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::X);
         }
 
         // Per-character dx (cross-axis).
-        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
-          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
+          penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                   Lengthd::Extent::X);
         }
 
@@ -316,7 +337,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         } else if (!span.rotateList.empty()) {
           glyph.rotateDegrees = span.rotateList.back() + baseRotation;
         } else {
-          glyph.rotateDegrees = span.rotateDegrees + baseRotation;
+          glyph.rotateDegrees = baseRotation;
         }
 
         run.glyphs.push_back(glyph);
@@ -330,12 +351,12 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         // Horizontal mode (existing path).
         // Per-character absolute X positioning overrides the pen.
         const bool hasAbsoluteX =
-            charIdx < span.xList.size() && span.xList[charIdx].has_value();
+            charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
         const bool hasAbsoluteY =
-            charIdx < span.yList.size() && span.yList[charIdx].has_value();
+            charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
 
         if (hasAbsoluteX) {
-          penX = span.xList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+          penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::X);
         } else if (!hasAbsoluteY) {
           // Kern adjustment with previous glyph. Suppress kerning when a new text chunk
@@ -347,21 +368,21 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         }
 
         // Per-character dx.
-        if (charIdx < span.dxList.size() && span.dxList[charIdx].has_value()) {
-          penX += span.dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
+          penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                   Lengthd::Extent::X);
         }
 
         // Per-character absolute Y positioning.
         if (hasAbsoluteY) {
-          penY = span.yList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+          penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                 Lengthd::Extent::Y) +
-                 baselineShift;
+                 defaultY;
         }
 
         // Per-character dy.
-        if (charIdx < span.dyList.size() && span.dyList[charIdx].has_value()) {
-          penY += span.dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics,
+        if (charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
+          penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
                                                   Lengthd::Extent::Y);
         }
 
@@ -381,8 +402,6 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
           glyph.rotateDegrees = span.rotateList[charIdx];
         } else if (!span.rotateList.empty()) {
           glyph.rotateDegrees = span.rotateList.back();
-        } else {
-          glyph.rotateDegrees = span.rotateDegrees;
         }
 
         run.glyphs.push_back(glyph);
@@ -399,6 +418,10 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
 
       prevGlyph = glyphIndex;
     }
+
+    // Compute run start from first glyph's actual position (after per-character positioning).
+    const double runStartX = run.glyphs.empty() ? penX : run.glyphs[0].xPosition;
+    const double runStartY = run.glyphs.empty() ? penY : run.glyphs[0].yPosition;
 
     // If the span has path data, reposition glyphs along the path.
     if (span.pathSpline && !run.glyphs.empty()) {
@@ -419,7 +442,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
           g.xPosition = sample.point.x - halfAdv * std::cos(sample.angle);
           g.yPosition = sample.point.y - halfAdv * std::sin(sample.angle);
           // Convert tangent angle to degrees and add the per-glyph rotation
-          // (already set from per-character rotateList or span.rotateDegrees).
+          // (already set from per-character rotateList).
           g.rotateDegrees =
               sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
         } else {

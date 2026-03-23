@@ -51,8 +51,8 @@ LTR layout mode (`layoutLTR`):
 
 - **Chunk splitting uses UTF-16 indices** (not raw codepoint indices) for `xList`/`yList` lookups,
   preventing ZWJ emoji sequences from being split.
-- **First logical character** recognized via `span.hasX`/`span.hasY` even when `yList[0]` is cleared
-  by TextSystem, ensuring correct chunk boundaries.
+- **First logical character** recognized via `span.startsNewChunk` or `xList[0]`/`yList[0]` having
+  values, ensuring correct chunk boundaries.
 - **Rotate uses raw codepoint indices** — combining marks consume rotate values (matching Chrome/resvg),
   unlike x/y which use addressable character indices. Separate `byteToRawCpIdx` map.
 - **Combining mark rotation** — marks' positions are pre-rotated around the base character's origin
