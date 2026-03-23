@@ -28,7 +28,9 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/renderer/RenderingContext.h"
@@ -37,6 +39,42 @@
 namespace donner::svg {
 
 namespace {
+
+/// Resolves per-span style properties from each span's sourceEntity.
+/// Called before drawText so that layout engines and renderers have access to
+/// fill color, font-weight, baseline-shift, alignment-baseline, and opacity.
+void resolvePerSpanStyles(Registry& registry,
+                          components::ComputedTextComponent& text) {
+  for (auto& span : text.spans) {
+    if (span.sourceEntity == entt::null) {
+      continue;
+    }
+
+    // Walk up to the parent if the entity itself has no style (e.g., text content node).
+    auto* style = registry.try_get<components::ComputedStyleComponent>(span.sourceEntity);
+    if (!style || !style->properties) {
+      if (auto* tree = registry.try_get<donner::components::TreeComponent>(span.sourceEntity)) {
+        if (tree->parent() != entt::null) {
+          style = registry.try_get<components::ComputedStyleComponent>(tree->parent());
+        }
+      }
+    }
+
+    if (style && style->properties) {
+      span.baselineShift = style->properties->baselineShift.getRequired();
+      span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
+      span.fontWeight = style->properties->fontWeight.getRequired();
+      span.opacity = style->properties->opacity.getRequired();
+
+      const css::RGBA currentColor = style->properties->color.getRequired().rgba();
+      const float fillOpacity = static_cast<float>(style->properties->fillOpacity.getRequired());
+      const PaintServer fill = style->properties->fill.getRequired();
+      if (const auto* solid = std::get_if<PaintServer::Solid>(&fill.value)) {
+        span.fillColor = css::Color(solid->color.resolve(currentColor, fillOpacity));
+      }
+    }
+  }
+}
 
 PathShape toPathShape(const components::ComputedPathComponent& path,
                       const components::ComputedStyleComponent& style) {
@@ -638,8 +676,10 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
-      } else if (const auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+      } else if (auto* text =
+                     instance.dataHandle(registry)
+                         .try_get<components::ComputedTextComponent>()) {
+        resolvePerSpanStyles(registry, *text);
         const auto* textComp =
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
@@ -870,8 +910,10 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
-      } else if (const auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+      } else if (auto* text =
+                     instance.dataHandle(registry)
+                         .try_get<components::ComputedTextComponent>()) {
+        resolvePerSpanStyles(registry, *text);
         const auto* textComp =
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
@@ -1161,8 +1203,10 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
-      } else if (const auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+      } else if (auto* text =
+                     instance.dataHandle(registry)
+                         .try_get<components::ComputedTextComponent>()) {
+        resolvePerSpanStyles(registry, *text);
         const auto* textComp =
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);

@@ -1016,8 +1016,16 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(TspanElement, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-tspan")), TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    TspanElement, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-tspan",
+        {
+            {"e-tspan-031.svg",
+             Params().withMaxPixelsDifferent(
+                 400)},  // Vertical axis has different AA (its not the focus of the test)
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Use, ImageComparisonTestFixture,

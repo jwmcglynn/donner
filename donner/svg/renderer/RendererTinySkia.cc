@@ -1412,13 +1412,13 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
   std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(textBounds);
-  const auto makeSolidFillPaint = [&](const css::Color& color) {
+  const auto makeSolidFillPaint = [&](const css::Color& color, double spanOpacity = 1.0) {
     tiny_skia::Paint paint = makeBasePaint(antialias_);
     paint.unpremulStore = surfaceStack_.empty();
 
     css::RGBA rgba = color.rgba();
     rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) *
-                                             params.opacity * paintOpacity_));
+                                             params.opacity * paintOpacity_ * spanOpacity));
     paint.shader = toTinyColor(rgba);
     return paint;
   };
@@ -1448,8 +1448,14 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     }
 
     std::optional<tiny_skia::Paint> spanFillPaint = fillPaint;
-    if (runIndex < text.spans.size() && text.spans[runIndex].fillColor.has_value()) {
-      spanFillPaint = makeSolidFillPaint(*text.spans[runIndex].fillColor);
+    if (runIndex < text.spans.size()) {
+      const auto& span = text.spans[runIndex];
+      if (span.fillColor.has_value()) {
+        spanFillPaint = makeSolidFillPaint(*span.fillColor, span.opacity);
+      } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
+        // Re-create the fill paint with per-span opacity applied.
+        spanFillPaint = makeSolidFillPaint(params.fillColor, span.opacity);
+      }
     }
 
     for (const auto& glyph : run.glyphs) {

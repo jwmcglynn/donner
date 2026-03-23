@@ -3,6 +3,8 @@
 
 #include <optional>
 
+#include <entt/entt.hpp>
+
 #include "donner/css/Color.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
@@ -44,15 +46,35 @@ struct ComputedTextComponent {
     /// Byte index (exclusive) one past the last code unit of the span within \c text.
     std::size_t end;
 
+    /// Back-reference to the source entity (text, tspan, or textPath) that produced this span.
+    /// Used by the renderer to look up ComputedStyleComponent for per-span properties
+    /// (fill, opacity, font-weight, clip-path, mask, filter, baseline-shift, etc.).
+    entt::entity sourceEntity = entt::null;
+
     /// True when this span starts a new text chunk (has explicit x or y positioning).
     /// A new chunk resets the current text position and suppresses cross-span kerning.
     bool startsNewChunk = false;
 
-    /// Resolved solid fill color for this span, if one is available from computed style.
+    /// Resolved solid fill color for this span, populated by RendererDriver from sourceEntity.
     std::optional<css::Color> fillColor;
 
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
+    /// Populated by RendererDriver from sourceEntity.
     int fontWeight = 400;
+
+    /// CSS `baseline-shift` value for this span. Stored as a Lengthd where em units are relative
+    /// to the span's font-size. Positive = shift up (per CSS convention). Populated by
+    /// RendererDriver from sourceEntity.
+    Lengthd baselineShift;
+
+    /// CSS `alignment-baseline` value for this span. When not Auto, overrides the
+    /// dominant-baseline for this specific inline element. Populated by RendererDriver from
+    /// sourceEntity.
+    DominantBaseline alignmentBaseline = DominantBaseline::Auto;
+
+    /// CSS `opacity` value for this span (0.0-1.0). Populated by RendererDriver from
+    /// sourceEntity.
+    double opacity = 1.0;
 
     /// Per-character absolute X positions from \c x attribute lists. Indexed by character
     /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph
@@ -72,15 +94,6 @@ struct ComputedTextComponent {
     bool hasExplicitX() const { return !xList.empty() && xList[0].has_value(); }
     /// Returns true if yList[0] has an explicit value.
     bool hasExplicitY() const { return !yList.empty() && yList[0].has_value(); }
-
-    /// CSS `baseline-shift` value for this span. Stored as a Lengthd where em units are relative
-    /// to the span's font-size. Positive = shift up (per CSS convention). Resolved to pixels in
-    /// the layout engine.
-    Lengthd baselineShift;
-
-    /// CSS `alignment-baseline` value for this span. When not Auto, overrides the
-    /// dominant-baseline for this specific inline element.
-    DominantBaseline alignmentBaseline = DominantBaseline::Auto;
 
     /// If set, glyphs in this span are positioned along this path (for \ref xml_textPath).
     std::optional<PathSpline> pathSpline;
