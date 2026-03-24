@@ -455,6 +455,29 @@ ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> compone
   return err;
 }
 
+ParseResult<ColorInterpolationFilters> ParseColorInterpolationFilters(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("srgb")) {
+        return ColorInterpolationFilters::SRGB;
+      } else if (value.equalsLowercase("linearrgb")) {
+        return ColorInterpolationFilters::LinearRGB;
+      } else if (value.equalsLowercase("auto")) {
+        return ColorInterpolationFilters::LinearRGB;  // SVG spec: auto = linearRGB
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid color-interpolation-filters value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -1623,6 +1646,15 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                          return ParseReference("mask", params.components());
                        },
                        &registry.mask);
+                 }},  //
+                {"color-interpolation-filters",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseColorInterpolationFilters(params.components());
+                       },
+                       &registry.colorInterpolationFilters);
                  }},  //
                 {"filter",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

@@ -217,12 +217,26 @@ using GraphPrimitive = std::variant<
     graph_primitive::Turbulence, graph_primitive::DisplacementMap, graph_primitive::DiffuseLighting,
     graph_primitive::SpecularLighting, graph_primitive::DropShadow, graph_primitive::Image>;
 
+/// Affine transform coefficients for rotation-aware subregion clipping.
+/// Maps pixel coordinates to filter (user) coordinates:
+///   x' = a*x + c*y + e
+///   y' = b*x + d*y + f
+struct AffineTransform {
+  double a = 1, b = 0, c = 0, d = 1, e = 0, f = 0;
+};
+
 /// A single node in the filter graph.
 struct GraphNode {
   GraphPrimitive primitive;            ///< The filter operation.
   std::vector<NodeInput> inputs;       ///< Input reference(s).
   std::optional<std::string> result;   ///< Named output (for `result` attribute).
-  std::optional<PixelRect> subregion;  ///< Pixel-space primitive subregion (for clipping).
+  std::optional<PixelRect> subregion;  ///< Pixel-space primitive subregion (AABB, for clipping).
+
+  /// User-space subregion for rotation-aware clipping. When set alongside
+  /// FilterGraph::filterFromDevice, per-pixel point-in-rect testing is used instead of the
+  /// AABB subregion. This prevents axis-aligned bounding box overflow when the element's
+  /// transform has rotation or skew.
+  std::optional<PixelRect> userSpaceSubregion;
 
   /// Per-node color space override. When set, overrides the graph-level `useLinearRGB`.
   /// true = linearRGB, false = sRGB.
@@ -240,6 +254,10 @@ struct FilterGraph {
 
   /// Filter region in pixel space (clips subregions). If not set, uses full pixmap extent.
   std::optional<PixelRect> filterRegion;
+
+  /// Inverse transform (pixel → filter/user space) for rotation-aware subregion clipping.
+  /// When set, nodes with userSpaceSubregion use per-pixel point-in-rect testing.
+  std::optional<AffineTransform> filterFromDevice;
 };
 
 /// Execute a filter graph on a source pixmap.

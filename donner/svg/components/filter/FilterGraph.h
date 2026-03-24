@@ -12,6 +12,7 @@
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterUnits.h"
+#include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg::components {
@@ -22,10 +23,10 @@ namespace donner::svg::components {
  * @see https://drafts.fxtf.org/filter-effects/#FilterPrimitiveSubRegion
  */
 enum class FilterStandardInput : std::uint8_t {
-  SourceGraphic,   ///< The original element rendering.
-  SourceAlpha,     ///< Alpha channel of SourceGraphic (RGB = 0).
-  FillPaint,       ///< The element's fill paint, conceptually infinite.
-  StrokePaint,     ///< The element's stroke paint, conceptually infinite.
+  SourceGraphic,  ///< The original element rendering.
+  SourceAlpha,    ///< Alpha channel of SourceGraphic (RGB = 0).
+  FillPaint,      ///< The element's fill paint, conceptually infinite.
+  StrokePaint,    ///< The element's stroke paint, conceptually infinite.
 };
 
 /**
@@ -77,15 +78,15 @@ struct GaussianBlur {
     Wrap,       ///< Wrap around (modular arithmetic).
   };
 
-  double stdDeviationX = 0.0;  ///< Standard deviation in X.
-  double stdDeviationY = 0.0;  ///< Standard deviation in Y.
+  double stdDeviationX = 0.0;          ///< Standard deviation in X.
+  double stdDeviationY = 0.0;          ///< Standard deviation in Y.
   EdgeMode edgeMode = EdgeMode::None;  ///< Edge handling mode.
 };
 
 /// Parameters for \c feFlood.
 struct Flood {
   css::Color floodColor{css::RGBA(0, 0, 0, 0xFF)};  ///< Flood color (default: black).
-  double floodOpacity = 1.0;                          ///< Flood opacity (default: 1).
+  double floodOpacity = 1.0;                        ///< Flood opacity (default: 1).
 };
 
 /// Parameters for \c feOffset.
@@ -133,10 +134,10 @@ struct Composite {
   };
 
   Operator op = Operator::Over;  ///< Compositing operator.
-  double k1 = 0.0;              ///< Arithmetic coefficient k1.
-  double k2 = 0.0;              ///< Arithmetic coefficient k2.
-  double k3 = 0.0;              ///< Arithmetic coefficient k3.
-  double k4 = 0.0;              ///< Arithmetic coefficient k4.
+  double k1 = 0.0;               ///< Arithmetic coefficient k1.
+  double k2 = 0.0;               ///< Arithmetic coefficient k2.
+  double k3 = 0.0;               ///< Arithmetic coefficient k3.
+  double k4 = 0.0;               ///< Arithmetic coefficient k4.
 };
 
 /// Parameters for \c feColorMatrix.
@@ -149,8 +150,8 @@ struct ColorMatrix {
     LuminanceToAlpha,  ///< No values.
   };
 
-  Type type = Type::Matrix;      ///< Matrix type.
-  std::vector<double> values;    ///< Matrix values (interpretation depends on type).
+  Type type = Type::Matrix;    ///< Matrix type.
+  std::vector<double> values;  ///< Matrix values (interpretation depends on type).
 };
 
 /// Parameters for \c feMerge. Children are represented as additional inputs on the FilterNode.
@@ -158,12 +159,12 @@ struct Merge {};
 
 /// Parameters for \c feDropShadow.
 struct DropShadow {
-  double dx = 2.0;              ///< Horizontal offset.
-  double dy = 2.0;              ///< Vertical offset.
-  double stdDeviationX = 2.0;   ///< Blur standard deviation X.
-  double stdDeviationY = 2.0;   ///< Blur standard deviation Y.
+  double dx = 2.0;                                  ///< Horizontal offset.
+  double dy = 2.0;                                  ///< Vertical offset.
+  double stdDeviationX = 2.0;                       ///< Blur standard deviation X.
+  double stdDeviationY = 2.0;                       ///< Blur standard deviation Y.
   css::Color floodColor{css::RGBA(0, 0, 0, 0xFF)};  ///< Shadow color (default: black).
-  double floodOpacity = 1.0;    ///< Shadow opacity (default: 1).
+  double floodOpacity = 1.0;                        ///< Shadow opacity (default: 1).
 };
 
 /// Parameters for \c feComponentTransfer.
@@ -182,10 +183,10 @@ struct ComponentTransfer {
     FuncType type = FuncType::Identity;  ///< Function type.
     std::vector<double> tableValues;     ///< Table values (for table/discrete).
     double slope = 1.0;                  ///< Slope (for linear).
-    double intercept = 0.0;             ///< Intercept (for linear).
-    double amplitude = 1.0;             ///< Amplitude (for gamma).
-    double exponent = 1.0;              ///< Exponent (for gamma).
-    double offset = 0.0;               ///< Offset (for gamma).
+    double intercept = 0.0;              ///< Intercept (for linear).
+    double amplitude = 1.0;              ///< Amplitude (for gamma).
+    double exponent = 1.0;               ///< Exponent (for gamma).
+    double offset = 0.0;                 ///< Offset (for gamma).
   };
 
   Func funcR;  ///< Red channel transfer function.
@@ -203,15 +204,15 @@ struct ConvolveMatrix {
     None,
   };
 
-  int orderX = 3;                        ///< Kernel width.
-  int orderY = 3;                        ///< Kernel height.
-  std::vector<double> kernelMatrix;      ///< Kernel values (orderX * orderY).
-  std::optional<double> divisor;          ///< Divisor (nullopt = sum of kernel values).
-  double bias = 0.0;                     ///< Bias added to result.
-  std::optional<int> targetX;            ///< Target X (nullopt = floor(orderX/2)).
-  std::optional<int> targetY;            ///< Target Y (nullopt = floor(orderY/2)).
+  int orderX = 3;                           ///< Kernel width.
+  int orderY = 3;                           ///< Kernel height.
+  std::vector<double> kernelMatrix;         ///< Kernel values (orderX * orderY).
+  std::optional<double> divisor;            ///< Divisor (nullopt = sum of kernel values).
+  double bias = 0.0;                        ///< Bias added to result.
+  std::optional<int> targetX;               ///< Target X (nullopt = floor(orderX/2)).
+  std::optional<int> targetY;               ///< Target Y (nullopt = floor(orderY/2)).
   EdgeMode edgeMode = EdgeMode::Duplicate;  ///< Edge handling mode.
-  bool preserveAlpha = false;            ///< If true, only filter RGB channels.
+  bool preserveAlpha = false;               ///< If true, only filter RGB channels.
 };
 
 /// Parameters for \c feMorphology.
@@ -238,12 +239,12 @@ struct Turbulence {
     Turbulence,
   };
 
-  Type type = Type::Turbulence;    ///< Noise type.
-  double baseFrequencyX = 0.0;    ///< Base frequency X.
-  double baseFrequencyY = 0.0;    ///< Base frequency Y.
-  int numOctaves = 1;             ///< Number of octaves.
-  double seed = 0.0;              ///< Random seed.
-  bool stitchTiles = false;       ///< Whether to stitch tiles.
+  Type type = Type::Turbulence;  ///< Noise type.
+  double baseFrequencyX = 0.0;   ///< Base frequency X.
+  double baseFrequencyY = 0.0;   ///< Base frequency Y.
+  int numOctaves = 1;            ///< Number of octaves.
+  double seed = 0.0;             ///< Random seed.
+  bool stitchTiles = false;      ///< Whether to stitch tiles.
 };
 
 /// Parameters for \c feImage.
@@ -276,7 +277,7 @@ struct DisplacementMap {
   /// Channel selector.
   enum class Channel : std::uint8_t { R, G, B, A };
 
-  double scale = 0.0;                   ///< Displacement scale factor.
+  double scale = 0.0;                     ///< Displacement scale factor.
   Channel xChannelSelector = Channel::A;  ///< Channel to use for X displacement.
   Channel yChannelSelector = Channel::A;  ///< Channel to use for Y displacement.
 };
@@ -289,8 +290,8 @@ struct LightSource {
   Type type = Type::Distant;
 
   // feDistantLight
-  double azimuth = 0.0;     ///< Angle in the XY plane (degrees).
-  double elevation = 0.0;   ///< Angle above the XY plane (degrees).
+  double azimuth = 0.0;    ///< Angle in the XY plane (degrees).
+  double elevation = 0.0;  ///< Angle above the XY plane (degrees).
 
   // fePointLight / feSpotLight
   double x = 0.0;  ///< X position.
@@ -298,26 +299,26 @@ struct LightSource {
   double z = 0.0;  ///< Z position.
 
   // feSpotLight
-  double pointsAtX = 0.0;   ///< X target.
-  double pointsAtY = 0.0;   ///< Y target.
-  double pointsAtZ = 0.0;   ///< Z target.
-  double spotExponent = 1.0; ///< Spotlight exponent.
+  double pointsAtX = 0.0;                   ///< X target.
+  double pointsAtY = 0.0;                   ///< Y target.
+  double pointsAtZ = 0.0;                   ///< Z target.
+  double spotExponent = 1.0;                ///< Spotlight exponent.
   std::optional<double> limitingConeAngle;  ///< Cone angle limit (degrees).
 };
 
 /// Parameters for \c feDiffuseLighting.
 struct DiffuseLighting {
-  double surfaceScale = 1.0;       ///< Height of surface.
-  double diffuseConstant = 1.0;    ///< Diffuse reflection constant.
+  double surfaceScale = 1.0;                                    ///< Height of surface.
+  double diffuseConstant = 1.0;                                 ///< Diffuse reflection constant.
   css::Color lightingColor{css::RGBA(0xFF, 0xFF, 0xFF, 0xFF)};  ///< Light color (default: white).
   std::optional<LightSource> light;  ///< Light source (from child element).
 };
 
 /// Parameters for \c feSpecularLighting.
 struct SpecularLighting {
-  double surfaceScale = 1.0;        ///< Height of surface.
-  double specularConstant = 1.0;    ///< Specular reflection constant.
-  double specularExponent = 1.0;    ///< Specular exponent (1..128).
+  double surfaceScale = 1.0;                                    ///< Height of surface.
+  double specularConstant = 1.0;                                ///< Specular reflection constant.
+  double specularExponent = 1.0;                                ///< Specular exponent (1..128).
   css::Color lightingColor{css::RGBA(0xFF, 0xFF, 0xFF, 0xFF)};  ///< Light color (default: white).
   std::optional<LightSource> light;  ///< Light source (from child element).
 };
@@ -327,24 +328,14 @@ struct SpecularLighting {
 /**
  * Variant holding any filter primitive type.
  */
-using FilterPrimitive = std::variant<
-    filter_primitive::GaussianBlur,
-    filter_primitive::Flood,
-    filter_primitive::Offset,
-    filter_primitive::Merge,
-    filter_primitive::Blend,
-    filter_primitive::Composite,
-    filter_primitive::ColorMatrix,
-    filter_primitive::DropShadow,
-    filter_primitive::ComponentTransfer,
-    filter_primitive::ConvolveMatrix,
-    filter_primitive::Morphology,
-    filter_primitive::Tile,
-    filter_primitive::Turbulence,
-    filter_primitive::Image,
-    filter_primitive::DisplacementMap,
-    filter_primitive::DiffuseLighting,
-    filter_primitive::SpecularLighting>;
+using FilterPrimitive =
+    std::variant<filter_primitive::GaussianBlur, filter_primitive::Flood, filter_primitive::Offset,
+                 filter_primitive::Merge, filter_primitive::Blend, filter_primitive::Composite,
+                 filter_primitive::ColorMatrix, filter_primitive::DropShadow,
+                 filter_primitive::ComponentTransfer, filter_primitive::ConvolveMatrix,
+                 filter_primitive::Morphology, filter_primitive::Tile, filter_primitive::Turbulence,
+                 filter_primitive::Image, filter_primitive::DisplacementMap,
+                 filter_primitive::DiffuseLighting, filter_primitive::SpecularLighting>;
 
 /**
  * A single node in the filter graph, representing one filter primitive.
@@ -354,13 +345,13 @@ using FilterPrimitive = std::variant<
  * operation, and writes to an output buffer.
  */
 struct FilterNode {
-  FilterPrimitive primitive;           ///< The filter primitive operation.
-  std::vector<FilterInput> inputs;     ///< Input(s) to this primitive.
-  std::optional<RcString> result;      ///< Named output (for `result` attribute).
-  std::optional<Lengthd> x;           ///< Primitive subregion X.
-  std::optional<Lengthd> y;           ///< Primitive subregion Y.
-  std::optional<Lengthd> width;       ///< Primitive subregion width.
-  std::optional<Lengthd> height;      ///< Primitive subregion height.
+  FilterPrimitive primitive;        ///< The filter primitive operation.
+  std::vector<FilterInput> inputs;  ///< Input(s) to this primitive.
+  std::optional<RcString> result;   ///< Named output (for `result` attribute).
+  std::optional<Lengthd> x;         ///< Primitive subregion X.
+  std::optional<Lengthd> y;         ///< Primitive subregion Y.
+  std::optional<Lengthd> width;     ///< Primitive subregion width.
+  std::optional<Lengthd> height;    ///< Primitive subregion height.
 
   /// Per-primitive color-interpolation-filters. When set, overrides the graph-level default.
   std::optional<ColorInterpolationFilters> colorInterpolationFilters;

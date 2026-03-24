@@ -496,42 +496,34 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FeDiffuseLighting, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix(
-                             "e-feDiffuseLighting",
-                             {
-                                 {"e-feDiffuseLighting-021.svg",
-                                  Params::WithThreshold(0.1f, 750)},  // Transformed diffuse (690px)
-                             })),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FeDiffuseLighting, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feDiffuseLighting",
+        {
+            {"e-feDiffuseLighting-021.svg",
+             Params::WithThreshold(0.2f)},  // Shading differences, donner is smoother
+        })),
+    TestNameFromFilename);
 INSTANTIATE_TEST_SUITE_P(FeDisplacementMap, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-feDisplacementMap", {})),
-                         TestNameFromFilename);
+                         ValuesIn(getTestsWithPrefix("e-feDisplacementMap")), TestNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(FeDistantLight, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-feDistantLight", {})),
-                         TestNameFromFilename);
+                         ValuesIn(getTestsWithPrefix("e-feDistantLight")), TestNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(
     FeDropShadow, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-feDropShadow",
         {
             // linearRGB 8-bit LUT rounding diffs at blur edges
-            {"e-feDropShadow-001.svg",
-             Params::WithThreshold(kDefaultThreshold, 300)},  // box blur edge rounding (246px)
-            {"e-feDropShadow-002.svg", Params::WithThreshold(kDefaultThreshold, 150)},  // 129px
+            {"e-feDropShadow-001.svg", Params::WithThreshold(0.04f)},  // Minor blur diffs
+            {"e-feDropShadow-002.svg", Params::WithThreshold(0.03f)},  // Minor blur diffs
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeFlood, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feFlood",
-        {
-            {"e-feFlood-008.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   18000)},  // OBB + complex transform (17501px at 0.02)
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeFlood, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feFlood")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeGaussianBlur, ImageComparisonTestFixture,
@@ -539,10 +531,9 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feGaussianBlur",
         {
             {"e-feGaussianBlur-002.svg",
-             Params::Skip()},  // huge stdDev=1000, 207K px diff, 70s runtime
-            {"e-feGaussianBlur-012.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   200)},  // Rotated asymmetric blur, transformed path
+             Params::WithThreshold(0.1f)},  // Test only requires not crashing; differences in
+                                            // behavior for clamping sigma
+            {"e-feGaussianBlur-012.svg", Params::WithThreshold(0.03f)},  // Minor AA differences
         })),
     TestNameFromFilename);
 
@@ -583,31 +574,17 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeMerge, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feMerge",
-        {
-            {"e-feMerge-001.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   1250)},  // linearRGB rounding (1117px at 0.02)
-            {"e-feMerge-002.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   2350)},  // linearRGB rounding (2203px at 0.02)
-            {"e-feMerge-003.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   7000)},  // Complex skew transform + c-i-f (6372px at 0.02)
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeMerge, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix(
+                             "e-feMerge",
+                             {
+                                 {"e-feMerge-003.svg",
+                                  Params::WithThreshold(0.15f)},  // Minor blur shading differences
+                             })),
+                         TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeMorphology, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("e-feMorphology",
-                                {
-                                    {"e-feMorphology-012.svg",
-                                     Params::Skip()},  // Perf: radius=9999, O(n*r^2) too slow
-                                })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeMorphology, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feMorphology")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeOffset, ImageComparisonTestFixture,

@@ -227,6 +227,16 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                                      pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
   }
 
+  // Detect rotation/skew: if the transform has off-diagonal elements, subregion clipping inside
+  // the filter graph needs per-pixel point-in-rect testing to avoid AABB overflow.
+  const bool hasRotation = !NearZero(deviceFromFilter.data[1], 1e-6) ||
+                           !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (hasRotation && !NearZero(deviceFromFilter.determinant(), 1e-12)) {
+    const Transformd inv = deviceFromFilter.inverse();
+    graph.filterFromDevice = tiny_skia::filter::AffineTransform{
+        inv.data[0], inv.data[1], inv.data[2], inv.data[3], inv.data[4], inv.data[5]};
+  }
+
   for (const FilterNode& node : filterGraph.nodes) {
     tiny_skia::filter::GraphNode graphNode;
 
@@ -264,6 +274,12 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
           tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
                                        pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
                                        pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+
+      // Store user-space subregion for rotation-aware clipping.
+      if (graph.filterFromDevice.has_value()) {
+        graphNode.userSpaceSubregion =
+            tiny_skia::filter::PixelRect{ux, uy, uw, uh};
+      }
     }
 
     std::visit(

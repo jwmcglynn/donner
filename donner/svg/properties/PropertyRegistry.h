@@ -7,6 +7,7 @@
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
 #include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/ClipRule.h"
 #include "donner/svg/core/CursorType.h"
 #include "donner/svg/core/Display.h"
@@ -238,6 +239,14 @@ public:
       "filter",
       []() -> std::optional<std::vector<FilterEffect>> { return std::vector<FilterEffect>(); }};
 
+  /// `color-interpolation-filters` property, which determines the color space for filter
+  /// operations. Defaults to \ref ColorInterpolationFilters::LinearRGB. Inherited.
+  Property<ColorInterpolationFilters, PropertyCascade::Inherit> colorInterpolationFilters{
+      "color-interpolation-filters",
+      []() -> std::optional<ColorInterpolationFilters> {
+        return ColorInterpolationFilters::LinearRGB;
+      }};
+
   //
   // Interaction
   //
@@ -368,7 +377,8 @@ public:
     return std::forward_as_tuple(color, display, opacity, visibility, overflow, transformOrigin,
                                  fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
                                  strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray,
-                                 strokeDashoffset, clipPath, clipRule, mask, filter, pointerEvents,
+                                 strokeDashoffset, clipPath, clipRule, mask, filter,
+                                 colorInterpolationFilters, pointerEvents,
                                  cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize,
                                  fontWeight, textAnchor, textDecoration, dominantBaseline,
                                  writingMode, letterSpacing, wordSpacing, mixBlendMode, isolation);

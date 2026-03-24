@@ -174,28 +174,10 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
 /// default should be used.
 std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(const Registry& registry,
                                                                           entt::entity cur) {
-  // Check CSS unparsed properties (from presentation attribute or style="").
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
-    if (style->properties.has_value()) {
-      for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
-        if (name == "color-interpolation-filters") {
-          const auto& decl = unparsedProperty.declaration;
-          // Parse the simple keyword value.
-          for (const auto& component : decl.values) {
-            if (const auto* token = std::get_if<css::Token>(&component.value)) {
-              if (token->is<css::Token::Ident>()) {
-                const auto& ident = token->get<css::Token::Ident>().value;
-                if (ident == "sRGB") {
-                  return ColorInterpolationFilters::SRGB;
-                }
-                if (ident == "linearRGB") {
-                  return ColorInterpolationFilters::LinearRGB;
-                }
-              }
-            }
-          }
-        }
-      }
+    if (style->properties.has_value() &&
+        style->properties->colorInterpolationFilters.hasValue()) {
+      return style->properties->colorInterpolationFilters.getRequired();
     }
   }
   return std::nullopt;
@@ -353,7 +335,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
               .stdDeviationY = blur->stdDeviationY,
               .edgeMode = static_cast<filter_primitive::GaussianBlur::EdgeMode>(blur->edgeMode),
           },
-          *primitive));
+          *primitive, primitiveCIF));
     } else if (registry.try_get<FEFloodComponent>(cur)) {
       filterGraph.nodes.push_back(makeFilterNode(resolveFloodProperties(registry, cur, outWarnings),
                                                  *primitive, primitiveCIF));
@@ -363,7 +345,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
               .dx = offset->dx,
               .dy = offset->dy,
           },
-          *primitive));
+          *primitive, primitiveCIF));
     } else if (const auto* comp = registry.try_get<FECompositeComponent>(cur)) {
       filter_primitive::Composite prim;
       prim.op = static_cast<filter_primitive::Composite::Operator>(comp->op);

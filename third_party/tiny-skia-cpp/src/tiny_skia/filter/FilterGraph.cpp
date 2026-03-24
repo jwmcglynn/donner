@@ -108,7 +108,41 @@ std::optional<Box> computeNonTransparentBounds(const FloatPixmap& pixmap) {
 }
 
 /// Apply subregion clipping on float pixmap: clear pixels outside the given rect.
-void applySubregionClipping(FloatPixmap& output, const PixelRect& sr, int w, int h) {
+/// When filterFromDevice and userSpaceSubregion are provided, uses per-pixel point-in-rect
+/// testing for rotation-aware clipping instead of the axis-aligned bounding box.
+void applySubregionClipping(FloatPixmap& output, const PixelRect& sr, int w, int h,
+                            const AffineTransform* filterFromDevice = nullptr,
+                            const PixelRect* userSpaceSubregion = nullptr) {
+  // Rotation-aware path: transform each pixel center to user space and test against the
+  // user-space subregion rectangle.
+  if (filterFromDevice != nullptr && userSpaceSubregion != nullptr) {
+    const auto& t = *filterFromDevice;
+    const auto& usr = *userSpaceSubregion;
+    const double ux0 = usr.x;
+    const double uy0 = usr.y;
+    const double ux1 = usr.x + usr.w;
+    const double uy1 = usr.y + usr.h;
+
+    auto data = output.data();
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const double px = x + 0.5;
+        const double py = y + 0.5;
+        const double fx = t.a * px + t.c * py + t.e;
+        const double fy = t.b * px + t.d * py + t.f;
+        if (fx < ux0 || fx >= ux1 || fy < uy0 || fy >= uy1) {
+          const auto idx = static_cast<std::size_t>((y * w + x) * 4);
+          data[idx + 0] = 0.0f;
+          data[idx + 1] = 0.0f;
+          data[idx + 2] = 0.0f;
+          data[idx + 3] = 0.0f;
+        }
+      }
+    }
+    return;
+  }
+
+  // Axis-aligned fast path.
   const int rx0 = std::max(0, static_cast<int>(std::floor(sr.x)));
   const int ry0 = std::max(0, static_cast<int>(std::floor(sr.y)));
   const int rx1 = std::clamp(static_cast<int>(std::ceil(sr.x + sr.w)), 0, w);
@@ -706,7 +740,12 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
       const PixelRect clipRect{nodeSubregion.x0, nodeSubregion.y0,
                                nodeSubregion.x1 - nodeSubregion.x0,
                                nodeSubregion.y1 - nodeSubregion.y0};
-      applySubregionClipping(*output, clipRect, w, h);
+      const AffineTransform* xform =
+          (graph.filterFromDevice.has_value() && node.userSpaceSubregion.has_value())
+              ? &*graph.filterFromDevice
+              : nullptr;
+      const PixelRect* usrSub = xform ? &*node.userSpaceSubregion : nullptr;
+      applySubregionClipping(*output, clipRect, w, h, xform, usrSub);
 
       if (node.result.has_value()) {
         namedBuffers[*node.result] = FloatPixmap(*output);
