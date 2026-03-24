@@ -398,6 +398,64 @@ TEST(TextShaperTest, ArabicPerCharacterY_GlyphIdsAndPositions) {
   }
 }
 
+// Test display:none + rotate: hidden chars consume rotate indices.
+// <text x="28" y="100" rotate="10 30 50 70">T<tspan display="none">ex</tspan>t</text>
+TEST(TextShaperTest, DisplayNoneRotateConsumesIndices) {
+  FontManager mgr;
+  TextShaper shaper(mgr);
+
+  components::ComputedTextComponent text;
+
+  // Span 0: "T" (rotate from root: [10,30,50,70])
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("T");
+    span.start = 0;
+    span.end = 1;
+    span.startsNewChunk = true;
+    span.xList.push_back(Lengthd(28.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.rotateList = {10, 30, 50, 70};
+    text.spans.push_back(std::move(span));
+  }
+  // Span 1: "ex" (hidden — no rotate, no position, doesn't consume indices)
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("ex");
+    span.start = 0;
+    span.end = 2;
+    span.hidden = true;
+    text.spans.push_back(std::move(span));
+  }
+  // Span 2: "t" (rotate [30] — hidden chars didn't consume indices)
+  {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("t");
+    span.start = 0;
+    span.end = 1;
+    span.startsNewChunk = false;
+    span.xList.resize(1);
+    span.yList.resize(1);
+    span.rotateList = {30};
+    text.spans.push_back(std::move(span));
+  }
+
+  auto params = makeTextParams(64.0);
+  auto runs = shaper.layout(text, params);
+
+  // Should have 3 runs (hidden span produces empty run).
+  ASSERT_EQ(runs.size(), 3u);
+  ASSERT_EQ(runs[0].glyphs.size(), 1u);  // T
+  ASSERT_TRUE(runs[1].glyphs.empty());     // ex (hidden)
+  ASSERT_EQ(runs[2].glyphs.size(), 1u);  // t
+
+  std::cout << "  T: rotate=" << runs[0].glyphs[0].rotateDegrees << "\n";
+  std::cout << "  t: rotate=" << runs[2].glyphs[0].rotateDegrees << "\n";
+
+  EXPECT_DOUBLE_EQ(runs[0].glyphs[0].rotateDegrees, 10.0) << "T should have rotate=10";
+  EXPECT_DOUBLE_EQ(runs[2].glyphs[0].rotateDegrees, 30.0) << "t should have rotate=30 (hidden chars don't consume indices)";
+}
+
 // Debug test: check glyph positions for e-tspan-027 pattern.
 // <text x="33"><tspan y="100 110 120 130">T<tspan y="50">ex</tspan></tspan>t</text>
 TEST(TextShaperTest, NestedTspanMultipleYCoordinates) {

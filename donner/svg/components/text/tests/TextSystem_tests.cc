@@ -509,4 +509,50 @@ TEST_F(TextSystemTest, StartsNewChunk) {
   EXPECT_TRUE(computed->spans[2].startsNewChunk);
 }
 
+// --- display:none + rotate ---
+
+TEST_F(TextSystemTest, DisplayNoneConsumesRotateIndices) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" font-size="64">
+      <text id="t" x="28" y="100" rotate="10 30 50 70">
+        T<tspan display="none">ex</tspan>t
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  // Collect non-empty spans and their properties.
+  std::vector<std::string> texts;
+  std::vector<bool> hiddenFlags;
+  std::vector<SmallVector<double, 1>> rotateLists;
+  for (const auto& span : computed->spans) {
+    if (span.text.empty()) {
+      continue;
+    }
+    texts.push_back(span.text.str());
+    hiddenFlags.push_back(span.hidden);
+    rotateLists.push_back(span.rotateList);
+  }
+
+  EXPECT_THAT(texts, testing::ElementsAre("T", "ex", "t"));
+  EXPECT_THAT(hiddenFlags, testing::ElementsAre(false, true, false));
+
+  // "T" is the root's first chunk → gets the full rotate list [10,30,50,70].
+  ASSERT_GE(rotateLists[0].size(), 1u);
+  EXPECT_DOUBLE_EQ(rotateLists[0][0], 10.0);
+
+  // "ex" is hidden (display:none) — does NOT consume attribute indices.
+  // The hidden span has no rotate values (skips character counting entirely).
+  EXPECT_TRUE(rotateLists[1].empty());
+
+  // "t" is root continuation at globalCharIndex=1 (hidden chars skipped) → rotate[1]=30.
+  ASSERT_EQ(rotateLists[2].size(), 1u);
+  EXPECT_DOUBLE_EQ(rotateLists[2][0], 30.0);
+}
+
 }  // namespace donner::svg::components
