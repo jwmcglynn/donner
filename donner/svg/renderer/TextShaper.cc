@@ -359,6 +359,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
   double currentPenX = 0.0;
   double currentPenY = 0.0;
   uint32_t prevSpanLastCodepoint = 0;  // Unicode codepoint, for cross-span GPOS kerning.
+  hb_font_t* prevSpanHbFont = hbFont;  // Previous span's HB font for cross-span kerning.
+  float prevSpanFontSizePx = fontSizePx;  // Previous span's font size.
+  double prevSpanPixelScale = pixelScale;  // Previous span's pixel scale.
 
   for (const auto& span : text.spans) {
     ShapedTextRun run;
@@ -390,12 +393,31 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       spanHbFont = hbFont;
       run.font = font;
     }
-    // Set the FreeType face size for this span's font (may differ from the default font).
-    if (spanFont != font && spanHbFont) {
+
+    // Per-span font size: use the span's fontSize if set, otherwise the text element's.
+    const float spanFontSizePx = span.fontSize.value != 0.0
+        ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
+                                                     Lengthd::Extent::Mixed))
+        : fontSizePx;
+
+    // Set the FreeType face size for this span (font-size or font-weight may differ).
+    {
       FT_Face spanFtFace = hb_ft_font_get_face(spanHbFont);
       if (spanFtFace && FT_IS_SCALABLE(spanFtFace)) {
-        FT_Set_Char_Size(spanFtFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
+        FT_Set_Char_Size(spanFtFace, 0, static_cast<FT_F26Dot6>(spanFontSizePx * 64.0f), 72, 72);
         hb_ft_font_changed(spanHbFont);
+      }
+    }
+
+    // Compute per-span pixel scale for HarfBuzz position conversion.
+    double spanPixelScale = pixelScale;
+    if (spanFontSizePx != fontSizePx) {
+      spanPixelScale = 1.0 / 64.0;
+      FT_Face spanFtFace = hb_ft_font_get_face(spanHbFont);
+      if (spanFtFace && !FT_IS_SCALABLE(spanFtFace) &&
+          spanFtFace->size->metrics.y_ppem > 0) {
+        spanPixelScale = static_cast<double>(spanFontSizePx) /
+                         (static_cast<double>(spanFtFace->size->metrics.y_ppem) * 64.0);
       }
     }
 
@@ -403,7 +425,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
     // Resolve per-span baseline-shift using actual font size for em units.
     FontMetrics spanFontMetrics = params.fontMetrics;
-    spanFontMetrics.fontSize = fontSizePx;
+    spanFontMetrics.fontSize = spanFontSizePx;
     const double spanBaselineShiftPx =
         span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
 
@@ -412,9 +434,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     if (span.alignmentBaseline != DominantBaseline::Auto) {
       effectiveBaselineShift = 0.0;
       hb_font_extents_t extents;
-      hb_font_get_h_extents(hbFont, &extents);
-      const double ascent = static_cast<double>(extents.ascender) * pixelScale;
-      const double descent = static_cast<double>(extents.descender) * pixelScale;
+      hb_font_get_h_extents(spanHbFont, &extents);
+      const double ascent = static_cast<double>(extents.ascender) * spanPixelScale;
+      const double descent = static_cast<double>(extents.descender) * spanPixelScale;
       switch (span.alignmentBaseline) {
         case DominantBaseline::Auto:
         case DominantBaseline::Alphabetic: break;
@@ -722,9 +744,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         ShapedGlyph glyph;
         glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
         // HarfBuzz vertical: y_advance is negative (Y-up convention), negate for SVG Y-down.
-        glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * pixelScale;
-        glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * pixelScale;
-        glyph.yAdvance = std::abs(static_cast<double>(glyphPositions[gi].y_advance) * pixelScale);
+        glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * spanPixelScale;
+        glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
+        glyph.yAdvance = std::abs(static_cast<double>(glyphPositions[gi].y_advance) * spanPixelScale);
         glyph.xAdvance = 0;
 
         // Per-character rotation using raw codepoint index.
@@ -766,35 +788,60 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           const uint32_t curCodepoint =
               spanByteOffset < spanText.size() ? decodeCodepointAt(spanText, spanByteOffset) : 0;
           if (curCodepoint != 0) {
+            // Use the PREVIOUS span's font and scale for the kerning pair, since
+            // the kern adjusts the previous character's advance width. This is
+            // critical when font sizes differ across spans.
+            // Temporarily restore the previous span's font size if it differs.
+            const bool needFontRestore =
+                (prevSpanHbFont == spanHbFont && prevSpanFontSizePx != spanFontSizePx);
+            if (needFontRestore) {
+              FT_Face prevFtFace = hb_ft_font_get_face(prevSpanHbFont);
+              if (prevFtFace && FT_IS_SCALABLE(prevFtFace)) {
+                FT_Set_Char_Size(prevFtFace, 0,
+                                 static_cast<FT_F26Dot6>(prevSpanFontSizePx * 64.0f), 72, 72);
+                hb_ft_font_changed(prevSpanHbFont);
+              }
+            }
             hb_buffer_t* pairBuf = hb_buffer_create();
             const uint32_t pair[2] = {prevSpanLastCodepoint, curCodepoint};
             hb_buffer_add_codepoints(pairBuf, pair, 2, 0, 2);
             hb_buffer_set_direction(pairBuf, vertical ? HB_DIRECTION_TTB : HB_DIRECTION_LTR);
             hb_buffer_set_script(pairBuf, HB_SCRIPT_LATIN);
             hb_buffer_guess_segment_properties(pairBuf);
-            hb_shape(hbFont, pairBuf, nullptr, 0);
+            hb_shape(prevSpanHbFont, pairBuf, nullptr, 0);
             unsigned int pairCount = 0;
             const hb_glyph_position_t* pairPos = hb_buffer_get_glyph_positions(pairBuf, &pairCount);
             if (pairCount >= 1) {
               // Compare the first glyph's advance in the pair vs standalone.
-              const double pairedAdvance = static_cast<double>(pairPos[0].x_advance) * pixelScale;
+              const double pairedAdvance =
+                  static_cast<double>(pairPos[0].x_advance) * prevSpanPixelScale;
               // Shape the first character alone to get its standalone advance.
               hb_buffer_t* soloBuf = hb_buffer_create();
               hb_buffer_add_codepoints(soloBuf, &prevSpanLastCodepoint, 1, 0, 1);
               hb_buffer_set_direction(soloBuf, vertical ? HB_DIRECTION_TTB : HB_DIRECTION_LTR);
               hb_buffer_set_script(soloBuf, HB_SCRIPT_LATIN);
               hb_buffer_guess_segment_properties(soloBuf);
-              hb_shape(hbFont, soloBuf, nullptr, 0);
+              hb_shape(prevSpanHbFont, soloBuf, nullptr, 0);
               unsigned int soloCount = 0;
               const hb_glyph_position_t* soloPos =
                   hb_buffer_get_glyph_positions(soloBuf, &soloCount);
               if (soloCount >= 1) {
-                const double soloAdvance = static_cast<double>(soloPos[0].x_advance) * pixelScale;
+                const double soloAdvance =
+                    static_cast<double>(soloPos[0].x_advance) * prevSpanPixelScale;
                 penX += (pairedAdvance - soloAdvance);
               }
               hb_buffer_destroy(soloBuf);
             }
             hb_buffer_destroy(pairBuf);
+            // Restore current span's font size.
+            if (needFontRestore) {
+              FT_Face curFtFace = hb_ft_font_get_face(spanHbFont);
+              if (curFtFace && FT_IS_SCALABLE(curFtFace)) {
+                FT_Set_Char_Size(curFtFace, 0,
+                                 static_cast<FT_F26Dot6>(spanFontSizePx * 64.0f), 72, 72);
+                hb_ft_font_changed(spanHbFont);
+              }
+            }
           }
         }
 
@@ -809,7 +856,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           const unsigned int prevGlyphId = static_cast<unsigned int>(run.glyphs.back().glyphIndex);
           const double nominalAdvance =
               static_cast<double>(hb_font_get_glyph_h_advance(spanHbFont, prevGlyphId)) *
-              pixelScale;
+              spanPixelScale;
           const double shapedAdvance = run.glyphs.back().xAdvance;
           // The difference is the kerning that shouldn't cross the chunk boundary.
           penX += (nominalAdvance - shapedAdvance);
@@ -838,9 +885,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
         ShapedGlyph glyph;
         glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
-        glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * pixelScale;
-        glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * pixelScale;
-        glyph.xAdvance = static_cast<double>(glyphPositions[gi].x_advance) * pixelScale;
+        glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * spanPixelScale;
+        glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
+        glyph.xAdvance = static_cast<double>(glyphPositions[gi].x_advance) * spanPixelScale;
 
         // Rotate uses raw codepoint index (combining marks consume values),
         // matching Chrome/resvg behavior.
@@ -953,6 +1000,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     currentPenY = penY;
     haveCurrentPosition = true;
     prevSpanLastCodepoint = lastCodepoint;
+    prevSpanHbFont = spanHbFont;
+    prevSpanFontSizePx = spanFontSizePx;
+    prevSpanPixelScale = spanPixelScale;
     runs.push_back(std::move(run));
   }
 

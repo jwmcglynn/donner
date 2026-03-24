@@ -1105,9 +1105,17 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];
+
+    // Per-span font size: use the span's fontSize if set, otherwise the text element's.
+    float spanFontSizePx = fontSizePx;
+    if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
+      spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
+          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+    }
+
     if (run.font != FontHandle()) {
       info = fontManager.fontInfo(run.font);  // nullptr for bitmap-only fonts.
-      scale = fontManager.scaleForPixelHeight(run.font, fontSizePx);
+      scale = fontManager.scaleForPixelHeight(run.font, spanFontSizePx);
     }
 
     const bool isBitmapFont = run.font && fontManager.isBitmapOnly(run.font);
