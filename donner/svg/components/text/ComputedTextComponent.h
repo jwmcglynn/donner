@@ -68,6 +68,11 @@ struct ComputedTextComponent {
     /// Populated by RendererDriver from sourceEntity.
     int fontWeight = 400;
 
+    /// CSS font-size for this span. When different from the text element's font-size,
+    /// the layout engine uses this to shape glyphs at the correct size.
+    /// Populated by RendererDriver from sourceEntity.
+    Lengthd fontSize;
+
     /// CSS `baseline-shift` value for this span. Stored as a Lengthd where em units are relative
     /// to the span's font-size. Positive = shift up (per CSS convention). Populated by
     /// RendererDriver from sourceEntity.

@@ -65,6 +65,7 @@ void resolvePerSpanStyles(Registry& registry,
       span.baselineShift = style->properties->baselineShift.getRequired();
       span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
       span.fontWeight = style->properties->fontWeight.getRequired();
+      span.fontSize = style->properties->fontSize.getRequired();
       span.opacity = style->properties->opacity.getRequired();
 
       // Resolve the fill paint server. Solid colors are stored directly; gradient/pattern
