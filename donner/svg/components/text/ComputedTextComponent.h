@@ -55,6 +55,11 @@ struct ComputedTextComponent {
     /// A new chunk resets the current text position and suppresses cross-span kerning.
     bool startsNewChunk = false;
 
+    /// True when this span's source element has `display:none`. Hidden spans consume
+    /// per-character attribute indices (rotate, x, y) but are not rendered and do not
+    /// advance the pen position.
+    bool hidden = false;
+
     /// Resolved solid fill color for this span, populated by RendererDriver from sourceEntity.
     std::optional<css::Color> fillColor;
 

@@ -186,6 +186,12 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     LayoutTextRun run;
     run.font = font;
 
+    // Hidden spans (display:none) are not rendered. Push empty run.
+    if (span.hidden) {
+      runs.push_back(std::move(run));
+      continue;
+    }
+
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
     // Resolve per-span baseline-shift using actual font size for em units.
