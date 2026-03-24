@@ -363,6 +363,13 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
   for (const auto& span : text.spans) {
     ShapedTextRun run;
 
+    // Hidden spans (display:none) are not rendered but still consume per-character
+    // attribute indices. Push an empty run to maintain run-to-span index correspondence.
+    if (span.hidden) {
+      runs.push_back(std::move(run));
+      continue;
+    }
+
     // Per-span font resolution: if the span's font-weight differs from the default,
     // find a weight-matched font.
     FontHandle spanFont = font;

@@ -14,6 +14,8 @@
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/core/Display.h"
 #include "donner/svg/graph/Reference.h"
 
 namespace donner::svg::components {
@@ -198,7 +200,10 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       }
 
       // Rotate: local values take priority; per SVG spec last value repeats in layout.
-      if (!pos.rotateDegrees.empty()) {
+      // For the element's first chunk, use the element's own rotate list.
+      // For continuation chunks (text after child elements), use globalCharIndex to
+      // index into the ancestor's rotate list at the correct offset.
+      if (applyElementPositioning && !pos.rotateDegrees.empty()) {
         span.rotateList.assign(pos.rotateDegrees.begin(), pos.rotateDegrees.end());
       } else if (!positioningComponent.rotateDegrees.empty()) {
         for (size_t ci = 0; ci < charCount; ++ci) {
@@ -254,12 +259,13 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       bool applyElementPositioning;
       size_t depth;
       bool preserveSpaces;
+      bool hidden = false;  ///< True if this span's element or an ancestor has display:none.
     };
 
     std::vector<PendingSpan> pendingSpans;
 
-    std::function<void(EntityHandle, size_t)> collectSpans = [&](EntityHandle handle,
-                                                                 size_t depth) {
+    std::function<void(EntityHandle, size_t, bool)> collectSpans =
+        [&](EntityHandle handle, size_t depth, bool parentHidden) {
       if (!handle.all_of<TextComponent, TextPositioningComponent>()) {
         return;
       }
@@ -270,6 +276,16 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
         return;
       }
 
+      // Check if this element has display:none. Hidden state propagates to children.
+      bool isHidden = parentHidden;
+      if (!isHidden) {
+        auto* style = handle.try_get<ComputedStyleComponent>();
+        if (style && style->properties &&
+            style->properties->display.getRequired() == Display::None) {
+          isHidden = true;
+        }
+      }
+
       const auto& text = handle.get<TextComponent>();
       const bool preserveSpaces = hasXmlSpacePreserve(registry, handle.entity());
 
@@ -278,7 +294,7 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       auto emitChunk = [&](const RcString& chunk) {
         if (!emittedFirstChunk || !chunk.empty()) {
           pendingSpans.push_back(PendingSpan{handle, collapseTextWhitespace(chunk, preserveSpaces),
-                                             !emittedFirstChunk, depth, preserveSpaces});
+                                             !emittedFirstChunk, depth, preserveSpaces, isHidden});
           emittedFirstChunk = true;
         }
       };
@@ -290,7 +306,7 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       }
 
       donner::components::ForAllChildren(handle, [&](EntityHandle child) {
-        collectSpans(child, depth + 1);
+        collectSpans(child, depth + 1, isHidden);
 
         ++chunkIndex;
         if (chunkIndex < text.textChunks.size()) {
@@ -299,7 +315,7 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       });
     };
 
-    collectSpans(EntityHandle(registry, entity), 0);
+    collectSpans(EntityHandle(registry, entity), 0, /*parentHidden=*/false);
 
     if (!pendingSpans.empty()) {
       // With xml:space="preserve", skip all inter-span space normalization.
@@ -347,6 +363,9 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
     for (const PendingSpan& pending : pendingSpans) {
       const auto& pos = pending.handle.get<TextPositioningComponent>();
       appendSpan(pending.handle, pending.text, pos, pending.applyElementPositioning);
+      if (pending.hidden) {
+        computed.spans.back().hidden = true;
+      }
     }
   }
 }
