@@ -1450,10 +1450,31 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     std::optional<tiny_skia::Paint> spanFillPaint = fillPaint;
     if (runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
-      if (span.fillColor.has_value()) {
-        spanFillPaint = makeSolidFillPaint(*span.fillColor, span.opacity);
+      const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+      const float spanFillOpacity = NarrowToFloat(paint_.fillOpacity);
+
+      if (const auto* solid =
+              std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+        // Per-span solid fill color.
+        spanFillPaint = makeSolidFillPaint(
+            css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
+      } else if (const auto* ref =
+                     std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
+        // Per-span gradient/pattern fill. Uses the text element's bbox (textBounds)
+        // for objectBoundingBox mapping, per SVG spec ("tspan doesn't have a bbox").
+        const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
+        if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
+                                                     spanCurrentColor, combinedOpacity)) {
+          tiny_skia::Paint paint = makeBasePaint(antialias_);
+          paint.unpremulStore = surfaceStack_.empty();
+          paint.shader = std::move(*shader);
+          spanFillPaint = paint;
+        } else if (ref->fallback.has_value()) {
+          spanFillPaint = makeSolidFillPaint(
+              css::Color(ref->fallback->resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
+        }
       } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
-        // Re-create the fill paint with per-span opacity applied.
+        // No explicit fill but has per-span opacity — re-apply with opacity.
         spanFillPaint = makeSolidFillPaint(params.fillColor, span.opacity);
       }
     }

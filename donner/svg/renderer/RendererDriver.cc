@@ -30,6 +30,7 @@
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/core/Overflow.h"
@@ -66,11 +67,20 @@ void resolvePerSpanStyles(Registry& registry,
       span.fontWeight = style->properties->fontWeight.getRequired();
       span.opacity = style->properties->opacity.getRequired();
 
-      const css::RGBA currentColor = style->properties->color.getRequired().rgba();
-      const float fillOpacity = static_cast<float>(style->properties->fillOpacity.getRequired());
+      // Resolve the fill paint server. Solid colors are stored directly; gradient/pattern
+      // url() references are resolved to PaintResolvedReference for the renderer.
       const PaintServer fill = style->properties->fill.getRequired();
-      if (const auto* solid = std::get_if<PaintServer::Solid>(&fill.value)) {
-        span.fillColor = css::Color(solid->color.resolve(currentColor, fillOpacity));
+      if (fill.is<PaintServer::Solid>()) {
+        span.resolvedFill = fill.get<PaintServer::Solid>();
+      } else if (fill.is<PaintServer::ElementReference>()) {
+        const auto& ref = fill.get<PaintServer::ElementReference>();
+        auto resolvedRef = ref.reference.resolve(registry);
+        if (resolvedRef && resolvedRef->handle) {
+          span.resolvedFill =
+              components::PaintResolvedReference{*resolvedRef, ref.fallback, std::nullopt};
+        } else if (ref.fallback) {
+          span.resolvedFill = PaintServer::Solid(*ref.fallback);
+        }
       }
     }
   }

@@ -5,10 +5,10 @@
 
 #include <entt/entt.hpp>
 
-#include "donner/css/Color.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/PathSpline.h"
 
@@ -60,8 +60,9 @@ struct ComputedTextComponent {
     /// advance the pen position.
     bool hidden = false;
 
-    /// Resolved solid fill color for this span, populated by RendererDriver from sourceEntity.
-    std::optional<css::Color> fillColor;
+    /// Resolved fill paint for this span (solid color, gradient reference, or none).
+    /// Populated by RendererDriver from sourceEntity's ComputedStyleComponent.
+    ResolvedPaintServer resolvedFill;
 
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
     /// Populated by RendererDriver from sourceEntity.
