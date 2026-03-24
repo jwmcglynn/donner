@@ -64,13 +64,22 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     span.fontWeight = style->properties->fontWeight.getRequired();
     span.opacity = style->properties->opacity.getRequired();
 
-    const css::RGBA currentColor = style->properties->color.getRequired().rgba();
-    const float fillOpacity = static_cast<float>(style->properties->fillOpacity.getRequired());
     const PaintServer fill = style->properties->fill.getRequired();
-    if (const auto* solid = std::get_if<PaintServer::Solid>(&fill.value)) {
-      span.fillColor = css::Color(solid->color.resolve(currentColor, fillOpacity));
+    if (fill.is<PaintServer::Solid>()) {
+      span.resolvedFill = fill.get<PaintServer::Solid>();
+    } else if (fill.is<PaintServer::ElementReference>()) {
+      const auto& ref = fill.get<PaintServer::ElementReference>();
+      auto resolvedRef = ref.reference.resolve(registry);
+      if (resolvedRef && resolvedRef->handle) {
+        span.resolvedFill =
+            components::PaintResolvedReference{*resolvedRef, ref.fallback, std::nullopt};
+      } else if (ref.fallback) {
+        span.resolvedFill = PaintServer::Solid(*ref.fallback);
+      } else {
+        span.resolvedFill = PaintServer::None{};
+      }
     } else {
-      span.fillColor.reset();
+      span.resolvedFill = PaintServer::None{};
     }
   }
 }

@@ -2063,8 +2063,8 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
 
   for (const auto& span : text.spans) {
     SkPaint spanFillPaint = fillPaint;
-    if (span.fillColor.has_value()) {
-      spanFillPaint = makeSolidFillPaint(*span.fillColor);
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+      spanFillPaint = makeSolidFillPaint(css::Color(solid->color));
     }
 
     SkScalar x = 0;
