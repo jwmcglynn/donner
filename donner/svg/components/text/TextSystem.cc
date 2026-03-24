@@ -362,9 +362,19 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
 
     for (const PendingSpan& pending : pendingSpans) {
       const auto& pos = pending.handle.get<TextPositioningComponent>();
-      appendSpan(pending.handle, pending.text, pos, pending.applyElementPositioning);
       if (pending.hidden) {
-        computed.spans.back().hidden = true;
+        // display:none elements don't participate in layout — their characters
+        // do NOT consume per-character attribute indices (x, y, rotate).
+        // Still create a span (for correct run indexing) but skip character counting.
+        ComputedTextComponent::TextSpan span;
+        span.text = pending.text;
+        span.start = 0;
+        span.end = static_cast<std::size_t>(pending.text.size());
+        span.sourceEntity = pending.handle.entity();
+        span.hidden = true;
+        computed.spans.push_back(span);
+      } else {
+        appendSpan(pending.handle, pending.text, pos, pending.applyElementPositioning);
       }
     }
   }
