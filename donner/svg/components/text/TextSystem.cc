@@ -318,45 +318,56 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
     collectSpans(EntityHandle(registry, entity), 0, /*parentHidden=*/false);
 
     if (!pendingSpans.empty()) {
-      // With xml:space="preserve", skip all inter-span space normalization.
-      if (!pendingSpans.front().preserveSpaces) {
-        removeLeadingSpace(pendingSpans.front().text);
+      // SVG spec whitespace normalization (section 10.15):
+      // 1. Per-span collapse is already done by collapseTextWhitespace above.
+      // 2. At span boundaries: a default (non-preserved) space that immediately follows
+      //    any space character (preserved or not) is removed.
+      // 3. Strip leading/trailing default spaces from the composed text.
+
+      // Step 3a: strip leading default space from the first non-empty span.
+      for (auto& span : pendingSpans) {
+        if (!span.text.empty()) {
+          if (!span.preserveSpaces) {
+            removeLeadingSpace(span.text);
+          }
+          break;
+        }
       }
 
+      // Step 2: boundary collapse across spans.
       std::optional<size_t> lastNonEmpty;
       for (size_t i = 0; i + 1 < pendingSpans.size(); ++i) {
-        size_t currentIndex = i;
-        if (pendingSpans[currentIndex].text.empty() && lastNonEmpty.has_value()) {
-          currentIndex = *lastNonEmpty;
+        if (!pendingSpans[i].text.empty()) {
+          lastNonEmpty = i;
         }
 
+        size_t currentIndex = lastNonEmpty.value_or(i);
         RcString& current = pendingSpans[currentIndex].text;
         RcString& next = pendingSpans[i + 1].text;
         if (next.empty()) {
           continue;
         }
 
-        if (!pendingSpans[currentIndex].preserveSpaces && !pendingSpans[i + 1].preserveSpaces) {
-          const bool currentEndsWithSpace =
-              !current.empty() && current.data()[current.size() - 1] == ' ';
-          const bool nextStartsWithSpace = next.data()[0] == ' ';
+        const bool currentEndsWithSpace =
+            !current.empty() && current.data()[current.size() - 1] == ' ';
+        const bool nextStartsWithSpace = next.data()[0] == ' ';
 
-          if (pendingSpans[currentIndex].depth < pendingSpans[i + 1].depth) {
-            if (nextStartsWithSpace) {
-              removeLeadingSpace(next);
-            }
-          } else if (currentEndsWithSpace && nextStartsWithSpace) {
-            removeTrailingSpace(current);
-          }
-        }
-
-        if (!current.empty()) {
-          lastNonEmpty = currentIndex;
+        // A default space following any space (preserved or not) is removed.
+        // Preserved spaces are never removed at boundaries.
+        if (currentEndsWithSpace && nextStartsWithSpace &&
+            !pendingSpans[i + 1].preserveSpaces) {
+          removeLeadingSpace(next);
         }
       }
 
-      if (!pendingSpans.back().preserveSpaces) {
-        removeTrailingSpace(pendingSpans.back().text);
+      // Step 3b: strip trailing default space from the last non-empty span.
+      for (auto it = pendingSpans.rbegin(); it != pendingSpans.rend(); ++it) {
+        if (!it->text.empty()) {
+          if (!it->preserveSpaces) {
+            removeTrailingSpace(it->text);
+          }
+          break;
+        }
       }
     }
 

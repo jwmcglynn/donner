@@ -1205,9 +1205,10 @@ private:
           }
         }
       } else {
-        // Data node
+        // Data node — restore to before the whitespace skip so leading whitespace
+        // is preserved in the text content (significant for SVG text elements,
+        // xml:space="preserve", etc.).
         remaining_ = contentsStart;
-        skipWhitespace(remaining_);
 
         if (auto maybeError = parseAndAppendData(node)) {
           return maybeError;  // Propagate error

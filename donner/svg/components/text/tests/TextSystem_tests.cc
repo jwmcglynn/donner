@@ -11,6 +11,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::Eq;
@@ -359,7 +360,9 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
     nonEmptyHasSource.push_back(span.sourceEntity != entt::null);
   }
 
-  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "very", "long", "text", "."));
+  // The " ." has a leading space from the indentation whitespace before "." in the XML source.
+  // This is correct per SVG spec: newlines are removed, indentation collapses to one space.
+  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "very", "long", "text", " ."));
   EXPECT_THAT(nonEmptyOnPath, testing::ElementsAre(false, true, false, true, false));
   // All spans should have a source entity for style resolution.
   EXPECT_THAT(nonEmptyHasSource, testing::ElementsAre(true, true, true, true, true));
@@ -553,6 +556,144 @@ TEST_F(TextSystemTest, DisplayNoneConsumesRotateIndices) {
   // "t" is root continuation at globalCharIndex=1 (hidden chars skipped) → rotate[1]=30.
   ASSERT_EQ(rotateLists[2].size(), 1u);
   EXPECT_DOUBLE_EQ(rotateLists[2][0], 30.0);
+}
+
+// --- Whitespace normalization tests ---
+
+// Space after </tspan> must be preserved in the raw textChunks and in the composed text.
+TEST_F(TextSystemTest, WhitespaceTspanBoundarySpace) {
+  auto document = ParseAndCompute(
+      "<svg xmlns='http://www.w3.org/2000/svg'>"
+      "<text id='t'>Some <tspan>long</tspan> text</text>"
+      "</svg>");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+
+  auto& textComp = registry.get<TextComponent>(textEntity);
+  EXPECT_EQ(textComp.textChunks.size(), 2u);
+  if (textComp.textChunks.size() >= 2) {
+    EXPECT_EQ(textComp.textChunks[0].str(), "Some ");
+    EXPECT_EQ(textComp.textChunks[1].str(), " text");
+  }
+
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  std::string concatenated;
+  for (const auto& span : computed->spans) {
+    concatenated += span.text.str();
+  }
+  EXPECT_EQ(concatenated, "Some long text");
+}
+
+// Inter-tspan spacing with indented markup (newlines collapse to spaces).
+TEST_F(TextSystemTest, WhitespaceInterTspanSpacing) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="t" x="34" y="100">
+        Some
+        <tspan>long</tspan>
+        text
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  std::string concatenated;
+  for (const auto& span : computed->spans) {
+    concatenated += span.text.str();
+  }
+  EXPECT_EQ(concatenated, "Some long text");
+}
+
+// xml:space="preserve" tspan inside default text preserves all spaces.
+TEST_F(TextSystemTest, WhitespacePreserveLeadingSpaces) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="t" x="20" y="95">
+        <tspan xml:space="preserve">         Text</tspan>
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  std::string concatenated;
+  for (const auto& span : computed->spans) {
+    concatenated += span.text.str();
+  }
+  EXPECT_EQ(concatenated, "         Text");
+}
+
+// Mixed xml:space: default root with preserve tspan.
+// Per SVG spec: default space following any space (including preserve) is removed.
+TEST_F(TextSystemTest, WhitespaceDefaultRootPreserveTspan) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="t" x="20" y="100">
+        Text  <tspan xml:space="preserve">  Text  </tspan>  Text
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  std::string concatenated;
+  for (const auto& span : computed->spans) {
+    concatenated += span.text.str();
+  }
+  EXPECT_EQ(concatenated, "Text   Text  Text");
+}
+
+// Mixed xml:space: preserve root with default tspan.
+TEST_F(TextSystemTest, WhitespacePreserveRootDefaultTspan) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="t" x="10" y="100" xml:space="preserve">  Text  <tspan xml:space="default">  Text  </tspan>  Text  </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  std::string concatenated;
+  for (const auto& span : computed->spans) {
+    concatenated += span.text.str();
+  }
+  EXPECT_EQ(concatenated, "  Text  Text   Text  ");
+}
+
+// Gradient-filled tspan preserves spaces at boundaries.
+TEST_F(TextSystemTest, WhitespaceGradientTspan) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <linearGradient id="lg1">
+        <stop offset="0" stop-color="white"/>
+        <stop offset="1" stop-color="green"/>
+      </linearGradient>
+      <text id="t" x="20" y="100">
+        Some <tspan fill="url(#lg1)">long</tspan> text
+      </text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  std::string concatenated;
+  for (const auto& span : computed->spans) {
+    concatenated += span.text.str();
+  }
+  EXPECT_EQ(concatenated, "Some long text");
 }
 
 }  // namespace donner::svg::components
