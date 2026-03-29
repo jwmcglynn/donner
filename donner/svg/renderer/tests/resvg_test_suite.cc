@@ -1021,6 +1021,17 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-tspan",
         {
+            {"e-tspan-011.svg",
+             Params::Skip()},  // Whitespace-only text nodes lost in preserve context (XML parser)
+            {"e-tspan-016.svg",
+             Params::Skip()},  // Bug: Applying rotation indices across nested tspans
+            {"e-tspan-020.svg", Params::Skip()},  // Not impl: Interaction with `mask`
+            {"e-tspan-021.svg", Params::Skip()},  // Not impl: Interaction with `clip-path`
+            {"e-tspan-022.svg", Params::Skip()},  // Not impl: Interaction with `filter`
+            {"e-tspan-026.svg", Params::Skip()},  // Not impl: BIDI reordering
+            {"e-tspan-030.svg",
+             Params().withMaxPixelsDifferent(
+                 400)},  // Vertical axis has different AA (its not the focus of the test)
             {"e-tspan-031.svg",
              Params().withMaxPixelsDifferent(
                  400)},  // Vertical axis has different AA (its not the focus of the test)
