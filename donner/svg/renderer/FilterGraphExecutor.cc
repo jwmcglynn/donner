@@ -235,6 +235,11 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
     const Transformd inv = deviceFromFilter.inverse();
     graph.filterFromDevice = tiny_skia::filter::AffineTransform{
         inv.data[0], inv.data[1], inv.data[2], inv.data[3], inv.data[4], inv.data[5]};
+    if (filterRegion.has_value()) {
+      graph.userSpaceFilterRegion = tiny_skia::filter::PixelRect{
+          filterRegion->topLeft.x, filterRegion->topLeft.y,
+          filterRegion->width(), filterRegion->height()};
+    }
   }
 
   for (const FilterNode& node : filterGraph.nodes) {

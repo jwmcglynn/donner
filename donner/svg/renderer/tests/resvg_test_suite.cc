@@ -586,16 +586,8 @@ INSTANTIATE_TEST_SUITE_P(FeMerge, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(FeMorphology, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feMorphology")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FeOffset, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feOffset",
-        {
-            {"e-feOffset-008.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   2000)},  // Complex skew transform (1828px at 0.02)
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeOffset, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feOffset")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FePointLight, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix(
@@ -606,6 +598,7 @@ INSTANTIATE_TEST_SUITE_P(FePointLight, ImageComparisonTestFixture,
                                                                       // clips to shape (54px)
                              })),
                          TestNameFromFilename);
+
 // Specular lighting: algorithm differences vs resvg.
 // Float pipeline + light coordinate scaling fixed most tests to 0 diffs at 0.1f threshold.
 // specularExponent out-of-range handling: <1 skips primitive (transparent), >128 clamps to 128.

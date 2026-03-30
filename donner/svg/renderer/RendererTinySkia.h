@@ -242,6 +242,12 @@ private:
     std::vector<Transformd> savedTransformStack;
     std::optional<tiny_skia::Mask> savedClipMask;
     std::vector<std::optional<tiny_skia::Mask>> savedClipStack;
+
+    /// Offset of the filter buffer origin from the device origin (in pixels).
+    /// When the filter region extends into negative device coordinates, the buffer is expanded
+    /// and rendering is offset so all content is captured.
+    int filterBufferOffsetX = 0;
+    int filterBufferOffsetY = 0;
   };
 
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();

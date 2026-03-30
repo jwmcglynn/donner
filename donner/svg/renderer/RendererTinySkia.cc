@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -494,6 +495,18 @@ bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
   return false;
 }
 
+/// Returns true if the filter graph contains spatial primitives (feOffset, feDisplacementMap)
+/// that can shift content from outside the viewport into view.
+bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
+  using namespace components::filter_primitive;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    if (std::holds_alternative<Offset>(node.primitive)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
   for (const auto& node : filterGraph.nodes) {
     bool anisotropic = false;
@@ -605,6 +618,16 @@ void RendererTinySkia::setTransform(const Transformd& transform) {
     const Transformd& rasterFromTile = surfaceStack_.back().patternRasterFromTile;
     currentTransform_ =
         scaleTransformOutput(transform, Vector2d(rasterFromTile.data[0], rasterFromTile.data[3]));
+  } else if (!surfaceStack_.empty() && surfaceStack_.back().kind == SurfaceKind::FilterLayer) {
+    const auto& frame = surfaceStack_.back();
+    if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+      // Offset the transform so content at negative device coordinates renders into the
+      // expanded filter buffer. Same pattern as PatternTile's rasterFromTile adjustment.
+      currentTransform_ = transform * Transformd::Translate(
+          frame.filterBufferOffsetX, frame.filterBufferOffsetY);
+    } else {
+      currentTransform_ = transform;
+    }
   } else {
     currentTransform_ = transform;
   }
@@ -696,8 +719,57 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   frame.filterGraph = filterGraph;
   frame.filterRegion = filterRegion;
   frame.deviceFromFilter = currentTransform_;
-  const int width = static_cast<int>(currentPixmap().width());
-  const int height = static_cast<int>(currentPixmap().height());
+
+  const int viewportWidth = static_cast<int>(currentPixmap().width());
+  const int viewportHeight = static_cast<int>(currentPixmap().height());
+
+  // Compute the filter buffer dimensions. When the filter region's AABB in device space extends
+  // beyond the viewport (e.g., due to skew or rotation placing content at negative coordinates),
+  // expand the buffer so the SourceGraphic captures all content. This is needed because feOffset
+  // or other spatial primitives may shift content into the viewport later.
+  int bufferX0 = 0;
+  int bufferY0 = 0;
+  int width = viewportWidth;
+  int height = viewportHeight;
+
+  if (filterRegion.has_value()) {
+    const Boxd deviceRegion = currentTransform_.transformBox(*filterRegion);
+    const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
+    const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
+    const int regionX1 =
+        static_cast<int>(std::ceil(deviceRegion.bottomRight.x));
+    const int regionY1 =
+        static_cast<int>(std::ceil(deviceRegion.bottomRight.y));
+
+    // Expand buffer to cover the union of viewport and filter region AABB.
+    bufferX0 = std::min(0, regionX0);
+    bufferY0 = std::min(0, regionY0);
+    const int bufferX1 = std::max(viewportWidth, regionX1);
+    const int bufferY1 = std::max(viewportHeight, regionY1);
+    width = bufferX1 - bufferX0;
+    height = bufferY1 - bufferY0;
+
+    // Cap to a reasonable maximum to avoid huge allocations.
+    constexpr int kMaxBufferDim = 4096;
+    width = std::min(width, kMaxBufferDim);
+    height = std::min(height, kMaxBufferDim);
+  }
+
+  // Expand the buffer into negative device coordinates only when the filter graph contains
+  // spatial primitives (feOffset, feDisplacementMap) that can shift content into the viewport
+  // from outside. Without such primitives, content at negative coordinates would never be
+  // visible, so expansion is unnecessary.
+  if ((bufferX0 < 0 || bufferY0 < 0) && graphHasSpatialShift(filterGraph)) {
+    constexpr int kMaxExpansion = 4096;
+    frame.filterBufferOffsetX = std::min(-bufferX0, std::max(0, kMaxExpansion - viewportWidth));
+    frame.filterBufferOffsetY = std::min(-bufferY0, std::max(0, kMaxExpansion - viewportHeight));
+    width = viewportWidth + frame.filterBufferOffsetX;
+    height = viewportHeight + frame.filterBufferOffsetY;
+  } else {
+    // No expansion needed — use viewport dimensions.
+    width = viewportWidth;
+    height = viewportHeight;
+  }
   frame.pixmap = createTransparentPixmap(width, height);
   if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint)) {
     frame.fillPaintPixmap = createTransparentPixmap(width, height);
@@ -716,6 +788,16 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   clipStack_.clear();
 
   surfaceStack_.push_back(std::move(frame));
+
+  // Apply the buffer offset to the current transform. setTransform (called by RendererDriver)
+  // ran BEFORE this filter layer was pushed, so currentTransform_ doesn't include the offset yet.
+  // Subsequent setTransform calls will pick up the offset from surfaceStack_.back(), but we
+  // need to fix the already-set transform for the element being filtered.
+  const auto& pushedFrame = surfaceStack_.back();
+  if (pushedFrame.filterBufferOffsetX != 0 || pushedFrame.filterBufferOffsetY != 0) {
+    currentTransform_ = currentTransform_ * Transformd::Translate(
+        pushedFrame.filterBufferOffsetX, pushedFrame.filterBufferOffsetY);
+  }
 #else
   UTILS_UNUSED(filterGraph);
   UTILS_UNUSED(filterRegion);
@@ -736,6 +818,10 @@ void RendererTinySkia::popFilterLayer() {
   // paint → filter → clip-path → mask → opacity.
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
+
+  // Transform is maintained by RendererDriver via setTransform. The filter buffer offset
+  // (if any) was applied in setTransform and is automatically removed when the surface is
+  // popped, since setTransform checks surfaceStack_.back().
 
   // Use the transformed local-raster path for eligible simple blur chains with
   // rotation or skew transforms. This resamples device content into an axis-aligned local
@@ -827,12 +913,20 @@ void RendererTinySkia::popFilterLayer() {
                                      toTinyTransform(deviceFromLocal), mask);
     }
   } else {
-  device_space_fallback:
+  device_space_fallback: {
+    // When the filter buffer is offset (expanded to capture content at negative device
+    // coordinates), adjust the deviceFromFilter transform to include the offset.
+    const Transformd bufferDeviceFromFilter =
+        (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
+            ? frame.deviceFromFilter * Transformd::Translate(
+                  frame.filterBufferOffsetX, frame.filterBufferOffsetY)
+            : frame.deviceFromFilter;
+
     ApplyFilterGraphToPixmap(
-        frame.pixmap, frame.filterGraph, frame.deviceFromFilter, frame.filterRegion, true,
+        frame.pixmap, frame.filterGraph, bufferDeviceFromFilter, frame.filterRegion, true,
         frame.fillPaintPixmap.has_value() ? &*frame.fillPaintPixmap : nullptr,
         frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr);
-    ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, frame.deviceFromFilter);
+    ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, bufferDeviceFromFilter);
 
     {
       // Composite the filter result with the restored clip mask applied, so the clip-path
@@ -845,9 +939,45 @@ void RendererTinySkia::popFilterLayer() {
 
       const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
       auto pixmapView = currentPixmapView();
-      tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, frame.pixmap.view(), paint,
-                                     tiny_skia::Transform::identity(), mask);
+
+      if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+        // The filter buffer is expanded beyond the viewport. Extract the viewport-sized region
+        // at the buffer offset and composite that. drawPixmap doesn't support negative dest
+        // coordinates, so we copy the relevant region into a viewport-sized pixmap first.
+        const int vpW = static_cast<int>(pixmapView.width());
+        const int vpH = static_cast<int>(pixmapView.height());
+        tiny_skia::Pixmap viewportRegion = createTransparentPixmap(vpW, vpH);
+        const auto srcData = frame.pixmap.data();
+        auto dstData = viewportRegion.data();
+        const int bufW = static_cast<int>(frame.pixmap.width());
+        const int bufH = static_cast<int>(frame.pixmap.height());
+        const int ox = frame.filterBufferOffsetX;
+        const int oy = frame.filterBufferOffsetY;
+        for (int y = 0; y < vpH; ++y) {
+          const int srcY = y + oy;
+          if (srcY < 0 || srcY >= bufH) {
+            continue;
+          }
+          // Copy the overlapping row segment.
+          const int srcXStart = std::max(0, ox);
+          const int srcXEnd = std::min(bufW, ox + vpW);
+          if (srcXStart >= srcXEnd) {
+            continue;
+          }
+          const int dstX = srcXStart - ox;
+          const auto srcOff = static_cast<std::size_t>((srcY * bufW + srcXStart) * 4);
+          const auto dstOff = static_cast<std::size_t>((y * vpW + dstX) * 4);
+          const auto count = static_cast<std::size_t>((srcXEnd - srcXStart) * 4);
+          std::memcpy(&dstData[dstOff], &srcData[srcOff], count);
+        }
+        tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, viewportRegion.view(), paint,
+                                       tiny_skia::Transform::identity(), mask);
+      } else {
+        tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, frame.pixmap.view(), paint,
+                                       tiny_skia::Transform::identity(), mask);
+      }
     }
+  }
   }
 #endif  // DONNER_FILTERS_ENABLED
 }

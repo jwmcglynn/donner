@@ -188,7 +188,16 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   FloatPixmap sourceFloat = FloatPixmap::fromPixmap(sourceGraphic);
 
   if (graph.clipSourceToFilterRegion && graph.filterRegion.has_value()) {
-    applySubregionClipping(sourceFloat, *graph.filterRegion, w, h);
+    // When the transform has rotation/skew, use rotation-aware clipping to avoid AABB
+    // over-clipping. The AABB of a skewed filter region is larger than the actual region,
+    // but clipping to the AABB is too aggressive when the filter contains feOffset or other
+    // spatial primitives that shift content into the clipped area.
+    if (graph.filterFromDevice.has_value() && graph.userSpaceFilterRegion.has_value()) {
+      applySubregionClipping(sourceFloat, *graph.filterRegion, w, h,
+                             &*graph.filterFromDevice, &*graph.userSpaceFilterRegion);
+    } else {
+      applySubregionClipping(sourceFloat, *graph.filterRegion, w, h);
+    }
   }
 
   // Convert paint inputs to float sRGB.

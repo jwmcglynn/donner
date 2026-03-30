@@ -255,6 +255,9 @@ struct FilterGraph {
   /// Filter region in pixel space (clips subregions). If not set, uses full pixmap extent.
   std::optional<PixelRect> filterRegion;
 
+  /// User-space filter region for rotation-aware source clipping. Used with filterFromDevice.
+  std::optional<PixelRect> userSpaceFilterRegion;
+
   /// Inverse transform (pixel → filter/user space) for rotation-aware subregion clipping.
   /// When set, nodes with userSpaceSubregion use per-pixel point-in-rect testing.
   std::optional<AffineTransform> filterFromDevice;
