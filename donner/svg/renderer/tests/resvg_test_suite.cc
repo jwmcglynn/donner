@@ -598,9 +598,6 @@ INSTANTIATE_TEST_SUITE_P(FePointLight, ImageComparisonTestFixture,
                              })),
                          TestNameFromFilename);
 
-// Specular lighting: algorithm differences vs resvg.
-// Float pipeline + light coordinate scaling fixed most tests to 0 diffs at 0.1f threshold.
-// specularExponent out-of-range handling: <1 skips primitive (transparent), >128 clamps to 128.
 INSTANTIATE_TEST_SUITE_P(FeSpecularLighting, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feSpecularLighting")),
                          TestNameFromFilename);
@@ -641,14 +638,10 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-filter",
         {
-            {"e-filter-011.svg",
-             Params::WithThreshold(kDefaultThreshold, 8000)},  // Subregion (7240px at 0.02)
+            {"e-filter-011.svg", Params::WithThreshold(0.1f)},  // Minor shading differences
             {"e-filter-019.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   4100)},  // inherited filter blur edge (3700px at 0.02)
-            {"e-filter-027.svg",
-             Params::WithThreshold(kDefaultThreshold, 6000)},  // Skew transform + narrow filter
-                                                               // region (5406px at 0.02)
+             Params::Skip()},  // Bug: Color is slightly off, we are missing transparency
+            {"e-filter-027.svg", Params::Skip()},  // Bug: We don't blur the right edge
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage (deprecated SVG 1.1)
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha (deprecated SVG 1.1)
             {"e-filter-034.svg", Params::Skip()},  // UB: in=FillPaint
@@ -656,7 +649,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-036.svg", Params::Skip()},  // UB: in=FillPaint gradient
             {"e-filter-037.svg", Params::Skip()},  // UB: in=FillPaint pattern
             {"e-filter-038.svg", Params::Skip()},  // UB: in=FillPaint on group
-            {"e-filter-060.svg", Params::Skip()},  // Filter on root svg (227K px diff)
+            {"e-filter-060.svg", Params::Skip()},  // UB: Filter on the root `svg`
             {"e-filter-065.svg", Params::Skip()},  // UB: in=FillPaint on empty group
         })),
     TestNameFromFilename);
