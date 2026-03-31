@@ -3,6 +3,7 @@
 /// @file Lighting.h
 /// @brief SVG feDiffuseLighting and feSpecularLighting filter operations.
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -33,6 +34,16 @@ struct LightSourceParams {
   double pointsAtZ = 0.0;
   double spotExponent = 1.0;
   std::optional<double> limitingConeAngle;
+
+  // User-space positions for spot light cone angle computation.
+  // The cone angle and exponent are computed in user space to correctly handle non-uniform
+  // transforms (skew, rotation).  Device-space positions above are used for N·L shading.
+  double userX = 0.0;
+  double userY = 0.0;
+  double userZ = 0.0;
+  double userPointsAtX = 0.0;
+  double userPointsAtY = 0.0;
+  double userPointsAtZ = 0.0;
 };
 
 /// Parameters for diffuse lighting.
@@ -43,6 +54,14 @@ struct DiffuseLightingParams {
   double lightG = 1.0;  ///< Light color green (0..1).
   double lightB = 1.0;  ///< Light color blue (0..1).
   LightSourceParams light;
+
+  /// Inverse transform mapping pixel coordinates to user/filter space.
+  /// ux = pixelToUser[0]*px + pixelToUser[1]*py + pixelToUser[2]
+  /// uy = pixelToUser[3]*px + pixelToUser[4]*py + pixelToUser[5]
+  std::array<double, 6> pixelToUser = {1, 0, 0, 0, 1, 0};
+
+  /// True if the device-from-filter transform has shear (non-conformal).
+  bool hasShear = false;
 };
 
 /// Parameters for specular lighting.
@@ -54,6 +73,12 @@ struct SpecularLightingParams {
   double lightG = 1.0;
   double lightB = 1.0;
   LightSourceParams light;
+
+  /// Inverse transform mapping pixel coordinates to user/filter space.
+  std::array<double, 6> pixelToUser = {1, 0, 0, 0, 1, 0};
+
+  /// True if the device-from-filter transform has shear (non-conformal).
+  bool hasShear = false;
 };
 
 /// Apply diffuse lighting to the input pixmap's alpha channel as a bump map.

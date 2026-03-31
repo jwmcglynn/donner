@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/FilterGraphExecutor.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -167,6 +168,29 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
     return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
   }();
 
+  // Inverse transform mapping pixel coordinates back to user/filter space.
+  // Used by spot light cone angle computation which must be done in user space.
+  const std::array<double, 6> pixelToUser = [&]() -> std::array<double, 6> {
+    const Transformd inv = deviceFromFilter.inverse();
+    // Layout: ux = [0]*px + [1]*py + [2], uy = [3]*px + [4]*py + [5]
+    return {inv.data[0], inv.data[2], inv.data[4], inv.data[1], inv.data[3], inv.data[5]};
+  }();
+
+  // Detect non-conformal transforms (shear/skew) that distort angles in device space.
+  // For conformal transforms (rotation + uniform scale), device-space angles match user-space.
+  const bool hasShear = [&]() -> bool {
+    const double a = deviceFromFilter.data[0];
+    const double b = deviceFromFilter.data[1];
+    const double c = deviceFromFilter.data[2];
+    const double d = deviceFromFilter.data[3];
+    // Transform axes are orthogonal iff their dot product is zero.
+    const double dot = a * c + b * d;
+    const double lenSq1 = a * a + b * b;
+    const double lenSq2 = c * c + d * d;
+    // Check if cosine of angle between axes exceeds ~1 degree.
+    return dot * dot > 0.0003 * lenSq1 * lenSq2;  // cos²(1°) ≈ 0.0003
+  }();
+
   auto convertLightSource =
       [&](const filter_primitive::LightSource& ls) -> tiny_skia::filter::LightSourceParams {
     tiny_skia::filter::LightSourceParams lp;
@@ -206,6 +230,15 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
     lp.pointsAtZ = userPtZ * pixelScale;
     lp.spotExponent = ls.spotExponent;
     lp.limitingConeAngle = ls.limitingConeAngle;
+
+    // Store user-space positions for spot light cone angle computation.
+    lp.userX = userX;
+    lp.userY = userY;
+    lp.userZ = userZ;
+    lp.userPointsAtX = userPtX;
+    lp.userPointsAtY = userPtY;
+    lp.userPointsAtZ = userPtZ;
+
     return lp;
   };
 
@@ -536,6 +569,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
               diffuseLighting.params.lightG = rgba.g / 255.0;
               diffuseLighting.params.lightB = rgba.b / 255.0;
               diffuseLighting.params.light = convertLightSource(*primitive.light);
+              diffuseLighting.params.pixelToUser = pixelToUser;
+              diffuseLighting.params.hasShear = hasShear;
               graphNode.primitive = diffuseLighting;
             } else {
               graphNode.primitive = gp::Image{};
@@ -552,6 +587,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
               specularLighting.params.lightG = rgba.g / 255.0;
               specularLighting.params.lightB = rgba.b / 255.0;
               specularLighting.params.light = convertLightSource(*primitive.light);
+              specularLighting.params.pixelToUser = pixelToUser;
+              specularLighting.params.hasShear = hasShear;
               graphNode.primitive = specularLighting;
             } else {
               graphNode.primitive = gp::Image{};

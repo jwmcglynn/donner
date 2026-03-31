@@ -594,60 +594,45 @@ INSTANTIATE_TEST_SUITE_P(FePointLight, ImageComparisonTestFixture,
                              "e-fePointLight",
                              {
                                  {"e-fePointLight-004.svg",
-                                  Params::WithThreshold(0.1f, 120)},  // Lighting alpha=1.0 vs resvg
-                                                                      // clips to shape (54px)
+                                  Params::WithThreshold(0.1f, 120)},  // Minor shading differences
                              })),
                          TestNameFromFilename);
 
 // Specular lighting: algorithm differences vs resvg.
 // Float pipeline + light coordinate scaling fixed most tests to 0 diffs at 0.1f threshold.
 // specularExponent out-of-range handling: <1 skips primitive (transparent), >128 clamps to 128.
-INSTANTIATE_TEST_SUITE_P(
-    FeSpecularLighting, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feSpecularLighting",
-        {
-            {"e-feSpecularLighting-002.svg", Params::WithThreshold(0.1f)},  // 2717px at 0.01f
-            {"e-feSpecularLighting-004.svg",
-             Params::WithThreshold(0.1f, 58000)},  // resvg golden bug: R=0 channel (BGRA issue in
-                                                   // resvg ~v0.9.x)
-            {"e-feSpecularLighting-005.svg", Params::WithThreshold(0.1f)},  // 1466px at 0.01f
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FeSpecularLighting, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feSpecularLighting")),
+                         TestNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(
     FeSpotLight, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-feSpotLight",
         {
-            // feSpotLight-005: negative specularExponent=-10 on feSpotLight. Non-positive values
-            // fall back to default 1.0, matching resvg's PositiveF32 validation.
-            // feSpotLight-007/008: 0px at 0.02 threshold (were 2922px at 0.01)
             {"e-feSpotLight-012.svg",
-             Params::WithThreshold(0.1f,
-                                   15200)},  // Lighting alpha=1.0 vs resvg clips to shape (14622px)
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-e-feSpotLight-012.png")},  // resvg bug: SpotLight Y
+                                                                          // uses region.x not .y
         })),
     TestNameFromFilename);
-INSTANTIATE_TEST_SUITE_P(
-    FeTile, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-feTile",
-        {
-            // feTile-001/002/004/005: 0px at 0.02 threshold (were 2500-9700px at 0.01)
-            {"e-feTile-007.svg", Params::Skip()},  // Complex transform (UB per test title)
-        })),
-    TestNameFromFilename);
+
+INSTANTIATE_TEST_SUITE_P(FeTile, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("e-feTile",
+                                                     {
+                                                         {"e-feTile-007.svg",
+                                                          Params::Skip()},  // UB: complex transform
+                                                     })),
+                         TestNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(
     FeTurbulence, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-feTurbulence",
         {
-            {"e-feTurbulence-017.svg", Params::Skip()},  // stitchTiles=stitch (UB per test title)
-            {"e-feTurbulence-018.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   500)},  // Complex skew transform (426px at 0.02)
-            {"e-feTurbulence-019.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   1100)},  // sRGB color-interpolation (990px at 0.02)
+            {"e-feTurbulence-017.svg", Params::Skip()},                // UB: stitchTiles=stitch
+            {"e-feTurbulence-018.svg", Params::WithThreshold(0.05f)},  // Minor shading differences
+            {"e-feTurbulence-019.svg", Params::WithThreshold(0.05f)},  // Minor shading differences
         })),
     TestNameFromFilename);
 

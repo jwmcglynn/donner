@@ -1,6 +1,7 @@
 #include "Lighting.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -150,40 +151,82 @@ void pointLightDirection(const LightSourceParams& light, double px, double py, d
 }
 
 /// Compute spotlight color factor for a spot light.
-/// Returns a factor in [0, 1] that attenuates the light color.
-double spotLightFactor(const LightSourceParams& light, double lx, double ly, double lz) {
-  // Direction from light to target point (s).
-  double sx = light.pointsAtX - light.x;
-  double sy = light.pointsAtY - light.y;
-  double sz = light.pointsAtZ - light.z;
-  normalize3(sx, sy, sz);
+/// For non-conformal transforms (shear/skew), the cone boundary check is computed in user/filter
+/// space since limitingConeAngle is defined in the filter's coordinate system and device-space
+/// angles are distorted by shear.  For conformal transforms, device-space is used (matching
+/// reference renderers).
+///
+/// \param light Light source parameters (device-space + user-space positions).
+/// \param deviceLx Device-space light direction x (surface-to-light, normalized).
+/// \param deviceLy Device-space light direction y.
+/// \param deviceLz Device-space light direction z.
+/// \param hasShear True if the transform is non-conformal (shear/skew).
+/// \param pixelToUser Inverse transform mapping pixel coordinates to user space.
+/// \param surfaceScale Surface scale (user-space, unscaled by pixelScale).
+/// \param px Pixel x coordinate.
+/// \param py Pixel y coordinate.
+/// \param alpha Alpha value at (px, py) in [0, 1].
+double spotLightFactor(const LightSourceParams& light, double deviceLx, double deviceLy,
+                       double deviceLz, bool hasShear,
+                       const std::array<double, 6>& pixelToUser, double surfaceScale, double px,
+                       double py, double alpha) {
+  // Device-space spot direction (light to pointsAt).
+  double dsx = light.pointsAtX - light.x;
+  double dsy = light.pointsAtY - light.y;
+  double dsz = light.pointsAtZ - light.z;
+  normalize3(dsx, dsy, dsz);
 
-  // -L is direction from surface to light, so we use the negative.
-  const double cosAngle = -(lx * sx + ly * sy + lz * sz);
+  // Device-space cosAngle: used for the exponent power (consistent with N·L space)
+  // and for the cone check when the transform is conformal.
+  // deviceL is surface-to-light, so negate for light-to-surface dot spot-direction.
+  const double cosAngleDevice = -(deviceLx * dsx + deviceLy * dsy + deviceLz * dsz);
 
-  if (cosAngle <= 0.0) {
+  if (cosAngleDevice <= 0.0) {
     return 0.0;
+  }
+
+  // For non-conformal transforms, compute the spot light factor in user space where the
+  // limitingConeAngle and exponent are defined.  This ensures the cone boundary and the
+  // exponent peak (focus) are positioned correctly under shear transforms.
+  // For conformal transforms, device-space is used (matching reference renderers).
+  double cosAngle = cosAngleDevice;
+  if (hasShear) {
+    // Transform pixel coordinates to user space.
+    const double ux = pixelToUser[0] * px + pixelToUser[1] * py + pixelToUser[2];
+    const double uy = pixelToUser[3] * px + pixelToUser[4] * py + pixelToUser[5];
+    const double uz = surfaceScale * alpha;  // Already in user space.
+
+    // Direction from light to surface point in user space.
+    double ulx = ux - light.userX;
+    double uly = uy - light.userY;
+    double ulz = uz - light.userZ;
+    normalize3(ulx, uly, ulz);
+
+    // Spot axis direction in user space.
+    double usx = light.userPointsAtX - light.userX;
+    double usy = light.userPointsAtY - light.userY;
+    double usz = light.userPointsAtZ - light.userZ;
+    normalize3(usx, usy, usz);
+
+    cosAngle = ulx * usx + uly * usy + ulz * usz;
+    if (cosAngle <= 0.0) {
+      return 0.0;
+    }
   }
 
   double coneFactor = 1.0;
   if (light.limitingConeAngle.has_value()) {
     const double cosOuter = std::cos(*light.limitingConeAngle * std::numbers::pi / 180.0);
-    // Apply smooth anti-aliased transition at the cone boundary (~1 degree ramp),
-    // per SVG spec recommendation: "User agents should apply a smoothing technique
-    // such as anti-aliasing at the boundary of the cone."
     constexpr double kAntiAliasThreshold = 0.016;  // ~1 degree in cosine space
     const double cosInner = cosOuter + kAntiAliasThreshold;
     if (cosAngle < cosOuter) {
       return 0.0;  // Fully outside the cone.
     }
     if (cosAngle < cosInner) {
-      // Smooth linear ramp at the cone edge.
       coneFactor = (cosAngle - cosOuter) / kAntiAliasThreshold;
     }
   }
 
-  // Per SVG spec, feSpotLight's specularExponent must be positive.
-  // Non-positive values fall back to the default (1.0), matching resvg behavior.
   const double exp = light.spotExponent > 0.0 ? light.spotExponent : 1.0;
   return std::pow(cosAngle, exp) * coneFactor;
 }
@@ -227,10 +270,13 @@ void diffuseLighting(const Pixmap& src, Pixmap& dst, const DiffuseLightingParams
           break;
         }
         case LightType::Spot: {
-          const double pz = params.surfaceScale * getAlpha(src, x, y);
+          const double alpha = getAlpha(src, x, y);
+          const double pz = params.surfaceScale * alpha;
           pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
                               ly, lz);
-          spotFactor = spotLightFactor(params.light, lx, ly, lz);
+          spotFactor = spotLightFactor(params.light, lx, ly, lz, params.hasShear,
+                                       params.pixelToUser, params.surfaceScale,
+                                       static_cast<double>(x), static_cast<double>(y), alpha);
           break;
         }
       }
@@ -295,10 +341,13 @@ void specularLighting(const Pixmap& src, Pixmap& dst, const SpecularLightingPara
           break;
         }
         case LightType::Spot: {
-          const double pz = params.surfaceScale * getAlpha(src, x, y);
+          const double alpha = getAlpha(src, x, y);
+          const double pz = params.surfaceScale * alpha;
           pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
                               ly, lz);
-          spotFactor = spotLightFactor(params.light, lx, ly, lz);
+          spotFactor = spotLightFactor(params.light, lx, ly, lz, params.hasShear,
+                                       params.pixelToUser, params.surfaceScale,
+                                       static_cast<double>(x), static_cast<double>(y), alpha);
           break;
         }
       }
@@ -461,10 +510,13 @@ void diffuseLighting(const FloatPixmap& src, FloatPixmap& dst,
           break;
         }
         case LightType::Spot: {
-          const double pz = params.surfaceScale * getAlphaFloat(src, x, y);
+          const double alpha = getAlphaFloat(src, x, y);
+          const double pz = params.surfaceScale * alpha;
           pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
                               ly, lz);
-          spotFactor = spotLightFactor(params.light, lx, ly, lz);
+          spotFactor = spotLightFactor(params.light, lx, ly, lz, params.hasShear,
+                                       params.pixelToUser, params.surfaceScale,
+                                       static_cast<double>(x), static_cast<double>(y), alpha);
           break;
         }
       }
@@ -525,10 +577,13 @@ void specularLighting(const FloatPixmap& src, FloatPixmap& dst,
           break;
         }
         case LightType::Spot: {
-          const double pz = params.surfaceScale * getAlphaFloat(src, x, y);
+          const double alpha = getAlphaFloat(src, x, y);
+          const double pz = params.surfaceScale * alpha;
           pointLightDirection(params.light, static_cast<double>(x), static_cast<double>(y), pz, lx,
                               ly, lz);
-          spotFactor = spotLightFactor(params.light, lx, ly, lz);
+          spotFactor = spotLightFactor(params.light, lx, ly, lz, params.hasShear,
+                                       params.pixelToUser, params.surfaceScale,
+                                       static_cast<double>(x), static_cast<double>(y), alpha);
           break;
         }
       }
