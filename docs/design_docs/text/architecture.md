@@ -39,12 +39,12 @@ Already vendored in `third_party/stb/stb_truetype.h`. Single-header C library.
 - **Verdict:** The right choice for the base tier. Zero new dependencies, already vendored,
   and the ~55 KB cost is proportional to the TinySkia backend. Provides correct text rendering
   for fonts with `kern` tables. The architecture is designed so HarfBuzz can replace stb_truetype
-  for the layout/outline path in the `text_shaping` tier.
+  for the layout/outline path in the `text_full` tier.
 
 ### HarfBuzz — Full OpenType shaping
 
 Industry-standard OpenType text shaper. Handles GSUB and GPOS. **Implemented** as `TextShaper`
-in the `text_shaping` tier.
+in the `text_full` tier.
 
 - **License:** MIT
 - **Binary size:** ~400-600 KB with `HB_TINY` — roughly doubles the TinySkia binary
@@ -55,7 +55,7 @@ in the `text_shaping` tier.
   draw API (`HB_NO_DRAW`), CFF outlines (`HB_NO_CFF`), and file I/O (`HB_NO_OPEN`).
 - **Version:** 10.1.0 (tag, resolved to commit `9ef44a2d`)
 - **Integration:** `TextShaper` creates HarfBuzz font objects from `FontManager`'s raw font
-  data. Both backends use conditional compilation (`DONNER_TEXT_SHAPING_ENABLED`) to select
+  data. Both backends use conditional compilation (`DONNER_TEXT_FULL`) to select
   `TextShaper` vs `TextLayout`.
 
 ### kb_text_shape.h — Lightweight alternative shaper
@@ -64,14 +64,14 @@ Single-header C/C++ OpenType shaper (~22K LOC). Supports GSUB/GPOS.
 
 - **License:** Unknown / recently published (mid-2025)
 - **Limitations:** Not battle-tested, 128x slower font loading for complex scripts
-- **Verdict:** Worth evaluating for the `text_shaping` tier as a lighter alternative to
+- **Verdict:** Worth evaluating for the `text_full` tier as a lighter alternative to
   HarfBuzz. Should be measured for actual binary size before deciding.
 
 ### Google woff2 + Brotli — WOFF2 decompression
 
 - **License:** MIT (both)
 - **Binary size:** ~185-195 KB total (Brotli decode 175 KB + woff2 decode ~15 KB)
-- **Verdict:** Gated behind `text_woff2`. Modest cost for broad web font compatibility.
+- **Verdict:** Gated behind `text_full`. Modest cost for broad web font compatibility.
 
 ### FreeType — Font rasterization
 
@@ -98,8 +98,8 @@ Single-header C/C++ OpenType shaper (~22K LOC). Supports GSUB/GPOS.
        v
   FontManager (new, gated by DONNER_TEXT_ENABLED)
   - Resolves @font-face cascade
-  - Decompresses WOFF1 (always) / WOFF2 (if DONNER_TEXT_WOFF2_ENABLED)
-  - Loads fonts via stb_truetype (base) or HarfBuzz (text_shaping tier)
+  - Decompresses WOFF1 (always) / WOFF2 (if DONNER_TEXT_FULL)
+  - Loads fonts via stb_truetype (base) or HarfBuzz (text_full tier)
   - Caches loaded fonts
   - Provides fallback (Public Sans)
        |
@@ -109,7 +109,7 @@ Single-header C/C++ OpenType shaper (~22K LOC). Supports GSUB/GPOS.
   - Lays out glyphs: codepoint → glyph ID, advance + kern adjustment
   - Produces LayoutTextRun[] with glyph IDs, positions
   - Applies text-anchor adjustment
-  - [text_shaping tier: replaced by TextShaper using HarfBuzz]
+  - [text_full tier: replaced by TextShaper using HarfBuzz]
        |
        v
   RendererInterface::drawText()
@@ -211,7 +211,7 @@ public:
 
 ### TextShaper (HarfBuzz tier)
 
-The `TextShaper` class replaces `TextLayout` when the `text_shaping` tier is enabled. Both
+The `TextShaper` class replaces `TextLayout` when the `text_full` tier is enabled. Both
 produce equivalent output formats (`ShapedTextRun`/`ShapedGlyph` vs `LayoutTextRun`/`LayoutGlyph`)
 so renderers can consume either identically. The Bazel `select()` in each renderer backend
 conditionally compiles the appropriate path:
@@ -303,7 +303,7 @@ own potentially-better kerning (since it can access GPOS via FreeType internally
 
 **Recommendation:** Option A for the base tier. Skia's `drawSimpleText()` already works and its
 layout is at least as good as stb_truetype's (likely better, since it has GPOS access). Adding
-`TextLayout` for Skia provides no benefit at this tier. At the `text_shaping` tier (now
+`TextLayout` for Skia provides no benefit at this tier. At the `text_full` tier (now
 implemented), Option B is used — both backends use identical HarfBuzz shaping, and Skia uses
 `drawGlyphs()` with glyph positions from `TextShaper`.
 
@@ -313,7 +313,7 @@ For the base tier, Skia improvements focus on:
 - `text-anchor` via measuring text width with `SkFont::measureText()`.
 - `@font-face` font loading via `SkFontMgr::makeFromData()` with fonts loaded by `FontManager`.
 
-### WOFF2 integration (gated by `text_woff2`)
+### WOFF2 integration (gated by `text_full`)
 
 1. Add `third_party/woff2` and `third_party/brotli` as Bazel deps with `cc_library` targets.
 2. Add `Woff2Parser` alongside existing `WoffParser` in `donner/base/fonts/`:
@@ -356,9 +356,9 @@ struct TextParams {
   - [x] `donner.configure()` call in donner's own `MODULE.bazel`.
 - [x] Migrate existing flags (`renderer_backend`, `use_coretext`, `use_fontconfig`) to load
   defaults from `@donner_config//:config.bzl`.
-- [x] Add `text` and `text_woff2` bool_flags with defaults from `DONNER_CONFIG`.
+- [x] Add `text` and `text_full` bool_flags with defaults from `DONNER_CONFIG`.
   - [x] Create config_settings and `.bazelrc` shortcuts.
-  - [x] Add `DONNER_TEXT_ENABLED` / `DONNER_TEXT_WOFF2_ENABLED` defines via `select()`.
+  - [x] Add `DONNER_TEXT_ENABLED` / `DONNER_TEXT_FULL` defines via `select()`.
 - [x] Create stb_truetype Bazel target (wrap existing vendored header via `stb_library` macro).
 - [x] Implement `FontManager` in `donner/svg/resources/`.
   - [x] TTF/OTF loading via `stbtt_InitFont()`.
@@ -399,7 +399,7 @@ struct TextParams {
 - [x] Add `dominant-baseline` support.
 - [x] Update golden images for text tests.
 
-### Phase 4: WOFF2 support (behind `text_woff2` flag)
+### Phase 4: WOFF2 support (behind `text_full` flag)
 
 - [x] Vendor Google woff2 + Brotli under `third_party/`.
   - [x] `cc_library` targets (decode-only for both).
@@ -419,9 +419,9 @@ struct TextParams {
 
 ### Phase 6: HarfBuzz shaping tier (follow-up)
 
-- [x] Add `text_shaping` bool_flag and config_setting.
-  - `--config=text-shaping` enables both `text=true` and `text_shaping=true`.
-  - `text_shaping_enabled` config_setting requires both flags for Bazel select() specificity.
+- [x] Add `text_full` bool_flag and config_setting.
+  - `--config=text-full` enables both `text=true` and `text_full=true`.
+  - `text_full_enabled` config_setting requires both flags for Bazel select() specificity.
 - [x] Vendor HarfBuzz (amalgamated, `HB_TINY`) under `third_party/harfbuzz`.
   - Uses `new_git_repository` with `patch_cmds` to create `config-override.h` that re-enables
     the draw API (`#undef HB_NO_DRAW`), CFF outlines (`#undef HB_NO_CFF`), and file I/O
@@ -448,9 +448,9 @@ struct TextParams {
 | Dependency | Feature tier | License | Binary cost | New? |
 |------------|-------------|---------|------------|------|
 | stb_truetype | `text` | Public domain / MIT | ~55 KB | Already vendored |
-| Google woff2 (decode) | `text_woff2` | MIT | ~15 KB | Yes |
-| Brotli (decode) | `text_woff2` | MIT | ~175 KB | Yes |
-| HarfBuzz (`HB_TINY`) | `text_shaping` | MIT | ~400-600 KB | Done |
+| Google woff2 (decode) | `text_full` | MIT | ~15 KB | Yes |
+| Brotli (decode) | `text_full` | MIT | ~175 KB | Yes |
+| HarfBuzz (`HB_TINY`) | `text_full` | MIT | ~400-600 KB | Done |
 | SheenBidi | Future | Apache 2.0 | ~30 KB | Future |
 | Public Sans | `text` | OFL 1.1 | ~90 KB (data) | Already vendored |
 | zlib | (existing) | zlib | — | Already a dep |
@@ -461,8 +461,7 @@ struct TextParams {
 |--------------|------------------|----------|
 | No text (default) | 0 | None |
 | `--config=text` | ~55 KB | None (stb_truetype already vendored) |
-| `--config=text-woff2` | ~245 KB | woff2, Brotli |
-| `--config=text-shaping` | ~500-650 KB | HarfBuzz |
+| `--config=text-full` | ~500-650 KB | HarfBuzz, woff2, Brotli |
 
 For comparison: tiny-skia-cpp is ~200 KB, Skia is ~6-8 MB linked.
 
@@ -470,7 +469,7 @@ For comparison: tiny-skia-cpp is ~200 KB, Skia is ~6-8 MB linked.
 
 **HarfBuzz as the base tier instead of stb_truetype:**
 Kept as opt-in tier. HarfBuzz `HB_TINY` adds ~400-600 KB, roughly doubling the TinySkia binary.
-The quality improvement (GSUB/GPOS) is available via `--config=text-shaping` but not forced on
+The quality improvement (GSUB/GPOS) is available via `--config=text-full` but not forced on
 all consumers. The base tier (stb_truetype) provides correct text for fonts with `kern` tables
 at minimal binary cost.
 
@@ -484,7 +483,7 @@ Not viable. TinySkia has no text APIs. A shared font loading layer is needed reg
 whether the layout is done by stb_truetype or HarfBuzz.
 
 **kb_text_shape.h as the shaping tier:**
-Worth evaluating for the `text_shaping` tier as a potentially lighter alternative to HarfBuzz.
+Worth evaluating for the `text_full` tier as a potentially lighter alternative to HarfBuzz.
 At ~22K LOC vs HarfBuzz's 100K+, it could produce a significantly smaller binary. However, it's
 too new (mid-2025) and untested to commit to now. The follow-up phase should measure its actual
 binary size and test suite pass rate before deciding.
@@ -514,8 +513,8 @@ require changing all `select()` references across donner's BUILD files. The chos
 `build_setting_default` values come from the generated repo.
 
 **Three-way layout strategy (no-text / stb-basic / harfbuzz-full) active simultaneously:**
-Rejected in favor of sequential tiers. The `text` and `text_shaping` tiers use the same
-interface (`LayoutTextRun`), so `text_shaping` simply replaces the layout implementation rather
+Rejected in favor of sequential tiers. The `text` and `text_full` tiers use the same
+interface (`LayoutTextRun`), so `text_full` simply replaces the layout implementation rather
 than coexisting. This avoids maintaining two layout codepaths long-term.
 
 ## Open Questions
@@ -550,7 +549,7 @@ than coexisting. This avoids maintaining two layout codepaths long-term.
 - [ ] System font discovery for TinySkia (platform-specific font enumeration).
 - [ ] Glyph bitmap caching for TinySkia performance optimization.
 - [ ] `text-decoration` with proper ink-skip behavior.
-- [ ] CMake feature selection matching the Bazel `text`/`text_woff2`/`text_shaping` flags.
+- [ ] CMake feature selection matching the Bazel `text`/`text_full` flags.
 - [ ] Measure actual HarfBuzz `HB_TINY` arm64 binary size impact.
 - [ ] Evaluate `kb_text_shape.h` as lighter HarfBuzz alternative.
-- [ ] Run resvg text tests with `text_shaping` tier, compare quality vs base tier.
+- [ ] Run resvg text tests with `text_full` tier, compare quality vs base tier.

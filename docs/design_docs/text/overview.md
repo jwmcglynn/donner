@@ -24,8 +24,8 @@ This design covers:
 4. **Optional WOFF2** — gated behind a separate feature flag.
 5. **Feature tiers** — build-time opt-in via Bazel flags controlling binary size cost.
 
-Full OpenType shaping (GSUB/GPOS via HarfBuzz) is available as an opt-in `text_shaping` tier
-(`--config=text-shaping`) to avoid roughly doubling the TinySkia binary size when not needed.
+Full OpenType shaping (GSUB/GPOS via HarfBuzz) is available as an opt-in `text_full` tier
+(`--config=text-full`) to avoid roughly doubling the binary size when not needed.
 
 ## Goals
 
@@ -51,13 +51,9 @@ Text support is split into independently selectable features, ordered by depende
 | Feature | What it adds | New deps | Binary cost | Status |
 |---------|-------------|----------|------------|--------|
 | **`text`** | Font loading (TTF/OTF/WOFF1), `kern`-table kerning, glyph outlines, `@font-face` | None (stb_truetype already vendored) | ~55 KB | **Done** |
-| **`text_woff2`** | WOFF2 web font decompression | Google woff2 + Brotli | ~190 KB | **Done** |
-| **`text_shaping`** | Full OpenType shaping (GSUB/GPOS: ligatures, contextual kerning) | HarfBuzz (`HB_TINY`) | ~400-600 KB | **Done** |
+| **`text_full`** | Full OpenType shaping (GSUB/GPOS: ligatures, contextual kerning), WOFF2 web font support | HarfBuzz (`HB_TINY`), Google woff2 + Brotli | ~500-800 KB | **Done** |
 
-Each tier implies the previous: `text_shaping` implies `text`, `text_woff2` implies `text`.
-All tiers default to **off** so existing consumers pay nothing.
-
-### What the base `text` tier provides vs full shaping
+### What the base `text` tier provides vs full text shaping
 
 The base tier uses stb_truetype's `kern` table for pair kerning and `stbtt_GetGlyphHMetrics()`
 for glyph advances. This covers:
@@ -66,7 +62,7 @@ for glyph advances. This covers:
 - **Pair kerning** — common kern pairs (AV, To, Wa, etc.) are adjusted via the `kern` table.
 - **Glyph outlines** — `stbtt_GetGlyphShape()` extracts Bezier curves for path-based rendering.
 
-What it does **not** cover (deferred to `text_shaping`):
+What it does **not** cover (deferred to `text_full`):
 
 - **GPOS kerning** — some modern fonts (especially Google Fonts) store kerning only in the GPOS
   table, not the legacy `kern` table. These fonts will have correct advances but no kerning
@@ -83,7 +79,7 @@ is most visible with Google Fonts and other web-first fonts that rely solely on 
 
 stb_truetype has a known bug where fonts containing both `kern` and `GPOS` tables get
 double-applied kerning from `stbtt_GetGlyphKernAdvance()`. Since the base tier does not process
-GPOS, this manifests as slightly over-kerned text with some fonts. The `text_shaping` tier
+GPOS, this manifests as slightly over-kerned text with some fonts. The `text_full` tier
 (HarfBuzz) eliminates this issue entirely by handling all positioning through GPOS.
 
 ### Bazel feature flags {#bazel-flags}
@@ -103,19 +99,15 @@ donner = use_extension("@donner//config:extensions.bzl", "donner")
 donner.configure(
     renderer = "tiny_skia",
     text = True,
-    text_woff2 = False,
-    text_shaping = False,
+    text_full = False,
 )
 use_repo(donner, "donner_config")
 ```
 
 The `configure` tag validates values at module-resolution time (before the build starts):
 - `renderer`: `"skia"` (default) or `"tiny_skia"`
-- `text`: `True`/`False` (default `False`)
-- `text_woff2`: `True`/`False` (default `False`)
-- `text_shaping`: `True`/`False` (default `False`)
-- `use_coretext`: `True`/`False` (default `False`, macOS only)
-- `use_fontconfig`: `True`/`False` (default `False`, Linux only)
+- `text`: `True`/`False` (default `True`)
+- `text_full`: `True`/`False` (default `False`)
 
 If no `donner.configure()` call is made (or donner is the root module), all options use their
 built-in defaults.
@@ -125,86 +117,6 @@ Consumers can still override individual flags on the command line:
 ```sh
 # Override one flag without changing the MODULE.bazel configuration:
 bazel build --@donner//donner/svg/renderer:text=false //...
-```
-
-#### How the module extension works
-
-The extension generates a `@donner_config` repo containing a single `config.bzl` file with the
-consumer's chosen defaults:
-
-```starlark
-# config/extensions.bzl
-
-_configure = tag_class(attrs = {
-    "renderer": attr.string(default = "skia", values = ["skia", "tiny_skia"]),
-    "text": attr.bool(default = False),
-    "text_woff2": attr.bool(default = False),
-    "use_coretext": attr.bool(default = False),
-    "use_fontconfig": attr.bool(default = False),
-})
-
-def _donner_config_repo_impl(rctx):
-    rctx.file("BUILD.bazel", "exports_files(['config.bzl'])\n")
-    rctx.file("config.bzl", """
-DONNER_CONFIG = {{
-    "renderer": {renderer},
-    "text": {text},
-    "text_woff2": {text_woff2},
-    "use_coretext": {use_coretext},
-    "use_fontconfig": {use_fontconfig},
-}}
-""".format(
-        renderer = repr(rctx.attr.renderer),
-        text = repr(rctx.attr.text),
-        text_woff2 = repr(rctx.attr.text_woff2),
-        use_coretext = repr(rctx.attr.use_coretext),
-        use_fontconfig = repr(rctx.attr.use_fontconfig),
-    ))
-
-_donner_config_repo = repository_rule(
-    implementation = _donner_config_repo_impl,
-    attrs = {
-        "renderer": attr.string(default = "skia"),
-        "text": attr.bool(default = False),
-        "text_woff2": attr.bool(default = False),
-        "use_coretext": attr.bool(default = False),
-        "use_fontconfig": attr.bool(default = False),
-    },
-)
-
-def _donner_impl(module_ctx):
-    # Start with built-in defaults
-    cfg = dict(renderer = "skia", text = False, text_woff2 = False,
-               use_coretext = False, use_fontconfig = False)
-
-    # Walk the module graph; root module's tags win
-    for mod in module_ctx.modules:
-        for tag in mod.tags.configure:
-            if mod.is_root:
-                cfg = dict(
-                    renderer = tag.renderer,
-                    text = tag.text,
-                    text_woff2 = tag.text_woff2,
-                    use_coretext = tag.use_coretext,
-                    use_fontconfig = tag.use_fontconfig,
-                )
-
-    _donner_config_repo(name = "donner_config", **cfg)
-
-donner = module_extension(
-    implementation = _donner_impl,
-    tag_classes = {"configure": _configure},
-)
-```
-
-Donner's own `MODULE.bazel` calls the extension with defaults so that `@donner_config` always
-exists, even when donner is the root module:
-
-```starlark
-# donner's MODULE.bazel
-donner = use_extension("//config:extensions.bzl", "donner")
-donner.configure()  # All defaults
-use_repo(donner, "donner_config")
 ```
 
 #### How flags consume the config
@@ -225,13 +137,13 @@ string_flag(
 
 bool_flag(
     name = "text",
-    build_setting_default = DONNER_CONFIG.get("text", False),
+    build_setting_default = DONNER_CONFIG.get("text", True),
     visibility = ["//visibility:public"],
 )
 
 bool_flag(
-    name = "text_woff2",
-    build_setting_default = DONNER_CONFIG.get("text_woff2", False),
+    name = "text_full",
+    build_setting_default = DONNER_CONFIG.get("text_full", False),
     visibility = ["//visibility:public"],
 )
 
@@ -242,8 +154,8 @@ config_setting(
 )
 
 config_setting(
-    name = "text_woff2_enabled",
-    flag_values = {":text_woff2": "true"},
+    name = "text_full_enabled",
+    flag_values = {":text_full": "true"},
     visibility = ["//visibility:public"],
 )
 
@@ -279,8 +191,7 @@ Donner's `.bazelrc` still provides shortcuts for internal development:
 ```sh
 # .bazelrc
 common:text --//donner/svg/renderer:text=true
-common:text-woff2 --//donner/svg/renderer:text=true --//donner/svg/renderer:text_woff2=true
-common:text-shaping --//donner/svg/renderer:text=true --//donner/svg/renderer:text_shaping=true
+common:text-full --//donner/svg/renderer:text=true --//donner/svg/renderer:text_full=true
 common:skia --//donner/svg/renderer:renderer_backend=skia
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 ```
@@ -318,7 +229,7 @@ donner_cc_library(
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }) + select({
-        ":text_woff2_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
+        ":text_full_enabled": ["DONNER_TEXT_FULL_ENABLED"],
         "//conditions:default": [],
     }),
 )
@@ -339,7 +250,7 @@ std::optional<FontHandle> FontManager::loadFontData(std::span<const uint8_t> dat
     return loadWoff2(data);
 #else
     UTILS_LOG(warning) << "WOFF2 font encountered but WOFF2 support not enabled. "
-                          "Build with --config=text-woff2 to enable.";
+                          "Build with --config=text-full to enable.";
     return std::nullopt;
 #endif
   }
@@ -355,7 +266,7 @@ Tests declare required features via the existing `ImageComparisonParams` mechani
 ```cpp
 // renderer_tests
 {"text_basic.svg", Params::RequiresFeature(Feature::Text)},
-{"text_woff2_font.svg", Params::RequiresFeature(Feature::TextWoff2)},
+{"text_woff2_font.svg", Params::RequiresFeature(Feature::TextFull)},
 ```
 
 Tests requiring `Feature::Text` are skipped when `DONNER_TEXT_ENABLED` is not defined. This
@@ -371,12 +282,12 @@ mirrors the existing `Feature::FilterEffects` pattern.
 | `ComputedTextComponent` | Done — resolved spans with x/y/dx/dy/rotate |
 | `TextParams` | Done — font families, size, fill/stroke colors, opacity, text-anchor, dominant-baseline, text-decoration, textLength |
 | WOFF 1.0 parsing | Done — `WoffParser` decompresses tables via zlib |
-| WOFF 2.0 parsing | Done — `Woff2Parser` via Google woff2 + Brotli (`--config=text-woff2`) |
+| WOFF 2.0 parsing | Done — `Woff2Parser` via Google woff2 + Brotli (`--config=text-full`) |
 | `@font-face` CSS parsing | Done — `FontFace` struct with local/url/data sources |
 | `FontLoader` | Done — loads WOFF from URI/data, returns `FontResource` |
 | `FontManager` | Done — TTF/OTF/WOFF1 loading, `@font-face` cascade, fallback to Public Sans |
 | `TextLayout` | Done — stb_truetype layout with kern-table kerning, text-anchor, dominant-baseline, textLength |
-| `TextShaper` | Done — HarfBuzz shaping with GSUB/GPOS (`--config=text-shaping`) |
+| `TextShaper` | Done — HarfBuzz shaping with GSUB/GPOS (`--config=text-full`) |
 | Skia `drawText` | Done — fill, stroke, rotation, text-anchor, dominant-baseline, text-decoration |
 | TinySkia `drawText` | Done — glyph outlines via stb_truetype/HarfBuzz, fill, stroke, rotation |
 | Embedded fallback font | Done — Public Sans Medium OTF in `third_party/public-sans` |

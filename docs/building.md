@@ -120,7 +120,7 @@ cmake --build build -j$(nproc)
 | Config / Flag | Description |
 |---------------|-------------|
 | `--config=skia` | Use the Skia renderer backend (default is tiny-skia) |
-| `--config=text-shaping` | Enable HarfBuzz text shaping (advanced text layout) |
+| `--config=text-full` | Enable HarfBuzz text shaping + WOFF2 (advanced text layout) |
 | `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer |
 | `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage) |
 

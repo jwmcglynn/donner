@@ -93,10 +93,10 @@ Text support has three build tiers. When making text-related changes, test all a
 | Config | Flag | Layout Engine | Description |
 |--------|------|--------------|-------------|
 | Base text | `--config=text` | stb_truetype (`TextLayout`) | Kern-table kerning, glyph outlines |
-| Text shaping | `--config=text-shaping` | HarfBuzz (`TextShaper`) | Full OpenType shaping (GSUB/GPOS) |
+| Full text | `--config=text-full` | HarfBuzz (`TextShaper`) + WOFF2 | Full OpenType shaping (GSUB/GPOS) |
 | Skia backend | `--config=skia` | Skia internal | Skia's own text rendering |
 
-Example: `bazel test --config=text-shaping //donner/svg/renderer/tests:resvg_test_suite`
+Example: `bazel test --config=text-full //donner/svg/renderer/tests:resvg_test_suite`
 
 Update golden images: `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:renderer_tests`
 

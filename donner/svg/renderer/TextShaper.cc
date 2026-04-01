@@ -765,9 +765,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         run.glyphs.push_back(glyph);
 
         penY += glyph.yAdvance;
-        penY += params.letterSpacingPx;
+        penY += span.letterSpacingPx;
         if (spanByteOffset < spanText.size() && spanText[spanByteOffset] == ' ') {
-          penY += params.wordSpacingPx;
+          penY += span.wordSpacingPx;
         }
       } else {
         // Horizontal mode.
@@ -942,9 +942,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         }
 
         penX += glyph.xAdvance;
-        penX += params.letterSpacingPx;
+        penX += span.letterSpacingPx;
         if (spanByteOffset < spanText.size() && spanText[spanByteOffset] == ' ') {
-          penX += params.wordSpacingPx;
+          penX += span.wordSpacingPx;
         }
       }
     }

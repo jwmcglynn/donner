@@ -41,7 +41,7 @@ Everything completed since v0.1, collected into a single release milestone.
 
 - Phases 1–5: stb_truetype font loading, glyph outlines, `TextLayout`, WOFF2 support,
   `dominant-baseline`.
-- Phase 6: Optional HarfBuzz text shaping tier (`--config=text-shaping`).
+- Phase 6: Optional HarfBuzz text shaping tier (`--config=text-full`).
 - ([design](text_rendering.md))
 
 ### SVG Filter Effects

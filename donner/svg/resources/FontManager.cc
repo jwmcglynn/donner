@@ -226,7 +226,7 @@ FontHandle FontManager::loadFontData(std::span<const uint8_t> data) {
     return loadWoff2(data);
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
-                 "Build with --config=text-woff2 to enable.\n";
+                 "Build with --config=text-full to enable.\n";
     return FontHandle();
 #endif
   }
@@ -254,7 +254,7 @@ FontHandle FontManager::loadFontDataShared(
     return loadWoff2(*data);
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
-                 "Build with --config=text-woff2 to enable.\n";
+                 "Build with --config=text-full to enable.\n";
     return FontHandle();
 #endif
   }

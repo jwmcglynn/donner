@@ -35,7 +35,7 @@ struct LayoutTextRun {
  * Uses stb_truetype for codepoint→glyph mapping, advance widths, and `kern`-table kerning.
  * Produces `LayoutTextRun` arrays that can be consumed by any renderer backend.
  *
- * Designed to be replaceable by a HarfBuzz-based `TextShaper` in the `text_shaping` tier,
+ * Designed to be replaceable by a HarfBuzz-based `TextShaper` in the `text_full` tier,
  * which produces the same `LayoutTextRun` output format.
  */
 class TextLayout {
