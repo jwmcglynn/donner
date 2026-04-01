@@ -444,6 +444,16 @@ public:
       PropertyInheritOptions options = PropertyInheritOptions::All) const;
 
   /**
+   * Resolve font-size from relative units (em, %, ex) to absolute pixels. Must be called after CSS
+   * cascade with the parent's computed font-size, since font-size percentages and em units resolve
+   * against the parent (not the viewBox).
+   *
+   * @param parentFontSizePx The parent element's computed font-size in pixels. Use 16.0 (CSS
+   *   initial value) for the root element.
+   */
+  void resolveFontSize(double parentFontSizePx);
+
+  /**
    * Parse a single declaration, adding it to the property registry.
    *
    * @param declaration Declaration to parse.

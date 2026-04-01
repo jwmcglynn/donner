@@ -1354,8 +1354,22 @@ constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::str
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
                        params,
-                       [](const parser::PropertyParseFnParams& params) {
-                         return parser::ParseLengthPercentage(params.components(),
+                       [](const parser::PropertyParseFnParams& params) -> ParseResult<Lengthd> {
+                         const auto& components = params.components();
+                         // Handle relative font-size keywords (CSS Fonts Level 4).
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("larger")) {
+                               return Lengthd(120, Lengthd::Unit::Percent);
+                             }
+                             if (ident->value.equalsLowercase("smaller")) {
+                               return Lengthd(100.0 / 1.2, Lengthd::Unit::Percent);
+                             }
+                             // TODO(jwm): Absolute-size keywords (xx-small..xx-large).
+                           }
+                         }
+                         return parser::ParseLengthPercentage(components,
                                                               params.allowUserUnits());
                        },
                        &registry.fontSize);
@@ -1882,6 +1896,33 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   }
 
   return false;
+}
+
+void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
+  const Lengthd fs = fontSize.getRequired();
+  double resolvedPx;
+  switch (fs.unit) {
+    case Lengthd::Unit::Percent:
+      // font-size: N% means N% of parent's computed font-size (NOT the viewBox).
+      resolvedPx = fs.value / 100.0 * parentFontSizePx;
+      break;
+    case Lengthd::Unit::Em:
+      resolvedPx = fs.value * parentFontSizePx;
+      break;
+    case Lengthd::Unit::Ex:
+      // TODO(jwm): Measure the actual font's x-height instead of using the 0.5 fallback.
+      resolvedPx = fs.value * 0.5 * parentFontSizePx;
+      break;
+    case Lengthd::Unit::Rem:
+      // TODO(jwm): Thread the root element's computed font-size.
+      resolvedPx = fs.value * 16.0;
+      break;
+    default:
+      // Absolute units (px, pt, cm, etc.) — resolve with empty context.
+      resolvedPx = fs.toPixels(Boxd(), FontMetrics(), Lengthd::Extent::Mixed);
+      break;
+  }
+  fontSize.value = Lengthd(resolvedPx, Lengthd::Unit::Px);
 }
 
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {

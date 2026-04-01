@@ -188,30 +188,71 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-font",
         {
-            {"a-font-001.svg", Params::Skip()},  // Canvas size mismatch (400 vs 500)
-            {"a-font-size-003.svg", Params::WithThreshold(kDefaultThreshold, 20500)},
-            {"a-font-size-004.svg", Params::Skip()},  // Bug: nested percentage `font-size`
-            {"a-font-size-006.svg", Params::WithThreshold(kDefaultThreshold, 25000)},
-            {"a-font-size-013.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
-            {"a-font-size-020.svg", Params::Skip()},  // Bug: nested percentage `font-size`
-            {"a-font-weight-002.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-            {"a-font-weight-003.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-            {"a-font-weight-004.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-            {"a-font-weight-005.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-            {"a-font-weight-006.svg", Params::WithThreshold(kDefaultThreshold, 18000)},
-        },
-        Params::WithThreshold(kDefaultThreshold, 17000))),
+            {"a-font-001.svg", Params::Skip()},       // Canvas size mismatch (400 vs 500)
+            {"a-font-size-013.svg", Params::Skip()},  // UB: negative font size
+
+            // Generic font-family mapping: not implemented, all generic families render as
+            // fallback (Public Sans).
+            {"a-font-family-001.svg", Params::Skip()},  // serif
+            {"a-font-family-002.svg", Params::Skip()},  // sans-serif
+            {"a-font-family-003.svg", Params::Skip()},  // cursive
+            {"a-font-family-004.svg", Params::Skip()},  // fantasy
+            {"a-font-family-005.svg", Params::Skip()},  // monospace
+            {"a-font-family-007.svg", Params::Skip()},  // Named font not in @font-face
+            {"a-font-family-008.svg", Params::Skip()},  // Font list fallback
+            {"a-font-family-009.svg", Params::Skip()},  // Fallback from invalid family
+            {"a-font-family-010.svg", Params::Skip()},  // Fallback list with valid second entry
+            {"a-font-family-011.svg", Params::Skip()},  // Bold sans-serif
+
+            // font-weight: bolder/lighter keywords not implemented, bold font variants not
+            // available for weight matching.
+            {"a-font-weight-002.svg", Params::Skip()},  // bold / 700
+            {"a-font-weight-003.svg", Params::Skip()},  // bolder (relative keyword)
+            {"a-font-weight-004.svg", Params::Skip()},  // bolder with clamping
+            {"a-font-weight-005.svg", Params::Skip()},  // bolder without parent
+            {"a-font-weight-006.svg", Params::Skip()},  // lighter
+            {"a-font-weight-009.svg", Params::Skip()},  // 700
+            {"a-font-weight-012.svg", Params::Skip()},  // 650
+
+            // font-style: not implemented.
+            {"a-font-style-001.svg", Params::Skip()},  // italic
+            {"a-font-style-002.svg", Params::Skip()},  // oblique
+            {"a-font-style-003.svg", Params::Skip()},  // inherit (italic from parent)
+
+            // font-stretch: not implemented.
+            {"a-font-stretch-001.svg", Params::Skip()},  // narrower
+            {"a-font-stretch-002.svg", Params::Skip()},  // inherit (extra-condensed)
+            {"a-font-stretch-003.svg", Params::Skip()},  // extra-condensed
+
+            // font-variant: not implemented.
+            {"a-font-variant-001.svg", Params::Skip()},  // small-caps
+            {"a-font-variant-002.svg", Params::Skip()},  // inherit (small-caps)
+
+            // font-size: absolute-size keywords (xx-small..xx-large) not implemented.
+            {"a-font-size-005.svg", Params::Skip()},  // All named values
+            {"a-font-size-008.svg", Params::Skip()},  // xx-large without parent
+            {"a-font-size-010.svg",
+             Params::Skip()},  // Absolute font-size on tspan with zero parent
+
+            {"a-font-size-007.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-a-font-size-007.png")},  // Donner renders larger,
+                                                                        // consistent w/ Chrome
+            {"a-font-size-016.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-a-font-size-016.png")},  // Donner renders larger,
+                                                                        // consistent w/ Chrome
+            {"a-font-size-017.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-a-font-size-017.png")},  // Donner renders larger,
+                                                                        // consistent w/ Chrome
+        })),
     TestNameFromFilename);
 
 // TODO(font): a-glyph-orientation
 
 INSTANTIATE_TEST_SUITE_P(Isolation, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix(
-                             "a-isolation",
-                             {
-                                 // a-isolation-001 and 002 now pass with 0 diffs — omit overrides.
-                             })),
-                         TestNameFromFilename);
+                         ValuesIn(getTestsWithPrefix("a-isolation")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Kerning, ImageComparisonTestFixture,

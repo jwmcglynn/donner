@@ -179,8 +179,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   // Inherit from parent.
-  if (const Entity parent = handle.get<donner::components::TreeComponent>().parent();
-      parent != entt::null) {
+  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
+  if (parent != entt::null) {
     auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
     computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, outWarnings);
 
@@ -194,6 +194,20 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
         properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
   } else {
     computedStyle.properties = properties;
+  }
+
+  // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
+  // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
+  // font-size, and percentages resolve against the parent font-size (not the viewBox).
+  if (computedStyle.properties) {
+    double parentFontSizePx = 16.0;  // CSS initial value for root elements.
+    if (parent != entt::null) {
+      const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
+      if (parentStyle.properties) {
+        parentFontSizePx = parentStyle.properties->fontSize.getRequired().value;
+      }
+    }
+    computedStyle.properties->resolveFontSize(parentFontSizePx);
   }
 }
 
