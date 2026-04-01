@@ -709,31 +709,6 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       printVerboseFailureOutputOverrideHint();
     }
 
-    // TODO: Remove this debug output once the root causes of AA test failures are addressed
-    if (!suppressVerboseOutput) {
-      // Dump first 30 mismatched pixels with actual values for debugging.
-      {
-        int dumped = 0;
-        for (int y = 0; y < height && dumped < 30; y++) {
-          for (int x = 0; x < width && dumped < 30; x++) {
-            const size_t idx = (static_cast<size_t>(y) * strideInPixels + x) * 4;
-            if (snapshot.pixels[idx] != goldenImage.data[idx] ||
-                snapshot.pixels[idx + 1] != goldenImage.data[idx + 1] ||
-                snapshot.pixels[idx + 2] != goldenImage.data[idx + 2] ||
-                snapshot.pixels[idx + 3] != goldenImage.data[idx + 3]) {
-              std::cout << "  pixel(" << x << "," << y << "): actual=(" << (int)snapshot.pixels[idx]
-                        << "," << (int)snapshot.pixels[idx + 1] << ","
-                        << (int)snapshot.pixels[idx + 2] << "," << (int)snapshot.pixels[idx + 3]
-                        << ") expected=(" << (int)goldenImage.data[idx] << ","
-                        << (int)goldenImage.data[idx + 1] << "," << (int)goldenImage.data[idx + 2]
-                        << "," << (int)goldenImage.data[idx + 3] << ")\n";
-              dumped++;
-            }
-          }
-        }
-      }
-    }
-
     ADD_FAILURE() << mismatchedPixels << " pixels different.";
 
     if (!suppressVerboseOutput) {

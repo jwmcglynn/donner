@@ -717,6 +717,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     const hb_glyph_info_t* glyphInfos = allInfos.data();
     const hb_glyph_position_t* glyphPositions = allPositions.data();
 
+    uint32_t prevSidewaysCodepoint = 0;  // Previous sideways glyph's codepoint for kern pairs.
     for (unsigned int gi = 0; gi < glyphCount; ++gi) {
       const size_t spanByteOffset = glyphInfos[gi].cluster;
       unsigned int charIdx = 0;
@@ -741,13 +742,83 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           penX += dxList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
         }
 
+        // Detect sideways Latin vs upright CJK.
+        const uint32_t curCodepoint =
+            spanByteOffset < spanText.size() ? decodeCodepointAt(spanText, spanByteOffset) : 0;
+        const bool sideways = (curCodepoint > 0 && curCodepoint < 0x2E80);
+
         ShapedGlyph glyph;
         glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
-        // HarfBuzz vertical: y_advance is negative (Y-up convention), negate for SVG Y-down.
-        glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * spanPixelScale;
-        glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
-        glyph.yAdvance = std::abs(static_cast<double>(glyphPositions[gi].y_advance) * spanPixelScale);
         glyph.xAdvance = 0;
+
+        if (sideways) {
+          // Sideways Latin: position manually, ignoring HarfBuzz's TTB origin offsets
+          // which are designed for upright CJK layout.
+          // SVG 1.1 §10.7.3: advance by horizontal metrics for 90° glyph orientation.
+          const hb_codepoint_t glyphId = glyphInfos[gi].codepoint;
+          glyph.yAdvance = static_cast<double>(
+              hb_font_get_glyph_h_advance(spanHbFont, glyphId)) * spanPixelScale;
+
+          // Apply horizontal GPOS kerning to the vertical pen position.
+          // Shape [prev, cur] as a LTR pair to get the kern adjustment, using the
+          // same pair-shaping technique as cross-span horizontal kerning.
+          if (curCodepoint != 0 && prevSidewaysCodepoint != 0) {
+            hb_buffer_t* pairBuf = hb_buffer_create();
+            const uint32_t pair[2] = {prevSidewaysCodepoint, curCodepoint};
+            hb_buffer_add_codepoints(pairBuf, pair, 2, 0, 2);
+            hb_buffer_set_direction(pairBuf, HB_DIRECTION_LTR);
+            hb_buffer_guess_segment_properties(pairBuf);
+            hb_shape(spanHbFont, pairBuf, nullptr, 0);
+            unsigned int pairCount = 0;
+            const hb_glyph_position_t* pairPos =
+                hb_buffer_get_glyph_positions(pairBuf, &pairCount);
+            if (pairCount >= 1) {
+              const double pairedAdv =
+                  static_cast<double>(pairPos[0].x_advance) * spanPixelScale;
+              // Shape the previous character alone to get standalone advance.
+              hb_buffer_t* soloBuf = hb_buffer_create();
+              hb_buffer_add_codepoints(soloBuf, &prevSidewaysCodepoint, 1, 0, 1);
+              hb_buffer_set_direction(soloBuf, HB_DIRECTION_LTR);
+              hb_buffer_guess_segment_properties(soloBuf);
+              hb_shape(spanHbFont, soloBuf, nullptr, 0);
+              unsigned int soloCount = 0;
+              const hb_glyph_position_t* soloPos =
+                  hb_buffer_get_glyph_positions(soloBuf, &soloCount);
+              if (soloCount >= 1) {
+                const double soloAdv =
+                    static_cast<double>(soloPos[0].x_advance) * spanPixelScale;
+                penY += (pairedAdv - soloAdv);
+              }
+              hb_buffer_destroy(soloBuf);
+            }
+            hb_buffer_destroy(pairBuf);
+          }
+
+          // Position at pen without HarfBuzz TTB offsets.
+          glyph.xPosition = penX;
+          glyph.yPosition = penY;
+
+          // Center on the central baseline: shift X so the midpoint between the scaled
+          // ascender and descender aligns with the text position. Use pixel-height scaling
+          // (ascent-to-descent = fontSize) so the center is proportionally correct.
+          hb_font_extents_t hExtents;
+          hb_font_get_h_extents(spanHbFont, &hExtents);
+          const double fontHeight = static_cast<double>(hExtents.ascender - hExtents.descender);
+          const double phScale = (fontHeight > 0) ? spanFontSizePx / fontHeight : spanPixelScale;
+          const double centralBaselineOffset =
+              (static_cast<double>(hExtents.ascender) + static_cast<double>(hExtents.descender)) *
+              phScale / 2.0;
+          glyph.xPosition -= centralBaselineOffset;
+        } else {
+          // Upright CJK: use HarfBuzz's vertical positioning and advance.
+          glyph.xPosition =
+              penX + static_cast<double>(glyphPositions[gi].x_offset) * spanPixelScale;
+          glyph.yPosition =
+              penY - static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
+          // HarfBuzz vertical: y_advance is negative (Y-up convention), negate for SVG Y-down.
+          glyph.yAdvance =
+              std::abs(static_cast<double>(glyphPositions[gi].y_advance) * spanPixelScale);
+        }
 
         // Per-character rotation using raw codepoint index.
         {
@@ -755,14 +826,20 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           if (spanByteOffset < byteToRawCpIdx.size()) {
             rotIdx = byteToRawCpIdx[spanByteOffset];
           }
+          double baseRotation = sideways ? 90.0 : 0.0;
           if (rotIdx < span.rotateList.size()) {
-            glyph.rotateDegrees = span.rotateList[rotIdx];
+            glyph.rotateDegrees = span.rotateList[rotIdx] + baseRotation;
           } else if (!span.rotateList.empty()) {
-            glyph.rotateDegrees = span.rotateList.back();
+            glyph.rotateDegrees = span.rotateList.back() + baseRotation;
+          } else {
+            glyph.rotateDegrees = baseRotation;
           }
         }
 
         run.glyphs.push_back(glyph);
+
+        // Track previous sideways codepoint for kerning.
+        prevSidewaysCodepoint = sideways ? curCodepoint : 0;
 
         penY += glyph.yAdvance;
         penY += span.letterSpacingPx;
