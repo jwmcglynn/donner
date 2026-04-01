@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
+#include FT_TRUETYPE_TABLES_H
 #include <hb-ft.h>
 #include <hb-ot.h>
 #include <hb.h>
@@ -813,8 +814,36 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           // Upright CJK: use HarfBuzz's vertical positioning and advance.
           glyph.xPosition =
               penX + static_cast<double>(glyphPositions[gi].x_offset) * spanPixelScale;
-          glyph.yPosition =
-              penY - static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
+
+          // HarfBuzz uses the font-level h_extents.ascender (hhea ascender) for the
+          // vertical origin, which often extends beyond the em-square. Recompute
+          // using the vhea ascender when available, as it defines the vertical
+          // typographic extent that determines the em-box origin for vertical layout.
+          // Fallback to OS/2 sTypoAscender for fonts without vhea.
+          {
+            double vertOriginY =
+                -static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
+            FT_Face ftFace = hb_ft_font_get_face(spanHbFont);
+            if (ftFace && ftFace->units_per_EM > 0) {
+              const double emScale =
+                  spanFontSizePx / static_cast<double>(ftFace->units_per_EM);
+              // Try vhea ascender first (vertical typographic ascender).
+              auto* vhea = static_cast<TT_VertHeader*>(
+                  FT_Get_Sfnt_Table(ftFace, FT_SFNT_VHEA));
+              if (vhea && vhea->Ascender > 0) {
+                vertOriginY = static_cast<double>(vhea->Ascender) * emScale;
+              } else {
+                // Fallback to OS/2 sTypoAscender.
+                auto* os2 =
+                    static_cast<TT_OS2*>(FT_Get_Sfnt_Table(ftFace, FT_SFNT_OS2));
+                if (os2 && os2->sTypoAscender > 0) {
+                  vertOriginY = static_cast<double>(os2->sTypoAscender) * emScale;
+                }
+              }
+            }
+            glyph.yPosition = penY + vertOriginY;
+          }
+
           // HarfBuzz vertical: y_advance is negative (Y-up convention), negate for SVG Y-down.
           glyph.yAdvance =
               std::abs(static_cast<double>(glyphPositions[gi].y_advance) * spanPixelScale);
