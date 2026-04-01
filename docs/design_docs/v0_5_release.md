@@ -471,7 +471,7 @@ Phase 10 (Filter Pipeline Float Precision) and Phase 11 (`<textPath>` Implementa
 This is the condensed go/no-go checklist. All items must be checked before tagging.
 
 ```
-[x] All Bazel tests pass (tiny-skia backend) — both --config=text and --config=text-shaping
+[x] All Bazel tests pass (tiny-skia backend) — both --config=text and --config=text-full
 [ ] All Bazel tests pass (Skia backend) — blocked by filter_graph_executor → tiny_skia_deps dep
 [x] CMake builds succeed (both backends, with and without tests)
 [x] All fuzzers run 10min with no crashes

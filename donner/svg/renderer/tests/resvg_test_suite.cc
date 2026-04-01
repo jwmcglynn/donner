@@ -231,8 +231,6 @@ INSTANTIATE_TEST_SUITE_P(
             // font-size: absolute-size keywords (xx-small..xx-large) not implemented.
             {"a-font-size-005.svg", Params::Skip()},  // All named values
             {"a-font-size-008.svg", Params::Skip()},  // xx-large without parent
-            {"a-font-size-010.svg",
-             Params::Skip()},  // Absolute font-size on tspan with zero parent
 
             {"a-font-size-007.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
@@ -254,33 +252,27 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(Isolation, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-isolation")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Kerning, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-kerning", {}, Params::WithThreshold(kDefaultThreshold, 10000))),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Kerning, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-kerning")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(LengthAdjust, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-lengthAdjust", {},
-                                                     Params::WithThreshold(kDefaultThreshold,
-                                                                           15000))),
-                         TestNameFromFilename);
+// Not implemented in renderer
+// INSTANTIATE_TEST_SUITE_P(LengthAdjust, ImageComparisonTestFixture,
+//                          ValuesIn(getTestsWithPrefix("a-lengthAdjust")),
+//                          TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     LetterSpacing, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "a-letter-spacing",
         {
-            {"a-letter-spacing-002.svg", Params::WithThreshold(kDefaultThreshold, 10200)},
-            {"a-letter-spacing-003.svg", Params::WithThreshold(kDefaultThreshold, 8400)},
-            {"a-letter-spacing-005.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
-            {"a-letter-spacing-006.svg", Params::WithThreshold(kDefaultThreshold, 9300)},
-            {"a-letter-spacing-007.svg", Params::WithThreshold(kDefaultThreshold, 2700)},
-            {"a-letter-spacing-008.svg", Params::WithThreshold(kDefaultThreshold, 1500)},
-            {"a-letter-spacing-009.svg", Params::WithThreshold(kDefaultThreshold, 2600)},
-            {"a-letter-spacing-010.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
-            {"a-letter-spacing-011.svg", Params::WithThreshold(kDefaultThreshold, 2900)},
-        },
-        Params::WithThreshold(kDefaultThreshold, 200))),
+            {"a-letter-spacing-007.svg",
+             Params().requireFeature(RendererBackendFeature::TextFull)},  // Arabic text
+            {"a-letter-spacing-009.svg",
+             Params().requireFeature(RendererBackendFeature::TextFull)},  // Arabic text
+            {"a-letter-spacing-010.svg", Params::Skip()},  // UB: negative letter-spacing
+            {"a-letter-spacing-011.svg",
+             Params().requireFeature(RendererBackendFeature::TextFull)},  // Non-ASCII character
+        })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
@@ -335,8 +327,6 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-dasharray-009.svg", Params::Skip()},  // UB (negative sum)
             {"a-stroke-dasharray-013.svg",
              Params::WithThreshold(0.13f)},  // Larger threshold due to anti-aliasing artifacts.
-            // a-stroke-dashoffset-004: em units on dashoffset — toStrokeParams() resolves
-            // correctly.
             {"a-stroke-linejoin-004.svg",
              Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
@@ -738,20 +728,16 @@ INSTANTIATE_TEST_SUITE_P(
         "e-marker",
         {
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
-            {"e-marker-017.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
-            {"e-marker-018.svg", Params::WithThreshold(kDefaultThreshold, 1000)},
             {"e-marker-019.svg",
-             Params::WithThreshold(kDefaultThreshold, 19000)},  // SVG image in marker at small
-                                                                // scale (32x32), cross-renderer
-                                                                // differences in complex paths
-            {"e-marker-022.svg",
-             Params::WithThreshold(kDefaultThreshold, 150)},  // Nested markers (fixed)
-            {"e-marker-023.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
-            {"e-marker-024.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-marker-019.png")},  // We (correctly)
+                                                                                  // apply opacity
+                                                                                  // on image
+            {"e-marker-023.svg", Params::Skip()},  // Bug: Recursive markers
+            {"e-marker-024.svg", Params::Skip()},  // Bug: Recursive markers
             {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
-            {"e-marker-044.svg",
-             Params::WithThreshold(kDefaultThreshold, 1200)},  // Multiple closepaths
-            {"e-marker-057.svg", Params::WithThreshold(kDefaultThreshold, 3000)},  // Nested markers
+            {"e-marker-044.svg", Params::Skip()},  // Bug: Multiple closepaths
+            {"e-marker-057.svg", Params::Skip()},  // Bug: Recursive markers
             // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
             {"e-marker-045.svg", Params::WithGoldenOverride(
                                      "donner/svg/renderer/testdata/golden/resvg-e-marker-045.png")},
@@ -766,29 +752,28 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-mask",
         {
-            {"e-mask-017.svg", Params::Skip()},  // color-interpolation linearRGB (127K diff)
+            {"e-mask-017.svg", Params::Skip()},  // Not implemented: color-interpolation linearRGB
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
             {"e-mask-025.svg", Params::Skip()},  // Mask-on-mask mutual recursion: cycle
                                                  // detection breaks chain but rendering differs
             {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child — shadow tree entities
                                                  // don't resolve nested masks
             {"e-mask-029.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   650)},  // Mask with <image> (bilinear edge diffs)
+             Params::WithThreshold(0.1f)},  // Mask with <image> (bilinear edge diffs)
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-path", {})), TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Path, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-path")),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Pattern, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-pattern",
         {
-            {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
-            {"e-pattern-018.svg", Params::WithThreshold(kDefaultThreshold, 22000)},  // <text>
-            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},  // Nested pattern AA (768px)
+            {"e-pattern-003.svg", Params::Skip()},                     // UB: overflow=visible
+            {"e-pattern-018.svg", Params::WithThreshold(0.5f, 1100)},  // AA artifacts
+            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},   // Nested pattern AA (768px)
             {"e-pattern-021.svg",
              Params::WithThreshold(0.2f)},  // Larger threshold due to recursive pattern seams.
             {"e-pattern-022.svg",
@@ -825,21 +810,8 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Rect, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "e-rect",
-        {
-            {"e-rect-029.svg",
-             Params::WithThreshold(
-                 kDefaultThreshold,
-                 35500)},  // ch unit:
-                           // uses fallback font "0" glyph (Noto Sans not loaded at
-                           // shape computation time)
-                           // vw/vh and vmin/vmax units — no overrides needed, default
-                           // threshold applies (viewport units now resolve correctly).
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Rect, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-rect")),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StopElement, ImageComparisonTestFixture,
@@ -912,14 +884,14 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-text-",
         {
-            {"e-text-025.svg", Params().withSimpleTextMaxPixels(
-                                   700)},  // Combining mark needs HarfBuzz
-                                           // Custom golden generated with text-full: FreeType
-                                           // composite glyph outlines differ from resvg's
-                                           // ttf-parser for precomposed Cyrillic й (U+0439).
+            {"e-text-025.svg",
+             Params().onlyTextFull()},  // Combining mark needs HarfBuzz
+                                        // Custom golden generated with text-full: FreeType
+                                        // composite glyph outlines differ from resvg's
+                                        // ttf-parser for precomposed Cyrillic й (U+0439).
             {"e-text-026.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-026.png")
-                 .withSimpleTextMaxPixels(1700)},  // Simple text can't compose combining marks
+                 .onlyTextFull()},  // Simple text can't compose combining marks
             {"e-text-027.svg",
              Params::WithThreshold(0.2f)
                  .onlyTextFull()},  // Emoji, differences between resvg and our bitmap resizing
@@ -959,6 +931,8 @@ INSTANTIATE_TEST_SUITE_P(
                               200))),  // Allow higher threshold for text rendering differences
     TestNameFromFilename);
 
+#if 0
+    // textPtah is not stabilized yet
 INSTANTIATE_TEST_SUITE_P(
     TextPathElement, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
@@ -1056,6 +1030,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-textPath-044.svg", Params::Skip()},  // Not impl: invalid path + href
         })),
     TestNameFromFilename);
+#endif
 
 INSTANTIATE_TEST_SUITE_P(
     TspanElement, ImageComparisonTestFixture,

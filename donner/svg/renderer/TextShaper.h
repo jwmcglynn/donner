@@ -35,7 +35,7 @@ struct ShapedTextRun {
 };
 
 /**
- * HarfBuzz-based text shaper that replaces TextLayout when the `text_shaping` tier is enabled.
+ * HarfBuzz-based text shaper that replaces TextLayout when the `text_full` tier is enabled.
  *
  * Uses HarfBuzz for full OpenType shaping (GSUB/GPOS), producing the same output format as
  * TextLayout so renderers can consume either implementation identically. HarfBuzz handles:
@@ -71,7 +71,7 @@ public:
   /**
    * Extract glyph outlines via HarfBuzz's draw API, producing a PathSpline.
    *
-   * This replaces stb_truetype's `glyphToPathSpline()` when the text_shaping tier is enabled.
+   * This replaces stb_truetype's `glyphToPathSpline()` when the text_full tier is enabled.
    *
    * @param font Font handle.
    * @param glyphIndex Glyph index to extract.

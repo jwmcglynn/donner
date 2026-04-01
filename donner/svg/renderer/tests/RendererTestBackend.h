@@ -23,9 +23,10 @@ enum class RendererBackend {
  */
 enum class RendererBackendFeature : uint32_t {
   Text = 0,
-  FilterEffects = 1,
-  AsciiSnapshot = 2,
-  SkpDebug = 3,
+  TextFull = 1,
+  FilterEffects = 2,
+  AsciiSnapshot = 3,
+  SkpDebug = 4,
 };
 
 /**
@@ -62,6 +63,7 @@ inline std::string_view RendererBackendName(RendererBackend backend) {
 inline std::string_view RendererBackendFeatureName(RendererBackendFeature feature) {
   switch (feature) {
     case RendererBackendFeature::Text: return "text rendering";
+    case RendererBackendFeature::TextFull: return "full text rendering";
     case RendererBackendFeature::FilterEffects: return "filter effects";
     case RendererBackendFeature::AsciiSnapshot: return "ASCII snapshots";
     case RendererBackendFeature::SkpDebug: return "SkPicture debug capture";

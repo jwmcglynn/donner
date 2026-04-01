@@ -21,7 +21,7 @@
   - Multi-span positioning (dx/dy).
   - `text-anchor` (start/middle/end).
   - `@font-face` with embedded WOFF1 font.
-  - `@font-face` with WOFF2 font (requires `text_woff2`).
+  - `@font-face` with WOFF2 font (requires `text_full`).
   - Stroke + fill text.
   - Per-glyph rotation.
 - Resvg text test subset: most `e-text-*` and `e-tspan-*` tests now pass with tight
@@ -31,7 +31,7 @@
 
 ```cpp
 {"text_basic.svg", Params::RequiresFeature(Feature::Text)},
-{"text_woff2_font.svg", Params::RequiresFeature(Feature::TextWoff2)},
+{"text_woff2_font.svg", Params::RequiresFeature(Feature::TextFull)},
 ```
 
 CI runs all feature combinations to ensure both enabled and disabled paths work.
@@ -40,7 +40,7 @@ CI runs all feature combinations to ensure both enabled and disabled paths work.
 
 - Text golden images differ between Skia and TinySkia at the base tier because Skia uses
   its own internal layout (with GPOS access) while TinySkia uses stb_truetype (kern-table only).
-- At the `text_shaping` tier, shaping output is identical between backends since both use
+- At the `text_full` tier, shaping output is identical between backends since both use
   HarfBuzz, and golden images should be much closer.
 - TinySkia renders glyph outlines as vector paths (no hinting), so small-size text will look
   slightly different from Skia's hinted rasterization regardless of shaping tier.

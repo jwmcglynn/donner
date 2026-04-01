@@ -43,9 +43,11 @@ namespace {
 
 /// Resolves per-span style properties from each span's sourceEntity.
 /// Called before drawText so that layout engines and renderers have access to
-/// fill color, font-weight, baseline-shift, alignment-baseline, and opacity.
+/// fill color, font-weight, baseline-shift, alignment-baseline, opacity,
+/// letter-spacing, and word-spacing.
 void resolvePerSpanStyles(Registry& registry,
-                          components::ComputedTextComponent& text) {
+                          components::ComputedTextComponent& text,
+                          const Boxd& viewBox, const FontMetrics& fontMetrics) {
   for (auto& span : text.spans) {
     if (span.sourceEntity == entt::null) {
       continue;
@@ -67,6 +69,12 @@ void resolvePerSpanStyles(Registry& registry,
       span.fontWeight = style->properties->fontWeight.getRequired();
       span.fontSize = style->properties->fontSize.getRequired();
       span.opacity = style->properties->opacity.getRequired();
+
+      // Resolve per-span letter-spacing and word-spacing to pixels.
+      span.letterSpacingPx = style->properties->letterSpacing.getRequired().toPixels(
+          viewBox, fontMetrics, Lengthd::Extent::X);
+      span.wordSpacingPx = style->properties->wordSpacing.getRequired().toPixels(
+          viewBox, fontMetrics, Lengthd::Extent::X);
 
       // Resolve the fill paint server. Solid colors are stored directly; gradient/pattern
       // url() references are resolved to PaintResolvedReference for the renderer.
@@ -690,10 +698,10 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       } else if (auto* text =
                      instance.dataHandle(registry)
                          .try_get<components::ComputedTextComponent>()) {
-        resolvePerSpanStyles(registry, *text);
         const auto* textComp =
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
         renderer_.drawText(*text, textParams);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
@@ -924,10 +932,10 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       } else if (auto* text =
                      instance.dataHandle(registry)
                          .try_get<components::ComputedTextComponent>()) {
-        resolvePerSpanStyles(registry, *text);
         const auto* textComp =
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
         renderer_.drawText(*text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry)
@@ -1217,10 +1225,10 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       } else if (auto* text =
                      instance.dataHandle(registry)
                          .try_get<components::ComputedTextComponent>()) {
-        resolvePerSpanStyles(registry, *text);
         const auto* textComp =
             instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
         renderer_.drawText(*text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry)

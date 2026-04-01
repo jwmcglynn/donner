@@ -10,7 +10,7 @@
 
 ## Sub-documents
 
-- **[Overview](text/overview.md)** — Summary, goals, non-goals, feature tiers (text / text_woff2 / text_shaping), Bazel feature flags, current state of implementation.
+- **[Overview](text/overview.md)** — Summary, goals, non-goals, feature tiers (text / text_full), Bazel feature flags, current state of implementation.
 
 - **[Architecture](text/architecture.md)** — Dependency evaluation (stb_truetype, HarfBuzz, FreeType, woff2/Brotli), proposed architecture (FontManager, TextLayout, TextShaper, glyph outlines, renderer integration), implementation plan (Phases 1-7), dependencies table, alternatives considered, open questions, and future work.
 
@@ -19,5 +19,3 @@
 - **[RTL Text and Complex Scripts](text/rtl_and_complex_scripts.md)** — RTL pen direction, HarfBuzz script auto-detection, per-character coordinates with RTL text, combining mark rotation, cross-family font fallback, and color emoji (CBDT/CBLC) support.
 
 - **[textPath Implementation Plan](text/textpath.md)** — `<textPath>` element design: SVGTextPathElement class, path-based text layout algorithm, path sampling, renderer integration, and test plan.
-
-- **[Gap Analysis (2026-03-13)](text/gap_analysis_2026_03_13.md)** — Original resvg text test gap analysis: test threshold summary across 14 test groups, root cause breakdown (per-character positioning, font rendering baseline, missing properties, SVG 2 tspan features), and implementation plan for Phases 8-12 (all completed).

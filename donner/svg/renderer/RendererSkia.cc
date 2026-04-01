@@ -1916,7 +1916,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
 #ifdef DONNER_TEXT_FULL
-  // When text shaping is enabled, use TextShaper for layout and drawGlyphs() for rendering.
+  // When text_full is enabled, use TextShaper for layout and drawGlyphs() for rendering.
   // This provides full OpenType GSUB/GPOS support with identical shaping across backends.
   {
     static FontManager fontManager;

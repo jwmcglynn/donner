@@ -19,6 +19,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
 namespace donner::svg {
@@ -127,8 +128,7 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
 void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::path& fontsDir) {
   const auto& faces = loadFontsFromDirectory(fontsDir);
   if (!faces.empty()) {
-    auto& resourceManager =
-        document.registry().ctx().get<components::ResourceManagerContext>();
+    auto& resourceManager = document.registry().ctx().get<components::ResourceManagerContext>();
     resourceManager.addFontFaces(faces);
   }
 }
@@ -387,9 +387,8 @@ bool isActiveBackendAllowed(const ImageComparisonParams& params) {
 
 std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFeatures) {
   constexpr RendererBackendFeature kFeatures[] = {
-      RendererBackendFeature::Text,
-      RendererBackendFeature::FilterEffects,
-      RendererBackendFeature::AsciiSnapshot,
+      RendererBackendFeature::Text,          RendererBackendFeature::TextFull,
+      RendererBackendFeature::FilterEffects, RendererBackendFeature::AsciiSnapshot,
       RendererBackendFeature::SkpDebug,
   };
 

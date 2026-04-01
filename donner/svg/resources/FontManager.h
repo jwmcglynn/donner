@@ -198,7 +198,7 @@ private:
   /**
    * Internal: load a WOFF 2.0 font by decompressing via Brotli and table transforms.
    *
-   * Only available when built with the `text_woff2` feature flag.
+   * Only available when built with the `text_full` feature flag.
    *
    * @param data Raw WOFF2 data.
    * @return A valid FontHandle on success, or an invalid handle on failure.

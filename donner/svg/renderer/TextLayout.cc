@@ -194,10 +194,17 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
 
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
+    // Per-span font size: use the span's fontSize if set, otherwise the text element's.
+    const float spanFontSizePx = span.fontSize.value != 0.0
+        ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
+                                                     Lengthd::Extent::Mixed))
+        : fontSizePx;
+    const float spanScale = fontManager_.scaleForPixelHeight(font, spanFontSizePx);
+
     // Resolve per-span baseline-shift using actual font size for em units.
     // Positive CSS baseline-shift = shift up, which in SVG Y-down = subtract from Y.
     FontMetrics spanFontMetrics = params.fontMetrics;
-    spanFontMetrics.fontSize = fontSizePx;
+    spanFontMetrics.fontSize = spanFontSizePx;
     const double spanBaselineShiftPx =
         span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
 
@@ -214,20 +221,20 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         case DominantBaseline::Alphabetic: break;
         case DominantBaseline::Middle:
         case DominantBaseline::Central:
-          effectiveBaselineShift = static_cast<double>(ascent + descent) * 0.5 * scale;
+          effectiveBaselineShift = static_cast<double>(ascent + descent) * 0.5 * spanScale;
           break;
         case DominantBaseline::Hanging:
-          effectiveBaselineShift = static_cast<double>(ascent) * 0.8 * scale;
+          effectiveBaselineShift = static_cast<double>(ascent) * 0.8 * spanScale;
           break;
         case DominantBaseline::Mathematical:
-          effectiveBaselineShift = static_cast<double>(ascent) * 0.5 * scale;
+          effectiveBaselineShift = static_cast<double>(ascent) * 0.5 * spanScale;
           break;
         case DominantBaseline::TextTop:
-          effectiveBaselineShift = static_cast<double>(ascent) * scale;
+          effectiveBaselineShift = static_cast<double>(ascent) * spanScale;
           break;
         case DominantBaseline::TextBottom:
         case DominantBaseline::Ideographic:
-          effectiveBaselineShift = static_cast<double>(descent) * scale;
+          effectiveBaselineShift = static_cast<double>(descent) * spanScale;
           break;
       }
     }
@@ -329,8 +336,8 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         glyph.glyphIndex = glyphIndex;
         glyph.xPosition = penX;
         glyph.yPosition = penY;
-        // Vertical advance: use fontSizePx (em-square height). stb_truetype lacks vmtx.
-        glyph.yAdvance = fontSizePx;
+        // Vertical advance: use spanFontSizePx (em-square height). stb_truetype lacks vmtx.
+        glyph.yAdvance = spanFontSizePx;
         glyph.xAdvance = 0;
 
         // Rotation: non-CJK glyphs (codepoint < 0x2E80) get 90° CW rotation in vertical mode.
@@ -346,9 +353,9 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         run.glyphs.push_back(glyph);
 
         penY += glyph.yAdvance;
-        penY += params.letterSpacingPx;
+        penY += span.letterSpacingPx;
         if (codepoint == 0x0020) {
-          penY += params.wordSpacingPx;
+          penY += span.wordSpacingPx;
         }
       } else {
         // Horizontal mode (existing path).
@@ -364,7 +371,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
           // starts, which happens when the character has an absolute x OR y value.
           if (prevGlyph != 0 && glyphIndex != 0) {
             const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
-            penX += static_cast<double>(kern) * scale;
+            penX += static_cast<double>(kern) * spanScale;
           }
         }
 
@@ -396,7 +403,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         glyph.glyphIndex = glyphIndex;
         glyph.xPosition = penX;
         glyph.yPosition = penY;
-        glyph.xAdvance = static_cast<double>(advanceWidth) * scale;
+        glyph.xAdvance = static_cast<double>(advanceWidth) * spanScale;
 
         // Per-character rotation (last value repeats per SVG spec).
         if (charIdx < span.rotateList.size()) {
@@ -410,10 +417,10 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         penX += glyph.xAdvance;
 
         // CSS letter-spacing: extra space after every character.
-        penX += params.letterSpacingPx;
+        penX += span.letterSpacingPx;
         // CSS word-spacing: extra space after U+0020 (space) characters.
         if (codepoint == 0x0020) {
-          penX += params.wordSpacingPx;
+          penX += span.wordSpacingPx;
         }
       }
 

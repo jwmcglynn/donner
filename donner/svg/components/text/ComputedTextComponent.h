@@ -87,6 +87,11 @@ struct ComputedTextComponent {
     /// sourceEntity.
     double opacity = 1.0;
 
+    /// CSS `letter-spacing` for this span, resolved to pixels. Populated by RendererDriver.
+    double letterSpacingPx = 0.0;
+    /// CSS `word-spacing` for this span, resolved to pixels. Populated by RendererDriver.
+    double wordSpacingPx = 0.0;
+
     /// Per-character absolute X positions from \c x attribute lists. Indexed by character
     /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph
     /// advances naturally from the previous character. Index 0 holds the span-start position.
