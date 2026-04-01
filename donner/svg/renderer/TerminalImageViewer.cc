@@ -180,6 +180,28 @@ double medianLuminance(const QuarterBlock& block) {
   return (luminances[1] + luminances[2]) / 2.0;
 }
 
+constexpr css::RGBA kCheckerLight{0xCC, 0xCC, 0xCC, 0xFF};
+constexpr css::RGBA kCheckerDark{0x99, 0x99, 0x99, 0xFF};
+constexpr int kCheckerSize = 4;
+
+/// Composite a foreground color over a checkerboard background based on sub-pixel position.
+css::RGBA compositeOverChecker(const css::RGBA& fg, int subPixelX, int subPixelY) {
+  if (fg.a == 255) {
+    return fg;
+  }
+  const css::RGBA bg =
+      ((subPixelX / kCheckerSize + subPixelY / kCheckerSize) % 2 == 0) ? kCheckerLight
+                                                                       : kCheckerDark;
+  if (fg.a == 0) {
+    return bg;
+  }
+  const uint16_t a = fg.a;
+  const uint16_t ia = 255 - a;
+  return css::RGBA(static_cast<uint8_t>((fg.r * a + bg.r * ia + 127) / 255),
+                   static_cast<uint8_t>((fg.g * a + bg.g * ia + 127) / 255),
+                   static_cast<uint8_t>((fg.b * a + bg.b * ia + 127) / 255), 255);
+}
+
 bool envMatchesValue(std::string_view value, std::string_view expectation) {
   return !value.empty() && containsIgnoreCase(value, expectation);
 }
@@ -467,7 +489,14 @@ void TerminalImageViewer::renderSampled(const TerminalImage& sampledImage, std::
       };
 
       if (cell.mode == TerminalPixelMode::kQuarterPixel) {
-        const QuarterBlock& quarters = cell.quarter;
+        const int sx = column * 2;
+        const int sy = row * 2;
+        const QuarterBlock quarters{
+            compositeOverChecker(cell.quarter.topLeft, sx, sy),
+            compositeOverChecker(cell.quarter.topRight, sx + 1, sy),
+            compositeOverChecker(cell.quarter.bottomLeft, sx, sy + 1),
+            compositeOverChecker(cell.quarter.bottomRight, sx + 1, sy + 1),
+        };
         const uint8_t alphaThreshold = medianAlpha(quarters);
         const double luminanceThreshold = medianLuminance(quarters);
         const uint8_t minAlpha = std::min(std::min(quarters.topLeft.a, quarters.topRight.a),
@@ -518,8 +547,8 @@ void TerminalImageViewer::renderSampled(const TerminalImage& sampledImage, std::
         writeColor(48, bgColor);
         output << kQuarterBlockGlyphs[mask];
       } else {
-        const css::RGBA fgColor = cell.half.upper;
-        const css::RGBA bgColor = cell.half.lower;
+        const css::RGBA fgColor = compositeOverChecker(cell.half.upper, column, row * 2);
+        const css::RGBA bgColor = compositeOverChecker(cell.half.lower, column, row * 2 + 1);
 
         writeColor(38, fgColor);
         writeColor(48, bgColor);
