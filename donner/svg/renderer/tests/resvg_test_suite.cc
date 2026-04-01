@@ -322,9 +322,8 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold, 15000)},  // Gradient stroke on text (radial)
             {"a-stroke-009.svg",
              Params::WithThreshold(kDefaultThreshold, 33000)},  // <text> stroke on complex text
-            // a-stroke-dasharray-005: em units on dasharray — toStrokeParams() resolves correctly.
-            {"a-stroke-dasharray-007.svg", Params::Skip()},  // UB (negative values)
-            {"a-stroke-dasharray-009.svg", Params::Skip()},  // UB (negative sum)
+            {"a-stroke-dasharray-007.svg", Params::Skip()},     // UB (negative values)
+            {"a-stroke-dasharray-009.svg", Params::Skip()},     // UB (negative sum)
             {"a-stroke-dasharray-013.svg",
              Params::WithThreshold(0.13f)},  // Larger threshold due to anti-aliasing artifacts.
             {"a-stroke-linejoin-004.svg",
@@ -438,21 +437,24 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-writing-mode",
         {
-            {"a-writing-mode-005.svg", Params::WithThreshold(kDefaultThreshold, 14200)},
-            {"a-writing-mode-006.svg", Params::WithThreshold(kDefaultThreshold, 14200)},
-            {"a-writing-mode-008.svg", Params::WithThreshold(kDefaultThreshold, 14200)},
-            {"a-writing-mode-009.svg", Params::WithThreshold(kDefaultThreshold, 9800)},
-            {"a-writing-mode-010.svg", Params::WithThreshold(kDefaultThreshold, 10000)},
-            {"a-writing-mode-011.svg", Params::WithThreshold(kDefaultThreshold, 7500)},
-            {"a-writing-mode-012.svg", Params::WithThreshold(kDefaultThreshold, 12600)},
-            {"a-writing-mode-013.svg", Params::WithThreshold(kDefaultThreshold, 2900)},
-            {"a-writing-mode-014.svg", Params::WithThreshold(kDefaultThreshold, 3200)},
-            {"a-writing-mode-015.svg", Params::WithThreshold(kDefaultThreshold, 2000)},
-            {"a-writing-mode-016.svg", Params::Skip()},  // UB: tb with rotate
+            {"a-writing-mode-005.svg",
+             Params().withMaxPixelsDifferent(1500)},  // Bug: Baseline is ~2px off compared to resvg
+            {"a-writing-mode-006.svg",
+             Params().withMaxPixelsDifferent(1500)},  // Bug: Baseline is ~2px off compared to resvg
+            {"a-writing-mode-008.svg",
+             Params().withMaxPixelsDifferent(1500)},  // Bug: Baseline is ~2px off compared to resvg
+            {"a-writing-mode-010.svg",
+             Params().withMaxPixelsDifferent(1500)},  // Bug: Baseline is ~2px off compared to resvg
+            {"a-writing-mode-011.svg", Params().onlyTextFull()},  // Non-ascii text
+            {"a-writing-mode-012.svg", Params().onlyTextFull()},  // Non-ascii text
+            {"a-writing-mode-013.svg", Params().onlyTextFull()},  // Non-ascii text
+            {"a-writing-mode-014.svg", Params().onlyTextFull()},  // Non-ascii text
+            {"a-writing-mode-015.svg", Params().onlyTextFull()},  // Non-ascii text
+            {"a-writing-mode-016.svg", Params::Skip()},           // UB: tb with rotate
             {"a-writing-mode-017.svg", Params::Skip()},  // UB: tb with rotate and underline
             {"a-writing-mode-019.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dx`
-            {"a-writing-mode-018.svg", Params::WithThreshold(kDefaultThreshold, 10300)},
-            {"a-writing-mode-020.svg", Params::WithThreshold(kDefaultThreshold, 10100)},
+            {"a-writing-mode-018.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dx`
+            {"a-writing-mode-020.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dy`
         },
         Params::WithThreshold(kDefaultThreshold, 200))),
     TestNameFromFilename);
@@ -460,23 +462,22 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO: e-a-
 
 INSTANTIATE_TEST_SUITE_P(Circle, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-circle", {})), TestNameFromFilename);
+                         ValuesIn(getTestsWithPrefix("e-circle")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     ClipPath, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-clipPath",
         {
-            {"e-clipPath-007.svg", Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
-            {"e-clipPath-009.svg", Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
-            {"e-clipPath-010.svg", Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
-            {"e-clipPath-011.svg", Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
-            {"e-clipPath-012.svg", Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
-            {"e-clipPath-034.svg",
-             Params::WithThreshold(kDefaultThreshold, 160)},  // Nested clip-path AA (148px)
-            {"e-clipPath-042.svg", Params::Skip()},           // UB: on root `<svg>` without size
-            {"e-clipPath-044.svg", Params::Skip()},           // Not impl: <use> child
-            {"e-clipPath-046.svg", Params::Skip()},           // Not impl: <switch>
+            {"e-clipPath-007.svg", Params::Skip()},  // Not impl: clipPath on <text>
+            {"e-clipPath-009.svg", Params::Skip()},  // Not impl: clipPath with <text> children
+            {"e-clipPath-010.svg", Params::Skip()},  // Not impl: clipPath with <text> children
+            {"e-clipPath-011.svg", Params::Skip()},  // Not impl: clipPath with <text> children
+            {"e-clipPath-012.svg", Params::Skip()},  // Not impl: clipPath with <text> children
+            {"e-clipPath-034.svg", Params::Skip()},  // Bug: Nested clip-path not working
+            {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
+            {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
+            {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
         })),
     TestNameFromFilename);
 

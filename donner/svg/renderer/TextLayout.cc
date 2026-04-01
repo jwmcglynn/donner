@@ -195,10 +195,11 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
-    const float spanFontSizePx = span.fontSize.value != 0.0
-        ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
-                                                     Lengthd::Extent::Mixed))
-        : fontSizePx;
+    const float spanFontSizePx =
+        span.fontSize.value != 0.0
+            ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
+                                                        Lengthd::Extent::Mixed))
+            : fontSizePx;
     const float spanScale = fontManager_.scaleForPixelHeight(font, spanFontSizePx);
 
     // Resolve per-span baseline-shift using actual font size for em units.
@@ -336,18 +337,54 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         glyph.glyphIndex = glyphIndex;
         glyph.xPosition = penX;
         glyph.yPosition = penY;
-        // Vertical advance: use spanFontSizePx (em-square height). stb_truetype lacks vmtx.
-        glyph.yAdvance = spanFontSizePx;
         glyph.xAdvance = 0;
 
         // Rotation: non-CJK glyphs (codepoint < 0x2E80) get 90° CW rotation in vertical mode.
-        double baseRotation = (codepoint < 0x2E80) ? 90.0 : 0.0;
-        if (charIdx < span.rotateList.size()) {
-          glyph.rotateDegrees = span.rotateList[charIdx] + baseRotation;
-        } else if (!span.rotateList.empty()) {
-          glyph.rotateDegrees = span.rotateList.back() + baseRotation;
+        if (codepoint < 0x2E80) {
+          // Sideways Latin glyph: rotated 90° CW per SVG spec.
+          // Advance by horizontal advance width (SVG 1.1 §10.7.3: when glyph-orientation-vertical
+          // is not a multiple of 180°, advance by horizontal metrics).
+          int advanceWidth = 0;
+          int leftSideBearing = 0;
+          stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &leftSideBearing);
+          glyph.yAdvance = static_cast<double>(advanceWidth) * spanScale;
+
+          // Apply horizontal kerning to vertical pen (sideways glyphs use horizontal metrics).
+          const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+          if (!hasAbsoluteY && prevGlyph != 0 && glyphIndex != 0) {
+            const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
+            penY += static_cast<double>(kern) * spanScale;
+            glyph.yPosition = penY;
+          }
+
+          // Center on the central baseline: shift X so the midpoint between the scaled
+          // ascender and descender aligns with the text position. Use pixel-height scaling
+          // (ascent-to-descent = fontSize) so the center is proportionally correct.
+          int fontAscent = 0;
+          int fontDescent = 0;
+          int fontLineGap = 0;
+          stbtt_GetFontVMetrics(info, &fontAscent, &fontDescent, &fontLineGap);
+          const double phScale = stbtt_ScaleForPixelHeight(info, spanFontSizePx);
+          const double centralBaselineOffset =
+              (static_cast<double>(fontAscent) + static_cast<double>(fontDescent)) * phScale / 2.0;
+          glyph.xPosition -= centralBaselineOffset;
+
+          double baseRotation = 90.0;
+          if (charIdx < span.rotateList.size()) {
+            glyph.rotateDegrees = span.rotateList[charIdx] + baseRotation;
+          } else if (!span.rotateList.empty()) {
+            glyph.rotateDegrees = span.rotateList.back() + baseRotation;
+          } else {
+            glyph.rotateDegrees = baseRotation;
+          }
         } else {
-          glyph.rotateDegrees = baseRotation;
+          // Upright CJK: vertical advance = em height. stb_truetype lacks vmtx.
+          glyph.yAdvance = spanFontSizePx;
+          if (charIdx < span.rotateList.size()) {
+            glyph.rotateDegrees = span.rotateList[charIdx];
+          } else if (!span.rotateList.empty()) {
+            glyph.rotateDegrees = span.rotateList.back();
+          }
         }
 
         run.glyphs.push_back(glyph);
