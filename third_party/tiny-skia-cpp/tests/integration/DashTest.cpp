@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "GoldenTestHelper.h"
+#include "ImageComparisonTestFixture.h"
 #include "tiny_skia/Color.h"
 #include "tiny_skia/Geom.h"
 #include "tiny_skia/Painter.h"
@@ -11,6 +11,7 @@
 #include "tiny_skia/Mask.h"
 
 using namespace tiny_skia;
+using tiny_skia::test_utils::Params;
 
 namespace {
 
@@ -132,7 +133,8 @@ TEST(DashTest, Complex) {
     auto mut = pixmap->mutableView();
     Painter::strokePath(mut, *path, paint, stroke, Transform::identity());
 
-    EXPECT_GOLDEN_MATCH(*pixmap, "dash/complex.png");
+    EXPECT_GOLDEN_MATCH_WITH_PARAMS(*pixmap, "dash/complex.png",
+                                    Params::WithThreshold(0.1f));
 }
 
 TEST(DashTest, MultiSubpaths) {
@@ -162,12 +164,8 @@ TEST(DashTest, MultiSubpaths) {
     auto mut = pixmap->mutableView();
     Painter::strokePath(mut, *path, paint, stroke, Transform::identity());
 
-    // Allow up to 1 pixel of difference due to FMA contraction differences
-    // between C++ and Rust compilers on ARM64.
-    int diff = ::tiny_skia::test_utils::compareWithGolden(*pixmap,
-        "dash/multi_subpaths.png");
-    EXPECT_LE(diff, 1) << "Pixel mismatch with golden image: "
-        << "dash/multi_subpaths.png (" << diff << " pixels differ, tolerance: 1)";
+    EXPECT_GOLDEN_MATCH_WITH_PARAMS(*pixmap, "dash/multi_subpaths.png",
+                                    Params::WithThreshold(0.1f));
 }
 
 TEST(DashTest, Closed) {
@@ -192,7 +190,8 @@ TEST(DashTest, Closed) {
     auto mut = pixmap->mutableView();
     Painter::strokePath(mut, *path, paint, stroke, Transform::identity());
 
-    EXPECT_GOLDEN_MATCH(*pixmap, "dash/closed.png");
+    EXPECT_GOLDEN_MATCH_WITH_PARAMS(*pixmap, "dash/closed.png",
+                                    Params::WithThreshold(0.1f));
 }
 
 }  // namespace

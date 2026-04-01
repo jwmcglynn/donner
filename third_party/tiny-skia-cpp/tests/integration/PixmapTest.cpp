@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "GoldenTestHelper.h"
+#include "ImageComparisonTestFixture.h"
 #include "tiny_skia/Color.h"
 #include "tiny_skia/Geom.h"
 #include "tiny_skia/Painter.h"

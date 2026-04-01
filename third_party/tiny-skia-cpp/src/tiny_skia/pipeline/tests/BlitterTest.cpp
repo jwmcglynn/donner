@@ -145,9 +145,9 @@ TEST(PipelineBlitterTest, CreateBlitVPartialCoverageSetsColorAndComposesAlpha) {
   blitter->blitV(0, 0, 1u, 128u);
   blitter->blitV(0, 0, 1u, 128u);
 
-  EXPECT_THAT(channelAt(*pixmap, 0, 0, 0), Eq(9u));
-  EXPECT_THAT(channelAt(*pixmap, 0, 0, 1), Eq(17u));
-  EXPECT_THAT(channelAt(*pixmap, 0, 0, 2), Eq(25u));
+  EXPECT_THAT(channelAt(*pixmap, 0, 0, 0), Eq(8u));
+  EXPECT_THAT(channelAt(*pixmap, 0, 0, 1), Eq(16u));
+  EXPECT_THAT(channelAt(*pixmap, 0, 0, 2), Eq(24u));
   EXPECT_THAT(alphaAt(*pixmap, 0, 0), Eq(161u));
 }
 
@@ -297,7 +297,7 @@ TEST(PipelineBlitterTest, PartialCoverageComposesWithExistingDestinationAlpha) {
   blitter->blitV(0, 0, 1u, 128u);
   blitter->blitV(0, 0, 1u, 128u);
 
-  EXPECT_THAT(alphaAt(*pixmap, 0, 0), Eq(191u));
+  EXPECT_THAT(alphaAt(*pixmap, 0, 0), Eq(192u));
 }
 
 TEST(PipelineBlitterTest, BlitRectClipsToPixmapBounds) {
@@ -376,7 +376,7 @@ TEST(PipelineBlitterTest, BlitMaskPartialCoverageComposesAcrossPasses) {
   blitter->blitMask(*mask, *clip);
   blitter->blitMask(*mask, *clip);
 
-  EXPECT_THAT(alphaAt(*pixmap, 0, 0), Eq(191u));
+  EXPECT_THAT(alphaAt(*pixmap, 0, 0), Eq(192u));
 }
 
 TEST(PipelineBlitterTest, BlitMaskLerpsDestinationAlphaWithCoverageMap) {

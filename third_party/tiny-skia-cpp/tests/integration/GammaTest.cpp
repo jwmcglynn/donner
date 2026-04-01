@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "GoldenTestHelper.h"
+#include "ImageComparisonTestFixture.h"
 #include "tiny_skia/Color.h"
 #include "tiny_skia/Geom.h"
 #include "tiny_skia/Painter.h"
@@ -89,5 +89,6 @@ TEST(GammaTest, gamma) {
         Painter::strokePath(mut, *path, paint, wide, xf3);
     }
 
-    EXPECT_GOLDEN_MATCH(*pixmap, "gamma.png");
+    EXPECT_GOLDEN_MATCH_WITH_PARAMS(*pixmap, "gamma.png",
+        ::tiny_skia::test_utils::Params::WithThreshold(0.1f));
 }

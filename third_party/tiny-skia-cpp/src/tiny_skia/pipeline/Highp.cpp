@@ -1025,6 +1025,9 @@ void fusedBilinearPattern(Pipeline& pipeline) {
       if (ctx.spreadMode == SpreadMode::Repeat) {
         tx = tx - std::floor(tx * ctx.invWidth) * w;
         ty = ty - std::floor(ty * ctx.invHeight) * h;
+      } else if (ctx.spreadMode == SpreadMode::Reflect) {
+        tx = exclusiveReflect(tx, w, ctx.invWidth);
+        ty = exclusiveReflect(ty, h, ctx.invHeight);
       }
       tx = std::max(0.0f, std::min(wMax, tx));
       ty = std::max(0.0f, std::min(hMax, ty));
@@ -1051,6 +1054,9 @@ void fusedBilinearPattern(Pipeline& pipeline) {
           if (ctx.spreadMode == SpreadMode::Repeat) {
             tx = tx - std::floor(tx * ctx.invWidth) * w;
             ty = ty - std::floor(ty * ctx.invHeight) * h;
+          } else if (ctx.spreadMode == SpreadMode::Reflect) {
+            tx = exclusiveReflect(tx, w, ctx.invWidth);
+            ty = exclusiveReflect(ty, h, ctx.invHeight);
           }
           tx = std::max(0.0f, std::min(wMax, tx));
           ty = std::max(0.0f, std::min(hMax, ty));

@@ -390,9 +390,8 @@ TEST(LinearGradientTest, PushStagesTwoStopPad) {
   tiny_skia::pipeline::RasterPipelineBuilder builder;
   const bool ok = std::get<LinearGradient>(*result).pushStages(ColorSpace::Linear, builder);
   EXPECT_TRUE(ok);
-  // Should have pushed at least SeedShader + Transform + PadX1 +
-  // EvenlySpaced2StopGradient + Premultiply (colors are non-opaque).
-  EXPECT_GE(builder.compile().stageCount(), 4u);
+  // 2-stop Pad uses the fused FusedLinearGradient2Stop single stage.
+  EXPECT_GE(builder.compile().stageCount(), 1u);
 }
 
 TEST(LinearGradientTest, PushStagesThreeStopRepeat) {
@@ -422,9 +421,9 @@ TEST(LinearGradientTest, PushStagesOpaqueSkipsPremultiply) {
   tiny_skia::pipeline::RasterPipelineBuilder builder;
   const bool ok = std::get<LinearGradient>(*result).pushStages(ColorSpace::Linear, builder);
   EXPECT_TRUE(ok);
-  // With opaque colors, no Premultiply stage, so fewer stages.
+  // 2-stop Pad uses the fused FusedLinearGradient2Stop single stage.
   const auto pipeline = builder.compile();
-  EXPECT_GE(pipeline.stageCount(), 3u);
+  EXPECT_GE(pipeline.stageCount(), 1u);
 }
 
 // ---------------------------------------------------------------------------
@@ -672,7 +671,8 @@ TEST(RadialGradientTest, PushStagesSimpleRadial) {
   tiny_skia::pipeline::RasterPipelineBuilder builder;
   const bool ok = std::get<RadialGradient>(*result).pushStages(ColorSpace::Linear, builder);
   EXPECT_TRUE(ok);
-  EXPECT_GE(builder.compile().stageCount(), 3u);
+  // Simple 2-stop radial uses the fused FusedRadialGradient2Stop single stage.
+  EXPECT_GE(builder.compile().stageCount(), 1u);
 }
 
 TEST(RadialGradientTest, PushStagesTwoPointConical) {
@@ -725,7 +725,8 @@ TEST(PatternTest, CreateAndPushStagesNearest) {
   tiny_skia::pipeline::RasterPipelineBuilder builder;
   const bool ok = pat.pushStages(ColorSpace::Linear, builder);
   EXPECT_TRUE(ok);
-  EXPECT_GE(builder.compile().stageCount(), 2u);
+  // Nearest uses the fused FusedBilinearPattern single stage.
+  EXPECT_GE(builder.compile().stageCount(), 1u);
 }
 
 TEST(PatternTest, CreateAndPushStagesBilinear) {
@@ -739,7 +740,8 @@ TEST(PatternTest, CreateAndPushStagesBilinear) {
   tiny_skia::pipeline::RasterPipelineBuilder builder;
   const bool ok = pat.pushStages(ColorSpace::Linear, builder);
   EXPECT_TRUE(ok);
-  EXPECT_GE(builder.compile().stageCount(), 3u);
+  // Bilinear uses the fused FusedBilinearPattern single stage.
+  EXPECT_GE(builder.compile().stageCount(), 1u);
 }
 
 TEST(PatternTest, CreateAndPushStagesBicubic) {
@@ -790,8 +792,8 @@ TEST(PatternTest, OpacityAppliesScale1FloatStage) {
   tiny_skia::pipeline::RasterPipelineBuilder builder;
   const bool ok = pat.pushStages(ColorSpace::Linear, builder);
   EXPECT_TRUE(ok);
-  // With opacity < 1, adds Scale1Float.
-  EXPECT_GE(builder.compile().stageCount(), 3u);
+  // Fused path handles opacity internally — still a single stage.
+  EXPECT_GE(builder.compile().stageCount(), 1u);
 }
 
 TEST(PatternTest, RepeatSpreadModePushesRepeatStage) {
@@ -805,7 +807,8 @@ TEST(PatternTest, RepeatSpreadModePushesRepeatStage) {
   tiny_skia::pipeline::RasterPipelineBuilder builder;
   const bool ok = pat.pushStages(ColorSpace::Linear, builder);
   EXPECT_TRUE(ok);
-  EXPECT_GE(builder.compile().stageCount(), 3u);
+  // Fused path handles Repeat internally — still a single stage.
+  EXPECT_GE(builder.compile().stageCount(), 1u);
 }
 
 TEST(PatternTest, ShaderVariantDispatch) {

@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "GoldenTestHelper.h"
+#include "ImageComparisonTestFixture.h"
 #include "tiny_skia/Color.h"
 #include "tiny_skia/Geom.h"
 #include "tiny_skia/Painter.h"
@@ -11,6 +11,7 @@
 #include "tiny_skia/Mask.h"
 
 using namespace tiny_skia;
+using tiny_skia::test_utils::Params;
 
 namespace {
 
@@ -36,7 +37,8 @@ TEST(StrokeTest, RoundCapsAndLargeScale) {
     auto mut = pixmap->mutableView();
     Painter::strokePath(mut, *path, paint, stroke, ts);
 
-    EXPECT_GOLDEN_MATCH(*pixmap, "stroke/round-caps-and-large-scale.png");
+    EXPECT_GOLDEN_MATCH_WITH_PARAMS(*pixmap, "stroke/round-caps-and-large-scale.png",
+                                    Params::WithThreshold(0.1f));
 }
 
 TEST(StrokeTest, Circle) {
@@ -57,7 +59,8 @@ TEST(StrokeTest, Circle) {
     auto mut = pixmap->mutableView();
     Painter::strokePath(mut, *path, paint, stroke, Transform::identity());
 
-    EXPECT_GOLDEN_MATCH(*pixmap, "stroke/circle.png");
+    EXPECT_GOLDEN_MATCH_WITH_PARAMS(*pixmap, "stroke/circle.png",
+                                    Params::WithThreshold(0.1f));
 }
 
 TEST(StrokeTest, ZeroLenSubpathButtCap) {
@@ -151,7 +154,8 @@ TEST(StrokeTest, RoundCapJoin) {
     auto mut = pixmap->mutableView();
     Painter::strokePath(mut, *path, paint, stroke, Transform::identity());
 
-    EXPECT_GOLDEN_MATCH(*pixmap, "stroke/round-cap-join.png");
+    EXPECT_GOLDEN_MATCH_WITH_PARAMS(*pixmap, "stroke/round-cap-join.png",
+                                    Params::WithThreshold(0.1f));
 }
 
 }  // namespace

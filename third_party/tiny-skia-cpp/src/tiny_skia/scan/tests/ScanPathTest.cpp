@@ -168,7 +168,7 @@ TEST(ScanPathTest, FillPathOutsideClipCullsWithoutSpans) {
   EXPECT_THAT(blitter.spans(), ::testing::IsEmpty());
 }
 
-TEST(ScanPathTest, FillPathAaFallsBackToAntialiasBlits) {
+TEST(ScanPathTest, FillPathAaProducesOutputForIntegerAlignedRect) {
   const auto clip = tiny_skia::ScreenIntRect::fromXYWH(0, 0, 20, 20).value();
   tiny_skia::Path path;
   path.addVerb(tiny_skia::PathVerb::Move);
@@ -183,8 +183,9 @@ TEST(ScanPathTest, FillPathAaFallsBackToAntialiasBlits) {
   RecordingAntialiasBlitter blitter;
   tiny_skia::scan::path_aa::fillPath(path, tiny_skia::FillRule::Winding, clip, blitter);
 
-  EXPECT_GT(blitter.antiSpans().size(), 0u);
-  EXPECT_THAT(blitter.spans(), ::testing::IsEmpty());
+  // Analytic AA recognises integer-aligned edges as full coverage, so the path
+  // is emitted via blitRect/blitH (spans) rather than blitAntiH (antiSpans).
+  EXPECT_GT(blitter.spans().size() + blitter.antiSpans().size(), 0u);
 }
 
 TEST(ScanPathTest, FillPathAaClipOverflowAvoidsBlitting) {

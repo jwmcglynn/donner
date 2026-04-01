@@ -193,7 +193,7 @@ TEST(ColorTest, ColorSpaceTransforms) {
 TEST(ColorTest, PipelineStageOrderingMatchesRustReference) {
   using tiny_skia::pipeline::Stage;
 
-  constexpr std::array<Stage, 79> kExpectedOrder{Stage::MoveSourceToDestination,
+  constexpr std::array<Stage, 84> kExpectedOrder{Stage::MoveSourceToDestination,
                                                  Stage::MoveDestinationToSource,
                                                  Stage::Clamp0,
                                                  Stage::ClampA,
@@ -271,9 +271,14 @@ TEST(ColorTest, PipelineStageOrderingMatchesRustReference) {
                                                  Stage::GammaCompress22,
                                                  Stage::GammaExpandSrgb,
                                                  Stage::GammaExpandDestinationSrgb,
-                                                 Stage::GammaCompressSrgb};
+                                                 Stage::GammaCompressSrgb,
+                                                 Stage::Unpremultiply,
+                                                 Stage::PremultiplyDestination,
+                                                 Stage::FusedLinearGradient2Stop,
+                                                 Stage::FusedRadialGradient2Stop,
+                                                 Stage::FusedBilinearPattern};
 
-  EXPECT_EQ(static_cast<std::size_t>(79), tiny_skia::pipeline::kStagesCount);
+  EXPECT_EQ(static_cast<std::size_t>(84), tiny_skia::pipeline::kStagesCount);
   EXPECT_EQ(tiny_skia::pipeline::kStagesCount, kExpectedOrder.size());
 
   for (std::size_t i = 0; i < kExpectedOrder.size(); ++i) {

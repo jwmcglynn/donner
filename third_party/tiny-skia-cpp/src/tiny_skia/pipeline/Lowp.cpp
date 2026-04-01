@@ -1394,6 +1394,12 @@ void fusedRadialGradient2Stop(Pipeline& pipeline) {
   pipeline.nextStage();
 }
 
+/// Reflect tiling for coordinates in [0, limit) range.
+inline float exclusiveReflect(float v, float limit, float invLimit) {
+  return std::abs((v - limit) - (limit + limit) * std::floor((v - limit) * (invLimit * 0.5f)) -
+                  limit);
+}
+
 void fusedBilinearPattern(Pipeline& pipeline) {
   const auto& ctx = pipeline.ctx->fusedBilinearPattern;
   if (!ctx.pixels || ctx.width == 0 || ctx.height == 0) {
@@ -1632,6 +1638,18 @@ void fusedBilinearPattern(Pipeline& pipeline) {
           float32x4_t normY = vmulq_f32(cy, vinvH);
           cx = vsubq_f32(cx, vmulq_f32(vrndmq_f32(normX), vfw));
           cy = vsubq_f32(cy, vmulq_f32(vrndmq_f32(normY), vfh));
+        } else if (ctx.spreadMode == SpreadMode::Reflect) {
+          // Scalar reflect per lane — vectorizing the reflect formula with
+          // NEON floor+abs is possible but not worth it for correctness-first.
+          alignas(16) float cxArr[4], cyArr[4];
+          vst1q_f32(cxArr, cx);
+          vst1q_f32(cyArr, cy);
+          for (int lane = 0; lane < 4; ++lane) {
+            cxArr[lane] = exclusiveReflect(cxArr[lane], fw, ctx.invWidth);
+            cyArr[lane] = exclusiveReflect(cyArr[lane], fh, ctx.invHeight);
+          }
+          cx = vld1q_f32(cxArr);
+          cy = vld1q_f32(cyArr);
         }
 
         cx = vmaxq_f32(cx, vzero);
@@ -1749,6 +1767,9 @@ void fusedBilinearPattern(Pipeline& pipeline) {
       if (ctx.spreadMode == SpreadMode::Repeat) {
         cx = repeatTile(cx, fw, ctx.invWidth);
         cy = repeatTile(cy, fh, ctx.invHeight);
+      } else if (ctx.spreadMode == SpreadMode::Reflect) {
+        cx = exclusiveReflect(cx, fw, ctx.invWidth);
+        cy = exclusiveReflect(cy, fh, ctx.invHeight);
       }
       cx = clampCoord(cx, wMax);
       cy = clampCoord(cy, hMax);
@@ -1839,6 +1860,9 @@ void fusedBilinearPattern(Pipeline& pipeline) {
         if (ctx.spreadMode == SpreadMode::Repeat) {
           tx = repeatTile(tx, fw, ctx.invWidth);
           ty = repeatTile(ty, fh, ctx.invHeight);
+        } else if (ctx.spreadMode == SpreadMode::Reflect) {
+          tx = exclusiveReflect(tx, fw, ctx.invWidth);
+          ty = exclusiveReflect(ty, fh, ctx.invHeight);
         }
         tx = clampCoord(tx, wMax);
         ty = clampCoord(ty, hMax);

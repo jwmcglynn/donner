@@ -236,8 +236,9 @@ TEST(MaskTest, FillPathAaUses255BasedCoverageForThreeQuarterPixel) {
   mask->fillPath(*path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::identity());
 
   const auto rowStride = mask->width();
-  EXPECT_EQ(mask->data()[1 * rowStride + 1], 192u);
-  EXPECT_EQ(mask->data()[1 * rowStride + 2], 192u);
+  // Analytic AA computes 191 (0xBF); supersampled AA computed 192.
+  EXPECT_EQ(mask->data()[1 * rowStride + 1], 191u);
+  EXPECT_EQ(mask->data()[1 * rowStride + 2], 191u);
   EXPECT_EQ(mask->data()[2 * rowStride + 1], 255u);
   EXPECT_EQ(mask->data()[2 * rowStride + 2], 255u);
 }
@@ -258,7 +259,8 @@ TEST(MaskTest, FillPathAaUses255BasedCoverageForFifteenSixteenthPixel) {
   mask->fillPath(*path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::identity());
 
   const auto rowStride = mask->width();
-  EXPECT_EQ(mask->data()[0 * rowStride + 0], 240u);
+  // Analytic AA computes 239 (0xEF); supersampled AA computed 240.
+  EXPECT_EQ(mask->data()[0 * rowStride + 0], 239u);
   EXPECT_EQ(mask->data()[0 * rowStride + 1], 0u);
   EXPECT_EQ(mask->data()[1 * rowStride + 0], 0u);
 }
