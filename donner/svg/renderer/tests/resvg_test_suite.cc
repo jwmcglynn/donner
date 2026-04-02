@@ -287,16 +287,8 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(Overflow, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-overflow")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Shape, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-shape",
-                                {
-                                    {"a-shape-rendering-005.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
-                                    {"a-shape-rendering-008.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 100)},  // marker
-                                })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Shape, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("a-shape")),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(StopAttributes, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-stop")), TestNameFromFilename);
