@@ -61,10 +61,7 @@ TEST_F(TextSystemTest, BasicTextElement) {
 TEST_F(TextSystemTest, TextWithTspan) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-      <text id="t" x="10" y="30">
-        <tspan>First</tspan>
-        <tspan dx="5">Second</tspan>
-      </text>
+      <text id="t" x="10" y="30"><tspan>First</tspan><tspan dx="5">Second</tspan></text>
     </svg>
   )");
 
@@ -85,9 +82,7 @@ TEST_F(TextSystemTest, TextWithTspan) {
 TEST_F(TextSystemTest, PositioningInheritedFromRoot) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-      <text id="t" x="15" y="25">
-        <tspan>ABC</tspan>
-      </text>
+      <text id="t" x="15" y="25"><tspan>ABC</tspan></text>
     </svg>
   )");
 
@@ -140,9 +135,7 @@ TEST_F(TextSystemTest, PerCharacterPositioning) {
 TEST_F(TextSystemTest, DxDyPositioning) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-      <text id="t">
-        <tspan dx="5 10" dy="2 4">AB</tspan>
-      </text>
+      <text id="t"><tspan dx="5 10" dy="2 4">AB</tspan></text>
     </svg>
   )");
 
@@ -196,9 +189,7 @@ TEST_F(TextSystemTest, RootDxDyBecomesScalarStartPosition) {
 TEST_F(TextSystemTest, RotateAttribute) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-      <text id="t">
-        <tspan rotate="45 90">AB</tspan>
-      </text>
+      <text id="t"><tspan rotate="45 90">AB</tspan></text>
     </svg>
   )");
 
@@ -240,11 +231,7 @@ TEST_F(TextSystemTest, EmptyTextElement) {
 TEST_F(TextSystemTest, MultipleTspanWithPositioning) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-      <text id="t">
-        <tspan x="10" y="20">A</tspan>
-        <tspan x="30" y="40">B</tspan>
-        <tspan x="50" y="60">C</tspan>
-      </text>
+      <text id="t"><tspan x="10" y="20">A</tspan><tspan x="30" y="40">B</tspan><tspan x="50" y="60">C</tspan></text>
     </svg>
   )");
 
@@ -278,9 +265,7 @@ TEST_F(TextSystemTest, TextPathReference) {
       <defs>
         <path id="p" d="M 10 80 C 40 10, 65 10, 95 80"/>
       </defs>
-      <text id="t">
-        <textPath href="#p">Along the path</textPath>
-      </text>
+      <text id="t"><textPath href="#p">Along the path</textPath></text>
     </svg>
   )");
 
@@ -304,9 +289,7 @@ TEST_F(TextSystemTest, TextPathWithStartOffset) {
       <defs>
         <path id="p" d="M 0 0 L 100 0"/>
       </defs>
-      <text id="t">
-        <textPath href="#p" startOffset="50%">Offset text</textPath>
-      </text>
+      <text id="t"><textPath href="#p" startOffset="50%">Offset text</textPath></text>
     </svg>
   )");
 
@@ -360,12 +343,16 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
     nonEmptyHasSource.push_back(span.sourceEntity != entt::null);
   }
 
-  // The " ." has a leading space from the indentation whitespace before "." in the XML source.
-  // This is correct per SVG spec: newlines are removed, indentation collapses to one space.
-  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "very", "long", "text", " ."));
-  EXPECT_THAT(nonEmptyOnPath, testing::ElementsAre(false, true, false, true, false));
+  // Whitespace between elements is preserved and collapses to single spaces per SVG §10.15.
+  // The leading space of "Some " comes from its trailing whitespace in the first root chunk.
+  // Each inter-element boundary produces a " " span from the root element's whitespace chunks.
+  EXPECT_THAT(nonEmptyTexts,
+              testing::ElementsAre("Some ", "very", " ", "long", " ", "text", " ."));
+  EXPECT_THAT(nonEmptyOnPath,
+              testing::ElementsAre(false, true, false, false, false, true, false));
   // All spans should have a source entity for style resolution.
-  EXPECT_THAT(nonEmptyHasSource, testing::ElementsAre(true, true, true, true, true));
+  EXPECT_THAT(nonEmptyHasSource,
+              testing::ElementsAre(true, true, true, true, true, true, true));
 }
 
 // --- UTF-8 multibyte characters ---
@@ -463,9 +450,7 @@ TEST_F(TextSystemTest, NoDoubleApplication) {
 TEST_F(TextSystemTest, ChildTspanPreservesListZero) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-      <text id="t" x="10" y="20">
-        <tspan dy="7">A</tspan>
-      </text>
+      <text id="t" x="10" y="20"><tspan dy="7">A</tspan></text>
     </svg>
   )");
 
@@ -489,10 +474,7 @@ TEST_F(TextSystemTest, ChildTspanPreservesListZero) {
 TEST_F(TextSystemTest, StartsNewChunk) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-      <text id="t" x="10" y="20">
-        <tspan>Continuation</tspan>
-        <tspan x="50">NewChunk</tspan>
-      </text>
+      <text id="t" x="10" y="20"><tspan>Continuation</tspan><tspan x="50">NewChunk</tspan></text>
     </svg>
   )");
 

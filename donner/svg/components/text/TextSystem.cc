@@ -324,13 +324,20 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
       //    any space character (preserved or not) is removed.
       // 3. Strip leading/trailing default spaces from the composed text.
 
-      // Step 3a: strip leading default space from the first non-empty span.
+      // Step 3a: strip leading default space from the composed text.
+      // If stripping makes a span empty, continue to the next non-empty span
+      // so the first visible character in the composed text has no leading space.
       for (auto& span : pendingSpans) {
         if (!span.text.empty()) {
           if (!span.preserveSpaces) {
             removeLeadingSpace(span.text);
+            if (!span.text.empty()) {
+              break;  // Still has content after stripping — done.
+            }
+            // Span became empty; continue to strip next non-empty span.
+          } else {
+            break;  // Preserve-spaces span — don't strip.
           }
-          break;
         }
       }
 
@@ -360,13 +367,19 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
         }
       }
 
-      // Step 3b: strip trailing default space from the last non-empty span.
+      // Step 3b: strip trailing default space from the composed text.
+      // If stripping makes a span empty, continue to the previous non-empty span.
       for (auto it = pendingSpans.rbegin(); it != pendingSpans.rend(); ++it) {
         if (!it->text.empty()) {
           if (!it->preserveSpaces) {
             removeTrailingSpace(it->text);
+            if (!it->text.empty()) {
+              break;
+            }
+            // Span became empty; continue to strip previous non-empty span.
+          } else {
+            break;
           }
-          break;
         }
       }
     }
