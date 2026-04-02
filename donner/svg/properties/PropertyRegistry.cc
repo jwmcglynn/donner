@@ -1259,6 +1259,12 @@ constexpr auto kProperties =
                            if (const auto* ident = comp.tryGetToken<css::Token::Ident>()) {
                              if (ident->value.equalsLowercase("normal")) return 400;
                              if (ident->value.equalsLowercase("bold")) return 700;
+                             // Relative keywords: stored as sentinels, resolved during cascade
+                             // by resolveFontWeight() when the inherited value is available.
+                             if (ident->value.equalsLowercase("bolder"))
+                               return PropertyRegistry::kFontWeightBolder;
+                             if (ident->value.equalsLowercase("lighter"))
+                               return PropertyRegistry::kFontWeightLighter;
                            } else if (const auto* num = comp.tryGetToken<css::Token::Number>()) {
                              if (num->value >= 1 && num->value <= 1000) {
                                return static_cast<int>(num->value);
@@ -1780,6 +1786,33 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
       break;
   }
   fontSize.value = Lengthd(resolvedPx, Lengthd::Unit::Px);
+}
+
+void PropertyRegistry::resolveFontWeight(int parentFontWeight) {
+  const int fw = fontWeight.getRequired();
+  if (fw == kFontWeightBolder) {
+    // CSS Fonts Level 4 §2.5: bolder relative to inherited weight.
+    int resolved;
+    if (parentFontWeight < 350) {
+      resolved = 400;
+    } else if (parentFontWeight <= 550) {
+      resolved = 700;
+    } else {
+      resolved = 900;
+    }
+    fontWeight.value = resolved;
+  } else if (fw == kFontWeightLighter) {
+    // CSS Fonts Level 4 §2.5: lighter relative to inherited weight.
+    int resolved;
+    if (parentFontWeight <= 550) {
+      resolved = 100;
+    } else if (parentFontWeight <= 750) {
+      resolved = 400;
+    } else {
+      resolved = 700;
+    }
+    fontWeight.value = resolved;
+  }
 }
 
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
