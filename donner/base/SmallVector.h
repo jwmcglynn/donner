@@ -222,6 +222,45 @@ public:
   }
 
   /**
+   * Resizes the vector to contain \p newSize elements.
+   *
+   * If \p newSize is greater than the current size, new elements are default-constructed.
+   * If \p newSize is less than the current size, elements are destroyed from the end.
+   *
+   * @param newSize The new size of the vector.
+   */
+  void resize(std::size_t newSize) {
+    if (newSize > size_) {
+      ensureCapacity(newSize);
+      for (std::size_t i = size_; i < newSize; ++i) {
+        new (data() + i) T();
+      }
+    } else if (newSize < size_) {
+      if constexpr (!std::is_trivially_destructible_v<T>) {
+        for (std::size_t i = newSize; i < size_; ++i) {
+          data()[i].~T();
+        }
+      }
+    }
+    size_ = newSize;
+  }
+
+  /**
+   * Replaces the contents of the vector with copies of elements from the range [first, last).
+   *
+   * @tparam InputIt An input iterator type.
+   * @param first Iterator to the first element of the range.
+   * @param last Iterator past the last element of the range.
+   */
+  template <typename InputIt>
+  void assign(InputIt first, InputIt last) {
+    clear();
+    for (InputIt it = first; it != last; ++it) {
+      push_back(*it);
+    }
+  }
+
+  /**
    * Clears the contents of the vector.
    */
   void clear() noexcept {
