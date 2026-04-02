@@ -38,10 +38,14 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& c
                                                              SVGStyleElement element,
                                                              const XMLNode& node) {
   if (element.isCssType()) {
+    // Concatenate all text/CDATA children into a single string before parsing.
+    // Multiple Data/CData nodes can occur when whitespace text nodes are preserved
+    // between or around CDATA sections.
+    std::string combined;
     for (auto child = node.firstChild(); child; child = child->nextSibling()) {
       if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
         if (auto value = child->value()) {
-          element.setContents(value.value());
+          combined += value.value();
         }
       } else {
         ParseError err;
@@ -56,6 +60,9 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& c
         }
         return err;
       }
+    }
+    if (!combined.empty()) {
+      element.setContents(combined);
     }
   }
 

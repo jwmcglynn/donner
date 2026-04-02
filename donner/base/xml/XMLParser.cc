@@ -1150,8 +1150,10 @@ private:
     // For all children and text
     while (true) {
       // Skip whitespace between > and node contents
+      const size_t sizeBefore = remaining_.size();
       ChunkedString contentsStart = remaining_;
       skipWhitespace(remaining_);
+      const bool hadLeadingWhitespace = (remaining_.size() != sizeBefore);
       std::optional<char> nextChar = peek(remaining_);
 
       if (!nextChar || nextChar == '\0') {
@@ -1159,6 +1161,17 @@ private:
       }
 
       if (nextChar == '<') {
+        // If there was whitespace before this '<', preserve it as a Data node.
+        // Whitespace-only text between elements is significant for SVG text
+        // content (§10.15) and must not be silently discarded.
+        if (hadLeadingWhitespace) {
+          remaining_ = contentsStart;
+          if (auto maybeError = parseAndAppendData(node)) {
+            return maybeError;
+          }
+          continue;
+        }
+
         if (tryConsume(remaining_, "</")) {  // Node closing
           // Emit token for "</" (2 bytes).
           const size_t closeTagOpenOffset = currentByteOffset() - 2;

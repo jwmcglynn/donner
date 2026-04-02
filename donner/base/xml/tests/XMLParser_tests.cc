@@ -259,21 +259,39 @@ TEST_F(XMLParserTests, ParseData) {
   EXPECT_THAT(child.value(), Eq("abcd"));
 }
 
-TEST_F(XMLParserTests, WhitespaceOnlyDataBetweenChildrenNotPreserved) {
+TEST_F(XMLParserTests, WhitespaceOnlyDataBetweenChildrenPreserved) {
   auto maybeNode = parseAndGetFirstNode(R"(<node>  <a/>  <b/>  </node>)");
   ASSERT_TRUE(maybeNode.has_value());
 
   const XMLNode node = std::move(maybeNode.value());
 
+  // Whitespace-only text nodes between elements are preserved as Data nodes.
+  // This is significant for SVG text elements where whitespace between child
+  // elements (like tspan) must be preserved per the SVG spec (§10.15).
   auto child = node.firstChild();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Data);
+  EXPECT_THAT(child->value(), testing::Optional(Eq("  ")));
+
+  child = child->nextSibling();
   ASSERT_TRUE(child.has_value());
   EXPECT_EQ(child->type(), XMLNode::Type::Element);
   EXPECT_THAT(child->tagName(), Eq("a"));
 
   child = child->nextSibling();
   ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Data);
+  EXPECT_THAT(child->value(), testing::Optional(Eq("  ")));
+
+  child = child->nextSibling();
+  ASSERT_TRUE(child.has_value());
   EXPECT_EQ(child->type(), XMLNode::Type::Element);
   EXPECT_THAT(child->tagName(), Eq("b"));
+
+  child = child->nextSibling();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Data);
+  EXPECT_THAT(child->value(), testing::Optional(Eq("  ")));
 
   child = child->nextSibling();
   ASSERT_FALSE(child.has_value());
@@ -1205,7 +1223,7 @@ TEST(XMLParserTokenTest, TextContentEmitsTextToken) {
   EXPECT_TRUE(foundText) << "Expected a TextContent token";
 }
 
-TEST(XMLParserTokenTest, WhitespaceBetweenChildrenEmitsNoText) {
+TEST(XMLParserTokenTest, WhitespaceBetweenChildrenPreservesText) {
   const auto tokens = parseWithTokens(R"(<root><a/>  <b/></root>)");
 
   bool foundWhitespaceText = false;
@@ -1215,7 +1233,7 @@ TEST(XMLParserTokenTest, WhitespaceBetweenChildrenEmitsNoText) {
     }
   }
 
-  EXPECT_FALSE(foundWhitespaceText) << "Expected no whitespace-only TextContent token";
+  EXPECT_TRUE(foundWhitespaceText) << "Expected whitespace-only TextContent token to be preserved";
 }
 
 TEST(XMLParserTokenTest, NoCallbackProducesNoTokens) {
