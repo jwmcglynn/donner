@@ -21,8 +21,7 @@
 #include <iostream>
 #include <vector>
 
-#include "absl/debugging/failure_signal_handler.h"
-#include "absl/debugging/symbolize.h"
+#include "donner/base/FailureSignalHandler.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererSkia.h"
@@ -131,11 +130,7 @@ void DumpTree(SVGElement element, int depth = 0) {
 int main(int argc, char* argv[]) {
   using namespace donner::svg;
 
-  // Initialize the symbolizer to get a human-readable stack trace
-  absl::InitializeSymbolizer(argv[0]);
-
-  absl::FailureSignalHandlerOptions options;
-  absl::InstallFailureSignalHandler(options);
+  donner::InstallFailureSignalHandler();
 
   if (argc != 2 && argc != 3) {
     std::cerr << "Unexpected arg count."

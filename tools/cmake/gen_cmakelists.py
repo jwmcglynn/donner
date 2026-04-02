@@ -6,7 +6,7 @@ This script performs three high-level steps:
 
 1.  **generate_root()**
     Creates the project-level `CMakeLists.txt`, declares external
-    dependencies via FetchContent (absl, EnTT, googletest, …),
+    dependencies via FetchContent (EnTT, googletest, …),
     embeds Skia, and wires up umbrella and convenience libraries.
 
 2.  **generate_all_packages()**
@@ -45,8 +45,6 @@ BAZEL_PREFIX = ["bazel"]
 # Mapping of known Bazel labels for external/third-party deps → CMake targets.
 # Adjust when an external project changes its exported target name.
 KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
-    "@com_google_absl//absl/debugging:failure_signal_handler": "absl::failure_signal_handler",
-    "@com_google_absl//absl/debugging:symbolize": "absl::symbolize",
     "@com_google_gtest//:gtest_main": "gmock_main",
     "@com_google_gtest//:gtest": "gmock",
     "@entt//:entt": "EnTT::EnTT",
@@ -331,7 +329,6 @@ def generate_root() -> None:
             ("entt", "https://github.com/skypjack/entt.git", "v3.13.2"),
             ("googletest", "https://github.com/google/googletest.git", "v1.17.0"),
             ("nlohmann_json", "https://github.com/nlohmann/json.git", "v3.12.0"),
-            ("absl", "https://github.com/abseil/abseil-cpp.git", "20250512.0"),
             ("rules_cc", "https://github.com/bazelbuild/rules_cc.git", "0.1.1"),
             ("pixelmatch-cpp17", "https://github.com/jwmcglynn/pixelmatch-cpp17.git", "ad7b103b746c9b23c61b4ce629fea64ae802df15"),
             ("zlib", "https://github.com/madler/zlib.git", "v1.3.1"),
