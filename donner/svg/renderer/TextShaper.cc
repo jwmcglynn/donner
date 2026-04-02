@@ -359,9 +359,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
   bool haveCurrentPosition = false;
   double currentPenX = 0.0;
   double currentPenY = 0.0;
-  uint32_t prevSpanLastCodepoint = 0;  // Unicode codepoint, for cross-span GPOS kerning.
-  hb_font_t* prevSpanHbFont = hbFont;  // Previous span's HB font for cross-span kerning.
-  float prevSpanFontSizePx = fontSizePx;  // Previous span's font size.
+  uint32_t prevSpanLastCodepoint = 0;      // Unicode codepoint, for cross-span GPOS kerning.
+  hb_font_t* prevSpanHbFont = hbFont;      // Previous span's HB font for cross-span kerning.
+  float prevSpanFontSizePx = fontSizePx;   // Previous span's font size.
   double prevSpanPixelScale = pixelScale;  // Previous span's pixel scale.
 
   for (const auto& span : text.spans) {
@@ -396,10 +396,11 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     }
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
-    const float spanFontSizePx = span.fontSize.value != 0.0
-        ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
-                                                     Lengthd::Extent::Mixed))
-        : fontSizePx;
+    const float spanFontSizePx =
+        span.fontSize.value != 0.0
+            ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
+                                                        Lengthd::Extent::Mixed))
+            : fontSizePx;
 
     // Set the FreeType face size for this span (font-size or font-weight may differ).
     {
@@ -415,8 +416,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     if (spanFontSizePx != fontSizePx) {
       spanPixelScale = 1.0 / 64.0;
       FT_Face spanFtFace = hb_ft_font_get_face(spanHbFont);
-      if (spanFtFace && !FT_IS_SCALABLE(spanFtFace) &&
-          spanFtFace->size->metrics.y_ppem > 0) {
+      if (spanFtFace && !FT_IS_SCALABLE(spanFtFace) && spanFtFace->size->metrics.y_ppem > 0) {
         spanPixelScale = static_cast<double>(spanFontSizePx) /
                          (static_cast<double>(spanFtFace->size->metrics.y_ppem) * 64.0);
       }
@@ -757,8 +757,8 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           // which are designed for upright CJK layout.
           // SVG 1.1 §10.7.3: advance by horizontal metrics for 90° glyph orientation.
           const hb_codepoint_t glyphId = glyphInfos[gi].codepoint;
-          glyph.yAdvance = static_cast<double>(
-              hb_font_get_glyph_h_advance(spanHbFont, glyphId)) * spanPixelScale;
+          glyph.yAdvance = static_cast<double>(hb_font_get_glyph_h_advance(spanHbFont, glyphId)) *
+                           spanPixelScale;
 
           // Apply horizontal GPOS kerning to the vertical pen position.
           // Shape [prev, cur] as a LTR pair to get the kern adjustment, using the
@@ -771,11 +771,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
             hb_buffer_guess_segment_properties(pairBuf);
             hb_shape(spanHbFont, pairBuf, nullptr, 0);
             unsigned int pairCount = 0;
-            const hb_glyph_position_t* pairPos =
-                hb_buffer_get_glyph_positions(pairBuf, &pairCount);
+            const hb_glyph_position_t* pairPos = hb_buffer_get_glyph_positions(pairBuf, &pairCount);
             if (pairCount >= 1) {
-              const double pairedAdv =
-                  static_cast<double>(pairPos[0].x_advance) * spanPixelScale;
+              const double pairedAdv = static_cast<double>(pairPos[0].x_advance) * spanPixelScale;
               // Shape the previous character alone to get standalone advance.
               hb_buffer_t* soloBuf = hb_buffer_create();
               hb_buffer_add_codepoints(soloBuf, &prevSidewaysCodepoint, 1, 0, 1);
@@ -786,8 +784,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
               const hb_glyph_position_t* soloPos =
                   hb_buffer_get_glyph_positions(soloBuf, &soloCount);
               if (soloCount >= 1) {
-                const double soloAdv =
-                    static_cast<double>(soloPos[0].x_advance) * spanPixelScale;
+                const double soloAdv = static_cast<double>(soloPos[0].x_advance) * spanPixelScale;
                 penY += (pairedAdv - soloAdv);
               }
               hb_buffer_destroy(soloBuf);
@@ -821,21 +818,17 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           // typographic extent that determines the em-box origin for vertical layout.
           // Fallback to OS/2 sTypoAscender for fonts without vhea.
           {
-            double vertOriginY =
-                -static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
+            double vertOriginY = -static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
             FT_Face ftFace = hb_ft_font_get_face(spanHbFont);
             if (ftFace && ftFace->units_per_EM > 0) {
-              const double emScale =
-                  spanFontSizePx / static_cast<double>(ftFace->units_per_EM);
+              const double emScale = spanFontSizePx / static_cast<double>(ftFace->units_per_EM);
               // Try vhea ascender first (vertical typographic ascender).
-              auto* vhea = static_cast<TT_VertHeader*>(
-                  FT_Get_Sfnt_Table(ftFace, FT_SFNT_VHEA));
+              auto* vhea = static_cast<TT_VertHeader*>(FT_Get_Sfnt_Table(ftFace, FT_SFNT_VHEA));
               if (vhea && vhea->Ascender > 0) {
                 vertOriginY = static_cast<double>(vhea->Ascender) * emScale;
               } else {
                 // Fallback to OS/2 sTypoAscender.
-                auto* os2 =
-                    static_cast<TT_OS2*>(FT_Get_Sfnt_Table(ftFace, FT_SFNT_OS2));
+                auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(ftFace, FT_SFNT_OS2));
                 if (os2 && os2->sTypoAscender > 0) {
                   vertOriginY = static_cast<double>(os2->sTypoAscender) * emScale;
                 }
@@ -903,8 +896,8 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
             if (needFontRestore) {
               FT_Face prevFtFace = hb_ft_font_get_face(prevSpanHbFont);
               if (prevFtFace && FT_IS_SCALABLE(prevFtFace)) {
-                FT_Set_Char_Size(prevFtFace, 0,
-                                 static_cast<FT_F26Dot6>(prevSpanFontSizePx * 64.0f), 72, 72);
+                FT_Set_Char_Size(prevFtFace, 0, static_cast<FT_F26Dot6>(prevSpanFontSizePx * 64.0f),
+                                 72, 72);
                 hb_ft_font_changed(prevSpanHbFont);
               }
             }
@@ -943,8 +936,8 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
             if (needFontRestore) {
               FT_Face curFtFace = hb_ft_font_get_face(spanHbFont);
               if (curFtFace && FT_IS_SCALABLE(curFtFace)) {
-                FT_Set_Char_Size(curFtFace, 0,
-                                 static_cast<FT_F26Dot6>(spanFontSizePx * 64.0f), 72, 72);
+                FT_Set_Char_Size(curFtFace, 0, static_cast<FT_F26Dot6>(spanFontSizePx * 64.0f), 72,
+                                 72);
                 hb_ft_font_changed(spanHbFont);
               }
             }
@@ -1098,6 +1091,11 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         haveCurrentPosition = true;
       }
 
+      // Hidden/collapsed spans on a path still advance along the path but are not drawn.
+      if (span.visibility != Visibility::Visible) {
+        run.glyphs.clear();
+      }
+
       runs.push_back(std::move(run));
       continue;
     }
@@ -1109,6 +1107,13 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     prevSpanHbFont = spanHbFont;
     prevSpanFontSizePx = spanFontSizePx;
     prevSpanPixelScale = spanPixelScale;
+
+    // Hidden/collapsed spans participate in layout (pen advances above) but their glyphs
+    // are not rendered. Clear the glyph list so the renderer skips this run.
+    if (span.visibility != Visibility::Visible) {
+      run.glyphs.clear();
+    }
+
     runs.push_back(std::move(run));
   }
 
