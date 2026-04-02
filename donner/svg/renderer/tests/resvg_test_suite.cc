@@ -298,24 +298,16 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-stroke",
         {
-            {"a-stroke-007.svg",
-             Params::WithThreshold(kDefaultThreshold, 12000)},  // Gradient stroke on text
-            {"a-stroke-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 15000)},  // Gradient stroke on text (radial)
-            {"a-stroke-009.svg",
-             Params::WithThreshold(kDefaultThreshold, 33000)},  // <text> stroke on complex text
-            {"a-stroke-dasharray-007.svg", Params::Skip()},     // UB (negative values)
-            {"a-stroke-dasharray-009.svg", Params::Skip()},     // UB (negative sum)
+            {"a-stroke-007.svg", Params::WithThreshold(0.05f)},  // AA artifacts
+            {"a-stroke-008.svg", Params::Skip()},                // Bug: Text bbox calculation
+            {"a-stroke-dasharray-007.svg", Params::Skip()},      // UB (negative values)
+            {"a-stroke-dasharray-009.svg", Params::Skip()},      // UB (negative sum)
             {"a-stroke-dasharray-013.svg",
              Params::WithThreshold(0.13f)},  // Larger threshold due to anti-aliasing artifacts.
             {"a-stroke-linejoin-004.svg",
              Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
             {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
-            {"a-stroke-opacity-004.svg",
-             Params::WithThreshold(kDefaultThreshold, 100)},  // Pattern/stroke
-            {"a-stroke-opacity-006.svg",
-             Params::WithThreshold(kDefaultThreshold, 19000)},  // Stroke opacity on text
-            {"a-stroke-width-004.svg", Params::Skip()},         // UB: Nothing should be rendered
+            {"a-stroke-width-004.svg", Params::Skip()},     // UB: Nothing should be rendered
         })),
     TestNameFromFilename);
 

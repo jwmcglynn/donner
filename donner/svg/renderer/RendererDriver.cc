@@ -498,6 +498,11 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   if (const auto* stroke = std::get_if<PaintServer::Solid>(&instance.resolvedStroke)) {
     const float strokeOpacity = NarrowToFloat(properties.strokeOpacity.getRequired());
     params.strokeColor = css::Color(stroke->color.resolve(currentColor, strokeOpacity));
+  }
+
+  // Always populate stroke params when there's any non-none stroke (solid, gradient, or pattern),
+  // so that the renderer knows to stroke text outlines.
+  if (!std::holds_alternative<PaintServer::None>(instance.resolvedStroke)) {
     params.strokeParams = toStrokeParams(registry, instance, style);
   }
 
