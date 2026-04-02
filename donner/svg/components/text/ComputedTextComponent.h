@@ -10,6 +10,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PathSpline.h"
 #include "donner/svg/core/Visibility.h"
 
@@ -97,6 +98,13 @@ struct ComputedTextComponent {
     double letterSpacingPx = 0.0;
     /// CSS `word-spacing` for this span, resolved to pixels. Populated by RendererDriver.
     double wordSpacingPx = 0.0;
+
+    /// Per-span textLength override from the source element's TextComponent.
+    /// When set, textLength adjustment is applied to this span's run individually
+    /// rather than using the global textLength from TextParams.
+    std::optional<Lengthd> textLength;
+    /// Per-span lengthAdjust from the source element's TextComponent.
+    LengthAdjust lengthAdjust = LengthAdjust::Default;
 
     /// Per-character absolute X positions from \c x attribute lists. Indexed by character
     /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph

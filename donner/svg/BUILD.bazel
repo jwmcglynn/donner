@@ -62,6 +62,7 @@ donner_cc_library(
         "SVGDocument.h",
         "SVGDocumentHandle.h",
         "SVGElement.h",
+        "SVGElementNames.h",
         "SVGEllipseElement.h",
         "SVGFEGaussianBlurElement.h",
         "SVGFilterElement.h",
