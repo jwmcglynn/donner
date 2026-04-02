@@ -364,12 +364,22 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
   float prevSpanFontSizePx = fontSizePx;   // Previous span's font size.
   double prevSpanPixelScale = pixelScale;  // Previous span's pixel scale.
 
+  // Per-run pen extent, tracked for per-span textLength calculation.
+  struct RunPenExtent {
+    double startX = 0.0;
+    double startY = 0.0;
+    double endX = 0.0;
+    double endY = 0.0;
+  };
+  std::vector<RunPenExtent> runExtents;
+
   for (const auto& span : text.spans) {
     ShapedTextRun run;
 
     // Hidden spans (display:none) are not rendered but still consume per-character
     // attribute indices. Push an empty run to maintain run-to-span index correspondence.
     if (span.hidden) {
+      runExtents.push_back({0.0, 0.0, 0.0, 0.0});
       runs.push_back(std::move(run));
       continue;
     }
@@ -485,9 +495,14 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       currentPenX = penX;
       currentPenY = penY;
       haveCurrentPosition = true;
+      runExtents.push_back({penX, penY, penX, penY});
       runs.push_back(std::move(run));
       continue;
     }
+
+    // Capture pen position at the start of glyph layout for per-span textLength.
+    const double runPenStartX = penX;
+    const double runPenStartY = penY;
 
     // Build byte-offset to addressable-character-index map for cluster mapping.
     // The SVG DOM uses UTF-16 indexing for per-character attributes (x, y, dx, dy).
@@ -1096,6 +1111,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         run.glyphs.clear();
       }
 
+      runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
       runs.push_back(std::move(run));
       continue;
     }
@@ -1114,14 +1130,78 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       run.glyphs.clear();
     }
 
+    runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
     runs.push_back(std::move(run));
   }
 
-  // text-anchor and textLength apply to the entire text element (all runs),
-  // not per-span. Compute the global extent from the first glyph of the first
-  // non-empty run to the final pen position.
+  // textLength and text-anchor adjustments. textLength can be specified per-span (on tspan
+  // elements) or globally (on the text element). Per-span textLength takes priority.
   if (!runs.empty()) {
     const bool vertical = isVertical(params.writingMode);
+
+    // Check if any span has per-span textLength.
+    bool anySpanHasTextLength = false;
+    for (const auto& span : text.spans) {
+      if (span.textLength.has_value()) {
+        anySpanHasTextLength = true;
+        break;
+      }
+    }
+
+    // Apply per-span textLength to individual runs.
+    if (anySpanHasTextLength) {
+      for (size_t i = 0; i < runs.size() && i < text.spans.size(); ++i) {
+        auto& run = runs[i];
+        const auto& span = text.spans[i];
+        if (!span.textLength.has_value() || run.glyphs.empty()) {
+          continue;
+        }
+
+        const double runStartPos =
+            vertical ? run.glyphs[0].yPosition : run.glyphs[0].xPosition;
+        // Natural length from pen tracking (includes kerning, letter-spacing, word-spacing).
+        const auto& extent = runExtents[i];
+        double naturalLength = vertical
+            ? (extent.endY - extent.startY)
+            : (extent.endX - extent.startX);
+
+        if (naturalLength <= 0.0) {
+          continue;
+        }
+
+        const double targetLength = span.textLength->toPixels(
+            params.viewBox, params.fontMetrics,
+            vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+
+        if (targetLength <= 0.0) {
+          continue;
+        }
+
+        if (span.lengthAdjust == LengthAdjust::Spacing) {
+          const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
+          const double extraPerGap =
+              (targetLength - naturalLength) / static_cast<double>(numGaps);
+          for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+            if (vertical) {
+              run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
+            } else {
+              run.glyphs[gi].xPosition += extraPerGap * static_cast<double>(gi);
+            }
+          }
+        } else {
+          const double scaleFactor = targetLength / naturalLength;
+          for (auto& g : run.glyphs) {
+            if (vertical) {
+              g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
+              g.yAdvance *= scaleFactor;
+            } else {
+              g.xPosition = runStartPos + (g.xPosition - runStartPos) * scaleFactor;
+              g.xAdvance *= scaleFactor;
+            }
+          }
+        }
+      }
+    }
 
     // Find the global start position from the first glyph across all runs.
     double globalStartX = currentPenX;
@@ -1137,13 +1217,12 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     const double globalNaturalLength =
         vertical ? (currentPenY - globalStartY) : (currentPenX - globalStartX);
 
-    // Apply textLength adjustment across all runs.
-    if (params.textLength.has_value() && globalNaturalLength > 0.0) {
+    // Apply global textLength only when no span has per-span textLength.
+    if (!anySpanHasTextLength && params.textLength.has_value() && globalNaturalLength > 0.0) {
       const double targetLength = params.textLength->toPixels(
           params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
 
       if (targetLength > 0.0) {
-        // Count total glyphs for spacing mode.
         size_t totalGlyphs = 0;
         for (const auto& r : runs) {
           totalGlyphs += r.glyphs.size();

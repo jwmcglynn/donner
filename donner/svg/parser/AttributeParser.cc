@@ -2337,6 +2337,16 @@ std::optional<ParseError> ParseAttribute<SVGTSpanElement>(SVGParserContext& cont
       context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
     }
     element.setRotateList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("textLength")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setTextLength(length);
+    }
+  } else if (name == XMLQualifiedNameRef("lengthAdjust")) {
+    if (value == "spacing") {
+      element.setLengthAdjust(LengthAdjust::Spacing);
+    } else if (value == "spacingAndGlyphs") {
+      element.setLengthAdjust(LengthAdjust::SpacingAndGlyphs);
+    }
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

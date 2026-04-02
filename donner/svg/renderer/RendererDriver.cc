@@ -77,6 +77,17 @@ void resolvePerSpanStyles(Registry& registry,
       span.wordSpacingPx = style->properties->wordSpacing.getRequired().toPixels(
           viewBox, fontMetrics, Lengthd::Extent::X);
 
+      // Resolve per-span textLength from the source entity's own TextComponent.
+      // Only the element's own textLength is used; the parent text element's
+      // textLength is handled globally via TextParams.
+      if (auto* textComp =
+              registry.try_get<components::TextComponent>(span.sourceEntity)) {
+        if (textComp->textLength.has_value()) {
+          span.textLength = textComp->textLength;
+          span.lengthAdjust = textComp->lengthAdjust;
+        }
+      }
+
       // Resolve the fill paint server. Solid colors are stored directly; gradient/pattern
       // url() references are resolved to PaintResolvedReference for the renderer.
       const PaintServer fill = style->properties->fill.getRequired();

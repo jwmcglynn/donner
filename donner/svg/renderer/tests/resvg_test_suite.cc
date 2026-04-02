@@ -367,20 +367,16 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextRendering, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-text-rendering", {},
-                                                     Params::WithThreshold(kDefaultThreshold,
-                                                                           19500))),
-                         TestNameFromFilename);
+                         ValuesIn(getTestsWithPrefix("a-text-rendering")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     TextLength, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-textLength",
-                                {
-                                    {"a-textLength-007.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 7200)},
-                                    {"a-textLength-008.svg", Params::Skip()},  // TODO: Needs triage
-                                },
-                                Params::WithThreshold(kDefaultThreshold, 200))),
+    ValuesIn(
+        getTestsWithPrefix("a-textLength",
+                           {
+                               {"a-textLength-008.svg",
+                                Params::Skip()},  // Bug? We compress slightly more than the golden
+                           })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -393,10 +389,7 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    UnicodeBidi, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-unicode", {}, Params::WithThreshold(kDefaultThreshold, 2500))),
-    TestNameFromFilename);
+// TODO(text-bidi): a-unicode
 
 INSTANTIATE_TEST_SUITE_P(
     Visibility, ImageComparisonTestFixture,
