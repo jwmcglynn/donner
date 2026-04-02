@@ -344,11 +344,9 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-text-anchor",
         {
-            {"a-text-anchor-005.svg",
-             Params::WithThreshold(kDefaultThreshold, 16000)},  // tspan with anchor
-            {"a-text-anchor-010.svg", Params::WithThreshold(kDefaultThreshold, 21500)},  // RTL text
-        },
-        Params::WithThreshold(kDefaultThreshold, 10500))),
+            {"a-text-anchor-006.svg", Params().requireFeature(RendererBackendFeature::TextFull)},
+            {"a-text-anchor-009.svg", Params::WithThreshold(0.1f)},  // Axis AA artifacts
+        })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -366,6 +364,9 @@ INSTANTIATE_TEST_SUITE_P(
         Params::WithThreshold(kDefaultThreshold, 13000))),
     TestNameFromFilename);
 
+// TODO(jwm): We don't implement text-rendering, but the image comparison test fuzziness masks AA
+// differences that are being tested. Investigate the feasibility of adding support and making these
+// tests more strict.
 INSTANTIATE_TEST_SUITE_P(TextRendering, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-text-rendering")), TestNameFromFilename);
 

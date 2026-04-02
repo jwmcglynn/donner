@@ -182,6 +182,16 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
   double currentPenY = 0.0;
   int prevSpanLastGlyph = 0;  // Last glyph of previous span, for cross-span kerning.
 
+  // Text chunk boundaries for per-chunk text-anchor adjustment.
+  // A new chunk starts at the first glyph, at any span with startsNewChunk=true,
+  // and at any character with an absolute x or y position within a span.
+  struct ChunkBoundary {
+    size_t runIndex = 0;      // Index into runs vector.
+    size_t glyphIndex = 0;    // Index into the run's glyph vector.
+    TextAnchor textAnchor = TextAnchor::Start;
+  };
+  std::vector<ChunkBoundary> chunkBoundaries;
+
   // Per-run pen start position, tracked for per-span textLength calculation.
   struct RunPenExtent {
     double startX = 0.0;
@@ -305,6 +315,13 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       }
     }
 
+    // Record chunk boundary at span start if this span starts a new chunk.
+    // The text-anchor may be updated later if this span is empty (the first
+    // non-empty span's text-anchor is used for the chunk).
+    if (span.startsNewChunk || !haveCurrentPosition) {
+      chunkBoundaries.push_back({runs.size(), 0, span.textAnchor});
+    }
+
     // For empty spans, span-start already applied positioning — just propagate.
     if (spanText.empty()) {
       currentPenX = penX;
@@ -346,6 +363,10 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         // Vertical mode: primary advance is along Y, cross-axis is X.
         // Per-character absolute Y overrides the pen along the primary axis.
         const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+        const bool hasAbsoluteX_v = charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
+        if ((hasAbsoluteX_v || hasAbsoluteY) && !firstCodepoint) {
+          chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
+        }
         if (hasAbsoluteY) {
           penY =
               yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
@@ -435,6 +456,12 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         // Per-character absolute X positioning overrides the pen.
         const bool hasAbsoluteX = charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
         const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+
+        // A within-span absolute x or y starts a new text chunk (unless it's the
+        // first character of a span that already started a chunk via startsNewChunk).
+        if ((hasAbsoluteX || hasAbsoluteY) && !firstCodepoint) {
+          chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
+        }
 
         if (hasAbsoluteX) {
           penX =
@@ -691,20 +718,75 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       }
     }
 
-    // Apply text-anchor adjustment across all runs.
-    if (params.textAnchor != TextAnchor::Start) {
-      double shift = 0.0;
-      if (params.textAnchor == TextAnchor::Middle) {
-        shift = -globalNaturalLength / 2.0;
-      } else if (params.textAnchor == TextAnchor::End) {
-        shift = -globalNaturalLength;
+    // Fix up chunk text-anchors: for each chunk, use the text-anchor from the
+    // first span that has actual glyph content (skipping empty whitespace-only spans).
+    for (auto& chunk : chunkBoundaries) {
+      for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
+        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+        if (gStart < runs[ri].glyphs.size()) {
+          chunk.textAnchor = text.spans[ri].textAnchor;
+          break;
+        }
       }
-      for (auto& r : runs) {
-        for (auto& g : r.glyphs) {
-          if (vertical) {
-            g.yPosition += shift;
+    }
+
+    // Apply text-anchor adjustment per text chunk using the chunk boundaries
+    // recorded during layout.
+    for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
+      const auto& chunk = chunkBoundaries[ci];
+      if (chunk.textAnchor == TextAnchor::Start) {
+        continue;
+      }
+
+      // Determine the end boundary (next chunk or end of all runs).
+      size_t endRunIdx = runs.size();
+      size_t endGlyphIdx = 0;
+      if (ci + 1 < chunkBoundaries.size()) {
+        endRunIdx = chunkBoundaries[ci + 1].runIndex;
+        endGlyphIdx = chunkBoundaries[ci + 1].glyphIndex;
+      }
+
+      // Compute chunk extent: first glyph position to last glyph end position.
+      double chunkStartPos = 0.0;
+      double chunkEndPos = 0.0;
+      bool foundFirst = false;
+      for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+        const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
+        for (size_t gi = gStart; gi < gEnd; ++gi) {
+          const auto& g = runs[ri].glyphs[gi];
+          const double pos = vertical ? g.yPosition : g.xPosition;
+          const double adv = vertical ? g.yAdvance : g.xAdvance;
+          if (!foundFirst) {
+            chunkStartPos = pos;
+            chunkEndPos = pos + adv;
+            foundFirst = true;
           } else {
-            g.xPosition += shift;
+            chunkEndPos = pos + adv;
+          }
+        }
+      }
+
+      if (!foundFirst) {
+        continue;
+      }
+
+      const double chunkLength = chunkEndPos - chunkStartPos;
+      double shift = 0.0;
+      if (chunk.textAnchor == TextAnchor::Middle) {
+        shift = -chunkLength / 2.0;
+      } else if (chunk.textAnchor == TextAnchor::End) {
+        shift = -chunkLength;
+      }
+
+      for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+        const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
+        for (size_t gi = gStart; gi < gEnd; ++gi) {
+          if (vertical) {
+            runs[ri].glyphs[gi].yPosition += shift;
+          } else {
+            runs[ri].glyphs[gi].xPosition += shift;
           }
         }
       }
