@@ -1,0 +1,52 @@
+"""SIMD build settings used by transitions and select()s."""
+
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+
+package(default_visibility = ["//visibility:public"])
+
+string_flag(
+    name = "simd_mode",
+    build_setting_default = "native",
+    values = [
+        "native",
+        "scalar",
+    ],
+)
+
+config_setting(
+    name = "simd_native",
+    flag_values = {
+        "//bazel/config:simd_mode": "native",
+    },
+)
+
+config_setting(
+    name = "simd_scalar",
+    flag_values = {
+        "//bazel/config:simd_mode": "scalar",
+    },
+)
+
+# Combined settings (flag + constraint): used to apply x86 AVX2+FMA flags.
+# More specific than simd_scalar (flag-only), so Bazel resolves native+x86
+# before the scalar catch-all when both conditions would otherwise match.
+config_setting(
+    name = "simd_native_x86_64",
+    constraint_values = ["@platforms//cpu:x86_64"],
+    flag_values = {
+        "//bazel/config:simd_mode": "native",
+    },
+)
+
+config_setting(
+    name = "simd_native_x86_32",
+    constraint_values = ["@platforms//cpu:x86_32"],
+    flag_values = {
+        "//bazel/config:simd_mode": "native",
+    },
+)
+
+config_setting(
+    name = "compilation_mode_opt",
+    values = {"compilation_mode": "opt"},
+)

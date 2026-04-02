@@ -1,0 +1,118 @@
+"""Integration tests: rendering parity with Rust tiny-skia golden images."""
+
+load("//:bazel/simd_test.bzl", "tiny_skia_dual_mode_cc_test")
+
+_GOLDEN_IMAGES = ["//third_party/tiny-skia/tests/images:golden_images"]
+
+_COMMON_DEPS = [
+    "//src:tiny_skia_lib",
+    "//tests/test_utils:golden_test_helper",
+    "@googletest//:gtest",
+    "@googletest//:gtest_main",
+]
+
+_COMMON_COPTS = ["-std=c++20"]
+
+tiny_skia_dual_mode_cc_test(
+    name = "fill_test",
+    srcs = ["FillTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "hairline_test",
+    srcs = ["HairlineTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "gradients_test",
+    srcs = ["GradientsTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "stroke_test",
+    srcs = ["StrokeTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "dash_test",
+    srcs = ["DashTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "mask_test",
+    srcs = ["MaskTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "pattern_test",
+    srcs = ["PatternTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "pixmap_test",
+    srcs = ["PixmapTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "path_test",
+    srcs = ["PathTest.cpp"],
+    copts = _COMMON_COPTS,
+    deps = [
+        "//src:tiny_skia_lib",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "gamma_test",
+    srcs = ["GammaTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "skia_dash_test",
+    srcs = ["SkiaDashTest.cpp"],
+    copts = _COMMON_COPTS,
+    data = _GOLDEN_IMAGES,
+    deps = _COMMON_DEPS,
+)
+
+tiny_skia_dual_mode_cc_test(
+    name = "cross_validation_test",
+    srcs = ["CrossValidationTest.cpp"],
+    copts = _COMMON_COPTS,
+    deps = [
+        "//src:tiny_skia_lib",
+        "//tests/test_utils:cross_validator",
+        "//tests/test_utils:rust_reference",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
