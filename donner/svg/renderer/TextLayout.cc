@@ -808,6 +808,7 @@ PathSpline glyphToPathSpline(const stbtt_fontinfo* info, int glyphIndex, float s
   // Track the current point for quad→cubic conversion.
   double curX = 0;
   double curY = 0;
+  bool hasContour = false;
 
   for (int i = 0; i < numVertices; ++i) {
     const double x = static_cast<double>(vertices[i].x) * scale;
@@ -816,7 +817,12 @@ PathSpline glyphToPathSpline(const stbtt_fontinfo* info, int glyphIndex, float s
 
     switch (vertices[i].type) {
       case STBTT_vmove:
+        // Close the previous contour — stb_truetype contours are implicitly closed.
+        if (hasContour) {
+          spline.closePath();
+        }
         spline.moveTo(Vector2d(x, y));
+        hasContour = true;
         curX = x;
         curY = y;
         break;
@@ -856,6 +862,11 @@ PathSpline glyphToPathSpline(const stbtt_fontinfo* info, int glyphIndex, float s
 
       default: break;
     }
+  }
+
+  // Close the final contour.
+  if (hasContour) {
+    spline.closePath();
   }
 
   stbtt_FreeShape(info, vertices);

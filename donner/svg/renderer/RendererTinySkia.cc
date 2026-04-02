@@ -1371,6 +1371,14 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       }
     }
   }
+
+  // Consume pattern paints after use, matching drawPath/drawRect/drawEllipse behavior.
+  if (patternFillPaint_.has_value()) {
+    patternFillPaint_.reset();
+  }
+  if (patternStrokePaint_.has_value()) {
+    patternStrokePaint_.reset();
+  }
 #else
   (void)text;
   (void)params;
