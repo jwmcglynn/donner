@@ -290,6 +290,68 @@ TEST(PathSpline, ClosePathMoveToReplace) {
                           Command{CommandType::LineTo, 3}));
 }
 
+TEST(PathSpline, ConsecutiveClosePathIsNoOp) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.closePath();
+  spline.closePath();  // Should be a no-op, not crash.
+
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::ClosePath, 0}));
+}
+
+TEST(PathSpline, ConsecutiveClosePathThenNewSubpath) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.closePath();
+  spline.closePath();  // No-op.
+  spline.moveTo(kVec3);
+  spline.lineTo(kVec4);
+
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 2},
+                          Command{CommandType::LineTo, 3}));
+}
+
+// Regression test: many consecutive closePath calls after a single subpath.
+// Without the early-return guard in closePath(), each redundant call writes to
+// commands_[SIZE_MAX], corrupting memory. Under ASAN (--config=asan) this is a
+// reliable heap-buffer-overflow; without ASAN it may crash or silently corrupt.
+TEST(PathSpline, ManyConsecutiveClosePathsDoNotCorrupt) {
+  PathSpline spline;
+  spline.moveTo(kVec1);
+  spline.lineTo(kVec2);
+  spline.closePath();
+
+  // Hammer closePath 100 times — each is a no-op.
+  for (int i = 0; i < 100; ++i) {
+    spline.closePath();
+  }
+
+  // Verify the spline is still intact.
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::ClosePath, 0}));
+
+  // Open a new subpath — would crash if internal state was corrupted.
+  spline.moveTo(kVec3);
+  spline.lineTo(kVec4);
+  spline.closePath();
+
+  EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                          Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 2},
+                          Command{CommandType::LineTo, 3}, Command{CommandType::ClosePath, 2}));
+}
+
 TEST(PathSpline, Ellipse) {
   PathSpline spline;
   spline.ellipse(Vector2d(0.0, 1.0), Vector2d(2.0, 1.0));
