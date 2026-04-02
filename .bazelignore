@@ -2,6 +2,9 @@
 examples/bazel-examples
 tools/python
 
+# Ignore subtree repos with their own Bazel workspace
+third_party/tiny-skia-cpp
+
 # Ignore CMake-generated files
 build
 CMakeFiles
