@@ -214,7 +214,6 @@ donner_cc_library(
 donner_cc_binary(
     name = "renderer_tool",
     srcs = ["renderer_tool.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         ":renderer",
         "//donner/base:failure_signal_handler",

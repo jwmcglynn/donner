@@ -540,7 +540,6 @@ def generate_all_packages() -> None:
                     "donner_svg_renderer_skia_deps",
                     "donner_svg_renderer_skia_deps_opt",
                     "donner_svg_renderer_skia_deps_unconfigured",
-                    "donner_svg_renderer_renderer_tool",
                     "donner_svg_renderer_tests_renderer_ascii_tests",
                     "donner_svg_tests_svg_renderer_ascii_tests",
                 }
