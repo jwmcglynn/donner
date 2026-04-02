@@ -1,0 +1,27 @@
+"""tiny_skia shader source groups."""
+
+filegroup(
+    name = "srcs",
+    srcs = [
+        "Gradient.cpp",
+        "LinearGradient.cpp",
+        "Shaders.cpp",
+        "Pattern.cpp",
+        "RadialGradient.cpp",
+        "SweepGradient.cpp",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "hdrs",
+    srcs = [
+        "Gradient.h",
+        "LinearGradient.h",
+        "Shaders.h",
+        "Pattern.h",
+        "RadialGradient.h",
+        "SweepGradient.h",
+    ],
+    visibility = ["//visibility:public"],
+)

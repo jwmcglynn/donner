@@ -1,0 +1,19 @@
+"""Rust FFI bridge to the original tiny-skia library for cross-validation tests."""
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
+
+rust_static_library(
+    name = "tiny_skia_ffi_rust",
+    srcs = ["src/lib.rs"],
+    edition = "2021",
+    deps = ["@crates//:tiny-skia"],
+)
+
+cc_library(
+    name = "tiny_skia_ffi",
+    hdrs = ["include/tiny_skia_ffi.h"],
+    includes = ["include"],
+    visibility = ["//tests:__subpackages__"],
+    deps = [":tiny_skia_ffi_rust"],
+)

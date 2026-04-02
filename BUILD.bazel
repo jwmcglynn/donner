@@ -1,0 +1,16 @@
+"""Top-level package for the tiny_skia_cpp port."""
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "README.md",
+    "LICENSE",
+])
+
+# Convenience alias: native SIMD on the current platform (AVX2+FMA on x86,
+# NEON on ARM64, scalar on everything else). Library users can depend on
+# //:tiny_skia without caring about the native/scalar distinction.
+alias(
+    name = "tiny_skia",
+    actual = "//src:tiny_skia_lib_native",
+)

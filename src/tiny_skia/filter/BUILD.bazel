@@ -1,0 +1,51 @@
+"""Filter operations for tiny_skia pixmaps."""
+
+load("//:bazel/defs.bzl", "tiny_skia_cc_library")
+
+tiny_skia_cc_library(
+    name = "filter",
+    srcs = [
+        "Blend.cpp",
+        "ColorMatrix.cpp",
+        "ColorSpace.cpp",
+        "ComponentTransfer.cpp",
+        "Composite.cpp",
+        "ConvolveMatrix.cpp",
+        "DisplacementMap.cpp",
+        "FilterGraph.cpp",
+        "Flood.cpp",
+        "GaussianBlur.cpp",
+        "Lighting.cpp",
+        "Merge.cpp",
+        "Morphology.cpp",
+        "Offset.cpp",
+        "Tile.cpp",
+        "Turbulence.cpp",
+    ],
+    hdrs = [
+        "Blend.h",
+        "ColorMatrix.h",
+        "ColorSpace.h",
+        "FloatPixmap.h",
+        "ComponentTransfer.h",
+        "Composite.h",
+        "ConvolveMatrix.h",
+        "DisplacementMap.h",
+        "FilterGraph.h",
+        "Flood.h",
+        "GaussianBlur.h",
+        "Lighting.h",
+        "Merge.h",
+        "Morphology.h",
+        "Offset.h",
+        "SimdVec.h",
+        "Tile.h",
+        "Turbulence.h",
+    ],
+    include_prefix = "tiny_skia/filter",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/tiny_skia:tiny_skia_core",
+    ],
+)

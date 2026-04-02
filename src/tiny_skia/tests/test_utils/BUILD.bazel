@@ -1,0 +1,50 @@
+"""Shared test matchers for tiny_skia tests."""
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "geom_matchers",
+    hdrs = ["GeomMatchers.h"],
+    include_prefix = "tiny_skia/tests/test_utils",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src:tiny_skia_lib",
+        "@googletest//:gtest",
+    ],
+)
+
+cc_library(
+    name = "pixmap_mask_matchers",
+    hdrs = ["PixmapMaskMatchers.h"],
+    include_prefix = "tiny_skia/tests/test_utils",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src:tiny_skia_lib",
+        "@googletest//:gtest",
+    ],
+)
+
+cc_library(
+    name = "path_edge_matchers",
+    hdrs = ["PathEdgeMatchers.h"],
+    include_prefix = "tiny_skia/tests/test_utils",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src:tiny_skia_lib",
+        "@googletest//:gtest",
+    ],
+)
+
+cc_library(
+    name = "scan_matchers",
+    hdrs = ["ScanMatchers.h"],
+    include_prefix = "tiny_skia/tests/test_utils",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@googletest//:gtest",
+    ],
+)

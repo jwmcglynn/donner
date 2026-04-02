@@ -1,0 +1,20 @@
+"""Tests for src/tiny_skia/scan modules."""
+
+load("//:bazel/simd_test.bzl", "tiny_skia_dual_mode_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+tiny_skia_dual_mode_cc_test(
+    name = "tiny_skia_scan_tests",
+    srcs = [
+        "ScanPathTest.cpp",
+    ],
+    copts = ["-std=c++20"],
+    deps = [
+        "//src:tiny_skia_lib",
+        "//src/tiny_skia/tests/test_utils:geom_matchers",
+        "//src/tiny_skia/tests/test_utils:scan_matchers",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)

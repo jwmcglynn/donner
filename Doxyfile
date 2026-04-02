@@ -1,0 +1,85 @@
+# Doxyfile for tiny-skia-cpp
+# Concise API reference optimized for LLM consumption.
+# Run: doxygen Doxyfile  (from repo root)
+
+PROJECT_NAME           = "tiny-skia-cpp"
+PROJECT_BRIEF          = "A C++20 2D rendering library (port of tiny-skia)"
+OUTPUT_DIRECTORY       = build/docs
+
+# Only generate HTML.
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+GENERATE_MAN           = NO
+
+# Public surface only — hide private members and undocumented symbols.
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_ALL            = NO
+HIDE_UNDOC_MEMBERS     = YES
+HIDE_UNDOC_CLASSES     = YES
+HIDE_FRIEND_COMPOUNDS  = YES
+INTERNAL_DOCS          = NO
+
+# Input: only public headers.
+INPUT                  = src/tiny_skia/Canvas.h \
+                         src/tiny_skia/Paint.h \
+                         src/tiny_skia/Pixmap.h \
+                         src/tiny_skia/Mask.h \
+                         src/tiny_skia/Path.h \
+                         src/tiny_skia/PathBuilder.h \
+                         src/tiny_skia/Color.h \
+                         src/tiny_skia/Geom.h \
+                         src/tiny_skia/Point.h \
+                         src/tiny_skia/Transform.h \
+                         src/tiny_skia/Stroke.h \
+                         src/tiny_skia/BlendMode.h \
+                         src/tiny_skia/FloatingPoint.h \
+                         src/tiny_skia/shaders/Shaders.h \
+                         src/tiny_skia/shaders/LinearGradient.h \
+                         src/tiny_skia/shaders/RadialGradient.h \
+                         src/tiny_skia/shaders/SweepGradient.h \
+                         src/tiny_skia/shaders/Pattern.h \
+                         src/tiny_skia/shaders/Gradient.h \
+                         src/tiny_skia/pipeline/Pipeline.h \
+                         docs/mainpage.md
+RECURSIVE              = NO
+FILE_PATTERNS          = *.h *.md
+
+# Examples.
+EXAMPLE_PATH           = examples
+EXAMPLE_PATTERNS       = *.cpp *.h
+EXAMPLE_RECURSIVE      = NO
+
+# Use markdown for main page.
+USE_MDFILE_AS_MAINPAGE = docs/mainpage.md
+
+# Preprocessing — resolve includes for cross-referencing.
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+SEARCH_INCLUDES        = YES
+INCLUDE_PATH           = src
+
+# Keep output concise.
+BRIEF_MEMBER_DESC      = YES
+REPEAT_BRIEF           = NO
+ALWAYS_DETAILED_SEC    = NO
+INLINE_INHERITED_MEMB  = NO
+FULL_PATH_NAMES        = NO
+STRIP_FROM_PATH        = src
+STRIP_FROM_INC_PATH    = src
+JAVADOC_AUTOBRIEF      = YES
+MULTILINE_CPP_IS_BRIEF = YES
+TAB_SIZE               = 2
+
+# Navigation / layout.
+DISABLE_INDEX          = NO
+GENERATE_TREEVIEW      = YES
+SORT_MEMBER_DOCS       = NO
+SORT_BRIEF_DOCS        = NO
+
+# Warnings.
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES

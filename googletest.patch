@@ -1,0 +1,6 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -1,0 +1,2 @@
++load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
++

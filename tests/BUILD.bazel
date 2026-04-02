@@ -1,0 +1,27 @@
+"""Top-level test package."""
+
+package(default_visibility = ["//visibility:public"])
+
+test_suite(
+    name = "tiny_skia_dual_mode_suite",
+    tests = [
+        "//src/tiny_skia/path64/tests:tiny_skia_path64_tests",
+        "//src/tiny_skia/pipeline/tests:tiny_skia_pipeline_tests",
+        "//src/tiny_skia/scan/tests:tiny_skia_scan_tests",
+        "//src/tiny_skia/shaders/tests:tiny_skia_shaders_tests",
+        "//src/tiny_skia/tests:tiny_skia_core_tests",
+        "//src/tiny_skia/wide/tests:tiny_skia_wide_tests",
+        "//tests/integration:cross_validation_test",
+        "//tests/integration:dash_test",
+        "//tests/integration:fill_test",
+        "//tests/integration:gamma_test",
+        "//tests/integration:gradients_test",
+        "//tests/integration:hairline_test",
+        "//tests/integration:mask_test",
+        "//tests/integration:path_test",
+        "//tests/integration:pattern_test",
+        "//tests/integration:pixmap_test",
+        "//tests/integration:skia_dash_test",
+        "//tests/integration:stroke_test",
+    ],
+)

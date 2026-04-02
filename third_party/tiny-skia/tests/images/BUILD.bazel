@@ -1,0 +1,8 @@
+"""Golden reference images from Rust tiny-skia test suite."""
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "golden_images",
+    srcs = glob(["**/*.png"]),
+)
