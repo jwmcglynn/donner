@@ -364,6 +364,14 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
   float prevSpanFontSizePx = fontSizePx;   // Previous span's font size.
   double prevSpanPixelScale = pixelScale;  // Previous span's pixel scale.
 
+  // Text chunk boundaries for per-chunk text-anchor adjustment.
+  struct ChunkBoundary {
+    size_t runIndex = 0;
+    size_t glyphIndex = 0;
+    TextAnchor textAnchor = TextAnchor::Start;
+  };
+  std::vector<ChunkBoundary> chunkBoundaries;
+
   // Per-run pen extent, tracked for per-span textLength calculation.
   struct RunPenExtent {
     double startX = 0.0;
@@ -488,6 +496,11 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         penY += dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
         dyList[0].reset();
       }
+    }
+
+    // Record chunk boundary at span start if this span starts a new chunk.
+    if (span.startsNewChunk || !haveCurrentPosition) {
+      chunkBoundaries.push_back({runs.size(), 0, span.textAnchor});
     }
 
     // For empty spans, span-start already applied positioning — just propagate.
@@ -743,6 +756,11 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
       if (vertical) {
         // Vertical mode: primary advance along Y, cross-axis X.
+        const bool hasAbsoluteX_v = charIdx < xList.size() && xList[charIdx].has_value();
+        const bool hasAbsoluteY_v = charIdx < yList.size() && yList[charIdx].has_value();
+        if ((hasAbsoluteX_v || hasAbsoluteY_v) && gi > 0) {
+          chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
+        }
         // Per-character absolute Y (primary axis).
         if (charIdx < yList.size() && yList[charIdx].has_value()) {
           penY = yList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
@@ -891,6 +909,11 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         const unsigned int posIdx = (isRTL && !layoutLTR) ? gi : charIdx;
         const bool hasAbsoluteX = posIdx < xList.size() && xList[posIdx].has_value();
         const bool hasAbsoluteY = posIdx < yList.size() && yList[posIdx].has_value();
+
+        // A within-span absolute x or y starts a new text chunk (unless first glyph).
+        if ((hasAbsoluteX || hasAbsoluteY) && gi > 0) {
+          chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
+        }
 
         // Cross-span kerning: HarfBuzz shapes each span separately, so kerning between
         // the last glyph of the previous span and the first of this span is lost. Apply
@@ -1260,20 +1283,75 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       }
     }
 
-    // Apply text-anchor adjustment across all runs.
-    if (params.textAnchor != TextAnchor::Start) {
-      double shift = 0.0;
-      if (params.textAnchor == TextAnchor::Middle) {
-        shift = -globalNaturalLength / 2.0;
-      } else if (params.textAnchor == TextAnchor::End) {
-        shift = -globalNaturalLength;
+    // Fix up chunk text-anchors: for each chunk, use the text-anchor from the
+    // first span that has actual glyph content (skipping empty whitespace-only spans).
+    for (auto& chunk : chunkBoundaries) {
+      for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
+        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+        if (gStart < runs[ri].glyphs.size()) {
+          chunk.textAnchor = text.spans[ri].textAnchor;
+          break;
+        }
       }
-      for (auto& r : runs) {
-        for (auto& g : r.glyphs) {
-          if (vertical) {
-            g.yPosition += shift;
+    }
+
+    // Apply text-anchor adjustment per text chunk using the chunk boundaries
+    // recorded during layout.
+    for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
+      const auto& chunk = chunkBoundaries[ci];
+      if (chunk.textAnchor == TextAnchor::Start) {
+        continue;
+      }
+
+      // Determine the end boundary (next chunk or end of all runs).
+      size_t endRunIdx = runs.size();
+      size_t endGlyphIdx = 0;
+      if (ci + 1 < chunkBoundaries.size()) {
+        endRunIdx = chunkBoundaries[ci + 1].runIndex;
+        endGlyphIdx = chunkBoundaries[ci + 1].glyphIndex;
+      }
+
+      // Compute chunk extent: first glyph position to last glyph end position.
+      double chunkStartPos = 0.0;
+      double chunkEndPos = 0.0;
+      bool foundFirst = false;
+      for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+        const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
+        for (size_t gi = gStart; gi < gEnd; ++gi) {
+          const auto& g = runs[ri].glyphs[gi];
+          const double pos = vertical ? g.yPosition : g.xPosition;
+          const double adv = vertical ? g.yAdvance : g.xAdvance;
+          if (!foundFirst) {
+            chunkStartPos = pos;
+            chunkEndPos = pos + adv;
+            foundFirst = true;
           } else {
-            g.xPosition += shift;
+            chunkEndPos = pos + adv;
+          }
+        }
+      }
+
+      if (!foundFirst) {
+        continue;
+      }
+
+      const double chunkLength = chunkEndPos - chunkStartPos;
+      double shift = 0.0;
+      if (chunk.textAnchor == TextAnchor::Middle) {
+        shift = -chunkLength / 2.0;
+      } else if (chunk.textAnchor == TextAnchor::End) {
+        shift = -chunkLength;
+      }
+
+      for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+        const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
+        for (size_t gi = gStart; gi < gEnd; ++gi) {
+          if (vertical) {
+            runs[ri].glyphs[gi].yPosition += shift;
+          } else {
+            runs[ri].glyphs[gi].xPosition += shift;
           }
         }
       }

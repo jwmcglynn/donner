@@ -12,6 +12,7 @@
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PathSpline.h"
+#include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/Visibility.h"
 
 namespace donner::svg::components {
@@ -98,6 +99,11 @@ struct ComputedTextComponent {
     double letterSpacingPx = 0.0;
     /// CSS `word-spacing` for this span, resolved to pixels. Populated by RendererDriver.
     double wordSpacingPx = 0.0;
+
+    /// Per-span text-anchor value. Used for per-chunk text-anchor adjustment:
+    /// each text chunk uses the text-anchor of its first rendered character's element.
+    /// Populated by RendererDriver from sourceEntity's ComputedStyleComponent.
+    TextAnchor textAnchor = TextAnchor::Start;
 
     /// Per-span textLength override from the source element's TextComponent.
     /// When set, textLength adjustment is applied to this span's run individually
