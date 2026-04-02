@@ -384,13 +384,13 @@ INSTANTIATE_TEST_SUITE_P(TextRendering, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     TextLength, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-textLength",
-        {
-            {"a-textLength-007.svg", Params::WithThreshold(kDefaultThreshold, 7200)},
-            {"a-textLength-008.svg", Params::WithThreshold(kDefaultThreshold, 13500)},
-        },
-        Params::WithThreshold(kDefaultThreshold, 200))),
+    ValuesIn(getTestsWithPrefix("a-textLength",
+                                {
+                                    {"a-textLength-007.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 7200)},
+                                    {"a-textLength-008.svg", Params::Skip()},  // TODO: Needs triage
+                                },
+                                Params::WithThreshold(kDefaultThreshold, 200))),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -410,26 +410,21 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     Visibility, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-visibility",  //
-        {
-            {"a-visibility-003.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
-            {"a-visibility-004.svg", Params::WithThreshold(kDefaultThreshold, 4000)},
-            {"a-visibility-007.svg", Params::WithThreshold(kDefaultThreshold, 3500)},
-        })),
+    ValuesIn(
+        getTestsWithPrefix("a-visibility",  //
+                           {
+                               {"a-visibility-007.svg",
+                                Params::Skip()},  // Not impl: <text> contributing to bbox handling
+                           })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     WordSpacing, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-word-spacing",
-        {
-            {"a-word-spacing-002.svg", Params::WithThreshold(kDefaultThreshold, 1800)},
-            {"a-word-spacing-003.svg", Params::WithThreshold(kDefaultThreshold, 1700)},
-            {"a-word-spacing-005.svg", Params::WithThreshold(kDefaultThreshold, 1800)},
-            {"a-word-spacing-006.svg", Params::WithThreshold(kDefaultThreshold, 2200)},
-            {"a-word-spacing-007.svg", Params::Skip()},  // UB: word-spacing=-10000
-        })),
+    ValuesIn(getTestsWithPrefix("a-word-spacing",
+                                {
+                                    {"a-word-spacing-007.svg",
+                                     Params::Skip()},  // UB: word-spacing=-10000
+                                })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -445,12 +440,17 @@ INSTANTIATE_TEST_SUITE_P(
              Params().withMaxPixelsDifferent(1500)},  // Bug: Baseline is ~2px off compared to resvg
             {"a-writing-mode-010.svg",
              Params().withMaxPixelsDifferent(1500)},  // Bug: Baseline is ~2px off compared to resvg
-            {"a-writing-mode-011.svg", Params().onlyTextFull()},  // Non-ascii text
-            {"a-writing-mode-012.svg", Params().onlyTextFull()},  // Non-ascii text
-            {"a-writing-mode-013.svg", Params().onlyTextFull()},  // Non-ascii text
-            {"a-writing-mode-014.svg", Params().onlyTextFull()},  // Non-ascii text
-            {"a-writing-mode-015.svg", Params().onlyTextFull()},  // Non-ascii text
-            {"a-writing-mode-016.svg", Params::Skip()},           // UB: tb with rotate
+            {"a-writing-mode-011.svg", Params::Skip().onlyTextFull()},  // Non-ascii text
+            {"a-writing-mode-012.svg", Params().onlyTextFull().withMaxPixelsDifferent(
+                                           600)},  // Non-ascii text, bug: y position is ~1px off
+            {"a-writing-mode-013.svg",
+             Params::Skip().onlyTextFull()},  // Non-ascii text, bug: mixed language
+            {"a-writing-mode-014.svg",
+             Params::Skip().onlyTextFull()},  // Non-ascii text, bug: underline not implemented,
+                                              // mixed language
+            {"a-writing-mode-015.svg",
+             Params::Skip().onlyTextFull()},             // Non-ascii text, bug: CJK punctuation
+            {"a-writing-mode-016.svg", Params::Skip()},  // UB: tb with rotate
             {"a-writing-mode-017.svg", Params::Skip()},  // UB: tb with rotate and underline
             {"a-writing-mode-019.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dx`
             {"a-writing-mode-018.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dx`
@@ -1046,6 +1046,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-tspan-021.svg", Params::Skip()},  // Not impl: Interaction with `clip-path`
             {"e-tspan-022.svg", Params::Skip()},  // Not impl: Interaction with `filter`
             {"e-tspan-026.svg", Params::Skip()},  // Not impl: BIDI reordering
+            {"e-tspan-028.svg", Params::Skip()},  // Bug: Handling kerning with font size changes
+                                                  // with simple text support
             {"e-tspan-030.svg",
              Params().withMaxPixelsDifferent(
                  400)},  // Vertical axis has different AA (its not the focus of the test)

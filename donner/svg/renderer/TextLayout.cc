@@ -192,6 +192,27 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       continue;
     }
 
+    // Per-span font resolution: if the span's font-weight differs from the default (400),
+    // find a weight-matched font.
+    FontHandle spanFont = font;
+    if (span.fontWeight != 400) {
+      for (const auto& family : params.fontFamilies) {
+        FontHandle candidate = fontManager_.findFont(family, span.fontWeight);
+        if (candidate) {
+          spanFont = candidate;
+          break;
+        }
+      }
+    }
+    run.font = spanFont;
+
+    const stbtt_fontinfo* spanInfo = fontManager_.fontInfo(spanFont);
+    if (!spanInfo) {
+      spanInfo = info;
+      spanFont = font;
+      run.font = font;
+    }
+
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
@@ -200,7 +221,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
             ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
                                                         Lengthd::Extent::Mixed))
             : fontSizePx;
-    const float spanScale = fontManager_.scaleForPixelHeight(font, spanFontSizePx);
+    const float spanScale = fontManager_.scaleForPixelHeight(spanFont, spanFontSizePx);
 
     // Resolve per-span baseline-shift using actual font size for em units.
     // Positive CSS baseline-shift = shift up, which in SVG Y-down = subtract from Y.
@@ -216,7 +237,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       int ascent = 0;
       int descent = 0;
       int lineGap = 0;
-      stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
+      stbtt_GetFontVMetrics(spanInfo, &ascent, &descent, &lineGap);
       switch (span.alignmentBaseline) {
         case DominantBaseline::Auto:
         case DominantBaseline::Alphabetic: break;
@@ -304,7 +325,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         charIdx += (codepoint >= 0x10000) ? 2 : 1;
       }
       firstCodepoint = false;
-      const int glyphIndex = stbtt_FindGlyphIndex(info, static_cast<int>(codepoint));
+      const int glyphIndex = stbtt_FindGlyphIndex(spanInfo, static_cast<int>(codepoint));
 
       if (vertical) {
         // Vertical mode: primary advance is along Y, cross-axis is X.
@@ -346,13 +367,13 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
           // is not a multiple of 180°, advance by horizontal metrics).
           int advanceWidth = 0;
           int leftSideBearing = 0;
-          stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &leftSideBearing);
+          stbtt_GetGlyphHMetrics(spanInfo, glyphIndex, &advanceWidth, &leftSideBearing);
           glyph.yAdvance = static_cast<double>(advanceWidth) * spanScale;
 
           // Apply horizontal kerning to vertical pen (sideways glyphs use horizontal metrics).
           const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
           if (!hasAbsoluteY && prevGlyph != 0 && glyphIndex != 0) {
-            const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
+            const int kern = stbtt_GetGlyphKernAdvance(spanInfo, prevGlyph, glyphIndex);
             penY += static_cast<double>(kern) * spanScale;
             glyph.yPosition = penY;
           }
@@ -363,8 +384,8 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
           int fontAscent = 0;
           int fontDescent = 0;
           int fontLineGap = 0;
-          stbtt_GetFontVMetrics(info, &fontAscent, &fontDescent, &fontLineGap);
-          const double phScale = stbtt_ScaleForPixelHeight(info, spanFontSizePx);
+          stbtt_GetFontVMetrics(spanInfo, &fontAscent, &fontDescent, &fontLineGap);
+          const double phScale = stbtt_ScaleForPixelHeight(spanInfo, spanFontSizePx);
           const double centralBaselineOffset =
               (static_cast<double>(fontAscent) + static_cast<double>(fontDescent)) * phScale / 2.0;
           glyph.xPosition -= centralBaselineOffset;
@@ -407,7 +428,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
           // Kern adjustment with previous glyph. Suppress kerning when a new text chunk
           // starts, which happens when the character has an absolute x OR y value.
           if (prevGlyph != 0 && glyphIndex != 0) {
-            const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
+            const int kern = stbtt_GetGlyphKernAdvance(spanInfo, prevGlyph, glyphIndex);
             penX += static_cast<double>(kern) * spanScale;
           }
         }
@@ -434,7 +455,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         // Advance width.
         int advanceWidth = 0;
         int leftSideBearing = 0;
-        stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &leftSideBearing);
+        stbtt_GetGlyphHMetrics(spanInfo, glyphIndex, &advanceWidth, &leftSideBearing);
 
         LayoutGlyph glyph;
         glyph.glyphIndex = glyphIndex;
@@ -504,6 +525,11 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         haveCurrentPosition = true;
       }
 
+      // Hidden/collapsed spans on a path still advance along the path but are not drawn.
+      if (span.visibility != Visibility::Visible) {
+        run.glyphs.clear();
+      }
+
       // Skip textLength and text-anchor adjustments for path-based text.
       runs.push_back(std::move(run));
       continue;
@@ -513,6 +539,13 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     currentPenY = penY;
     haveCurrentPosition = true;
     prevSpanLastGlyph = prevGlyph;
+
+    // Hidden/collapsed spans participate in layout (pen advances above) but their glyphs
+    // are not rendered. Clear the glyph list so the renderer skips this run.
+    if (span.visibility != Visibility::Visible) {
+      run.glyphs.clear();
+    }
+
     runs.push_back(std::move(run));
   }
 

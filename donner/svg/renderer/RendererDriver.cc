@@ -68,6 +68,7 @@ void resolvePerSpanStyles(Registry& registry,
       span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
       span.fontWeight = style->properties->fontWeight.getRequired();
       span.fontSize = style->properties->fontSize.getRequired();
+      span.visibility = style->properties->visibility.getRequired();
       span.opacity = style->properties->opacity.getRequired();
 
       // Resolve per-span letter-spacing and word-spacing to pixels.

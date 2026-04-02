@@ -11,6 +11,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/PathSpline.h"
+#include "donner/svg/core/Visibility.h"
 
 namespace donner::svg::components {
 
@@ -82,6 +83,11 @@ struct ComputedTextComponent {
     /// dominant-baseline for this specific inline element. Populated by RendererDriver from
     /// sourceEntity.
     DominantBaseline alignmentBaseline = DominantBaseline::Auto;
+
+    /// CSS `visibility` value for this span. Hidden/collapsed spans are laid out normally
+    /// (they still advance the pen position) but their glyphs are not drawn.
+    /// Populated by RendererDriver from sourceEntity.
+    Visibility visibility = Visibility::Visible;
 
     /// CSS `opacity` value for this span (0.0-1.0). Populated by RendererDriver from
     /// sourceEntity.
