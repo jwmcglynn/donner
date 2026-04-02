@@ -288,8 +288,15 @@ public:
   Property<Lengthd, PropertyCascade::Inherit> fontSize{
       "font-size", []() -> std::optional<Lengthd> { return Lengthd(16, Lengthd::Unit::Px); }};
 
+  /// Sentinel value for the `bolder` relative keyword, resolved during cascade.
+  static constexpr int kFontWeightBolder = -1;
+  /// Sentinel value for the `lighter` relative keyword, resolved during cascade.
+  static constexpr int kFontWeightLighter = -2;
+
   /// `font-weight` property, which determines the font weight (boldness) for text content.
   /// Inherited. Value is a numeric weight (100-900), where 400=normal and 700=bold.
+  /// The relative keywords `bolder`/`lighter` are stored as sentinel values and resolved
+  /// by \ref resolveFontWeight() during style cascade.
   Property<int, PropertyCascade::Inherit> fontWeight{
       "font-weight", []() -> std::optional<int> { return 400; }};
 
@@ -452,6 +459,14 @@ public:
    *   initial value) for the root element.
    */
   void resolveFontSize(double parentFontSizePx);
+
+  /**
+   * Resolve relative font-weight keywords (`bolder`/`lighter`) against the parent's
+   * computed font-weight.
+   *
+   * @param parentFontWeight The parent element's computed font-weight (100-900). Use 400 for root.
+   */
+  void resolveFontWeight(int parentFontWeight);
 
   /**
    * Parse a single declaration, adding it to the property registry.

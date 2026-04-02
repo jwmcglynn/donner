@@ -27,50 +27,118 @@ namespace donner::svg {
 namespace {
 
 /**
- * Derive a CSS font-family name from a font filename.
+ * Read the font family name from the TrueType/OpenType name table (nameID 1).
+ * This matches how font databases (fontconfig, fontdb) identify font families,
+ * ensuring our test fixture registers fonts under the same family names that
+ * renderers like resvg use.
  *
- * Examples: "NotoSans-Regular.ttf" → "Noto Sans", "MPLUS1p-Regular.ttf" → "MPLUS1p"
- *
- * Splits the stem on '-' to get the base name, then inserts spaces before uppercase
- * letters that follow lowercase letters (camelCase → space-separated).
+ * Returns empty string on failure.
  */
-/// Parse CSS font-weight from a font filename suffix (e.g., "Bold" → 700).
-int fontWeightFromFilename(const std::filesystem::path& path) {
-  std::string stem = path.stem().string();
-  const auto dashPos = stem.find('-');
-  if (dashPos == std::string::npos) {
-    return 400;
+std::string fontFamilyFromData(const std::vector<uint8_t>& data) {
+  if (data.size() < 12) {
+    return {};
   }
-  const std::string suffix = stem.substr(dashPos + 1);
-  if (suffix == "Thin") return 100;
-  if (suffix == "ExtraLight" || suffix == "UltraLight") return 200;
-  if (suffix == "Light") return 300;
-  if (suffix == "Regular") return 400;
-  if (suffix == "Medium") return 500;
-  if (suffix == "SemiBold" || suffix == "DemiBold") return 600;
-  if (suffix == "Bold") return 700;
-  if (suffix == "ExtraBold" || suffix == "UltraBold") return 800;
-  if (suffix == "Black" || suffix == "Heavy") return 900;
-  return 400;
+
+  auto readU16 = [&](size_t offset) -> uint16_t {
+    return static_cast<uint16_t>((data[offset] << 8) | data[offset + 1]);
+  };
+  auto readU32 = [&](size_t offset) -> uint32_t {
+    return (static_cast<uint32_t>(data[offset]) << 24) |
+           (static_cast<uint32_t>(data[offset + 1]) << 16) |
+           (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
+  };
+
+  // Find 'name' table in the offset table.
+  const uint16_t numTables = readU16(4);
+  size_t nameTableOffset = 0;
+  size_t nameTableLength = 0;
+  for (uint16_t i = 0; i < numTables; ++i) {
+    const size_t rec = 12 + i * 16;
+    if (rec + 16 > data.size()) {
+      return {};
+    }
+    if (data[rec] == 'n' && data[rec + 1] == 'a' && data[rec + 2] == 'm' &&
+        data[rec + 3] == 'e') {
+      nameTableOffset = readU32(rec + 8);
+      nameTableLength = readU32(rec + 12);
+      break;
+    }
+  }
+  if (nameTableOffset == 0 || nameTableOffset + nameTableLength > data.size()) {
+    return {};
+  }
+
+  // Parse name table header.
+  const uint16_t nameCount = readU16(nameTableOffset + 2);
+  const size_t stringStorageOffset = nameTableOffset + readU16(nameTableOffset + 4);
+
+  // Search for nameID 1 (Font Family) in platform 3 (Windows, UTF-16BE).
+  for (uint16_t i = 0; i < nameCount; ++i) {
+    const size_t recOff = nameTableOffset + 6 + i * 12;
+    if (recOff + 12 > data.size()) {
+      break;
+    }
+    const uint16_t platformID = readU16(recOff);
+    const uint16_t nameID = readU16(recOff + 6);
+    const uint16_t length = readU16(recOff + 8);
+    const uint16_t offset = readU16(recOff + 10);
+
+    if (nameID == 1 && platformID == 3) {
+      const size_t strStart = stringStorageOffset + offset;
+      if (strStart + length > data.size()) {
+        continue;
+      }
+      // Decode UTF-16BE to ASCII (sufficient for font family names).
+      std::string result;
+      for (size_t j = 0; j + 1 < length; j += 2) {
+        const uint16_t ch = static_cast<uint16_t>((data[strStart + j] << 8) |
+                                                   data[strStart + j + 1]);
+        result.push_back(ch < 128 ? static_cast<char>(ch) : '?');
+      }
+      return result;
+    }
+  }
+
+  return {};
 }
 
-std::string fontFamilyFromFilename(const std::filesystem::path& path) {
-  std::string stem = path.stem().string();
-  // Strip weight/style suffix after the first '-'.
-  if (const auto dashPos = stem.find('-'); dashPos != std::string::npos) {
-    stem = stem.substr(0, dashPos);
+/**
+ * Read the font weight from the OS/2 table's usWeightClass field.
+ * Returns 400 (normal) on failure.
+ */
+int fontWeightFromData(const std::vector<uint8_t>& data) {
+  if (data.size() < 12) {
+    return 400;
   }
 
-  // Insert spaces before uppercase letters that follow lowercase (CamelCase splitting).
-  std::string result;
-  for (size_t i = 0; i < stem.size(); ++i) {
-    if (i > 0 && std::isupper(static_cast<unsigned char>(stem[i])) &&
-        std::islower(static_cast<unsigned char>(stem[i - 1]))) {
-      result.push_back(' ');
+  auto readU16 = [&](size_t offset) -> uint16_t {
+    return static_cast<uint16_t>((data[offset] << 8) | data[offset + 1]);
+  };
+  auto readU32 = [&](size_t offset) -> uint32_t {
+    return (static_cast<uint32_t>(data[offset]) << 24) |
+           (static_cast<uint32_t>(data[offset + 1]) << 16) |
+           (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
+  };
+
+  // Find 'OS/2' table.
+  const uint16_t numTables = readU16(4);
+  for (uint16_t i = 0; i < numTables; ++i) {
+    const size_t rec = 12 + i * 16;
+    if (rec + 16 > data.size()) {
+      return 400;
     }
-    result.push_back(stem[i]);
+    if (data[rec] == 'O' && data[rec + 1] == 'S' && data[rec + 2] == '/' &&
+        data[rec + 3] == '2') {
+      const size_t tableOffset = readU32(rec + 8);
+      // usWeightClass is at offset 4 in the OS/2 table.
+      if (tableOffset + 6 > data.size()) {
+        return 400;
+      }
+      return readU16(tableOffset + 4);
+    }
   }
-  return result;
+
+  return 400;
 }
 
 /// Load all TTF/OTF fonts from a directory and register them as @font-face rules on the document.
@@ -109,7 +177,15 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
     std::vector<uint8_t> fontData(static_cast<size_t>(size));
     fontFile.read(reinterpret_cast<char*>(fontData.data()), size);
 
-    const std::string family = fontFamilyFromFilename(entry.path());
+    // Read the font family name and weight from the font's internal tables (name table
+    // nameID 1 and OS/2 usWeightClass). This matches how font databases like fontconfig
+    // and fontdb identify fonts, ensuring we register fonts under the same family names
+    // that reference renderers like resvg use.
+    std::string family = fontFamilyFromData(fontData);
+    if (family.empty()) {
+      continue;  // Skip fonts with unreadable name tables.
+    }
+    const int weight = fontWeightFromData(fontData);
 
     css::FontFaceSource source;
     source.kind = css::FontFaceSource::Kind::Data;
@@ -117,7 +193,7 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
 
     css::FontFace face;
     face.familyName = RcString(family);
-    face.fontWeight = fontWeightFromFilename(entry.path());
+    face.fontWeight = weight;
     face.sources.push_back(std::move(source));
     faces.push_back(std::move(face));
   }

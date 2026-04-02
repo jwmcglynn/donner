@@ -204,16 +204,6 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-font-family-010.svg", Params::Skip()},  // Fallback list with valid second entry
             {"a-font-family-011.svg", Params::Skip()},  // Bold sans-serif
 
-            // font-weight: bolder/lighter keywords not implemented, bold font variants not
-            // available for weight matching.
-            {"a-font-weight-002.svg", Params::Skip()},  // bold / 700
-            {"a-font-weight-003.svg", Params::Skip()},  // bolder (relative keyword)
-            {"a-font-weight-004.svg", Params::Skip()},  // bolder with clamping
-            {"a-font-weight-005.svg", Params::Skip()},  // bolder without parent
-            {"a-font-weight-006.svg", Params::Skip()},  // lighter
-            {"a-font-weight-009.svg", Params::Skip()},  // 700
-            {"a-font-weight-012.svg", Params::Skip()},  // 650
-
             // font-style: not implemented.
             {"a-font-style-001.svg", Params::Skip()},  // italic
             {"a-font-style-002.svg", Params::Skip()},  // oblique

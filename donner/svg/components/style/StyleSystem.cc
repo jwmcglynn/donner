@@ -208,6 +208,16 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
       }
     }
     computedStyle.properties->resolveFontSize(parentFontSizePx);
+
+    // Resolve relative font-weight keywords (bolder/lighter) against inherited weight.
+    int parentFontWeight = 400;  // CSS initial value.
+    if (parent != entt::null) {
+      const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
+      if (parentStyle.properties) {
+        parentFontWeight = parentStyle.properties->fontWeight.getRequired();
+      }
+    }
+    computedStyle.properties->resolveFontWeight(parentFontWeight);
   }
 }
 
