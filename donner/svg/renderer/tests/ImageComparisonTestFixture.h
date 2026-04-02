@@ -3,11 +3,16 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <ostream>
+#include <string>
+#include <string_view>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {
 
@@ -40,6 +45,8 @@ struct ImageComparisonParams {
   float threshold = kDefaultThreshold;
   /// Maximum number of pixels that can exceed the threshold.
   int maxMismatchedPixels = kDefaultMismatchedPixels;
+  /// If true, count anti-aliased pixels as mismatches instead of suppressing them.
+  bool includeAntiAliasing = false;
   /// If true, skip this test case.
   bool skip = false;
   /// If true, save a .skp file for debugging when a test fails.
@@ -52,6 +59,14 @@ struct ImageComparisonParams {
   std::optional<Vector2i> canvasSize;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
+  /// If false, skip the test when the active backend is Skia.
+  bool allowSkia = true;
+  /// If false, skip the test when the active backend is TinySkia.
+  bool allowTinySkia = true;
+  /// Bitmask of required backend features, built from \ref RendererBackendFeatureMask.
+  uint32_t requiredFeatures = 0;
+  /// Human-readable reason used when backend restrictions cause a skip.
+  std::string_view backendRequirementReason;
 
   /**
    * @brief Creates parameters to skip a test.
@@ -100,6 +115,15 @@ struct ImageComparisonParams {
   }
 
   /**
+   * @brief Counts anti-aliased pixel differences as mismatches.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& includeAntiAliasingDifferences() {
+    includeAntiAliasing = true;
+    return *this;
+  }
+
+  /**
    * @brief Enables updating golden images based on an environment variable.
    * @return Reference to this ImageComparisonParams object.
    */
@@ -117,6 +141,44 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& setCanvasSize(int width, int height) {
     canvasSize = Vector2i(width, height);
+    return *this;
+  }
+
+  /**
+   * @brief Disables one backend for this test case.
+   *
+   * @param backend The backend to disable.
+   * @param reason Optional human-readable skip reason.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& disableBackend(RendererBackend backend,
+                                        std::string_view reason = std::string_view()) {
+    switch (backend) {
+      case RendererBackend::Skia: allowSkia = false; break;
+      case RendererBackend::TinySkia: allowTinySkia = false; break;
+    }
+
+    if (!reason.empty()) {
+      backendRequirementReason = reason;
+    }
+
+    return *this;
+  }
+
+  /**
+   * @brief Requires a renderer feature for this test case.
+   *
+   * @param feature The feature to require.
+   * @param reason Optional human-readable skip reason.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& requireFeature(RendererBackendFeature feature,
+                                        std::string_view reason = std::string_view()) {
+    requiredFeatures |= RendererBackendFeatureMask(feature);
+    if (!reason.empty()) {
+      backendRequirementReason = reason;
+    }
+
     return *this;
   }
 };
@@ -160,7 +222,7 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
  */
 struct TerminalPreviewConfig {
   TerminalPixelMode pixelMode = TerminalPixelMode::kQuarterPixel;  //!< Pixel mode to use.
-  int terminalWidth = 120;                                        //!< Maximum terminal width.
+  int terminalWidth = 120;                                         //!< Maximum terminal width.
 };
 
 /**

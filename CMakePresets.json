@@ -1,0 +1,43 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default (TinySkia)",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "DONNER_RENDERER_BACKEND": "tiny_skia"
+      }
+    },
+    {
+      "name": "skia",
+      "displayName": "Skia Backend",
+      "binaryDir": "${sourceDir}/build-skia",
+      "cacheVariables": {
+        "DONNER_RENDERER_BACKEND": "skia"
+      }
+    },
+    {
+      "name": "tiny-skia",
+      "displayName": "TinySkia Backend",
+      "binaryDir": "${sourceDir}/build-tiny-skia",
+      "cacheVariables": {
+        "DONNER_RENDERER_BACKEND": "tiny_skia"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "skia",
+      "configurePreset": "skia"
+    },
+    {
+      "name": "tiny-skia",
+      "configurePreset": "tiny-skia"
+    }
+  ]
+}

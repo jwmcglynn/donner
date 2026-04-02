@@ -46,6 +46,10 @@ common:latest_llvm --//build_defs:llvm_latest=1
 # Disable warning about not eliding copy on return (NRVO), which started triggering in skia on LLVM 21
 build:latest_llvm --copt=-Wno-nrvo
 
+# Renderer backend selection
+common:skia --//donner/svg/renderer:renderer_backend=skia
+common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
+
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
 build:libc++ --action_env=LDFLAGS=-stdlib=libc++
@@ -75,6 +79,9 @@ build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linko
 
 # Binary size builds
 build:binary-size -c opt --copt=-Os --copt=-g --strip=never
+
+test --test_env=LLM
+test --test_env=DONNER_RENDERER_TEST_VERBOSE
 
 # Coverage builds
 coverage --config=coverage

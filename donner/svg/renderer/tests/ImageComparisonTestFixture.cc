@@ -15,13 +15,8 @@
 
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-#include "donner/svg/renderer/RendererSkia.h"
-#include "donner/svg/renderer/tests/RendererTestUtils.h"
+#include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
-
-// Skia
-#include "include/core/SkData.h"
-#include "include/core/SkPicture.h"
 
 namespace donner::svg {
 
@@ -47,6 +42,21 @@ bool isEnabledFromEnv(const char* name, bool defaultValue) {
   }
 
   return defaultValue;
+}
+
+bool suppressVerboseFailureOutputForLlm() {
+  return isEnabledFromEnv("LLM", false) && !isEnabledFromEnv("DONNER_RENDERER_TEST_VERBOSE", false);
+}
+
+void printVerboseFailureOutputOverrideHint() {
+  if (!suppressVerboseFailureOutputForLlm()) {
+    return;
+  }
+
+  std::cout << "=> Verbose renderer failure output suppressed because LLM=1\n"
+            << "=> To re-enable backend logs, pixel dumps, terminal preview, and SVG contents,\n"
+            << "=> rerun with DONNER_RENDERER_TEST_VERBOSE=1, e.g.:\n"
+            << "=>   DONNER_RENDERER_TEST_VERBOSE=1 bazel test <target> --test_output=errors\n\n";
 }
 
 TerminalPixelMode pixelModeFromEnv() {
@@ -255,6 +265,83 @@ std::string escapeFilename(std::string filename) {
   return filename;
 }
 
+bool isActiveBackendAllowed(const ImageComparisonParams& params) {
+  switch (ActiveRendererBackend()) {
+    case RendererBackend::Skia: return params.allowSkia;
+    case RendererBackend::TinySkia: return params.allowTinySkia;
+  }
+
+  return false;
+}
+
+std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFeatures) {
+  constexpr RendererBackendFeature kFeatures[] = {
+      RendererBackendFeature::Text,
+      RendererBackendFeature::FilterEffects,
+      RendererBackendFeature::AsciiSnapshot,
+      RendererBackendFeature::SkpDebug,
+  };
+
+  for (RendererBackendFeature feature : kFeatures) {
+    if ((requiredFeatures & RendererBackendFeatureMask(feature)) != 0u &&
+        !ActiveRendererSupportsFeature(feature)) {
+      return feature;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::string> skipReasonIfUnsupported(const ImageComparisonParams& params) {
+  if (params.skip) {
+    return std::string("Test case disabled");
+  }
+
+  if (!isActiveBackendAllowed(params)) {
+    const std::string_view reason = params.backendRequirementReason.empty()
+                                        ? std::string_view("this test case")
+                                        : params.backendRequirementReason;
+    return std::string(ActiveRendererBackendName()) + " backend does not support " +
+           std::string(reason);
+  }
+
+  const std::optional<RendererBackendFeature> missingFeature =
+      missingRequiredFeature(params.requiredFeatures);
+  if (missingFeature.has_value()) {
+    const std::string_view reason = params.backendRequirementReason.empty()
+                                        ? RendererBackendFeatureName(*missingFeature)
+                                        : params.backendRequirementReason;
+    return std::string(ActiveRendererBackendName()) + " backend does not support " +
+           std::string(reason);
+  }
+
+  return std::nullopt;
+}
+
+RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
+  const std::size_t tightRowBytes = static_cast<std::size_t>(snapshot.dimensions.x) * 4u;
+  if (snapshot.empty() || snapshot.rowBytes == tightRowBytes) {
+    return snapshot;
+  }
+
+  RendererBitmap normalized;
+  normalized.dimensions = snapshot.dimensions;
+  normalized.rowBytes = tightRowBytes;
+  normalized.pixels.resize(tightRowBytes * static_cast<std::size_t>(snapshot.dimensions.y));
+
+  for (int y = 0; y < snapshot.dimensions.y; ++y) {
+    const auto sourceBegin =
+        snapshot.pixels.begin() +
+        static_cast<std::ptrdiff_t>(static_cast<std::size_t>(y) * snapshot.rowBytes);
+    const auto destBegin =
+        normalized.pixels.begin() +
+        static_cast<std::ptrdiff_t>(static_cast<std::size_t>(y) * normalized.rowBytes);
+    std::copy_n(sourceBegin, static_cast<std::ptrdiff_t>(tightRowBytes), destBegin);
+  }
+
+  return normalized;
+}
+
 }  // namespace
 
 std::optional<TerminalPreviewConfig> PreviewConfigFromEnv(const ImageComparisonParams& params) {
@@ -408,8 +495,13 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
                                                   const std::filesystem::path& svgFilename,
                                                   const char* goldenImageFilename,
                                                   const ImageComparisonParams& params) {
-  std::cout << "[  COMPARE ] " << svgFilename.string()
-            << ": ";  // No endl yet, the line will be continued
+  if (const std::optional<std::string> skipReason = skipReasonIfUnsupported(params);
+      skipReason.has_value()) {
+    GTEST_SKIP() << *skipReason;
+  }
+
+  std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << ActiveRendererBackendName()
+            << "]: ";  // No endl yet, the line will be continued
 
   // The canvas size to draw into, as a recommendation instead of a strict guideline, since some
   // SVGs may override.
@@ -417,43 +509,45 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     document.setCanvasSize(params.canvasSize->x, params.canvasSize->y);
   }
 
-  RendererSkia renderer(/*verbose*/ false);
-  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(RenderDocumentWithActiveBackend(document));
+  ASSERT_EQ(snapshot.rowBytes % 4u, 0u);
 
-  const size_t strideInPixels = renderer.width();
-  const int width = renderer.width();
-  const int height = renderer.height();
+  const size_t strideInPixels = snapshot.rowBytes / 4u;
+  const int width = snapshot.dimensions.x;
+  const int height = snapshot.dimensions.y;
   ASSERT_GT(width, 0);
   ASSERT_GT(height, 0);
+  ASSERT_EQ(snapshot.pixels.size(), snapshot.rowBytes * static_cast<std::size_t>(height));
 
-  if (params.updateGoldenFromEnv) {
+  if (params.updateGoldenFromEnv && ActiveRendererBackend() == RendererBackend::Skia) {
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
     if (goldenImageDirToUpdate != nullptr) {
       const std::filesystem::path goldenImagePath =
           std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
-      RendererImageIO::writeRgbaPixelsToPngFile(
-          goldenImagePath.string().c_str(), renderer.pixelData(), width, height, strideInPixels);
+      RendererImageIO::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(), snapshot.pixels,
+                                                width, height, strideInPixels);
       std::cout << "Updated golden image: " << goldenImagePath.string() << "\n";
       return;
     }
   }
 
-  auto maybeGoldenImage = RendererTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
+  auto maybeGoldenImage = RendererImageTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
   ASSERT_TRUE(maybeGoldenImage.has_value());
 
   Image goldenImage = std::move(maybeGoldenImage.value());
   ASSERT_EQ(goldenImage.width, width);
   ASSERT_EQ(goldenImage.height, height);
   ASSERT_EQ(goldenImage.strideInPixels, strideInPixels);
-  ASSERT_EQ(goldenImage.data.size(), renderer.pixelData().size());
+  ASSERT_EQ(goldenImage.data.size(), snapshot.pixels.size());
 
   std::vector<uint8_t> diffImage;
   diffImage.resize(strideInPixels * height * 4);
 
   pixelmatch::Options options;
   options.threshold = params.threshold;
-  const int mismatchedPixels = pixelmatch::pixelmatch(
-      goldenImage.data, renderer.pixelData(), diffImage, width, height, strideInPixels, options);
+  options.includeAA = params.includeAntiAliasing;
+  const int mismatchedPixels = pixelmatch::pixelmatch(goldenImage.data, snapshot.pixels, diffImage,
+                                                      width, height, strideInPixels, options);
 
   if (mismatchedPixels > params.maxMismatchedPixels) {
     std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
@@ -461,49 +555,78 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
     const std::filesystem::path actualImagePath =
         std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
-    RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(),
-                                              renderer.pixelData(), width, height, strideInPixels);
+    RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), snapshot.pixels,
+                                              width, height, strideInPixels);
 
     const std::filesystem::path diffFilePath =
         std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
-    if (params.saveDebugSkpOnFailure) {
-      std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
-
-      {
-        RendererSkia rendererVerbose(/*verbose*/ true);
-        sk_sp<SkPicture> picture = rendererVerbose.drawIntoSkPicture(document);
-
-        sk_sp<SkData> pictureData = picture->serialize();
+    const bool suppressVerboseOutput = suppressVerboseFailureOutputForLlm();
+    if (!suppressVerboseOutput) {
+      if (params.saveDebugSkpOnFailure &&
+          ActiveRendererSupportsFeature(RendererBackendFeature::SkpDebug)) {
+        std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
 
         const std::filesystem::path skpFilePath =
             std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
-        {
-          std::ofstream file(skpFilePath.string());
-          file.write(
-              reinterpret_cast<const char*>(pictureData->data()),  // NOLINT: Intentional cast
-              static_cast<std::streamsize>(pictureData->size()));
-          EXPECT_TRUE(file.good());
+        if (WriteActiveRendererDebugSkp(document, skpFilePath)) {
+          std::cout << "Load this .skp into https://debugger.skia.org/\n"
+                    << "=> " << skpFilePath.string() << "\n\n";
+        } else {
+          std::cout << "=> Failed to create debug .skp at " << skpFilePath.string() << "\n";
+        }
+      } else {
+        if (params.saveDebugSkpOnFailure) {
+          std::cout << "=> Debug .skp capture is only available for the Skia backend\n";
         }
 
-        std::cout << "Load this .skp into https://debugger.skia.org/\n"
-                  << "=> " << skpFilePath.string() << "\n\n";
+        std::cout << "=> Re-rendering with verbose backend output\n";
+        (void)RenderDocumentWithActiveBackend(document, /*verbose=*/true);
+      }
+    } else {
+      printVerboseFailureOutputOverrideHint();
+    }
+
+    // TODO: Remove this debug output once the root causes of AA test failures are addressed
+    if (!suppressVerboseOutput) {
+      // Dump first 30 mismatched pixels with actual values for debugging.
+      {
+        int dumped = 0;
+        for (int y = 0; y < height && dumped < 30; y++) {
+          for (int x = 0; x < width && dumped < 30; x++) {
+            const size_t idx = (static_cast<size_t>(y) * strideInPixels + x) * 4;
+            if (snapshot.pixels[idx] != goldenImage.data[idx] ||
+                snapshot.pixels[idx + 1] != goldenImage.data[idx + 1] ||
+                snapshot.pixels[idx + 2] != goldenImage.data[idx + 2] ||
+                snapshot.pixels[idx + 3] != goldenImage.data[idx + 3]) {
+              std::cout << "  pixel(" << x << "," << y << "): actual=(" << (int)snapshot.pixels[idx]
+                        << "," << (int)snapshot.pixels[idx + 1] << ","
+                        << (int)snapshot.pixels[idx + 2] << "," << (int)snapshot.pixels[idx + 3]
+                        << ") expected=(" << (int)goldenImage.data[idx] << ","
+                        << (int)goldenImage.data[idx + 1] << "," << (int)goldenImage.data[idx + 2]
+                        << "," << (int)goldenImage.data[idx + 3] << ")\n";
+              dumped++;
+            }
+          }
+        }
       }
     }
 
     ADD_FAILURE() << mismatchedPixels << " pixels different.";
 
-    // Output the SVG content for easier debugging
-    std::cout << "\n\nSVG Content for " << svgFilename.filename().string() << ":\n---\n";
-    std::ifstream svgFile(svgFilename);
-    if (svgFile) {
-      std::string svgContent((std::istreambuf_iterator<char>(svgFile)),
-                             std::istreambuf_iterator<char>());
-      std::cout << svgContent << "\n---\n";
-    } else {
-      std::cout << "Could not read SVG file: " << svgFilename << "\n---\n";
+    if (!suppressVerboseOutput) {
+      // Output the SVG content for easier debugging
+      std::cout << "\n\nSVG Content for " << svgFilename.filename().string() << ":\n---\n";
+      std::ifstream svgFile(svgFilename);
+      if (svgFile) {
+        std::string svgContent((std::istreambuf_iterator<char>(svgFile)),
+                               std::istreambuf_iterator<char>());
+        std::cout << svgContent << "\n---\n";
+      } else {
+        std::cout << "Could not read SVG file: " << svgFilename << "\n---\n";
+      }
     }
 
     std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
@@ -515,7 +638,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       TerminalImageViewerConfig viewerConfig = TerminalImageViewer::DetectConfigFromEnvironment();
       viewerConfig.autoScale = true;  // Enable auto-scaling for terminal preview
 
-      const TerminalImageView actualView{renderer.pixelData(), width, height, strideInPixels};
+      const TerminalImageView actualView{snapshot.pixels, width, height, strideInPixels};
       const TerminalImageView expectedView{goldenImage.data, width, height, strideInPixels};
       const TerminalImageView diffView{diffImage, width, height, strideInPixels};
 

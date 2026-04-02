@@ -14,8 +14,7 @@ extern "C" {
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and SVGParser
-#include "donner/svg/renderer/RendererDriver.h"
-#include "donner/svg/renderer/RendererSkia.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -212,8 +211,7 @@ int main(int argc, char** argv) {
 
   state.loadSVG(svgString);
 
-  RendererSkia renderer;
-  RendererDriver driver(renderer);
+  Renderer renderer;
 
   bool svgChanged = false;
 
@@ -336,10 +334,15 @@ int main(int argc, char** argv) {
     }
 
     if (state.valid) {
-      driver.draw(state.document);
-      const SkBitmap& bitmap = renderer.bitmap();
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.width(), bitmap.height(), 0, GL_RGBA,
-                   GL_UNSIGNED_BYTE, bitmap.getPixels());
+      renderer.draw(state.document);
+      const RendererBitmap bitmap = renderer.takeSnapshot();
+      if (!bitmap.empty()) {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+      }
     }
 
     ImGui::Image(static_cast<ImTextureID>(texture), ImVec2(renderer.width(), renderer.height()));
