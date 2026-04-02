@@ -347,7 +347,12 @@ private:
   explicit RcString(std::vector<char>&& data) {
     assert(data.size() <= kMaxSize);
 
-    data_.long_.shiftedSize = (data.size() << 1) | 1;
+    const size_t originalSize = data.size();
+    // Null-terminate so data() is safe to use with strlen/string_view(const char*).
+    if (data.empty() || data.back() != '\0') {
+      data.push_back('\0');
+    }
+    data_.long_.shiftedSize = (originalSize << 1) | 1;
     data_.long_.data = data.data();
     data_.long_.storage = std::make_shared<std::vector<char>>(std::move(data));
   }
@@ -409,8 +414,15 @@ private:
       assert(size < kMaxSize);
 
       // Allocate and copy into new storage before clearing, for self-assignment safety.
-      auto storage = std::make_shared<std::vector<char>>(size);
+      // Null-terminate so that data() returns a null-terminated pointer, matching
+      // std::string::data() semantics and enabling safe use in strlen/string_view(const char*).
+      const bool needsNullTerminator = data.back() != '\0';
+      auto storage =
+          std::make_shared<std::vector<char>>(size + (needsNullTerminator ? 1 : 0));
       std::copy(data.begin(), data.end(), storage->begin());
+      if (needsNullTerminator) {
+        (*storage)[size] = '\0';
+      }
 
       data_.clear();
       data_.long_.shiftedSize = (size << 1) | 1;

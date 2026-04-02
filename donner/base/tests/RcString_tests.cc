@@ -520,4 +520,52 @@ TEST(RcString, HashMap) {
 #endif
 }
 
+TEST(RcString, DataIsNullTerminated) {
+  // Long strings use heap-allocated storage that is null-terminated, so data() is safe to pass to
+  // strlen() or std::string_view(const char*).
+
+  // Long string (created via initializeStorage).
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    EXPECT_EQ(str.data()[str.size()], '\0');
+    EXPECT_EQ(strlen(str.data()), str.size());
+  }
+
+  // Long string from fromVector.
+  {
+    std::vector<char> vec(50, 'x');
+    RcString str = RcString::fromVector(std::move(vec));
+    EXPECT_EQ(str.data()[str.size()], '\0');
+    EXPECT_EQ(strlen(str.data()), str.size());
+  }
+
+  // After reassignment: long → short → long, verify long is still null-terminated.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    EXPECT_EQ(str.data()[str.size()], '\0');
+    str = "short";
+    str = "back to a very long string that definitely exceeds 30 chars";
+    EXPECT_EQ(str.data()[str.size()], '\0');
+    EXPECT_EQ(strlen(str.data()), str.size());
+  }
+
+  // Verify self-assignment via data() works (data() must be null-terminated for strlen in
+  // operator=(const char*)).
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    const char* raw = str.data();
+    str = raw;  // operator=(const char*) calls strlen(raw), which requires null termination.
+    EXPECT_EQ(str, "test STRING that is longer than 30 characters");
+    EXPECT_EQ(str.data()[str.size()], '\0');
+  }
+
+  // Verify multiple sizes of long strings (starting well past SSO threshold).
+  for (size_t i = 50; i < 512; ++i) {
+    std::string origStr(i, 'a');
+    RcString str(origStr);
+    EXPECT_EQ(str.data()[str.size()], '\0') << "i = " << i;
+    EXPECT_EQ(strlen(str.data()), str.size()) << "i = " << i;
+  }
+}
+
 }  // namespace donner
