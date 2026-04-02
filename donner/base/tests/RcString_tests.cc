@@ -208,6 +208,107 @@ TEST(RcString, Assign) {
     str = std::string_view("new world");
     EXPECT_EQ(str, "new world");
   }
+
+  // Assign a char* long string into a previously allocated short string.
+  {
+    RcString str("short");
+    str = "test STRING that is longer than 30 characters";
+    EXPECT_EQ(str, "test STRING that is longer than 30 characters");
+  }
+
+  // Assign a char* short string into a previously allocated long string.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    str = "tiny";
+    EXPECT_EQ(str, "tiny");
+  }
+
+  // Assign a std::string_view long string into a previously allocated short string.
+  {
+    RcString str("short");
+    str = std::string_view("test STRING that is longer than 30 characters");
+    EXPECT_EQ(str, "test STRING that is longer than 30 characters");
+  }
+
+  // Assign a std::string_view short string into a previously allocated long string.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    str = std::string_view("tiny");
+    EXPECT_EQ(str, "tiny");
+  }
+
+  // Long → Short (>=16 chars, overlaps shared_ptr memory in union) → Long.
+  // Without clearing old storage, this corrupts the shared_ptr and crashes on reassignment.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    str = "sixteen_chars!!!";  // 16 chars: fits in SSO but overlaps shared_ptr bytes
+    EXPECT_EQ(str, "sixteen_chars!!!");
+    str = "another long string that is definitely over 30 characters";
+    EXPECT_EQ(str, "another long string that is definitely over 30 characters");
+  }
+
+  // Same pattern with string_view.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    str = std::string_view("sixteen_chars!!!");
+    EXPECT_EQ(str, "sixteen_chars!!!");
+    str = std::string_view("another long string that is definitely over 30 characters");
+    EXPECT_EQ(str, "another long string that is definitely over 30 characters");
+  }
+
+  // Long → Empty → Long.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    str = "";
+    EXPECT_EQ(str, "");
+    EXPECT_TRUE(str.empty());
+    str = "test STRING that is longer than 30 characters again";
+    EXPECT_EQ(str, "test STRING that is longer than 30 characters again");
+  }
+
+  // Verify reference counting: substr keeps shared data alive after reassignment.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    RcString sub = str.substr(0, str.size() - 1);
+    str = "short";
+    EXPECT_EQ(str, "short");
+    EXPECT_EQ(sub, "test STRING that is longer than 30 character");
+  }
+
+  // Self-referential: assign string_view of own long string data.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    str = std::string_view(str);
+    EXPECT_EQ(str, "test STRING that is longer than 30 characters");
+  }
+
+  // Self-referential: assign own data() as const char*.
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    str = str.data();
+    EXPECT_EQ(str, "test STRING that is longer than 30 characters");
+  }
+
+  // Self-referential: assign a short substring of self (long → short).
+  {
+    RcString str("test STRING that is longer than 30 characters");
+    std::string_view view(str);
+    str = view.substr(0, 4);  // "test" - goes from long to short
+    EXPECT_EQ(str, "test");
+  }
+
+  // Chain of multiple reassignments across short/long boundaries.
+  {
+    RcString str("short");
+    str = "test STRING that is longer than 30 characters";
+    EXPECT_EQ(str, "test STRING that is longer than 30 characters");
+    str = "medium length str!!";  // 19 chars, short
+    EXPECT_EQ(str, "medium length str!!");
+    str = "back to a very long string that definitely exceeds 30 chars";
+    EXPECT_EQ(str, "back to a very long string that definitely exceeds 30 chars");
+    str = "x";
+    EXPECT_EQ(str, "x");
+  }
 }
 
 TEST(RcString, Comparison) {

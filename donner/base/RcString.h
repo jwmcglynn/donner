@@ -398,17 +398,24 @@ private:
     const size_t size = data.size();
 
     if (size <= kShortStringCapacity) {
+      // Copy data before clearing, in case data points into our current storage (self-assignment).
+      char buf[kShortStringCapacity];
+      std::copy(data.begin(), data.end(), &buf[0]);
+
+      data_.clear();
       data_.short_.shiftedSizeByte = static_cast<uint8_t>(size) << 1;
-      std::copy(data.begin(), data.end(), &data_.short_.data[0]);
+      std::copy(&buf[0], &buf[size], &data_.short_.data[0]);
     } else {
       assert(size < kMaxSize);
 
-      data_.long_.shiftedSize = (size << 1) | 1;
-      data_.long_.storage = std::make_shared<std::vector<char>>(size);
+      // Allocate and copy into new storage before clearing, for self-assignment safety.
+      auto storage = std::make_shared<std::vector<char>>(size);
+      std::copy(data.begin(), data.end(), storage->begin());
 
-      std::vector<char>& vec = *data_.long_.storage.get();
-      std::copy(data.begin(), data.end(), vec.begin());
-      data_.long_.data = vec.data();
+      data_.clear();
+      data_.long_.shiftedSize = (size << 1) | 1;
+      data_.long_.data = storage->data();
+      data_.long_.storage = std::move(storage);
     }
   }
 
