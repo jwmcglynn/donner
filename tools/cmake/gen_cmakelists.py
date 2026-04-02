@@ -409,8 +409,8 @@ def generate_root() -> None:
         f.write("  enable_testing()\n")
         f.write("endif()\n\n")
 
-        f.write("# System font dependencies for Linux\n")
-        f.write("if(UNIX AND NOT APPLE)\n")
+        f.write("# System font dependencies for Linux (Skia backend only)\n")
+        f.write("if(DONNER_RENDERER_BACKEND STREQUAL \"skia\" AND UNIX AND NOT APPLE)\n")
         f.write("  find_package(PkgConfig REQUIRED)\n")
         f.write("  pkg_check_modules(FREETYPE REQUIRED freetype2)\n")
         f.write("  pkg_check_modules(FONTCONFIG REQUIRED fontconfig)\n")
@@ -540,6 +540,9 @@ def generate_all_packages() -> None:
                     "donner_svg_renderer_skia_deps",
                     "donner_svg_renderer_skia_deps_opt",
                     "donner_svg_renderer_skia_deps_unconfigured",
+                    "donner_svg_renderer_renderer_tool",
+                    "donner_svg_renderer_tests_renderer_ascii_tests",
+                    "donner_svg_tests_svg_renderer_ascii_tests",
                 }
                 _TINY_SKIA_ONLY_TARGETS = {
                     "donner_svg_renderer_renderer_tiny_skia",
@@ -567,10 +570,22 @@ def generate_all_packages() -> None:
                 copts = target_info.copts
                 includes = target_info.includes
 
-                # Strip backend-specific sources from the renderer target;
-                # they are added conditionally via target_sources() below.
+                # Strip backend-specific sources from targets that use select()
+                # in Bazel; they are added conditionally via target_sources() below.
                 if cmake_name == "donner_svg_renderer_renderer":
                     srcs = [s for s in srcs if "Backend" not in s]
+                elif cmake_name == "donner_svg_renderer_tests_renderer_test_backend":
+                    # Emit a configure-time variable for the backend source, then
+                    # inject it as a source. Strip both backend .cc files from auto srcs.
+                    srcs = [s for s in srcs if "BackendSkia" not in s and "BackendTinySkia" not in s]
+                    f.write(
+                        "if(DONNER_RENDERER_BACKEND STREQUAL \"tiny_skia\")\n"
+                        "  set(_TEST_BACKEND_SRC RendererTestBackendTinySkia.cc)\n"
+                        "else()\n"
+                        "  set(_TEST_BACKEND_SRC RendererTestBackendSkia.cc)\n"
+                        "endif()\n"
+                    )
+                    srcs.append("${_TEST_BACKEND_SRC}")
 
                 print(
                     "Adding target:",
@@ -638,14 +653,22 @@ def generate_all_packages() -> None:
                             )
 
                 # Link dependencies
-                _BACKEND_SPECIFIC_DEPS = {
+                #
+                # Backend-specific deps are stripped from most targets because
+                # the `renderer` target pulls in the correct backend
+                # conditionally.  For skia-only targets we keep skia deps but
+                # strip tiny-skia deps (and vice-versa).
+                _SKIA_DEPS = {
                     "donner_svg_renderer_renderer_skia",
-                    "donner_svg_renderer_renderer_tiny_skia",
                     "donner_svg_renderer_skia_deps",
                     "donner_svg_renderer_skia_deps_opt",
                     "donner_svg_renderer_skia_deps_unconfigured",
+                }
+                _TINY_SKIA_DEPS = {
+                    "donner_svg_renderer_renderer_tiny_skia",
                     "tiny_skia",
                 }
+                _ALL_BACKEND_DEPS = _SKIA_DEPS | _TINY_SKIA_DEPS
                 deps: List[str] = []
                 for dep in query_deps(bazel_label):
                     mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
@@ -653,10 +676,15 @@ def generate_all_packages() -> None:
                         p, n = dep.removeprefix("//").split(":", 1)
                         mapped = cmake_target_name(p, n)
                     if mapped and mapped != cmake_name:
-                        # Strip backend-specific deps from the renderer target;
-                        # they are added conditionally below.
-                        if cmake_name == "donner_svg_renderer_renderer" and mapped in _BACKEND_SPECIFIC_DEPS:
-                            continue
+                        if mapped in _ALL_BACKEND_DEPS:
+                            # Skia-only targets keep skia deps, drop tiny-skia
+                            if cmake_name in _SKIA_ONLY_TARGETS and mapped in _SKIA_DEPS:
+                                pass  # keep
+                            # Tiny-skia-only targets keep tiny-skia deps, drop skia
+                            elif cmake_name in _TINY_SKIA_ONLY_TARGETS and mapped in _TINY_SKIA_DEPS:
+                                pass  # keep
+                            else:
+                                continue  # strip
                         deps.append(mapped)
 
                 if deps:
@@ -699,7 +727,7 @@ def generate_all_packages() -> None:
                             "DONNER_USE_FREETYPE)\n"
                         )
 
-                # Override the renderer target to select backend at configure time
+                # Override targets that use Bazel select() for backend sources/deps
                 if cmake_name == "donner_svg_renderer_renderer":
                     f.write(
                         "# Backend selection: replace auto-generated sources/deps\n"
@@ -720,6 +748,14 @@ def generate_all_packages() -> None:
     root = Path("CMakeLists.txt")
     with root.open("a") as f:
         f.write("\n# Umbrella library for external consumers\n")
+        _UMBRELLA_SKIP = {
+            "donner_svg_renderer_renderer_skia",
+            "donner_svg_renderer_renderer_tiny_skia",
+            "donner_svg_renderer_skia_deps",
+            "donner_svg_renderer_skia_deps_opt",
+            "donner_svg_renderer_skia_deps_unconfigured",
+            "tiny_skia",
+        }
         f.write("if(NOT TARGET donner)\n")
         f.write("  add_library(donner INTERFACE)\n")
         for dep in query_deps("//:donner"):
@@ -728,7 +764,7 @@ def generate_all_packages() -> None:
                 if not dep.startswith("//")
                 else cmake_target_name(*dep.removeprefix("//").split(":", 1))
             )
-            if mapped and mapped != "donner":
+            if mapped and mapped != "donner" and mapped not in _UMBRELLA_SKIP:
                 f.write(f"  target_link_libraries(donner INTERFACE {mapped})\n")
         f.write("endif()\n")
 
