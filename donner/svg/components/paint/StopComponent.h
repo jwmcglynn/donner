@@ -3,7 +3,9 @@
 
 #include <optional>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
 
@@ -57,5 +59,11 @@ struct StopComponent {
   /// The properties of the \ref xml_stop element.
   StopProperties properties;
 };
+
+/**
+ * Parse presentation attributes for a \ref xml_stop element, such as stop-color and stop-opacity.
+ */
+ParseResult<bool> ParseStopPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                  const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

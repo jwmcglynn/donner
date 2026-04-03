@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"
@@ -80,5 +81,11 @@ struct EllipseComponent {
   /// The properties of the ellipse.
   EllipseProperties properties;
 };
+
+/**
+ * Parse presentation attributes for a \ref xml_ellipse element, such as cx, cy, rx, ry.
+ */
+ParseResult<bool> ParseEllipsePresentationAttribute(EntityHandle handle, std::string_view name,
+                                                     const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

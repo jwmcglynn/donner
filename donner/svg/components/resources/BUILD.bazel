@@ -10,7 +10,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
-        "//donner/svg/properties",
+        "//donner/svg/properties:property_parsing",
         "//donner/svg/resources:image_resource",
     ],
 )

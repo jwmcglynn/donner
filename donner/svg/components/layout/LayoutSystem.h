@@ -11,6 +11,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
 
@@ -273,5 +274,11 @@ private:
    */
   Vector2d calculateRawDocumentSize(Registry& registry) const;
 };
+
+/**
+ * Parse presentation attributes for sized elements (SVG, Use, Image), such as x, y, width, height.
+ */
+ParseResult<bool> ParseSizedElementPresentationAttribute(
+    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

@@ -21,6 +21,7 @@ donner_cc_library(
     ],
     visibility = [
         "//donner/svg/components:__subpackages__",
+        "//donner/svg/properties:__pkg__",
     ],
     deps = [
         "//donner/base",
@@ -28,9 +29,8 @@ donner_cc_library(
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/shape:components",
-        "//donner/svg/properties",
+        "//donner/svg/properties:property_parsing",
     ],
-    alwayslink = 1,
 )
 
 donner_cc_library(
@@ -51,6 +51,6 @@ donner_cc_library(
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:style_system",
-        "//donner/svg/properties",
+        "//donner/svg/properties:property_parsing",
     ],
 )

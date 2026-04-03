@@ -1,11 +1,7 @@
 #include "donner/svg/properties/PropertyParsing.h"
 
 #include "donner/css/parser/ValueParser.h"
-#include "donner/svg/components/layout/TransformComponent.h"
-#include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
-#include "donner/svg/parser/TransformParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"
 
 namespace donner::svg::parser {
 
@@ -79,39 +75,6 @@ std::span<const css::ComponentValue> PropertyParseFnParams::components() const {
   } else {
     return std::get<std::span<const css::ComponentValue>>(valueOrComponents);
   }
-}
-
-ParseResult<bool> ParseSpecialAttributes(PropertyParseFnParams& params, std::string_view name,
-                                         std::optional<ElementType> type, EntityHandle handle) {
-  if (StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
-    auto& transform = handle.get_or_emplace<components::TransformComponent>();
-    auto maybeError = Parse(
-        params,
-        [](const PropertyParseFnParams& params) {
-          if (const std::string_view* str =
-                  std::get_if<std::string_view>(&params.valueOrComponents)) {
-            return TransformParser::Parse(*str).map<CssTransform>(
-                [](const Transformd& transform) { return CssTransform(transform); });
-          } else {
-            return CssTransformParser::Parse(params.components());
-          }
-        },
-        &transform.transform);
-    if (maybeError) {
-      return std::move(maybeError.value());
-    }
-
-    return true;
-  }
-
-  if (!type.has_value()) {
-    // Stop processing if there is not an element type.
-    return false;
-  }
-
-  return ToConstexpr<ParseResult<bool>>(type.value(), [&](auto elementType) {
-    return ParsePresentationAttribute<elementType()>(handle, name, params);
-  });
 }
 
 std::optional<RcString> TryGetSingleIdent(std::span<const css::ComponentValue> components) {

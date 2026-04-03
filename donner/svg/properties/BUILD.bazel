@@ -1,17 +1,15 @@
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
-    name = "properties",
+    name = "property_parsing",
     srcs = [
         "PaintServer.cc",
-        "PresentationAttributeParsing.cc",
         "PropertyParsing.cc",
         "PropertyRegistry.cc",
         "RxRyProperties.cc",
     ],
     hdrs = [
         "PaintServer.h",
-        "PresentationAttributeParsing.h",
         "PropertyParsing.h",
         "PropertyRegistry.h",
         "RxRyProperties.h",
@@ -30,6 +28,24 @@ donner_cc_library(
         "//donner/svg/components/layout:components",
         "//donner/svg/graph",
         "//donner/svg/parser:parser_core",
+    ],
+)
+
+donner_cc_library(
+    name = "properties",
+    srcs = [
+        "PresentationAttributeParsing.cc",
+    ],
+    hdrs = [
+        "PresentationAttributeParsing.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":property_parsing",
+        "//donner/svg/components/layout:layout_system",
+        "//donner/svg/components/paint:components",
+        "//donner/svg/components/shape:components",
+        "//donner/svg/components/shape:shape_system",
     ],
 )
 

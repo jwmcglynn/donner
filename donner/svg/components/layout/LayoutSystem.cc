@@ -25,7 +25,7 @@
 #include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/parser/TransformParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
+#include "donner/svg/properties/PropertyParsing.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
@@ -112,23 +112,6 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
   }
 }
 
-ParseResult<bool> ParseSizedElementPresentationAttribute(
-    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
-  const SizedElementPresentationAttributeParseFn* parseFn = kProperties.find(name);
-  if (parseFn != nullptr) {
-    SizedElementProperties& properties = handle.get_or_emplace<SizedElementComponent>().properties;
-    auto maybeError = (*parseFn)(properties, params);
-    if (maybeError) {
-      return std::move(maybeError).value();
-    } else {
-      // Property found and parsed successfully.
-      return true;
-    }
-  }
-
-  return false;
-}
-
 template <typename T, PropertyCascade kCascade>
 bool IsAbsolute(const Property<T, kCascade>& property) {
   return property.hasValue() && property.getRequired().isAbsoluteSize();
@@ -174,6 +157,23 @@ Boxd GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Box
 }
 
 }  // namespace
+
+ParseResult<bool> ParseSizedElementPresentationAttribute(
+    EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params) {
+  const SizedElementPresentationAttributeParseFn* parseFn = kProperties.find(name);
+  if (parseFn != nullptr) {
+    SizedElementProperties& properties = handle.get_or_emplace<SizedElementComponent>().properties;
+    auto maybeError = (*parseFn)(properties, params);
+    if (maybeError) {
+      return std::move(maybeError).value();
+    } else {
+      // Property found and parsed successfully.
+      return true;
+    }
+  }
+
+  return false;
+}
 
 std::optional<float> LayoutSystem::intrinsicAspectRatio(EntityHandle entity) const {
   const SizedElementProperties& properties = entity.get<SizedElementComponent>().properties;
@@ -854,36 +854,3 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
 }
 
 }  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-// SVGSVGElement shares this component.
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::SVG>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return components::ParseSizedElementPresentationAttribute(handle, name, params);
-}
-
-// SVGUseElement shares this component.
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Use>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return components::ParseSizedElementPresentationAttribute(handle, name, params);
-}
-
-// SVGImageElement shares this component.
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Image>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return components::ParseSizedElementPresentationAttribute(handle, name, params);
-}
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Symbol>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <symbol> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
-}
-
-}  // namespace donner::svg::parser

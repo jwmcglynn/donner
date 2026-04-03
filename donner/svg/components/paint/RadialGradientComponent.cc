@@ -1,7 +1,5 @@
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
-
 namespace donner::svg::components {
 
 void RadialGradientComponent::inheritAttributes(EntityHandle handle, EntityHandle base) {
@@ -41,15 +39,3 @@ void ComputedRadialGradientComponent::inheritAttributes(EntityHandle handle, Ent
 }
 
 }  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::RadialGradient>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <radialGradient> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
-}
-
-}  // namespace donner::svg::parser

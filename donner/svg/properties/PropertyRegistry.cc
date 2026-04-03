@@ -11,7 +11,10 @@
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
+#include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg {
@@ -1081,7 +1084,6 @@ void PropertyRegistry::parseStyle(std::string_view str) {
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
                                                                std::string_view value,
-                                                               std::optional<ElementType> type,
                                                                EntityHandle handle) {
   /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not necessarily
    * the same. There may need to be a second mapping.
@@ -1094,8 +1096,6 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
    * In practice, we propagate an "AllowUserUnits" flag. "User units" are specified as being
    * equivalent to pixels.
    */
-  assert((!type.has_value() || (type.has_value() && handle != EntityHandle())) &&
-         "If a type is specified, entity handle must be set");
 
   if (!kValidPresentationAttributes.contains(name)) {
     return false;
@@ -1113,7 +1113,30 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
     return true;
   }
 
-  return ParseSpecialAttributes(params, name, type, handle);
+  // Handle 'transform' as a special case — it's stored in TransformComponent, not PropertyRegistry.
+  if (handle != EntityHandle() &&
+      StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
+    auto& transform = handle.get_or_emplace<components::TransformComponent>();
+    auto maybeError = parser::Parse(
+        params,
+        [](const parser::PropertyParseFnParams& params) {
+          if (const std::string_view* str =
+                  std::get_if<std::string_view>(&params.valueOrComponents)) {
+            return parser::TransformParser::Parse(*str).map<CssTransform>(
+                [](const Transformd& transform) { return CssTransform(transform); });
+          } else {
+            return parser::CssTransformParser::Parse(params.components());
+          }
+        },
+        &transform.transform);
+    if (maybeError) {
+      return std::move(maybeError.value());
+    }
+
+    return true;
+  }
+
+  return false;
 }
 
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {

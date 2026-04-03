@@ -6,8 +6,6 @@
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
-
 namespace donner::svg::components {
 
 void TextSystem::instantiateAllComputedComponents(Registry& registry,
@@ -68,23 +66,3 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
 }
 
 }  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-// SVGTextElement shares this component.
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Text>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // TODO: Determine if <text> has presentation attributes
-  return false;
-}
-
-// SVGTSpanElement shares this component.
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::TSpan>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // TODO: Determine if <tspan> has presentation attributes
-  return false;
-}
-
-}  // namespace donner::svg::parser

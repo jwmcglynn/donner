@@ -374,19 +374,21 @@ public:
   void parseStyle(std::string_view str);
 
   /**
-   * Parse a presentation attribute, which can contain a CSS value.
+   * Parse a common presentation attribute (CSS properties like fill, stroke, etc.) or `transform`.
+   *
+   * This handles properties stored in PropertyRegistry and the `transform` attribute. For
+   * element-specific presentation attributes (like `cx` on circles), use
+   * \ref parser::ParsePresentationAttribute separately.
    *
    * @see https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
    *
    * @param name Name of the attribute.
    * @param value Value of the attribute, parsed as a CSS value.
-   * @param type If set, parses additional presentation attributes for the given element type.
-   * @param handle Entity handle to use for parsing additional attributes.
-   * @return true if the element supports this attribute and it was parsed successfully, or a \ref
+   * @param handle Entity handle, needed for `transform` attribute parsing.
+   * @return true if the attribute was parsed successfully, false if not recognized, or a \ref
    * ParseError if parsing failed.
    */
   ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
-                                               std::optional<ElementType> type = std::nullopt,
                                                EntityHandle handle = EntityHandle());
 
   /**

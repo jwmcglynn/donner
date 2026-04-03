@@ -9,11 +9,11 @@
 namespace donner::svg::parser {
 
 /**
- * Parse a presentation attribute,which can contain a CSS value, for a specific \ref ElementType.
+ * Parse a presentation attribute, which can contain a CSS value, for a specific \ref ElementType.
  *
  * @see https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
  *
- * @tparam Type Type of element to parse presentation attributes for.
+ * @param type Type of element to parse presentation attributes for.
  * @param handle Entity handle which determines which attributes are supported, and where to save
  * the parsed value.
  * @param name Name of the attribute.
@@ -22,8 +22,8 @@ namespace donner::svg::parser {
  * @return true if the element supports this attribute and it was parsed successfully, or a \ref
  * ParseError if parsing failed.
  */
-template <ElementType Type>
-ParseResult<bool> ParsePresentationAttribute(EntityHandle handle, std::string_view name,
+ParseResult<bool> ParsePresentationAttribute(ElementType type, EntityHandle handle,
+                                             std::string_view name,
                                              const PropertyParseFnParams& params);
 
 }  // namespace donner::svg::parser

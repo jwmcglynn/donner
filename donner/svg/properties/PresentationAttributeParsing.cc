@@ -1,62 +1,39 @@
 #include "donner/svg/properties/PresentationAttributeParsing.h"
 
+#include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/paint/StopComponent.h"
+#include "donner/svg/components/shape/CircleComponent.h"
+#include "donner/svg/components/shape/EllipseComponent.h"
+#include "donner/svg/components/shape/RectComponent.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
+
 namespace donner::svg::parser {
 
-// For elements without components, define the presentation attribute template overload for them
-// here.
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Defs>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return false;
-}
+ParseResult<bool> ParsePresentationAttribute(ElementType type, EntityHandle handle,
+                                             std::string_view name,
+                                             const PropertyParseFnParams& params) {
+  switch (type) {
+    case ElementType::SVG:
+    case ElementType::Use:
+    case ElementType::Image:
+      return components::ParseSizedElementPresentationAttribute(handle, name, params);
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::G>(EntityHandle handle,
-                                                             std::string_view name,
-                                                             const PropertyParseFnParams& params) {
-  return false;
-}
+    case ElementType::Rect:
+      return components::ParseRectPresentationAttribute(handle, name, params);
+    case ElementType::Circle:
+      return components::ParseCirclePresentationAttribute(handle, name, params);
+    case ElementType::Ellipse:
+      return components::ParseEllipsePresentationAttribute(handle, name, params);
+    case ElementType::Path:
+      return components::ParsePathPresentationAttribute(handle, name, params);
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Unknown>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return false;
-}
+    case ElementType::Stop:
+      return components::ParseStopPresentationAttribute(handle, name, params);
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Filter>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return false;
-}
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::FeGaussianBlur>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  return false;
-}
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::ClipPath>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <clipPath> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
-}
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Marker>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <marker> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
-}
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Mask>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <mask> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
+    // All other elements have no element-specific presentation attributes.
+    default:
+      return false;
+  }
 }
 
 }  // namespace donner::svg::parser

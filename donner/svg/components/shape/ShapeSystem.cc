@@ -9,7 +9,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/PathParser.h"
-#include "donner/svg/properties/PresentationAttributeParsing.h"  // IWYU pragma: keep, defines ParsePresentationAttribute
+#include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
 
@@ -420,24 +420,10 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   return nullptr;
 }
 
-}  // namespace donner::svg::components
-
-namespace donner::svg::parser {
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Line>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <line> still has normal attributes, not presentation attributes that can be specified
-  // in CSS.
-  return false;
-}
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Path>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
+ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::string_view name,
+                                                  const parser::PropertyParseFnParams& params) {
   if (name == "d") {
-    auto maybeError = components::ParseDFromAttributes(
-        handle.get_or_emplace<components::PathComponent>(), params);
+    auto maybeError = ParseDFromAttributes(handle.get_or_emplace<PathComponent>(), params);
     if (maybeError) {
       return std::move(maybeError).value();
     } else {
@@ -448,20 +434,4 @@ ParseResult<bool> ParsePresentationAttribute<ElementType::Path>(
   return false;
 }
 
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Polygon>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <polygon> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
-}
-
-template <>
-ParseResult<bool> ParsePresentationAttribute<ElementType::Polyline>(
-    EntityHandle handle, std::string_view name, const PropertyParseFnParams& params) {
-  // In SVG2, <polyline> still has normal attributes, not presentation attributes that can be
-  // specified in CSS.
-  return false;
-}
-
-}  // namespace donner::svg::parser
+}  // namespace donner::svg::components
