@@ -157,6 +157,8 @@ FontManager::~FontManager() = default;
 
 void FontManager::addFontFace(const css::FontFace& face) {
   faces_.push_back(face);
+  // Clear the lookup cache since the new face may match queries that previously fell back.
+  cache_.clear();
 }
 
 FontHandle FontManager::findFont(std::string_view family) {

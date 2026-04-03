@@ -21,14 +21,12 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
 #ifdef DONNER_TEXT_FULL
-#include "donner/svg/renderer/TextShaper.h"
+#include "donner/svg/renderer/TextBackendFull.h"
 #else
-#include "donner/svg/renderer/TextLayout.h"
+#include "donner/svg/renderer/TextBackendSimple.h"
 #endif
+#include "donner/svg/renderer/TextEngine.h"
 #include "donner/svg/resources/FontManager.h"
-
-#define STBTT_DEF extern
-#include <stb/stb_truetype.h>
 #endif
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/PathBuilder.h"
@@ -1040,14 +1038,14 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
   }
 
 #ifdef DONNER_TEXT_FULL
-  TextShaper shaper(fontManager);
-  std::vector<ShapedTextRun> runs = shaper.layout(text, params);
+  TextBackendFull backend(fontManager);
 #else
-  TextLayout layout(fontManager);
-  std::vector<LayoutTextRun> runs = layout.layout(text, params);
+  TextBackendSimple backend(fontManager);
 #endif
+  TextEngine engine(backend, fontManager);
+  std::vector<TextRun> runs = engine.layout(text, params);
 
-  const stbtt_fontinfo* info = nullptr;
+
   float scale = 0.0f;
   const float fontSizePx = static_cast<float>(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
@@ -1074,19 +1072,15 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       }
 
       // Get font metrics for this run to compute proper em-box vertical extent.
-      const stbtt_fontinfo* runInfo = run.font ? fontManager.fontInfo(run.font) : nullptr;
-      float runScale = run.font ? fontManager.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+      float runScale = run.font ? backend.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
       double emTop = static_cast<double>(runFontSizePx);  // fallback: full font size above baseline
       double emBottom = 0.0;                               // fallback: baseline
-      if (runInfo && runScale > 0.0f) {
-        int runAscent = 0;
-        int runDescent = 0;
-        int runLineGap = 0;
-        stbtt_GetFontVMetrics(runInfo, &runAscent, &runDescent, &runLineGap);
+      if (run.font && runScale > 0.0f) {
+        const FontVMetrics metrics = backend.fontVMetrics(run.font);
         // ascent is positive (above baseline), descent is negative (below baseline).
         // In SVG's y-down space: top = baseline - ascent*scale, bottom = baseline - descent*scale.
-        emTop = static_cast<double>(runAscent) * runScale;
-        emBottom = -static_cast<double>(runDescent) * runScale;
+        emTop = static_cast<double>(metrics.ascent) * runScale;
+        emBottom = -static_cast<double>(metrics.descent) * runScale;
       }
 
       for (const auto& glyph : run.glyphs) {
@@ -1141,12 +1135,11 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     }
 
     if (run.font != FontHandle()) {
-      info = fontManager.fontInfo(run.font);  // nullptr for bitmap-only fonts.
-      scale = fontManager.scaleForPixelHeight(run.font, spanFontSizePx);
+      scale = backend.scaleForPixelHeight(run.font, spanFontSizePx);
     }
 
-    const bool isBitmapFont = run.font && fontManager.isBitmapOnly(run.font);
-    if (!isBitmapFont && (!info || scale == 0.0f)) {
+    const bool isBitmapFont = run.font && backend.isBitmapOnly(run.font);
+    if (!isBitmapFont && scale == 0.0f) {
       continue;
     }
 
@@ -1187,16 +1180,16 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
         continue;  // .notdef glyph, skip.
       }
 
-#ifdef DONNER_TEXT_FULL
       PathSpline glyphPath;
       if (!isBitmapFont) {
-        glyphPath = shaper.glyphOutline(run.font, glyph.glyphIndex,
-                                       scale * glyph.fontSizeScale);
+        glyphPath = backend.glyphOutline(run.font, glyph.glyphIndex,
+                                         scale * glyph.fontSizeScale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = shaper.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        auto bitmap = backend.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        // DEBUG
         if (bitmap) {
           // Premultiply alpha for correct blending.
           std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
@@ -1239,13 +1232,6 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       if (glyphPath.empty()) {
         continue;
       }
-#else
-      PathSpline glyphPath =
-          glyphToPathSpline(info, glyph.glyphIndex, scale * glyph.fontSizeScale);
-      if (glyphPath.empty()) {
-        continue;
-      }
-#endif
 
       // Place glyph geometry in document space, then let the renderer's current transform map it
       // to device space. This avoids relying on composed affine semantics that differ from TinySkia's.
@@ -1274,45 +1260,22 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     }
 
     // Draw text-decoration lines using font metrics.
-    if (params.textDecoration != TextDecoration::None && !run.glyphs.empty() && info) {
-      int ascent = 0;
-      int descent = 0;
-      int lineGap = 0;
-      stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
+    if (params.textDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
+      const FontVMetrics vmetrics = backend.fontVMetrics(run.font);
+      const int ascent = vmetrics.ascent;
+      const int descent = vmetrics.descent;
 
-      // Read underline position/thickness from the font's 'post' table (offsets 8 and 10).
-      // underlinePosition is negative in font units (below baseline).
+      // Read underline position/thickness from the font's 'post' table.
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
-      {
-        // Locate the 'post' table in the TrueType table directory.
-        const unsigned char* data = info->data;
-        const int fontstart = info->fontstart;
-        const int numTables = (data[fontstart + 4] << 8) | data[fontstart + 5];
-        for (int i = 0; i < numTables; ++i) {
-          const int tableDir = fontstart + 12 + i * 16;
-          if (data[tableDir] == 'p' && data[tableDir + 1] == 'o' && data[tableDir + 2] == 's' &&
-              data[tableDir + 3] == 't') {
-            const unsigned int postOffset = static_cast<unsigned int>(data[tableDir + 8]) << 24 |
-                                            static_cast<unsigned int>(data[tableDir + 9]) << 16 |
-                                            static_cast<unsigned int>(data[tableDir + 10]) << 8 |
-                                            static_cast<unsigned int>(data[tableDir + 11]);
-            // post table: offset 8 = underlinePosition (int16), offset 10 = underlineThickness
-            // (int16).
-            fontUnderlinePos =
-                static_cast<double>(static_cast<int16_t>((data[postOffset + 8] << 8) |
-                                                         data[postOffset + 9]));
-            fontUnderlineThick =
-                static_cast<double>(static_cast<int16_t>((data[postOffset + 10] << 8) |
-                                                         data[postOffset + 11]));
-            break;
-          }
-        }
+      if (auto ul = backend.underlineMetrics(run.font)) {
+        fontUnderlinePos = ul->position;
+        fontUnderlineThick = ul->thickness;
       }
 
       // Post table metrics are in font design units — scale by fontSize/unitsPerEm, not by
-      // stbtt_ScaleForPixelHeight (which normalizes to ascent-descent height instead of em).
-      const float emScale = stbtt_ScaleForMappingEmToPixels(info, fontSizePx);
+      // scaleForPixelHeight (which normalizes to ascent-descent height instead of em).
+      const float emScale = backend.scaleForEmToPixels(run.font, fontSizePx);
       // Use font metrics for thickness, with heuristic fallback.
       const double thickness = fontUnderlineThick > 0.0
                                    ? fontUnderlineThick * emScale
