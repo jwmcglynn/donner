@@ -307,8 +307,16 @@ std::array<float, 20> buildColorMatrix(const components::filter_primitive::Color
   std::array<float, 20> m{};
   switch (cm.type) {
     case components::filter_primitive::ColorMatrix::Type::Matrix: {
-      for (std::size_t i = 0; i < std::min(cm.values.size(), std::size_t{20}); ++i) {
-        m[i] = static_cast<float>(cm.values[i]);
+      if (cm.values.size() == 20) {
+        for (std::size_t i = 0; i < 20; ++i) {
+          m[i] = static_cast<float>(cm.values[i]);
+        }
+      } else {
+        // Default to identity matrix when values are missing/incomplete.
+        m[0] = 1.0f;   // R = R
+        m[6] = 1.0f;   // G = G
+        m[12] = 1.0f;  // B = B
+        m[18] = 1.0f;  // A = A
       }
       break;
     }
@@ -367,9 +375,19 @@ void buildTransferTable(const components::filter_primitive::ComponentTransfer::F
     case FuncType::Table: {
       const auto& v = func.tableValues;
       const int n = static_cast<int>(v.size());
-      if (n < 2) {
+      if (n == 0) {
+        // Empty table: identity.
         for (int i = 0; i < 256; ++i) {
           table[i] = static_cast<uint8_t>(i);
+        }
+        break;
+      }
+      if (n == 1) {
+        // Single value: constant output per SVG spec.
+        const uint8_t val =
+            static_cast<uint8_t>(std::clamp(std::lround(v[0] * 255.0), 0L, 255L));
+        for (int i = 0; i < 256; ++i) {
+          table[i] = val;
         }
         break;
       }
@@ -416,6 +434,7 @@ void buildTransferTable(const components::filter_primitive::ComponentTransfer::F
 }
 
 /// Attempt to lower the entire FilterGraph to a single SkImageFilter DAG.
+
 /// Returns nullptr if any node can't be lowered (caller should fall back to CPU path).
 sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& filterGraph,
                                               const Transformd& deviceFromFilter) {
@@ -487,8 +506,71 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
     return Boxd::FromXYWH(x, y, w, h);
   };
 
+  // Extract scale factors from deviceFromFilter. The filter DAG operates on device-pixel
+  // rasters (SourceGraphic captured at device resolution), so all spatial parameters must be
+  // transformed from SVG user/filter space to device pixels.
+  const Vector2d transformedXAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const double scaleX = transformedXAxis.length();
+  const double determinant = deviceFromFilter.determinant();
+  const double scaleY =
+      NearZero(scaleX, 1e-12) ? std::abs(deviceFromFilter.data[3]) : std::abs(determinant) / scaleX;
+
+  auto toDeviceX = [&](double userX) -> SkScalar {
+    return static_cast<SkScalar>(std::abs(userX) * scaleX);
+  };
+  auto toDeviceY = [&](double userY) -> SkScalar {
+    return static_cast<SkScalar>(std::abs(userY) * scaleY);
+  };
+
+  const double bboxW_offset = isOBB ? filterGraph.elementBoundingBox->width() : 1.0;
+  const double bboxH_offset = isOBB ? filterGraph.elementBoundingBox->height() : 1.0;
+  auto toDeviceOffset = [&](double dx, double dy) -> Vector2d {
+    const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW_offset, dy * bboxH_offset)
+                                      : Vector2d(dx, dy);
+    return deviceFromFilter.transformVector(userOffset);
+  };
+
+  // Uniform pixel scale for Z-axis values (lighting).
+  const double pixelScale = [&]() -> double {
+    const Vector2d sx = deviceFromFilter.transformPosition(Vector2d(1, 0)) -
+                        deviceFromFilter.transformPosition(Vector2d(0, 0));
+    const Vector2d sy = deviceFromFilter.transformPosition(Vector2d(0, 1)) -
+                        deviceFromFilter.transformPosition(Vector2d(0, 0));
+    return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
+  }();
+
+  // Transform a user-space Boxd to device-pixel SkRect.
+  auto toDeviceRect = [&](const Boxd& userRegion) -> SkRect {
+    const Boxd deviceBox = deviceFromFilter.transformBox(userRegion);
+    return toSkia(deviceBox);
+  };
+
+  // Convert an sRGB SkColor to linearRGB. Used for colors passed to Skia filter APIs
+  // (SkColor is always sRGB) when the node operates in linearRGB, since the result will
+  // be wrapped in LinearToSRGBGamma.
+  auto srgbToLinearComponent = [](float c) -> float {
+    return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+  };
+  auto toLinearColor = [&](SkColor srgbColor, bool useLinear) -> SkColor {
+    if (!useLinear) {
+      return srgbColor;
+    }
+    const uint8_t a = SkColorGetA(srgbColor);
+    const uint8_t r = static_cast<uint8_t>(
+        std::clamp(srgbToLinearComponent(SkColorGetR(srgbColor) / 255.0f) * 255.0f + 0.5f, 0.0f,
+                   255.0f));
+    const uint8_t g = static_cast<uint8_t>(
+        std::clamp(srgbToLinearComponent(SkColorGetG(srgbColor) / 255.0f) * 255.0f + 0.5f, 0.0f,
+                   255.0f));
+    const uint8_t b = static_cast<uint8_t>(
+        std::clamp(srgbToLinearComponent(SkColorGetB(srgbColor) / 255.0f) * 255.0f + 0.5f, 0.0f,
+                   255.0f));
+    return SkColorSetARGB(a, r, g, b);
+  };
+
   // Track the previous node's resolved subregion (for feTile input subregion).
-  Boxd previousSubregion = defaultSubregion;
+  // Stored in device-pixel coordinates.
+  Boxd previousSubregion = deviceFromFilter.transformBox(defaultSubregion);
   std::map<RcString, Boxd> namedSubregions;
 
   for (const components::FilterNode& node : filterGraph.nodes) {
@@ -531,9 +613,16 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
     // Resolve first (and possibly second) input.
     sk_sp<SkImageFilter> in1 = node.inputs.empty() ? previousFilter : resolveInput(node.inputs[0]);
-    sk_sp<SkImageFilter> in2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : nullptr;
+    const bool hasIn2 = node.inputs.size() > 1;
+    sk_sp<SkImageFilter> in2 = hasIn2 ? resolveInput(node.inputs[1]) : nullptr;
+
+    // Save raw input before color space conversion — used by error-case pass-throughs
+    // that need to bypass the linearRGB round-trip to avoid 8-bit quantization artifacts.
+    sk_sp<SkImageFilter> rawIn1 = in1;
 
     // Apply color space conversion to inputs if this node uses linearRGB.
+    // Note: nullptr is a valid Skia input (means SourceGraphic), so we must apply
+    // the conversion even to nullptr inputs when the node has a second input.
     auto applyColorSpace = [&](sk_sp<SkImageFilter> filter) -> sk_sp<SkImageFilter> {
       if (nodeUsesLinearRGB) {
         return SkImageFilters::ColorFilter(SkColorFilters::SRGBToLinearGamma(), std::move(filter));
@@ -542,55 +631,67 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
     };
 
     in1 = applyColorSpace(std::move(in1));
-    if (in2) {
+    if (hasIn2) {
       in2 = applyColorSpace(std::move(in2));
     }
 
     // Lower the primitive to an SkImageFilter.
     sk_sp<SkImageFilter> result;
+    bool skipLinearRGBPostWrap = false;  // Set by error-case pass-throughs.
 
     const bool lowered = std::visit(
         [&](const auto& primitive) -> bool {
           using T = std::decay_t<decltype(primitive)>;
 
           if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
-            result =
-                SkImageFilters::Blur(static_cast<SkScalar>(primitive.stdDeviationX),
-                                     static_cast<SkScalar>(primitive.stdDeviationY),
-                                     blurEdgeModeToTileMode(primitive.edgeMode), std::move(in1));
+            const SkScalar sigmaX = primitive.stdDeviationX >= 0
+                                        ? toDeviceX(primitive.stdDeviationX) : 0.0f;
+            const SkScalar sigmaY = primitive.stdDeviationY >= 0
+                                        ? toDeviceY(primitive.stdDeviationY) : 0.0f;
+            result = SkImageFilters::Blur(sigmaX, sigmaY,
+                                         blurEdgeModeToTileMode(primitive.edgeMode), std::move(in1));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Offset>) {
-            result = SkImageFilters::Offset(static_cast<SkScalar>(primitive.dx),
-                                            static_cast<SkScalar>(primitive.dy), std::move(in1));
+            const Vector2d offset = toDeviceOffset(primitive.dx, primitive.dy);
+            result = SkImageFilters::Offset(static_cast<SkScalar>(offset.x),
+                                            static_cast<SkScalar>(offset.y), std::move(in1));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Flood>) {
             const auto rgba = primitive.floodColor.asRGBA();
-            const float a = static_cast<float>(primitive.floodOpacity);
+            const float opacity = static_cast<float>(primitive.floodOpacity);
+            // SkColor4f is always unpremultiplied in Skia's API. Pass straight RGBA.
             const SkColor4f color = {
-                static_cast<float>(rgba.r) / 255.0f * a, static_cast<float>(rgba.g) / 255.0f * a,
-                static_cast<float>(rgba.b) / 255.0f * a, static_cast<float>(rgba.a) / 255.0f * a};
+                static_cast<float>(rgba.r) / 255.0f,
+                static_cast<float>(rgba.g) / 255.0f,
+                static_cast<float>(rgba.b) / 255.0f,
+                static_cast<float>(rgba.a) / 255.0f * opacity};
+            // Skip linearRGB post-wrap — the flood color is in sRGB and Skia handles
+            // the premultiplication internally.
+            skipLinearRGBPostWrap = true;
             result = SkImageFilters::Shader(SkShaders::Color(color, nullptr));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Blend>) {
-            result = SkImageFilters::Blend(toSkiaBlendMode(primitive.mode), std::move(in1),
-                                           std::move(in2));
+            // SVG: in=foreground, in2=background. Skia: Blend(mode, background, foreground).
+            result = SkImageFilters::Blend(toSkiaBlendMode(primitive.mode), std::move(in2),
+                                           std::move(in1));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Composite>) {
+            // SVG: in=foreground, in2=background. Skia Blend/Arithmetic: (background, foreground).
             if (primitive.op == fp::Composite::Operator::Arithmetic) {
               result = SkImageFilters::Arithmetic(
                   static_cast<SkScalar>(primitive.k1), static_cast<SkScalar>(primitive.k2),
                   static_cast<SkScalar>(primitive.k3), static_cast<SkScalar>(primitive.k4),
-                  true /* enforcePMColor */, std::move(in1), std::move(in2));
+                  true /* enforcePMColor */, std::move(in2), std::move(in1));
             } else {
               auto blendMode = compositeOpToBlendMode(primitive.op);
               if (!blendMode) {
                 return false;
               }
-              result = SkImageFilters::Blend(*blendMode, std::move(in1), std::move(in2));
+              result = SkImageFilters::Blend(*blendMode, std::move(in2), std::move(in1));
             }
             return true;
 
@@ -615,24 +716,39 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
           } else if constexpr (std::is_same_v<T, fp::DropShadow>) {
             const auto rgba = primitive.floodColor.asRGBA();
             const float opacity = static_cast<float>(primitive.floodOpacity);
+            const Vector2d offset = toDeviceOffset(primitive.dx, primitive.dy);
+            const SkScalar sigmaX = primitive.stdDeviationX >= 0
+                                        ? toDeviceX(primitive.stdDeviationX) : 0.0f;
+            const SkScalar sigmaY = primitive.stdDeviationY >= 0
+                                        ? toDeviceY(primitive.stdDeviationY) : 0.0f;
+            // SkColorSetARGB takes straight sRGB values. No linearRGB conversion
+            // needed — Skia handles the color internally.
             result = SkImageFilters::DropShadow(
-                static_cast<SkScalar>(primitive.dx), static_cast<SkScalar>(primitive.dy),
-                static_cast<SkScalar>(primitive.stdDeviationX),
-                static_cast<SkScalar>(primitive.stdDeviationY),
+                static_cast<SkScalar>(offset.x), static_cast<SkScalar>(offset.y),
+                sigmaX, sigmaY,
                 SkColorSetARGB(static_cast<uint8_t>(std::clamp(rgba.a * opacity, 0.0f, 255.0f)),
                                rgba.r, rgba.g, rgba.b),
                 std::move(in1));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Morphology>) {
+            // Negative or zero radius disables the filter (transparent output).
+            if (primitive.radiusX < 0 || primitive.radiusY < 0 ||
+                (primitive.radiusX == 0 && primitive.radiusY == 0)) {
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              skipLinearRGBPostWrap = true;
+              return true;
+            }
+            // For OBB, radius is relative to bbox dimensions.
+            const double userRx = isOBB ? primitive.radiusX * bboxW_offset : primitive.radiusX;
+            const double userRy = isOBB ? primitive.radiusY * bboxH_offset : primitive.radiusY;
+            const SkScalar rx = static_cast<SkScalar>(std::abs(userRx) * scaleX);
+            const SkScalar ry = static_cast<SkScalar>(std::abs(userRy) * scaleY);
             if (primitive.op == fp::Morphology::Operator::Dilate) {
-              result =
-                  SkImageFilters::Dilate(static_cast<SkScalar>(primitive.radiusX),
-                                         static_cast<SkScalar>(primitive.radiusY), std::move(in1));
+              result = SkImageFilters::Dilate(rx, ry, std::move(in1));
             } else {
-              result =
-                  SkImageFilters::Erode(static_cast<SkScalar>(primitive.radiusX),
-                                        static_cast<SkScalar>(primitive.radiusY), std::move(in1));
+              result = SkImageFilters::Erode(rx, ry, std::move(in1));
             }
             return true;
 
@@ -649,24 +765,55 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
           } else if constexpr (std::is_same_v<T, fp::ConvolveMatrix>) {
             const int orderX = primitive.orderX;
             const int orderY = primitive.orderY;
+            const int requiredSize = orderX * orderY;
+
+            // Validate parameters. Invalid convolve disables the filter (transparent output).
+            if (orderX <= 0 || orderY <= 0 ||
+                static_cast<int>(primitive.kernelMatrix.size()) < requiredSize) {
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              skipLinearRGBPostWrap = true;
+              return true;
+            }
+
             const int targetX = primitive.targetX.value_or(orderX / 2);
             const int targetY = primitive.targetY.value_or(orderY / 2);
+
+            // Out-of-range target disables the filter (transparent output).
+            if (targetX < 0 || targetX >= orderX || targetY < 0 || targetY >= orderY) {
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              skipLinearRGBPostWrap = true;
+              return true;
+            }
+
+            // Handle divisor: explicit 0 disables the filter per common SVG implementations.
+            if (primitive.divisor.has_value() && *primitive.divisor == 0.0) {
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              skipLinearRGBPostWrap = true;
+              return true;
+            }
+
             double divisor = primitive.divisor.value_or(0.0);
             if (divisor == 0.0) {
+              // No explicit divisor: compute from kernel sum.
               divisor = 0.0;
-              for (double v : primitive.kernelMatrix) {
-                divisor += v;
+              for (int i = 0; i < requiredSize; ++i) {
+                divisor += primitive.kernelMatrix[static_cast<std::size_t>(i)];
               }
-              if (NearZero(divisor)) {
+              if (std::abs(divisor) < 1e-10) {
                 divisor = 1.0;
               }
             }
             const float gain = static_cast<float>(1.0 / divisor);
             const float bias = static_cast<float>(primitive.bias);
 
-            std::vector<SkScalar> kernel(primitive.kernelMatrix.size());
-            for (std::size_t i = 0; i < primitive.kernelMatrix.size(); ++i) {
-              kernel[i] = static_cast<SkScalar>(primitive.kernelMatrix[i]);
+            // Use only requiredSize kernel values (ignore extras).
+            std::vector<SkScalar> kernel(static_cast<std::size_t>(requiredSize));
+            for (int i = 0; i < requiredSize; ++i) {
+              kernel[static_cast<std::size_t>(i)] =
+                  static_cast<SkScalar>(primitive.kernelMatrix[static_cast<std::size_t>(i)]);
             }
 
             result = SkImageFilters::MatrixConvolution(
@@ -677,23 +824,32 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
           } else if constexpr (std::is_same_v<T, fp::DisplacementMap>) {
             // Note: Skia's DisplacementMap takes (displacement, color) — in2 is displacement.
+            const double scalePx =
+                isOBB ? primitive.scale * std::sqrt(bboxW_offset * bboxH_offset) * pixelScale
+                      : primitive.scale * pixelScale;
             result = SkImageFilters::DisplacementMap(toSkiaColorChannel(primitive.xChannelSelector),
                                                      toSkiaColorChannel(primitive.yChannelSelector),
-                                                     static_cast<SkScalar>(primitive.scale),
+                                                     static_cast<SkScalar>(scalePx),
                                                      std::move(in2), std::move(in1));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Turbulence>) {
+            // Use Skia's native Perlin noise. While it doesn't exactly match the SVG
+            // spec's algorithm (different lookup tables), it produces visually similar
+            // results and avoids premultiplied/straight alpha format mismatches that
+            // occur with the spec-compliant implementation.
+            const SkScalar freqX = NearZero(scaleX, 1e-12)
+                                       ? static_cast<SkScalar>(primitive.baseFrequencyX)
+                                       : static_cast<SkScalar>(primitive.baseFrequencyX / scaleX);
+            const SkScalar freqY = NearZero(scaleY, 1e-12)
+                                       ? static_cast<SkScalar>(primitive.baseFrequencyY)
+                                       : static_cast<SkScalar>(primitive.baseFrequencyY / scaleY);
             sk_sp<SkShader> shader;
             if (primitive.type == fp::Turbulence::Type::FractalNoise) {
-              shader = SkShaders::MakeFractalNoise(static_cast<SkScalar>(primitive.baseFrequencyX),
-                                                   static_cast<SkScalar>(primitive.baseFrequencyY),
-                                                   primitive.numOctaves,
+              shader = SkShaders::MakeFractalNoise(freqX, freqY, primitive.numOctaves,
                                                    static_cast<SkScalar>(primitive.seed));
             } else {
-              shader = SkShaders::MakeTurbulence(static_cast<SkScalar>(primitive.baseFrequencyX),
-                                                 static_cast<SkScalar>(primitive.baseFrequencyY),
-                                                 primitive.numOctaves,
+              shader = SkShaders::MakeTurbulence(freqX, freqY, primitive.numOctaves,
                                                  static_cast<SkScalar>(primitive.seed));
             }
             result = SkImageFilters::Shader(std::move(shader));
@@ -701,13 +857,28 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
           } else if constexpr (std::is_same_v<T, fp::DiffuseLighting>) {
             if (!primitive.light.has_value()) {
-              return false;
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              return true;
             }
             const auto& light = *primitive.light;
             const auto lightRgba = primitive.lightingColor.asRGBA();
-            const SkColor lightColor = toSkia(lightRgba);
+            const SkColor lightColor = toLinearColor(toSkia(lightRgba), nodeUsesLinearRGB);
             const SkScalar surfaceScale = static_cast<SkScalar>(primitive.surfaceScale);
             const SkScalar kd = static_cast<SkScalar>(primitive.diffuseConstant);
+
+            // Resolve light coordinates: OBB maps x/y through bbox, z scales by bboxH.
+            double userX = light.x, userY = light.y, userZ = light.z;
+            double userPtX = light.pointsAtX, userPtY = light.pointsAtY;
+            double userPtZ = light.pointsAtZ;
+            if (isOBB) {
+              userX = bboxW_offset * light.x + filterGraph.elementBoundingBox->topLeft.x;
+              userY = bboxH_offset * light.y + filterGraph.elementBoundingBox->topLeft.y;
+              userZ = bboxH_offset * light.z;
+              userPtX = bboxW_offset * light.pointsAtX + filterGraph.elementBoundingBox->topLeft.x;
+              userPtY = bboxH_offset * light.pointsAtY + filterGraph.elementBoundingBox->topLeft.y;
+              userPtZ = bboxH_offset * light.pointsAtZ;
+            }
 
             switch (light.type) {
               case fp::LightSource::Type::Distant: {
@@ -721,25 +892,33 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                 break;
               }
               case fp::LightSource::Type::Point: {
-                const SkPoint3 location = {static_cast<SkScalar>(light.x),
-                                           static_cast<SkScalar>(light.y),
-                                           static_cast<SkScalar>(light.z)};
+                const Vector2d pos = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+                const SkPoint3 location = {static_cast<SkScalar>(pos.x),
+                                           static_cast<SkScalar>(pos.y),
+                                           static_cast<SkScalar>(userZ * pixelScale)};
                 result = SkImageFilters::PointLitDiffuse(location, lightColor, surfaceScale, kd,
                                                          std::move(in1));
                 break;
               }
               case fp::LightSource::Type::Spot: {
-                const SkPoint3 location = {static_cast<SkScalar>(light.x),
-                                           static_cast<SkScalar>(light.y),
-                                           static_cast<SkScalar>(light.z)};
-                const SkPoint3 target = {static_cast<SkScalar>(light.pointsAtX),
-                                         static_cast<SkScalar>(light.pointsAtY),
-                                         static_cast<SkScalar>(light.pointsAtZ)};
+                const Vector2d pos = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+                const Vector2d tgt = deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
+                const SkPoint3 location = {static_cast<SkScalar>(pos.x),
+                                           static_cast<SkScalar>(pos.y),
+                                           static_cast<SkScalar>(userZ * pixelScale)};
+                const SkPoint3 target = {static_cast<SkScalar>(tgt.x),
+                                         static_cast<SkScalar>(tgt.y),
+                                         static_cast<SkScalar>(userPtZ * pixelScale)};
                 const SkScalar cutoff = light.limitingConeAngle.has_value()
                                             ? static_cast<SkScalar>(*light.limitingConeAngle)
                                             : 180.0f;
+                // Per SVG spec, negative specularExponent on feSpotLight means "not set" → default 1.
+                // Per SVG spec, negative specularExponent on feSpotLight means "not set" → default 1.
+                const SkScalar spotExp = light.spotExponent < 0
+                                             ? 1.0f
+                                             : static_cast<SkScalar>(light.spotExponent);
                 result = SkImageFilters::SpotLitDiffuse(
-                    location, target, static_cast<SkScalar>(light.spotExponent), cutoff, lightColor,
+                    location, target, spotExp, cutoff, lightColor,
                     surfaceScale, kd, std::move(in1));
                 break;
               }
@@ -748,14 +927,29 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
           } else if constexpr (std::is_same_v<T, fp::SpecularLighting>) {
             if (!primitive.light.has_value()) {
-              return false;
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              return true;
             }
             const auto& light = *primitive.light;
             const auto lightRgba = primitive.lightingColor.asRGBA();
-            const SkColor lightColor = toSkia(lightRgba);
+            const SkColor lightColor = toLinearColor(toSkia(lightRgba), nodeUsesLinearRGB);
             const SkScalar surfaceScale = static_cast<SkScalar>(primitive.surfaceScale);
             const SkScalar ks = static_cast<SkScalar>(primitive.specularConstant);
             const SkScalar shininess = static_cast<SkScalar>(primitive.specularExponent);
+
+            // Resolve light coordinates: OBB maps x/y through bbox, z scales by bboxH.
+            double userX = light.x, userY = light.y, userZ = light.z;
+            double userPtX = light.pointsAtX, userPtY = light.pointsAtY;
+            double userPtZ = light.pointsAtZ;
+            if (isOBB) {
+              userX = bboxW_offset * light.x + filterGraph.elementBoundingBox->topLeft.x;
+              userY = bboxH_offset * light.y + filterGraph.elementBoundingBox->topLeft.y;
+              userZ = bboxH_offset * light.z;
+              userPtX = bboxW_offset * light.pointsAtX + filterGraph.elementBoundingBox->topLeft.x;
+              userPtY = bboxH_offset * light.pointsAtY + filterGraph.elementBoundingBox->topLeft.y;
+              userPtZ = bboxH_offset * light.pointsAtZ;
+            }
 
             switch (light.type) {
               case fp::LightSource::Type::Distant: {
@@ -769,25 +963,32 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                 break;
               }
               case fp::LightSource::Type::Point: {
-                const SkPoint3 location = {static_cast<SkScalar>(light.x),
-                                           static_cast<SkScalar>(light.y),
-                                           static_cast<SkScalar>(light.z)};
+                const Vector2d pos = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+                const SkPoint3 location = {static_cast<SkScalar>(pos.x),
+                                           static_cast<SkScalar>(pos.y),
+                                           static_cast<SkScalar>(userZ * pixelScale)};
                 result = SkImageFilters::PointLitSpecular(location, lightColor, surfaceScale, ks,
                                                           shininess, std::move(in1));
                 break;
               }
               case fp::LightSource::Type::Spot: {
-                const SkPoint3 location = {static_cast<SkScalar>(light.x),
-                                           static_cast<SkScalar>(light.y),
-                                           static_cast<SkScalar>(light.z)};
-                const SkPoint3 target = {static_cast<SkScalar>(light.pointsAtX),
-                                         static_cast<SkScalar>(light.pointsAtY),
-                                         static_cast<SkScalar>(light.pointsAtZ)};
+                const Vector2d pos = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+                const Vector2d tgt = deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
+                const SkPoint3 location = {static_cast<SkScalar>(pos.x),
+                                           static_cast<SkScalar>(pos.y),
+                                           static_cast<SkScalar>(userZ * pixelScale)};
+                const SkPoint3 target = {static_cast<SkScalar>(tgt.x),
+                                         static_cast<SkScalar>(tgt.y),
+                                         static_cast<SkScalar>(userPtZ * pixelScale)};
                 const SkScalar cutoff = light.limitingConeAngle.has_value()
                                             ? static_cast<SkScalar>(*light.limitingConeAngle)
                                             : 180.0f;
+                // Per SVG spec, negative specularExponent on feSpotLight means "not set" → default 1.
+                const SkScalar spotExp = light.spotExponent < 0
+                                             ? 1.0f
+                                             : static_cast<SkScalar>(light.spotExponent);
                 result = SkImageFilters::SpotLitSpecular(
-                    location, target, static_cast<SkScalar>(light.spotExponent), cutoff, lightColor,
+                    location, target, spotExp, cutoff, lightColor,
                     surfaceScale, ks, shininess, std::move(in1));
                 break;
               }
@@ -796,7 +997,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
           } else if constexpr (std::is_same_v<T, fp::Tile>) {
             // feTile tiles the input's subregion to fill the output.
-            // Source rect = input node's subregion, dest rect = filter region.
+            // Both rects are in device-pixel coordinates (subregions stored in device space).
             Boxd inputSubregion = previousSubregion;
             if (!node.inputs.empty()) {
               const auto& input = node.inputs[0];
@@ -812,19 +1013,20 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                   },
                   input.value);
             }
-            const SkRect srcRect = SkRect::MakeXYWH(static_cast<SkScalar>(inputSubregion.topLeft.x),
-                                                    static_cast<SkScalar>(inputSubregion.topLeft.y),
-                                                    static_cast<SkScalar>(inputSubregion.width()),
-                                                    static_cast<SkScalar>(inputSubregion.height()));
-            const Boxd dstRegion = resolveNodeSubregion(node);
-            const SkRect dstRect = SkRect::MakeXYWH(static_cast<SkScalar>(dstRegion.topLeft.x),
-                                                    static_cast<SkScalar>(dstRegion.topLeft.y),
-                                                    static_cast<SkScalar>(dstRegion.width()),
-                                                    static_cast<SkScalar>(dstRegion.height()));
+            const SkRect srcRect = toSkia(inputSubregion);
+            const SkRect dstRect = toDeviceRect(resolveNodeSubregion(node));
+
+            // TODO(jwmcglynn): feTile with generator filter chains (feFlood) doesn't tile
+            // correctly because Skia's SkImageFilter bounds model can't see content from
+            // generators. Needs a pre-render approach or alternative implementation.
             result = SkImageFilters::Tile(srcRect, dstRect, std::move(in1));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Image>) {
+            // feImage data (fragment references or decoded PNGs) is already in sRGB.
+            // Skip the linearRGB post-wrap to avoid double-gamma conversion.
+            skipLinearRGBPostWrap = true;
+
             if (primitive.imageData.empty() || primitive.imageWidth <= 0 ||
                 primitive.imageHeight <= 0) {
               // No image data — produce transparent output.
@@ -856,7 +1058,8 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             }
 
             // Compute viewport from node's subregion for preserveAspectRatio mapping.
-            const Boxd viewport = resolveNodeSubregion(node);
+            // The viewport is in device-pixel coordinates.
+            const Boxd viewport = deviceFromFilter.transformBox(resolveNodeSubregion(node));
             const Boxd imageBox = Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
             const Boxd viewportLocal = Boxd::FromXYWH(0, 0, viewport.width(), viewport.height());
             const Transformd viewportFromImage =
@@ -888,12 +1091,57 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
     }
 
     // Convert back from linearRGB to sRGB if the node operated in linear.
-    if (nodeUsesLinearRGB) {
+    if (nodeUsesLinearRGB && !skipLinearRGBPostWrap) {
       result = SkImageFilters::ColorFilter(SkColorFilters::LinearToSRGBGamma(), std::move(result));
     }
 
-    // Store named result if this node has a result attribute.
-    const Boxd nodeSubregion = resolveNodeSubregion(node);
+    // Clip the node's output to its explicit subregion via CropRect. This is required for
+    // feTile to work correctly: without it, generator filters like feFlood fill infinitely,
+    // making the tile source a solid block with no visible repetition. Only apply when the
+    // node has explicit x/y/width/height attributes.
+    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+        node.height.has_value()) {
+      const SkRect deviceSubregion = toDeviceRect(resolveNodeSubregion(node));
+      // Debug: uncomment to trace subregion CropRects
+      // std::cerr << "[Skia] CropRect: " << deviceSubregion.fLeft << "," << deviceSubregion.fTop
+      //           << " - " << deviceSubregion.fRight << "," << deviceSubregion.fBottom << "\n";
+      result = SkImageFilters::Crop(deviceSubregion, std::move(result));
+    }
+
+    // Track the node's effective subregion in device-pixel coordinates for feTile.
+    // Per SVG spec, if a node has no explicit x/y/width/height, its subregion defaults to
+    // "the tightest bounding box" of its content. Compute this by applying the primitive's
+    // spatial effect to the input subregion (matching tiny-skia's defaultNodeSubregion).
+    const bool hasExplicitSubregion =
+        node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+        node.height.has_value();
+    Boxd nodeSubregion;
+    if (hasExplicitSubregion) {
+      nodeSubregion = deviceFromFilter.transformBox(resolveNodeSubregion(node));
+    } else {
+      // Compute effective subregion from primitive type and input bounds.
+      nodeSubregion = std::visit(
+          [&](const auto& prim) -> Boxd {
+            using T = std::decay_t<decltype(prim)>;
+            if constexpr (std::is_same_v<T, fp::Offset>) {
+              const Vector2d off = toDeviceOffset(prim.dx, prim.dy);
+              return Boxd(previousSubregion.topLeft + off,
+                          previousSubregion.bottomRight + off);
+            } else if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
+              const double ex = std::ceil(toDeviceX(prim.stdDeviationX) * 3.0);
+              const double ey = std::ceil(toDeviceY(prim.stdDeviationY) * 3.0);
+              return Boxd(previousSubregion.topLeft - Vector2d(ex, ey),
+                          previousSubregion.bottomRight + Vector2d(ex, ey));
+            } else if constexpr (std::is_same_v<T, fp::Flood> ||
+                                 std::is_same_v<T, fp::Turbulence> ||
+                                 std::is_same_v<T, fp::Image>) {
+              return deviceFromFilter.transformBox(defaultSubregion);
+            } else {
+              return previousSubregion;
+            }
+          },
+          node.primitive);
+    }
     if (node.result.has_value()) {
       namedResults[*node.result] = result;
       namedSubregions[*node.result] = nodeSubregion;
@@ -1423,23 +1671,11 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
 
   const Transformd deviceFromFilter = toDonnerTransform(currentCanvas_->getTotalMatrix());
 
-  // Try to lower the entire filter graph to native Skia SkImageFilter DAG.
-  if (sk_sp<SkImageFilter> nativeFilter = buildNativeSkiaFilterDAG(filterGraph, deviceFromFilter)) {
-    SkPaint filterPaint;
-    filterPaint.setAntiAlias(antialias_);
-    if (filterRegion.has_value()) {
-      const SkRect cropRect = currentCanvas_->getTotalMatrix().mapRect(toSkia(*filterRegion));
-      nativeFilter = SkImageFilters::Crop(cropRect, std::move(nativeFilter));
-    }
-    filterPaint.setImageFilter(std::move(nativeFilter));
-    currentCanvas_->saveLayer(nullptr, &filterPaint);
-
-    FilterLayerState state;
-    state.usesNativeSkiaFilter = true;
-    filterLayerStack_.push_back(std::move(state));
-    return;
-  }
-
+  // Capture the SourceGraphic into an offscreen SkSurface. We cannot use saveLayer with
+  // SkImageFilter directly because Skia sizes the layer based on filter INPUT bounds
+  // (SkImageFilter::getInputBounds). Generator filters like feFlood and feTurbulence report
+  // Empty() input bounds, so the layer would be undersized. Instead, we capture to a
+  // full-viewport surface and apply the native SkImageFilter DAG in popFilterLayer.
   const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
   const int height = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
   const SkImageInfo surfaceInfo =
@@ -1492,15 +1728,51 @@ void RendererSkia::popFilterLayer() {
   FilterLayerState state = std::move(filterLayerStack_.back());
   filterLayerStack_.pop_back();
 
-  if (state.usesNativeSkiaFilter) {
-    currentCanvas_->restore();
+  // Restore the parent canvas.
+  currentCanvas_ = state.parentCanvas;
+  if (currentCanvas_ == nullptr || state.surface == nullptr) {
     return;
   }
 
-  // All SVG filter primitives are lowered to native Skia SkImageFilter in
-  // buildNativeSkiaFilterDAG(). If we reach here, the lowering failed for an
-  // unexpected reason — just restore the canvas and discard the filter output.
-  currentCanvas_ = state.parentCanvas;
+  // Snapshot the SourceGraphic from the offscreen surface.
+  sk_sp<SkImage> sourceImage = state.surface->makeImageSnapshot();
+  if (sourceImage == nullptr) {
+    return;
+  }
+
+  // Build the native Skia SkImageFilter DAG. In this DAG, SourceGraphic (represented as
+  // nullptr input) will be the sourceImage we captured. We wrap the DAG so that nullptr
+  // inputs resolve to an SkImageFilters::Image of the captured SourceGraphic.
+  sk_sp<SkImageFilter> nativeFilter =
+      buildNativeSkiaFilterDAG(state.filterGraph, state.deviceFromFilter);
+  if (nativeFilter == nullptr) {
+    // If lowering failed, composite the unfiltered SourceGraphic back.
+    currentCanvas_->drawImage(sourceImage, 0, 0);
+    return;
+  }
+
+  // Crop to the filter region in device space.
+  if (state.filterRegion.has_value()) {
+    const SkRect cropRect =
+        toSkia(state.deviceFromFilter.transformBox(*state.filterRegion));
+    nativeFilter = SkImageFilters::Crop(cropRect, std::move(nativeFilter));
+  }
+
+  // Apply the SkImageFilter DAG to the SourceGraphic image. We draw the sourceImage through
+  // a paint with the filter set. SkImageFilter::Image() is used as the SourceGraphic
+  // input inside the DAG (nullptr → sourceImage), so we need to set up the paint to provide
+  // the source image as the filter's input context.
+  //
+  // The canonical way: draw the sourceImage with a paint that has the SkImageFilter. Skia
+  // applies the filter to the drawn image, which acts as the SourceGraphic. The filter output
+  // is composited onto the parent canvas.
+  SkPaint filterPaint;
+  filterPaint.setAntiAlias(antialias_);
+  filterPaint.setImageFilter(std::move(nativeFilter));
+  currentCanvas_->save();
+  currentCanvas_->resetMatrix();
+  currentCanvas_->drawImage(sourceImage, 0, 0, SkSamplingOptions(), &filterPaint);
+  currentCanvas_->restore();
 }
 
 namespace {
