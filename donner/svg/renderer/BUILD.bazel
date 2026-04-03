@@ -289,6 +289,52 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "text_types",
+    hdrs = ["TextTypes.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/svg/resources:font_manager",
+    ],
+)
+
+donner_cc_library(
+    name = "text_backend",
+    hdrs = ["TextBackend.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":text_types",
+        "//donner/svg/core",
+        "//donner/svg/resources:font_manager",
+    ],
+)
+
+donner_cc_library(
+    name = "text_backend_simple",
+    srcs = ["TextBackendSimple.cc"],
+    hdrs = ["TextBackendSimple.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":text_backend",
+        "//donner/svg/resources:font_manager",
+        "@stb//:truetype",
+    ],
+)
+
+donner_cc_library(
+    name = "text_engine",
+    srcs = ["TextEngine.cc"],
+    hdrs = ["TextEngine.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":renderer_interface",
+        ":text_backend",
+        ":text_types",
+        "//donner/base",
+        "//donner/svg/resources:font_manager",
+    ],
+)
+
+donner_cc_library(
     name = "text_layout",
     srcs = ["TextLayout.cc"],
     hdrs = ["TextLayout.h"],
@@ -297,6 +343,19 @@ donner_cc_library(
         ":renderer_interface",
         "//donner/svg/resources:font_manager",
         "@stb//:truetype",
+    ],
+)
+
+donner_cc_library(
+    name = "text_backend_full",
+    srcs = ["TextBackendFull.cc"],
+    hdrs = ["TextBackendFull.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":text_backend",
+        "//donner/svg/resources:font_manager",
+        "@freetype//:freetype",
+        "@harfbuzz",
     ],
 )
 
@@ -343,8 +402,11 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }) + select({
-        ":text_full_enabled": [":text_shaper"],
-        ":text_enabled": [":text_layout"],
+        ":text_full_enabled": [":text_backend_full"],
+        ":text_enabled": [":text_backend_simple"],
+        "//conditions:default": [],
+    }) + select({
+        ":text_enabled": [":text_engine"],
         "//conditions:default": [],
     }),
 )

@@ -19,3 +19,5 @@
 - **[RTL Text and Complex Scripts](text/rtl_and_complex_scripts.md)** — RTL pen direction, HarfBuzz script auto-detection, per-character coordinates with RTL text, combining mark rotation, cross-family font fallback, and color emoji (CBDT/CBLC) support.
 
 - **[textPath Implementation Plan](text/textpath.md)** — `<textPath>` element design: SVGTextPathElement class, path-based text layout algorithm, path sampling, renderer integration, and test plan.
+
+- **[TextBackend Refactor](text/text_backend_refactor.md)** — TextBackend abstraction to decouple font operations from layout engines, unify duplicated SVG positioning code into shared TextEngine, readability cleanup, mock-based testability. Backends: TextBackendSimple (stb_truetype), TextBackendFull (HarfBuzz+FreeType).
