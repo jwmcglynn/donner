@@ -48,6 +48,36 @@ bool isNonSpacing(uint32_t cp) {
   return false;
 }
 
+/// Returns true if the codepoint belongs to a cursive/joining script where letter-spacing
+/// should be suppressed (CSS Text §8.1: "cursive scripts ... must not use letter-spacing").
+/// This covers Arabic, Syriac, Thaana, N'Ko, Mandaic, and similar connecting scripts.
+bool isCursiveScript(uint32_t cp) {
+  // Arabic (0600–06FF), Arabic Supplement (0750–077F), Arabic Extended-A (08A0–08FF),
+  // Arabic Presentation Forms-A (FB50–FDFF), Arabic Presentation Forms-B (FE70–FEFF).
+  if ((cp >= 0x0600 && cp <= 0x06FF) || (cp >= 0x0750 && cp <= 0x077F) ||
+      (cp >= 0x08A0 && cp <= 0x08FF) || (cp >= 0xFB50 && cp <= 0xFDFF) ||
+      (cp >= 0xFE70 && cp <= 0xFEFF)) {
+    return true;
+  }
+  // Syriac (0700–074F), Syriac Supplement (0860–086F).
+  if ((cp >= 0x0700 && cp <= 0x074F) || (cp >= 0x0860 && cp <= 0x086F)) {
+    return true;
+  }
+  // Thaana (0780–07BF).
+  if (cp >= 0x0780 && cp <= 0x07BF) {
+    return true;
+  }
+  // N'Ko (07C0–07FF).
+  if (cp >= 0x07C0 && cp <= 0x07FF) {
+    return true;
+  }
+  // Mandaic (0840–085F).
+  if (cp >= 0x0840 && cp <= 0x085F) {
+    return true;
+  }
+  return false;
+}
+
 /// Decode a single UTF-8 codepoint from a byte offset in a string.
 uint32_t decodeCodepointAt(std::string_view str, size_t byteOffset) {
   if (byteOffset >= str.size()) {
@@ -992,7 +1022,10 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         prevSidewaysCodepoint = sideways ? curCodepoint : 0;
 
         penY += glyph.yAdvance;
-        penY += span.letterSpacingPx;
+        // Suppress letter-spacing for cursive/joining scripts (e.g., Arabic) per CSS Text §8.1.
+        if (!isCursiveScript(curCodepoint)) {
+          penY += span.letterSpacingPx;
+        }
         if (spanByteOffset < spanText.size() && spanText[spanByteOffset] == ' ') {
           penY += span.wordSpacingPx;
         }
@@ -1182,7 +1215,14 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         }
 
         penX += glyph.xAdvance;
-        penX += span.letterSpacingPx;
+        // Suppress letter-spacing for cursive/joining scripts (e.g., Arabic) per CSS Text §8.1.
+        {
+          const uint32_t glyphCp =
+              spanByteOffset < spanText.size() ? decodeCodepointAt(spanText, spanByteOffset) : 0;
+          if (!isCursiveScript(glyphCp)) {
+            penX += span.letterSpacingPx;
+          }
+        }
         if (spanByteOffset < spanText.size() && spanText[spanByteOffset] == ' ') {
           penX += span.wordSpacingPx;
         }
