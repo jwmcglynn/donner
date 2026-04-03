@@ -111,6 +111,43 @@ bool isNonSpacing(uint32_t cp) {
   return false;
 }
 
+/// Read a big-endian int16 from raw font data.
+int16_t readInt16BE(const unsigned char* data, int offset) {
+  return static_cast<int16_t>(static_cast<uint16_t>(data[offset] << 8) | data[offset + 1]);
+}
+
+/// Find an OpenType/TrueType table by 4-char tag in raw font data.
+/// Returns the byte offset of the table, or 0 if not found.
+int findFontTable(const unsigned char* data, int fontstart, const char* tag) {
+  const int numTables = (data[fontstart + 4] << 8) | data[fontstart + 5];
+  const int tabledir = fontstart + 12;
+  for (int i = 0; i < numTables; ++i) {
+    const int loc = tabledir + 16 * i;
+    if (data[loc] == tag[0] && data[loc + 1] == tag[1] && data[loc + 2] == tag[2] &&
+        data[loc + 3] == tag[3]) {
+      return static_cast<int>((static_cast<unsigned>(data[loc + 8]) << 24) |
+                              (static_cast<unsigned>(data[loc + 9]) << 16) |
+                              (static_cast<unsigned>(data[loc + 10]) << 8) |
+                              static_cast<unsigned>(data[loc + 11]));
+    }
+  }
+  return 0;
+}
+
+/// Get subscript and superscript Y offsets from the font's OS/2 table (in font design units).
+/// Returns true if the OS/2 table was found. Values are positive-up (subscript offset is typically
+/// positive, meaning it measures the distance below the baseline).
+bool getOS2SubSuperOffsets(const stbtt_fontinfo* info, int* subYOffset, int* superYOffset) {
+  const int tab = findFontTable(info->data, info->fontstart, "OS/2");
+  if (!tab) {
+    return false;
+  }
+  // OS/2 table layout: ySubscriptYOffset at offset 16, ySuperscriptYOffset at offset 24 (int16).
+  *subYOffset = readInt16BE(info->data, tab + 16);
+  *superYOffset = readInt16BE(info->data, tab + 24);
+  return true;
+}
+
 }  // namespace
 
 TextLayout::TextLayout(FontManager& fontManager) : fontManager_(fontManager) {}
@@ -180,6 +217,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
   bool haveCurrentPosition = false;
   double currentPenX = 0.0;
   double currentPenY = 0.0;
+  double prevDefaultY = 0.0;  // Previous span's baseline-shift offset, for undo/redo between spans.
   int prevSpanLastGlyph = 0;  // Last glyph of previous span, for cross-span kerning.
 
   // Text chunk boundaries for per-chunk text-anchor adjustment.
@@ -247,10 +285,57 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
 
     // Resolve per-span baseline-shift using actual font size for em units.
     // Positive CSS baseline-shift = shift up, which in SVG Y-down = subtract from Y.
+    // For sub/super keywords, prefer font OS/2 metrics over hardcoded em constants.
     FontMetrics spanFontMetrics = params.fontMetrics;
     spanFontMetrics.fontSize = spanFontSizePx;
-    const double spanBaselineShiftPx =
-        span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+    double spanBaselineShiftPx;
+    using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+    if (span.baselineShiftKeyword == BSK::Sub || span.baselineShiftKeyword == BSK::Super) {
+      int subYOffset = 0;
+      int superYOffset = 0;
+      if (getOS2SubSuperOffsets(spanInfo, &subYOffset, &superYOffset)) {
+        // OS/2 offsets are in font design units (positive = up). Convert to pixels and
+        // negate for CSS convention (positive CSS baseline-shift = shift up = negative Y).
+        if (span.baselineShiftKeyword == BSK::Sub) {
+          // Subscript: ySubscriptYOffset measures distance below baseline (positive value).
+          // CSS sub shifts DOWN, so the CSS value is negative.
+          spanBaselineShiftPx = -static_cast<double>(subYOffset) * spanScale;
+        } else {
+          // Superscript: ySuperscriptYOffset measures distance above baseline (positive value).
+          // CSS super shifts UP, so the CSS value is positive.
+          spanBaselineShiftPx = static_cast<double>(superYOffset) * spanScale;
+        }
+      } else {
+        // Fallback to em-based constants if OS/2 table is missing.
+        spanBaselineShiftPx =
+            span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+      }
+    } else {
+      spanBaselineShiftPx =
+          span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+    }
+    // Resolve ancestor baseline-shifts, using font OS/2 metrics for sub/super keywords.
+    {
+      int subYOff = 0;
+      int superYOff = 0;
+      const bool hasOS2 = getOS2SubSuperOffsets(spanInfo, &subYOff, &superYOff);
+      for (const auto& ancestor : span.ancestorBaselineShifts) {
+        if (hasOS2 && ancestor.keyword == BSK::Sub) {
+          const float ancestorScale =
+              fontManager_.scaleForPixelHeight(spanFont, static_cast<float>(ancestor.fontSizePx));
+          spanBaselineShiftPx += -static_cast<double>(subYOff) * ancestorScale;
+        } else if (hasOS2 && ancestor.keyword == BSK::Super) {
+          const float ancestorScale =
+              fontManager_.scaleForPixelHeight(spanFont, static_cast<float>(ancestor.fontSizePx));
+          spanBaselineShiftPx += static_cast<double>(superYOff) * ancestorScale;
+        } else {
+          FontMetrics ancestorFm = params.fontMetrics;
+          ancestorFm.fontSize = ancestor.fontSizePx;
+          spanBaselineShiftPx +=
+              ancestor.shift.toPixels(params.viewBox, ancestorFm, Lengthd::Extent::Y);
+        }
+      }
+    }
 
     // If alignment-baseline is set on this span, it overrides the text-level dominant-baseline.
     double effectiveBaselineShift = baselineShift;
@@ -286,7 +371,10 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     const bool vertical = isVertical(params.writingMode);
     double penX = haveCurrentPosition ? currentPenX : 0.0;
     const double defaultY = effectiveBaselineShift - spanBaselineShiftPx;
-    double penY = haveCurrentPosition ? currentPenY : defaultY;
+    // Always apply this span's baseline-shift. When transitioning from a previous span, undo
+    // the previous span's shift and apply the current span's shift so that baseline-shift is
+    // correctly scoped to each span (sub/super/length shifts don't leak to siblings).
+    double penY = haveCurrentPosition ? (currentPenY - prevDefaultY + defaultY) : defaultY;
 
     // Apply span-start positioning from xList[0]/yList[0], then clear index 0
     // so the glyph loop doesn't double-apply. This replaces the old scalar
@@ -328,6 +416,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     if (spanText.empty()) {
       currentPenX = penX;
       currentPenY = penY;
+      prevDefaultY = defaultY;
       haveCurrentPosition = true;
       runExtents.push_back({penX, penY, penX, penY});
       runs.push_back(std::move(run));
@@ -581,6 +670,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         currentPenY = 0.0;
         haveCurrentPosition = true;
       }
+      prevDefaultY = 0.0;  // Path sets absolute position; no shift to undo.
 
       // Hidden/collapsed spans on a path still advance along the path but are not drawn.
       if (span.visibility != Visibility::Visible) {
@@ -595,6 +685,7 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
 
     currentPenX = penX;
     currentPenY = penY;
+    prevDefaultY = defaultY;
     haveCurrentPosition = true;
     prevSpanLastGlyph = prevGlyph;
 
