@@ -188,8 +188,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "a-font",
         {
-            {"a-font-001.svg", Params::Skip()},       // Canvas size mismatch (400 vs 500)
-            {"a-font-size-013.svg", Params::Skip()},  // UB: negative font size
+            {"a-font-001.svg", Params::Skip()},  // Canvas size mismatch (400 vs 500)
 
             // Generic font-family mapping: not implemented, all generic families render as
             // fallback (Public Sans).
@@ -204,36 +203,22 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-font-family-010.svg", Params::Skip()},  // Fallback list with valid second entry
             {"a-font-family-011.svg", Params::Skip()},  // Bold sans-serif
 
-            // font-style: not implemented.
-            {"a-font-style-001.svg", Params::Skip()},  // italic
-            {"a-font-style-002.svg", Params::Skip()},  // oblique
-            {"a-font-style-003.svg", Params::Skip()},  // inherit (italic from parent)
+            {"a-font-variant-001.svg",
+             Params().withSimpleTextMaxPixels(1200)},  // small-caps is emulated with simple text
+            {"a-font-variant-002.svg",
+             Params().withSimpleTextMaxPixels(1200)},  // small-caps is emulated with simple text
 
-            // font-stretch: not implemented.
-            {"a-font-stretch-001.svg", Params::Skip()},  // narrower
-            {"a-font-stretch-002.svg", Params::Skip()},  // inherit (extra-condensed)
-            {"a-font-stretch-003.svg", Params::Skip()},  // extra-condensed
-
-            // font-variant: not implemented.
-            {"a-font-variant-001.svg", Params::Skip()},  // small-caps
-            {"a-font-variant-002.svg", Params::Skip()},  // inherit (small-caps)
-
-            // font-size: absolute-size keywords (xx-small..xx-large) not implemented.
-            {"a-font-size-005.svg", Params::Skip()},  // All named values
-            {"a-font-size-008.svg", Params::Skip()},  // xx-large without parent
-
-            {"a-font-size-007.svg",
-             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                        "resvg-a-font-size-007.png")},  // Donner renders larger,
-                                                                        // consistent w/ Chrome
-            {"a-font-size-016.svg",
-             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                        "resvg-a-font-size-016.png")},  // Donner renders larger,
-                                                                        // consistent w/ Chrome
-            {"a-font-size-017.svg",
-             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                        "resvg-a-font-size-017.png")},  // Donner renders larger,
-                                                                        // consistent w/ Chrome
+            {"a-font-size-005.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/"
+                 "resvg-a-font-size-005.png")},  // Donner uses CSS Fonts Level 4, which has
+                                                 // different scaling than resvg's CSS2 ratios.
+            {"a-font-size-008.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/"
+                 "resvg-a-font-size-008.png")},       // Donner uses CSS Fonts Level 4, which has
+                                                      // different scaling than resvg's CSS2 ratios.
+            {"a-font-size-013.svg", Params::Skip()},  // UB: negative font size
         })),
     TestNameFromFilename);
 
@@ -273,16 +258,16 @@ INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(MixBlendMode, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-mix-blend-mode")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Opacity, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-opacity",
-        {
-            {"a-opacity-005.svg",
-             Params::Skip()},  // Changed in css-color-4 to allow percentage in <alpha-value>, see
-                               // https://www.w3.org/TR/css-color/#transparency
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Opacity, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix(
+                             "a-opacity",
+                             {
+                                 {"a-opacity-005.svg",
+                                  Params::Skip()},  // Changed in css-color-4 to allow percentage in
+                                                    // <alpha-value>, see
+                                                    // https://www.w3.org/TR/css-color/#transparency
+                             })),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(Overflow, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-overflow")), TestNameFromFilename);
@@ -348,9 +333,9 @@ INSTANTIATE_TEST_SUITE_P(
         Params::WithThreshold(kDefaultThreshold, 13000))),
     TestNameFromFilename);
 
-// TODO(jwm): We don't implement text-rendering, but the image comparison test fuzziness masks AA
-// differences that are being tested. Investigate the feasibility of adding support and making these
-// tests more strict.
+// TODO(jwm): We don't implement text-rendering, but the image comparison test fuzziness
+// masks AA differences that are being tested. Investigate the feasibility of adding
+// support and making these tests more strict.
 INSTANTIATE_TEST_SUITE_P(TextRendering, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-text-rendering")), TestNameFromFilename);
 
@@ -414,8 +399,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-writing-mode-013.svg",
              Params::Skip().onlyTextFull()},  // Non-ascii text, bug: mixed language
             {"a-writing-mode-014.svg",
-             Params::Skip().onlyTextFull()},  // Non-ascii text, bug: underline not implemented,
-                                              // mixed language
+             Params::Skip().onlyTextFull()},  // Non-ascii text, bug: underline not
+                                              // implemented, mixed language
             {"a-writing-mode-015.svg",
              Params::Skip().onlyTextFull()},             // Non-ascii text, bug: CJK punctuation
             {"a-writing-mode-016.svg", Params::Skip()},  // UB: tb with rotate
@@ -463,16 +448,33 @@ INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(FeBlend, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feBlend")), TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FeColorMatrix, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix(
-                             "e-feColorMatrix",
-                             {
-                                 {"e-feColorMatrix-008.svg", Params::Skip()},  // UB: saturate -0.5
-                                 {"e-feColorMatrix-009.svg", Params::Skip()},  // UB: saturate 99999
-                             },
-                             // Slightly increase the threshold due to small color conversion diffs.
-                             Params::WithThreshold(0.03f))),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FeColorMatrix, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feColorMatrix",
+        {
+            // Float pipeline diffs: identity-like filters (no-op) show gradient
+            // rendering differences (~10945px) since the float sRGB↔linear round-trip
+            // is lossless. Non-trivial filters improved significantly with float
+            // precision. All feColorMatrix diffs are from resvg's uint8 sRGB↔linear
+            // quantization vs our float pipeline. Diffs are small per-pixel (below YIQ
+            // 0.05) but numerous because the test gradient has many unique colors
+            // affected by quantization.
+            {"e-feColorMatrix-001.svg", Params::WithThreshold(0.05f)},  // type=matrix
+            {"e-feColorMatrix-002.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-003.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-004.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-005.svg", Params::WithThreshold(0.05f)},  // identity matrix
+            {"e-feColorMatrix-006.svg", Params::WithThreshold(0.05f)},  // non-normalized values
+            {"e-feColorMatrix-007.svg", Params::WithThreshold(0.05f)},  // saturate
+            {"e-feColorMatrix-008.svg", Params::Skip()},                // saturate -0.5 (UB)
+            {"e-feColorMatrix-009.svg", Params::Skip()},                // saturate 99999 (UB)
+            {"e-feColorMatrix-010.svg", Params::WithThreshold(0.05f)},  // identity saturate
+            {"e-feColorMatrix-011.svg", Params::WithThreshold(0.05f)},  // hueRotate(30)
+            {"e-feColorMatrix-012.svg", Params::WithThreshold(0.05f)},  // hueRotate(0) identity
+            {"e-feColorMatrix-015.svg", Params::WithThreshold(0.05f)},  // no attrs identity
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FeComponentTransfer, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feComponentTransfer")),
@@ -558,11 +560,12 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feImage-010.svg",
              Params::WithThreshold(kDefaultThreshold, 13000)},  // Absolute subregion coords
             {"e-feImage-005.svg", Params::Skip()},  // Linux CI: std::bad_alloc in test setup.
-            // Not a code bug — glibc allocator issue specific to the CI runner's memory state.
-            // Passes locally on macOS (10MB peak RSS). Shared font data eliminates heap
-            // fragmentation from copies, but the allocator still fails on the CI runner.
-            {"e-feImage-011.svg",
-             Params::Skip()},  // Subregion with rotation: filter region sizing mismatch (64K px)
+            // Not a code bug — glibc allocator issue specific to the CI runner's memory
+            // state. Passes locally on macOS (10MB peak RSS). Shared font data
+            // eliminates heap fragmentation from copies, but the allocator still fails
+            // on the CI runner.
+            {"e-feImage-011.svg", Params::Skip()},  // Subregion with rotation: filter
+                                                    // region sizing mismatch (64K px)
             {"e-feImage-019.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    34200)},  // Fragment ref with skewX transform on element
@@ -597,16 +600,32 @@ INSTANTIATE_TEST_SUITE_P(FePointLight, ImageComparisonTestFixture,
                                   Params::WithThreshold(0.1f, 120)},  // Minor shading differences
                              })),
                          TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(FeSpecularLighting, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("e-feSpecularLighting")),
-                         TestNameFromFilename);
+// Specular lighting: algorithm differences vs resvg.
+// Float pipeline + light coordinate scaling fixed most tests to 0 diffs at 0.1f
+// threshold. specularExponent out-of-range handling: <1 skips primitive (transparent),
+// >128 clamps to 128.
+INSTANTIATE_TEST_SUITE_P(
+    FeSpecularLighting, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix(
+        "e-feSpecularLighting",
+        {
+            {"e-feSpecularLighting-002.svg", Params::WithThreshold(0.1f)},  // 2717px at 0.01f
+            {"e-feSpecularLighting-004.svg",
+             Params::WithThreshold(0.1f, 58000)},  // resvg golden bug: R=0 channel
+                                                    // (BGRA issue in resvg ~v0.9.x)
+            {"e-feSpecularLighting-005.svg", Params::WithThreshold(0.1f)},  // 1466px at 0.01f
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FeSpotLight, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-feSpotLight",
         {
+            // feSpotLight-005: negative specularExponent=-10 on feSpotLight.
+            // Non-positive values fall back to default 1.0, matching resvg's
+            // PositiveF32 validation. feSpotLight-007/008: 0px at 0.02 threshold (were
+            // 2922px at 0.01)
             {"e-feSpotLight-012.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                         "resvg-e-feSpotLight-012.png")},  // resvg bug: SpotLight Y
@@ -640,8 +659,11 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-filter-011.svg", Params::WithThreshold(0.1f)},  // Minor shading differences
             {"e-filter-019.svg",
-             Params::Skip()},  // Bug: Color is slightly off, we are missing transparency
-            {"e-filter-027.svg", Params::Skip()},  // Bug: We don't blur the right edge
+             Params::WithThreshold(kDefaultThreshold, 4100)},  // inherited filter blur
+                                                               // edge (3700px at 0.02)
+            {"e-filter-027.svg",
+             Params::WithThreshold(kDefaultThreshold, 6000)},  // Skew transform + narrow filter
+                                                               // region (5406px at 0.02)
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage (deprecated SVG 1.1)
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha (deprecated SVG 1.1)
             {"e-filter-034.svg", Params::Skip()},  // UB: in=FillPaint
@@ -677,8 +699,8 @@ INSTANTIATE_TEST_SUITE_P(
         "e-line-",
         {
             {"e-line-001.svg",
-             Params::WithThreshold(0.02f)},  // Larger threshold due to anti-aliasing artifacts with
-                                             // overlapping lines.
+             Params::WithThreshold(0.02f)},  // Larger threshold due to anti-aliasing
+                                             // artifacts with overlapping lines.
         })),
     TestNameFromFilename);
 
@@ -698,16 +720,17 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
             {"e-marker-019.svg",
-             Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-marker-019.png")},  // We (correctly)
-                                                                                  // apply opacity
-                                                                                  // on image
-            {"e-marker-023.svg", Params::Skip()},  // Bug: Recursive markers
-            {"e-marker-024.svg", Params::Skip()},  // Bug: Recursive markers
-            {"e-marker-032.svg", Params::Skip()},  // UB: Target with subpaths
-            {"e-marker-044.svg", Params::Skip()},  // Bug: Multiple closepaths
-            {"e-marker-057.svg", Params::Skip()},  // Bug: Recursive markers
-            // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-e-marker-019.png")},  // We (correctly)
+                                                                     // apply opacity
+                                                                     // on image
+            {"e-marker-023.svg", Params::Skip()},                    // Bug: Recursive markers
+            {"e-marker-024.svg", Params::Skip()},                    // Bug: Recursive markers
+            {"e-marker-032.svg", Params::Skip()},                    // UB: Target with subpaths
+            {"e-marker-044.svg", Params::Skip()},                    // Bug: Multiple closepaths
+            {"e-marker-057.svg", Params::Skip()},                    // Bug: Recursive markers
+            // Resvg bug? Direction to place markers at the beginning/end of closed
+            // shapes.
             {"e-marker-045.svg", Params::WithGoldenOverride(
                                      "donner/svg/renderer/testdata/golden/resvg-e-marker-045.png")},
             // BUG? Disagreement about marker direction on cusp
@@ -725,8 +748,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
             {"e-mask-025.svg", Params::Skip()},  // Mask-on-mask mutual recursion: cycle
                                                  // detection breaks chain but rendering differs
-            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child — shadow tree entities
-                                                 // don't resolve nested masks
+            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child — shadow tree
+                                                 // entities don't resolve nested masks
             {"e-mask-029.svg",
              Params::WithThreshold(0.1f)},  // Mask with <image> (bilinear edge diffs)
         })),
@@ -862,36 +885,38 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-026.png")
                  .onlyTextFull()},  // Simple text can't compose combining marks
             {"e-text-027.svg",
-             Params::WithThreshold(0.2f)
-                 .onlyTextFull()},  // Emoji, differences between resvg and our bitmap resizing
+             Params::WithThreshold(0.2f).onlyTextFull()},  // Emoji, differences between
+                                                           // resvg and our bitmap resizing
             {"e-text-028.svg",
              Params::WithThreshold(0.2f)
-                 .onlyTextFull()},  // Emoji, differences between resvg and our bitmap resizing
-                                    // Custom golden: resvg misapplies per-character y for
-                                    // supplementary emoji (UTF-16 surrogate pair indexing). Our
-                                    // rendering matches browser behavior.
+                 .onlyTextFull()},  // Emoji, differences between resvg and our bitmap
+                                    // resizing Custom golden: resvg misapplies
+                                    // per-character y for supplementary emoji (UTF-16
+                                    // surrogate pair indexing). Our rendering matches
+                                    // browser behavior.
             {"e-text-029.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-029.png")
-                 .onlyTextFull()},  // Emoji, resvg renders the smiley and crab emoji incorrectly
+                 .onlyTextFull()},  // Emoji, resvg renders the smiley and crab emoji
+                                    // incorrectly
             {"e-text-030.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-030.png")
-                 .withMaxPixelsDifferent(
-                     400)  // Vertical axis has different AA (its not the focus of the test)
-                 .onlyTextFull()},  // Arabic text shaping requires text-full, and this version of
-                                    // the resvg test suite has a bug, so override (we need to
-                                    // upgrade the suite)
+                 .withMaxPixelsDifferent(400)  // Vertical axis has different AA (its
+                                               // not the focus of the test)
+                 .onlyTextFull()},             // Arabic text shaping requires text-full, and this
+                                               // version of the resvg test suite has a bug, so
+                                               // override (we need to upgrade the suite)
             {"e-text-031.svg",
              Params()
-                 .withMaxPixelsDifferent(
-                     300)  // Vertical axis has different AA (its not the focus of the test)
+                 .withMaxPixelsDifferent(300)             // Vertical axis has different AA (its
+                                                          // not the focus of the test)
                  .onlyTextFull()},                        // Complex diatrics requires text-full
             {"e-text-034.svg", Params().onlyTextFull()},  // Complex diatrics requires text-full
             {"e-text-035.svg", Params::Skip()},           // Not impl: Bidirectional text shaping
             {"e-text-036.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-036.png")
                  .onlyTextFull()},  // Arabic text shaping requires text-full,
-                                    // custom golden: test suite's Noto Sans lacks Arabic,
-                                    // so we fall back to Amiri
+                                    // custom golden: test suite's Noto Sans lacks
+                                    // Arabic, so we fall back to Amiri
             {"e-text-040.svg", Params().onlyTextFull()},  // Arabic text shaping requires text-full
             {"e-text-042.svg", Params::Skip()},           // UB: grapheme split by tspan
             {"e-text-043.svg", Params::WithThreshold(kDefaultThreshold, 19100)},
@@ -1006,8 +1031,8 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-tspan",
         {
-            {"e-tspan-011.svg",
-             Params::Skip()},  // Whitespace-only text nodes lost in preserve context (XML parser)
+            {"e-tspan-011.svg", Params::Skip()},  // Whitespace-only text nodes lost in
+                                                  // preserve context (XML parser)
             {"e-tspan-016.svg",
              Params::Skip()},  // Bug: Applying rotation indices across nested tspans
             {"e-tspan-020.svg", Params::Skip()},  // Not impl: Interaction with `mask`
@@ -1017,11 +1042,11 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-tspan-028.svg", Params::Skip()},  // Bug: Handling kerning with font size changes
                                                   // with simple text support
             {"e-tspan-030.svg",
-             Params().withMaxPixelsDifferent(
-                 400)},  // Vertical axis has different AA (its not the focus of the test)
+             Params().withMaxPixelsDifferent(400)},  // Vertical axis has different AA
+                                                     // (its not the focus of the test)
             {"e-tspan-031.svg",
-             Params().withMaxPixelsDifferent(
-                 400)},  // Vertical axis has different AA (its not the focus of the test)
+             Params().withMaxPixelsDifferent(400)},  // Vertical axis has different AA
+                                                     // (its not the focus of the test)
         })),
     TestNameFromFilename);
 

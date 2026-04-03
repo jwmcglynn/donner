@@ -106,6 +106,17 @@ public:
   FontHandle findFont(std::string_view family, int weight);
 
   /**
+   * Find or load a font matching the given family name, weight, style, and stretch.
+   *
+   * @param family Font family name to look up.
+   * @param weight CSS font-weight value (100-900, 400=normal, 700=bold).
+   * @param style CSS font-style value (0=normal, 1=italic, 2=oblique).
+   * @param stretch CSS font-stretch value (1-9, 5=normal, matching FontStretch enum).
+   * @return A valid FontHandle, or falls back to findFont(family, weight) if no match.
+   */
+  FontHandle findFont(std::string_view family, int weight, int style, int stretch);
+
+  /**
    * Load a font from raw TTF/OTF/WOFF data.
    *
    * The data is copied internally. The font is not associated with any family name; callers

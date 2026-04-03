@@ -19,6 +19,7 @@ struct LayoutGlyph {
   double xAdvance = 0;      ///< Horizontal advance to next glyph.
   double yAdvance = 0;      ///< Vertical advance (used in vertical writing modes).
   double rotateDegrees = 0; ///< Per-glyph rotation in degrees.
+  float fontSizeScale = 1.0f;  ///< Per-glyph font size multiplier (< 1.0 for small-caps).
 };
 
 /**

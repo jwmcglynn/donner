@@ -17,6 +17,9 @@
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/FontStretch.h"
+#include "donner/svg/core/FontStyle.h"
+#include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/Isolation.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/WritingMode.h"
@@ -285,8 +288,9 @@ public:
       }};
 
   /// `font-size` property, which determines the font size for text content. Inherited.
+  /// Initial value is `medium`, which maps to the UA default font size (12px).
   Property<Lengthd, PropertyCascade::Inherit> fontSize{
-      "font-size", []() -> std::optional<Lengthd> { return Lengthd(16, Lengthd::Unit::Px); }};
+      "font-size", []() -> std::optional<Lengthd> { return Lengthd(12, Lengthd::Unit::Px); }};
 
   /// Sentinel value for the `bolder` relative keyword, resolved during cascade.
   static constexpr int kFontWeightBolder = -1;
@@ -299,6 +303,28 @@ public:
   /// by \ref resolveFontWeight() during style cascade.
   Property<int, PropertyCascade::Inherit> fontWeight{
       "font-weight", []() -> std::optional<int> { return 400; }};
+
+  /// `font-style` property, which determines the style (normal/italic/oblique) for text content.
+  /// Inherited. Defaults to \ref FontStyle::Normal.
+  Property<FontStyle, PropertyCascade::Inherit> fontStyle{
+      "font-style", []() -> std::optional<FontStyle> { return FontStyle::Normal; }};
+
+  /// Sentinel value for the `narrower` relative keyword, resolved during cascade.
+  static constexpr int kFontStretchNarrower = -1;
+  /// Sentinel value for the `wider` relative keyword, resolved during cascade.
+  static constexpr int kFontStretchWider = -2;
+
+  /// `font-stretch` property, which determines the width (condensed/expanded) for text content.
+  /// Inherited. Stored as the underlying integer of \ref FontStretch for sentinel support.
+  /// Defaults to \ref FontStretch::Normal (5).
+  Property<int, PropertyCascade::Inherit> fontStretch{
+      "font-stretch",
+      []() -> std::optional<int> { return static_cast<int>(FontStretch::Normal); }};
+
+  /// `font-variant` shorthand property (SVG 1.1 subset: normal | small-caps).
+  /// Inherited. Defaults to \ref FontVariant::Normal.
+  Property<FontVariant, PropertyCascade::Inherit> fontVariant{
+      "font-variant", []() -> std::optional<FontVariant> { return FontVariant::Normal; }};
 
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
@@ -387,8 +413,9 @@ public:
                                  strokeDashoffset, clipPath, clipRule, mask, filter,
                                  colorInterpolationFilters, pointerEvents,
                                  cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize,
-                                 fontWeight, textAnchor, textDecoration, dominantBaseline,
-                                 writingMode, letterSpacing, wordSpacing, mixBlendMode, isolation);
+                                 fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
+                                 textDecoration, dominantBaseline, writingMode, letterSpacing,
+                                 wordSpacing, mixBlendMode, isolation);
   }
 
   /**
@@ -467,6 +494,15 @@ public:
    * @param parentFontWeight The parent element's computed font-weight (100-900). Use 400 for root.
    */
   void resolveFontWeight(int parentFontWeight);
+
+  /**
+   * Resolve relative font-stretch keywords (`narrower`/`wider`) against the parent's
+   * computed font-stretch value.
+   *
+   * @param parentFontStretch The parent element's computed font-stretch (as int). Use
+   *   static_cast<int>(FontStretch::Normal) for root.
+   */
+  void resolveFontStretch(int parentFontStretch);
 
   /**
    * Parse a single declaration, adding it to the property registry.

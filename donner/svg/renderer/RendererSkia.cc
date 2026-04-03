@@ -95,6 +95,20 @@ SkColor toSkia(const css::RGBA rgba) {
   return SkColorSetARGB(rgba.a, rgba.r, rgba.g, rgba.b);
 }
 
+SkFontStyle toSkiaFontStyle(int fontWeight, FontStyle fontStyle, FontStretch fontStretch) {
+  // Map FontStretch enum (1-9) to Skia width values (1-9, same range).
+  const int skWidth = static_cast<int>(fontStretch);
+
+  SkFontStyle::Slant skSlant;
+  switch (fontStyle) {
+    case FontStyle::Normal: skSlant = SkFontStyle::kUpright_Slant; break;
+    case FontStyle::Italic: skSlant = SkFontStyle::kItalic_Slant; break;
+    case FontStyle::Oblique: skSlant = SkFontStyle::kOblique_Slant; break;
+  }
+
+  return SkFontStyle(fontWeight, skWidth, skSlant);
+}
+
 SkPath toSkia(const PathSpline& spline);
 
 SkTileMode toSkia(GradientSpreadMethod spreadMethod);
@@ -2069,6 +2083,19 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
       spanFillPaint = makeSolidFillPaint(css::Color(solid->color));
     }
 
+    // Per-span typeface resolution for font-weight/style/stretch.
+    SkFont spanFont = font;
+    if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
+        span.fontStretch != FontStretch::Normal) {
+      const SkFontStyle skStyle =
+          toSkiaFontStyle(span.fontWeight, span.fontStyle, span.fontStretch);
+      sk_sp<SkTypeface> spanTypeface =
+          fontMgr_->matchFamilyStyle(familyName.c_str(), skStyle);
+      if (spanTypeface) {
+        spanFont.setTypeface(std::move(spanTypeface));
+      }
+    }
+
     SkScalar x = 0;
     if (span.hasExplicitX()) {
       x = static_cast<SkScalar>(
@@ -2095,7 +2122,7 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
 
     // Apply text-anchor adjustment.
     if (params.textAnchor != TextAnchor::Start) {
-      const SkScalar textWidth = font.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
+      const SkScalar textWidth = spanFont.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
       if (params.textAnchor == TextAnchor::Middle) {
         x -= textWidth / 2;
       } else if (params.textAnchor == TextAnchor::End) {
@@ -2106,16 +2133,16 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
     const double rotateDeg = span.rotateList.empty() ? 0.0 : span.rotateList[0];
     if (rotateDeg != 0.0) {
       // Per-glyph rotation: convert to glyphs and draw individually.
-      const int glyphCount = font.countText(spanData, spanLen, SkTextEncoding::kUTF8);
+      const int glyphCount = spanFont.countText(spanData, spanLen, SkTextEncoding::kUTF8);
       if (glyphCount <= 0) {
         continue;
       }
 
       std::vector<SkGlyphID> glyphs(static_cast<size_t>(glyphCount));
-      font.textToGlyphs(spanData, spanLen, SkTextEncoding::kUTF8, glyphs.data(), glyphCount);
+      spanFont.textToGlyphs(spanData, spanLen, SkTextEncoding::kUTF8, glyphs.data(), glyphCount);
 
       std::vector<SkScalar> widths(static_cast<size_t>(glyphCount));
-      font.getWidths(glyphs.data(), glyphCount, widths.data());
+      spanFont.getWidths(glyphs.data(), glyphCount, widths.data());
 
       SkScalar penX = x;
       const SkPoint origin = SkPoint::Make(0, 0);
@@ -2125,9 +2152,9 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
         currentCanvas_->rotate(static_cast<SkScalar>(rotateDeg));
         // SVG stroke is drawn first (behind fill), then fill on top.
         if (hasStroke) {
-          currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, strokePaint);
+          currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, spanFont, strokePaint);
         }
-        currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, font, spanFillPaint);
+        currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, spanFont, spanFillPaint);
         currentCanvas_->restore();
         penX += widths[i];
       }
@@ -2135,19 +2162,19 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
       // No rotation: use drawSimpleText for better performance.
       // SVG stroke is drawn first (behind fill), then fill on top.
       if (hasStroke) {
-        currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, font,
+        currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, spanFont,
                                        strokePaint);
       }
-      currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, font,
+      currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, spanFont,
                                      spanFillPaint);
     }
 
     // Draw text-decoration lines.
     if (params.textDecoration != TextDecoration::None) {
       SkFontMetrics metrics;
-      font.getMetrics(&metrics);
+      spanFont.getMetrics(&metrics);
 
-      const SkScalar textWidth = font.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
+      const SkScalar textWidth = spanFont.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
       SkScalar decoY = y;
       SkScalar thickness = metrics.fUnderlineThickness > 0 ? metrics.fUnderlineThickness
                                                            : fontSizePx / 18.0f;

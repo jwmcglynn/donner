@@ -392,12 +392,14 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       continue;
     }
 
-    // Per-span font resolution: if the span's font-weight differs from the default,
-    // find a weight-matched font.
+    // Per-span font resolution: find a font matching weight, style, and stretch.
     FontHandle spanFont = font;
-    if (span.fontWeight != 400) {
+    if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
+        span.fontStretch != FontStretch::Normal) {
       for (const auto& family : params.fontFamilies) {
-        FontHandle candidate = fontManager_.findFont(family, span.fontWeight);
+        FontHandle candidate = fontManager_.findFont(
+            family, span.fontWeight, static_cast<int>(span.fontStyle),
+            static_cast<int>(span.fontStretch));
         if (candidate) {
           spanFont = candidate;
           break;
@@ -440,7 +442,39 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       }
     }
 
-    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+    const std::string_view spanTextOriginal(span.text.data() + span.start, span.end - span.start);
+
+    // Small-caps: prefer native OpenType `smcp` feature when available.
+    // Fall back to synthesis (uppercase + reduced font size) otherwise.
+    std::string smallCapsText;
+    std::vector<bool> isSmallCap;
+    bool useSmcpFeature = false;
+    if (span.fontVariant == FontVariant::SmallCaps) {
+      // Check if the font has a native small-caps feature.
+      hb_face_t* hbFace = hb_font_get_face(spanHbFont);
+      unsigned int featureIndex = 0;
+      useSmcpFeature =
+          hbFace && hb_ot_layout_language_find_feature(hbFace, HB_OT_TAG_GSUB, 0,
+                                                       HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX,
+                                                       HB_TAG('s', 'm', 'c', 'p'), &featureIndex);
+
+      if (!useSmcpFeature) {
+        // Synthesize: convert lowercase to uppercase and track which bytes changed.
+        smallCapsText.reserve(spanTextOriginal.size());
+        isSmallCap.resize(spanTextOriginal.size(), false);
+        for (size_t i = 0; i < spanTextOriginal.size(); ++i) {
+          char ch = spanTextOriginal[i];
+          if (ch >= 'a' && ch <= 'z') {
+            smallCapsText.push_back(ch - 'a' + 'A');
+            isSmallCap[i] = true;
+          } else {
+            smallCapsText.push_back(ch);
+          }
+        }
+      }
+    }
+    const std::string_view spanText =
+        smallCapsText.empty() ? spanTextOriginal : std::string_view(smallCapsText);
 
     // Resolve per-span baseline-shift using actual font size for em units.
     FontMetrics spanFontMetrics = params.fontMetrics;
@@ -672,6 +706,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     // in the chunk so they share the chunk's explicit baseline.
     std::unordered_map<unsigned int, double> chunkYOverrides;
 
+    // Small-caps scale factor for synthesized small-caps rendering.
+    constexpr float kSmallCapScale = 0.8f;
+
     for (const auto& chunk : chunks) {
       // Map chunk range to byte range.
       size_t minByte = spanText.size();
@@ -685,24 +722,10 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         }
       }
 
-      hb_buffer_t* chunkBuf = hb_buffer_create();
-      hb_buffer_add_utf8(chunkBuf, spanText.data() + minByte,
-                         static_cast<int>(maxByteEnd - minByte), 0,
-                         static_cast<int>(maxByteEnd - minByte));
       // When layoutLTR, single-character chunks use LTR for DOM-order output.
       // Multi-character chunks keep the detected direction for correct Arabic
       // joining (e.g., ya-ba connected forms).
       const bool isMultiChar = (chunk.idxEnd - chunk.idxStart) > 1;
-      hb_buffer_set_direction(chunkBuf,
-                              (layoutLTR && !isMultiChar) ? HB_DIRECTION_LTR : detectedDirection);
-      hb_buffer_set_script(chunkBuf, detectedScript);
-      hb_buffer_set_language(chunkBuf, detectedLanguage);
-      hb_shape(spanHbFont, chunkBuf, nullptr, 0);
-
-      unsigned int chunkGlyphCount = 0;
-      const hb_glyph_info_t* chunkInfos = hb_buffer_get_glyph_infos(chunkBuf, &chunkGlyphCount);
-      const hb_glyph_position_t* chunkPositions =
-          hb_buffer_get_glyph_positions(chunkBuf, &chunkGlyphCount);
 
       // For RTL multi-char chunks in layoutLTR mode, pre-set penY from the
       // chunk's first logical character (which has the explicit Y). HarfBuzz outputs
@@ -713,31 +736,103 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
       // store the chunk's Y in a map from glyph-index to override-Y.
       const unsigned int chunkGlyphStart = static_cast<unsigned int>(allInfos.size());
 
-      for (unsigned int i = 0; i < chunkGlyphCount; ++i) {
-        hb_glyph_info_t info = chunkInfos[i];
-        // Adjust cluster from chunk-relative to span-relative byte offset.
-        info.cluster += static_cast<unsigned int>(minByte);
-        allInfos.push_back(info);
-        allPositions.push_back(chunkPositions[i]);
+      // Lambda to shape a byte range and append results to allInfos/allPositions.
+      auto shapeRange = [&](size_t rangeStart, size_t rangeEnd, hb_feature_t* features,
+                            unsigned int numFeatures) {
+        hb_buffer_t* buf = hb_buffer_create();
+        hb_buffer_add_utf8(buf, spanText.data() + rangeStart,
+                           static_cast<int>(rangeEnd - rangeStart), 0,
+                           static_cast<int>(rangeEnd - rangeStart));
+        hb_buffer_set_direction(buf,
+                                (layoutLTR && !isMultiChar) ? HB_DIRECTION_LTR : detectedDirection);
+        hb_buffer_set_script(buf, detectedScript);
+        hb_buffer_set_language(buf, detectedLanguage);
+        hb_shape(spanHbFont, buf, features, numFeatures);
+
+        unsigned int count = 0;
+        const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buf, &count);
+        const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(buf, &count);
+        for (unsigned int i = 0; i < count; ++i) {
+          hb_glyph_info_t info = infos[i];
+          // Adjust cluster from range-relative to span-relative byte offset.
+          info.cluster += static_cast<unsigned int>(rangeStart);
+          allInfos.push_back(info);
+          allPositions.push_back(positions[i]);
+        }
+        hb_buffer_destroy(buf);
+      };
+
+      if (useSmcpFeature) {
+        // Native small-caps: shape the whole chunk with the `smcp` feature enabled.
+        // HarfBuzz substitutes lowercase glyphs with proper small-caps glyphs from the font,
+        // producing correct advances and kerning without manual scaling.
+        hb_feature_t smcpFeature = {HB_TAG('s', 'm', 'c', 'p'), 1, 0, UINT_MAX};
+        shapeRange(minByte, maxByteEnd, &smcpFeature, 1);
+      } else if (!isSmallCap.empty()) {
+        // Small-caps active: split the chunk into sub-runs at small-cap boundaries
+        // and shape each at the appropriate font size. This ensures HarfBuzz computes
+        // correct advances for the reduced-size glyphs rather than computing full-size
+        // advances and scaling them down (which leaves excess kerning gaps).
+        size_t bi = minByte;
+        while (bi < maxByteEnd) {
+          const bool sc = bi < isSmallCap.size() && isSmallCap[bi];
+          const size_t subStart = bi;
+          while (bi < maxByteEnd && (bi < isSmallCap.size() && isSmallCap[bi]) == sc) {
+            const auto byte = static_cast<uint8_t>(spanText[bi]);
+            if (byte >= 0xF0) {
+              bi += 4;
+            } else if (byte >= 0xE0) {
+              bi += 3;
+            } else if (byte >= 0xC0) {
+              bi += 2;
+            } else {
+              bi += 1;
+            }
+          }
+
+          if (sc) {
+            // Shape small-cap sub-run at reduced font size.
+            FT_Face spanFtFace = hb_ft_font_get_face(spanHbFont);
+            if (spanFtFace && FT_IS_SCALABLE(spanFtFace)) {
+              FT_Set_Char_Size(spanFtFace, 0,
+                               static_cast<FT_F26Dot6>(spanFontSizePx * kSmallCapScale * 64.0f), 72,
+                               72);
+              hb_ft_font_changed(spanHbFont);
+            }
+
+            shapeRange(subStart, bi, nullptr, 0);
+
+            // Restore full font size.
+            if (spanFtFace && FT_IS_SCALABLE(spanFtFace)) {
+              FT_Set_Char_Size(spanFtFace, 0,
+                               static_cast<FT_F26Dot6>(spanFontSizePx * 64.0f), 72, 72);
+              hb_ft_font_changed(spanHbFont);
+            }
+          } else {
+            shapeRange(subStart, bi, nullptr, 0);
+          }
+        }
+      } else {
+        // No small-caps: shape the whole chunk at once.
+        shapeRange(minByte, maxByteEnd, nullptr, 0);
       }
 
       // Record that this multi-char RTL chunk's glyphs should all use the
       // chunk's explicit Y (from its first logical character).
-      if (layoutLTR && isMultiChar && chunkGlyphCount > 0) {
+      const unsigned int chunkGlyphEnd = static_cast<unsigned int>(allInfos.size());
+      if (layoutLTR && isMultiChar && chunkGlyphEnd > chunkGlyphStart) {
         const unsigned int firstLi = chunk.idxStart;
         if (firstLi < yList.size() && yList[firstLi].has_value()) {
           const double chunkY =
               yList[firstLi]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
               defaultY;
           // Tag all glyphs in this chunk with the override Y by recording the
-          // range [chunkGlyphStart, chunkGlyphStart + chunkGlyphCount).
-          for (unsigned int gi2 = chunkGlyphStart; gi2 < chunkGlyphStart + chunkGlyphCount; ++gi2) {
+          // range [chunkGlyphStart, chunkGlyphEnd).
+          for (unsigned int gi2 = chunkGlyphStart; gi2 < chunkGlyphEnd; ++gi2) {
             chunkYOverrides[gi2] = chunkY;
           }
         }
       }
-
-      hb_buffer_destroy(chunkBuf);
     }
 
     // If no per-character coords exist (single chunk = full text), this produces
@@ -1020,11 +1115,19 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
           penY += dyList[charIdx]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
         }
 
+        // Small-caps glyph detection:
+        // - With native `smcp` feature: glyphs are already the correct size (fontSizeScale=1.0).
+        // - With synthesis: lowercase-sourced glyphs need fontSizeScale for outline rendering
+        //   (advances are already correct from shaping at the reduced font size).
+        const bool isSynthSmallCapGlyph =
+            !isSmallCap.empty() && spanByteOffset < isSmallCap.size() && isSmallCap[spanByteOffset];
+
         ShapedGlyph glyph;
         glyph.glyphIndex = static_cast<int>(glyphInfos[gi].codepoint);
         glyph.xPosition = penX + static_cast<double>(glyphPositions[gi].x_offset) * spanPixelScale;
         glyph.yPosition = penY - static_cast<double>(glyphPositions[gi].y_offset) * spanPixelScale;
         glyph.xAdvance = static_cast<double>(glyphPositions[gi].x_advance) * spanPixelScale;
+        glyph.fontSizeScale = isSynthSmallCapGlyph ? kSmallCapScale : 1.0f;
 
         // Rotate uses raw codepoint index (combining marks consume values),
         // matching Chrome/resvg behavior.

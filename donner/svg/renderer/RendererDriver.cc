@@ -68,6 +68,10 @@ void resolvePerSpanStyles(Registry& registry,
       span.baselineShift = style->properties->baselineShift.getRequired();
       span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
       span.fontWeight = style->properties->fontWeight.getRequired();
+      span.fontStyle = style->properties->fontStyle.getRequired();
+      span.fontStretch =
+          static_cast<FontStretch>(style->properties->fontStretch.getRequired());
+      span.fontVariant = style->properties->fontVariant.getRequired();
       span.fontSize = style->properties->fontSize.getRequired();
       span.visibility = style->properties->visibility.getRequired();
       span.opacity = style->properties->opacity.getRequired();
@@ -123,7 +127,7 @@ StrokeParams toStrokeParams(Registry& registry,
   const auto& properties = style.properties.value();
 
   const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+  const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
   const double fontSizePx = properties.fontSize.getRequired().toPixels(viewBox, baseFontMetrics);
   const FontMetrics fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
 
@@ -511,7 +515,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   // Resolve font size so that em/ex units in text positioning attributes resolve correctly.
   {
-    const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
     const double fontSizePx =
         params.fontSize.toPixels(params.viewBox, baseFontMetrics, Lengthd::Extent::Mixed);
     params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
@@ -636,7 +640,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     const Boxd filterViewBox =
         components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
@@ -857,7 +861,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     const Boxd filterViewBox =
         components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
@@ -1163,7 +1167,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     const Boxd filterViewBox =
         components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
