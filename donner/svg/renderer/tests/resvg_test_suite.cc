@@ -78,31 +78,25 @@ INSTANTIATE_TEST_SUITE_P(
     Clip, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("a-clip",
                                 {
-                                    {"a-clip-001.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 77000)},  // Text clip
+                                    // SVG2 no longer requires the deprecated CSS 'clip' property
+                                    // (replaced by clip-path). See
+                                    // https://drafts.csswg.org/css-masking-1/#clip-property
+                                    {"a-clip-001.svg", Params::Skip()},
                                 })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(Color, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-color",  //
-                                                     {
-                                                         // a-color-interpolation-filters-001 passes
-                                                         // with default threshold (72px diff).
-                                                     })),
+INSTANTIATE_TEST_SUITE_P(Color, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("a-color")),
                          TestNameFromFilename);
 
 // TODO: a-direction
 
-INSTANTIATE_TEST_SUITE_P(
-    Display, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-display",  //
-        {
-            {"a-display-005.svg", Params::WithThreshold(kDefaultThreshold, 17000)},
-            {"a-display-006.svg", Params::Skip()},  // Not impl: <tref>
-            {"a-display-009.svg", Params::WithThreshold(kDefaultThreshold, 8000)},
-        })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Display, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-display",  //
+                                                     {
+                                                         {"a-display-006.svg",
+                                                          Params::Skip()},  // Not impl: <tref>
+                                                     })),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(DominantBaseline, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-dominant-baseline", {},
@@ -120,13 +114,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
             {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
             {"a-fill-027.svg", Params::Skip()},  // Not impl: Fallback with icc-color
-            {"a-fill-031.svg", Params::Skip()},  // Bug: linear gradient fill on text
-            {"a-fill-032.svg",
-             Params::WithThreshold(kDefaultThreshold, 23000)},  // Gradient fill on text (radial)
-            {"a-fill-033.svg",
-             Params::WithThreshold(kDefaultThreshold, 16500)},  // Pattern fill on text
-            // a-fill-opacity-004 passes with default threshold.
-            {"a-fill-opacity-006.svg", Params::WithThreshold(kDefaultThreshold, 18000)},  // <text>
+            // fill-031 (linear gradient on text) — fixed by proper text bbox computation.
         })),
     TestNameFromFilename);
 
@@ -271,7 +259,7 @@ INSTANTIATE_TEST_SUITE_P(
         "a-stroke",
         {
             {"a-stroke-007.svg", Params::WithThreshold(0.05f)},  // AA artifacts
-            {"a-stroke-008.svg", Params::Skip()},                // Bug: Text bbox calculation
+            {"a-stroke-008.svg", Params::Skip()},  // Bug: Gradient stroke on text
             {"a-stroke-dasharray-007.svg", Params::Skip()},      // UB (negative values)
             {"a-stroke-dasharray-009.svg", Params::Skip()},      // UB (negative sum)
             {"a-stroke-dasharray-013.svg",

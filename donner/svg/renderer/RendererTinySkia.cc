@@ -1387,24 +1387,51 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
   // Compute text bounding box from glyph positions for objectBoundingBox gradient mapping.
+  // Per the SVG spec, the objectBoundingBox for text uses em-box cells defined by font metrics
+  // (ascent above baseline, |descent| below baseline), not the raw font size.
   Boxd textBounds;
   {
     double minX = std::numeric_limits<double>::max();
     double minY = std::numeric_limits<double>::max();
     double maxX = std::numeric_limits<double>::lowest();
     double maxY = std::numeric_limits<double>::lowest();
-    for (const auto& run : runs) {
+    for (size_t runIdx = 0; runIdx < runs.size(); ++runIdx) {
+      const auto& run = runs[runIdx];
+
+      // Resolve per-run font size (spans may override the text element's font size).
+      float runFontSizePx = fontSizePx;
+      if (runIdx < text.spans.size() && text.spans[runIdx].fontSize.value != 0.0) {
+        runFontSizePx = static_cast<float>(text.spans[runIdx].fontSize.toPixels(
+            params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+      }
+
+      // Get font metrics for this run to compute proper em-box vertical extent.
+      const stbtt_fontinfo* runInfo = run.font ? fontManager.fontInfo(run.font) : nullptr;
+      float runScale = run.font ? fontManager.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+      double emTop = static_cast<double>(runFontSizePx);  // fallback: full font size above baseline
+      double emBottom = 0.0;                               // fallback: baseline
+      if (runInfo && runScale > 0.0f) {
+        int runAscent = 0;
+        int runDescent = 0;
+        int runLineGap = 0;
+        stbtt_GetFontVMetrics(runInfo, &runAscent, &runDescent, &runLineGap);
+        // ascent is positive (above baseline), descent is negative (below baseline).
+        // In SVG's y-down space: top = baseline - ascent*scale, bottom = baseline - descent*scale.
+        emTop = static_cast<double>(runAscent) * runScale;
+        emBottom = -static_cast<double>(runDescent) * runScale;
+      }
+
       for (const auto& glyph : run.glyphs) {
         if (glyph.glyphIndex == 0) {
           continue;
         }
         minX = std::min(minX, glyph.xPosition);
-        maxX = std::max(maxX, glyph.xPosition + std::max(glyph.xAdvance, glyph.yAdvance));
-        minY = std::min(minY, glyph.yPosition - static_cast<double>(fontSizePx));
-        maxY = std::max(maxY, glyph.yPosition);
+        maxX = std::max(maxX, glyph.xPosition + glyph.xAdvance);
+        minY = std::min(minY, glyph.yPosition - emTop);
+        maxY = std::max(maxY, glyph.yPosition + emBottom);
       }
     }
-  if (minX < maxX && minY < maxY) {
+    if (minX < maxX && minY < maxY) {
       textBounds = Boxd({minX, minY}, {maxX, maxY});
     }
   }
