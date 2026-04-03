@@ -63,6 +63,9 @@ INSTANTIATE_TEST_SUITE_P(AlignmentBaseline, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-alignment-baseline")),
                          TestNameFromFilename);
 
+INSTANTIATE_TEST_SUITE_P(Color, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("a-color")),
+                         TestNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(
     BaselineShift, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("a-baseline-shift",
@@ -129,8 +132,6 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-// Non-text filter coverage is intentionally disabled on the text branch cleanup path.
-#if 0
 INSTANTIATE_TEST_SUITE_P(
     FilterAttrib, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
@@ -255,7 +256,6 @@ INSTANTIATE_TEST_SUITE_P(MarkerAttrib, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(MixBlendMode, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-mix-blend-mode")), TestNameFromFilename);
-#endif
 
 INSTANTIATE_TEST_SUITE_P(Opacity, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix(
@@ -447,8 +447,6 @@ INSTANTIATE_TEST_SUITE_P(Defs, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(Ellipse, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-ellipse")), TestNameFromFilename);
 
-// Non-text filter coverage is intentionally disabled on the text branch cleanup path.
-#if 0
 INSTANTIATE_TEST_SUITE_P(FeBlend, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feBlend")), TestNameFromFilename);
 
@@ -679,7 +677,6 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-065.svg", Params::Skip()},  // UB: in=FillPaint on empty group
         })),
     TestNameFromFilename);
-#endif
 
 INSTANTIATE_TEST_SUITE_P(G, ImageComparisonTestFixture, ValuesIn(getTestsWithPrefix("e-g")),
                          TestNameFromFilename);

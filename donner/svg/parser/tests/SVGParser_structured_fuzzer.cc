@@ -8,6 +8,7 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/svg/SVGElementNames.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using namespace donner::xml;
@@ -34,15 +35,8 @@ XMLQualifiedName CreateRandomElementName(FuzzedDataProvider& provider) {
   // Either pick from a known element name or generate a random one
   const bool useKnownElementName = provider.ConsumeBool();
   if (useKnownElementName) {
-    // List of known SVG element names
-    // TODO: Update this to use AllSVGElements()
-    constexpr std::string_view knownElementNames[] = {
-        "circle",  "clipPath", "defs",           "ellipse", "feGaussianBlur", "filter", "g",
-        "image",   "line",     "linearGradient", "marker",  "mask",           "path",   "pattern",
-        "polygon", "polyline", "radialGradient", "rect",    "stop",           "style",  "svg",
-        "unknown", "use"};
-
-    const std::string_view elementName = provider.PickValueInArray(knownElementNames);
+    const std::string_view elementName =
+        provider.PickValueInArray(donner::svg::kSVGElementNames);
     return XMLQualifiedName(donner::RcString(elementName));
   }
 
@@ -54,80 +48,8 @@ XMLQualifiedName CreateRandomAttributeName(FuzzedDataProvider& provider) {
   // Either pick from a known attribute name or generate a random one
   const bool useKnownAttributeName = provider.ConsumeBool();
   if (useKnownAttributeName) {
-    // List of known attribute names
-    // TODO: Share this with kValidPresentationAttributes in PropertyRegistry.cc
-    constexpr std::string_view knownAttributeNames[] = {"cx",
-                                                        "cy",
-                                                        "height",
-                                                        "width",
-                                                        "x",
-                                                        "y",
-                                                        "r",
-                                                        "rx",
-                                                        "ry",
-                                                        "d",
-                                                        "fill",
-                                                        "transform",
-                                                        "alignment-baseline",
-                                                        "baseline-shift",
-                                                        "clip-path",
-                                                        "clip-rule",
-                                                        "color",
-                                                        "color-interpolation",
-                                                        "color-interpolation-filters",
-                                                        "color-rendering",
-                                                        "cursor",
-                                                        "direction",
-                                                        "display",
-                                                        "dominant-baseline",
-                                                        "fill-opacity",
-                                                        "fill-rule",
-                                                        "filter",
-                                                        "flood-color",
-                                                        "flood-opacity",
-                                                        "font-family",
-                                                        "font-size",
-                                                        "font-size-adjust",
-                                                        "font-stretch",
-                                                        "font-style",
-                                                        "font-variant",
-                                                        "font-weight",
-                                                        "glyph-orientation-horizontal",
-                                                        "glyph-orientation-vertical",
-                                                        "image-rendering",
-                                                        "letter-spacing",
-                                                        "lighting-color",
-                                                        "marker-end",
-                                                        "marker-mid",
-                                                        "marker-start",
-                                                        "mask",
-                                                        "opacity",
-                                                        "overflow",
-                                                        "paint-order",
-                                                        "pointer-events",
-                                                        "shape-rendering",
-                                                        "stop-color",
-                                                        "stop-opacity",
-                                                        "stroke",
-                                                        "stroke-dasharray",
-                                                        "stroke-dashoffset",
-                                                        "stroke-linecap",
-                                                        "stroke-linejoin",
-                                                        "stroke-miterlimit",
-                                                        "stroke-opacity",
-                                                        "stroke-width",
-                                                        "text-anchor",
-                                                        "text-decoration",
-                                                        "text-overflow",
-                                                        "text-rendering",
-                                                        "unicode-bidi",
-                                                        "vector-effect",
-                                                        "visibility",
-                                                        "white-space",
-                                                        "word-spacing",
-                                                        "writing-mode"};
-
-    const std::string_view attrName = provider.PickValueInArray(knownAttributeNames);
+    const std::string_view attrName =
+        provider.PickValueInArray(donner::svg::kSVGPresentationAttributeNames);
     return XMLQualifiedName(donner::RcString(attrName));
   } else {
     // Generate a random attribute name

@@ -11,33 +11,57 @@ namespace donner::svg {
  * \ref xml_rect, etc.
  */
 enum class ElementType : uint8_t {
-  Circle,          //!< \ref xml_circle
-  ClipPath,        //!< \ref xml_clipPath
-  Defs,            //!< \ref xml_defs
-  Ellipse,         //!< \ref xml_ellipse
-  FeGaussianBlur,  //!< \ref xml_feGaussianBlur
-  Filter,          //!< \ref xml_filter
-  G,               //!< \ref xml_g
-  Image,           //!< \ref xml_image
-  Line,            //!< \ref xml_line
-  LinearGradient,  //!< \ref xml_linearGradient
-  Marker,          //!< \ref xml_marker
-  Mask,            //!< \ref xml_mask
-  Path,            //!< \ref xml_path
-  Pattern,         //!< \ref xml_pattern
-  Polygon,         //!< \ref xml_polygon
-  Polyline,        //!< \ref xml_polyline
-  RadialGradient,  //!< \ref xml_radialGradient
-  Rect,            //!< \ref xml_rect
-  Stop,            //!< \ref xml_stop, for gradient stops.
-  Style,           //!< \ref xml_style
-  SVG,             //!< \ref xml_svg, SVG root element.
-  Symbol,          //!< \ref xml_symbol
-  Text,            //!< \ref xml_text
-  TextPath,        //!< \ref xml_textPath
-  TSpan,           //!< \ref xml_tspan
-  Unknown,         //!< For unknown elements.
-  Use,             //!< \ref xml_use
+  Circle,               //!< \ref xml_circle
+  ClipPath,             //!< \ref xml_clipPath
+  Defs,                 //!< \ref xml_defs
+  Ellipse,              //!< \ref xml_ellipse
+  FeBlend,              //!< \ref xml_feBlend
+  FeColorMatrix,        //!< \ref xml_feColorMatrix
+  FeComponentTransfer,  //!< \ref xml_feComponentTransfer
+  FeComposite,          //!< \ref xml_feComposite
+  FeConvolveMatrix,     //!< \ref xml_feConvolveMatrix
+  FeDiffuseLighting,    //!< \ref xml_feDiffuseLighting
+  FeDisplacementMap,    //!< \ref xml_feDisplacementMap
+  FeDistantLight,       //!< \ref xml_feDistantLight
+  FeDropShadow,         //!< \ref xml_feDropShadow
+  FeFlood,              //!< \ref xml_feFlood
+  FeFuncA,              //!< \ref xml_feFuncA
+  FeFuncB,              //!< \ref xml_feFuncB
+  FeFuncG,              //!< \ref xml_feFuncG
+  FeFuncR,              //!< \ref xml_feFuncR
+  FeGaussianBlur,       //!< \ref xml_feGaussianBlur
+  FeImage,              //!< \ref xml_feImage
+  FeMerge,              //!< \ref xml_feMerge
+  FeMergeNode,          //!< \ref xml_feMergeNode
+  FeMorphology,         //!< \ref xml_feMorphology
+  FeOffset,             //!< \ref xml_feOffset
+  FePointLight,         //!< \ref xml_fePointLight
+  FeSpecularLighting,   //!< \ref xml_feSpecularLighting
+  FeSpotLight,          //!< \ref xml_feSpotLight
+  FeTile,               //!< \ref xml_feTile
+  FeTurbulence,         //!< \ref xml_feTurbulence
+  Filter,               //!< \ref xml_filter
+  G,                    //!< \ref xml_g
+  Image,                //!< \ref xml_image
+  Line,                 //!< \ref xml_line
+  LinearGradient,       //!< \ref xml_linearGradient
+  Marker,               //!< \ref xml_marker
+  Mask,                 //!< \ref xml_mask
+  Path,                 //!< \ref xml_path
+  Pattern,              //!< \ref xml_pattern
+  Polygon,              //!< \ref xml_polygon
+  Polyline,             //!< \ref xml_polyline
+  RadialGradient,       //!< \ref xml_radialGradient
+  Rect,                 //!< \ref xml_rect
+  Stop,                 //!< \ref xml_stop, for gradient stops.
+  Style,                //!< \ref xml_style
+  SVG,                  //!< \ref xml_svg, SVG root element.
+  Symbol,               //!< \ref xml_symbol
+  Text,                 //!< \ref xml_text
+  TextPath,             //!< \ref xml_textPath
+  TSpan,                //!< \ref xml_tspan
+  Unknown,              //!< For unknown elements.
+  Use,                  //!< \ref xml_use
 };
 
 /// Ostream output operator for \ref ElementType, outputs the element name.
@@ -85,8 +109,55 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::Defs: return fn(std::integral_constant<ElementType, ElementType::Defs>());
     case ElementType::Ellipse:
       return fn(std::integral_constant<ElementType, ElementType::Ellipse>());
+    case ElementType::FeBlend:
+      return fn(std::integral_constant<ElementType, ElementType::FeBlend>());
+    case ElementType::FeColorMatrix:
+      return fn(std::integral_constant<ElementType, ElementType::FeColorMatrix>());
+    case ElementType::FeComponentTransfer:
+      return fn(std::integral_constant<ElementType, ElementType::FeComponentTransfer>());
+    case ElementType::FeComposite:
+      return fn(std::integral_constant<ElementType, ElementType::FeComposite>());
+    case ElementType::FeConvolveMatrix:
+      return fn(std::integral_constant<ElementType, ElementType::FeConvolveMatrix>());
+    case ElementType::FeDiffuseLighting:
+      return fn(std::integral_constant<ElementType, ElementType::FeDiffuseLighting>());
+    case ElementType::FeDisplacementMap:
+      return fn(std::integral_constant<ElementType, ElementType::FeDisplacementMap>());
+    case ElementType::FeDistantLight:
+      return fn(std::integral_constant<ElementType, ElementType::FeDistantLight>());
+    case ElementType::FeDropShadow:
+      return fn(std::integral_constant<ElementType, ElementType::FeDropShadow>());
+    case ElementType::FeFlood:
+      return fn(std::integral_constant<ElementType, ElementType::FeFlood>());
+    case ElementType::FeFuncA:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncA>());
+    case ElementType::FeFuncB:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncB>());
+    case ElementType::FeFuncG:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncG>());
+    case ElementType::FeFuncR:
+      return fn(std::integral_constant<ElementType, ElementType::FeFuncR>());
     case ElementType::FeGaussianBlur:
       return fn(std::integral_constant<ElementType, ElementType::FeGaussianBlur>());
+    case ElementType::FeImage:
+      return fn(std::integral_constant<ElementType, ElementType::FeImage>());
+    case ElementType::FeMerge:
+      return fn(std::integral_constant<ElementType, ElementType::FeMerge>());
+    case ElementType::FeMergeNode:
+      return fn(std::integral_constant<ElementType, ElementType::FeMergeNode>());
+    case ElementType::FeMorphology:
+      return fn(std::integral_constant<ElementType, ElementType::FeMorphology>());
+    case ElementType::FeOffset:
+      return fn(std::integral_constant<ElementType, ElementType::FeOffset>());
+    case ElementType::FePointLight:
+      return fn(std::integral_constant<ElementType, ElementType::FePointLight>());
+    case ElementType::FeSpecularLighting:
+      return fn(std::integral_constant<ElementType, ElementType::FeSpecularLighting>());
+    case ElementType::FeSpotLight:
+      return fn(std::integral_constant<ElementType, ElementType::FeSpotLight>());
+    case ElementType::FeTile: return fn(std::integral_constant<ElementType, ElementType::FeTile>());
+    case ElementType::FeTurbulence:
+      return fn(std::integral_constant<ElementType, ElementType::FeTurbulence>());
     case donner::svg::ElementType::Filter:
       return fn(std::integral_constant<ElementType, ElementType::Filter>());
     case ElementType::G: return fn(std::integral_constant<ElementType, ElementType::G>());

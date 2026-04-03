@@ -13,11 +13,11 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
-#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
+#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -225,8 +225,15 @@ public:
       std::cout << "\n";
     }
 
+    const std::vector<FilterEffect>& filterEffects = properties.filter.getRequired();
+    const bool hasFilterEffect = !filterEffects.empty();
+
     if (properties.visibility.getRequired() != Visibility::Visible) {
       instance.visible = false;
+    }
+
+    if (hasFilterEffect) {
+      instance.resolvedFilter = resolveFilter(dataHandle, filterEffects);
     }
 
     if (properties.clipPath.get()) {
@@ -295,6 +302,12 @@ public:
     if (instance.mask) {
       instance.isolatedLayer = true;
       layerDepth += 2;
+    }
+
+    if (properties.mixBlendMode.getRequired() != MixBlendMode::Normal ||
+        properties.isolation.getRequired() == Isolation::Isolate) {
+      instance.isolatedLayer = true;
+      ++layerDepth;
     }
 
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
@@ -557,6 +570,27 @@ public:
       }
     }
     return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt, MarkerUnits::Default};
+  }
+
+  ResolvedFilterEffect resolveFilter(EntityHandle dataHandle,
+                                     const std::vector<FilterEffect>& filters) {
+    // If the list is exactly one element reference, resolve it directly to keep the existing
+    // ResolvedReference path (which provides filter region info from the <filter> element).
+    if (filters.size() == 1 && filters.front().is<FilterEffect::ElementReference>()) {
+      const FilterEffect::ElementReference& ref =
+          filters.front().get<FilterEffect::ElementReference>();
+
+      if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
+          resolvedRef && resolvedRef->handle.all_of<ComputedFilterComponent>()) {
+        return resolvedRef.value();
+      } else {
+        return std::vector<FilterEffect>();
+      }
+    }
+
+    // For lists of filter functions (possibly including url() references), return the vector
+    // directly. The renderer will handle resolution of element references within the list.
+    return filters;
   }
 
 private:
@@ -1042,6 +1076,8 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 
   PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
+
+  FilterSystem().instantiateAllComputedComponents(registry_, outWarnings);
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {

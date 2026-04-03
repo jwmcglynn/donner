@@ -285,6 +285,248 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   return clip;
 }
 
+/// Convert a Lengthd to pixel value, resolving relative units (em, ex, rem, etc.) via font
+/// metrics.
+double lengthToPixels(const Lengthd& length, const Boxd& viewBox, const FontMetrics& fontMetrics) {
+  return length.toPixels(viewBox, fontMetrics);
+}
+
+std::optional<components::FilterGraph> resolveFilterGraph(
+    Registry& registry, const components::ResolvedFilterEffect& filter, css::RGBA currentColor,
+    const Boxd& viewBox, const FontMetrics& fontMetrics) {
+  if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
+    // Convert CSS filter functions to a FilterGraph.
+    // CSS Filter Effects Level 1 §8: shorthand filter functions use sRGB color space for
+    // interpolation, unlike SVG filter elements which default to linearRGB.
+    components::FilterGraph graph;
+    graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+    for (const FilterEffect& effect : *effects) {
+      std::visit(
+          [&](const auto& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, FilterEffect::None>) {
+              // No-op.
+            } else if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::GaussianBlur{
+                  .stdDeviationX = lengthToPixels(e.stdDeviationX, viewBox, fontMetrics),
+                  .stdDeviationY = lengthToPixels(e.stdDeviationY, viewBox, fontMetrics),
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::ElementReference>) {
+              // Resolve the element reference and copy its filter graph nodes.
+              // Preserve the source filter's color space on each copied node so that
+              // url() nodes run in the <filter> element's color space (typically linearRGB)
+              // while CSS function nodes use the graph-level sRGB.
+              if (auto resolvedRef = e.reference.resolve(registry);
+                  resolvedRef &&
+                  resolvedRef->handle.template all_of<components::ComputedFilterComponent>()) {
+                if (const auto* computed =
+                        registry.try_get<components::ComputedFilterComponent>(*resolvedRef)) {
+                  const auto srcColorSpace = computed->filterGraph.colorInterpolationFilters;
+                  for (auto refNode : computed->filterGraph.nodes) {
+                    if (!refNode.colorInterpolationFilters.has_value()) {
+                      refNode.colorInterpolationFilters = srcColorSpace;
+                    }
+                    graph.nodes.push_back(std::move(refNode));
+                  }
+                }
+              }
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::HueRotate>) {
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::HueRotate,
+                  .values = {e.angleDegrees},
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Brightness>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcR = {.type = components::filter_primitive::ComponentTransfer::FuncType::Linear,
+                          .slope = e.amount,
+                          .intercept = 0.0};
+              ct.funcG = ct.funcR;
+              ct.funcB = ct.funcR;
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Contrast>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcR = {.type = components::filter_primitive::ComponentTransfer::FuncType::Linear,
+                          .slope = e.amount,
+                          .intercept = -(0.5 * e.amount) + 0.5};
+              ct.funcG = ct.funcR;
+              ct.funcB = ct.funcR;
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Grayscale>) {
+              // grayscale(n) = saturate(1 - n)
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::Saturate,
+                  .values = {1.0 - e.amount},
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Invert>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcR = {
+                  .type = components::filter_primitive::ComponentTransfer::FuncType::Table,
+                  .tableValues = {e.amount, 1.0 - e.amount},
+              };
+              ct.funcG = ct.funcR;
+              ct.funcB = ct.funcR;
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::FilterOpacity>) {
+              components::FilterNode node;
+              components::filter_primitive::ComponentTransfer ct;
+              ct.funcA = {.type = components::filter_primitive::ComponentTransfer::FuncType::Linear,
+                          .slope = e.amount,
+                          .intercept = 0.0};
+              node.primitive = std::move(ct);
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Saturate>) {
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::Saturate,
+                  .values = {e.amount},
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::Sepia>) {
+              // Sepia matrix per CSS Filter Effects Level 1 spec.
+              const double s = e.amount;
+              components::FilterNode node;
+              // clang-format off
+              node.primitive = components::filter_primitive::ColorMatrix{
+                  .type = components::filter_primitive::ColorMatrix::Type::Matrix,
+                  .values = {
+                      0.393 + 0.607 * (1.0 - s), 0.769 - 0.769 * (1.0 - s), 0.189 - 0.189 * (1.0 - s), 0, 0,
+                      0.349 - 0.349 * (1.0 - s), 0.686 + 0.314 * (1.0 - s), 0.168 - 0.168 * (1.0 - s), 0, 0,
+                      0.272 - 0.272 * (1.0 - s), 0.534 - 0.534 * (1.0 - s), 0.131 + 0.869 * (1.0 - s), 0, 0,
+                      0, 0, 0, 1, 0,
+                  },
+              };
+              // clang-format on
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+
+            } else if constexpr (std::is_same_v<T, FilterEffect::DropShadow>) {
+              // Resolve currentColor to the element's computed color property value.
+              const css::RGBA resolvedRGBA = e.color.resolve(currentColor, 1.0f);
+              components::FilterNode node;
+              node.primitive = components::filter_primitive::DropShadow{
+                  .dx = lengthToPixels(e.offsetX, viewBox, fontMetrics),
+                  .dy = lengthToPixels(e.offsetY, viewBox, fontMetrics),
+                  .stdDeviationX = lengthToPixels(e.stdDeviation, viewBox, fontMetrics),
+                  .stdDeviationY = lengthToPixels(e.stdDeviation, viewBox, fontMetrics),
+                  .floodColor = css::Color(resolvedRGBA),
+                  .floodOpacity = static_cast<double>(resolvedRGBA.a) / 255.0,
+              };
+              node.inputs.push_back(components::FilterInput{});
+              graph.nodes.push_back(std::move(node));
+            }
+          },
+          effect.value);
+    }
+    return graph;
+  }
+
+  if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
+    if (const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference)) {
+      return computed->filterGraph;
+    }
+  }
+
+  return std::nullopt;
+}
+
+/// Compute the filter region bounds in entity-local coordinates from a resolved filter reference.
+std::optional<Boxd> computeFilterRegion(Registry& registry,
+                                        const components::ResolvedFilterEffect& filter,
+                                        const components::RenderingInstanceComponent& instance) {
+  const auto* reference = std::get_if<ResolvedReference>(&filter);
+  if (!reference) {
+    // For CSS filter function lists, check if any entry is a url() reference.
+    // url() references need a filter region; pure CSS functions don't.
+    const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter);
+    if (!effects) {
+      return std::nullopt;
+    }
+
+    const bool hasUrlReference = std::any_of(effects->begin(), effects->end(), [](const auto& e) {
+      return e.template is<FilterEffect::ElementReference>();
+    });
+    if (!hasUrlReference) {
+      return std::nullopt;  // Pure CSS filter functions: no filter region clipping.
+    }
+
+    // Mixed list with url() references: use the default filter region.
+    const std::optional<Boxd> shapeBounds =
+        components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+    if (!shapeBounds) {
+      return std::nullopt;
+    }
+    const double bx = shapeBounds->topLeft.x;
+    const double by = shapeBounds->topLeft.y;
+    const double bw = shapeBounds->width();
+    const double bh = shapeBounds->height();
+    return Boxd::FromXYWH(bx - 0.1 * bw, by - 0.1 * bh, 1.2 * bw, 1.2 * bh);
+  }
+
+  const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference);
+  if (!computed) {
+    return std::nullopt;
+  }
+
+  // Determine the bounds reference for resolving percentages.
+  const Boxd shapeBounds =
+      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
+
+  if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
+    // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
+    // Unitless values are fractions (e.g., 0.1 = 10% of bbox dimension).
+    // Percent values use toPixels which handles the /100 division.
+    auto resolveOBB = [&](const Lengthd& len, double bboxDim) -> double {
+      if (len.unit == Lengthd::Unit::None) {
+        return len.value * bboxDim;
+      }
+      // Percent and other units: toPixels resolves relative to shapeBounds.
+      return len.toPixels(shapeBounds, FontMetrics(),
+                          bboxDim == shapeBounds.width() ? Lengthd::Extent::X : Lengthd::Extent::Y);
+    };
+    const double xPx = resolveOBB(computed->x, shapeBounds.width()) + shapeBounds.topLeft.x;
+    const double yPx = resolveOBB(computed->y, shapeBounds.height()) + shapeBounds.topLeft.y;
+    const double wPx = resolveOBB(computed->width, shapeBounds.width());
+    const double hPx = resolveOBB(computed->height, shapeBounds.height());
+    return Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+  }
+
+  const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  const double xPx = computed->x.toPixels(viewBox, FontMetrics(), Lengthd::Extent::X);
+  const double yPx = computed->y.toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y);
+  const double wPx = computed->width.toPixels(viewBox, FontMetrics(), Lengthd::Extent::X);
+  const double hPx = computed->height.toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y);
+  return Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+}
+
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style) {
   const auto& properties = style.properties.value();
@@ -402,9 +644,9 @@ void RendererDriver::draw(SVGDocument& document) {
     }
   }
 
-  const Vector2i renderingSize = document.canvasSize();
+  renderingSize_ = document.canvasSize();
   RenderViewport viewport;
-  viewport.size = Vector2d(renderingSize.x, renderingSize.y);
+  viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
   viewport.devicePixelRatio = 1.0;
 
   renderer_.beginFrame(viewport);
@@ -452,10 +694,43 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
     const double opacity = style.properties->opacity.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0;
+    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
+    const Isolation isolation = style.properties->isolation.getRequired();
+    const bool hasIsolatedLayer =
+        opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity, style.properties->mixBlendMode.getRequired());
+      renderer_.pushIsolatedLayer(opacity, blendMode);
     }
+
+    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double filterFontSizePx =
+        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
+
+    std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
+                                 style.properties->color.getRequired().rgba(), filterViewBox,
+                                 filterFontMetrics)
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
+        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
+                                                 renderingSize_.y / filterViewBox.height());
+      }
+    }
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
@@ -463,6 +738,12 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     int maskDepth = 0;
@@ -493,7 +774,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
-    if (instance.visible) {
+    if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
@@ -521,12 +802,16 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasViewportClip = hasViewportClip;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
+      deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
       deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
       for (int mi = 0; mi < maskDepth; ++mi) {
         renderer_.popMask();
+      }
+      if (hasFilterLayer) {
+        renderer_.popFilterLayer();
       }
       if (hasEntityClip) {
         renderer_.popClip();
@@ -543,6 +828,9 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       const DeferredPop& deferred = subtreeMarkers_.back();
       for (int mi = 0; mi < deferred.maskDepth; ++mi) {
         renderer_.popMask();
+      }
+      if (deferred.hasFilterLayer) {
+        renderer_.popFilterLayer();
       }
       if (deferred.hasEntityClip) {
         renderer_.popClip();
@@ -563,6 +851,9 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     const DeferredPop& deferred = subtreeMarkers_.back();
     for (int mi = 0; mi < deferred.maskDepth; ++mi) {
       renderer_.popMask();
+    }
+    if (deferred.hasFilterLayer) {
+      renderer_.popFilterLayer();
     }
     if (deferred.hasEntityClip) {
       renderer_.popClip();
@@ -619,10 +910,47 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
     const double opacity = style.properties->opacity.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0;
+    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
+    const Isolation isolation = style.properties->isolation.getRequired();
+    const bool hasIsolatedLayer =
+        opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity, style.properties->mixBlendMode.getRequired());
+      renderer_.pushIsolatedLayer(opacity, blendMode);
     }
+
+    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double filterFontSizePx =
+        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
+
+    std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
+                                 style.properties->color.getRequired().rgba(), filterViewBox,
+                                 filterFontMetrics)
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      // Compute the user-space to pixel-space scale factor from the viewBox and canvas dimensions.
+      // Lighting filters need this to transform light positions from SVG attribute values to the
+      // pixel-space pixmap coordinates.
+      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
+        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
+                                                 renderingSize_.y / filterViewBox.height());
+      }
+    }
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    // Per SVG spec, an empty or invalid filter reference makes the element invisible.
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     // Clip paths are in entity-local coordinates.
     // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
@@ -636,6 +964,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     // Render mask content, then transition to masked content layer.
@@ -669,7 +1003,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
-    if (instance.visible) {
+    if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
@@ -784,6 +1118,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         renderer_.popMask();
       }
       // Pop in reverse of push order: filter is innermost, then entity clip.
+      if (hasFilterLayer) {
+        renderer_.popFilterLayer();
+      }
       if (hasEntityClip) {
         renderer_.popClip();
       }
@@ -802,6 +1139,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         renderer_.popMask();
       }
       // Pop in reverse of push order: filter is innermost, then entity clip.
+      if (deferred.hasFilterLayer) {
+        renderer_.popFilterLayer();
+      }
       if (deferred.hasEntityClip) {
         renderer_.popClip();
       }
@@ -851,10 +1191,43 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
     const double opacity = style.properties->opacity.getRequired();
-    const bool hasIsolatedLayer = opacity < 1.0;
+    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
+    const Isolation isolation = style.properties->isolation.getRequired();
+    const bool hasIsolatedLayer =
+        opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity, style.properties->mixBlendMode.getRequired());
+      renderer_.pushIsolatedLayer(opacity, blendMode);
     }
+
+    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double filterFontSizePx =
+        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
+
+    std::optional<components::FilterGraph> filterGraph =
+        instance.resolvedFilter.has_value()
+            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
+                                 style.properties->color.getRequired().rgba(), filterViewBox,
+                                 filterFontMetrics)
+            : std::nullopt;
+    const std::optional<Boxd> filterRegion =
+        instance.resolvedFilter.has_value()
+            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
+            : std::nullopt;
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
+      }
+      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
+        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
+                                                 renderingSize_.y / filterViewBox.height());
+      }
+    }
+    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     // Per SVG spec: paint → filter → clip-path. Push clip before filter so clip applies to
     // the filter output. The filter layer saves/clears the clip mask internally.
@@ -865,6 +1238,12 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    if (hasFilterLayer) {
+      preRenderSvgFeImages(*filterGraph);
+      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
+      renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
     // Render mask content, then transition to masked content layer.
@@ -892,7 +1271,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
-    if (instance.visible) {
+    if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
@@ -964,6 +1343,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       for (int mi = 0; mi < maskDepth; ++mi) {
         renderer_.popMask();
       }
+      if (hasFilterLayer) {
+        renderer_.popFilterLayer();
+      }
       if (hasEntityClip) {
         renderer_.popClip();
       }
@@ -977,6 +1359,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       // Pop in reverse of push order: mask innermost, then filter, clip, layer.
       for (int mi = 0; mi < deferred.maskDepth; ++mi) {
         renderer_.popMask();
+      }
+      if (deferred.hasFilterLayer) {
+        renderer_.popFilterLayer();
       }
       if (deferred.hasEntityClip) {
         renderer_.popClip();
@@ -1016,63 +1401,79 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     return 0;
   }
 
+  // Currently only a single mask is supported (no parentMask chain).
+  SmallVector<const components::ResolvedMask*, 3> chain;
+  chain.push_back(&mask);
+
   const Boxd shapeLocalBounds =
       components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
 
-  std::optional<Boxd> maskBounds;
-  if (!maskComponent->useAutoBounds()) {
-    Boxd maskUnitsBounds;
-    if (maskComponent->maskUnits == MaskUnits::ObjectBoundingBox) {
-      maskUnitsBounds = shapeLocalBounds;
-    } else {
-      maskUnitsBounds = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  for (const auto* m : chain) {
+    if (!m->subtreeInfo || !m->reference.handle.valid()) {
+      continue;
     }
 
-    const Lengthd x = maskComponent->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd y = maskComponent->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd width = maskComponent->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-    const Lengthd height = maskComponent->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+    const auto* mc = m->reference.handle.try_get<components::MaskComponent>();
+    if (!mc) {
+      continue;
+    }
 
-    const double xPx = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
-    const double yPx = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
-    const double wPx = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
-    const double hPx = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+    std::optional<Boxd> maskBounds;
+    if (!mc->useAutoBounds()) {
+      Boxd maskUnitsBounds;
+      if (mc->maskUnits == MaskUnits::ObjectBoundingBox) {
+        maskUnitsBounds = shapeLocalBounds;
+      } else {
+        maskUnitsBounds = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+      }
 
-    maskBounds = Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+      const Lengthd x = mc->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+      const Lengthd y = mc->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+      const Lengthd width = mc->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+      const Lengthd height = mc->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+      const double xPx = x.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double yPx = y.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+      const double wPx = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
+      const double hPx = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
+
+      maskBounds = Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+    }
+
+    if (verbose_) {
+      std::cout << "[renderMask] chain depth=" << chain.size()
+                << " maskBounds=" << (maskBounds ? "yes" : "none")
+                << "\n  layerBase=" << layerBaseTransform_
+                << "\n  entityFromWorld=" << instance.entityFromWorldTransform
+                << "\n  maskContentUnits="
+                << (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox ? "OBB"
+                                                                                : "userSpace")
+                << "\n";
+    }
+    renderer_.pushMask(maskBounds);
+
+    const Transformd savedLayerBase = layerBaseTransform_;
+    layerBaseTransform_ = instance.entityFromWorldTransform;
+
+    if (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
+      const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
+                                                  Transformd::Translate(shapeLocalBounds.topLeft);
+      layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
+    }
+
+    if (!shapeLocalBounds.isEmpty()) {
+      traverseRange(view, registry, m->subtreeInfo->firstRenderedEntity,
+                    m->subtreeInfo->lastRenderedEntity);
+    } else {
+      skipUntil(view, m->subtreeInfo->lastRenderedEntity);
+    }
+
+    layerBaseTransform_ = savedLayerBase;
+    renderer_.transitionMaskToContent();
   }
 
-  if (verbose_) {
-    std::cout << "[renderMask] maskBounds=" << (maskBounds ? "yes" : "none")
-              << "\n  layerBase=" << layerBaseTransform_
-              << "\n  entityFromWorld=" << instance.entityFromWorldTransform
-              << "\n  maskContentUnits="
-              << (maskComponent->maskContentUnits == MaskContentUnits::ObjectBoundingBox
-                      ? "OBB"
-                      : "userSpace")
-              << "\n";
-  }
-  renderer_.pushMask(maskBounds);
-
-  const Transformd savedLayerBase = layerBaseTransform_;
-  layerBaseTransform_ = instance.entityFromWorldTransform;
-
-  if (maskComponent->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
-    const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
-                                                Transformd::Translate(shapeLocalBounds.topLeft);
-    layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
-  }
-
-  if (!shapeLocalBounds.isEmpty()) {
-    traverseRange(view, registry, mask.subtreeInfo->firstRenderedEntity,
-                  mask.subtreeInfo->lastRenderedEntity);
-  } else {
-    skipUntil(view, mask.subtreeInfo->lastRenderedEntity);
-  }
-
-  layerBaseTransform_ = savedLayerBase;
-  renderer_.transitionMaskToContent();
   renderer_.setTransform(instance.entityFromWorldTransform);
-  return 1;
+  return static_cast<int>(chain.size());
 }
 
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
@@ -1417,6 +1818,191 @@ void RendererDriver::setSubDocumentContextPaint(
 void RendererDriver::clearSubDocumentContextPaint(SVGDocument& subDocument) {
   if (subDocument.registry().ctx().contains<components::RenderingContext>()) {
     subDocument.registry().ctx().get<components::RenderingContext>().clearInitialContextPaint();
+  }
+}
+
+void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) {
+  for (auto& node : filterGraph.nodes) {
+    auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
+    if (!imageNode || !imageNode->svgSubDocument || !imageNode->imageData.empty()) {
+      continue;
+    }
+
+    // Cast the type-erased sub-document pointer.
+    auto* subDoc = std::any_cast<SVGDocument>(imageNode->svgSubDocument);
+    if (!subDoc) {
+      continue;
+    }
+
+    // Create an independent offscreen renderer to render the sub-document.
+    auto offscreen = renderer_.createOffscreenInstance();
+    if (!offscreen) {
+      if (verbose_) {
+        std::cerr << "[preRenderSvgFeImages] Backend does not support offscreen rendering\n";
+      }
+      continue;
+    }
+
+    // Render the sub-document into the offscreen renderer.
+    // draw() handles prepareDocumentForRendering, beginFrame, traverse, and endFrame internally.
+    RendererDriver subDriver(*offscreen, verbose_);
+    subDriver.draw(*subDoc);
+
+    // Determine the rendered size from the sub-document's canvas size.
+    const Vector2i subDocSize = subDoc->canvasSize();
+    if (subDocSize.x <= 0 || subDocSize.y <= 0) {
+      continue;
+    }
+
+    // Capture the rendered pixels.
+    RendererBitmap snapshot = offscreen->takeSnapshot();
+    if (!snapshot.empty()) {
+      imageNode->imageWidth = snapshot.dimensions.x;
+      imageNode->imageHeight = snapshot.dimensions.y;
+
+      // The snapshot may have row padding. Convert to tightly packed RGBA.
+      const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
+      if (snapshot.rowBytes == tightRowBytes) {
+        imageNode->imageData = std::move(snapshot.pixels);
+      } else {
+        imageNode->imageData.resize(tightRowBytes * snapshot.dimensions.y);
+        for (int y = 0; y < snapshot.dimensions.y; ++y) {
+          std::memcpy(imageNode->imageData.data() + y * tightRowBytes,
+                      snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
+        }
+      }
+    }
+
+    // Clear the sub-document pointer since we've now rendered to pixels.
+    imageNode->svgSubDocument = nullptr;
+  }
+}
+
+void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGraph,
+                                               Registry& registry,
+                                               const std::optional<Boxd>& filterRegion) {
+  // Lazily create the recursion guard set if needed.
+  std::unordered_set<entt::id_type> localGuard;
+  const bool ownsGuard = (feImageFragmentGuard_ == nullptr);
+  if (ownsGuard) {
+    feImageFragmentGuard_ = &localGuard;
+  }
+
+  for (auto& node : filterGraph.nodes) {
+    auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
+    if (!imageNode || imageNode->fragmentId.empty() || !imageNode->imageData.empty()) {
+      continue;
+    }
+
+    // Look up the referenced element by ID.
+    const auto& docCtx = registry.ctx().get<const components::SVGDocumentContext>();
+    const Entity targetEntity = docCtx.getEntityById(imageNode->fragmentId);
+    if (targetEntity == entt::null) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Fragment '" << imageNode->fragmentId
+                  << "' not found\n";
+      }
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Recursion guard: skip if this entity is already being rendered as an feImage fragment.
+    const auto entityId = entt::to_integral(targetEntity);
+    if (feImageFragmentGuard_->count(entityId) > 0) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Skipping recursive reference to '"
+                  << imageNode->fragmentId << "'\n";
+      }
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Create an offscreen renderer at the same canvas size.
+    auto offscreen = renderer_.createOffscreenInstance();
+    if (!offscreen) {
+      if (verbose_) {
+        std::cerr << "[preRenderFeImageFragments] Backend does not support offscreen rendering\n";
+      }
+      continue;
+    }
+
+    // Add to recursion guard before rendering.
+    feImageFragmentGuard_->insert(entityId);
+
+    // Check if the element is in the normal render tree.
+    const auto* targetInstance =
+        registry.try_get<components::RenderingInstanceComponent>(targetEntity);
+
+    if (targetInstance == nullptr) {
+      feImageFragmentGuard_->erase(entityId);
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
+    // Determine the last entity in the subtree for traverseRange.
+    Entity lastEntity;
+    if (targetInstance->subtreeInfo) {
+      lastEntity = targetInstance->subtreeInfo->lastRenderedEntity;
+    } else {
+      lastEntity = targetEntity;
+    }
+
+    // Begin frame with same viewport.
+    RenderViewport viewport;
+    viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
+    viewport.devicePixelRatio = 1.0;
+    offscreen->beginFrame(viewport);
+
+    // Create a sub-driver for offscreen rendering and share the recursion guard.
+    RendererDriver subDriver(*offscreen, verbose_);
+    subDriver.renderingSize_ = renderingSize_;
+    subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
+
+    // Offset the fragment rendering so its coordinates align with the filter pixel space.
+    // The filter graph executor places the fragment image at (0,0). Without offset, the
+    // fragment renders at absolute canvas coordinates, but the filter expects coordinates
+    // relative to the filter region's origin.
+    if (filterRegion.has_value()) {
+      subDriver.layerBaseTransform_ =
+          Transformd::Translate(filterRegion->topLeft.x, filterRegion->topLeft.y);
+    }
+
+    {
+      RenderingInstanceView subView(registry);
+      subDriver.traverseRange(subView, registry, targetEntity, lastEntity);
+    }
+
+    offscreen->endFrame();
+
+    // Capture the rendered pixels.
+    RendererBitmap snapshot = offscreen->takeSnapshot();
+    if (!snapshot.empty()) {
+      imageNode->imageWidth = snapshot.dimensions.x;
+      imageNode->imageHeight = snapshot.dimensions.y;
+
+      // Convert to tightly packed RGBA.
+      const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
+      if (snapshot.rowBytes == tightRowBytes) {
+        imageNode->imageData = std::move(snapshot.pixels);
+      } else {
+        imageNode->imageData.resize(tightRowBytes * snapshot.dimensions.y);
+        for (int y = 0; y < snapshot.dimensions.y; ++y) {
+          std::memcpy(imageNode->imageData.data() + y * tightRowBytes,
+                      snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
+        }
+      }
+    }
+
+    // Remove from recursion guard after rendering.
+    feImageFragmentGuard_->erase(entityId);
+
+    // Clear fragmentId since we've rendered to pixels.
+    imageNode->fragmentId = RcString();
+  }
+
+  // Clean up owned guard.
+  if (ownsGuard) {
+    feImageFragmentGuard_ = nullptr;
   }
 }
 

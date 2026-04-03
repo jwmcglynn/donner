@@ -46,13 +46,9 @@
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
-#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-
-// Embedded resources
-#include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
 
@@ -850,7 +846,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             const SkRect srcRect = SkRect::MakeWH(static_cast<SkScalar>(primitive.imageWidth),
                                                   static_cast<SkScalar>(primitive.imageHeight));
 
-            if (!primitive.href.empty() && std::string_view(primitive.href).front() == '#') {
+            if (primitive.isFragmentReference) {
               // Fragment references: place at (0,0) with 1:1 mapping.
               result = SkImageFilters::Image(
                   std::move(skImage),
@@ -1192,7 +1188,8 @@ void RendererSkia::beginFrame(const RenderViewport& viewport) {
   const int pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
 
   bitmap_.allocPixels(
-      SkImageInfo::MakeN32(pixelWidth, pixelHeight, SkAlphaType::kUnpremul_SkAlphaType));
+      SkImageInfo::MakeN32(pixelWidth, pixelHeight, SkAlphaType::kPremul_SkAlphaType));
+  bitmap_.eraseColor(SK_ColorTRANSPARENT);
 
   if (externalCanvas_ != nullptr) {
     currentCanvas_ = externalCanvas_;

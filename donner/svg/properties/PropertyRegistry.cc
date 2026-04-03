@@ -127,6 +127,20 @@ ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> com
   return err;
 }
 
+/// Parse CSS isolation property: auto | isolate.
+ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("auto")) return Isolation::Auto;
+      if (ident->value.equalsLowercase("isolate")) return Isolation::Isolate;
+    }
+  }
+  ParseError err;
+  err.reason = "Invalid isolation value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components) {
   TextDecoration result = TextDecoration::None;
 
@@ -205,6 +219,35 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
 
   ParseError err;
   err.reason = "Invalid dominant-baseline value";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+/// Parse mix-blend-mode CSS keyword values.
+ParseResult<MixBlendMode> ParseMixBlendMode(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      const RcString& v = ident->value;
+      if (v.equalsLowercase("normal")) return MixBlendMode::Normal;
+      if (v.equalsLowercase("multiply")) return MixBlendMode::Multiply;
+      if (v.equalsLowercase("screen")) return MixBlendMode::Screen;
+      if (v.equalsLowercase("overlay")) return MixBlendMode::Overlay;
+      if (v.equalsLowercase("darken")) return MixBlendMode::Darken;
+      if (v.equalsLowercase("lighten")) return MixBlendMode::Lighten;
+      if (v.equalsLowercase("color-dodge")) return MixBlendMode::ColorDodge;
+      if (v.equalsLowercase("color-burn")) return MixBlendMode::ColorBurn;
+      if (v.equalsLowercase("hard-light")) return MixBlendMode::HardLight;
+      if (v.equalsLowercase("soft-light")) return MixBlendMode::SoftLight;
+      if (v.equalsLowercase("difference")) return MixBlendMode::Difference;
+      if (v.equalsLowercase("exclusion")) return MixBlendMode::Exclusion;
+      if (v.equalsLowercase("hue")) return MixBlendMode::Hue;
+      if (v.equalsLowercase("saturation")) return MixBlendMode::Saturation;
+      if (v.equalsLowercase("color")) return MixBlendMode::Color;
+      if (v.equalsLowercase("luminosity")) return MixBlendMode::Luminosity;
+    }
+  }
+  ParseError err;
+  err.reason = "Invalid mix-blend-mode value";
   err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
@@ -433,6 +476,29 @@ ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> compone
 
   ParseError err;
   err.reason = "Invalid fill rule";
+  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<ColorInterpolationFilters> ParseColorInterpolationFilters(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const css::ComponentValue& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+
+      if (value.equalsLowercase("srgb")) {
+        return ColorInterpolationFilters::SRGB;
+      } else if (value.equalsLowercase("linearrgb")) {
+        return ColorInterpolationFilters::LinearRGB;
+      } else if (value.equalsLowercase("auto")) {
+        return ColorInterpolationFilters::LinearRGB;  // SVG spec: auto = linearRGB
+      }
+    }
+  }
+
+  ParseError err;
+  err.reason = "Invalid color-interpolation-filters value";
   err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
@@ -933,6 +999,95 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   return err;
 }
 
+ParseResult<std::vector<FilterEffect>> ParseFilter(
+    std::span<const css::ComponentValue> components) {
+  if (components.empty()) {
+    ParseError err;
+    err.reason = "Invalid filter value";
+    return err;
+  }
+
+  std::span<const css::ComponentValue> remaining = components;
+  SkipWhitespace(remaining);
+
+  // Check for "none" keyword.
+  if (remaining.size() == 1 || (remaining.size() >= 1 && remaining.front().is<css::Token>())) {
+    const auto& first = remaining.front();
+    if (const auto* ident = first.tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("none")) {
+        return std::vector<FilterEffect>();
+      }
+    }
+  }
+
+  // Parse list of filter functions and/or url() references.
+  std::vector<FilterEffect> effects;
+  while (!remaining.empty()) {
+    SkipWhitespace(remaining);
+    if (remaining.empty()) {
+      break;
+    }
+
+    const css::ComponentValue& component = remaining.front();
+
+    if (component.is<css::Token>()) {
+      const auto& token = component.get<css::Token>();
+      if (token.is<css::Token::Url>()) {
+        const auto& url = token.get<css::Token::Url>();
+        effects.emplace_back(FilterEffect::ElementReference(url.value));
+        remaining = remaining.subspan(1);
+        continue;
+      }
+      // url("...") with quotes is parsed as a function token.
+    }
+
+    if (component.is<css::Function>()) {
+      const auto& function = component.get<css::Function>();
+      // Handle url("...") with quoted argument.
+      if (function.name.equalsLowercase("url")) {
+        if (!function.values.empty()) {
+          std::span<const css::ComponentValue> funcValues = function.values;
+          SkipWhitespace(funcValues);
+          if (!funcValues.empty()) {
+            if (const auto* str = funcValues.front().tryGetToken<css::Token::String>()) {
+              effects.emplace_back(FilterEffect::ElementReference(str->value));
+              remaining = remaining.subspan(1);
+              continue;
+            }
+          }
+        }
+      }
+
+      auto result = ParseFilterFunction(function);
+      if (result.hasError()) {
+        return std::move(result.error());
+      }
+      effects.push_back(std::move(result.result()));
+      remaining = remaining.subspan(1);
+      continue;
+    }
+
+    // Skip comma separators if present.
+    if (component.isToken<css::Token::Comma>()) {
+      remaining = remaining.subspan(1);
+      continue;
+    }
+
+    ParseError err;
+    err.reason = "Invalid filter value";
+    err.location = component.sourceOffset();
+    return err;
+  }
+
+  if (effects.empty()) {
+    ParseError err;
+    err.reason = "Invalid filter value";
+    return err;
+  }
+
+  return effects;
+}
+
 ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -1382,6 +1537,24 @@ constexpr auto kProperties =
                        },
                        &registry.writingMode);
                  }},  //
+                {"isolation",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseIsolation(params.components());
+                       },
+                       &registry.isolation);
+                 }},  //
+                {"mix-blend-mode",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseMixBlendMode(params.components());
+                       },
+                       &registry.mixBlendMode);
+                 }},  //
                 {"display",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -1554,6 +1727,24 @@ constexpr auto kProperties =
                          return ParseReference("mask", params.components());
                        },
                        &registry.mask);
+                 }},  //
+                {"color-interpolation-filters",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseColorInterpolationFilters(params.components());
+                       },
+                       &registry.colorInterpolationFilters);
+                 }},  //
+                {"filter",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseFilter(params.components());
+                       },
+                       &registry.filter);
                  }},  //
                 {"pointer-events",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

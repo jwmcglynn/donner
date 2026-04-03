@@ -109,6 +109,7 @@ struct ImageComparisonParams {
                                                   float threshold = kDefaultThreshold) {
     ImageComparisonParams result;
     result.overrideGoldenFilename = filename;
+    result.threshold = threshold;
     return result;
   }
 

@@ -27,6 +27,12 @@ bazel_dep(name = "platforms", version = "1.0.0")
 ## Third-party dependencies
 ##
 
+# Tiny-skia dependencies
+local_repository(
+    name = "tiny-skia-cpp",
+    path = "third_party/tiny-skia-cpp",
+)
+
 # Skia dependencies
 bazel_dep(name = "rules_license", version = "1.0.0")
 
@@ -68,11 +74,6 @@ git_repository(
 local_repository(
     name = "frozen",
     path = "third_party/frozen",
-)
-
-local_repository(
-    name = "tiny-skia-cpp",
-    path = "third_party/tiny-skia-cpp",
 )
 
 new_local_repository(
@@ -125,6 +126,9 @@ bazel_dep(name = "re2", version = "2024-07-02.bcr.1", dev_dependency = True)
 bazel_dep(name = "googletest", repo_name = "com_google_gtest", version = "1.17.0.bcr.2", dev_dependency = True)
 
 bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.1", dev_dependency = True)
+
+bazel_dep(name = "google_benchmark", version = "1.9.5", dev_dependency = True)
+bazel_dep(name = "rules_shell", version = "0.4.1", dev_dependency = True)
 
 bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3", dev_dependency = True)
 
@@ -189,6 +193,12 @@ git_repository(
 )
 
 bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
+bazel_dep(name = "protobuf", version = "30.2", dev_dependency = True)
+
+single_version_override(
+    module_name = "protobuf",
+    version = "30.2",
+)
 
 bazel_dep(name = "bloaty", version = "0.0.0", dev_dependency = True)
 

@@ -114,6 +114,14 @@ RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbo
 RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document);
 
 /**
+ * @brief Creates a new renderer instance for the active backend.
+ *
+ * @param verbose If true, enable backend-specific verbose logging.
+ * @return A new renderer instance.
+ */
+std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose = false);
+
+/**
  * @brief Writes a `.skp` debug file for the active backend when supported.
  *
  * @param document The document to render.

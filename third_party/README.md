@@ -15,6 +15,7 @@ The following subtrees have been added to the repo
 ```sh
 git subtree add https://github.com/jwmcglynn/css-parsing-tests --prefix third_party/css-parsing-tests master --squash
 git subtree add https://github.com/nothings/stb --prefix third_party/stb master --squash
+git subtree add https://github.com/jwmcglynn/tiny-skia-cpp --prefix third_party/tiny-skia-cpp main --squash
 ```
 
 ## Updating

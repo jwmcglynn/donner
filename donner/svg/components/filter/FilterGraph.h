@@ -261,6 +261,15 @@ struct Image {
   /// the feImage href references an external SVG file. The renderer pre-renders this to pixel data
   /// before filter execution. Owned by \ref SubDocumentCache.
   std::any* svgSubDocument = nullptr;
+
+  /// Fragment ID for same-document element references (e.g., href="#rect1" stores "rect1").
+  /// The renderer resolves this to pixel data before filter execution.
+  RcString fragmentId;
+
+  /// True when this image was rendered from a same-document element reference. Fragment images
+  /// are rendered in the SVG's user-space coordinate system and should be placed at 1:1 in the
+  /// filter pixmap without preserveAspectRatio scaling.
+  bool isFragmentReference = false;
 };
 
 /// Parameters for \c feDisplacementMap.

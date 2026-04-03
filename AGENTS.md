@@ -110,6 +110,7 @@ Update golden images: `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel ru
 - Threshold adjustments are a last resort after the rendering bug has been investigated and reduced as far as practical.
 - Threshold changes are not a way to paper over incorrect rendering just to get tests passing.
 - Enabling skipped tests with large thresholds is not useful without understanding the root cause.
+- Never inflate max diff pixels without explicit user consent, it is a last resort. 99% of the time it is masking a real issue.
 
 ## Resvg Test Threshold Conventions
 

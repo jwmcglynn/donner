@@ -74,9 +74,8 @@ public:
     return CreateOn(CreateEmptyEntity(document));
   }
 
-  // TODO: Add attributes
+  // TODO: Add attribute accessor
   // - in
-  // - edgeMode
 
   /**
    * Get the X-axis of the standard deviation, which is used to control the blur level.

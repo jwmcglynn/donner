@@ -247,7 +247,11 @@ public:
   virtual void popIsolatedLayer() = 0;
 
   /**
-   * Pushes a filter layer that applies the given effect chain to all content drawn within it.
+   * Pushes a filter layer that applies the given filter graph to all content drawn within it.
+   *
+   * @param filterGraph The filter graph describing primitives and their connections.
+   * @param filterRegion The filter region bounds in local coordinates, used to clip the filter
+   *   output. If nullopt, the filter operates on the full surface.
    */
   virtual void pushFilterLayer(const components::FilterGraph& filterGraph,
                                const std::optional<Boxd>& filterRegion) = 0;
@@ -282,9 +286,9 @@ public:
    * endPatternTile is captured as a repeating pattern.
    *
    * @param tileRect The tile rectangle in pattern coordinate space.
-   * @param patternToTarget Transform from pattern tile space to target element space.
+   * @param targetFromPattern Transform from pattern tile space to target element space.
    */
-  virtual void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) = 0;
+  virtual void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) = 0;
 
   /**
    * Ends pattern tile recording and sets the resulting tiled shader as the current fill or stroke
@@ -334,7 +338,7 @@ public:
   /**
    * Creates an independent offscreen renderer instance of the same type as this one.
    * Used for rendering sub-documents into intermediate pixmaps when a backend needs an isolated
-   * offscreen pass.
+   * offscreen pass (e.g., for feImage with SVG content).
    * Returns nullptr if offscreen rendering is not supported.
    */
   [[nodiscard]] virtual std::unique_ptr<RendererInterface> createOffscreenInstance() const {

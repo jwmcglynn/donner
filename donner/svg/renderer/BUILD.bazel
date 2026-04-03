@@ -11,6 +11,14 @@ string_flag(
     visibility = ["//visibility:public"],
 )
 
+# Enable filter effects (SVG filter primitives: feGaussianBlur, feColorMatrix, etc.).
+# Override with --//donner/svg/renderer:filters=true or via donner.configure(filters = True).
+bool_flag(
+    name = "filters",
+    build_setting_default = DONNER_CONFIG.get("filters", True),
+    visibility = ["//visibility:public"],
+)
+
 # Enable text rendering (stb_truetype, TTF/OTF/WOFF1).
 # Override with --//donner/svg/renderer:text=true or via donner.configure(text = True).
 bool_flag(
@@ -44,6 +52,12 @@ config_setting(
 config_setting(
     name = "renderer_backend_tiny_skia",
     flag_values = {":renderer_backend": "tiny_skia"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "filters_enabled",
+    flag_values = {":filters": "true"},
     visibility = ["//visibility:public"],
 )
 
@@ -120,6 +134,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "filter_graph_executor",
+    srcs = ["FilterGraphExecutor.cc"],
+    hdrs = ["FilterGraphExecutor.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        ":tiny_skia_deps",
+        ":tiny_skia_filter_deps",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],
@@ -177,6 +205,7 @@ donner_cc_library(
 donner_perf_sensitive_cc_library(
     name = "skia_deps",
     allow_debug_builds_config = ":config_skia_debug",
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     defines = select({
         ":macos_coretext": ["DONNER_USE_CORETEXT"],
         ":linux_fontconfig": ["DONNER_USE_FREETYPE_WITH_FONTCONFIG"],
@@ -208,6 +237,14 @@ donner_perf_sensitive_cc_library(
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     deps = [
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
+    ],
+)
+
+donner_perf_sensitive_cc_library(
+    name = "tiny_skia_filter_deps",
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
 
@@ -245,6 +282,9 @@ donner_cc_library(
     }) + select({
         ":text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
+    }) + select({
+        ":filters_enabled": ["DONNER_FILTERS_ENABLED"],
+        "//conditions:default": [],
     }),
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     visibility = ["//visibility:public"],
@@ -260,6 +300,12 @@ donner_cc_library(
         "//conditions:default": [],
     }) + select({
         ":text_enabled": ["//donner/svg/text:text_layout_params"],
+        "//conditions:default": [],
+    }) + select({
+        ":filters_enabled": [
+            ":filter_graph_executor",
+            ":tiny_skia_filter_deps",
+        ],
         "//conditions:default": [],
     }),
 )

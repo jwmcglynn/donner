@@ -12,8 +12,8 @@ namespace donner::svg {
  * CSS `isolation` property values. Controls whether an element creates a new stacking context.
  */
 enum class Isolation : uint8_t {
-  Auto,     //!< [DEFAULT] Element does not necessarily create a new stacking context.
-  Isolate,  //!< Element creates a new stacking context (isolated group).
+  Auto,     ///< [DEFAULT] Element does not necessarily create a new stacking context.
+  Isolate,  ///< Element creates a new stacking context (isolated group).
 };
 
 /// ostream output operator for \ref Isolation.

@@ -10,24 +10,26 @@ namespace donner::svg {
 
 /**
  * CSS `mix-blend-mode` property values for compositing blend modes.
+ *
+ * Maps to tiny_skia::BlendMode values at the renderer level.
  */
 enum class MixBlendMode : uint8_t {
-  Normal,      //!< [DEFAULT] Source over destination (no blending effect).
-  Multiply,    //!< Component-wise multiply.
-  Screen,      //!< Inverse multiply.
-  Overlay,     //!< Multiply or screen based on destination.
-  Darken,      //!< Minimum of source and destination.
-  Lighten,     //!< Maximum of source and destination.
-  ColorDodge,  //!< Brighten destination toward source.
-  ColorBurn,   //!< Darken destination toward source.
-  HardLight,   //!< Multiply or screen based on source.
-  SoftLight,   //!< Soft version of hard light.
-  Difference,  //!< Absolute difference.
-  Exclusion,   //!< Similar to Difference but lower contrast.
-  Hue,         //!< Source hue, destination saturation and luminosity.
-  Saturation,  //!< Source saturation, destination hue and luminosity.
-  Color,       //!< Source hue and saturation, destination luminosity.
-  Luminosity,  //!< Source luminosity, destination hue and saturation.
+  Normal,      ///< [DEFAULT] Source over destination (no blending effect).
+  Multiply,    ///< Component-wise multiply.
+  Screen,      ///< Inverse multiply.
+  Overlay,     ///< Multiply or screen based on destination.
+  Darken,      ///< Minimum of source and destination.
+  Lighten,     ///< Maximum of source and destination.
+  ColorDodge,  ///< Brighten destination toward source.
+  ColorBurn,   ///< Darken destination toward source.
+  HardLight,   ///< Multiply or screen based on source.
+  SoftLight,   ///< Soft version of hard light.
+  Difference,  ///< Absolute difference.
+  Exclusion,   ///< Similar to Difference but lower contrast.
+  Hue,         ///< Source hue, destination saturation and luminosity.
+  Saturation,  ///< Source saturation, destination hue and luminosity.
+  Color,       ///< Source hue and saturation, destination luminosity.
+  Luminosity,  ///< Source luminosity, destination hue and saturation.
 };
 
 /// ostream output operator for \ref MixBlendMode.
