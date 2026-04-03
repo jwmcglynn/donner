@@ -393,5 +393,6 @@ TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
                           this->optionsExperimental());
 }
 
+
 }  // namespace
 }  // namespace donner::svg

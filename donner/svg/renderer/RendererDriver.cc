@@ -26,6 +26,7 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
@@ -237,6 +238,35 @@ PaintParams toPaintParams(Registry& registry,
   paint.strokeParams = toStrokeParams(registry, instance, style);
 
   return paint;
+}
+
+TextParams toTextParams(Registry& registry,
+                        const components::RenderingInstanceComponent& instance,
+                        const components::ComputedStyleComponent& style) {
+  TextParams params;
+  const auto& properties = style.properties.value();
+  const css::RGBA currentColor = properties.color.getRequired().rgba();
+
+  params.opacity = properties.opacity.getRequired();
+
+  // Resolve fill color for text.
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&instance.resolvedFill)) {
+    const float fillOpacity = NarrowToFloat(properties.fillOpacity.getRequired());
+    params.fillColor = css::Color(solid->color.resolve(currentColor, fillOpacity));
+  }
+
+  if (const auto* stroke = std::get_if<PaintServer::Solid>(&instance.resolvedStroke)) {
+    const float strokeOpacity = NarrowToFloat(properties.strokeOpacity.getRequired());
+    params.strokeColor = css::Color(stroke->color.resolve(currentColor, strokeOpacity));
+    params.strokeParams = toStrokeParams(registry, instance, style);
+  }
+
+  params.fontFamilies = properties.fontFamily.getRequiredRef();
+  params.fontSize = properties.fontSize.getRequired();
+  params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  params.fontMetrics = FontMetrics();
+
+  return params;
 }
 
 ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instance,
@@ -792,6 +822,11 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
         if (imageParams.has_value()) {
           renderer_.drawImage(*image->image, *imageParams);
         }
+      } else if (const auto* text =
+                     instance.dataHandle(registry)
+                         .try_get<components::ComputedTextComponent>()) {
+        const TextParams textParams = toTextParams(registry, instance, style);
+        renderer_.drawText(*text, textParams);
       }
     }
 
@@ -1090,6 +1125,11 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             renderer_.drawImage(*image->image, *imageParams);
           }
         }
+      } else if (const auto* text =
+                     instance.dataHandle(registry)
+                         .try_get<components::ComputedTextComponent>()) {
+        const TextParams textParams = toTextParams(registry, instance, style);
+        renderer_.drawText(*text, textParams);
       }
     }
 
@@ -1328,6 +1368,11 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
             renderer_.drawImage(*image->image, *imageParams);
           }
         }
+      } else if (const auto* text =
+                     instance.dataHandle(registry)
+                         .try_get<components::ComputedTextComponent>()) {
+        const TextParams textParams = toTextParams(registry, instance, style);
+        renderer_.drawText(*text, textParams);
       }
     }
 

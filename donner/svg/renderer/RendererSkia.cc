@@ -49,6 +49,7 @@
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
 
@@ -1188,7 +1189,7 @@ void RendererSkia::beginFrame(const RenderViewport& viewport) {
   const int pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
 
   bitmap_.allocPixels(
-      SkImageInfo::MakeN32(pixelWidth, pixelHeight, SkAlphaType::kPremul_SkAlphaType));
+      SkImageInfo::MakeN32(pixelWidth, pixelHeight, SkAlphaType::kUnpremul_SkAlphaType));
   bitmap_.eraseColor(SK_ColorTRANSPARENT);
 
   if (externalCanvas_ != nullptr) {
@@ -1224,14 +1225,7 @@ void RendererSkia::setTransform(const Transformd& transform) {
     return;
   }
 
-  if (!patternStack_.empty() && patternStack_.back().surface != nullptr &&
-      currentCanvas_ == patternStack_.back().surface->getCanvas()) {
-    const Transformd& rasterFromTile = patternStack_.back().patternRasterFromTile;
-    currentCanvas_->setMatrix(toSkiaMatrix(
-        scaleTransformOutput(transform, Vector2d(rasterFromTile.data[0], rasterFromTile.data[3]))));
-  } else {
-    currentCanvas_->setMatrix(toSkiaMatrix(transform));
-  }
+  currentCanvas_->setMatrix(toSkiaMatrix(transform));
 }
 
 void RendererSkia::pushTransform(const Transformd& transform) {
@@ -1535,6 +1529,7 @@ SkBlendMode toSkBlendMode(MixBlendMode mode) {
 
 }  // namespace
 
+
 void RendererSkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   if (currentCanvas_ == nullptr) {
     return;
@@ -1701,32 +1696,11 @@ void RendererSkia::beginPatternTile(const Boxd& tileRect, const Transformd& targ
     return;
   }
 
-  const Transformd deviceFromTarget = toDonnerTransform(currentCanvas_->getTotalMatrix());
-  const Transformd deviceFromPattern = deviceFromTarget * targetFromPattern;
-  const Vector2d requestedRasterScale = patternRasterScaleForTransform(deviceFromPattern);
-  const int pixelWidth =
-      std::max(1, static_cast<int>(std::ceil(tileRect.width() * requestedRasterScale.x)));
-  const int pixelHeight =
-      std::max(1, static_cast<int>(std::ceil(tileRect.height() * requestedRasterScale.y)));
-  const Vector2d rasterScale =
-      effectivePatternRasterScale(tileRect, pixelWidth, pixelHeight, requestedRasterScale);
-  sk_sp<SkSurface> surface = SkSurfaces::Raster(
-      SkImageInfo::Make(pixelWidth, pixelHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
-  if (surface == nullptr) {
-    return;
-  }
-
   PatternState state;
-  state.surface = std::move(surface);
   state.targetFromPattern = targetFromPattern;
-  state.patternRasterFromTile = Transformd::Scale(rasterScale);
-  state.targetFromPattern.data[4] *= rasterScale.x;
-  state.targetFromPattern.data[5] *= rasterScale.y;
-  state.targetFromPattern =
-      state.targetFromPattern * Transformd::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
   state.savedCanvas = currentCanvas_;
-  currentCanvas_ = state.surface->getCanvas();
-  currentCanvas_->clear(SK_ColorTRANSPARENT);
+  state.recorder = std::make_unique<SkPictureRecorder>();
+  currentCanvas_ = state.recorder->beginRecording(toSkia(tileRect));
   patternStack_.push_back(std::move(state));
 }
 
@@ -1741,20 +1715,19 @@ void RendererSkia::endPatternTile(bool forStroke) {
   currentCanvas_ = state.savedCanvas;
 
   const SkMatrix skTargetFromPattern = toSkiaMatrix(state.targetFromPattern);
-  if (state.surface == nullptr) {
+  sk_sp<SkPicture> picture = state.recorder->finishRecordingAsPicture();
+  state.recorder.reset();
+
+  if (picture == nullptr) {
     return;
   }
 
-  sk_sp<SkImage> image = state.surface->makeImageSnapshot();
-  if (image == nullptr) {
-    return;
-  }
-
+  const SkRect tileRect = picture->cullRect();
   SkPaint patternPaint;
   patternPaint.setAntiAlias(antialias_);
-  patternPaint.setShader(image->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat,
-                                           SkSamplingOptions(SkFilterMode::kLinear),
-                                           &skTargetFromPattern));
+  patternPaint.setShader(picture->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat,
+                                             SkFilterMode::kLinear, &skTargetFromPattern,
+                                             &tileRect));
 
   if (forStroke) {
     patternStrokePaint_ = std::move(patternPaint);
