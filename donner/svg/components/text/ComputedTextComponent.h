@@ -10,6 +10,9 @@
 #include "donner/base/SmallVector.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/FontStretch.h"
+#include "donner/svg/core/FontStyle.h"
+#include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PathSpline.h"
 #include "donner/svg/core/TextAnchor.h"
@@ -70,6 +73,18 @@ struct ComputedTextComponent {
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
     /// Populated by RendererDriver from sourceEntity.
     int fontWeight = 400;
+
+    /// CSS font-style for this span (normal/italic/oblique).
+    /// Populated by RendererDriver from sourceEntity.
+    FontStyle fontStyle = FontStyle::Normal;
+
+    /// CSS font-stretch for this span (condensed/normal/expanded).
+    /// Populated by RendererDriver from sourceEntity.
+    FontStretch fontStretch = FontStretch::Normal;
+
+    /// CSS font-variant for this span (normal/small-caps).
+    /// Populated by RendererDriver from sourceEntity.
+    FontVariant fontVariant = FontVariant::Normal;
 
     /// CSS font-size for this span. When different from the text element's font-size,
     /// the layout engine uses this to shape glyphs at the correct size.

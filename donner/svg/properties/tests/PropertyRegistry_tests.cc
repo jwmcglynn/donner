@@ -314,5 +314,255 @@ TEST(PropertyRegistry, Stroke) {
   }
 }
 
+TEST(PropertyRegistry, FontStyle) {
+  {
+    PropertyRegistry registry;
+    EXPECT_FALSE(registry.fontStyle.hasValue());
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Normal));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-style: normal");
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Normal));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-style: italic");
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-style: oblique");
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Oblique));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-style: invalid");
+    EXPECT_FALSE(registry.fontStyle.hasValue());
+  }
+
+  // Presentation attribute.
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("font-style", "italic"), ParseResultIs(true));
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+  }
+}
+
+TEST(PropertyRegistry, FontStretch) {
+  {
+    PropertyRegistry registry;
+    EXPECT_FALSE(registry.fontStretch.hasValue());
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Normal)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: normal");
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Normal)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: ultra-condensed");
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::UltraCondensed)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: extra-condensed");
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::ExtraCondensed)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: condensed");
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: semi-condensed");
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::SemiCondensed)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: semi-expanded");
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::SemiExpanded)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: expanded");
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Expanded)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: extra-expanded");
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::ExtraExpanded)));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: ultra-expanded");
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::UltraExpanded)));
+  }
+
+  // SVG 1.1 relative keywords stored as sentinel values.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: narrower");
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(PropertyRegistry::kFontStretchNarrower));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: wider");
+    EXPECT_THAT(registry.fontStretch.get(), Optional(PropertyRegistry::kFontStretchWider));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: invalid");
+    EXPECT_FALSE(registry.fontStretch.hasValue());
+  }
+
+  // Presentation attribute.
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("font-stretch", "condensed"),
+                ParseResultIs(true));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
+  }
+}
+
+TEST(PropertyRegistry, FontVariant) {
+  {
+    PropertyRegistry registry;
+    EXPECT_FALSE(registry.fontVariant.hasValue());
+    EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::Normal));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-variant: normal");
+    EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::Normal));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-variant: small-caps");
+    EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+  }
+
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-variant: invalid");
+    EXPECT_FALSE(registry.fontVariant.hasValue());
+  }
+
+  // Presentation attribute.
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("font-variant", "small-caps"),
+                ParseResultIs(true));
+    EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+  }
+}
+
+TEST(PropertyRegistry, FontSizeAbsoluteKeywords) {
+  auto parseFontSize = [](const char* value) {
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("font-size: ") + value);
+    return registry.fontSize.get();
+  };
+
+  // Absolute keywords use CSS Fonts Level 4 §2.5.1 scaling factors from medium=12px (UA default).
+  // https://www.w3.org/TR/css-fonts-4/#absolute-size-mapping
+  EXPECT_TRUE(parseFontSize("medium").has_value());
+  EXPECT_DOUBLE_EQ(parseFontSize("medium")->value, 12.0);
+
+  EXPECT_TRUE(parseFontSize("large").has_value());
+  EXPECT_DOUBLE_EQ(parseFontSize("large")->value, 12.0 * 6.0 / 5.0);  // 14.4
+
+  EXPECT_TRUE(parseFontSize("x-large").has_value());
+  EXPECT_DOUBLE_EQ(parseFontSize("x-large")->value, 18.0);  // 12 * 3/2
+
+  EXPECT_TRUE(parseFontSize("xx-large").has_value());
+  EXPECT_DOUBLE_EQ(parseFontSize("xx-large")->value, 24.0);  // 12 * 2/1
+
+  EXPECT_TRUE(parseFontSize("small").has_value());
+  EXPECT_DOUBLE_EQ(parseFontSize("small")->value, 12.0 * 8.0 / 9.0);  // ~10.67
+
+  EXPECT_TRUE(parseFontSize("x-small").has_value());
+  EXPECT_DOUBLE_EQ(parseFontSize("x-small")->value, 9.0);  // 12 * 3/4
+
+  EXPECT_TRUE(parseFontSize("xx-small").has_value());
+  EXPECT_DOUBLE_EQ(parseFontSize("xx-small")->value, 12.0 * 3.0 / 5.0);  // 7.2
+
+  // All absolute keywords are stored as Px units (already resolved).
+  EXPECT_EQ(parseFontSize("medium")->unit, Lengthd::Unit::Px);
+  EXPECT_EQ(parseFontSize("xx-large")->unit, Lengthd::Unit::Px);
+  EXPECT_EQ(parseFontSize("xx-small")->unit, Lengthd::Unit::Px);
+}
+
+TEST(PropertyRegistry, ResolveFontStretch) {
+  // narrower from Normal → SemiCondensed.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: narrower");
+    registry.resolveFontStretch(static_cast<int>(FontStretch::Normal));
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::SemiCondensed)));
+  }
+
+  // wider from Normal → SemiExpanded.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: wider");
+    registry.resolveFontStretch(static_cast<int>(FontStretch::Normal));
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::SemiExpanded)));
+  }
+
+  // narrower clamps at UltraCondensed.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: narrower");
+    registry.resolveFontStretch(static_cast<int>(FontStretch::UltraCondensed));
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::UltraCondensed)));
+  }
+
+  // wider clamps at UltraExpanded.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: wider");
+    registry.resolveFontStretch(static_cast<int>(FontStretch::UltraExpanded));
+    EXPECT_THAT(registry.fontStretch.get(),
+                Optional(static_cast<int>(FontStretch::UltraExpanded)));
+  }
+
+  // Non-sentinel values are not modified.
+  {
+    PropertyRegistry registry;
+    registry.parseStyle("font-stretch: condensed");
+    registry.resolveFontStretch(static_cast<int>(FontStretch::Normal));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
+  }
+}
 
 }  // namespace donner::svg

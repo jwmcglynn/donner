@@ -1163,7 +1163,8 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 #ifdef DONNER_TEXT_FULL
       PathSpline glyphPath;
       if (!isBitmapFont) {
-        glyphPath = shaper.glyphOutline(run.font, glyph.glyphIndex, scale);
+        glyphPath = shaper.glyphOutline(run.font, glyph.glyphIndex,
+                                       scale * glyph.fontSizeScale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
@@ -1212,7 +1213,8 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
         continue;
       }
 #else
-      PathSpline glyphPath = glyphToPathSpline(info, glyph.glyphIndex, scale);
+      PathSpline glyphPath =
+          glyphToPathSpline(info, glyph.glyphIndex, scale * glyph.fontSizeScale);
       if (glyphPath.empty()) {
         continue;
       }

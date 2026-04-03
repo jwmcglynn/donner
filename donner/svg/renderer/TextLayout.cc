@@ -212,12 +212,14 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
       continue;
     }
 
-    // Per-span font resolution: if the span's font-weight differs from the default (400),
-    // find a weight-matched font.
+    // Per-span font resolution: find a font matching weight, style, and stretch.
     FontHandle spanFont = font;
-    if (span.fontWeight != 400) {
+    if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
+        span.fontStretch != FontStretch::Normal) {
       for (const auto& family : params.fontFamilies) {
-        FontHandle candidate = fontManager_.findFont(family, span.fontWeight);
+        FontHandle candidate = fontManager_.findFont(
+            family, span.fontWeight, static_cast<int>(span.fontStyle),
+            static_cast<int>(span.fontStretch));
         if (candidate) {
           spanFont = candidate;
           break;
@@ -347,7 +349,15 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
     bool firstCodepoint = true;
     bool prevWasZwj = false;
     while (byteIdx < spanText.size()) {
-      const uint32_t codepoint = decodeUtf8(spanText, byteIdx);
+      uint32_t codepoint = decodeUtf8(spanText, byteIdx);
+
+      // Small-caps: convert lowercase to uppercase and use reduced scale.
+      bool smallCap = false;
+      if (span.fontVariant == FontVariant::SmallCaps && codepoint >= 'a' && codepoint <= 'z') {
+        codepoint = codepoint - 'a' + 'A';
+        smallCap = true;
+      }
+
       const bool combining = isNonSpacing(codepoint) || prevWasZwj;
       prevWasZwj = (codepoint == 0x200D);
       // Advance charIdx before non-combining characters (except the first), so combining marks
@@ -499,11 +509,16 @@ std::vector<LayoutTextRun> TextLayout::layout(const components::ComputedTextComp
         int leftSideBearing = 0;
         stbtt_GetGlyphHMetrics(spanInfo, glyphIndex, &advanceWidth, &leftSideBearing);
 
+        // Small-caps: scale down uppercase-substituted glyphs to ~80% of font size.
+        constexpr float kSmallCapScale = 0.8f;
+        const double glyphScale = smallCap ? spanScale * kSmallCapScale : spanScale;
+
         LayoutGlyph glyph;
         glyph.glyphIndex = glyphIndex;
         glyph.xPosition = penX;
         glyph.yPosition = penY;
-        glyph.xAdvance = static_cast<double>(advanceWidth) * spanScale;
+        glyph.xAdvance = static_cast<double>(advanceWidth) * glyphScale;
+        glyph.fontSizeScale = smallCap ? kSmallCapScale : 1.0f;
 
         // Per-character rotation (last value repeats per SVG spec).
         if (charIdx < span.rotateList.size()) {

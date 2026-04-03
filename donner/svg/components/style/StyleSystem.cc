@@ -227,7 +227,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
   // font-size, and percentages resolve against the parent font-size (not the viewBox).
   if (computedStyle.properties) {
-    double parentFontSizePx = 16.0;  // CSS initial value for root elements.
+    double parentFontSizePx = 12.0;  // UA default font size (medium) for root elements.
     if (parent != entt::null) {
       const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
       if (parentStyle.properties) {
@@ -245,6 +245,16 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
       }
     }
     computedStyle.properties->resolveFontWeight(parentFontWeight);
+
+    // Resolve relative font-stretch keywords (narrower/wider) against inherited stretch.
+    int parentFontStretch = static_cast<int>(FontStretch::Normal);
+    if (parent != entt::null) {
+      const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
+      if (parentStyle.properties) {
+        parentFontStretch = parentStyle.properties->fontStretch.getRequired();
+      }
+    }
+    computedStyle.properties->resolveFontStretch(parentFontStretch);
   }
 }
 

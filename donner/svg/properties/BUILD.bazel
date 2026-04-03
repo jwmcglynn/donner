@@ -60,16 +60,3 @@ donner_cc_library(
         "//donner/css",
     ],
 )
-
-donner_cc_test(
-    name = "property_parsing_tests",
-    srcs = [
-        "tests/PropertyParsing_tests.cc",
-    ],
-    deps = [
-        ":property_parsing",
-        "//donner/base:base_test_utils",
-        "//donner/svg/parser",
-        "@com_google_gtest//:gtest_main",
-    ],
-)

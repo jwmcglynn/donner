@@ -11,6 +11,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
@@ -670,14 +671,14 @@ ParseResult<double> ParseNumberPercentage(std::span<const css::ComponentValue> v
 ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   if (function.name.equalsLowercase("blur")) {
     if (function.values.empty()) {
-      return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px),
-                                             Lengthd(0.0, Lengthd::Unit::Px)});
+      return FilterEffect(
+          FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
     }
     std::span<const css::ComponentValue> remaining = function.values;
     SkipWhitespace(remaining);
     if (remaining.empty()) {
-      return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px),
-                                             Lengthd(0.0, Lengthd::Unit::Px)});
+      return FilterEffect(
+          FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
     }
     const auto& arg = remaining.front();
     if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
@@ -693,8 +694,8 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     // Accept bare 0 as 0px.
     if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
       if (number->value == 0.0) {
-        return FilterEffect(FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px),
-                                               Lengthd(0.0, Lengthd::Unit::Px)});
+        return FilterEffect(
+            FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
       }
     }
     ParseError err;
@@ -833,8 +834,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     }
 
     // Helper to parse a length value (dimension or unitless number).
-    auto parseLengthArg = [](std::span<const css::ComponentValue>& rem)
-        -> std::optional<Lengthd> {
+    auto parseLengthArg = [](std::span<const css::ComponentValue>& rem) -> std::optional<Lengthd> {
       if (rem.empty()) {
         return std::nullopt;
       }
@@ -908,95 +908,6 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   err.reason = "Unknown filter function '" + std::string(function.name) + "'";
   err.location = function.sourceOffset;
   return err;
-}
-
-ParseResult<std::vector<FilterEffect>> ParseFilter(
-    std::span<const css::ComponentValue> components) {
-  if (components.empty()) {
-    ParseError err;
-    err.reason = "Invalid filter value";
-    return err;
-  }
-
-  std::span<const css::ComponentValue> remaining = components;
-  SkipWhitespace(remaining);
-
-  // Check for "none" keyword.
-  if (remaining.size() == 1 || (remaining.size() >= 1 && remaining.front().is<css::Token>())) {
-    const auto& first = remaining.front();
-    if (const auto* ident = first.tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("none")) {
-        return std::vector<FilterEffect>();
-      }
-    }
-  }
-
-  // Parse list of filter functions and/or url() references.
-  std::vector<FilterEffect> effects;
-  while (!remaining.empty()) {
-    SkipWhitespace(remaining);
-    if (remaining.empty()) {
-      break;
-    }
-
-    const css::ComponentValue& component = remaining.front();
-
-    if (component.is<css::Token>()) {
-      const auto& token = component.get<css::Token>();
-      if (token.is<css::Token::Url>()) {
-        const auto& url = token.get<css::Token::Url>();
-        effects.emplace_back(FilterEffect::ElementReference(url.value));
-        remaining = remaining.subspan(1);
-        continue;
-      }
-      // url("...") with quotes is parsed as a function token.
-    }
-
-    if (component.is<css::Function>()) {
-      const auto& function = component.get<css::Function>();
-      // Handle url("...") with quoted argument.
-      if (function.name.equalsLowercase("url")) {
-        if (!function.values.empty()) {
-          std::span<const css::ComponentValue> funcValues = function.values;
-          SkipWhitespace(funcValues);
-          if (!funcValues.empty()) {
-            if (const auto* str = funcValues.front().tryGetToken<css::Token::String>()) {
-              effects.emplace_back(FilterEffect::ElementReference(str->value));
-              remaining = remaining.subspan(1);
-              continue;
-            }
-          }
-        }
-      }
-
-      auto result = ParseFilterFunction(function);
-      if (result.hasError()) {
-        return std::move(result.error());
-      }
-      effects.push_back(std::move(result.result()));
-      remaining = remaining.subspan(1);
-      continue;
-    }
-
-    // Skip comma separators if present.
-    if (component.isToken<css::Token::Comma>()) {
-      remaining = remaining.subspan(1);
-      continue;
-    }
-
-    ParseError err;
-    err.reason = "Invalid filter value";
-    err.location = component.sourceOffset();
-    return err;
-  }
-
-  if (effects.empty()) {
-    ParseError err;
-    err.reason = "Invalid filter value";
-    return err;
-  }
-
-  return effects;
 }
 
 ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValue> components) {
@@ -1229,21 +1140,41 @@ constexpr auto kProperties =
                        params,
                        [](const parser::PropertyParseFnParams& params) -> ParseResult<Lengthd> {
                          const auto& components = params.components();
-                         // Handle relative font-size keywords (CSS Fonts Level 4).
+                         // Handle font-size keywords (CSS Fonts Level 4).
                          if (components.size() == 1) {
                            if (const auto* ident =
                                    components.front().tryGetToken<css::Token::Ident>()) {
+                             // Relative keywords: resolve as percentage of parent.
                              if (ident->value.equalsLowercase("larger")) {
                                return Lengthd(120, Lengthd::Unit::Percent);
                              }
                              if (ident->value.equalsLowercase("smaller")) {
                                return Lengthd(100.0 / 1.2, Lengthd::Unit::Percent);
                              }
-                             // TODO(jwm): Absolute-size keywords (xx-small..xx-large).
+                             // Absolute-size keywords (CSS Fonts Level 4 §2.5.1).
+                             // Scaling factors relative to medium (UA default font size).
+                             // https://www.w3.org/TR/css-fonts-4/#absolute-size-mapping
+                             // Note that this differs from CSS2, which itself differs from CSS1 -
+                             // so our font sizes are slightly different than other renderers which
+                             // anchor to CSS2 (e.g. resvg).
+                             constexpr double kMediumFontSize = 12.0;
+                             if (ident->value.equalsLowercase("xx-small"))
+                               return Lengthd(kMediumFontSize * 3.0 / 5.0, Lengthd::Unit::Px);
+                             if (ident->value.equalsLowercase("x-small"))
+                               return Lengthd(kMediumFontSize * 3.0 / 4.0, Lengthd::Unit::Px);
+                             if (ident->value.equalsLowercase("small"))
+                               return Lengthd(kMediumFontSize * 8.0 / 9.0, Lengthd::Unit::Px);
+                             if (ident->value.equalsLowercase("medium"))
+                               return Lengthd(kMediumFontSize, Lengthd::Unit::Px);
+                             if (ident->value.equalsLowercase("large"))
+                               return Lengthd(kMediumFontSize * 6.0 / 5.0, Lengthd::Unit::Px);
+                             if (ident->value.equalsLowercase("x-large"))
+                               return Lengthd(kMediumFontSize * 3.0 / 2.0, Lengthd::Unit::Px);
+                             if (ident->value.equalsLowercase("xx-large"))
+                               return Lengthd(kMediumFontSize * 2.0, Lengthd::Unit::Px);
                            }
                          }
-                         return parser::ParseLengthPercentage(components,
-                                                              params.allowUserUnits());
+                         return parser::ParseLengthPercentage(components, params.allowUserUnits());
                        },
                        &registry.fontSize);
                  }},  //
@@ -1251,8 +1182,7 @@ constexpr auto kProperties =
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
                        params,
-                       [](const parser::PropertyParseFnParams& params)
-                           -> ParseResult<int> {
+                       [](const parser::PropertyParseFnParams& params) -> ParseResult<int> {
                          const auto& components = params.components();
                          if (components.size() == 1) {
                            const auto& comp = components.front();
@@ -1276,6 +1206,86 @@ constexpr auto kProperties =
                          return err;
                        },
                        &registry.fontWeight);
+                 }},  //
+                {"font-style",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) -> ParseResult<FontStyle> {
+                         const auto& components = params.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("normal")) return FontStyle::Normal;
+                             if (ident->value.equalsLowercase("italic")) return FontStyle::Italic;
+                             if (ident->value.equalsLowercase("oblique")) return FontStyle::Oblique;
+                           }
+                         }
+                         ParseError err;
+                         err.reason = "Invalid font-style value";
+                         return err;
+                       },
+                       &registry.fontStyle);
+                 }},  //
+                {"font-stretch",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) -> ParseResult<int> {
+                         const auto& components = params.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("normal"))
+                               return static_cast<int>(FontStretch::Normal);
+                             if (ident->value.equalsLowercase("ultra-condensed"))
+                               return static_cast<int>(FontStretch::UltraCondensed);
+                             if (ident->value.equalsLowercase("extra-condensed"))
+                               return static_cast<int>(FontStretch::ExtraCondensed);
+                             if (ident->value.equalsLowercase("condensed"))
+                               return static_cast<int>(FontStretch::Condensed);
+                             if (ident->value.equalsLowercase("semi-condensed"))
+                               return static_cast<int>(FontStretch::SemiCondensed);
+                             if (ident->value.equalsLowercase("semi-expanded"))
+                               return static_cast<int>(FontStretch::SemiExpanded);
+                             if (ident->value.equalsLowercase("expanded"))
+                               return static_cast<int>(FontStretch::Expanded);
+                             if (ident->value.equalsLowercase("extra-expanded"))
+                               return static_cast<int>(FontStretch::ExtraExpanded);
+                             if (ident->value.equalsLowercase("ultra-expanded"))
+                               return static_cast<int>(FontStretch::UltraExpanded);
+                             // SVG 1.1 relative keywords, stored as sentinels.
+                             if (ident->value.equalsLowercase("narrower"))
+                               return PropertyRegistry::kFontStretchNarrower;
+                             if (ident->value.equalsLowercase("wider"))
+                               return PropertyRegistry::kFontStretchWider;
+                           }
+                         }
+                         ParseError err;
+                         err.reason = "Invalid font-stretch value";
+                         return err;
+                       },
+                       &registry.fontStretch);
+                 }},  //
+                {"font-variant",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) -> ParseResult<FontVariant> {
+                         const auto& components = params.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("normal")) return FontVariant::Normal;
+                             if (ident->value.equalsLowercase("small-caps"))
+                               return FontVariant::SmallCaps;
+                           }
+                         }
+                         ParseError err;
+                         err.reason = "Invalid font-variant value";
+                         return err;
+                       },
+                       &registry.fontVariant);
                  }},  //
                 {"text-anchor",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
@@ -1522,15 +1532,6 @@ constexpr auto kProperties =
                        },
                        &registry.mask);
                  }},  //
-                {"filter",
-                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-                   return Parse(
-                       params,
-                       [](const parser::PropertyParseFnParams& params) {
-                         return ParseFilter(params.components());
-                       },
-                       &registry.filter);
-                 }},  //
                 {"pointer-events",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -1769,16 +1770,14 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
       // font-size: N% means N% of parent's computed font-size (NOT the viewBox).
       resolvedPx = fs.value / 100.0 * parentFontSizePx;
       break;
-    case Lengthd::Unit::Em:
-      resolvedPx = fs.value * parentFontSizePx;
-      break;
+    case Lengthd::Unit::Em: resolvedPx = fs.value * parentFontSizePx; break;
     case Lengthd::Unit::Ex:
       // TODO(jwm): Measure the actual font's x-height instead of using the 0.5 fallback.
       resolvedPx = fs.value * 0.5 * parentFontSizePx;
       break;
     case Lengthd::Unit::Rem:
       // TODO(jwm): Thread the root element's computed font-size.
-      resolvedPx = fs.value * 16.0;
+      resolvedPx = fs.value * 12.0;
       break;
     default:
       // Absolute units (px, pt, cm, etc.) — resolve with empty context.
@@ -1812,6 +1811,25 @@ void PropertyRegistry::resolveFontWeight(int parentFontWeight) {
       resolved = 700;
     }
     fontWeight.value = resolved;
+  }
+}
+
+void PropertyRegistry::resolveFontStretch(int parentFontStretch) {
+  const int fs = fontStretch.getRequired();
+  if (fs == kFontStretchNarrower) {
+    // Move one step narrower, clamped to UltraCondensed.
+    int resolved = parentFontStretch - 1;
+    if (resolved < static_cast<int>(FontStretch::UltraCondensed)) {
+      resolved = static_cast<int>(FontStretch::UltraCondensed);
+    }
+    fontStretch.value = resolved;
+  } else if (fs == kFontStretchWider) {
+    // Move one step wider, clamped to UltraExpanded.
+    int resolved = parentFontStretch + 1;
+    if (resolved > static_cast<int>(FontStretch::UltraExpanded)) {
+      resolved = static_cast<int>(FontStretch::UltraExpanded);
+    }
+    fontStretch.value = resolved;
   }
 }
 

@@ -164,26 +164,61 @@ FontHandle FontManager::findFont(std::string_view family) {
 }
 
 FontHandle FontManager::findFont(std::string_view family, int weight) {
-  // Check cache first (keyed by family + weight).
-  const std::string cacheKey = std::string(family) + ":" + std::to_string(weight);
+  return findFont(family, weight, 0, 5);
+}
+
+FontHandle FontManager::findFont(std::string_view family, int weight, int style, int stretch) {
+  // Check cache first (keyed by family + weight + style + stretch).
+  const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
+                               std::to_string(style) + ":" + std::to_string(stretch);
   if (auto it = cache_.find(cacheKey); it != cache_.end()) {
     return it->second;
   }
 
-  // Walk @font-face rules looking for the best matching family + weight.
-  // First pass: exact weight match. Second pass: closest weight.
+  // Walk @font-face rules looking for the best match.
+  // CSS font matching: style first, then stretch, then weight.
   const css::FontFace* bestFace = nullptr;
-  int bestDelta = std::numeric_limits<int>::max();
+  int bestScore = std::numeric_limits<int>::max();
 
   for (const auto& face : faces_) {
     if (face.familyName != family) {
       continue;
     }
-    const int delta = std::abs(face.fontWeight - weight);
-    if (delta < bestDelta) {
-      bestDelta = delta;
+    // Style mismatch is most costly, then stretch, then weight.
+    // CSS Fonts §5.2: oblique falls back to italic and vice versa before falling back to normal.
+    int score = 0;
+    if (face.fontStyle != style) {
+      // Oblique (2) ↔ Italic (1) is a better match than either ↔ Normal (0).
+      if ((face.fontStyle == 1 && style == 2) || (face.fontStyle == 2 && style == 1)) {
+        score += 5000;  // Partial match: italic ↔ oblique.
+      } else {
+        score += 10000;  // Full mismatch: to/from normal.
+      }
+    }
+
+    // CSS font matching for stretch: prefer faces on the correct side of the request.
+    // If requesting narrower than normal (stretch < 5), prefer narrower faces.
+    // If requesting wider than normal (stretch > 5), prefer wider faces.
+    const int stretchDelta = face.fontStretch - stretch;
+    if (stretchDelta == 0) {
+      // Exact match, no penalty.
+    } else if (stretch < 5 && stretchDelta < 0) {
+      // Request is narrow, face is even narrower — preferred direction.
+      score += (-stretchDelta) * 100;
+    } else if (stretch > 5 && stretchDelta > 0) {
+      // Request is wide, face is even wider — preferred direction.
+      score += stretchDelta * 100;
+    } else {
+      // Face is on the wrong side — heavy penalty.
+      score += std::abs(stretchDelta) * 100 + 1000;
+    }
+
+    score += std::abs(face.fontWeight - weight);
+
+    if (score < bestScore) {
+      bestScore = score;
       bestFace = &face;
-      if (delta == 0) {
+      if (score == 0) {
         break;  // Exact match.
       }
     }
