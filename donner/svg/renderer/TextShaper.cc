@@ -389,6 +389,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
   bool haveCurrentPosition = false;
   double currentPenX = 0.0;
   double currentPenY = 0.0;
+  double prevDefaultY = 0.0;  // Previous span's baseline-shift offset, for undo/redo between spans.
   uint32_t prevSpanLastCodepoint = 0;      // Unicode codepoint, for cross-span GPOS kerning.
   hb_font_t* prevSpanHbFont = hbFont;      // Previous span's HB font for cross-span kerning.
   float prevSpanFontSizePx = fontSizePx;   // Previous span's font size.
@@ -507,10 +508,64 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         smallCapsText.empty() ? spanTextOriginal : std::string_view(smallCapsText);
 
     // Resolve per-span baseline-shift using actual font size for em units.
+    // For sub/super keywords, prefer font OS/2 metrics over hardcoded em constants.
     FontMetrics spanFontMetrics = params.fontMetrics;
     spanFontMetrics.fontSize = spanFontSizePx;
-    const double spanBaselineShiftPx =
-        span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+    double spanBaselineShiftPx;
+    using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+    if (span.baselineShiftKeyword == BSK::Sub || span.baselineShiftKeyword == BSK::Super) {
+      bool resolved = false;
+      FT_Face spanFtFace = hb_ft_font_get_face(spanHbFont);
+      if (spanFtFace) {
+        auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(spanFtFace, FT_SFNT_OS2));
+        if (os2) {
+          // OS/2 offsets are in font design units. Convert using FreeType's units_per_EM.
+          const double emScale = spanFontSizePx / static_cast<double>(spanFtFace->units_per_EM);
+          if (span.baselineShiftKeyword == BSK::Sub) {
+            // ySubscriptYOffset: distance below baseline (positive value in font units).
+            // CSS sub = shift down = negative CSS baseline-shift.
+            spanBaselineShiftPx = -static_cast<double>(os2->ySubscriptYOffset) * emScale;
+          } else {
+            // ySuperscriptYOffset: distance above baseline (positive value in font units).
+            // CSS super = shift up = positive CSS baseline-shift.
+            spanBaselineShiftPx = static_cast<double>(os2->ySuperscriptYOffset) * emScale;
+          }
+          resolved = true;
+        }
+      }
+      if (!resolved) {
+        spanBaselineShiftPx =
+            span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+      }
+    } else {
+      spanBaselineShiftPx =
+          span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+    }
+    // Resolve ancestor baseline-shifts, using font OS/2 metrics for sub/super keywords.
+    {
+      FT_Face ancestorFtFace = hb_ft_font_get_face(spanHbFont);
+      TT_OS2* ancestorOS2 = ancestorFtFace
+          ? static_cast<TT_OS2*>(FT_Get_Sfnt_Table(ancestorFtFace, FT_SFNT_OS2))
+          : nullptr;
+      for (const auto& ancestor : span.ancestorBaselineShifts) {
+        if (ancestorOS2 && ancestor.keyword == BSK::Sub) {
+          const double emScale =
+              ancestor.fontSizePx / static_cast<double>(ancestorFtFace->units_per_EM);
+          spanBaselineShiftPx +=
+              -static_cast<double>(ancestorOS2->ySubscriptYOffset) * emScale;
+        } else if (ancestorOS2 && ancestor.keyword == BSK::Super) {
+          const double emScale =
+              ancestor.fontSizePx / static_cast<double>(ancestorFtFace->units_per_EM);
+          spanBaselineShiftPx +=
+              static_cast<double>(ancestorOS2->ySuperscriptYOffset) * emScale;
+        } else {
+          FontMetrics ancestorFm = params.fontMetrics;
+          ancestorFm.fontSize = ancestor.fontSizePx;
+          spanBaselineShiftPx +=
+              ancestor.shift.toPixels(params.viewBox, ancestorFm, Lengthd::Extent::Y);
+        }
+      }
+    }
 
     // If alignment-baseline is set on this span, it overrides the text-level dominant-baseline.
     double effectiveBaselineShift = baselineShift;
@@ -535,7 +590,9 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
     double penX = haveCurrentPosition ? currentPenX : 0.0;
     const double defaultY = effectiveBaselineShift - spanBaselineShiftPx;
-    double penY = haveCurrentPosition ? currentPenY : defaultY;
+    // Always apply this span's baseline-shift. When transitioning from a previous span, undo
+    // the previous span's shift and apply the current span's shift.
+    double penY = haveCurrentPosition ? (currentPenY - prevDefaultY + defaultY) : defaultY;
     // Copy positioning lists so span-start can consume index 0 without
     // double-applying in the glyph loop.
     auto xList = span.xList;
@@ -571,6 +628,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
     if (spanText.empty()) {
       currentPenX = penX;
       currentPenY = penY;
+      prevDefaultY = defaultY;
       haveCurrentPosition = true;
       runExtents.push_back({penX, penY, penX, penY});
       runs.push_back(std::move(run));
@@ -1271,6 +1329,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
         currentPenY = 0.0;
         haveCurrentPosition = true;
       }
+      prevDefaultY = 0.0;  // Path sets absolute position; no shift to undo.
 
       // Hidden/collapsed spans on a path still advance along the path but are not drawn.
       if (span.visibility != Visibility::Visible) {
@@ -1284,6 +1343,7 @@ std::vector<ShapedTextRun> TextShaper::layout(const components::ComputedTextComp
 
     currentPenX = penX;
     currentPenY = penY;
+    prevDefaultY = defaultY;
     haveCurrentPosition = true;
     prevSpanLastCodepoint = lastCodepoint;
     prevSpanHbFont = spanHbFont;

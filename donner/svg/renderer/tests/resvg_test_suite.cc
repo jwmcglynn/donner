@@ -60,32 +60,19 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
 }
 
 INSTANTIATE_TEST_SUITE_P(AlignmentBaseline, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-alignment-baseline", {},
-                                                     Params::WithThreshold(kDefaultThreshold,
-                                                                           13000))),
+                         ValuesIn(getTestsWithPrefix("a-alignment-baseline")),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(BaselineShift, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix(
-                             "a-baseline-shift",
-                             {
-                                 {"a-baseline-shift-014.svg",
-                                  Params::WithThreshold(kDefaultThreshold, 17000)},  // sub/super
-                                 {"a-baseline-shift-015.svg",
-                                  Params::WithThreshold(kDefaultThreshold, 21000)},  // percentage
-                                 {"a-baseline-shift-016.svg",
-                                  Params::WithThreshold(kDefaultThreshold, 21000)},  // percentage
-                                 {"a-baseline-shift-017.svg",
-                                  Params::WithThreshold(kDefaultThreshold, 21000)},  // percentage
-                                 {"a-baseline-shift-018.svg",
-                                  Params::WithThreshold(kDefaultThreshold, 21000)},  // percentage
-                                 {"a-baseline-shift-020.svg",
-                                  Params::WithThreshold(kDefaultThreshold, 19500)},  // nested
-                                 {"a-baseline-shift-021.svg",
-                                  Params::WithThreshold(kDefaultThreshold, 19500)},  // nested
-                             },
-                             Params::WithThreshold(kDefaultThreshold, 8500))),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    BaselineShift, ImageComparisonTestFixture,
+    ValuesIn(getTestsWithPrefix("a-baseline-shift",
+                                {
+                                    {"a-baseline-shift-020.svg",
+                                     Params::WithThreshold(0.1f)},  // Minor AA artifacts on axis
+                                    {"a-baseline-shift-021.svg",
+                                     Params::WithThreshold(0.1f)},  // Minor AA artifacts on axis
+                                })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     Clip, ImageComparisonTestFixture,
@@ -612,7 +599,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feSpecularLighting-002.svg", Params::WithThreshold(0.1f)},  // 2717px at 0.01f
             {"e-feSpecularLighting-004.svg",
              Params::WithThreshold(0.1f, 58000)},  // resvg golden bug: R=0 channel
-                                                    // (BGRA issue in resvg ~v0.9.x)
+                                                   // (BGRA issue in resvg ~v0.9.x)
             {"e-feSpecularLighting-005.svg", Params::WithThreshold(0.1f)},  // 1466px at 0.01f
         })),
     TestNameFromFilename);

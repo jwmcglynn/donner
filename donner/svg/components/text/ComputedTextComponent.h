@@ -91,10 +91,28 @@ struct ComputedTextComponent {
     /// Populated by RendererDriver from sourceEntity.
     Lengthd fontSize;
 
-    /// CSS `baseline-shift` value for this span. Stored as a Lengthd where em units are relative
-    /// to the span's font-size. Positive = shift up (per CSS convention). Populated by
-    /// RendererDriver from sourceEntity.
+    /// Indicates whether baseline-shift was set via the `sub` or `super` keywords,
+    /// which should be resolved from font OS/2 metrics at layout time.
+    enum class BaselineShiftKeyword : uint8_t { Length, Sub, Super };
+
+    /// CSS `baseline-shift` value for this span. For `Length` keyword, this is the explicit
+    /// shift value. For `Sub`/`Super`, this is a fallback em-based value; layout engines
+    /// should prefer font OS/2 metrics when available.
     Lengthd baselineShift;
+
+    /// Whether baseline-shift was `sub`, `super`, or an explicit length/percentage.
+    BaselineShiftKeyword baselineShiftKeyword = BaselineShiftKeyword::Length;
+
+    /// Unresolved baseline-shift values from ancestor tspan elements. Each entry is the ancestor's
+    /// (baseline-shift keyword, baseline-shift Lengthd, font-size in pixels). Layout engines resolve
+    /// each entry using font OS/2 metrics for sub/super or toPixels() for explicit lengths, then sum
+    /// to get the total ancestor shift.
+    struct AncestorShift {
+      BaselineShiftKeyword keyword;
+      Lengthd shift;
+      double fontSizePx;
+    };
+    SmallVector<AncestorShift, 2> ancestorBaselineShifts;
 
     /// CSS `alignment-baseline` value for this span. When not Auto, overrides the
     /// dominant-baseline for this specific inline element. Populated by RendererDriver from

@@ -415,7 +415,8 @@ public:
                                  cursor, markerStart, markerMid, markerEnd, fontFamily, fontSize,
                                  fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
                                  textDecoration, dominantBaseline, writingMode, letterSpacing,
-                                 wordSpacing, mixBlendMode, isolation);
+                                 wordSpacing, baselineShift, alignmentBaseline, mixBlendMode,
+                                 isolation);
   }
 
   /**
