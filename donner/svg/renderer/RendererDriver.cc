@@ -762,6 +762,14 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
+    int maskDepth = 0;
+    bool subtreeConsumedBySubRendering = false;
+
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
+      subtreeConsumedBySubRendering = true;
+    }
+
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately from clip — access it directly from instance.
@@ -774,14 +782,6 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       preRenderSvgFeImages(*filterGraph);
       preRenderFeImageFragments(*filterGraph, registry, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
-    }
-
-    int maskDepth = 0;
-    bool subtreeConsumedBySubRendering = false;
-
-    if (instance.mask.has_value() && instance.mask->valid()) {
-      maskDepth = renderMask(view, registry, instance, *instance.mask);
-      subtreeConsumedBySubRendering = true;
     }
 
     if (const auto* fillRef =
@@ -842,14 +842,14 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
-      for (int mi = 0; mi < maskDepth; ++mi) {
-        renderer_.popMask();
-      }
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
       }
       if (hasEntityClip) {
         renderer_.popClip();
+      }
+      for (int mi = 0; mi < maskDepth; ++mi) {
+        renderer_.popMask();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -861,14 +861,14 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
       const DeferredPop& deferred = subtreeMarkers_.back();
-      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
-        renderer_.popMask();
-      }
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
       }
       if (deferred.hasEntityClip) {
         renderer_.popClip();
+      }
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+        renderer_.popMask();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -884,14 +884,14 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   // a subtree root whose deferred pop hasn't fired yet).
   while (!subtreeMarkers_.empty()) {
     const DeferredPop& deferred = subtreeMarkers_.back();
-    for (int mi = 0; mi < deferred.maskDepth; ++mi) {
-      renderer_.popMask();
-    }
     if (deferred.hasFilterLayer) {
       renderer_.popFilterLayer();
     }
     if (deferred.hasEntityClip) {
       renderer_.popClip();
+    }
+    for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+      renderer_.popMask();
     }
     if (deferred.hasIsolatedLayer) {
       renderer_.popIsolatedLayer();
@@ -987,15 +987,21 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Per SVG spec, an empty or invalid filter reference makes the element invisible.
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
+    int maskDepth = 0;
+    // Track whether mask/pattern rendering consumed the element's subtree entities.
+    bool subtreeConsumedBySubRendering = false;
+
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
+      subtreeConsumedBySubRendering = true;
+    }
+
     // Clip paths are in entity-local coordinates.
     // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
-    // Push entity clip BEFORE filter so it's the outer layer: clip-path clips the filter output,
-    // not the SourceGraphic input. The filter layer saves/clears the clip mask so the
-    // SourceGraphic is rendered unclipped.
+    // Push in reverse so pop order applies the effects in spec order: mask outermost,
+    // then clip-path, then filter innermost.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
-    // Mask is handled separately below; don't let pushClip see it.
-    // Mask is handled separately from clip — access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
@@ -1005,16 +1011,6 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       preRenderSvgFeImages(*filterGraph);
       preRenderFeImageFragments(*filterGraph, registry, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
-    }
-
-    // Render mask content, then transition to masked content layer.
-    int maskDepth = 0;
-    // Track whether mask/pattern rendering consumed the element's subtree entities.
-    bool subtreeConsumedBySubRendering = false;
-
-    if (instance.mask.has_value() && instance.mask->valid()) {
-      maskDepth = renderMask(view, registry, instance, *instance.mask);
-      subtreeConsumedBySubRendering = true;
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -1154,15 +1150,14 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
-      for (int mi = 0; mi < maskDepth; ++mi) {
-        renderer_.popMask();
-      }
-      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
       }
       if (hasEntityClip) {
         renderer_.popClip();
+      }
+      for (int mi = 0; mi < maskDepth; ++mi) {
+        renderer_.popMask();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -1175,15 +1170,14 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Pop deferred subtree layers when we reach their last entity.
     while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
       const DeferredPop& deferred = subtreeMarkers_.back();
-      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
-        renderer_.popMask();
-      }
-      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
       }
       if (deferred.hasEntityClip) {
         renderer_.popClip();
+      }
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+        renderer_.popMask();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -1269,12 +1263,14 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
-    // Per SVG spec: paint → filter → clip-path. Push clip before filter so clip applies to
-    // the filter output. The filter layer saves/clears the clip mask internally.
+    int maskDepth = 0;
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
+    }
+
+    // Per SVG spec, apply paint → filter → clip-path → mask.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
-    // Mask is handled separately below; don't let pushClip see it.
-    // Mask is handled separately from clip — access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
@@ -1284,12 +1280,6 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       preRenderSvgFeImages(*filterGraph);
       preRenderFeImageFragments(*filterGraph, registry, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
-    }
-
-    // Render mask content, then transition to masked content layer.
-    int maskDepth = 0;
-    if (instance.mask.has_value() && instance.mask->valid()) {
-      maskDepth = renderMask(view, registry, instance, *instance.mask);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -1384,15 +1374,14 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       deferred.maskDepth = maskDepth;
       localDeferred.push_back(deferred);
     } else {
-      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
-      for (int mi = 0; mi < maskDepth; ++mi) {
-        renderer_.popMask();
-      }
       if (hasFilterLayer) {
         renderer_.popFilterLayer();
       }
       if (hasEntityClip) {
         renderer_.popClip();
+      }
+      for (int mi = 0; mi < maskDepth; ++mi) {
+        renderer_.popMask();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -1401,15 +1390,14 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     while (!localDeferred.empty() && localDeferred.back().lastEntity == entity) {
       const DeferredPop& deferred = localDeferred.back();
-      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
-      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
-        renderer_.popMask();
-      }
       if (deferred.hasFilterLayer) {
         renderer_.popFilterLayer();
       }
       if (deferred.hasEntityClip) {
         renderer_.popClip();
+      }
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+        renderer_.popMask();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();

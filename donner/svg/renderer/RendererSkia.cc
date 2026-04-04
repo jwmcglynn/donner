@@ -257,6 +257,99 @@ bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
   return false;
 }
 
+bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
+  for (const auto& node : filterGraph.nodes) {
+    bool anisotropic = false;
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          }
+        },
+        node.primitive);
+    if (anisotropic) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
+  if (filterGraph.nodes.empty() ||
+      filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+    return false;
+  }
+
+  bool hasBlur = false;
+  for (const auto& node : filterGraph.nodes) {
+    const bool isBlur =
+        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
+        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
+    const bool isOffset =
+        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
+    if (!isBlur && !isOffset) {
+      return false;
+    }
+    hasBlur |= isBlur;
+
+    if (node.result.has_value() || node.x.has_value() || node.y.has_value() ||
+        node.width.has_value() || node.height.has_value() || node.inputs.size() > 1) {
+      return false;
+    }
+
+    if (node.inputs.size() == 1) {
+      const auto& input = node.inputs[0];
+      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
+        continue;
+      }
+      if (const auto* stdInput = std::get_if<components::FilterStandardInput>(&input.value)) {
+        if (*stdInput == components::FilterStandardInput::SourceGraphic) {
+          continue;
+        }
+      }
+      return false;
+    }
+  }
+
+  return hasBlur;
+}
+
+bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
+                                  const Transformd& deviceFromFilter) {
+  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
+  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
+  if (!NearZero(dot, 1e-6)) {
+    return true;
+  }
+
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  return hasRotation && graphHasAnisotropicBlur(filterGraph);
+}
+
+double computeBlurPadding(const components::FilterGraph& filterGraph) {
+  double maxSigma = 0.0;
+  for (const auto& node : filterGraph.nodes) {
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          }
+        },
+        node.primitive);
+  }
+
+  return maxSigma * 3.0 + 1.0;
+}
+
 // ---------------------------------------------------------------------------
 // Native Skia filter DAG builder — lowers the full FilterGraph to SkImageFilter.
 // ---------------------------------------------------------------------------
@@ -484,9 +577,6 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                                               int sourceHeight,
                                               FinalTilePlan* finalTilePlan = nullptr) {
   namespace fp = components::filter_primitive;
-
-  // Track the implicit previous result and named results.
-  sk_sp<SkImageFilter> previousFilter;  // nullptr = SourceGraphic
   std::map<RcString, sk_sp<SkImageFilter>> namedResults;
 
   // SourceAlpha: extract alpha channel (zero RGB, keep A).
@@ -584,6 +674,12 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
   const double bboxW_offset = isOBB ? filterGraph.elementBoundingBox->width() : 1.0;
   const double bboxH_offset = isOBB ? filterGraph.elementBoundingBox->height() : 1.0;
+  auto primToDeviceX = [&](double val) -> SkScalar {
+    return isOBB ? toDeviceX(val * bboxW_offset) : toDeviceX(val);
+  };
+  auto primToDeviceY = [&](double val) -> SkScalar {
+    return isOBB ? toDeviceY(val * bboxH_offset) : toDeviceY(val);
+  };
   auto toDeviceOffset = [&](double dx, double dy) -> Vector2d {
     const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW_offset, dy * bboxH_offset)
                                       : Vector2d(dx, dy);
@@ -633,6 +729,17 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   Boxd previousSubregion = deviceFromFilter.transformBox(defaultSubregion);
   std::map<RcString, Boxd> namedSubregions;
   const Boxd filterRegionDeviceSpace = previousSubregion;
+
+  // SourceGraphic participates in filter processing only inside the filter region.
+  // Crop the implicit source input up front so primitives like feGaussianBlur see
+  // transparent black outside the region instead of the full captured surface.
+  sk_sp<SkImageFilter> sourceGraphicInput;
+  if (filterGraph.filterRegion.has_value()) {
+    sourceGraphicInput = SkImageFilters::Crop(toSkia(filterRegionDeviceSpace), nullptr);
+  }
+
+  // Track the implicit previous result and named results.
+  sk_sp<SkImageFilter> previousFilter = sourceGraphicInput;
 
   auto intersectBoxes = [](const Boxd& a, const Boxd& b) -> Boxd {
     return Boxd(Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
@@ -685,8 +792,9 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
               return previousFilter;
             } else if constexpr (std::is_same_v<T, components::FilterStandardInput>) {
               switch (v) {
-                case components::FilterStandardInput::SourceGraphic: return nullptr;
-                case components::FilterStandardInput::SourceAlpha: return makeSourceAlpha(nullptr);
+                case components::FilterStandardInput::SourceGraphic: return sourceGraphicInput;
+                case components::FilterStandardInput::SourceAlpha:
+                  return makeSourceAlpha(sourceGraphicInput);
                 case components::FilterStandardInput::FillPaint:
                 case components::FilterStandardInput::StrokePaint:
                   // FillPaint/StrokePaint require pre-rendered images that aren't available
@@ -741,9 +849,9 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
           if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
             const SkScalar sigmaX = primitive.stdDeviationX >= 0
-                                        ? toDeviceX(primitive.stdDeviationX) : 0.0f;
+                                        ? primToDeviceX(primitive.stdDeviationX) : 0.0f;
             const SkScalar sigmaY = primitive.stdDeviationY >= 0
-                                        ? toDeviceY(primitive.stdDeviationY) : 0.0f;
+                                        ? primToDeviceY(primitive.stdDeviationY) : 0.0f;
             result = SkImageFilters::Blur(sigmaX, sigmaY,
                                          blurEdgeModeToTileMode(primitive.edgeMode), std::move(in1));
             return true;
@@ -814,17 +922,19 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             const float opacity = static_cast<float>(primitive.floodOpacity);
             const Vector2d offset = toDeviceOffset(primitive.dx, primitive.dy);
             const SkScalar sigmaX = primitive.stdDeviationX >= 0
-                                        ? toDeviceX(primitive.stdDeviationX) : 0.0f;
+                                        ? primToDeviceX(primitive.stdDeviationX) : 0.0f;
             const SkScalar sigmaY = primitive.stdDeviationY >= 0
-                                        ? toDeviceY(primitive.stdDeviationY) : 0.0f;
-            // SkColorSetARGB takes straight sRGB values. No linearRGB conversion
-            // needed — Skia handles the color internally.
-            result = SkImageFilters::DropShadow(
-                static_cast<SkScalar>(offset.x), static_cast<SkScalar>(offset.y),
-                sigmaX, sigmaY,
+                                        ? primToDeviceY(primitive.stdDeviationY) : 0.0f;
+            // Convert shadow color to linear when node uses linearRGB, since the input
+            // source is already in linear space and the LinearToSRGBGamma post-wrap will
+            // convert both back to sRGB.
+            const SkColor shadowColor = toLinearColor(
                 SkColorSetARGB(static_cast<uint8_t>(std::clamp(rgba.a * opacity, 0.0f, 255.0f)),
                                rgba.r, rgba.g, rgba.b),
-                std::move(in1));
+                nodeUsesLinearRGB);
+            result = SkImageFilters::DropShadow(
+                static_cast<SkScalar>(offset.x), static_cast<SkScalar>(offset.y),
+                sigmaX, sigmaY, shadowColor, std::move(in1));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Morphology>) {
@@ -865,7 +975,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
             // Validate parameters. Invalid convolve disables the filter (transparent output).
             if (orderX <= 0 || orderY <= 0 ||
-                static_cast<int>(primitive.kernelMatrix.size()) < requiredSize) {
+                static_cast<int>(primitive.kernelMatrix.size()) != requiredSize) {
               result = SkImageFilters::Shader(
                   SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
               skipLinearRGBPostWrap = true;
@@ -1259,16 +1369,16 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
           [&](const auto& prim) -> Boxd {
             using T = std::decay_t<decltype(prim)>;
             if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
-              const double ex = std::ceil(toDeviceX(prim.stdDeviationX) * 3.0);
-              const double ey = std::ceil(toDeviceY(prim.stdDeviationY) * 3.0);
+              const double ex = std::ceil(primToDeviceX(prim.stdDeviationX) * 3.0);
+              const double ey = std::ceil(primToDeviceY(prim.stdDeviationY) * 3.0);
               return Boxd(previousSubregion.topLeft - Vector2d(ex, ey),
                           previousSubregion.bottomRight + Vector2d(ex, ey));
             } else if constexpr (std::is_same_v<T, fp::DropShadow>) {
               const Vector2d off = toDeviceOffset(prim.dx, prim.dy);
               const Boxd shadowBounds(previousSubregion.topLeft + off,
                                       previousSubregion.bottomRight + off);
-              const double ex = std::ceil(toDeviceX(prim.stdDeviationX) * 3.0);
-              const double ey = std::ceil(toDeviceY(prim.stdDeviationY) * 3.0);
+              const double ex = std::ceil(primToDeviceX(prim.stdDeviationX) * 3.0);
+              const double ey = std::ceil(primToDeviceY(prim.stdDeviationY) * 3.0);
               const Boxd expandedShadow(shadowBounds.topLeft - Vector2d(ex, ey),
                                         shadowBounds.bottomRight + Vector2d(ex, ey));
               return Boxd(Vector2d(std::min(previousSubregion.topLeft.x, expandedShadow.topLeft.x),
@@ -1931,15 +2041,6 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
 
   SkCanvas* filterCanvas = surface->getCanvas();
   filterCanvas->clear(SK_ColorTRANSPARENT);
-  for (const ClipStackEntry& entry : activeClips_) {
-    filterCanvas->save();
-    SkMatrix clipMatrix = entry.matrix;
-    if (offsetX != 0 || offsetY != 0) {
-      clipMatrix.postTranslate(static_cast<SkScalar>(offsetX), static_cast<SkScalar>(offsetY));
-    }
-    filterCanvas->setMatrix(clipMatrix);
-    applyClipToCanvas(filterCanvas, entry.clip);
-  }
 
   SkMatrix filterMatrix = currentCanvas_->getTotalMatrix();
   if (offsetX != 0 || offsetY != 0) {
@@ -1982,6 +2083,129 @@ void RendererSkia::popFilterLayer() {
   sk_sp<SkImage> sourceImage = state.surface->makeImageSnapshot();
   if (sourceImage == nullptr) {
     return;
+  }
+
+  const bool useTransformedBlurPath =
+      state.filterRegion.has_value() && !NearZero(state.deviceFromFilter.determinant(), 1e-12) &&
+      state.filterBufferOffsetX == 0 && state.filterBufferOffsetY == 0 &&
+      isEligibleForTransformedBlurPath(state.filterGraph) &&
+      shouldUseTransformedBlurPath(state.filterGraph, state.deviceFromFilter);
+
+  if (useTransformedBlurPath) {
+    const Boxd& filterRegion = *state.filterRegion;
+    const double scaleX =
+        std::max(1.0, state.deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
+    const double scaleY =
+        std::max(1.0, state.deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+    const double blurPadding = computeBlurPadding(state.filterGraph);
+    const Boxd paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
+                            filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
+    const int localWidth =
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX)));
+    const int localHeight =
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY)));
+
+    sk_sp<SkSurface> localSourceSurface = SkSurfaces::Raster(
+        SkImageInfo::Make(localWidth, localHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
+    if (localSourceSurface != nullptr) {
+      const Transformd filterFromDevice = state.deviceFromFilter.inverse();
+      const Transformd deviceToLocal =
+          filterFromDevice *
+          Transformd::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
+          Transformd::Scale(scaleX, scaleY);
+
+      {
+        SkCanvas* canvas = localSourceSurface->getCanvas();
+        canvas->clear(SK_ColorTRANSPARENT);
+        canvas->setMatrix(toSkiaMatrix(deviceToLocal));
+        SkPaint paint;
+        paint.setBlendMode(SkBlendMode::kSrc);
+        canvas->drawImage(sourceImage, 0.0f, 0.0f,
+                          SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest),
+                          &paint);
+      }
+
+      sk_sp<SkImage> localSourceImage = localSourceSurface->makeImageSnapshot();
+      if (localSourceImage != nullptr) {
+        components::FilterGraph localGraph = state.filterGraph;
+        const Transformd localTransform = Transformd::Scale(scaleX, scaleY);
+        localGraph.filterRegion =
+            Boxd::FromXYWH(blurPadding, blurPadding, filterRegion.width(), filterRegion.height());
+
+        sk_sp<SkImageFilter> localFilter = buildNativeSkiaFilterDAG(
+            localGraph, localTransform, localSourceImage->width(), localSourceImage->height());
+        if (localFilter != nullptr) {
+          localFilter = SkImageFilters::Crop(
+              toSkia(localTransform.transformBox(*localGraph.filterRegion)), std::move(localFilter));
+
+          sk_sp<SkSurface> localOutputSurface = SkSurfaces::Raster(SkImageInfo::Make(
+              localWidth, localHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
+          if (localOutputSurface != nullptr) {
+            SkCanvas* canvas = localOutputSurface->getCanvas();
+            canvas->clear(SK_ColorTRANSPARENT);
+            SkPaint paint;
+            paint.setAntiAlias(antialias_);
+            paint.setImageFilter(std::move(localFilter));
+            canvas->drawImage(localSourceImage, 0.0f, 0.0f,
+                              SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest),
+                              &paint);
+
+            sk_sp<SkImage> filteredLocalImage = localOutputSurface->makeImageSnapshot();
+            if (filteredLocalImage != nullptr) {
+              const Transformd deviceFromLocal =
+                  Transformd::Scale(1.0 / scaleX, 1.0 / scaleY) *
+                  Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
+                  state.deviceFromFilter;
+
+              currentCanvas_->save();
+              currentCanvas_->resetMatrix();
+              currentCanvas_->concat(toSkiaMatrix(deviceFromLocal));
+              currentCanvas_->drawImage(
+                  filteredLocalImage, 0.0f, 0.0f,
+                  SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest));
+              currentCanvas_->restore();
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (!useTransformedBlurPath && state.filterRegion.has_value() &&
+      (!NearZero(state.deviceFromFilter.data[1], 1e-6) ||
+       !NearZero(state.deviceFromFilter.data[2], 1e-6))) {
+    const int width = sourceImage->width();
+    const int height = sourceImage->height();
+    const SkImageInfo info =
+        SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    std::vector<std::uint8_t> pixels(static_cast<size_t>(width) * height * 4);
+    if (sourceImage->readPixels(info, pixels.data(), static_cast<size_t>(width) * 4, 0, 0)) {
+      const Transformd filterFromDevice = state.deviceFromFilter.inverse();
+      const Boxd& filterRegion = *state.filterRegion;
+      for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+          const Vector2d filterPoint =
+              filterFromDevice.transformPosition(Vector2d(x + 0.5, y + 0.5));
+          if (filterPoint.x < filterRegion.topLeft.x ||
+              filterPoint.x >= filterRegion.bottomRight.x ||
+              filterPoint.y < filterRegion.topLeft.y ||
+              filterPoint.y >= filterRegion.bottomRight.y) {
+            const size_t idx = static_cast<size_t>((y * width + x) * 4);
+            pixels[idx + 0] = 0;
+            pixels[idx + 1] = 0;
+            pixels[idx + 2] = 0;
+            pixels[idx + 3] = 0;
+          }
+        }
+      }
+
+      const SkPixmap pixmap(info, pixels.data(), static_cast<size_t>(width) * 4);
+      sk_sp<SkImage> clippedSource = SkImages::RasterFromPixmapCopy(pixmap);
+      if (clippedSource != nullptr) {
+        sourceImage = std::move(clippedSource);
+      }
+    }
   }
 
   // Build the native Skia SkImageFilter DAG. In this DAG, SourceGraphic (represented as
