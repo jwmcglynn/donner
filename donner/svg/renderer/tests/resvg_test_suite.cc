@@ -174,18 +174,28 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"a-font-001.svg", Params::Skip()},  // Canvas size mismatch (400 vs 500)
 
-            // Generic font-family mapping: not implemented, all generic families render as
-            // fallback (Public Sans).
-            {"a-font-family-001.svg", Params::Skip()},  // serif
-            {"a-font-family-002.svg", Params::Skip()},  // sans-serif
-            {"a-font-family-003.svg", Params::Skip()},  // cursive
-            {"a-font-family-004.svg", Params::Skip()},  // fantasy
-            {"a-font-family-005.svg", Params::Skip()},  // monospace
-            {"a-font-family-007.svg", Params::Skip()},  // Named font not in @font-face
-            {"a-font-family-008.svg", Params::Skip()},  // Font list fallback
-            {"a-font-family-009.svg", Params::Skip()},  // Fallback from invalid family
-            {"a-font-family-010.svg", Params::Skip()},  // Fallback list with valid second entry
-            {"a-font-family-011.svg", Params::Skip()},  // Bold sans-serif
+            // Generic font-family mapping: resolved via FontManager::setGenericFamilyMapping().
+            // Pixel diffs are glyph outline AA differences (stb_truetype vs resvg's ttf-parser).
+            {"a-font-family-001.svg",
+             Params::WithThreshold(kDefaultThreshold, 4200)},  // serif (Noto Serif)
+            {"a-font-family-002.svg",
+             Params::WithThreshold(kDefaultThreshold, 1900)},  // sans-serif (Noto Sans)
+            {"a-font-family-003.svg",
+             Params::WithThreshold(kDefaultThreshold, 5000)},  // cursive (Yellowtail)
+            {"a-font-family-004.svg",
+             Params::WithThreshold(kDefaultThreshold, 5200)},  // fantasy (Sedgwick Ave Display)
+            {"a-font-family-005.svg",
+             Params::WithThreshold(kDefaultThreshold, 600)},  // monospace (Noto Mono)
+            {"a-font-family-007.svg",
+             Params::WithThreshold(kDefaultThreshold, 1300)},  // Source Sans Pro
+            {"a-font-family-008.svg",
+             Params::WithThreshold(kDefaultThreshold, 1300)},  // Font list: Source Sans Pro fallback
+            {"a-font-family-009.svg", Params::Skip()},  // Fallback from invalid family (different
+                                                         // default font than resvg)
+            {"a-font-family-010.svg",
+             Params::WithThreshold(kDefaultThreshold, 1000)},  // Fallback list: "Invalid, Noto Sans"
+            {"a-font-family-011.svg",
+             Params::WithThreshold(kDefaultThreshold, 5200)},  // Bold sans-serif (Noto Sans Bold)
 
             {"a-font-variant-001.svg",
              Params().withSimpleTextMaxPixels(1200)},  // small-caps is emulated with simple text

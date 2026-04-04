@@ -1,5 +1,6 @@
 #include "donner/svg/resources/FontManager.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -173,6 +174,14 @@ std::string_view FontManager::faceFamilyName(size_t index) const {
   return {};
 }
 
+void FontManager::setGenericFamilyMapping(std::string_view genericName,
+                                          std::string_view realFamily) {
+  std::string key(genericName);
+  std::transform(key.begin(), key.end(), key.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  genericFamilyMap_[std::move(key)] = std::string(realFamily);
+}
+
 FontHandle FontManager::findFont(std::string_view family) {
   return findFont(family, 400);
 }
@@ -182,6 +191,14 @@ FontHandle FontManager::findFont(std::string_view family, int weight) {
 }
 
 FontHandle FontManager::findFont(std::string_view family, int weight, int style, int stretch) {
+  // Resolve CSS generic family names to real family names.
+  std::string familyLower(family);
+  std::transform(familyLower.begin(), familyLower.end(), familyLower.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {
+    family = it->second;
+  }
+
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
   if (auto it = cache_.find(cacheKey); it != cache_.end()) {

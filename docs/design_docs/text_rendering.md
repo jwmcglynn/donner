@@ -84,8 +84,11 @@ or unit tests.
 ### Text Layout Properties
 
 - [x] `text-anchor` — start, middle, end per text chunk
-- [x] `dominant-baseline` — auto, alphabetic, middle, central, hanging, mathematical,
-  text-top, text-bottom, ideographic *(1 resvg test, 10px diff — excellent)*
+- [ ] `dominant-baseline` — **broken.** Code exists for all values (auto, alphabetic, middle,
+  central, hanging, mathematical, text-top, text-bottom, ideographic) but only 1 resvg test
+  exists (hanging) with a 17000px threshold that masks failures. The baseline shift calculations
+  use approximate percentages of ascent/descent rather than proper font table baselines (BASE
+  table). Needs investigation and real test coverage.
 - [x] `alignment-baseline` — per-span override of dominant-baseline
 - [x] `baseline-shift` — sub, super, `<length>`, `<percentage>`; OS/2 table metrics for
   sub/super; ancestor baseline-shift accumulation
@@ -113,8 +116,9 @@ or unit tests.
 - [ ] `font-size-adjust` — not implemented
 - [ ] `font-feature-settings` — not implemented (HarfBuzz supports it internally)
 - [ ] `font-variation-settings` — variable fonts not supported
-- [ ] Generic font families — serif, sans-serif, monospace, cursive, fantasy not mapped to
-  system fonts *(11 resvg tests skipped)*
+- [x] Generic font families — serif, sans-serif, monospace, cursive, fantasy resolved via
+  `FontManager::setGenericFamilyMapping()` *(10 of 11 resvg tests enabled; 009 skipped:
+  different default fallback font)*
 
 ### @font-face
 
@@ -129,15 +133,17 @@ or unit tests.
 
 ### Text Decoration
 
-- [x] `text-decoration: underline` — position/thickness from post table
-- [x] `text-decoration: overline` — positioned at ascender
-- [x] `text-decoration: line-through` — positioned at strikethrough offset
-- [x] `text-decoration: none` — suppress inherited decoration
+- [ ] `text-decoration` — **broken.** Code exists for underline/overline/line-through/none but
+  resvg tests show 1600–6700px diffs (on 200×200 images) masked by a 13000px threshold.
+  All 18 text-decoration tests are effectively untested. Known issues: decoration does not
+  follow per-span paint/color changes, incorrect positioning on multi-span text, broken on
+  rotated text (6690px diff). The rendering code draws decoration per-run but doesn't
+  account for tspan style inheritance or decoration propagation per CSS Text Decoration §3.
 - [ ] `text-decoration-color` — not implemented (uses fill color)
 - [ ] `text-decoration-style` — solid only; no wavy, dotted, dashed, double
 - [ ] `text-decoration-thickness` — not implemented (uses font post table)
-- [ ] Decoration interaction with tspan style changes — *(high pixel diffs in resvg tests,
-  1600-5200px range, suggest decoration doesn't follow per-span paint changes)*
+- [ ] Decoration inheritance — SVG2/CSS: decoration set on ancestor should propagate to
+  descendants with the ancestor's color/style, not the child's
 
 ### Text Spacing
 
@@ -215,27 +221,32 @@ or unit tests.
 
 ## Open Work Areas
 
-### 1. textPath Stabilization
+### 1. Text Decoration — broken
+All 18 resvg tests pass only because the threshold is set to 13000–19500px (allowing up to
+17% pixel mismatch on a 200×200 image). Actual diffs range from 1600 to 6700. Decoration
+does not follow per-span paint changes, is incorrectly positioned on multi-span text, and
+is broken on rotated text. Needs a rewrite of decoration rendering to match CSS Text
+Decoration Level 3 §3 (propagation, color inheritance, positioning per font metrics).
+
+### 2. Dominant Baseline — broken
+Only 1 resvg test exists (`hanging`) with a 17000px max-mismatch threshold. The implementation
+uses hardcoded percentages of ascent/descent (e.g. 80% for hanging, 50% for mathematical)
+rather than reading the OpenType BASE table or using proper font-metric baselines. All non-auto
+values are likely wrong for fonts that define real baseline positions. Needs the BASE table
+reader and real test coverage across all baseline types.
+
+### 3. textPath Stabilization
 39 resvg tests disabled. Basic path layout works but missing: `method=stretch`, `spacing=auto`,
 `side=right`, `path` attribute, interaction with filters/masks/clip-paths. This is the largest
-single gap in text support.
+single gap by test count.
 
-### 2. Text Wrapping (SVG2)
+### 4. Text Wrapping (SVG2)
 `inline-size`, `shape-inside`, `shape-subtract` — SVG2 auto-wrapping text into a rectangular
 or arbitrary shape region. Not implemented; no design doc yet.
 
-### 3. Bidirectional Text
+### 5. Bidirectional Text
 SheenBidi integration deferred. One resvg test skipped (`e-text-035`). Required for correct
 rendering of mixed LTR/RTL content and Arabic paragraph layout.
-
-### 4. Text Decoration Fidelity
-Current decoration rendering has 1600–5200px diffs on resvg tests (masked by high thresholds
-of 13000–19500). Root causes likely include: decoration not following per-span paint changes,
-decoration thickness/position differences, and decoration on rotated text.
-
-### 5. Generic Font Families
-11 resvg font-family tests skipped because serif/sans-serif/monospace/cursive/fantasy are not
-mapped to system fonts. Requires OS font enumeration or a configurable family map.
 
 ### 6. Vertical Writing Mode Gaps
 5 writing-mode tests skipped: vertical `dx`/`dy` bugs, mixed-language vertical text, vertical

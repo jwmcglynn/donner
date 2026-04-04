@@ -85,12 +85,24 @@ public:
   void addFontFace(const css::FontFace& face);
 
   /**
+   * Register a mapping from a CSS generic family name (serif, sans-serif, monospace, cursive,
+   * fantasy) to a real font family name registered via `addFontFace()`.
+   *
+   * This allows `findFont("sans-serif")` to resolve to the specified family.
+   *
+   * @param genericName The CSS generic family name (case-insensitive).
+   * @param realFamily The real family name to resolve to.
+   */
+  void setGenericFamilyMapping(std::string_view genericName, std::string_view realFamily);
+
+  /**
    * Find or load a font matching the given family name.
    *
    * Resolution order:
-   * 1. Return an already-loaded entity if the best matching face has already been resolved.
-   * 2. Walk registered `@font-face` rules whose `font-family` matches, trying each source.
-   * 3. Fall back to the embedded Public Sans font.
+   * 1. If the family is a CSS generic name with a registered mapping, resolve to the real name.
+   * 2. Return an already-loaded entity if the best matching face has already been resolved.
+   * 3. Walk registered `@font-face` rules whose `font-family` matches, trying each source.
+   * 4. Fall back to the embedded Public Sans font.
    *
    * @param family Font family name to look up.
    * @return A valid FontHandle, or an invalid handle if even the fallback fails.
@@ -212,6 +224,9 @@ private:
 
   /// Cache: family/style query key → resolved font handle.
   std::unordered_map<std::string, FontHandle> cache_;
+
+  /// Mapping from CSS generic family names to real family names.
+  std::unordered_map<std::string, std::string> genericFamilyMap_;
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;

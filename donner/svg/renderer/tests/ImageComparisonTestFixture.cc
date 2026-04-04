@@ -16,6 +16,7 @@
 
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
@@ -97,6 +98,17 @@ void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::pa
     auto& resourceManager = document.registry().ctx().get<components::ResourceManagerContext>();
     resourceManager.addFontFaces(faces);
   }
+
+  // Register CSS generic family mappings using fonts from the resvg test suite.
+  auto& registry = document.registry();
+  auto& fontManager = registry.ctx().contains<FontManager>()
+                          ? registry.ctx().get<FontManager>()
+                          : registry.ctx().emplace<FontManager>(registry);
+  fontManager.setGenericFamilyMapping("serif", "Noto Serif");
+  fontManager.setGenericFamilyMapping("sans-serif", "Noto Sans");
+  fontManager.setGenericFamilyMapping("monospace", "Noto Mono");
+  fontManager.setGenericFamilyMapping("cursive", "Yellowtail");
+  fontManager.setGenericFamilyMapping("fantasy", "Sedgwick Ave Display");
 }
 
 bool isEnabledFromEnv(const char* name, bool defaultValue) {
