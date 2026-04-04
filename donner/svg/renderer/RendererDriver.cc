@@ -37,17 +37,20 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 
 namespace {
 
-/// Resolves per-span style properties from each span's sourceEntity.
-/// Called before drawText so that layout engines and renderers have access to
-/// fill color, font-weight, baseline-shift, alignment-baseline, opacity,
-/// letter-spacing, and word-spacing.
+/// Resolves renderer-facing per-span style properties from each span's sourceEntity.
+/// Layout-facing span state is delegated to TextEngine.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
-                          const Boxd& viewBox, const FontMetrics& fontMetrics) {
+                          EntityHandle textRootHandle) {
+  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+    textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+  }
+
   for (auto& span : text.spans) {
     if (span.sourceEntity == entt::null) {
       continue;
@@ -75,77 +78,6 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     }
 
     if (style && style->properties) {
-      span.textAnchor = style->properties->textAnchor.getRequired();
-      span.baselineShift = style->properties->baselineShift.getRequired();
-      span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
-      span.fontWeight = style->properties->fontWeight.getRequired();
-      span.fontStyle = style->properties->fontStyle.getRequired();
-      span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.getRequired());
-      span.fontVariant = style->properties->fontVariant.getRequired();
-      span.fontSize = style->properties->fontSize.getRequired();
-      span.visibility = style->properties->visibility.getRequired();
-      span.opacity = style->properties->opacity.getRequired();
-
-      // Resolve per-span letter-spacing and word-spacing to pixels.
-      span.letterSpacingPx = style->properties->letterSpacing.getRequired().toPixels(
-          viewBox, fontMetrics, Lengthd::Extent::X);
-      span.wordSpacingPx = style->properties->wordSpacing.getRequired().toPixels(
-          viewBox, fontMetrics, Lengthd::Extent::X);
-
-      // Per SVG spec, baseline-shift only applies to inline text elements (tspan, textPath),
-      // not to the root <text> element. Clear it for the text root so it doesn't affect content.
-      const bool isTextRoot = registry.any_of<components::TextRootComponent>(styleEntity);
-      if (isTextRoot) {
-        span.baselineShift = Lengthd(0, Lengthd::Unit::None);
-      } else {
-        // Detect sub/super keywords so layout engines can resolve from font OS/2 metrics.
-        using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
-        if (span.baselineShift.unit == Lengthd::Unit::Em && span.baselineShift.value == -0.33) {
-          span.baselineShiftKeyword = BSK::Sub;
-        } else if (span.baselineShift.unit == Lengthd::Unit::Em &&
-                   span.baselineShift.value == 0.4) {
-          span.baselineShiftKeyword = BSK::Super;
-        }
-
-        // Collect unresolved baseline-shift values from ancestor tspan elements so layout
-        // engines can resolve sub/super keywords from font OS/2 metrics at layout time.
-        auto* ancestorTree = registry.try_get<donner::components::TreeComponent>(styleEntity);
-        if (ancestorTree) {
-          entt::entity ancestor = ancestorTree->parent();
-          while (ancestor != entt::null &&
-                 !registry.any_of<components::TextRootComponent>(ancestor)) {
-            auto* ancestorStyle = registry.try_get<components::ComputedStyleComponent>(ancestor);
-            if (ancestorStyle && ancestorStyle->properties) {
-              const Lengthd ancestorShift = ancestorStyle->properties->baselineShift.getRequired();
-              const double ancestorFontSizePx =
-                  ancestorStyle->properties->fontSize.getRequired().toPixels(
-                      viewBox, fontMetrics, Lengthd::Extent::Mixed);
-              BSK ancestorKeyword = BSK::Length;
-              if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == -0.33) {
-                ancestorKeyword = BSK::Sub;
-              } else if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == 0.4) {
-                ancestorKeyword = BSK::Super;
-              }
-              span.ancestorBaselineShifts.push_back(
-                  {ancestorKeyword, ancestorShift, ancestorFontSizePx});
-            }
-            auto* tree2 = registry.try_get<donner::components::TreeComponent>(ancestor);
-            if (!tree2) break;
-            ancestor = tree2->parent();
-          }
-        }
-      }
-
-      // Resolve per-span textLength from the source entity's own TextComponent.
-      // Only the element's own textLength is used; the parent text element's
-      // textLength is handled globally via TextParams.
-      if (auto* textComp = registry.try_get<components::TextComponent>(span.sourceEntity)) {
-        if (textComp->textLength.has_value()) {
-          span.textLength = textComp->textLength;
-          span.lengthAdjust = textComp->lengthAdjust;
-        }
-      }
-
       // Resolve the fill paint server. Solid colors are stored directly; gradient/pattern
       // url() references are resolved to PaintResolvedReference for the renderer.
       const PaintServer fill = style->properties->fill.getRequired();
@@ -771,7 +703,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
         renderer_.drawText(registry, *text, textParams);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
@@ -1000,7 +932,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
         renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
@@ -1279,7 +1211,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
         renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {

@@ -5,6 +5,17 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
+#include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextRootComponent.h"
+#include "donner/svg/components/text/TextSystem.h"
+#include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/text/TextBackendSimple.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
@@ -114,6 +125,203 @@ bool isNonSpacing(uint32_t cp) {
   return false;
 }
 
+PathSpline transformPathSpline(const PathSpline& spline, const Transformd& transform) {
+  PathSpline result;
+  const auto& points = spline.points();
+
+  for (const auto& command : spline.commands()) {
+    switch (command.type) {
+      case PathSpline::CommandType::MoveTo:
+        result.moveTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case PathSpline::CommandType::LineTo:
+        result.lineTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case PathSpline::CommandType::CurveTo:
+        result.curveTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]),
+                       transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case PathSpline::CommandType::ClosePath: result.closePath(); break;
+    }
+  }
+
+  return result;
+}
+
+Entity findTextRootEntity(EntityHandle handle) {
+  Entity current = handle.entity();
+  Registry& registry = *handle.registry();
+
+  while (current != entt::null) {
+    if (registry.any_of<components::TextRootComponent>(current)) {
+      return current;
+    }
+
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (!tree) {
+      break;
+    }
+    current = tree->parent();
+  }
+
+  return entt::null;
+}
+
+bool isDescendantOf(Registry& registry, Entity entity, Entity ancestor) {
+  Entity current = entity;
+  while (current != entt::null) {
+    if (current == ancestor) {
+      return true;
+    }
+
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (!tree) {
+      break;
+    }
+    current = tree->parent();
+  }
+
+  return false;
+}
+
+TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
+                                       const components::ComputedStyleComponent& style,
+                                       const components::TextComponent& textComp) {
+  TextLayoutParams params;
+  const auto& properties = style.properties.value();
+
+  params.fontFamilies = properties.fontFamily.getRequired();
+  params.fontSize = properties.fontSize.getRequired();
+  params.viewBox = components::LayoutSystem().getViewBox(handle);
+
+  const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
+  const double fontSizePx =
+      params.fontSize.toPixels(params.viewBox, baseFontMetrics, Lengthd::Extent::Mixed);
+  params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
+
+  params.textAnchor = properties.textAnchor.getRequired();
+  params.dominantBaseline = properties.dominantBaseline.getRequired();
+  params.writingMode = properties.writingMode.getRequired();
+  params.letterSpacingPx = properties.letterSpacing.getRequired().toPixels(
+      params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+  params.wordSpacingPx = properties.wordSpacing.getRequired().toPixels(
+      params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+  params.textLength = textComp.textLength;
+  params.lengthAdjust = textComp.lengthAdjust;
+  return params;
+}
+
+void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
+                                const Boxd& viewBox, const FontMetrics& fontMetrics) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+
+  for (auto& span : text.spans) {
+    if (span.sourceEntity == entt::null) {
+      continue;
+    }
+
+    auto* style = registry.try_get<components::ComputedStyleComponent>(span.sourceEntity);
+    Entity styleEntity = span.sourceEntity;
+    if ((!style || !style->properties) &&
+        registry.all_of<donner::components::TreeComponent>(span.sourceEntity)) {
+      const Entity parent =
+          registry.get<donner::components::TreeComponent>(span.sourceEntity).parent();
+      if (parent != entt::null) {
+        style = registry.try_get<components::ComputedStyleComponent>(parent);
+        styleEntity = parent;
+      }
+    }
+
+    if (!style || !style->properties) {
+      continue;
+    }
+
+    span.textAnchor = style->properties->textAnchor.getRequired();
+    span.baselineShift = style->properties->baselineShift.getRequired();
+    span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
+    span.fontWeight = style->properties->fontWeight.getRequired();
+    span.fontStyle = style->properties->fontStyle.getRequired();
+    span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.getRequired());
+    span.fontVariant = style->properties->fontVariant.getRequired();
+    span.fontSize = style->properties->fontSize.getRequired();
+    span.visibility = style->properties->visibility.getRequired();
+    span.opacity = style->properties->opacity.getRequired();
+    span.letterSpacingPx = style->properties->letterSpacing.getRequired().toPixels(
+        viewBox, fontMetrics, Lengthd::Extent::X);
+    span.wordSpacingPx = style->properties->wordSpacing.getRequired().toPixels(viewBox, fontMetrics,
+                                                                               Lengthd::Extent::X);
+
+    const bool isTextRoot = registry.any_of<components::TextRootComponent>(styleEntity);
+    if (isTextRoot) {
+      span.baselineShift = Lengthd(0, Lengthd::Unit::None);
+    } else {
+      if (span.baselineShift.unit == Lengthd::Unit::Em && span.baselineShift.value == -0.33) {
+        span.baselineShiftKeyword = BSK::Sub;
+      } else if (span.baselineShift.unit == Lengthd::Unit::Em && span.baselineShift.value == 0.4) {
+        span.baselineShiftKeyword = BSK::Super;
+      }
+
+      Entity ancestor = styleEntity;
+      while (registry.all_of<donner::components::TreeComponent>(ancestor)) {
+        ancestor = registry.get<donner::components::TreeComponent>(ancestor).parent();
+        if (ancestor == entt::null || registry.any_of<components::TextRootComponent>(ancestor)) {
+          break;
+        }
+
+        auto* ancestorStyle = registry.try_get<components::ComputedStyleComponent>(ancestor);
+        if (!ancestorStyle || !ancestorStyle->properties) {
+          continue;
+        }
+
+        const Lengthd ancestorShift = ancestorStyle->properties->baselineShift.getRequired();
+        const double ancestorFontSizePx =
+            ancestorStyle->properties->fontSize.getRequired().toPixels(viewBox, fontMetrics,
+                                                                       Lengthd::Extent::Mixed);
+        BSK ancestorKeyword = BSK::Length;
+        if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == -0.33) {
+          ancestorKeyword = BSK::Sub;
+        } else if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == 0.4) {
+          ancestorKeyword = BSK::Super;
+        }
+
+        span.ancestorBaselineShifts.push_back({ancestorKeyword, ancestorShift, ancestorFontSizePx});
+      }
+    }
+
+    if (auto* textComp = registry.try_get<components::TextComponent>(span.sourceEntity)) {
+      if (textComp->textLength.has_value()) {
+        span.textLength = textComp->textLength;
+        span.lengthAdjust = textComp->lengthAdjust;
+      }
+    }
+  }
+}
+
+void addBox(Boxd& accum, bool& initialized, const Boxd& box) {
+  if (box.isEmpty()) {
+    return;
+  }
+
+  if (!initialized) {
+    accum = box;
+    initialized = true;
+  } else {
+    accum.addBox(box);
+  }
+}
+
+std::vector<const components::ComputedTextPathComponent::CharacterGeometry*> filteredCharacters(
+    Registry& registry, EntityHandle handle, const components::ComputedTextPathComponent& cache) {
+  std::vector<const components::ComputedTextPathComponent::CharacterGeometry*> result;
+  for (const auto& character : cache.characters) {
+    if (character.rendered && isDescendantOf(registry, character.sourceEntity, handle.entity())) {
+      result.push_back(&character);
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 TextEngine::TextEngine(FontManager& fontManager, Registry& registry)
@@ -126,6 +334,57 @@ TextEngine::TextEngine(FontManager& fontManager, Registry& registry)
 }
 
 TextEngine::~TextEngine() = default;
+
+void TextEngine::prepareForElement(EntityHandle handle, std::vector<ParseError>* outWarnings) {
+  UTILS_RELEASE_ASSERT(handle.registry() == &registry_);
+  const Entity textRootEntity = findTextRootEntity(handle);
+  if (textRootEntity == entt::null) {
+    return;
+  }
+
+  auto* resourceManager = registry_.ctx().find<components::ResourceManagerContext>();
+  if (!resourceManager) {
+    return;
+  }
+
+  if (resourceManager->fontFaces().empty()) {
+    for (auto view = registry_.view<components::StylesheetComponent>(); auto entity : view) {
+      resourceManager->addFontFaces(
+          view.get<components::StylesheetComponent>(entity).stylesheet.fontFaces());
+    }
+  }
+  resourceManager->loadResources(outWarnings);
+
+  auto& fontManager = registry_.ctx().contains<FontManager>()
+                          ? registry_.ctx().get<FontManager>()
+                          : registry_.ctx().emplace<FontManager>(registry_);
+  if (!registry_.ctx().contains<TextEngine>()) {
+    registry_.ctx().emplace<TextEngine>(fontManager, registry_);
+  }
+  addFontFaces(resourceManager->fontFaces());
+
+  components::StyleSystem styleSystem;
+  const EntityHandle textRootHandle(registry_, textRootEntity);
+  styleSystem.computeStyle(textRootHandle, outWarnings);
+  donner::components::ForAllChildrenRecursive(
+      textRootHandle, [&](EntityHandle child) { styleSystem.computeStyle(child, outWarnings); });
+
+  components::TextSystem().instantiateComputedComponent(textRootHandle, outWarnings);
+}
+
+void TextEngine::resolvePerSpanLayoutStyles(EntityHandle textRootHandle,
+                                            components::ComputedTextComponent& text) const {
+  const auto* textComp = registry_.try_get<components::TextComponent>(textRootHandle.entity());
+  const auto* style =
+      registry_.try_get<components::ComputedStyleComponent>(textRootHandle.entity());
+  if (!textComp || !style || !style->properties) {
+    return;
+  }
+
+  const TextLayoutParams params =
+      buildTextLayoutParams(registry_, textRootHandle, *style, *textComp);
+  ResolvePerSpanLayoutStyles(registry_, text, params.viewBox, params.fontMetrics);
+}
 
 void TextEngine::addFontFace(const css::FontFace& face) {
   fontManager_.addFontFace(face);
@@ -605,6 +864,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.yPosition = penY;
           glyph.xAdvance = 0;
           glyph.fontSizeScale = sg.fontSizeScale;
+          glyph.cluster = sg.cluster;
 
           // Vertical mode glyph handling: non-CJK glyphs get 90 degrees CW rotation.
           if (codepoint < 0x2E80) {
@@ -719,6 +979,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.xAdvance = sg.xAdvance;
           glyph.yAdvance = sg.yAdvance;
           glyph.fontSizeScale = sg.fontSizeScale;
+          glyph.cluster = sg.cluster;
 
           // Per-character rotation (last value repeats per SVG spec).
           if (rawCpIdx < span.rotateList.size()) {
@@ -1107,6 +1368,249 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
     return std::nullopt;
   }
   return shaped.glyphs.front().xAdvance;
+}
+
+const components::ComputedTextPathComponent& TextEngine::ensureComputedTextPathComponent(
+    EntityHandle handle) const {
+  const Entity textRootEntity = findTextRootEntity(handle);
+  UTILS_RELEASE_ASSERT_MSG(textRootEntity != entt::null, "Text content element has no text root");
+
+  auto emptyAndReturn = [&]() -> const components::ComputedTextPathComponent& {
+    return registry_.emplace_or_replace<components::ComputedTextPathComponent>(textRootEntity);
+  };
+
+  const auto* computedText = registry_.try_get<components::ComputedTextComponent>(textRootEntity);
+  const auto* textComp = registry_.try_get<components::TextComponent>(textRootEntity);
+  const auto* style = registry_.try_get<components::ComputedStyleComponent>(textRootEntity);
+  if (!computedText || !textComp || !style || !style->properties) {
+    return emptyAndReturn();
+  }
+
+  components::ComputedTextComponent styledText = *computedText;
+  const EntityHandle rootHandle(registry_, textRootEntity);
+  const TextLayoutParams params = buildTextLayoutParams(registry_, rootHandle, *style, *textComp);
+  ResolvePerSpanLayoutStyles(registry_, styledText, params.viewBox, params.fontMetrics);
+
+  const std::vector<TextRun> runs = const_cast<TextEngine*>(this)->layout(styledText, params);
+
+  components::ComputedTextPathComponent cache;
+  bool hasInkBounds = false;
+  bool hasEmBoxBounds = false;
+
+  const float fontSizePx = static_cast<float>(
+      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+
+  for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
+       ++runIndex) {
+    const auto& run = runs[runIndex];
+    const auto& span = styledText.spans[runIndex];
+    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+
+    if (spanText.empty()) {
+      continue;
+    }
+
+    float runFontSizePx = fontSizePx;
+    if (span.fontSize.value != 0.0) {
+      runFontSizePx = static_cast<float>(
+          span.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+    }
+
+    const float runScale = run.font ? scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+    double emTop = static_cast<double>(runFontSizePx);
+    double emBottom = 0.0;
+    if (run.font && runScale > 0.0f) {
+      const FontVMetrics metrics = fontVMetrics(run.font);
+      emTop = static_cast<double>(metrics.ascent) * runScale;
+      emBottom = -static_cast<double>(metrics.descent) * runScale;
+    }
+
+    bool firstChar = true;
+    bool prevWasZwj = false;
+    size_t pos = 0;
+    std::vector<size_t> byteToApiCharIdx(spanText.size(), 0);
+    size_t apiCharIdx = 0;
+    while (pos < spanText.size()) {
+      const size_t start = pos;
+      const uint32_t cp = decodeUtf8(spanText, pos);
+      const bool nonSpacing = isNonSpacing(cp) || prevWasZwj;
+      prevWasZwj = (cp == 0x200D);
+      if (!firstChar && !nonSpacing) {
+        ++apiCharIdx;
+      }
+      for (size_t i = start; i < pos; ++i) {
+        byteToApiCharIdx[i] = apiCharIdx;
+      }
+      firstChar = false;
+    }
+
+    const size_t localCharCount = firstChar ? 0 : apiCharIdx + 1;
+    const size_t charBaseIndex = cache.characters.size();
+    cache.characters.resize(charBaseIndex + localCharCount);
+    for (size_t i = 0; i < localCharCount; ++i) {
+      cache.characters[charBaseIndex + i].sourceEntity = span.sourceEntity;
+    }
+
+    if (!run.glyphs.empty()) {
+      Boxd runEmBounds =
+          Boxd::FromXYWH(run.glyphs.front().xPosition, run.glyphs.front().yPosition - emTop, 0.0,
+                         emTop + emBottom);
+      for (const auto& glyph : run.glyphs) {
+        runEmBounds.addPoint(Vector2d(glyph.xPosition, glyph.yPosition - emTop));
+        runEmBounds.addPoint(
+            Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + emBottom));
+      }
+      addBox(cache.emBoxBounds, hasEmBoxBounds, runEmBounds);
+    }
+
+    for (const auto& glyph : run.glyphs) {
+      const size_t localCharIndex =
+          glyph.cluster < byteToApiCharIdx.size() ? byteToApiCharIdx[glyph.cluster] : 0;
+      if (localCharIndex >= localCharCount) {
+        continue;
+      }
+
+      auto& charGeom = cache.characters[charBaseIndex + localCharIndex];
+      if (!charGeom.rendered) {
+        charGeom.startPosition = Vector2d(glyph.xPosition, glyph.yPosition);
+        charGeom.rotation = glyph.rotateDegrees;
+        charGeom.rendered = true;
+      }
+
+      charGeom.endPosition =
+          Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance);
+      charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
+
+      const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
+      PathSpline glyphPath =
+          glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
+      if (!glyphPath.empty()) {
+        Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+        if (glyph.rotateDegrees != 0.0) {
+          glyphFromLocal =
+              Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+              glyphFromLocal;
+        }
+
+        PathSpline transformed = transformPathSpline(glyphPath, glyphFromLocal);
+        const Boxd extent = transformed.bounds();
+        cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
+        addBox(cache.inkBounds, hasInkBounds, extent);
+        addBox(charGeom.extent, charGeom.hasExtent, extent);
+      } else if (auto bitmap = bitmapGlyph(run.font, glyph.glyphIndex, emScale)) {
+        const double targetX = glyph.xPosition + bitmap->bearingX;
+        const double targetY = glyph.yPosition - bitmap->bearingY;
+        const Boxd extent = Boxd::FromXYWH(targetX, targetY, bitmap->width * bitmap->scale,
+                                           bitmap->height * bitmap->scale);
+        addBox(cache.inkBounds, hasInkBounds, extent);
+        addBox(charGeom.extent, charGeom.hasExtent, extent);
+      }
+    }
+  }
+
+  return registry_.emplace_or_replace<components::ComputedTextPathComponent>(textRootEntity,
+                                                                             std::move(cache));
+}
+
+std::vector<PathSpline> TextEngine::computedGlyphPaths(EntityHandle handle) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  std::vector<PathSpline> result;
+  for (const auto& glyph : cache.glyphs) {
+    if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
+      result.push_back(glyph.path);
+    }
+  }
+  return result;
+}
+
+Boxd TextEngine::computedInkBounds(EntityHandle handle) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  Boxd result;
+  bool initialized = false;
+  for (const auto& glyph : cache.glyphs) {
+    if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
+      addBox(result, initialized, glyph.extent);
+    }
+  }
+  return result;
+}
+
+Boxd TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
+  const Entity rootEntity = findTextRootEntity(handle);
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  return handle.entity() == rootEntity ? cache.emBoxBounds : computedInkBounds(handle);
+}
+
+long TextEngine::getNumberOfChars(EntityHandle handle) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  return static_cast<long>(filteredCharacters(registry_, handle, cache).size());
+}
+
+double TextEngine::getComputedTextLength(EntityHandle handle) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  double total = 0.0;
+  for (const auto* character : filteredCharacters(registry_, handle, cache)) {
+    total += character->advance;
+  }
+  return total;
+}
+
+double TextEngine::getSubStringLength(EntityHandle handle, std::size_t charnum,
+                                      std::size_t nchars) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto characters = filteredCharacters(registry_, handle, cache);
+  double total = 0.0;
+  for (size_t i = charnum; i < characters.size() && i < charnum + nchars; ++i) {
+    total += characters[i]->advance;
+  }
+  return total;
+}
+
+Vector2d TextEngine::getStartPositionOfChar(EntityHandle handle, std::size_t charnum) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto characters = filteredCharacters(registry_, handle, cache);
+  if (charnum >= characters.size()) {
+    return Vector2d();
+  }
+  return characters[charnum]->startPosition;
+}
+
+Vector2d TextEngine::getEndPositionOfChar(EntityHandle handle, std::size_t charnum) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto characters = filteredCharacters(registry_, handle, cache);
+  if (charnum >= characters.size()) {
+    return Vector2d();
+  }
+  return characters[charnum]->endPosition;
+}
+
+Boxd TextEngine::getExtentOfChar(EntityHandle handle, std::size_t charnum) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto characters = filteredCharacters(registry_, handle, cache);
+  if (charnum >= characters.size()) {
+    return Boxd();
+  }
+  return characters[charnum]->extent;
+}
+
+double TextEngine::getRotationOfChar(EntityHandle handle, std::size_t charnum) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto characters = filteredCharacters(registry_, handle, cache);
+  if (charnum >= characters.size()) {
+    return 0.0;
+  }
+  return characters[charnum]->rotation;
+}
+
+long TextEngine::getCharNumAtPosition(EntityHandle handle, const Vector2d& point) const {
+  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto characters = filteredCharacters(registry_, handle, cache);
+  for (size_t i = 0; i < characters.size(); ++i) {
+    if (characters[i]->extent.contains(point)) {
+      return static_cast<long>(i);
+    }
+  }
+  return -1;
 }
 
 }  // namespace donner::svg

@@ -31,6 +31,14 @@ public:
   void instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings);
 
   /**
+   * Create all computed components needed for text/layout/style queries without instantiating
+   * render instances.
+   *
+   * @param outWarnings If non-null, warnings will be added to this vector.
+   */
+  void ensureComputedComponents(std::vector<ParseError>* outWarnings);
+
+  /**
    * Find the first entity that intersects the given point, using spatial acceleration
    * when the document has enough elements.
    *

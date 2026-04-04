@@ -20,11 +20,14 @@ This refactor introduces a `TextBackend` interface that abstracts all font-backe
 SVG positioning code through a single `TextEngine`. `FontManager` is now a registry-backed font
 service that stores `@font-face` declarations, loaded font bytes, and backend cache components on
 font entities inside the same document `entt::registry` used by the rest of the SVG ECS.
-`TextEngine` owns the selected backend privately, exposes the narrow text API used by renderers and
-layout-adjacent systems, and is registered in `registry.ctx()` for shared access. The two backend
-implementations are `TextBackendSimple` (stb_truetype) and `TextBackendFull` (HarfBuzz +
-FreeType). The refactor also includes a readability pass to reduce function length and cyclomatic
-complexity in the engine code.
+`TextEngine` owns the selected backend privately, exposes the narrow text API used by renderers,
+layout-adjacent systems, and text DOM public APIs, and is registered in `registry.ctx()` for
+shared access. `TextSystem` remains the ECS-facing layer that flattens raw text DOM state into
+`ComputedTextComponent`, while `TextEngine` consumes that computed text state to perform shaping,
+layout, glyph geometry extraction, and `ComputedTextPathComponent` caching for a specific text
+root. The two backend implementations are `TextBackendSimple` (stb_truetype) and
+`TextBackendFull` (HarfBuzz + FreeType). The refactor also includes a readability pass to reduce
+function length and cyclomatic complexity in the engine code.
 
 ## Goals
 
@@ -123,14 +126,15 @@ This makes the code difficult to review, modify, and test in isolation. Individu
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│        Renderers / ShapeSystem / other text clients          │
-│  call TextEngine layout/metrics/outline/bitmap APIs          │
+│   Renderers / SVGTextContentElement / other text clients    │
+│ call TextEngine layout/metrics/outline/cache/public APIs    │
 └────────────────────────┬────────────────────────────────────┘
                          │ uses
 ┌────────────────────────▼────────────────────────────────────┐
 │               TextEngine (shared service)                    │
 │  layout() → SVG positioning, chunking, anchor, textLength   │
-│  Owns selected backend and hides backend choice             │
+│  cached geometry/public API queries for one text root       │
+│  owns selected backend and hides backend choice             │
 └────────────────────────┬────────────────────────────────────┘
                          │ owns one of
           ┌──────────────┴──────────────┐
@@ -141,6 +145,12 @@ This makes the code difficult to review, modify, and test in isolation. Individu
 │ kern table kerning   │ │ GSUB/GPOS shaping, smcp feature     │
 └──────────────────────┘ └─────────────────────────────────────┘
                          │
+                         │ consumes
+┌────────────────────────▼────────────────────────────────────┐
+│                   TextSystem (ECS layer)                     │
+│  TextComponent/TextPositioningComponent ->                   │
+│  ComputedTextComponent for one text root                    │
+└────────────────────────┬────────────────────────────────────┘
                          │ reads raw font bytes / family lookup
 ┌────────────────────────▼────────────────────────────────────┐
 │             FontManager (document ECS-backed)               │
@@ -314,6 +324,7 @@ public:
   std::optional<TextBackend::BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
                                                       float scale) const;
   std::optional<double> measureChUnitInEm(std::span<const RcString> fontFamilies);
+  void prepareForElement(EntityHandle handle, std::vector<ParseError>* outWarnings = nullptr);
 
 private:
   FontManager& fontManager_;
@@ -369,7 +380,9 @@ public:
 
 `RendererTinySkia::drawText()` and `RendererSkia::drawText()` stop instantiating backends directly.
 The render driver passes the active document `Registry&` into `drawText()`, and the renderers use
-shared `FontManager` / `TextEngine` instances already stored in `registry.ctx()`:
+shared `FontManager` / `TextEngine` instances already stored in `registry.ctx()`. `RendererDriver`
+still resolves renderer-facing paint state, while layout-facing per-span state is delegated to
+`TextEngine`.
 
 ```cpp
 void RendererTinySkia::drawText(Registry& registry, const ComputedTextComponent& text,
@@ -438,77 +451,21 @@ unit tests for `TextBackendSimple`.
 - [x] `TextEngine::layout()` uses capability queries (`isCursive()`, `hasSmallCapsFeature()`)
 - [x] Remove `#ifdef DONNER_TEXT_FULL` code duplication from `RendererTinySkia::drawText()`
 - [x] All base-config tests pass
-- [ ] Close text-full parity gaps (1 remaining of 9 original, see below)
+- [x] Close text-full parity gaps
 - [x] Delete `TextShaper.h/cc`
 - [x] Add unit tests for `TextBackendFull`
 
-#### Phase 3a: Close text-full parity gaps
-
-**Closed (9 of 9):**
-
-Font metrics and underline:
-- [x] Read hhea table directly in `TextBackendFull::fontVMetrics()` to match stb_truetype
-- [x] Read post table directly in `TextBackendFull::underlineMetrics()` to match simple backend
-- [x] `a-text-rendering-005`: PASS (was 1137px, now 2px)
-- [x] `e-tspan-030`: PASS (was 933px, now 385px)
-
-Per-character rotation:
-- [x] Build byte→rawCpIdx mapping for rotation list indexing (matching old TextShaper)
-- [x] `e-text-033`: PASS (was 775px)
-
-Emoji bitmap glyphs:
-- [x] Fixed FontManager cache: `addFontFace()` clears lookup cache for stale fallbacks
-- [x] Fixed `scaleForEmToPixels`: use `hb_face_get_upem()` for bitmap-only fonts
-      (FreeType sets `units_per_EM = 0` for non-scalable fonts)
-- [x] Removed TextEngine bitmap-only font rejection; delegated `isBitmapOnly` to FontManager
-- [x] `e-text-027`: PASS (40px), `e-text-028`: PASS (33px)
-
-RTL per-character positioning:
-- [x] RTL Y-override for multi-glyph chunks: when a multi-glyph RTL chunk starts because
-      of an absolute y, all glyphs in the chunk share that y (matching old `chunkYOverrides`)
-- [x] Single-codepoint LTR forcing in `TextBackendFull::shapeRun`
-- [x] `forceLogicalOrder` parameter on `shapeRun` for future backend-side RTL sorting
-- [x] `e-text-030`: PASS (357px, matching old code exactly)
-
-FontManager improvements (applied outside the refactor):
-- [x] Case-insensitive font family matching via `StringUtils::Equals<IgnoreCase>`
-
-Compound emoji with per-char y (`e-text-029`, 7389px → PASS):
-- [x] Restore UTF-16 low-surrogate coordinate carryover in `TextEngine` so supplementary
-      characters consume the trailing code unit's positioning values.
-- [x] Result: `e-text-029` now passes in `--config=text-full`.
-
-Complex diacritics with rotation (`e-text-034`, 1715px → PASS):
-- [x] Restore combining-mark rotation behavior from the old `TextShaper` path by rotating
-      mark offsets around the base glyph origin after applying per-glyph rotate values.
-- [x] Result: `e-text-034` now passes in `--config=text-full`.
-
-Arabic with rotation (`e-text-036`, 4872px → PASS):
-- [x] Restore script-aware font fallback in `TextEngine` so spans can switch to a registered
-      font with glyph coverage (for example Amiri when `Noto Sans` lacks Arabic coverage).
-- [x] Result: `e-text-036` now passes in `--config=text-full`.
-
-CJK vertical layout (`a-writing-mode-012`, 11928px → PASS):
-- [x] Port per-script font fallback into `TextEngine`; the test now resolves a Japanese-capable
-      font instead of collapsing to missing glyphs.
-- [x] Add case-insensitive font family matching in `FontManager` so CSS family lookup matches
-      the names registered from the resvg font set.
-- [x] Restore the old `TextShaper` vertical-origin behavior for upright CJK by exposing
-      backend-provided vertical offsets from `TextBackendFull` and consuming them in
-      `TextEngine`.
-- [x] Scope HarfBuzz vertical shaping to chunks that contain upright CJK so sideways Latin
-      vertical text keeps the previous horizontal-shaping behavior.
-- [x] Result: `a-writing-mode-012` passes, and the full `//donner/svg/renderer/tests:resvg_test_suite`
-      target passes under `--config=text-full`.
-
 ### Phase 4: ECS caching + public API
 
-- [ ] Add `ComputedTextPathComponent` to the ECS registry
-- [ ] Populate during first render pass in `RendererTinySkia::drawText()`
-- [ ] Wire invalidation to text/font/positioning property changes
-- [ ] Add `SVGTextElement::convertToPath()`, `inkBoundingBox()`, `objectBoundingBox()`
-- [ ] Implement SVGTextContentElement Public APIs
-- [ ] Add unit tests for caching, invalidation, and public API
+- [x] Add `ComputedTextPathComponent` to the ECS registry
+- [x] Add `SVGTextElement::convertToPath()`, `inkBoundingBox()`, `objectBoundingBox()`
+- [x] Implement `SVGTextContentElement` public APIs on top of cached geometry
+- [x] Keep `SVGTextContentElement` thin and delegate geometry/public API work to `TextEngine`
+- [x] Make text public APIs prepare only the specific text root they query, not the full render tree
+- [x] Add focused tests for text geometry/public API behavior
+- [ ] Wire invalidation to text/font/positioning property changes for `ComputedTextPathComponent`
+- [ ] Reuse `ComputedTextPathComponent` directly during renderer text drawing
+- [ ] Add broader tests for cache invalidation semantics
 
 ### Phase 5: Cleanup
 
@@ -531,14 +488,11 @@ Verification checklist at the end of this refactor:
 
 Observed status on this branch:
 
-- The focused `text-full` unit and integration targets pass.
-- The shared `renderer` library builds under `--config=text-full`.
-- The base `--config=text` `text_engine_tests` target still has existing simple-backend failures
-  in `UsesCoverageFallbackForVerticalJapaneseText` and
-  `SupplementaryCharactersConsumeLowSurrogateCoordinates`.
-- The Skia-backed `--config=skia` renderer build currently fails in
-  `donner/svg/renderer/RendererSkia.cc` because the draw path still references
-  `ComputedTextComponent::TextSpan::fillColor`, which no longer exists on the span structure.
+- `bazel test //...` passes.
+- `bazel test //... --config=text-full` passes.
+- `bazel test //... --config=text-full --config=skia` still has broader Skia renderer failures
+  outside the text public-API work (for example compositing, renderer image tests, and many resvg
+  suite shards).
 
 The refactored `TextEngine` + `TextBackendFull` path now matches the previous text-full
 behavior for the resvg suite while removing the duplicated layout logic from `TextShaper`.
@@ -556,14 +510,15 @@ donner/svg/text/
   TextBackend.h            # TextBackend interface, FontVMetrics, UnderlineMetrics, etc.
   TextBackendSimple.h/cc   # stb_truetype implementation of TextBackend
   TextBackendFull.h/cc     # HarfBuzz+FreeType implementation (text_full only)
-  TextEngine.h/cc          # Shared SVG text layout algorithm
+  TextEngine.h/cc          # Shared SVG text layout, geometry cache, and public API support
   TextTypes.h              # TextGlyph, TextRun (unified output types)
 
 donner/svg/resources/
   FontManager.h/cc         # ECS-backed font service for declarations, bytes, and backend caches
 
 donner/svg/components/
-  ComputedTextPathComponent.h  # Planned cached text paths, ink/em-box bounds
+  text/ComputedTextComponent.h      # Flattened text/tree/positioning ECS state
+  text/ComputedTextPathComponent.h  # Cached glyph geometry, character metrics, bounds
 ```
 
 ## Capability Model
@@ -590,30 +545,35 @@ a fallback to `glyphOutline()` — all without compile-time branching.
 
 ## ECS Caching: ComputedTextPathComponent
 
-Text layout and outline extraction are expensive — they should not re-run every frame. Following
-the existing ECS "computed" pattern (`ComputedStyleComponent`, `ComputedPathComponent`, etc.), we
-introduce a `ComputedTextPathComponent` that caches the fully laid-out text paths:
+Text layout and outline extraction are expensive. Following the existing ECS "computed" pattern
+(`ComputedStyleComponent`, `ComputedPathComponent`, etc.), `ComputedTextPathComponent` caches the
+laid-out glyph geometry and per-character metrics for one text root:
 
 ```cpp
 namespace donner::svg::components {
 
-/// Cached text layout results. Attached to the text element's entity.
-/// Invalidated when text content, font properties, or positioning attributes change.
+/// Cached text layout results. Attached to the text root entity.
 struct ComputedTextPathComponent {
-  bool initialized = false;
-
-  /// Per-run glyph paths, already transformed to document space (glyph position applied).
-  struct RunPaths {
-    FontHandle font;
-    std::vector<PathSpline> glyphPaths;   ///< One per glyph, in document space.
-    std::vector<TextGlyph> glyphs;        ///< Corresponding positioned glyph data.
+  struct GlyphGeometry {
+    entt::entity sourceEntity = entt::null;
+    PathSpline path;
+    Boxd extent;
   };
-  std::vector<RunPaths> runs;
 
-  /// Bounding box of all glyph outlines (ink bounds, not em-box bounds).
+  struct CharacterGeometry {
+    entt::entity sourceEntity = entt::null;
+    Vector2d startPosition = Vector2d::Zero();
+    Vector2d endPosition = Vector2d::Zero();
+    Boxd extent;
+    double rotation = 0.0;
+    double advance = 0.0;
+    bool rendered = false;
+    bool hasExtent = false;
+  };
+
+  std::vector<GlyphGeometry> glyphs;
+  std::vector<CharacterGeometry> characters;
   Boxd inkBounds;
-
-  /// Em-box bounding box (for objectBoundingBox gradient mapping).
   Boxd emBoxBounds;
 };
 
@@ -622,7 +582,7 @@ struct ComputedTextPathComponent {
 
 ### Invalidation
 
-The component is invalidated (removed or marked `initialized = false`) when any of these change:
+The component should be invalidated (removed or recomputed) when any of these change:
 
 - Text content (character data, `<tspan>` structure)
 - Font properties (family, size, weight, style, stretch, variant)
@@ -635,9 +595,8 @@ This integrates with the existing incremental invalidation system (see
 
 ### Renderer integration
 
-`RendererTinySkia::drawText()` checks for a valid `ComputedTextPathComponent` before calling
-`TextEngine::layout()`. If present, it skips layout and outline extraction entirely, using the
-cached paths directly. The first render after invalidation populates the cache.
+`SVGTextContentElement` and `SVGTextElement` already use `ComputedTextPathComponent` through
+`TextEngine` for public text geometry APIs. Renderer reuse of the cache is still planned work.
 
 ## Public API: Text-to-Path and Bounds
 
@@ -670,9 +629,9 @@ public:
 };
 ```
 
-These methods trigger layout (populating `ComputedTextPathComponent`) if not already cached, then
-read from the cached data. This ensures consistent results between rendering and API queries
-without redundant computation.
+These methods prepare only the queried text root, populate `ComputedTextPathComponent` if needed,
+then read from the cached data. This keeps the DOM wrapper thin and avoids requiring full render
+tree instantiation for text geometry queries.
 
 ### Editor use cases
 

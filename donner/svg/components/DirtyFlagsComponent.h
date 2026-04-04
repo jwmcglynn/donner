@@ -25,7 +25,7 @@ struct DirtyFlagsComponent {
     Paint = 1 << 5,           //!< ResolvedPaintServer (fill/stroke) needs re-resolution.
     Filter = 1 << 6,          //!< Filter effect chain needs re-resolution.
     RenderInstance = 1 << 7,  //!< RenderingInstanceComponent needs update.
-    ShadowTree = 1 << 8,     //!< Shadow tree needs re-instantiation.
+    ShadowTree = 1 << 8,      //!< Shadow tree needs re-instantiation.
 
     /// Compound flag: style change that may affect paint, filter, and render instance.
     StyleCascade = Style | Paint | Filter | RenderInstance,
@@ -59,6 +59,9 @@ struct DirtyFlagsComponent {
 struct RenderTreeState {
   /// True if the render tree needs a full rebuild (structure changed, canvas resized, etc.).
   bool needsFullRebuild = true;
+
+  /// True if computed components have been built for the current document state.
+  bool hasComputedComponents = false;
 
   /// True if the render tree has been built at least once.
   bool hasBeenBuilt = false;

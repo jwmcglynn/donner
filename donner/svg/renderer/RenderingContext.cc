@@ -707,7 +707,23 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
   // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
   // is required, skip all recomputation.
-  if (renderState.hasBeenBuilt && !renderState.needsFullRebuild && !hasDirtyEntities) {
+  if (renderState.hasBeenBuilt && renderState.hasComputedComponents &&
+      !renderState.needsFullRebuild && !hasDirtyEntities) {
+    return;
+  }
+
+  ensureComputedComponents(outWarnings);
+  instantiateRenderTreeWithPrecomputedTree(verbose);
+
+  renderState.hasComputedComponents = true;
+  renderState.hasBeenBuilt = true;
+}
+
+void RenderingContext::ensureComputedComponents(std::vector<ParseError>* outWarnings) {
+  auto& renderState = getRenderTreeState(registry_);
+  const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
+
+  if (renderState.hasComputedComponents && !renderState.needsFullRebuild && !hasDirtyEntities) {
     return;
   }
 
@@ -719,14 +735,15 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
     createShadowTreeSystem().teardown(registry_, shadow);
   }
   registry_.clear<ComputedShadowTreeComponent>();
+  registry_.clear<RenderingInstanceComponent>();
+  registry_.clear<ComputedClipPathsComponent>();
 
   createComputedComponents(outWarnings);
-  instantiateRenderTreeWithPrecomputedTree(verbose);
 
-  // Clear all dirty flags after full recomputation.
   registry_.clear<DirtyFlagsComponent>();
   renderState.needsFullRebuild = false;
-  renderState.hasBeenBuilt = true;
+  renderState.hasComputedComponents = true;
+  renderState.hasBeenBuilt = false;
 }
 
 bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
@@ -906,7 +923,10 @@ std::optional<Boxd> RenderingContext::getWorldBounds(Entity entity) {
 void RenderingContext::invalidateRenderTree() {
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
-  getRenderTreeState(registry_).needsFullRebuild = true;
+  auto& renderState = getRenderTreeState(registry_);
+  renderState.needsFullRebuild = true;
+  renderState.hasComputedComponents = false;
+  renderState.hasBeenBuilt = false;
 }
 
 // 1. Setup shadow trees

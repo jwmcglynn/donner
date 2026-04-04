@@ -26,11 +26,13 @@ public:
    */
   void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
 
-private:
-  /// Resolve a textPath reference and attach path data to the span.
-  void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
-                       ComputedTextComponent::TextSpan& span,
-                       std::vector<ParseError>* outWarnings);
+  /**
+   * Instantiate computed text spans for a specific text root.
+   *
+   * @param handle Text root handle.
+   * @param outWarnings If non-null, warnings are appended here.
+   */
+  void instantiateComputedComponent(EntityHandle handle, std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

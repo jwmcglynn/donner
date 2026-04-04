@@ -25,6 +25,7 @@ donner_cc_library(
         "LayoutSystem.h",
     ],
     visibility = [
+        "//donner/svg:__subpackages__",
         "//donner/svg/components:__subpackages__",
         "//donner/svg/properties:__pkg__",
     ],

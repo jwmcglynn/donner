@@ -9,6 +9,7 @@ cc_library(
         "StyleComponent.h",
     ],
     visibility = [
+        "//donner/svg:__subpackages__",
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
