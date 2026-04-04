@@ -640,6 +640,34 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                          std::min(a.bottomRight.y, b.bottomRight.y)));
   };
 
+  auto unionBoxes = [](const Boxd& a, const Boxd& b) -> Boxd {
+    return Boxd(Vector2d(std::min(a.topLeft.x, b.topLeft.x), std::min(a.topLeft.y, b.topLeft.y)),
+                Vector2d(std::max(a.bottomRight.x, b.bottomRight.x),
+                         std::max(a.bottomRight.y, b.bottomRight.y)));
+  };
+
+  // Resolve the effective subregion for a filter input. SourceGraphic/SourceAlpha use the
+  // full filter region; named results use their stored subregion; Previous uses
+  // previousSubregion.
+  auto resolveInputSubregion = [&](const components::FilterInput& input) -> Boxd {
+    return std::visit(
+        [&](const auto& v) -> Boxd {
+          using T = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<T, components::FilterInput::Previous>) {
+            return previousSubregion;
+          } else if constexpr (std::is_same_v<T, components::FilterStandardInput>) {
+            return filterRegionDeviceSpace;
+          } else if constexpr (std::is_same_v<T, components::FilterInput::Named>) {
+            auto it = namedSubregions.find(v.name);
+            if (it != namedSubregions.end()) {
+              return it->second;
+            }
+            return previousSubregion;
+          }
+        },
+        input.value);
+  };
+
   for (std::size_t nodeIndex = 0; nodeIndex < filterGraph.nodes.size(); ++nodeIndex) {
     const components::FilterNode& node = filterGraph.nodes[nodeIndex];
     // Determine this node's color space.
@@ -1263,6 +1291,25 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                                  std::is_same_v<T, fp::Image> ||
                                  std::is_same_v<T, fp::Tile>) {
               return deviceFromFilter.transformBox(defaultSubregion);
+            } else if constexpr (std::is_same_v<T, fp::Blend> ||
+                                 std::is_same_v<T, fp::Composite> ||
+                                 std::is_same_v<T, fp::DisplacementMap>) {
+              // Two-input primitives: subregion is the union of both input subregions
+              // per SVG spec §15.7.2.
+              if (node.inputs.size() >= 2) {
+                return unionBoxes(resolveInputSubregion(node.inputs[0]),
+                                  resolveInputSubregion(node.inputs[1]));
+              }
+              return previousSubregion;
+            } else if constexpr (std::is_same_v<T, fp::Merge>) {
+              // Merge: subregion is the union of all input subregions.
+              Boxd merged = resolveInputSubregion(
+                  node.inputs.empty() ? components::FilterInput{components::FilterInput::Previous{}}
+                                      : node.inputs[0]);
+              for (std::size_t i = 1; i < node.inputs.size(); ++i) {
+                merged = unionBoxes(merged, resolveInputSubregion(node.inputs[i]));
+              }
+              return merged;
             } else {
               return previousSubregion;
             }
@@ -1605,7 +1652,19 @@ void RendererSkia::setTransform(const Transformd& transform) {
     return;
   }
 
-  currentCanvas_->setMatrix(toSkiaMatrix(transform));
+  SkMatrix m = toSkiaMatrix(transform);
+  // When rendering into a filter buffer with a non-zero offset (to capture content in
+  // negative filter regions), translate the canvas so drawing commands land at the correct
+  // position in the expanded buffer. postTranslate adds to TransX/TransY directly,
+  // giving a device-space offset.
+  if (!filterLayerStack_.empty()) {
+    const auto& state = filterLayerStack_.back();
+    if (state.filterBufferOffsetX != 0 || state.filterBufferOffsetY != 0) {
+      m.postTranslate(static_cast<SkScalar>(state.filterBufferOffsetX),
+                      static_cast<SkScalar>(state.filterBufferOffsetY));
+    }
+  }
+  currentCanvas_->setMatrix(m);
 }
 
 void RendererSkia::pushTransform(const Transformd& transform) {
@@ -2149,14 +2208,7 @@ void RendererSkia::popFilterLayer() {
                                           std::move(nativeFilter));
   }
 
-  // Apply the SkImageFilter DAG to the SourceGraphic image. We draw the sourceImage through
-  // a paint with the filter set. SkImageFilter::Image() is used as the SourceGraphic
-  // input inside the DAG (nullptr → sourceImage), so we need to set up the paint to provide
-  // the source image as the filter's input context.
-  //
-  // The canonical way: draw the sourceImage with a paint that has the SkImageFilter. Skia
-  // applies the filter to the drawn image, which acts as the SourceGraphic. The filter output
-  // is composited onto the parent canvas.
+  // Apply the SkImageFilter DAG to the SourceGraphic image.
   SkPaint filterPaint;
   filterPaint.setAntiAlias(antialias_);
   filterPaint.setImageFilter(std::move(nativeFilter));

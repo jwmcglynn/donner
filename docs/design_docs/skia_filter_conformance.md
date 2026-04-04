@@ -3,7 +3,7 @@
 **Status:** In Progress
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-03
-**Last Updated:** 2026-04-03
+**Last Updated:** 2026-04-04
 **Tracking:** Depends on [#151](https://github.com/jwmcglynn/donner/issues/151)
 
 ## Summary
@@ -13,8 +13,8 @@ Close all gaps in the Skia backend's SVG filter rendering so that
 every non-UB test without skips or inflated thresholds.
 
 The Skia backend started with **193 failing filter tests**. After the fixes
-described below, **130 remain** (63 fixed, 33% improvement). The TinySkia
-backend is not regressed.
+described below, **35 remain** (158 fixed, 82%). The TinySkia backend is not
+regressed.
 
 ## Goals
 
@@ -22,7 +22,7 @@ backend is not regressed.
   overrides (UB-labeled tests remain skipped per project convention).
 - The existing TinySkia test results are not regressed.
 - All filter processing uses native Skia APIs (`SkImageFilter`, `SkSurface`,
-  `SkImage`) — no tiny-skia CPU fallback.
+  `SkImage`).
 - Clean up threshold overrides that are no longer needed.
 
 ## Non-Goals
@@ -67,7 +67,7 @@ RendererDriver
         ├── Snapshot offscreen → SkImage (SourceGraphic)
         ├── buildNativeSkiaFilterDAG() → SkImageFilter DAG
         │   ├── All spatial params scaled by deviceFromFilter
-        │   ├── Colors converted sRGB→linear when nodeUsesLinearRGB
+        │   ├── Per-node CropRect for explicit subregions
         │   └── Per-node linearRGB wrapping (SRGBToLinearGamma / LinearToSRGBGamma)
         ├── Wrap in SkImageFilters::Crop(filterRegion)
         ├── resetMatrix() on parent canvas
@@ -87,14 +87,20 @@ SourceGraphic bounds. Using an explicit SkSurface + drawImage gives full control
 over bounds while still using native SkImageFilter for all processing.
 
 **D2: All filter operations are native Skia.**
-Every filter primitive is lowered to Skia's `SkImageFilter` API. No tiny-skia
-CPU fallback. The offscreen surface is only used to capture the SourceGraphic;
-the actual filter computation uses Skia's optimized implementations.
+Every filter primitive is lowered to Skia's `SkImageFilter` API. The offscreen
+surface is only used to capture the SourceGraphic; the actual filter computation
+uses Skia's optimized implementations.
 
 **D3: Device-space parameters.**
 Since `drawImage` with `resetMatrix()` operates in device-pixel coordinates,
 all filter parameters (offsets, radii, frequencies, light positions, subregions)
 are pre-transformed from user-space to device-pixel-space.
+
+**D4: SkColor4f is always unpremultiplied.**
+Skia's `SkColor4f` API expects straight (unpremultiplied) RGBA values. The
+canvas bitmap is `kUnpremul_SkAlphaType`. Colors passed to `SkShaders::Color`
+and `SkColorSetARGB` must be in straight sRGB — Skia handles premultiplication
+internally.
 
 ## Implementation Plan
 
@@ -104,9 +110,10 @@ are pre-transformed from user-space to device-pixel-space.
   `drawImage` with filter paint
 - [x] Scale all spatial params by `deviceFromFilter`: blur sigma, offset dx/dy,
   morphology radius, displacement scale, turbulence frequency (inverse),
-  lighting positions + surfaceScale, tile rects, image viewport
+  lighting positions, tile rects, image viewport
 - [x] Transform subregions to device-pixel coordinates for feTile and feImage
 - [x] Crop filter region in device coordinates via `SkImageFilters::Crop`
+- [x] Per-node CropRect for nodes with explicit x/y/width/height subregions
 
 ### Phase 2: Input Order + Color Space (DONE)
 
@@ -114,92 +121,121 @@ are pre-transformed from user-space to device-pixel-space.
   `in2`=background → Skia `Blend(background, foreground)`
 - [x] Fix `if(in2)` null check skipping `SRGBToLinearGamma` on SourceGraphic
   (`nullptr` is valid in Skia's SkImageFilter = source image)
-- [x] feFlood: convert flood color sRGB→linear when `nodeUsesLinearRGB`
-- [x] feDropShadow: convert shadow color sRGB→linear when `nodeUsesLinearRGB`
-- [x] Lighting: convert light color sRGB→linear when `nodeUsesLinearRGB`
 - [x] feColorMatrix: fix identity matrix for empty `values` attribute
+- [x] feComponentTransfer: fix single-value table (constant output, not identity)
 
-### Phase 3: Lighting Conformance (IN PROGRESS)
+### Phase 3: Color Values + Premultiplication (DONE)
 
-40 lighting tests remain (17 diffuse, 10 spot, 6 specular, 4 point, 3 distant).
-Root causes to investigate:
+- [x] feFlood: pass straight RGBA to `SkColor4f` (was incorrectly premultiplied
+  with flood-opacity, causing darkened semi-transparent colors)
+- [x] feFlood: skip linearRGB post-wrap (sRGB output, Skia handles internally)
+- [x] feDropShadow: pass straight sRGB to `SkColorSetARGB` (no manual linear
+  conversion needed)
+- [x] feImage: skip linearRGB post-wrap (image data already in sRGB)
+- [x] Lighting: convert light color sRGB→linear when `nodeUsesLinearRGB`
 
-- [ ] Skia's lighting filters may compute normals differently than the SVG spec
-  (Skia uses its own bump-map normal extraction)
-- [ ] `surfaceScale * pixelScale` interaction — verify Skia's internal handling
-  matches what we pass
-- [ ] SpotLight cone angle computation in device-pixel space
-- [ ] Distant light direction vector may need device-space rotation
+### Phase 4: Lighting Conformance (DONE)
 
-### Phase 4: Remaining Per-Primitive Issues
+- [x] Remove `surfaceScale * pixelScale` — Skia computes normals from device
+  pixels, the pixel-level alpha differences already reflect device resolution
+- [x] No-light-source case: produce transparent output instead of failing DAG
+- [x] OBB light coordinate resolution for x/y/z and pointsAt positions
+- [x] Negative spotExponent: clamp to default (1.0) per SVG spec
 
-- [ ] **feConvolveMatrix (11)**: Kernel operation in device-pixel space may
-  differ from user-space semantics. Check edge handling and kernel size.
-- [ ] **feTurbulence (10)**: Skia's Perlin noise vs SVG reference algorithm.
-  Frequency scaling is applied but noise pattern may still differ.
-- [ ] **feImage (16)**: Viewport/subregion mapping in device-pixel coordinates.
-  Fragment references vs external images.
-- [ ] **feTile (6)**: Src/dst rect device-space mapping. Possible seam issues.
-- [ ] **feMorphology (6)**: Radius scaling applied but still failing — debug.
-- [ ] **feFlood remaining (5)**: Opacity/subregion edge cases.
-- [ ] **feComposite remaining (5)**: Arithmetic mode coefficient handling.
-- [ ] **feBlend remaining (2)**: Subregion tests (007, 008).
-- [ ] **e-filter composite (21)**: Chains of upstream issues.
+### Phase 5: Primitive Validation (DONE)
 
-### Phase 5: Threshold + Skip Cleanup
+- [x] feMorphology: zero/negative radius produces transparent output
+- [x] feMorphology: OBB radius scaling through bbox dimensions
+- [x] feConvolveMatrix: negative order, incomplete kernel, out-of-range target
+  → transparent output
+- [x] feConvolveMatrix: explicit `divisor="0"` → transparent output
+- [x] Effective subregion tracking: inherit from input when no explicit
+  x/y/width/height (Offset translates, Blur expands, generators use filter
+  region)
 
-- [ ] Remove Skia-specific threshold overrides no longer needed
-- [ ] Verify all non-UB tests pass cleanly
-- [ ] Re-evaluate skipped tests for Skia-specific fixes
+### Phase 6: feTile + feImage Fixes (DONE)
+
+- [x] **feTile**: Fixed subregion handling so SkImageFilters::Tile sees
+  generator filter content correctly (commit c3890eca)
+- [x] **feImage**: Fixed subregion mapping edge cases (009, 021)
+- [x] **feFlood-006**: Fixed subregion+offset case
+- [x] **Misc primitives**: Fixed fePointLight, feOffset, feDiffuseLighting
+  failures
+
+### Phase 7: Two-Input Subregion Union (DONE)
+
+- [x] **feBlend/feComposite**: Fixed default subregion for two-input primitives
+  to use the union of both input subregions (SVG spec §15.7.2). Previously used
+  only `previousSubregion`, which cropped SourceGraphic to the feFlood's small
+  subregion. Fixed: feBlend-007/008, feComposite-001/007/010/011.
+- [x] **feMerge subregion**: Merge now unions all input subregions.
+- [x] **feDisplacementMap**: Also uses input union for default subregion.
+
+### Phase 8: Buffer Offset Compensation (DONE)
+
+- [x] **feMerge buffer offset**: `pushFilterLayer` set the buffer offset translate
+  on the filter canvas, but `setTransform` (called by the rendering driver)
+  replaced the entire matrix without it. Fixed by applying `postTranslate` in
+  `setTransform` when inside a filter layer with a non-zero buffer offset.
+  Fixed: feMerge-001/002/003.
+
+### Phase 9: Remaining Work
+
+- [ ] **feTurbulence (10)**: Skia's native noise algorithm differs from SVG
+  spec. Requires implementing the SVG spec's exact Perlin noise and injecting
+  as SkImage (premul/straight format issues need resolution first).
+- [ ] **e-filter composite (11)**: Chains of upstream issues — will improve as
+  turbulence is fixed.
+- [ ] **feSpotLight (5)**: Cone angle precision (4 small), transform (1 golden
+  override).
+- [ ] **feMerge (3)**: Buffer offset compensation broken for multi-input filters.
+  When the filter region extends into negative device coordinates, the expanded
+  buffer's `Offset(-N,-N)` compensation doesn't correctly shift Merge outputs.
+  Root cause confirmed: disabling buffer expansion fixes the tests. Needs a
+  different compensation approach (e.g., pre-shift SourceGraphic in the buffer).
+- [ ] **feSpecularLighting (3)**: Skia vs spec lighting computation differences.
+- [ ] **Remaining per-primitive (6)**: feConvolveMatrix (2), feGaussianBlur (2),
+  feDropShadow (1), feFlood (1).
 
 ## Progress
 
-| Date | Failures | Delta | Key Fixes |
-|------|----------|-------|-----------|
-| Start | 193 | — | Baseline (WIP native lowering, broken fallback) |
-| +arch | 155 | -38 | SkSurface capture, coordinate scaling, Blend input swap |
-| +color | 145 | -10 | feFlood linearRGB, `if(in2)→if(hasIn2)` null check |
-| +more | 130 | -15 | feColorMatrix identity, DropShadow/Lighting color |
-| +lighting | 101 | -29 | surfaceScale fix, no-light-source, OBB light coords |
-| +convolve | 92 | -9 | Invalid param validation, divisor=0, transparent error output |
-| +morph+tile | 74 | -18 | Morphology validation+OBB, per-node CropRect for subregion clipping |
-| +spot | 73 | -1 | feSpotLight negative specularExponent clamp |
-| +feImage | 59 | -14 | skipLinearRGBPostWrap for sRGB image data |
-| +edge | 57 | -2 | ComponentTransfer single-value table, flood-color hsla fix |
+| Failures | Delta | Key Fixes |
+|----------|-------|-----------|
+| 193 | — | Baseline (WIP native lowering, broken fallback) |
+| 155 | -38 | SkSurface capture, coordinate scaling, Blend input swap |
+| 145 | -10 | feFlood linearRGB, `if(hasIn2)` null check |
+| 130 | -15 | feColorMatrix identity, DropShadow/Lighting color |
+| 101 | -29 | surfaceScale fix, no-light-source, OBB light coords |
+| 92 | -9 | ConvolveMatrix validation, divisor=0, transparent error output |
+| 74 | -18 | Morphology validation+OBB, per-node CropRect |
+| 73 | -1 | feSpotLight negative specularExponent clamp |
+| 59 | -14 | feImage skipLinearRGBPostWrap for sRGB data |
+| 54 | -5 | SkColor4f unpremultiplied fix, ComponentTransfer single-value |
+| 44 | -10 | feTile subregion fix, feImage edge cases, feFlood-006, misc fixes |
+| 38 | -6 | Two-input subregion union for feBlend/feComposite |
+| 35 | -3 | Buffer offset compensation in setTransform for feMerge |
 
-### Known Skia Limitations (require thresholds)
+## Remaining Failures (35 total)
 
-**feTile (6 tests):** `SkImageFilters::Tile` can't see content from generator filter
-chains (feFlood→feOffset→feTile) because Skia's bounds model traces back through
-the chain and generator filters report `Empty()` input bounds. The Tile filter
-receives no pixels to tile. Fixing this requires either pre-rendering the tile
-input to an `SkImage` (which has its own coordinate challenges) or implementing
-tiling manually outside the SkImageFilter DAG.
+| Category | Count | Root Cause |
+|----------|-------|------------|
+| e-filter (composite) | 11 | Chains of upstream issues (turbulence, etc.) |
+| feTurbulence | 10 | Skia native noise ≠ SVG spec algorithm |
+| feSpotLight | 5 | Cone angle precision (4 small), transform (1 golden override) |
+| feSpecularLighting | 3 | Skia vs spec lighting computation differences |
+| feConvolveMatrix | 2 | Incomplete kernel (011), sum=0 divisor (014) |
+| feGaussianBlur | 2 | Edge handling (002: sigma clamping, 012: AA) |
+| feDropShadow | 1 | Likely linearRGB interaction (006) |
+| feFlood | 1 | OBB+transform (008) |
+
+### Known Skia Limitations
 
 **feTurbulence (10 tests):** Skia's `SkShaders::MakeTurbulence`/`MakeFractalNoise`
-implements a different Perlin noise algorithm than the SVG spec's reference
-(different lookup tables and gradient vectors). The noise patterns are visually
-similar but not pixel-identical. Diffs range from 2K to 75K pixels. These tests
-require `maxMismatchedPixels` thresholds since the algorithm cannot be fixed
-without reimplementing the SVG noise or using a non-Skia implementation.
+implements a different Perlin noise algorithm than the SVG spec (different
+lookup tables and gradient vectors). The noise patterns are visually similar
+but not pixel-identical. Fixing requires implementing the SVG spec's exact
+noise algorithm and injecting as an SkImage into the filter DAG.
 
-## Remaining Failures by Category (92 total)
-
-| Category | Count | Likely Root Cause |
-|----------|-------|-------------------|
-| e-filter (composite) | 21 | Chains of upstream issues |
-| feImage | 16 | Viewport/subregion mapping |
-| feTurbulence | 10 | Noise pattern differences |
-| feTile | 6 | Rect coordinate mapping |
-| feSpotLight | 6 | Cone angle / position |
-| feMorphology | 6 | Radius issue |
-| feFlood | 5 | Opacity / subregion |
-| feComposite | 5 | Arithmetic / order |
-| feSpecularLighting | 3 | Lighting edge cases |
-| feConvolveMatrix | 2 | Edge cases (incomplete kernel, sum=0) |
-| feGaussianBlur | 2 | Edge handling |
-| feBlend | 2 | Subregion tests |
-| Misc (1 diffuse, 1 point, 1 offset, 1 component, 4 attrs) | 8 | Edge cases |
 
 ## Testing and Validation
 

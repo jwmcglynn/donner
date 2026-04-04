@@ -165,6 +165,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         Params::WithThreshold(kDefaultThreshold, 8000))),
     TestNameFromFilename);
+
 INSTANTIATE_TEST_SUITE_P(Flood, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-flood",
                                                      {
