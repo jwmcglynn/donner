@@ -47,7 +47,7 @@ public:
    *
    * @param document The SVG document to render.
    */
-  void draw(SVGDocument& document) override;
+  void draw(SVGDocument& document);
 
   /**
    * Begins a render pass for the given viewport.
@@ -91,7 +91,7 @@ public:
    *
    * @param opacity Group opacity applied when the layer is composited back.
    */
-  void pushIsolatedLayer(double opacity) override;
+  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override;
 
   /// Pops the most recent isolated layer.
   void popIsolatedLayer() override;
@@ -101,7 +101,8 @@ public:
    *
    * @param effects The filter chain to apply when the layer is popped.
    */
-  void pushFilterLayer(std::span<const FilterEffect> effects) override;
+  void pushFilterLayer(const components::FilterGraph& filterGraph,
+                       const std::optional<Boxd>& filterRegion) override;
 
   /// Pops the most recent filter layer.
   void popFilterLayer() override;
@@ -123,9 +124,9 @@ public:
    * Begins pattern tile recording.
    *
    * @param tileRect Tile bounds in pattern space.
-   * @param patternToTarget Transform from pattern tile space to target space.
+   * @param targetFromPattern Transform from pattern tile space to target space.
    */
-  void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) override;
+  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override;
 
   /**
    * Ends pattern recording and stores the resulting pattern paint.
@@ -181,7 +182,8 @@ public:
    * @param text The shaped text runs.
    * @param params Text styling parameters.
    */
-  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override;
+  void drawText(Registry& registry, const components::ComputedTextComponent& text,
+                const TextParams& params) override;
 
   /**
    * Captures a CPU-readable snapshot of the current frame.
@@ -203,15 +205,15 @@ public:
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
   /// Returns the rendered width in pixels.
-  int width() const override;
+  int width() const;
 
   /// Returns the rendered height in pixels.
-  int height() const override;
+  int height() const;
 
 private:
   struct PatternPaintState {
     tiny_skia::Pixmap pixmap;
-    Transformd patternToTarget;
+    Transformd targetFromPattern;
   };
 
   enum class SurfaceKind {
@@ -225,12 +227,19 @@ private:
   struct SurfaceFrame {
     SurfaceKind kind;
     tiny_skia::Pixmap pixmap;
+    std::optional<tiny_skia::Pixmap> fillPaintPixmap;
+    std::optional<tiny_skia::Pixmap> strokePaintPixmap;
     double opacity = 1.0;
-    std::vector<FilterEffect> effects;
+    MixBlendMode blendMode = MixBlendMode::Normal;
+    components::FilterGraph filterGraph;
+    std::optional<Boxd> filterRegion;
+    Transformd deviceFromFilter;
+    int filterBufferOffsetX = 0;
+    int filterBufferOffsetY = 0;
     std::optional<Boxd> maskBounds;
     Transformd maskBoundsTransform;
     std::optional<tiny_skia::Mask> maskAlpha;
-    Transformd patternToTarget;
+    Transformd targetFromPattern;
     Transformd patternRasterFromTile;
     Transformd savedTransform;
     std::vector<Transformd> savedTransformStack;
@@ -246,20 +255,15 @@ private:
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Boxd& bounds,
                                                                 const StrokeParams& stroke);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
-  void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity);
-  void applyFilters(tiny_skia::Pixmap& pixmap, std::span<const FilterEffect> effects);
-  void maybeWarnUnsupportedFilter(const FilterEffect& effect);
+  void compositePixmapInto(tiny_skia::Pixmap& destination, const tiny_skia::Pixmap& pixmap,
+                           double opacity, MixBlendMode blendMode = MixBlendMode::Normal);
+  void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity,
+                       MixBlendMode blendMode = MixBlendMode::Normal);
   void maybeWarnUnsupportedText();
 
   bool verbose_ = false;
   bool antialias_ = true;
   bool warnedUnsupportedText_ = false;
-  bool warnedUnsupportedFilter_ = false;
-
-  /// Opaque pointer to text stack state, only used when DONNER_TEXT_ENABLED is defined.
-  /// Stored as void* to avoid requiring text headers when text is disabled.
-  void* textContextPtr_ = nullptr;
-
   RenderViewport viewport_;
   PaintParams paint_;
   double paintOpacity_ = 1.0;

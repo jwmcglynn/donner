@@ -1,7 +1,9 @@
 #include "donner/svg/resources/FontManager.h"
 
+#include <cassert>
 #include <cstring>
 #include <iostream>
+#include <limits>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/fonts/WoffFont.h"
@@ -121,20 +123,54 @@ std::vector<uint8_t> reconstructSfnt(const fonts::WoffFont& woff) {
 
 }  // namespace
 
-struct FontManager::LoadedFont {
-  std::vector<uint8_t> ownedData;  // Owns font bytes (for WOFF-reconstructed sfnt data).
-  std::shared_ptr<const std::vector<uint8_t>> sharedData;  // Shared ref (for raw TTF/OTF).
-  const uint8_t* dataPtr = nullptr;  // Points into either ownedData or sharedData.
-  size_t dataSize = 0;               // Size of font data.
+struct FontManager::FontFaceComponent {
+  explicit FontFaceComponent(css::FontFace fontFace) : face(std::move(fontFace)) {}
+
+  css::FontFace face;
 };
 
-FontManager::FontManager() = default;
+struct FontManager::LoadedFontComponent {
+  std::vector<uint8_t> ownedData;                          // Owns reconstructed sfnt bytes.
+  std::shared_ptr<const std::vector<uint8_t>> sharedData;  // Shares raw TTF/OTF bytes.
+
+  std::span<const uint8_t> fontData() const {
+    if (sharedData) {
+      return {sharedData->data(), sharedData->size()};
+    }
+
+    return {ownedData.data(), ownedData.size()};
+  }
+};
+
+FontManager::FontManager(Registry& registry) : registry_(registry) {}
 FontManager::~FontManager() = default;
 
 void FontManager::addFontFace(const css::FontFace& face) {
-  faces_.push_back(face);
-  // Clear the lookup cache since the new face may match queries that previously fell back.
+  const Entity entity = registry_.create();
+  registry_.emplace<FontFaceComponent>(entity, face);
   cache_.clear();
+}
+
+size_t FontManager::numFaces() const {
+  size_t count = 0;
+  for (const Entity entity : registry_.view<FontFaceComponent>()) {
+    static_cast<void>(entity);
+    ++count;
+  }
+  return count;
+}
+
+std::string_view FontManager::faceFamilyName(size_t index) const {
+  size_t currentIndex = 0;
+  auto view = registry_.view<FontFaceComponent>();
+  for (const Entity entity : view) {
+    if (currentIndex == index) {
+      return std::string_view(view.get<FontFaceComponent>(entity).face.familyName);
+    }
+    ++currentIndex;
+  }
+
+  return {};
 }
 
 FontHandle FontManager::findFont(std::string_view family) {
@@ -146,7 +182,6 @@ FontHandle FontManager::findFont(std::string_view family, int weight) {
 }
 
 FontHandle FontManager::findFont(std::string_view family, int weight, int style, int stretch) {
-  // Check cache first (keyed by family + weight + style + stretch).
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
   if (auto it = cache_.find(cacheKey); it != cache_.end()) {
@@ -155,10 +190,12 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
 
   // Walk @font-face rules looking for the best match.
   // CSS font matching: style first, then stretch, then weight.
-  const css::FontFace* bestFace = nullptr;
+  Entity bestEntity = entt::null;
   int bestScore = std::numeric_limits<int>::max();
 
-  for (const auto& face : faces_) {
+  auto view = registry_.view<FontFaceComponent>();
+  for (const Entity entity : view) {
+    const css::FontFace& face = view.get<FontFaceComponent>(entity).face;
     if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
       continue;
     }
@@ -195,166 +232,188 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
 
     if (score < bestScore) {
       bestScore = score;
-      bestFace = &face;
+      bestEntity = entity;
       if (score == 0) {
         break;  // Exact match.
       }
     }
   }
 
-  if (bestFace) {
-    for (const auto& source : bestFace->sources) {
-      FontHandle handle;
+  if (bestEntity != entt::null) {
+    if (registry_.all_of<LoadedFontComponent>(bestEntity)) {
+      FontHandle handle(bestEntity);
+      cache_[cacheKey] = handle;
+      return handle;
+    }
+
+    const auto& face = registry_.get<FontFaceComponent>(bestEntity).face;
+    for (const auto& source : face.sources) {
       if (source.kind == css::FontFaceSource::Kind::Data) {
         const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
-        handle = loadFontDataShared(dataPtr);
-      }
-      if (handle) {
-        cache_[cacheKey] = handle;
-        return handle;
+        if (loadFontDataSharedIntoEntity(bestEntity, dataPtr)) {
+          FontHandle handle(bestEntity);
+          cache_[cacheKey] = handle;
+          return handle;
+        }
       }
     }
   }
 
   // Fall back to the embedded Public Sans font.
-  FontHandle fb = fallbackFont();
-  cache_[cacheKey] = fb;
-  return fb;
+  FontHandle fallback = fallbackFont();
+  cache_[cacheKey] = fallback;
+  return fallback;
 }
 
 FontHandle FontManager::loadFontData(std::span<const uint8_t> data) {
-  if (data.size() < 4) {
+  const Entity entity = registry_.create();
+  if (!loadFontDataIntoEntity(entity, data)) {
+    registry_.destroy(entity);
     return FontHandle();
   }
 
-  const uint32_t magic = readBE32(data.data());
-
-  if (magic == kWoffMagic) {
-    return loadWoff1(data);
-  }
-
-  if (magic == kWoff2Magic) {
-#ifdef DONNER_TEXT_WOFF2_ENABLED
-    return loadWoff2(data);
-#else
-    std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
-                 "Build with --config=text-full to enable.\n";
-    return FontHandle();
-#endif
-  }
-
-  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple &&
-      magic != kSfntType1) {
-    return FontHandle();
-  }
-
-  // Treat as raw TTF/OTF.
-  std::vector<uint8_t> owned(data.begin(), data.end());
-  return loadRawFont(std::move(owned));
+  return FontHandle(entity);
 }
 
-FontHandle FontManager::loadFontDataShared(
-    const std::shared_ptr<const std::vector<uint8_t>>& data) {
+bool FontManager::loadFontDataSharedIntoEntity(
+    Entity entity, const std::shared_ptr<const std::vector<uint8_t>>& data) {
+  if (!data) {
+    return false;
+  }
+
   if (data->size() < 4) {
-    return FontHandle();
+    return false;
   }
 
   const uint32_t magic = readBE32(data->data());
 
   // WOFF fonts need decompression/reconstruction, so they create new owned buffers.
   if (magic == kWoffMagic) {
-    return loadWoff1(*data);
+    return loadWoff1(entity, *data);
   }
 
   if (magic == kWoff2Magic) {
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-    return loadWoff2(*data);
+    return loadWoff2(entity, *data);
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
                  "Build with --config=text-full to enable.\n";
-    return FontHandle();
+    return false;
 #endif
   }
 
-  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple &&
-      magic != kSfntType1) {
-    return FontHandle();
+  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple && magic != kSfntType1) {
+    return false;
   }
 
   // Raw TTF/OTF: share the data via shared_ptr (no copy).
-  return loadRawFont(data);
+  return setRawFontData(entity, data);
 }
 
 std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
-  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
+  if (!isValidHandle(handle)) {
     return {};
   }
-  const auto& font = fonts_[static_cast<size_t>(handle.index())];
-  if (font->sharedData) {
-    return {font->sharedData->data(), font->sharedData->size()};
-  }
-  return {font->ownedData.data(), font->ownedData.size()};
+
+  const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
+  return font ? font->fontData() : std::span<const uint8_t>();
 }
 
 FontHandle FontManager::fallbackFont() {
-  if (fallbackHandle_) {
+  if (isValidHandle(fallbackHandle_)) {
     return fallbackHandle_;
   }
+
+  const Entity entity = registry_.create();
 
   // Load the embedded Public Sans font.
   std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
                             embedded::kPublicSansMediumOtf.end());
-  fallbackHandle_ = loadRawFont(std::move(data));
-  if (!fallbackHandle_) {
+  if (!setRawFontData(entity, std::move(data))) {
+    registry_.destroy(entity);
     std::cerr << "FontManager: Failed to load embedded fallback font (Public Sans)\n";
+    return FontHandle();
   }
+
+  fallbackHandle_ = FontHandle(entity);
   return fallbackHandle_;
 }
 
-FontHandle FontManager::loadRawFont(std::vector<uint8_t> data) {
-  auto font = std::make_unique<LoadedFont>();
-  font->dataSize = data.size();
-  font->ownedData = std::move(data);
-  font->dataPtr = font->ownedData.data();
-
-  const int index = static_cast<int>(fonts_.size());
-  fonts_.push_back(std::move(font));
-  return FontHandle(index);
+bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data) {
+  LoadedFontComponent font;
+  font.ownedData = std::move(data);
+  registry_.emplace_or_replace<LoadedFontComponent>(entity, std::move(font));
+  return true;
 }
 
-FontHandle FontManager::loadRawFont(std::shared_ptr<const std::vector<uint8_t>> sharedData) {
-  auto font = std::make_unique<LoadedFont>();
-  font->dataSize = sharedData->size();
-  font->sharedData = std::move(sharedData);
-  font->dataPtr = font->sharedData->data();
+bool FontManager::setRawFontData(Entity entity,
+                                 std::shared_ptr<const std::vector<uint8_t>> sharedData) {
+  if (!sharedData) {
+    return false;
+  }
 
-  const int index = static_cast<int>(fonts_.size());
-  fonts_.push_back(std::move(font));
-  return FontHandle(index);
+  LoadedFontComponent font;
+  font.sharedData = std::move(sharedData);
+  registry_.emplace_or_replace<LoadedFontComponent>(entity, std::move(font));
+  return true;
 }
 
-FontHandle FontManager::loadWoff1(std::span<const uint8_t> data) {
+bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data) {
   auto maybeFont = fonts::WoffParser::Parse(data);
   if (maybeFont.hasError()) {
     std::cerr << "FontManager: WOFF1 parsing failed: " << maybeFont.error().reason << "\n";
-    return FontHandle();
+    return false;
   }
 
   // Reconstruct sfnt byte stream from decompressed WOFF tables.
   std::vector<uint8_t> sfntData = reconstructSfnt(maybeFont.result());
-  return loadRawFont(std::move(sfntData));
+  return setRawFontData(entity, std::move(sfntData));
+}
+
+bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data) {
+  if (data.size() < 4) {
+    return false;
+  }
+
+  const uint32_t magic = readBE32(data.data());
+
+  if (magic == kWoffMagic) {
+    return loadWoff1(entity, data);
+  }
+
+  if (magic == kWoff2Magic) {
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+    return loadWoff2(entity, data);
+#else
+    std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
+                 "Build with --config=text-full to enable.\n";
+    return false;
+#endif
+  }
+
+  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple && magic != kSfntType1) {
+    return false;
+  }
+
+  // Treat as raw TTF/OTF.
+  std::vector<uint8_t> owned(data.begin(), data.end());
+  return setRawFontData(entity, std::move(owned));
 }
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-FontHandle FontManager::loadWoff2(std::span<const uint8_t> data) {
+bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data) {
   auto result = fonts::Woff2Parser::Decompress(data);
   if (result.hasError()) {
     std::cerr << "FontManager: WOFF2 decompression failed: " << result.error().reason << "\n";
-    return FontHandle();
+    return false;
   }
 
-  return loadRawFont(std::move(result.result()));
+  return setRawFontData(entity, std::move(result.result()));
 }
 #endif
+
+bool FontManager::isValidHandle(FontHandle handle) const {
+  return handle && registry_.valid(handle.entity());
+}
 
 }  // namespace donner::svg

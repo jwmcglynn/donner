@@ -149,7 +149,8 @@ public:
   /**
    * Draws text runs.
    */
-  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override;
+  void drawText(Registry& registry, const components::ComputedTextComponent& text,
+                const TextParams& params) override;
 
   /**
    * Captures a CPU-readable snapshot of the last-rendered frame.
@@ -209,7 +210,6 @@ private:
   std::unique_ptr<SkCanvas> bitmapCanvas_;  //!< Direct canvas from bitmap.
   SkCanvas* currentCanvas_ = nullptr;       //!< The current canvas.
   bool antialias_ = true;                   //!< Whether to antialias.
-
   RenderViewport viewport_;
   PaintParams paint_;
   double paintOpacity_ = 1.0;

@@ -64,8 +64,9 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
 }  // namespace
 
 TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
-  FontManager fontManager;
-  TextEngine engine(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
 
   ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
   const FontHandle amiri = LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri");
@@ -91,8 +92,9 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
 }
 
 TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
-  FontManager fontManager;
-  TextEngine engine(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
 
   const FontHandle japaneseFont = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(japaneseFont));
@@ -129,8 +131,9 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
 }
 
 TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
-  FontManager fontManager;
-  TextEngine engine(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
 
   ASSERT_TRUE(
       static_cast<bool>(LoadResvgFont(fontManager, "NotoColorEmoji.ttf", "Noto Color Emoji")));
@@ -156,8 +159,9 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
 }
 
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
-  FontManager fontManager;
-  TextEngine engine(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
 
   ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
 

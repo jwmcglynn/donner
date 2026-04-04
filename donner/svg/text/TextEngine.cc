@@ -116,11 +116,12 @@ bool isNonSpacing(uint32_t cp) {
 
 }  // namespace
 
-TextEngine::TextEngine(FontManager& fontManager) : fontManager_(fontManager) {
+TextEngine::TextEngine(FontManager& fontManager, Registry& registry)
+    : fontManager_(fontManager), registry_(registry) {
 #ifdef DONNER_TEXT_FULL
-  backend_ = std::make_unique<TextBackendFull>(fontManager_);
+  backend_ = std::make_unique<TextBackendFull>(fontManager_, registry_);
 #else
-  backend_ = std::make_unique<TextBackendSimple>(fontManager_);
+  backend_ = std::make_unique<TextBackendSimple>(fontManager_, registry_);
 #endif
 }
 
@@ -1099,7 +1100,7 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
     font = fontManager_.fallbackFont();
   }
 
-  TextBackendSimple measurementBackend(fontManager_);
+  TextBackendSimple measurementBackend(fontManager_, registry_);
   const auto shaped =
       measurementBackend.shapeRun(font, 1.0f, "0", 0, 1, false, FontVariant::Normal, false);
   if (shaped.glyphs.empty()) {

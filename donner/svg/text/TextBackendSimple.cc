@@ -42,9 +42,16 @@ uint32_t decodeUtf8(std::string_view str, size_t& i) {
 
 constexpr float kSmallCapScale = 0.8f;
 
+/// Cached stb_truetype parse state attached to a font entity.
+struct StbFontComponent {
+  stbtt_fontinfo fontInfo{};
+  bool valid = false;
+};
+
 }  // namespace
 
-TextBackendSimple::TextBackendSimple(FontManager& fontManager) : fontManager_(fontManager) {}
+TextBackendSimple::TextBackendSimple(FontManager& fontManager, Registry& registry)
+    : fontManager_(fontManager), registry_(registry) {}
 
 const stbtt_fontinfo* TextBackendSimple::getFontInfo(FontHandle font) const {
   if (!font) {
@@ -56,22 +63,16 @@ const stbtt_fontinfo* TextBackendSimple::getFontInfo(FontHandle font) const {
     return nullptr;
   }
 
-  const size_t index = static_cast<size_t>(font.index());
-  if (index >= parsedFonts_.size()) {
-    parsedFonts_.resize(index + 1);
-    parsedFontsInitialized_.resize(index + 1, false);
-    parsedFontsValid_.resize(index + 1, false);
+  if (const auto* cached = registry_.try_get<StbFontComponent>(font.entity())) {
+    return cached->valid ? &cached->fontInfo : nullptr;
   }
 
-  if (!parsedFontsInitialized_[index]) {
-    parsedFontsInitialized_[index] = true;
-    const auto fontData = fontManager_.fontData(font);
-    if (!fontData.empty() && stbtt_InitFont(&parsedFonts_[index], fontData.data(), 0)) {
-      parsedFontsValid_[index] = true;
-    }
+  auto& cached = registry_.emplace<StbFontComponent>(font.entity());
+  if (stbtt_InitFont(&cached.fontInfo, fontData.data(), 0)) {
+    cached.valid = true;
   }
 
-  return parsedFontsValid_[index] ? &parsedFonts_[index] : nullptr;
+  return cached.valid ? &cached.fontInfo : nullptr;
 }
 
 FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {

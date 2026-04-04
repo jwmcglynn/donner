@@ -89,6 +89,7 @@ donner_cc_library(
     }),
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
+        "//donner/base",
         "//donner/base/fonts",
         "//donner/css:core",
         "//third_party/public-sans",

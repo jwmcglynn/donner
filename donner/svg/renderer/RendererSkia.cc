@@ -1838,7 +1838,7 @@ void RendererSkia::drawImage(const ImageResource& image, const ImageParams& para
   currentCanvas_->drawImageRect(skImage, toSkia(params.targetRect), sampling, &paint);
 }
 
-void RendererSkia::drawText(const components::ComputedTextComponent& text,
+void RendererSkia::drawText(Registry& registry, const components::ComputedTextComponent& text,
                             const TextParams& params) {
   if (currentCanvas_ == nullptr) {
     return;
@@ -1923,11 +1923,12 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   // for rendering. This provides full OpenType GSUB/GPOS support with identical shaping across
   // backends.
   {
-    static FontManager fontManager;
-    static TextEngine textEngine(fontManager);
-    for (const auto& face : params.fontFaces) {
-      fontManager.addFontFace(face);
+    if (!registry.ctx().contains<FontManager>() || !registry.ctx().contains<TextEngine>()) {
+      return;
     }
+
+    auto& fontManager = registry.ctx().get<FontManager>();
+    auto& textEngine = registry.ctx().get<TextEngine>();
     const TextLayoutParams layoutParams = toTextLayoutParams(params);
     std::vector<TextRun> runs = textEngine.layout(text, layoutParams);
 
