@@ -1953,8 +1953,33 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
       shapedFont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
       SkPaint spanFillPaint = fillPaint;
-      if (runIndex < text.spans.size() && text.spans[runIndex].fillColor.has_value()) {
-        spanFillPaint = makeSolidFillPaint(*text.spans[runIndex].fillColor);
+      if (runIndex < text.spans.size()) {
+        const auto& span = text.spans[runIndex];
+        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+        const float spanFillOpacity = NarrowToFloat(paint_.fillOpacity);
+
+        if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+          spanFillPaint = makeSolidFillPaint(
+              css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)));
+          spanFillPaint.setAlphaf(
+              NarrowToFloat(spanFillPaint.getAlphaf() * static_cast<float>(span.opacity)));
+        } else if (const auto* ref =
+                       std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
+          const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
+          if (std::optional<SkPaint> gradient = instantiateGradientPaint(
+                  *ref, Boxd(), paint_.viewBox, spanCurrentColor, combinedOpacity, antialias_)) {
+            spanFillPaint = std::move(*gradient);
+          } else if (ref->fallback.has_value()) {
+            spanFillPaint = makeSolidFillPaint(
+                css::Color(ref->fallback->resolve(spanCurrentColor, spanFillOpacity)));
+            spanFillPaint.setAlphaf(
+                NarrowToFloat(spanFillPaint.getAlphaf() * static_cast<float>(span.opacity)));
+          }
+        } else if (span.opacity < 1.0) {
+          spanFillPaint = makeSolidFillPaint(params.fillColor);
+          spanFillPaint.setAlphaf(
+              NarrowToFloat(spanFillPaint.getAlphaf() * static_cast<float>(span.opacity)));
+        }
       }
 
       // Convert shaped glyphs to Skia arrays.

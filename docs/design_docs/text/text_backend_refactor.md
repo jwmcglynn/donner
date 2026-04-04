@@ -17,10 +17,11 @@ parsing), even when the full engine is active.
 
 This refactor introduces a `TextBackend` interface that abstracts all font-backend operations
 (metrics, outlines, shaping), then restructures the layout engines to share the backend-agnostic
-SVG positioning code through a single `TextEngine`. `FontManager` is reduced to a font registry
-that owns raw font bytes, family matching, and `FontHandle` allocation only. `TextEngine` owns the
-selected backend privately, exposes the narrow text API used by renderers and layout-adjacent
-systems, and is registered in `entt::registry::ctx()` for shared access. The two backend
+SVG positioning code through a single `TextEngine`. `FontManager` is now a registry-backed font
+service that stores `@font-face` declarations, loaded font bytes, and backend cache components on
+font entities inside the same document `entt::registry` used by the rest of the SVG ECS.
+`TextEngine` owns the selected backend privately, exposes the narrow text API used by renderers and
+layout-adjacent systems, and is registered in `registry.ctx()` for shared access. The two backend
 implementations are `TextBackendSimple` (stb_truetype) and `TextBackendFull` (HarfBuzz +
 FreeType). The refactor also includes a readability pass to reduce function length and cyclomatic
 complexity in the engine code.
@@ -142,9 +143,9 @@ This makes the code difficult to review, modify, and test in isolation. Individu
                          │
                          │ reads raw font bytes / family lookup
 ┌────────────────────────▼────────────────────────────────────┐
-│                  FontManager (registry)                     │
-│  @font-face registration, family matching, raw font data    │
-│  No shaping, outlines, or table-derived font semantics      │
+│             FontManager (document ECS-backed)               │
+│  @font-face registration, family matching, raw font data,   │
+│  and backend cache components stored on font entities       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -301,7 +302,7 @@ struct TextRun {
 ```cpp
 class TextEngine {
 public:
-  explicit TextEngine(FontManager& fontManager);
+  TextEngine(FontManager& fontManager, Registry& registry);
 
   /// Full SVG text layout: shaping → positioning → chunking → anchor → textLength.
   std::vector<TextRun> layout(const components::ComputedTextComponent& text,
@@ -316,6 +317,7 @@ public:
 
 private:
   FontManager& fontManager_;
+  Registry& registry_;
   std::unique_ptr<TextBackend> backend_;
 
   // ── Shared helpers (currently duplicated) ───────────────────
@@ -341,7 +343,7 @@ observe the backend type directly.
 /// stb_truetype-based backend. No GSUB/GPOS, no bitmap glyphs, no cursive detection.
 class TextBackendSimple final : public TextBackend {
 public:
-  explicit TextBackendSimple(FontManager& fontManager);
+  TextBackendSimple(FontManager& fontManager, Registry& registry);
 
   // All methods implemented via stbtt_* calls.
   // isCursive() → always false
@@ -353,7 +355,7 @@ public:
 /// HarfBuzz + FreeType backend. Full OpenType shaping, cursive detection, bitmap glyphs.
 class TextBackendFull final : public TextBackend {
 public:
-  explicit TextBackendFull(FontManager& fontManager);
+  TextBackendFull(FontManager& fontManager, Registry& registry);
 
   // All methods implemented via hb_*/FT_* calls.
   // isCursive() → Unicode range checks for Arabic, Syriac, Thaana, N'Ko, Mandaic
@@ -365,18 +367,20 @@ public:
 
 ### Renderer Changes
 
-`RendererTinySkia::drawText()` and `RendererSkia::drawText()` stop instantiating backends directly
-and instead use a shared `TextEngine` service:
+`RendererTinySkia::drawText()` and `RendererSkia::drawText()` stop instantiating backends directly.
+The render driver passes the active document `Registry&` into `drawText()`, and the renderers use
+shared `FontManager` / `TextEngine` instances already stored in `registry.ctx()`:
 
 ```cpp
-void RendererTinySkia::drawText(const ComputedTextComponent& text, const TextParams& params) {
-  TextEngine engine(fontManager);
-  std::vector<TextRun> runs = engine.layout(text, params);
+void RendererTinySkia::drawText(Registry& registry, const ComputedTextComponent& text,
+                                const TextParams& params) {
+  auto& textEngine = registry.ctx().get<TextEngine>();
+  std::vector<TextRun> runs = textEngine.layout(text, toTextLayoutParams(params));
 
   // --- Font metrics for text bbox: use engine, not stbtt ---
   for (const auto& run : runs) {
-    FontVMetrics metrics = engine.fontVMetrics(run.font);
-    float scale = engine.scaleForPixelHeight(run.font, fontSizePx);
+    FontVMetrics metrics = textEngine.fontVMetrics(run.font);
+    float scale = textEngine.scaleForPixelHeight(run.font, fontSizePx);
     double emTop = static_cast<double>(metrics.ascent) * scale;
     double emBottom = -static_cast<double>(metrics.descent) * scale;
     // ... bbox computation ...
@@ -384,12 +388,12 @@ void RendererTinySkia::drawText(const ComputedTextComponent& text, const TextPar
 
   // --- Glyph outlines: use engine, not stbtt/shaper ---
   for (const auto& glyph : run.glyphs) {
-    PathSpline path = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+    PathSpline path = textEngine.glyphOutline(run.font, glyph.glyphIndex, scale);
     // ... no #ifdef needed ...
   }
 
   // --- Text decoration: use engine, not raw table parsing ---
-  auto underline = engine.underlineMetrics(run.font);
+  auto underline = textEngine.underlineMetrics(run.font);
   // ... position decoration lines ...
 }
 ```
@@ -503,7 +507,7 @@ CJK vertical layout (`a-writing-mode-012`, 11928px → PASS):
 - [ ] Populate during first render pass in `RendererTinySkia::drawText()`
 - [ ] Wire invalidation to text/font/positioning property changes
 - [ ] Add `SVGTextElement::convertToPath()`, `inkBoundingBox()`, `objectBoundingBox()`
-- [ ] Add `SVGTextElement::getStartPositionOfChar()`, `getExtentOfChar()`, `getNumberOfChars()`
+- [ ] Implement SVGTextContentElement Public APIs
 - [ ] Add unit tests for caching, invalidation, and public API
 
 ### Phase 5: Cleanup
@@ -513,16 +517,28 @@ CJK vertical layout (`a-writing-mode-012`, 11928px → PASS):
 - [x] Switch from reimplemented UTF-8 decoding to `donner/base/Utf8.h`
 - [x] Move the text stack into `donner/svg/text/`
 - [x] Register `TextEngine` in `registry.ctx()` for shared text measurement/layout access
+- [x] Store font entities and backend caches in the same document `Registry`
 - [x] Keep `TextParams` renderer-specific and use `TextLayoutParams` in the text layer
 - [x] Update design docs
 
 ## Validation Status
 
-Current verification for this refactor:
+Verification checklist at the end of this refactor:
 
 - [ ] `bazel test //...`
 - [ ] `bazel test //... --config=text-full`
 - [ ] `bazel test //... --config=text-full --config=skia`
+
+Observed status on this branch:
+
+- The focused `text-full` unit and integration targets pass.
+- The shared `renderer` library builds under `--config=text-full`.
+- The base `--config=text` `text_engine_tests` target still has existing simple-backend failures
+  in `UsesCoverageFallbackForVerticalJapaneseText` and
+  `SupplementaryCharactersConsumeLowSurrogateCoordinates`.
+- The Skia-backed `--config=skia` renderer build currently fails in
+  `donner/svg/renderer/RendererSkia.cc` because the draw path still references
+  `ComputedTextComponent::TextSpan::fillColor`, which no longer exists on the span structure.
 
 The refactored `TextEngine` + `TextBackendFull` path now matches the previous text-full
 behavior for the resvg suite while removing the duplicated layout logic from `TextShaper`.
@@ -536,15 +552,18 @@ uses a shared font metadata parser instead of maintaining its own inline OpenTyp
 ## File Structure (After)
 
 ```
-donner/svg/renderer/
+donner/svg/text/
   TextBackend.h            # TextBackend interface, FontVMetrics, UnderlineMetrics, etc.
   TextBackendSimple.h/cc   # stb_truetype implementation of TextBackend
   TextBackendFull.h/cc     # HarfBuzz+FreeType implementation (text_full only)
   TextEngine.h/cc          # Shared SVG text layout algorithm
   TextTypes.h              # TextGlyph, TextRun (unified output types)
 
+donner/svg/resources/
+  FontManager.h/cc         # ECS-backed font service for declarations, bytes, and backend caches
+
 donner/svg/components/
-  ComputedTextPathComponent.h  # Cached text paths, ink/em-box bounds
+  ComputedTextPathComponent.h  # Planned cached text paths, ink/em-box bounds
 ```
 
 ## Capability Model
