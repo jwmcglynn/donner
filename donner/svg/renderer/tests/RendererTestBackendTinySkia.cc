@@ -50,8 +50,8 @@ RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
 }
 
 bool WriteActiveRendererDebugSkp(SVGDocument& document, const std::filesystem::path& outputPath) {
-  UTILS_UNUSED(document);
-  UTILS_UNUSED(outputPath);
+  (void)document;
+  (void)outputPath;
   return false;
 }
 

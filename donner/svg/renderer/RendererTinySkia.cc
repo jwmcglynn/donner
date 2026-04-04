@@ -803,8 +803,8 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
                                                                   pushedFrame.filterBufferOffsetY);
   }
 #else
-  UTILS_UNUSED(filterGraph);
-  UTILS_UNUSED(filterRegion);
+  (void)filterGraph;
+  (void)filterRegion;
 #endif
 }
 

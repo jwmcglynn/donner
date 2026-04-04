@@ -2,7 +2,7 @@ developer_instructions = """
 When running Bazel in this repository, use `tools/llm-bazel-wrap.sh` instead of
 invoking `bazel` directly. The wrapper removes Codex-injected PATH entries that
 would otherwise perturb Bazel's effective client environment and action cache
-keys.
+keys. When writing commands in docs and to the user, use `bazel` instead.
 """
 
 [shell_environment_policy.set]
