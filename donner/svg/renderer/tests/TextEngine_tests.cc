@@ -92,6 +92,10 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
 }
 
 TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
+#ifndef DONNER_TEXT_FULL
+  GTEST_SKIP() << "Vertical CJK offset assertions require the full text backend.";
+#endif
+
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine(fontManager, registry);
@@ -131,6 +135,10 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
 }
 
 TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
+#ifndef DONNER_TEXT_FULL
+  GTEST_SKIP() << "Bitmap emoji shaping requires the full text backend.";
+#endif
+
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine(fontManager, registry);
