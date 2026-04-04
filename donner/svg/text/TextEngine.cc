@@ -438,9 +438,11 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
           if (vertical) {
             g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
             g.yAdvance *= scaleFactor;
+            g.stretchScaleY *= NarrowToFloat(scaleFactor);
           } else {
             g.xPosition = runStartPos + (g.xPosition - runStartPos) * scaleFactor;
             g.xAdvance *= scaleFactor;
+            g.stretchScaleX *= NarrowToFloat(scaleFactor);
           }
         }
       }
@@ -493,9 +495,11 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             if (vertical) {
               g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
               g.yAdvance *= scaleFactor;
+              g.stretchScaleY *= NarrowToFloat(scaleFactor);
             } else {
               g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
               g.xAdvance *= scaleFactor;
+              g.stretchScaleX *= NarrowToFloat(scaleFactor);
             }
           }
         }
@@ -1475,6 +1479,11 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       PathSpline glyphPath =
           glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
       if (!glyphPath.empty()) {
+        if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+          glyphPath = transformPathSpline(
+              glyphPath, Transformd::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+        }
+
         Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
         if (glyph.rotateDegrees != 0.0) {
           glyphFromLocal =

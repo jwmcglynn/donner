@@ -1552,6 +1552,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       if (!isBitmapFont) {
         glyphPath =
             textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+        if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+          glyphPath = transformPathSpline(
+              glyphPath, Transformd::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+        }
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
@@ -1571,8 +1575,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           // Compute target rect in document space: position with bearing, scaled size.
           const double targetX = glyph.xPosition + bitmap->bearingX;
           const double targetY = glyph.yPosition - bitmap->bearingY;
-          const double targetW = static_cast<double>(bitmap->width) * bitmap->scale;
-          const double targetH = static_cast<double>(bitmap->height) * bitmap->scale;
+          const double targetW =
+              static_cast<double>(bitmap->width) * bitmap->scale * glyph.stretchScaleX;
+          const double targetH =
+              static_cast<double>(bitmap->height) * bitmap->scale * glyph.stretchScaleY;
 
           // Use the same transform pattern as drawImage: Scale * Translate * currentTransform_.
           const double imgScaleX = targetW / static_cast<double>(bitmap->width);

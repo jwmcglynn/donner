@@ -85,8 +85,8 @@ TEST(FindChunkRangesTest, SingleChunkWhenNoAbsolutePositions) {
 }
 
 TEST(FindChunkRangesTest, SplitsAtAbsoluteXPosition) {
-  SmallVector<std::optional<Lengthd>, 1> xList = {
-      std::nullopt, std::nullopt, Lengthd(50.0, Lengthd::Unit::None)};
+  SmallVector<std::optional<Lengthd>, 1> xList = {std::nullopt, std::nullopt,
+                                                  Lengthd(50.0, Lengthd::Unit::None)};
   SmallVector<std::optional<Lengthd>, 1> yList;
   const auto ranges = findChunkRanges("ABC", xList, yList);
   ASSERT_EQ(ranges.size(), 2u);
@@ -98,8 +98,8 @@ TEST(FindChunkRangesTest, SplitsAtAbsoluteXPosition) {
 
 TEST(FindChunkRangesTest, SplitsAtAbsoluteYPosition) {
   SmallVector<std::optional<Lengthd>, 1> xList;
-  SmallVector<std::optional<Lengthd>, 1> yList = {
-      std::nullopt, Lengthd(100.0, Lengthd::Unit::None)};
+  SmallVector<std::optional<Lengthd>, 1> yList = {std::nullopt,
+                                                  Lengthd(100.0, Lengthd::Unit::None)};
   const auto ranges = findChunkRanges("AB", xList, yList);
   ASSERT_EQ(ranges.size(), 2u);
   EXPECT_EQ(ranges[0].byteStart, 0u);
@@ -110,8 +110,7 @@ TEST(FindChunkRangesTest, SplitsAtAbsoluteYPosition) {
 
 TEST(FindChunkRangesTest, HandlesMultibyteUtf8) {
   // "Aé" = 'A'(1 byte) + 'é'(2 bytes: 0xC3 0xA9)
-  SmallVector<std::optional<Lengthd>, 1> xList = {
-      std::nullopt, Lengthd(50.0, Lengthd::Unit::None)};
+  SmallVector<std::optional<Lengthd>, 1> xList = {std::nullopt, Lengthd(50.0, Lengthd::Unit::None)};
   SmallVector<std::optional<Lengthd>, 1> yList;
   const auto ranges = findChunkRanges("A\xC3\xA9", xList, yList);
   ASSERT_EQ(ranges.size(), 2u);
@@ -155,7 +154,9 @@ TEST(BuildByteIndexMappingsTest, CombiningMarkSharesBaseIndex) {
 TEST(BuildByteIndexMappingsTest, SupplementaryCharacterConsumeTwoIndices) {
   // "A" + U+1F601 (😁, 4 bytes) + "B". Supplementary chars increment charIdx by 2
   // (UTF-16 surrogate pair semantics) when they're not the first character.
-  const auto m = buildByteIndexMappings("A\xF0\x9F\x98\x81" "B");
+  const auto m = buildByteIndexMappings(
+      "A\xF0\x9F\x98\x81"
+      "B");
   ASSERT_EQ(m.byteToCharIdx.size(), 6u);
   // 'A' at byte 0 → charIdx 0 (first char).
   EXPECT_EQ(m.byteToCharIdx[0], 0u);
@@ -176,8 +177,7 @@ TEST(BuildByteIndexMappingsTest, EmptyText) {
 
 TEST(ApplyTextAnchorTest, StartAnchorNoShift) {
   std::vector<TextRun> runs(1);
-  runs[0].glyphs = {{.xPosition = 100.0, .xAdvance = 10.0},
-                     {.xPosition = 110.0, .xAdvance = 10.0}};
+  runs[0].glyphs = {{.xPosition = 100.0, .xAdvance = 10.0}, {.xPosition = 110.0, .xAdvance = 10.0}};
 
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
@@ -193,8 +193,7 @@ TEST(ApplyTextAnchorTest, StartAnchorNoShift) {
 
 TEST(ApplyTextAnchorTest, MiddleAnchorShiftsHalf) {
   std::vector<TextRun> runs(1);
-  runs[0].glyphs = {{.xPosition = 100.0, .xAdvance = 10.0},
-                     {.xPosition = 110.0, .xAdvance = 10.0}};
+  runs[0].glyphs = {{.xPosition = 100.0, .xAdvance = 10.0}, {.xPosition = 110.0, .xAdvance = 10.0}};
 
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
@@ -211,8 +210,7 @@ TEST(ApplyTextAnchorTest, MiddleAnchorShiftsHalf) {
 
 TEST(ApplyTextAnchorTest, EndAnchorShiftsFull) {
   std::vector<TextRun> runs(1);
-  runs[0].glyphs = {{.xPosition = 100.0, .xAdvance = 10.0},
-                     {.xPosition = 110.0, .xAdvance = 10.0}};
+  runs[0].glyphs = {{.xPosition = 100.0, .xAdvance = 10.0}, {.xPosition = 110.0, .xAdvance = 10.0}};
 
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
@@ -229,8 +227,7 @@ TEST(ApplyTextAnchorTest, EndAnchorShiftsFull) {
 
 TEST(ApplyTextAnchorTest, VerticalModeShiftsYPosition) {
   std::vector<TextRun> runs(1);
-  runs[0].glyphs = {{.yPosition = 50.0, .yAdvance = 20.0},
-                     {.yPosition = 70.0, .yAdvance = 20.0}};
+  runs[0].glyphs = {{.yPosition = 50.0, .yAdvance = 20.0}, {.yPosition = 70.0, .yAdvance = 20.0}};
 
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
@@ -250,8 +247,8 @@ TEST(ApplyTextAnchorTest, VerticalModeShiftsYPosition) {
 TEST(ApplyTextLengthTest, SpacingAdjustmentDistributesEvenly) {
   std::vector<TextRun> runs(1);
   runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0},
-                     {.xPosition = 10.0, .xAdvance = 10.0},
-                     {.xPosition = 20.0, .xAdvance = 10.0}};
+                    {.xPosition = 10.0, .xAdvance = 10.0},
+                    {.xPosition = 20.0, .xAdvance = 10.0}};
 
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
@@ -274,8 +271,7 @@ TEST(ApplyTextLengthTest, SpacingAdjustmentDistributesEvenly) {
 
 TEST(ApplyTextLengthTest, SpacingAndScalingAdjustmentScalesPositions) {
   std::vector<TextRun> runs(1);
-  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0},
-                     {.xPosition = 10.0, .xAdvance = 10.0}};
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}, {.xPosition = 10.0, .xAdvance = 10.0}};
 
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
@@ -295,12 +291,17 @@ TEST(ApplyTextLengthTest, SpacingAndScalingAdjustmentScalesPositions) {
   EXPECT_NEAR(runs[0].glyphs[1].xPosition, 20.0, 0.001);
   EXPECT_NEAR(runs[0].glyphs[0].xAdvance, 20.0, 0.001);
   EXPECT_NEAR(runs[0].glyphs[1].xAdvance, 20.0, 0.001);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[0].fontSizeScale, 1.0f);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[1].fontSizeScale, 1.0f);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleX, 2.0f);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[1].stretchScaleX, 2.0f);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[0].stretchScaleY, 1.0f);
+  EXPECT_FLOAT_EQ(runs[0].glyphs[1].stretchScaleY, 1.0f);
 }
 
 TEST(ApplyTextLengthTest, GlobalTextLengthAppliesWhenNoSpanTextLength) {
   std::vector<TextRun> runs(1);
-  runs[0].glyphs = {{.xPosition = 10.0, .xAdvance = 10.0},
-                     {.xPosition = 20.0, .xAdvance = 10.0}};
+  runs[0].glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}};
 
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
@@ -384,8 +385,7 @@ protected:
   void SetUp() override {
     auto mockBackend = std::make_unique<testing::NiceMock<MockTextBackend>>();
     mockBackend_ = mockBackend.get();
-    engine_ = std::make_unique<TextEngine>(fontManager_, registry_,
-                                           std::move(mockBackend));
+    engine_ = std::make_unique<TextEngine>(fontManager_, registry_, std::move(mockBackend));
 
     // Default mock behavior: simple metrics and scaling.
     ON_CALL(*mockBackend_, fontVMetrics(testing::_))
@@ -395,13 +395,12 @@ protected:
     ON_CALL(*mockBackend_, scaleForEmToPixels(testing::_, testing::_))
         .WillByDefault(testing::Return(0.016f));
     ON_CALL(*mockBackend_, isCursive(testing::_)).WillByDefault(testing::Return(false));
-    ON_CALL(*mockBackend_, hasSmallCapsFeature(testing::_))
-        .WillByDefault(testing::Return(false));
+    ON_CALL(*mockBackend_, hasSmallCapsFeature(testing::_)).WillByDefault(testing::Return(false));
     ON_CALL(*mockBackend_, isBitmapOnly(testing::_)).WillByDefault(testing::Return(false));
     ON_CALL(*mockBackend_, subSuperMetrics(testing::_))
         .WillByDefault(testing::Return(std::nullopt));
-    ON_CALL(*mockBackend_, crossSpanKern(testing::_, testing::_, testing::_, testing::_,
-                                         testing::_, testing::_, testing::_))
+    ON_CALL(*mockBackend_, crossSpanKern(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                         testing::_, testing::_))
         .WillByDefault(testing::Return(0.0));
   }
 

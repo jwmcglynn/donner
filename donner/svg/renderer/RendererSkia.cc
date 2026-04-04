@@ -2035,12 +2035,25 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
       }
 
       const SkPoint origin = SkPoint::Make(0, 0);
+      const bool hasPerGlyphTransform =
+          std::any_of(run.glyphs.begin(), run.glyphs.end(), [](const auto& glyph) {
+            return glyph.rotateDegrees != 0.0 || std::abs(glyph.fontSizeScale - 1.0f) > 1e-6f ||
+                   std::abs(glyph.stretchScaleX - 1.0f) > 1e-6f ||
+                   std::abs(glyph.stretchScaleY - 1.0f) > 1e-6f;
+          });
 
-      if (run.glyphs[0].rotateDegrees != 0.0) {
-        // Per-glyph rotation: draw each glyph individually with rotation.
+      if (hasPerGlyphTransform) {
+        // Per-glyph transforms: draw each glyph individually.
         for (int i = 0; i < glyphCount; ++i) {
           currentCanvas_->save();
           currentCanvas_->translate(skPositions[i].x(), skPositions[i].y());
+          if (std::abs(run.glyphs[i].fontSizeScale - 1.0f) > 1e-6f) {
+            currentCanvas_->scale(run.glyphs[i].fontSizeScale, run.glyphs[i].fontSizeScale);
+          }
+          if (std::abs(run.glyphs[i].stretchScaleX - 1.0f) > 1e-6f ||
+              std::abs(run.glyphs[i].stretchScaleY - 1.0f) > 1e-6f) {
+            currentCanvas_->scale(run.glyphs[i].stretchScaleX, run.glyphs[i].stretchScaleY);
+          }
           currentCanvas_->rotate(NarrowToFloat(run.glyphs[i].rotateDegrees));
           if (hasStroke) {
             currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, strokePaint);

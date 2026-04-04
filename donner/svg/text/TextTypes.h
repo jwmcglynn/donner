@@ -21,6 +21,8 @@ struct TextGlyph {
   double rotateDegrees = 0;    ///< Per-glyph rotation in degrees.
   uint32_t cluster = 0;        ///< Byte offset into the span text for the glyph's source cluster.
   float fontSizeScale = 1.0f;  ///< Per-glyph font size multiplier (< 1.0 for small-caps).
+  float stretchScaleX = 1.0f;  ///< Additional X-axis glyph stretch from lengthAdjust.
+  float stretchScaleY = 1.0f;  ///< Additional Y-axis glyph stretch from lengthAdjust.
 };
 
 /**

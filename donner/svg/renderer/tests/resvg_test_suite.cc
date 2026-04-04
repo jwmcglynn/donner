@@ -225,10 +225,8 @@ INSTANTIATE_TEST_SUITE_P(Isolation, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(Kerning, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-kerning")), TestNameFromFilename);
 
-// Not implemented in renderer
-// INSTANTIATE_TEST_SUITE_P(LengthAdjust, ImageComparisonTestFixture,
-//                          ValuesIn(getTestsWithPrefix("a-lengthAdjust")),
-//                          TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(LengthAdjust, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix("a-lengthAdjust")), TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     LetterSpacing, ImageComparisonTestFixture,
