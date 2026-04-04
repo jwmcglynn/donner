@@ -1591,13 +1591,25 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       }
     }
 
-    // Draw text-decoration lines using font metrics.
-    if (params.textDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
+    // Draw text-decoration lines. Per CSS Text Decoration §3, decoration uses the paint and
+    // font metrics of the element that declared text-decoration, not the current span's.
+    const bool hasSpan = runIndex < text.spans.size();
+    const TextDecoration spanDecoration =
+        hasSpan ? text.spans[runIndex].textDecoration : params.textDecoration;
+
+    if (spanDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
+      const auto& span = text.spans[runIndex];
+
+      // Use the declaring element's font-size for metrics (Category C fix).
+      const float decoFontSizePx =
+          span.decorationFontSizePx > 0.0f ? span.decorationFontSizePx : spanFontSizePx;
+      const float decoScale = textEngine.scaleForPixelHeight(run.font, decoFontSizePx);
+      const float decoEmScale = textEngine.scaleForEmToPixels(run.font, decoFontSizePx);
+
       const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
       const int ascent = vmetrics.ascent;
       const int descent = vmetrics.descent;
 
-      // Read underline position/thickness from the font's 'post' table.
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
       if (auto ul = textEngine.underlineMetrics(run.font)) {
@@ -1605,91 +1617,127 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         fontUnderlineThick = ul->thickness;
       }
 
-      // Post table metrics are in font design units — scale by fontSize/unitsPerEm, not by
-      // scaleForPixelHeight (which normalizes to ascent-descent height instead of em).
-      const float emScale = textEngine.scaleForEmToPixels(run.font, fontSizePx);
-      // Use font metrics for thickness, with heuristic fallback.
       const double thickness = fontUnderlineThick > 0.0
-                                   ? fontUnderlineThick * emScale
-                                   : static_cast<double>(ascent - descent) * scale / 18.0;
+                                   ? fontUnderlineThick * decoEmScale
+                                   : static_cast<double>(ascent - descent) * decoScale / 18.0;
 
-      // Compute vertical offset from baseline for the decoration type.
-      // In our Y-down coordinate system, positive = below baseline.
-      double decoOffsetY = 0.0;
-      if (params.textDecoration == TextDecoration::Underline) {
-        // fontUnderlinePos is typically negative (below baseline in font coords).
-        // Negate it since we need positive = downward in our coord system.
-        decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * emScale
-                                              : -static_cast<double>(descent) * scale * 0.4;
-      } else if (params.textDecoration == TextDecoration::Overline) {
-        decoOffsetY = -static_cast<double>(ascent) * scale;
-      } else if (params.textDecoration == TextDecoration::LineThrough) {
-        decoOffsetY = -static_cast<double>(ascent) * scale * 0.35;
+      // Resolve decoration fill paint from the declaring element (Category B fix).
+      std::optional<tiny_skia::Paint> decoFillPaint;
+      if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedDecorationFill)) {
+        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+        const float fillOpacity = NarrowToFloat(paint_.fillOpacity);
+        decoFillPaint =
+            makeSolidFillPaint(css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)),
+                               span.opacity);
+      } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(
+                     &span.resolvedDecorationFill)) {
+        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+        const float combinedOpacity =
+            NarrowToFloat(paint_.fillOpacity) * static_cast<float>(span.opacity);
+        if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
+                                                    spanCurrentColor, combinedOpacity)) {
+          tiny_skia::Paint paint = makeBasePaint(antialias_);
+          paint.unpremulStore = surfaceStack_.empty();
+          paint.shader = std::move(*shader);
+          decoFillPaint = paint;
+        }
+      }
+      if (!decoFillPaint) {
+        decoFillPaint = spanFillPaint;  // Fallback to span fill if no declaring element.
       }
 
-      // The post table's underlinePosition is the center of the stroke, so offset the
-      // rectangle top edge by half the thickness to center the stroke on that position.
-      const double decoTopY = decoOffsetY - thickness / 2.0;
+      // Resolve decoration stroke paint (Category A fix).
+      std::optional<tiny_skia::Paint> decoStrokePaint;
+      if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedDecorationStroke)) {
+        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+        const float strokeOpacity = NarrowToFloat(paint_.strokeOpacity);
+        css::RGBA resolved = solid->color.resolve(spanCurrentColor, strokeOpacity);
+        resolved.a = static_cast<uint8_t>(
+            std::round(static_cast<double>(resolved.a) * params.opacity * paintOpacity_));
+        tiny_skia::Paint paint = makeBasePaint(antialias_);
+        paint.unpremulStore = surfaceStack_.empty();
+        paint.shader = toTinyColor(resolved);
+        decoStrokePaint = paint;
+      }
 
-      // Check if any glyph has rotation — if so, draw per-glyph decoration segments.
       const bool hasRotation = std::any_of(run.glyphs.begin(), run.glyphs.end(),
                                            [](const auto& g) { return g.rotateDegrees != 0.0; });
 
-      if (hasRotation) {
-        // Per-glyph decoration: each segment is a rectangle under the glyph, rotated with it.
-        for (const auto& glyph : run.glyphs) {
-          if (glyph.glyphIndex == 0 || glyph.xAdvance <= 0.0) {
-            continue;
-          }
+      for (TextDecoration decoType :
+           {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
+        if (!hasFlag(spanDecoration, decoType)) {
+          continue;
+        }
 
-          // Build a horizontal rectangle in glyph-local space (before rotation).
-          PathSpline segPath;
-          segPath.moveTo(Vector2d(0.0, decoTopY));
-          segPath.lineTo(Vector2d(glyph.xAdvance, decoTopY));
-          segPath.lineTo(Vector2d(glyph.xAdvance, decoTopY + thickness));
-          segPath.lineTo(Vector2d(0.0, decoTopY + thickness));
-          segPath.closePath();
+        double decoOffsetY = 0.0;
+        if (decoType == TextDecoration::Underline) {
+          decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * decoEmScale
+                                                : -static_cast<double>(descent) * decoScale * 0.4;
+        } else if (decoType == TextDecoration::Overline) {
+          decoOffsetY = -static_cast<double>(ascent) * decoScale;
+        } else if (decoType == TextDecoration::LineThrough) {
+          decoOffsetY = -static_cast<double>(ascent) * decoScale * 0.35;
+        }
+        const double decoTopY = decoOffsetY - thickness / 2.0;
 
-          // Apply the same transform as the glyph: rotate then translate.
-          Transformd segTransform = Transformd::Translate(glyph.xPosition, glyph.yPosition);
-          if (glyph.rotateDegrees != 0.0) {
-            segTransform =
-                Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-                segTransform;
-          }
-
-          const tiny_skia::Path tinySegPath =
-              toTinyPath(transformPathSpline(segPath, segTransform));
+        // Helper lambda to fill+stroke a decoration path.
+        auto drawDecoPath = [&](const tiny_skia::Path& tinyPath) {
           auto pixmapView = currentPixmapView();
-
-          if (spanFillPaint) {
-            tiny_skia::Painter::fillPath(pixmapView, tinySegPath, *spanFillPaint,
+          if (decoFillPaint) {
+            tiny_skia::Painter::fillPath(pixmapView, tinyPath, *decoFillPaint,
                                          tiny_skia::FillRule::Winding,
                                          toTinyTransform(currentTransform_), mask);
           }
-        }
-      } else {
-        // No rotation: draw a single horizontal decoration line across the run.
-        const double firstX = run.glyphs.front().xPosition;
-        const double lastX = run.glyphs.back().xPosition + run.glyphs.back().xAdvance;
-        const double baseY = run.glyphs.front().yPosition;
-        const double lineWidth = lastX - firstX;
-        const double decoY = baseY + decoTopY;
+          if (decoStrokePaint && span.decorationStrokeWidth > 0.0) {
+            tiny_skia::Stroke stroke;
+            stroke.width = NarrowToFloat(span.decorationStrokeWidth);
+            tiny_skia::Painter::strokePath(pixmapView, tinyPath, *decoStrokePaint, stroke,
+                                           toTinyTransform(currentTransform_), mask);
+          }
+        };
 
-        PathSpline decoPath;
-        decoPath.moveTo(Vector2d(firstX, decoY));
-        decoPath.lineTo(Vector2d(firstX + lineWidth, decoY));
-        decoPath.lineTo(Vector2d(firstX + lineWidth, decoY + thickness));
-        decoPath.lineTo(Vector2d(firstX, decoY + thickness));
-        decoPath.closePath();
+        if (hasRotation) {
+          for (const auto& glyph : run.glyphs) {
+            if (glyph.glyphIndex == 0 || glyph.xAdvance <= 0.0) {
+              continue;
+            }
 
-        const tiny_skia::Path tinyDecoPath = toTinyPath(decoPath);
-        auto pixmapView = currentPixmapView();
+            PathSpline segPath;
+            segPath.moveTo(Vector2d(0.0, decoTopY));
+            segPath.lineTo(Vector2d(glyph.xAdvance, decoTopY));
+            segPath.lineTo(Vector2d(glyph.xAdvance, decoTopY + thickness));
+            segPath.lineTo(Vector2d(0.0, decoTopY + thickness));
+            segPath.closePath();
 
-        if (spanFillPaint) {
-          tiny_skia::Painter::fillPath(pixmapView, tinyDecoPath, *spanFillPaint,
-                                       tiny_skia::FillRule::Winding,
-                                       toTinyTransform(currentTransform_), mask);
+            Transformd segTransform = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+            if (glyph.rotateDegrees != 0.0) {
+              segTransform =
+                  Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                  segTransform;
+            }
+
+            drawDecoPath(toTinyPath(transformPathSpline(segPath, segTransform)));
+          }
+        } else {
+          PathSpline decoPath;
+          for (const auto& glyph : run.glyphs) {
+            if (glyph.glyphIndex == 0 || glyph.xAdvance <= 0.0) {
+              continue;
+            }
+
+            const double x0 = glyph.xPosition;
+            const double x1 = glyph.xPosition + glyph.xAdvance;
+            const double y = glyph.yPosition + decoTopY;
+            decoPath.moveTo(Vector2d(x0, y));
+            decoPath.lineTo(Vector2d(x1, y));
+            decoPath.lineTo(Vector2d(x1, y + thickness));
+            decoPath.lineTo(Vector2d(x0, y + thickness));
+            decoPath.closePath();
+          }
+
+          if (!decoPath.empty()) {
+            drawDecoPath(toTinyPath(decoPath));
+          }
         }
       }
     }

@@ -16,6 +16,7 @@
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PathSpline.h"
 #include "donner/svg/core/TextAnchor.h"
+#include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/Visibility.h"
 
 namespace donner::svg::components {
@@ -132,6 +133,22 @@ struct ComputedTextComponent {
     double letterSpacingPx = 0.0;
     /// CSS `word-spacing` for this span, resolved to pixels. Populated by RendererDriver.
     double wordSpacingPx = 0.0;
+
+    /// Per-span text-decoration bitmask, inherited from the declaring ancestor.
+    TextDecoration textDecoration = TextDecoration::None;
+
+    /// Fill paint resolved from the element that declared text-decoration (not this span).
+    /// Per CSS Text Decoration §3, decoration uses the declaring element's paint.
+    ResolvedPaintServer resolvedDecorationFill;
+
+    /// Stroke paint from the declaring element (for stroking decoration lines).
+    ResolvedPaintServer resolvedDecorationStroke;
+
+    /// Font size (in pixels) from the declaring element, for computing decoration metrics.
+    float decorationFontSizePx = 0.0f;
+
+    /// Stroke width from the declaring element, for stroking decoration lines.
+    double decorationStrokeWidth = 0.0;
 
     /// Per-span text-anchor value. Used for per-chunk text-anchor adjustment:
     /// each text chunk uses the text-anchor of its first rendered character's element.

@@ -82,6 +82,67 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
         }
       }
     }
+
+    // Resolve decoration from ancestors. Per CSS Text Decoration §3, text-decoration is NOT
+    // inherited but the visual decoration line propagates to descendants. Walk ancestors to
+    // accumulate decoration types and resolve paint from each declaring element.
+    {
+      const Boxd viewBox = textRootHandle.registry()
+                               ? components::LayoutSystem().getViewBox(textRootHandle)
+                               : Boxd();
+      const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
+
+      Entity walkEntity = styleEntity;
+      while (walkEntity != entt::null) {
+        auto* walkStyle = registry.try_get<components::ComputedStyleComponent>(walkEntity);
+        if (walkStyle && walkStyle->properties) {
+          const TextDecoration ancestorDeco =
+              walkStyle->properties->textDecoration.getRequired();
+          if (ancestorDeco != TextDecoration::None) {
+            // This ancestor declares decoration — accumulate and use its paint/metrics.
+            span.textDecoration |= ancestorDeco;
+
+            const auto& decoProps = walkStyle->properties.value();
+
+            // Use the first (innermost) declaring ancestor's paint for decoration.
+            if (std::holds_alternative<PaintServer::None>(span.resolvedDecorationFill)) {
+              const PaintServer decoFill = decoProps.fill.getRequired();
+              if (decoFill.is<PaintServer::Solid>()) {
+                span.resolvedDecorationFill = decoFill.get<PaintServer::Solid>();
+              } else if (decoFill.is<PaintServer::ElementReference>()) {
+                const auto& ref = decoFill.get<PaintServer::ElementReference>();
+                auto resolvedRef = ref.reference.resolve(registry);
+                if (resolvedRef && resolvedRef->handle) {
+                  span.resolvedDecorationFill =
+                      components::PaintResolvedReference{*resolvedRef, ref.fallback, std::nullopt};
+                } else if (ref.fallback) {
+                  span.resolvedDecorationFill = PaintServer::Solid(*ref.fallback);
+                }
+              }
+
+              const PaintServer decoStroke = decoProps.stroke.getRequired();
+              if (decoStroke.is<PaintServer::Solid>()) {
+                span.resolvedDecorationStroke = decoStroke.get<PaintServer::Solid>();
+              }
+
+              span.decorationStrokeWidth =
+                  decoProps.strokeWidth.getRequired().toPixels(viewBox, baseFm,
+                                                               Lengthd::Extent::Mixed);
+
+              span.decorationFontSizePx = static_cast<float>(
+                  decoProps.fontSize.getRequired().toPixels(viewBox, baseFm,
+                                                             Lengthd::Extent::Mixed));
+            }
+          }
+        }
+
+        auto* tree = registry.try_get<donner::components::TreeComponent>(walkEntity);
+        if (!tree) {
+          break;
+        }
+        walkEntity = tree->parent();
+      }
+    }
   }
 }
 

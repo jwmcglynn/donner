@@ -239,6 +239,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     }
 
     span.textAnchor = style->properties->textAnchor.getRequired();
+    span.textDecoration = style->properties->textDecoration.getRequired();
     span.baselineShift = style->properties->baselineShift.getRequired();
     span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
     span.fontWeight = style->properties->fontWeight.getRequired();

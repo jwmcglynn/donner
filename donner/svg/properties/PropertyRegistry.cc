@@ -128,27 +128,34 @@ ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> com
 }
 
 ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
+  TextDecoration result = TextDecoration::None;
+
+  for (const auto& component : components) {
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
       const RcString& value = ident->value;
-
       if (value.equalsLowercase("none")) {
-        return TextDecoration::None;
+        if (components.size() == 1) {
+          return TextDecoration::None;
+        }
       } else if (value.equalsLowercase("underline")) {
-        return TextDecoration::Underline;
+        result |= TextDecoration::Underline;
       } else if (value.equalsLowercase("overline")) {
-        return TextDecoration::Overline;
+        result |= TextDecoration::Overline;
       } else if (value.equalsLowercase("line-through")) {
-        return TextDecoration::LineThrough;
+        result |= TextDecoration::LineThrough;
       }
+      // Skip unknown idents (color/style values from full shorthand).
     }
   }
 
-  ParseError err;
-  err.reason = "Invalid text-decoration value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
-  return err;
+  if (result == TextDecoration::None && !components.empty()) {
+    ParseError err;
+    err.reason = "Invalid text-decoration value";
+    err.location = components.front().sourceOffset();
+    return err;
+  }
+
+  return result;
 }
 
 ParseResult<DominantBaseline> ParseDominantBaseline(

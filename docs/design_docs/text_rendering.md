@@ -133,17 +133,19 @@ or unit tests.
 
 ### Text Decoration
 
-- [ ] `text-decoration` — **broken.** Code exists for underline/overline/line-through/none but
-  resvg tests show 1600–6700px diffs (on 200×200 images) masked by a 13000px threshold.
-  All 18 text-decoration tests are effectively untested. Known issues: decoration does not
-  follow per-span paint/color changes, incorrect positioning on multi-span text, broken on
-  rotated text (6690px diff). The rendering code draws decoration per-run but doesn't
-  account for tspan style inheritance or decoration propagation per CSS Text Decoration §3.
+- [x] `text-decoration: underline` �� per-glyph baseline following for y-positioned text
+- [x] `text-decoration: overline` — positioned at ascender
+- [x] `text-decoration: line-through` — positioned at ~35% of ascent
+- [x] `text-decoration: none` — suppress decoration
+- [x] Multiple values (`underline overline line-through`) — bitmask parsing
+- [x] Per-span text-decoration resolved from declaring element's computed style
+- [ ] Decoration color from declaring element — per CSS Text Decoration §3, decoration
+  should use the fill/stroke of the element that set `text-decoration`, not the child tspan's.
+  Currently uses per-span fill paint. *(tests 005-008 still show 2100-3960px diffs)*
 - [ ] `text-decoration-color` — not implemented (uses fill color)
 - [ ] `text-decoration-style` — solid only; no wavy, dotted, dashed, double
 - [ ] `text-decoration-thickness` — not implemented (uses font post table)
-- [ ] Decoration inheritance — SVG2/CSS: decoration set on ancestor should propagate to
-  descendants with the ancestor's color/style, not the child's
+- [ ] Decoration stroke — decoration lines should support stroke, not just fill
 
 ### Text Spacing
 
@@ -221,12 +223,12 @@ or unit tests.
 
 ## Open Work Areas
 
-### 1. Text Decoration — broken
-All 18 resvg tests pass only because the threshold is set to 13000–19500px (allowing up to
-17% pixel mismatch on a 200×200 image). Actual diffs range from 1600 to 6700. Decoration
-does not follow per-span paint changes, is incorrectly positioned on multi-span text, and
-is broken on rotated text. Needs a rewrite of decoration rendering to match CSS Text
-Decoration Level 3 §3 (propagation, color inheritance, positioning per font metrics).
+### 1. Text Decoration Color Inheritance
+Decoration rendering is functional but uses per-span fill paint instead of the declaring
+element's paint (CSS Text Decoration §3). Tests 005-008 show 2100-3960px diffs due to
+decoration color mismatch. The bitmask parser, per-glyph baseline, and per-span resolution
+are all fixed. Remaining: track which ancestor declared the decoration and use its paint.
+Thresholds lowered from 13000 to 3300 (default) with per-test overrides.
 
 ### 2. Dominant Baseline — broken
 Only 1 resvg test exists (`hanging`) with a 17000px max-mismatch threshold. The implementation

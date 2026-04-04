@@ -2,7 +2,7 @@
 /**
  * @file TextDecoration.h
  *
- * Defines the \ref donner::svg::TextDecoration enum for the `text-decoration` CSS property.
+ * Defines the \ref donner::svg::TextDecoration bitmask for the `text-decoration` CSS property.
  */
 
 #include <cstdint>
@@ -13,33 +13,62 @@
 namespace donner::svg {
 
 /**
- * The parsed result of the `text-decoration` property (line type only).
+ * Bitmask for the `text-decoration` property line types.
  *
- * In SVG, `text-decoration` primarily specifies the decoration line type: underline, overline,
- * or line-through. The full CSS `text-decoration` shorthand (color, style, thickness) is not
- * yet supported.
+ * Values can be combined: `Underline | Overline` represents both an underline and overline.
+ * The CSS `text-decoration` shorthand parses space-separated values into this bitmask.
  *
  * @see https://www.w3.org/TR/SVG2/text.html#TextDecorationProperties
  */
 enum class TextDecoration : uint8_t {
-  None,         ///< [DEFAULT] No text decoration.
-  Underline,    ///< Draw a line below the text.
-  Overline,     ///< Draw a line above the text.
-  LineThrough,  ///< Draw a line through the middle of the text.
+  None = 0,             ///< [DEFAULT] No text decoration.
+  Underline = 1 << 0,   ///< Draw a line below the text.
+  Overline = 1 << 1,    ///< Draw a line above the text.
+  LineThrough = 1 << 2,  ///< Draw a line through the middle of the text.
 };
 
+/// Bitwise OR for combining TextDecoration values.
+constexpr TextDecoration operator|(TextDecoration a, TextDecoration b) {
+  return static_cast<TextDecoration>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+}
+
+/// Bitwise AND for testing TextDecoration flags.
+constexpr TextDecoration operator&(TextDecoration a, TextDecoration b) {
+  return static_cast<TextDecoration>(static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
+}
+
+/// Bitwise OR assignment.
+constexpr TextDecoration& operator|=(TextDecoration& a, TextDecoration b) {
+  a = a | b;
+  return a;
+}
+
+/// Returns true if any of the flags in \p flags are set in \p value.
+constexpr bool hasFlag(TextDecoration value, TextDecoration flags) {
+  return (static_cast<uint8_t>(value) & static_cast<uint8_t>(flags)) != 0;
+}
+
 /**
- * Ostream output operator for \ref TextDecoration enum, outputs the CSS value.
+ * Ostream output operator for \ref TextDecoration bitmask, outputs CSS values.
  */
 inline std::ostream& operator<<(std::ostream& os, TextDecoration value) {
-  switch (value) {
-    case TextDecoration::None: return os << "none";
-    case TextDecoration::Underline: return os << "underline";
-    case TextDecoration::Overline: return os << "overline";
-    case TextDecoration::LineThrough: return os << "line-through";
+  if (value == TextDecoration::None) {
+    return os << "none";
   }
-
-  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
+  bool first = true;
+  auto emit = [&](TextDecoration flag, const char* name) {
+    if (hasFlag(value, flag)) {
+      if (!first) {
+        os << ' ';
+      }
+      os << name;
+      first = false;
+    }
+  };
+  emit(TextDecoration::Underline, "underline");
+  emit(TextDecoration::Overline, "overline");
+  emit(TextDecoration::LineThrough, "line-through");
+  return os;
 }
 
 }  // namespace donner::svg

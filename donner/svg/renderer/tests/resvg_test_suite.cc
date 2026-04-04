@@ -121,7 +121,6 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
             {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
             {"a-fill-027.svg", Params::Skip()},  // Not impl: Fallback with icc-color
-            // fill-031 (linear gradient on text) — fixed by proper text bbox computation.
         })),
     TestNameFromFilename);
 
@@ -316,16 +315,7 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     TextDecoration, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
-        "a-text-decoration",
-        {
-            {"a-text-decoration-004.svg",
-             Params::WithThreshold(kDefaultThreshold, 15000)},  // overline
-            {"a-text-decoration-015.svg",
-             Params::WithThreshold(kDefaultThreshold, 14500)},  // gradient decoration
-            {"a-text-decoration-018.svg",
-             Params::WithThreshold(kDefaultThreshold, 19500)},  // on rotated text
-        },
-        Params::WithThreshold(kDefaultThreshold, 13000))),
+        "a-text-decoration")),
     TestNameFromFilename);
 
 // TODO(jwm): We don't implement text-rendering, but the image comparison test fuzziness
