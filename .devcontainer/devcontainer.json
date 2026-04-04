@@ -32,8 +32,8 @@
         "matepek.vscode-catch2-test-adapter",
         "ms-vscode.cpptools",
         "vadimcn.vscode-lldb"
-      ],
-    },
+      ]
+    }
   },
   // Connect as non-root user.
   "remoteUser": "vscode",
