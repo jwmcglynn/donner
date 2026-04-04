@@ -75,10 +75,7 @@ SKIPPED_PACKAGES = {
 }
 
 # Individual targets to skip (require optional deps like HarfBuzz).
-SKIPPED_TARGETS = {
-    "//donner/svg/renderer:text_shaper",
-    "//donner/svg/renderer/tests:text_shaper_tests",
-}
+SKIPPED_TARGETS = set()
 
 # Helper constants for CMake condition strings.
 _SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "skia"'
@@ -105,10 +102,8 @@ CONDITIONAL_TARGETS: Dict[str, str] = {
     # Filters (tiny-skia filter graph executor)
     "donner_svg_renderer_filter_graph_executor": f"{_TINY_SKIA} AND DONNER_FILTERS",
     # Text rendering
-    "donner_svg_renderer_text_layout": "DONNER_TEXT",
     "donner_svg_resources_font_manager": "DONNER_TEXT",
     "donner_svg_resources_font_manager_tests": "DONNER_TEXT",
-    "donner_svg_renderer_tests_text_layout_tests": "DONNER_TEXT",
     # WOFF2
     "donner_base_fonts_woff2_parser": "DONNER_TEXT_WOFF2",
     "donner_base_fonts_woff2_parser_tests": "DONNER_TEXT_WOFF2",
@@ -127,7 +122,6 @@ OPTIONAL_DEPS: Set[str] = {
     "donner_svg_renderer_renderer_skia",
     "donner_svg_renderer_renderer_tiny_skia",
     "donner_svg_renderer_filter_graph_executor",
-    "donner_svg_renderer_text_layout",
     "donner_svg_resources_font_manager",
     "donner_base_fonts_woff2_parser",
     "donner_svg_renderer_skia_deps",

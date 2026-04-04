@@ -33,7 +33,8 @@
     "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
 #endif
 #ifdef DONNER_TEXT_FULL
-#include "donner/svg/renderer/TextShaper.h"
+#include "donner/svg/renderer/TextBackendFull.h"
+#include "donner/svg/renderer/TextEngine.h"
 #include "donner/svg/resources/FontManager.h"
 #endif
 // Donner
@@ -1930,8 +1931,9 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
   font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
 #ifdef DONNER_TEXT_FULL
-  // When text_full is enabled, use TextShaper for layout and drawGlyphs() for rendering.
-  // This provides full OpenType GSUB/GPOS support with identical shaping across backends.
+  // When text_full is enabled, use TextEngine + TextBackendFull for layout and drawGlyphs()
+  // for rendering. This provides full OpenType GSUB/GPOS support with identical shaping across
+  // backends.
   {
     static FontManager fontManager;
     // Register @font-face declarations so custom fonts can be resolved.
@@ -1942,30 +1944,29 @@ void RendererSkia::drawText(const components::ComputedTextComponent& text,
         fontManager.addFontFace(params.fontFaces[i]);
       }
     }
-    TextShaper shaper(fontManager);
-    std::vector<ShapedTextRun> runs = shaper.layout(text, params);
-
-    // Create SkTypeface from the FontManager's font data so glyph IDs match HarfBuzz output.
-    sk_sp<SkTypeface> shapedTypeface;
-    if (!runs.empty() && runs[0].font) {
-      const auto fontBytes = fontManager.fontData(runs[0].font);
-      if (!fontBytes.empty()) {
-        shapedTypeface = fontMgr_->makeFromData(
-            SkData::MakeWithoutCopy(fontBytes.data(), fontBytes.size()));
-      }
-    }
-    if (!shapedTypeface) {
-      shapedTypeface = typeface;
-    }
-
-    SkFont shapedFont(shapedTypeface, fontSizePx);
-    shapedFont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+    TextBackendFull backend(fontManager);
+    TextEngine engine(backend, fontManager);
+    std::vector<TextRun> runs = engine.layout(text, params);
 
     for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
       const auto& run = runs[runIndex];
       if (run.glyphs.empty()) {
         continue;
       }
+
+      sk_sp<SkTypeface> shapedTypeface = typeface;
+      if (run.font) {
+        const auto fontBytes = fontManager.fontData(run.font);
+        if (!fontBytes.empty()) {
+          if (sk_sp<SkTypeface> face = fontMgr_->makeFromData(
+                  SkData::MakeWithoutCopy(fontBytes.data(), fontBytes.size()))) {
+            shapedTypeface = std::move(face);
+          }
+        }
+      }
+
+      SkFont shapedFont(shapedTypeface, fontSizePx);
+      shapedFont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
       SkPaint spanFillPaint = fillPaint;
       if (runIndex < text.spans.size() && text.spans[runIndex].fillColor.has_value()) {

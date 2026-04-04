@@ -4,59 +4,18 @@
 #include <string>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/Utf8.h"
 #include "donner/svg/core/WritingMode.h"
 
 namespace donner::svg {
 
 namespace {
 
-// TODO: Switch to donner/base/Utf8.h instead of reimplementing UTF-8 decoding.
-
 /// Decode a single UTF-8 codepoint, advancing \p i past the consumed bytes.
 uint32_t decodeUtf8(const std::string_view str, size_t& i) {
-  const auto byte = static_cast<uint8_t>(str[i]);
-
-  if (byte < 0x80) {
-    i += 1;
-    return byte;
-  }
-  if ((byte & 0xE0) == 0xC0) {
-    if (i + 1 >= str.size()) {
-      i = str.size();
-      return 0xFFFD;
-    }
-    const uint32_t cp =
-        (static_cast<uint32_t>(byte & 0x1F) << 6) | (static_cast<uint32_t>(str[i + 1]) & 0x3F);
-    i += 2;
-    return cp;
-  }
-  if ((byte & 0xF0) == 0xE0) {
-    if (i + 2 >= str.size()) {
-      i = str.size();
-      return 0xFFFD;
-    }
-    const uint32_t cp = (static_cast<uint32_t>(byte & 0x0F) << 12) |
-                        ((static_cast<uint32_t>(str[i + 1]) & 0x3F) << 6) |
-                        (static_cast<uint32_t>(str[i + 2]) & 0x3F);
-    i += 3;
-    return cp;
-  }
-  if ((byte & 0xF8) == 0xF0) {
-    if (i + 3 >= str.size()) {
-      i = str.size();
-      return 0xFFFD;
-    }
-    const uint32_t cp = (static_cast<uint32_t>(byte & 0x07) << 18) |
-                        ((static_cast<uint32_t>(str[i + 1]) & 0x3F) << 12) |
-                        ((static_cast<uint32_t>(str[i + 2]) & 0x3F) << 6) |
-                        (static_cast<uint32_t>(str[i + 3]) & 0x3F);
-    i += 4;
-    return cp;
-  }
-
-  // Invalid leading byte.
-  i += 1;
-  return 0xFFFD;
+  const auto [cp, length] = Utf8::NextCodepoint(str.substr(i));
+  i += static_cast<size_t>(length);
+  return static_cast<uint32_t>(cp);
 }
 
 /// Returns the first non-ASCII codepoint in \p str, or 0 if none exists.
@@ -74,22 +33,7 @@ uint32_t firstNonAsciiCodepoint(const std::string_view str) {
 /// Encode a single Unicode codepoint as UTF-8.
 std::string encodeUtf8(uint32_t cp) {
   std::string result;
-  if (cp <= 0x7F) {
-    result.push_back(static_cast<char>(cp));
-  } else if (cp <= 0x7FF) {
-    result.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp <= 0xFFFF) {
-    result.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    result.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    result.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-
+  Utf8::Append(static_cast<char32_t>(cp), std::back_inserter(result));
   return result;
 }
 

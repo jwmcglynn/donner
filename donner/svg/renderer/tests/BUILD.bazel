@@ -147,16 +147,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "text_layout_tests",
-    srcs = ["TextLayout_tests.cc"],
-    deps = [
-        "//donner/svg/renderer:text_layout",
-        "@com_google_gtest//:gtest_main",
-        "@stb//:truetype",
-    ],
-)
-
-donner_cc_test(
     name = "text_engine_tests",
     srcs = ["TextEngine_tests.cc"],
     data = [
@@ -171,15 +161,14 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "text_shaper_tests",
-    srcs = ["TextShaper_tests.cc"],
+    name = "text_backend_full_tests",
+    srcs = ["TextBackendFull_tests.cc"],
     data = [
         "@resvg-test-suite//:fonts",
     ],
     deps = [
         "//donner/base:base_test_utils",
-        "//donner/svg/renderer:text_layout",
-        "//donner/svg/renderer:text_shaper",
+        "//donner/svg/renderer:text_backend_full",
         "@com_google_gtest//:gtest_main",
     ],
 )

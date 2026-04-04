@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/TextBackendSimple.h"
 
+#include "donner/base/Utf8.h"
+
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
 
@@ -30,50 +32,11 @@ int16_t readInt16BE(const unsigned char* data, int offset) {
   return static_cast<int16_t>(static_cast<uint16_t>(data[offset] << 8) | data[offset + 1]);
 }
 
-// TODO: Switch to donner/base/Utf8.h instead of reimplementing UTF-8 decoding.
-
 /// Decode one UTF-8 codepoint from \p str starting at \p i. Advances \p i past the codepoint.
 uint32_t decodeUtf8(std::string_view str, size_t& i) {
-  const auto byte = static_cast<unsigned char>(str[i]);
-  if (byte < 0x80) {
-    i += 1;
-    return byte;
-  }
-  if ((byte & 0xE0) == 0xC0) {
-    if (i + 1 >= str.size()) {
-      i = str.size();
-      return 0xFFFD;
-    }
-    const uint32_t cp = (static_cast<uint32_t>(byte & 0x1F) << 6) |
-                        (static_cast<uint32_t>(str[i + 1]) & 0x3F);
-    i += 2;
-    return cp;
-  }
-  if ((byte & 0xF0) == 0xE0) {
-    if (i + 2 >= str.size()) {
-      i = str.size();
-      return 0xFFFD;
-    }
-    const uint32_t cp = (static_cast<uint32_t>(byte & 0x0F) << 12) |
-                        ((static_cast<uint32_t>(str[i + 1]) & 0x3F) << 6) |
-                        (static_cast<uint32_t>(str[i + 2]) & 0x3F);
-    i += 3;
-    return cp;
-  }
-  if ((byte & 0xF8) == 0xF0) {
-    if (i + 3 >= str.size()) {
-      i = str.size();
-      return 0xFFFD;
-    }
-    const uint32_t cp = (static_cast<uint32_t>(byte & 0x07) << 18) |
-                        ((static_cast<uint32_t>(str[i + 1]) & 0x3F) << 12) |
-                        ((static_cast<uint32_t>(str[i + 2]) & 0x3F) << 6) |
-                        (static_cast<uint32_t>(str[i + 3]) & 0x3F);
-    i += 4;
-    return cp;
-  }
-  i += 1;
-  return 0xFFFD;
+  const auto [cp, length] = Utf8::NextCodepoint(str.substr(i));
+  i += static_cast<size_t>(length);
+  return static_cast<uint32_t>(cp);
 }
 
 constexpr float kSmallCapScale = 0.8f;
@@ -229,16 +192,16 @@ bool TextBackendSimple::hasSmallCapsFeature(FontHandle /*font*/) const {
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendSimple::bitmapGlyph(FontHandle /*font*/,
-                                                                        int /*glyphIndex*/,
-                                                                        float /*scale*/) const {
+                                                                       int /*glyphIndex*/,
+                                                                       float /*scale*/) const {
   return std::nullopt;
 }
 
 TextBackend::ShapedRun TextBackendSimple::shapeRun(FontHandle font, float fontSizePx,
-                                                    std::string_view spanText, size_t byteOffset,
-                                                    size_t byteLength, bool isVertical,
-                                                    FontVariant fontVariant,
-                                                    bool /*forceLogicalOrder*/) const {
+                                                   std::string_view spanText, size_t byteOffset,
+                                                   size_t byteLength, bool isVertical,
+                                                   FontVariant fontVariant,
+                                                   bool /*forceLogicalOrder*/) const {
   const stbtt_fontinfo* info = fontManager_.fontInfo(font);
   if (!info) {
     return {};
@@ -314,9 +277,9 @@ TextBackend::ShapedRun TextBackendSimple::shapeRun(FontHandle font, float fontSi
 }
 
 double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx,
-                                         FontHandle /*curFont*/, float /*curSizePx*/,
-                                         uint32_t prevCodepoint, uint32_t curCodepoint,
-                                         bool isVertical) const {
+                                        FontHandle /*curFont*/, float /*curSizePx*/,
+                                        uint32_t prevCodepoint, uint32_t curCodepoint,
+                                        bool isVertical) const {
   const stbtt_fontinfo* info = fontManager_.fontInfo(prevFont);
   if (!info) {
     return 0.0;

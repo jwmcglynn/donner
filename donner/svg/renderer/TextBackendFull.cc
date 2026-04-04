@@ -13,6 +13,8 @@
 #include <hb-ot.h>
 #include <hb.h>
 
+#include "donner/base/Utf8.h"
+
 namespace donner::svg {
 
 namespace {
@@ -66,27 +68,8 @@ uint32_t decodeCodepointAt(std::string_view str, size_t byteOffset) {
     return 0;
   }
 
-  const auto byte = static_cast<uint8_t>(str[byteOffset]);
-  if (byte < 0x80) {
-    return byte;
-  }
-  if ((byte & 0xE0) == 0xC0 && byteOffset + 1 < str.size()) {
-    return (static_cast<uint32_t>(byte & 0x1F) << 6) |
-           (static_cast<uint32_t>(str[byteOffset + 1]) & 0x3F);
-  }
-  if ((byte & 0xF0) == 0xE0 && byteOffset + 2 < str.size()) {
-    return (static_cast<uint32_t>(byte & 0x0F) << 12) |
-           ((static_cast<uint32_t>(str[byteOffset + 1]) & 0x3F) << 6) |
-           (static_cast<uint32_t>(str[byteOffset + 2]) & 0x3F);
-  }
-  if ((byte & 0xF8) == 0xF0 && byteOffset + 3 < str.size()) {
-    return (static_cast<uint32_t>(byte & 0x07) << 18) |
-           ((static_cast<uint32_t>(str[byteOffset + 1]) & 0x3F) << 12) |
-           ((static_cast<uint32_t>(str[byteOffset + 2]) & 0x3F) << 6) |
-           (static_cast<uint32_t>(str[byteOffset + 3]) & 0x3F);
-  }
-
-  return 0xFFFD;
+  const auto [cp, /*length*/ _] = Utf8::NextCodepoint(str.substr(byteOffset));
+  return static_cast<uint32_t>(cp);
 }
 
 }  // namespace

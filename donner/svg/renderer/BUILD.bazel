@@ -158,10 +158,10 @@ donner_cc_library(
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
-        "//donner/base",
-        "//donner/svg",
         ":tiny_skia_deps",
         ":tiny_skia_filter_deps",
+        "//donner/base",
+        "//donner/svg",
     ],
 )
 
@@ -201,11 +201,11 @@ donner_cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
-    visibility = ["//visibility:public"],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
+    visibility = ["//visibility:public"],
     deps = [
         "//donner/svg/components",
         "//donner/svg/components:spatial_grid",
@@ -220,7 +220,6 @@ donner_cc_library(
 donner_perf_sensitive_cc_library(
     name = "skia_deps",
     allow_debug_builds_config = ":config_skia_debug",
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     defines = select({
         ":macos_coretext": ["DONNER_USE_CORETEXT"],
         ":linux_fontconfig": ["DONNER_USE_FREETYPE_WITH_FONTCONFIG"],
@@ -230,6 +229,7 @@ donner_perf_sensitive_cc_library(
         ":linux_fontconfig": ["-lfontconfig"],
         "//conditions:default": [],
     }),
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         "@skia//:core",
         "@skia//:pathops",
@@ -266,26 +266,26 @@ donner_cc_library(
     name = "renderer_skia",
     srcs = ["RendererSkia.cc"],
     hdrs = ["RendererSkia.h"],
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     defines = select({
         ":text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
+    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         ":renderer_driver",
         ":renderer_image_io",
         ":renderer_interface",
         ":renderer_utils",
         ":skia_deps",
+        ":text_backend_full",
+        ":text_engine",
         "//donner/base/fonts",
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",
+        "//donner/svg/resources:font_manager",
         "//third_party/public-sans",
-    ] + select({
-        ":text_full_enabled": [":text_shaper"],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 donner_cc_library(
@@ -335,18 +335,6 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "text_layout",
-    srcs = ["TextLayout.cc"],
-    hdrs = ["TextLayout.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":renderer_interface",
-        "//donner/svg/resources:font_manager",
-        "@stb//:truetype",
-    ],
-)
-
-donner_cc_library(
     name = "text_backend_full",
     srcs = ["TextBackendFull.cc"],
     hdrs = ["TextBackendFull.h"],
@@ -354,20 +342,7 @@ donner_cc_library(
     deps = [
         ":text_backend",
         "//donner/svg/resources:font_manager",
-        "@freetype//:freetype",
-        "@harfbuzz",
-    ],
-)
-
-donner_cc_library(
-    name = "text_shaper",
-    srcs = ["TextShaper.cc"],
-    hdrs = ["TextShaper.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":renderer_interface",
-        "//donner/svg/resources:font_manager",
-        "@freetype//:freetype",
+        "@freetype",
         "@harfbuzz",
     ],
 )
@@ -376,8 +351,6 @@ donner_cc_library(
     name = "renderer_tiny_skia",
     srcs = ["RendererTinySkia.cc"],
     hdrs = ["RendererTinySkia.h"],
-    visibility = ["//visibility:public"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     defines = select({
         ":filters_enabled": ["DONNER_FILTERS_ENABLED"],
         "//conditions:default": [],
@@ -388,6 +361,8 @@ donner_cc_library(
         ":text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//visibility:public"],
     deps = [
         ":renderer_driver",
         ":renderer_image_io",

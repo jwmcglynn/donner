@@ -413,7 +413,7 @@ unit tests for `TextBackendSimple`.
 - [x] All renderer_tests and resvg_test_suite pass (base config)
 - [ ] Break `layout()` into named helpers (resolveSpanFont, positionGlyphs, applyTextAnchor, etc.)
 - [ ] Add MockTextBackend unit tests for each helper
-- [ ] Delete `TextLayout.h/cc`
+- [x] Delete `TextLayout.h/cc`
 
 ### Phase 3: TextBackendFull
 
@@ -422,8 +422,8 @@ unit tests for `TextBackendSimple`.
 - [x] Remove `#ifdef DONNER_TEXT_FULL` code duplication from `RendererTinySkia::drawText()`
 - [x] All base-config tests pass
 - [ ] Close text-full parity gaps (1 remaining of 9 original, see below)
-- [ ] Delete `TextShaper.h/cc`
-- [ ] Add unit tests for `TextBackendFull`
+- [x] Delete `TextShaper.h/cc`
+- [x] Add unit tests for `TextBackendFull`
 
 #### Phase 3a: Close text-full parity gaps
 
@@ -497,18 +497,28 @@ CJK vertical layout (`a-writing-mode-012`, 11928px → PASS):
 
 - [ ] Remove `fontInfo()` from `FontManager`'s public API
 - [ ] Update `ImageComparisonTestFixture` table-reading helpers to use `TextBackend`
-- [ ] Switch from reimplemented UTF-8 decoding to `donner/base/Utf8.h`
+- [x] Switch from reimplemented UTF-8 decoding to `donner/base/Utf8.h`
 - [x] Update design docs
 
 ## Validation Status
 
 Current verification for this refactor:
 
+- [x] `bazel test //...`
+- [x] `bazel test //donner/svg/renderer/tests:text_backend_full_tests --config=text-full`
 - [x] `bazel test //donner/svg/renderer/tests:text_engine_tests --config=text-full`
 - [x] `bazel test //donner/svg/renderer/tests:resvg_test_suite --config=text-full --test_output=errors`
+- [x] `bazel test //donner/svg/renderer/tests:resvg_test_suite --test_output=errors`
+- [ ] `bazel build //donner/svg/renderer:renderer_skia --config=text-full`
+      Not verifiable in the current environment because the Skia renderer target is incompatible
+      on this machine.
 
 The refactored `TextEngine` + `TextBackendFull` path now matches the previous text-full
 behavior for the resvg suite while removing the duplicated layout logic from `TextShaper`.
+`RendererSkia` now uses `TextEngine + TextBackendFull`, and the legacy `TextShaper` source,
+target, and dedicated test target have been removed. `TextLayout` and its dedicated test target
+have also been removed because the production renderer no longer uses the legacy simple-layout
+implementation.
 
 ## File Structure (After)
 
