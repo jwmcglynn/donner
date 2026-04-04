@@ -106,10 +106,7 @@ INSTANTIATE_TEST_SUITE_P(Display, ImageComparisonTestFixture,
                          TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(DominantBaseline, ImageComparisonTestFixture,
-                         ValuesIn(getTestsWithPrefix("a-dominant-baseline", {},
-                                                     Params::WithThreshold(kDefaultThreshold,
-                                                                           17000))),
-                         TestNameFromFilename);
+                         ValuesIn(getTestsWithPrefix("a-dominant-baseline")), TestNameFromFilename);
 
 // a-enable-background: Deprecated in SVG 2, not implemented. See docs/unsupported_svg1_features.md.
 
