@@ -1,23 +1,247 @@
 # Design: Text Rendering
 
-**Status:** Implemented (Phases 1-6)
+**Status:** Implemented (Phases 1–6), backend refactor complete
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-09
+**Updated:** 2026-04-04
 **Tracking:** [#242](https://github.com/jwmcglynn/donner/issues/242)
 
-> This document was split from a monolithic design doc into separate files for easier navigation.
-> Each sub-document covers a specific aspect of text rendering.
+## Architecture
+
+Two-tier build-time text stack:
+
+- **Base tier** (`text`): stb_truetype font loading, kern-table kerning, glyph outlines, @font-face.
+  No new dependencies (~55 KB).
+- **Full tier** (`text_full`, `--config=text-full`): HarfBuzz OpenType shaping (GSUB/GPOS),
+  FreeType glyph outlines, WOFF2/Brotli, color emoji (CBDT/CBLC), cursive detection, native
+  small-caps. Adds HarfBuzz + FreeType + woff2 (~500–800 KB).
+
+Both tiers share a single `TextEngine` with a pluggable `TextBackend` interface
+(`TextBackendSimple` / `TextBackendFull`). Layout, positioning, chunking, text-anchor, textLength,
+and text-on-path logic live in `TextEngine::layout()` — no duplication between backends.
+
+Key components:
+
+| Component | Role |
+|---|---|
+| `FontManager` | ECS-backed font registry: @font-face, family matching, raw font data |
+| `TextBackend` | Abstract font operations: metrics, outlines, shaping, capabilities |
+| `TextEngine` | SVG text layout, geometry cache, public API support (in `registry.ctx()`) |
+| `TextSystem` | ECS layer: flattens DOM text into `ComputedTextComponent` |
+| `ComputedTextGeometryComponent` | Cached glyph geometry, character metrics, layout runs |
 
 ## Sub-documents
 
-- **[Overview](text/overview.md)** — Summary, goals, non-goals, feature tiers (text / text_full), Bazel feature flags, current state of implementation.
+- **[Overview](text/overview.md)** — Goals, non-goals, feature tiers, Bazel flags, phase summary.
+- **[Architecture](text/architecture.md)** — Dependency evaluation, component design, implementation
+  phases 1–6. *Note: describes the pre-refactor TextLayout/TextShaper split; the current unified
+  TextEngine/TextBackend architecture is documented in the refactor doc.*
+- **[Testing and Validation](text/testing.md)** — Test strategy, golden image tests, failure
+  analysis snapshot (2026-03-30), tspan gap analysis.
+- **[RTL Text and Complex Scripts](text/rtl_and_complex_scripts.md)** — HarfBuzz script detection,
+  RTL per-character coordinates, combining marks, font fallback, color emoji.
+- **[textPath Implementation Plan](text/textpath.md)** — `<textPath>` element design, path sampling,
+  renderer integration.
+- **[TextBackend Refactor](text/text_backend_refactor.md)** — TextBackend abstraction, TextEngine
+  extraction, layout helper decomposition, ECS caching, invalidation wiring. **This is the
+  authoritative architecture document for the current text stack.**
 
-- **[Architecture](text/architecture.md)** — Dependency evaluation (stb_truetype, HarfBuzz, FreeType, woff2/Brotli), proposed architecture (FontManager, TextLayout, TextShaper, glyph outlines, renderer integration), implementation plan (Phases 1-7), dependencies table, alternatives considered, open questions, and future work.
+---
 
-- **[Testing and Validation](text/testing.md)** — Unit test and golden image test strategy, feature-gated test skipping, backend parity notes, current test failure analysis (2026-03-21 snapshot), and tspan gap analysis with phased fix plan (Phases A-J).
+## SVG2 Text Feature Checklist
 
-- **[RTL Text and Complex Scripts](text/rtl_and_complex_scripts.md)** — RTL pen direction, HarfBuzz script auto-detection, per-character coordinates with RTL text, combining mark rotation, cross-family font fallback, and color emoji (CBDT/CBLC) support.
+Comprehensive coverage of [SVG2 Chapter 11: Text](https://www.w3.org/TR/SVG2/text.html) and
+related CSS properties. Checked items are implemented and validated by resvg golden image tests
+or unit tests.
 
-- **[textPath Implementation Plan](text/textpath.md)** — `<textPath>` element design: SVGTextPathElement class, path-based text layout algorithm, path sampling, renderer integration, and test plan.
+### Elements
 
-- **[TextBackend Refactor](text/text_backend_refactor.md)** — TextBackend abstraction to decouple font operations from layout engines, unify duplicated SVG positioning code into shared TextEngine, readability cleanup, mock-based testability. Backends: TextBackendSimple (stb_truetype), TextBackendFull (HarfBuzz+FreeType).
+- [x] `<text>` — text root element, positioning, rendering
+- [x] `<tspan>` — inline text span with per-span positioning and style
+- [ ] `<textPath>` — text laid out along a path *(basic layout works; 39 resvg tests disabled,
+  method/spacing/side/path-attr not implemented)*
+- [ ] `<tref>` — deprecated in SVG2, not planned
+
+### Text Content and Whitespace
+
+- [x] Character data rendering (ASCII, multi-byte UTF-8)
+- [x] `xml:space="default"` — collapse whitespace, strip leading/trailing
+- [x] `xml:space="preserve"` — convert newlines/tabs to spaces, preserve all spaces
+- [x] Mixed text and child element interleaving (advanceTextChunk)
+- [ ] White-space CSS property (`white-space: pre | pre-wrap | pre-line`) — SVG2 adds CSS
+  white-space; currently only `xml:space` is supported
+
+### Per-Character Positioning (SVG2 §11.4)
+
+- [x] `x` — absolute X position list
+- [x] `y` — absolute Y position list
+- [x] `dx` — relative X offset list
+- [x] `dy` — relative Y offset list
+- [x] `rotate` — per-character rotation list (last value repeats)
+- [x] UTF-16 surrogate pair coordinate consumption for supplementary characters
+- [x] Combining mark / ZWJ sequence grouping (non-spacing chars share base index)
+
+### Text Layout Properties
+
+- [x] `text-anchor` — start, middle, end per text chunk
+- [x] `dominant-baseline` — auto, alphabetic, middle, central, hanging, mathematical,
+  text-top, text-bottom, ideographic *(1 resvg test, 10px diff — excellent)*
+- [x] `alignment-baseline` — per-span override of dominant-baseline
+- [x] `baseline-shift` — sub, super, `<length>`, `<percentage>`; OS/2 table metrics for
+  sub/super; ancestor baseline-shift accumulation
+- [x] `textLength` — per-span and global, spacing and spacingAndGlyphs modes
+- [x] `lengthAdjust` — spacing (default) and spacingAndGlyphs
+- [x] `writing-mode` — horizontal-tb, vertical-rl *(basic Latin + CJK;
+  5 tests skipped for vertical dx/dy bugs and mixed-language issues)*
+- [ ] `writing-mode` vertical with non-ASCII mixed scripts — *(skipped: 011, 013, 014, 015)*
+- [ ] `glyph-orientation-vertical` / `glyph-orientation-horizontal` — deprecated in SVG2,
+  not implemented
+- [ ] `text-orientation` — SVG2 property for vertical text glyph orientation; not implemented
+- [ ] `inline-size` / `shape-inside` / `shape-subtract` — SVG2 text wrapping; not implemented
+
+### Font Properties
+
+- [x] `font-family` — family name matching from @font-face declarations
+- [x] `font-size` — `<length>`, `<percentage>`, absolute/relative keywords
+- [x] `font-weight` — numeric 100-900, bold/normal keyword matching
+- [x] `font-style` — normal, italic, oblique matching
+- [x] `font-stretch` — normal through ultra-expanded matching
+- [x] `font-variant` — normal, small-caps (synthesized in base tier, native smcp in full tier)
+- [ ] `font-variant` extended values — small-caps only; no `all-small-caps`, `petite-caps`,
+  `all-petite-caps`, `unicase`, `titling-caps`
+- [ ] `font` shorthand — not parsed; individual properties only
+- [ ] `font-size-adjust` — not implemented
+- [ ] `font-feature-settings` — not implemented (HarfBuzz supports it internally)
+- [ ] `font-variation-settings` — variable fonts not supported
+- [ ] Generic font families — serif, sans-serif, monospace, cursive, fantasy not mapped to
+  system fonts *(11 resvg tests skipped)*
+
+### @font-face
+
+- [x] `@font-face` rule parsing and registration
+- [x] `src: url()` with data URIs and external references
+- [x] TTF, OTF (CFF) font loading
+- [x] WOFF1 decompression (base tier)
+- [x] WOFF2 decompression (full tier, via Brotli)
+- [ ] `unicode-range` descriptor — not implemented
+- [ ] `font-display` descriptor — not applicable (no async loading)
+- [ ] System font discovery / fallback — no OS font enumeration
+
+### Text Decoration
+
+- [x] `text-decoration: underline` — position/thickness from post table
+- [x] `text-decoration: overline` — positioned at ascender
+- [x] `text-decoration: line-through` — positioned at strikethrough offset
+- [x] `text-decoration: none` — suppress inherited decoration
+- [ ] `text-decoration-color` — not implemented (uses fill color)
+- [ ] `text-decoration-style` — solid only; no wavy, dotted, dashed, double
+- [ ] `text-decoration-thickness` — not implemented (uses font post table)
+- [ ] Decoration interaction with tspan style changes — *(high pixel diffs in resvg tests,
+  1600-5200px range, suggest decoration doesn't follow per-span paint changes)*
+
+### Text Spacing
+
+- [x] `letter-spacing` — per-character extra spacing, suppressed for cursive scripts (full tier)
+- [x] `word-spacing` — extra spacing after U+0020
+- [ ] `letter-spacing` with BiDi text — *(1 test skipped: mixed LTR+RTL in one span)*
+
+### Text Rendering
+
+- [ ] `text-rendering` — auto, optimizeSpeed, optimizeLegibility, geometricPrecision;
+  property not implemented *(tests pass due to threshold fuzziness)*
+
+### Text on a Path (`<textPath>`)
+
+- [x] `href` / `xlink:href` — reference to `<path>` element
+- [x] `startOffset` — `<length>` and `<percentage>` along path
+- [x] Basic glyph positioning along path with tangent rotation
+- [ ] `method` — align (default) only; `stretch` not implemented
+- [ ] `spacing` — exact only; `auto` not implemented
+- [ ] `side` — left (default) only; `right` not implemented (SVG2)
+- [ ] `path` attribute — inline path data (SVG2); not implemented
+- [ ] `path` + `href` interaction — not implemented
+- [ ] Text overflow past path end — glyphs hidden (implemented), but no `textLength` interaction
+- [ ] textPath with filters / masks / clip-paths — not implemented
+- [ ] 39 resvg `e-textPath-*` tests disabled (`#if 0` block)
+
+### Complex Scripts (full tier only)
+
+- [x] HarfBuzz OpenType shaping (GSUB substitution, GPOS positioning)
+- [x] Arabic joining forms and contextual shaping
+- [x] Combining mark attachment (mark-to-base, mark-to-mark)
+- [x] Cross-family font fallback for missing glyphs
+- [x] Cursive script detection (letter-spacing suppression)
+- [x] Color emoji (CBDT/CBLC bitmap extraction via FreeType)
+- [ ] Bidirectional text (BiDi algorithm) — *(1 test skipped: e-text-035)*
+- [ ] Vertical CJK with mixed scripts — *(3 tests skipped in writing-mode)*
+
+### SVG DOM Text APIs (§11.5)
+
+- [x] `getNumberOfChars()`
+- [x] `getComputedTextLength()`
+- [x] `getSubStringLength(charnum, nchars)`
+- [x] `getStartPositionOfChar(charnum)`
+- [x] `getEndPositionOfChar(charnum)`
+- [x] `getExtentOfChar(charnum)`
+- [x] `getRotationOfChar(charnum)`
+- [x] `getCharNumAtPosition(point)`
+- [x] `convertToPath()` (non-standard, for export)
+- [x] `inkBoundingBox()` / `objectBoundingBox()`
+- [ ] `selectSubString(charnum, nchars)` — stub, not implemented
+
+### Text Interaction with Other Features
+
+- [x] Fill and stroke on text glyphs
+- [x] Gradient and pattern paint on text (objectBoundingBox mapping)
+- [x] Per-glyph transforms (rotation, translation)
+- [x] `opacity` on text elements
+- [x] `visibility: hidden` — glyphs hidden but advance preserved
+- [x] `display: none` — span skipped entirely
+- [ ] `clip-path` on text / with text children — *(5 resvg tests skipped)*
+- [ ] `mask` on text — *(1 resvg test skipped)*
+- [ ] `filter` on text / textPath — *(2 resvg tests skipped)*
+
+### ECS Caching and Invalidation
+
+- [x] `ComputedTextGeometryComponent` caches layout runs + glyph geometry
+- [x] Cache-aware `ensureComputedTextGeometryComponent()` (skip recompute when clean)
+- [x] `invalidateTextGeometry()` from 16 DOM mutation entry points
+- [x] `TextGeometry` dirty flag in `DirtyFlagsComponent`
+- [x] Renderers reuse cached TextRuns before calling `layout()`
+- [ ] Font property changes (inherited via style cascade) — handled by full render tree rebuild;
+  not yet wired to incremental `TextGeometry` invalidation
+
+---
+
+## Open Work Areas
+
+### 1. textPath Stabilization
+39 resvg tests disabled. Basic path layout works but missing: `method=stretch`, `spacing=auto`,
+`side=right`, `path` attribute, interaction with filters/masks/clip-paths. This is the largest
+single gap in text support.
+
+### 2. Text Wrapping (SVG2)
+`inline-size`, `shape-inside`, `shape-subtract` — SVG2 auto-wrapping text into a rectangular
+or arbitrary shape region. Not implemented; no design doc yet.
+
+### 3. Bidirectional Text
+SheenBidi integration deferred. One resvg test skipped (`e-text-035`). Required for correct
+rendering of mixed LTR/RTL content and Arabic paragraph layout.
+
+### 4. Text Decoration Fidelity
+Current decoration rendering has 1600–5200px diffs on resvg tests (masked by high thresholds
+of 13000–19500). Root causes likely include: decoration not following per-span paint changes,
+decoration thickness/position differences, and decoration on rotated text.
+
+### 5. Generic Font Families
+11 resvg font-family tests skipped because serif/sans-serif/monospace/cursive/fantasy are not
+mapped to system fonts. Requires OS font enumeration or a configurable family map.
+
+### 6. Vertical Writing Mode Gaps
+5 writing-mode tests skipped: vertical `dx`/`dy` bugs, mixed-language vertical text, vertical
+underline, CJK punctuation handling.
+
+### 7. CSS Text Properties
+`text-rendering`, `text-decoration-color/style/thickness`, `text-orientation`,
+`font-feature-settings`, `font-variation-settings`, `font-size-adjust`, `font` shorthand,
+`white-space` CSS property.

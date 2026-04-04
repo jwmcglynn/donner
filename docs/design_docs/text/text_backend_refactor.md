@@ -482,17 +482,10 @@ unit tests for `TextBackendSimple`.
 
 Verification checklist at the end of this refactor:
 
-- [ ] `bazel test //...`
-- [ ] `bazel test //... --config=text-full`
-- [ ] `bazel test //... --config=text-full --config=skia`
-
-Observed status on this branch:
-
-- `bazel test //...` passes.
-- `bazel test //... --config=text-full` passes.
-- `bazel test //... --config=text-full --config=skia` still has broader Skia renderer failures
-  outside the text public-API work (for example compositing, renderer image tests, and many resvg
-  suite shards).
+- [x] `bazel test //...` — 50 pass, 0 fail (2026-04-04)
+- [x] `bazel test //... --config=text-full` — 50 pass, 0 fail (2026-04-04)
+- [ ] `bazel test //... --config=text-full --config=skia` — broader Skia renderer failures
+  outside the text stack (compositing, renderer image tests, resvg suite shards).
 
 The refactored `TextEngine` + `TextBackendFull` path now matches the previous text-full
 behavior for the resvg suite while removing the duplicated layout logic from `TextShaper`.
@@ -717,11 +710,11 @@ pixel output should occur at any phase of the migration.
   `layout()` methods have drifted apart. A careful diff-based approach is needed to identify
   which divergences are intentional (capability differences) vs accidental (code drift).
 
-## TextBackendFull Parity Gaps
+## TextBackendFull Parity Gaps (Resolved)
 
 Phase 3 introduced `TextBackendFull` as a port of `TextShaper`'s HarfBuzz+FreeType code. The
-following 9 resvg tests regress in `--config=text-full` compared to the old `TextShaper` path.
-These must be fixed to achieve full parity before Phase 4.
+following 9 resvg tests initially regressed. **All have been resolved** — the full resvg suite
+passes on both `--config=text-full` and the default config as of 2026-04-04.
 
 ### Vertical CJK layout (`a-writing-mode-012`)
 
