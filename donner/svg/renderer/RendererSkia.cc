@@ -37,8 +37,11 @@
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
 // Donner
+#include <cstdlib>
+#include <iostream>
 #include <map>
 #include <numbers>
+#include <string_view>
 
 #include "donner/base/Length.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -72,6 +75,26 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
 }
 
 const Boxd kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+
+bool skiaFilterDebugEnabled() {
+  const char* verbose = std::getenv("DONNER_RENDERER_TEST_VERBOSE");
+  return verbose != nullptr && verbose[0] != '\0' && verbose[0] != '0';
+}
+
+std::string_view skiaFeTileDebugStage() {
+  const char* stage = std::getenv("DONNER_SKIA_FE_TILE_DEBUG_STAGE");
+  return stage != nullptr ? std::string_view(stage) : std::string_view();
+}
+
+void debugLogRect(std::string_view label, const SkRect& rect) {
+  std::cerr << label << ": [" << rect.fLeft << ", " << rect.fTop << " -> " << rect.fRight
+            << ", " << rect.fBottom << "]\n";
+}
+
+void debugLogIRect(std::string_view label, const SkIRect& rect) {
+  std::cerr << label << ": [" << rect.left() << ", " << rect.top() << " -> " << rect.right()
+            << ", " << rect.bottom() << "]\n";
+}
 
 SkPoint toSkia(Vector2d value) {
   return SkPoint::Make(NarrowToFloat(value.x), NarrowToFloat(value.y));
@@ -222,9 +245,28 @@ bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
   return false;
 }
 
+bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
+  using Offset = components::filter_primitive::Offset;
+
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    if (std::holds_alternative<Offset>(node.primitive)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Native Skia filter DAG builder — lowers the full FilterGraph to SkImageFilter.
 // ---------------------------------------------------------------------------
+
+struct FinalTilePlan {
+  bool valid = false;
+  sk_sp<SkImageFilter> inputFilter;
+  SkRect srcRect = SkRect::MakeEmpty();
+  SkRect dstRect = SkRect::MakeEmpty();
+};
 
 /// Convert donner Blend::Mode to SkBlendMode.
 SkBlendMode toSkiaBlendMode(components::filter_primitive::Blend::Mode mode) {
@@ -437,7 +479,10 @@ void buildTransferTable(const components::filter_primitive::ComponentTransfer::F
 
 /// Returns nullptr if any node can't be lowered (caller should fall back to CPU path).
 sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& filterGraph,
-                                              const Transformd& deviceFromFilter) {
+                                              const Transformd& deviceFromFilter,
+                                              int sourceWidth,
+                                              int sourceHeight,
+                                              FinalTilePlan* finalTilePlan = nullptr) {
   namespace fp = components::filter_primitive;
 
   // Track the implicit previous result and named results.
@@ -460,12 +505,27 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                      filterGraph.elementBoundingBox.has_value();
   const Boxd defaultSubregion = filterGraph.filterRegion.value_or(Boxd::FromXYWH(0, 0, 1, 1));
+  const Boxd primitiveUnitsBounds = [&]() -> Boxd {
+    if (isOBB) {
+      return *filterGraph.elementBoundingBox;
+    }
+
+    const double userW =
+        NearZero(filterGraph.userToPixelScale.x, 1e-12)
+            ? defaultSubregion.width()
+            : static_cast<double>(sourceWidth) / filterGraph.userToPixelScale.x;
+    const double userH =
+        NearZero(filterGraph.userToPixelScale.y, 1e-12)
+            ? defaultSubregion.height()
+            : static_cast<double>(sourceHeight) / filterGraph.userToPixelScale.y;
+    return Boxd::FromXYWH(0.0, 0.0, userW, userH);
+  }();
 
   auto resolveNodeSubregion = [&](const components::FilterNode& n) -> Boxd {
     if (!n.x.has_value() && !n.y.has_value() && !n.width.has_value() && !n.height.has_value()) {
       return defaultSubregion;
     }
-    const Boxd& bbox = isOBB ? *filterGraph.elementBoundingBox : defaultSubregion;
+    const Boxd& bbox = primitiveUnitsBounds;
     auto resolvePos = [&](const std::optional<Lengthd>& len, Lengthd::Extent ext, double origin,
                           double bboxDim) -> double {
       if (!len.has_value()) {
@@ -572,8 +632,16 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   // Stored in device-pixel coordinates.
   Boxd previousSubregion = deviceFromFilter.transformBox(defaultSubregion);
   std::map<RcString, Boxd> namedSubregions;
+  const Boxd filterRegionDeviceSpace = previousSubregion;
 
-  for (const components::FilterNode& node : filterGraph.nodes) {
+  auto intersectBoxes = [](const Boxd& a, const Boxd& b) -> Boxd {
+    return Boxd(Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
+                Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
+                         std::min(a.bottomRight.y, b.bottomRight.y)));
+  };
+
+  for (std::size_t nodeIndex = 0; nodeIndex < filterGraph.nodes.size(); ++nodeIndex) {
+    const components::FilterNode& node = filterGraph.nodes[nodeIndex];
     // Determine this node's color space.
     const bool nodeUsesLinearRGB =
         node.colorInterpolationFilters.has_value()
@@ -1016,6 +1084,58 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             const SkRect srcRect = toSkia(inputSubregion);
             const SkRect dstRect = toDeviceRect(resolveNodeSubregion(node));
 
+            if (inputSubregion.isEmpty() || srcRect.width() <= 0.0f || srcRect.height() <= 0.0f) {
+              result = SkImageFilters::Shader(SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              skipLinearRGBPostWrap = true;
+              return true;
+            }
+
+            if (skiaFilterDebugEnabled()) {
+              std::cerr << "[Skia feTile] node result="
+                        << (node.result.has_value() ? "<named>" : "<unnamed>") << "\n";
+              debugLogRect("  srcRect", srcRect);
+              debugLogRect("  dstRect", dstRect);
+              if (in1) {
+                const SkIRect sourceBounds = SkIRect::MakeLTRB(
+                    static_cast<int>(std::floor(defaultSubregion.topLeft.x * scaleX)),
+                    static_cast<int>(std::floor(defaultSubregion.topLeft.y * scaleY)),
+                    static_cast<int>(std::ceil(defaultSubregion.bottomRight.x * scaleX)),
+                    static_cast<int>(std::ceil(defaultSubregion.bottomRight.y * scaleY)));
+                debugLogIRect("  sourceBounds", sourceBounds);
+                debugLogIRect("  in1 forwardBounds",
+                              in1->filterBounds(sourceBounds, SkMatrix::I(),
+                                                SkImageFilter::kForward_MapDirection));
+                debugLogIRect("  in1 reverseBounds",
+                              in1->filterBounds(sourceBounds, SkMatrix::I(),
+                                                SkImageFilter::kReverse_MapDirection,
+                                                &sourceBounds));
+              } else {
+                std::cerr << "  in1=<SourceGraphic>\n";
+              }
+            }
+
+            if (skiaFeTileDebugStage() == "input") {
+              std::cerr << "[Skia feTile] DEBUG: bypassing Tile and returning input filter\n";
+              result = std::move(in1);
+              return true;
+            }
+
+            if (skiaFeTileDebugStage() == "crop") {
+              std::cerr << "[Skia feTile] DEBUG: wrapping input in Crop(srcRect) before Tile\n";
+              result = SkImageFilters::Tile(srcRect, dstRect,
+                                            SkImageFilters::Crop(srcRect, std::move(in1)));
+              return true;
+            }
+
+            if (finalTilePlan != nullptr &&
+                (skiaFeTileDebugStage() == "manual" || skiaFeTileDebugStage() == "probe") &&
+                nodeIndex + 1 == filterGraph.nodes.size()) {
+              finalTilePlan->valid = true;
+              finalTilePlan->inputFilter = in1;
+              finalTilePlan->srcRect = srcRect;
+              finalTilePlan->dstRect = dstRect;
+            }
+
             // TODO(jwmcglynn): feTile with generator filter chains (feFlood) doesn't tile
             // correctly because Skia's SkImageFilter bounds model can't see content from
             // generators. Needs a pre-render approach or alternative implementation.
@@ -1095,23 +1215,10 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
       result = SkImageFilters::ColorFilter(SkColorFilters::LinearToSRGBGamma(), std::move(result));
     }
 
-    // Clip the node's output to its explicit subregion via CropRect. This is required for
-    // feTile to work correctly: without it, generator filters like feFlood fill infinitely,
-    // making the tile source a solid block with no visible repetition. Only apply when the
-    // node has explicit x/y/width/height attributes.
-    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
-        node.height.has_value()) {
-      const SkRect deviceSubregion = toDeviceRect(resolveNodeSubregion(node));
-      // Debug: uncomment to trace subregion CropRects
-      // std::cerr << "[Skia] CropRect: " << deviceSubregion.fLeft << "," << deviceSubregion.fTop
-      //           << " - " << deviceSubregion.fRight << "," << deviceSubregion.fBottom << "\n";
-      result = SkImageFilters::Crop(deviceSubregion, std::move(result));
-    }
-
-    // Track the node's effective subregion in device-pixel coordinates for feTile.
-    // Per SVG spec, if a node has no explicit x/y/width/height, its subregion defaults to
-    // "the tightest bounding box" of its content. Compute this by applying the primitive's
-    // spatial effect to the input subregion (matching tiny-skia's defaultNodeSubregion).
+    // Track the node's effective subregion in device-pixel coordinates for feTile and crop the
+    // node output to that region. This matches tiny-skia's defaultNodeSubregion behavior:
+    // explicit subregions clip directly, source generators default to the filter region, and
+    // most primitives preserve their input subregion unless they explicitly expand it.
     const bool hasExplicitSubregion =
         node.x.has_value() || node.y.has_value() || node.width.has_value() ||
         node.height.has_value();
@@ -1123,18 +1230,38 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
       nodeSubregion = std::visit(
           [&](const auto& prim) -> Boxd {
             using T = std::decay_t<decltype(prim)>;
-            if constexpr (std::is_same_v<T, fp::Offset>) {
-              const Vector2d off = toDeviceOffset(prim.dx, prim.dy);
-              return Boxd(previousSubregion.topLeft + off,
-                          previousSubregion.bottomRight + off);
-            } else if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
+            if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
               const double ex = std::ceil(toDeviceX(prim.stdDeviationX) * 3.0);
               const double ey = std::ceil(toDeviceY(prim.stdDeviationY) * 3.0);
               return Boxd(previousSubregion.topLeft - Vector2d(ex, ey),
                           previousSubregion.bottomRight + Vector2d(ex, ey));
+            } else if constexpr (std::is_same_v<T, fp::DropShadow>) {
+              const Vector2d off = toDeviceOffset(prim.dx, prim.dy);
+              const Boxd shadowBounds(previousSubregion.topLeft + off,
+                                      previousSubregion.bottomRight + off);
+              const double ex = std::ceil(toDeviceX(prim.stdDeviationX) * 3.0);
+              const double ey = std::ceil(toDeviceY(prim.stdDeviationY) * 3.0);
+              const Boxd expandedShadow(shadowBounds.topLeft - Vector2d(ex, ey),
+                                        shadowBounds.bottomRight + Vector2d(ex, ey));
+              return Boxd(Vector2d(std::min(previousSubregion.topLeft.x, expandedShadow.topLeft.x),
+                                   std::min(previousSubregion.topLeft.y,
+                                            expandedShadow.topLeft.y)),
+                          Vector2d(std::max(previousSubregion.bottomRight.x,
+                                            expandedShadow.bottomRight.x),
+                                   std::max(previousSubregion.bottomRight.y,
+                                            expandedShadow.bottomRight.y)));
+            } else if constexpr (std::is_same_v<T, fp::Morphology>) {
+              if (prim.op == fp::Morphology::Operator::Dilate) {
+                const double ex = std::abs(toDeviceX(prim.radiusX));
+                const double ey = std::abs(toDeviceY(prim.radiusY));
+                return Boxd(previousSubregion.topLeft - Vector2d(ex, ey),
+                            previousSubregion.bottomRight + Vector2d(ex, ey));
+              }
+              return previousSubregion;
             } else if constexpr (std::is_same_v<T, fp::Flood> ||
                                  std::is_same_v<T, fp::Turbulence> ||
-                                 std::is_same_v<T, fp::Image>) {
+                                 std::is_same_v<T, fp::Image> ||
+                                 std::is_same_v<T, fp::Tile>) {
               return deviceFromFilter.transformBox(defaultSubregion);
             } else {
               return previousSubregion;
@@ -1142,6 +1269,11 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
           },
           node.primitive);
     }
+
+    nodeSubregion = intersectBoxes(nodeSubregion, filterRegionDeviceSpace);
+
+    result = SkImageFilters::Crop(toSkia(nodeSubregion), std::move(result));
+
     if (node.result.has_value()) {
       namedResults[*node.result] = result;
       namedSubregions[*node.result] = nodeSubregion;
@@ -1646,15 +1778,28 @@ void RendererSkia::drawOnFilterInputSurface(const sk_sp<SkSurface>& surface,
     return;
   }
 
+  const FilterLayerState* filterLayerState =
+      filterLayerStack_.empty() ? nullptr : &filterLayerStack_.back();
+  const int offsetX = filterLayerState != nullptr ? filterLayerState->filterBufferOffsetX : 0;
+  const int offsetY = filterLayerState != nullptr ? filterLayerState->filterBufferOffsetY : 0;
+
   SkCanvas* canvas = surface->getCanvas();
   canvas->save();
   for (const ClipStackEntry& entry : activeClips_) {
     canvas->save();
-    canvas->setMatrix(entry.matrix);
+    SkMatrix clipMatrix = entry.matrix;
+    if (offsetX != 0 || offsetY != 0) {
+      clipMatrix.postTranslate(static_cast<SkScalar>(offsetX), static_cast<SkScalar>(offsetY));
+    }
+    canvas->setMatrix(clipMatrix);
     applyClipToCanvas(canvas, entry.clip);
   }
 
-  canvas->setMatrix(currentCanvas_->getTotalMatrix());
+  SkMatrix canvasMatrix = currentCanvas_->getTotalMatrix();
+  if (offsetX != 0 || offsetY != 0) {
+    canvasMatrix.postTranslate(static_cast<SkScalar>(offsetX), static_cast<SkScalar>(offsetY));
+  }
+  canvas->setMatrix(canvasMatrix);
   drawFn(canvas);
 
   for (std::size_t i = 0; i < activeClips_.size(); ++i) {
@@ -1669,15 +1814,43 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
 
-  const Transformd deviceFromFilter = toDonnerTransform(currentCanvas_->getTotalMatrix());
-
   // Capture the SourceGraphic into an offscreen SkSurface. We cannot use saveLayer with
   // SkImageFilter directly because Skia sizes the layer based on filter INPUT bounds
   // (SkImageFilter::getInputBounds). Generator filters like feFlood and feTurbulence report
   // Empty() input bounds, so the layer would be undersized. Instead, we capture to a
   // full-viewport surface and apply the native SkImageFilter DAG in popFilterLayer.
-  const int width = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
-  const int height = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
+  const int viewportWidth = static_cast<int>(viewport_.size.x * viewport_.devicePixelRatio);
+  const int viewportHeight = static_cast<int>(viewport_.size.y * viewport_.devicePixelRatio);
+  int width = viewportWidth;
+  int height = viewportHeight;
+  int offsetX = 0;
+  int offsetY = 0;
+
+  const Transformd originalDeviceFromFilter = toDonnerTransform(currentCanvas_->getTotalMatrix());
+
+  if (filterRegion.has_value()) {
+    const Transformd parentDeviceFromFilter = originalDeviceFromFilter;
+    const Boxd deviceRegion = parentDeviceFromFilter.transformBox(*filterRegion);
+    const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
+    const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
+
+    if ((regionX0 < 0 || regionY0 < 0) && graphHasSpatialShift(filterGraph)) {
+      constexpr int kMaxExpansion = 4096;
+      offsetX =
+          std::min(std::max(0, -regionX0), std::max(0, kMaxExpansion - viewportWidth));
+      offsetY =
+          std::min(std::max(0, -regionY0), std::max(0, kMaxExpansion - viewportHeight));
+      width = viewportWidth + offsetX;
+      height = viewportHeight + offsetY;
+    }
+  }
+
+  if (skiaFilterDebugEnabled()) {
+    std::cerr << "[Skia pushFilterLayer] viewport=" << viewportWidth << "x" << viewportHeight
+              << " buffer=" << width << "x" << height << " offset=(" << offsetX << ", "
+              << offsetY << ")\n";
+  }
+
   const SkImageInfo surfaceInfo =
       SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
   sk_sp<SkSurface> surface = SkSurfaces::Raster(surfaceInfo);
@@ -1701,10 +1874,19 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
   filterCanvas->clear(SK_ColorTRANSPARENT);
   for (const ClipStackEntry& entry : activeClips_) {
     filterCanvas->save();
-    filterCanvas->setMatrix(entry.matrix);
+    SkMatrix clipMatrix = entry.matrix;
+    if (offsetX != 0 || offsetY != 0) {
+      clipMatrix.postTranslate(static_cast<SkScalar>(offsetX), static_cast<SkScalar>(offsetY));
+    }
+    filterCanvas->setMatrix(clipMatrix);
     applyClipToCanvas(filterCanvas, entry.clip);
   }
-  filterCanvas->setMatrix(currentCanvas_->getTotalMatrix());
+
+  SkMatrix filterMatrix = currentCanvas_->getTotalMatrix();
+  if (offsetX != 0 || offsetY != 0) {
+    filterMatrix.postTranslate(static_cast<SkScalar>(offsetX), static_cast<SkScalar>(offsetY));
+  }
+  filterCanvas->setMatrix(filterMatrix);
 
   FilterLayerState state;
   state.surface = std::move(surface);
@@ -1712,10 +1894,13 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
       graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint));
   state.strokePaintSurface = createFilterInputSurface(
       graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint));
+  state.filterBufferOffsetX = offsetX;
+  state.filterBufferOffsetY = offsetY;
   state.parentCanvas = currentCanvas_;
   state.filterGraph = filterGraph;
   state.filterRegion = filterRegion;
-  state.deviceFromFilter = deviceFromFilter;
+  state.originalDeviceFromFilter = originalDeviceFromFilter;
+  state.deviceFromFilter = toDonnerTransform(filterMatrix);
   currentCanvas_ = filterCanvas;
   filterLayerStack_.push_back(std::move(state));
 }
@@ -1743,19 +1928,225 @@ void RendererSkia::popFilterLayer() {
   // Build the native Skia SkImageFilter DAG. In this DAG, SourceGraphic (represented as
   // nullptr input) will be the sourceImage we captured. We wrap the DAG so that nullptr
   // inputs resolve to an SkImageFilters::Image of the captured SourceGraphic.
+  FinalTilePlan finalTilePlan;
   sk_sp<SkImageFilter> nativeFilter =
-      buildNativeSkiaFilterDAG(state.filterGraph, state.deviceFromFilter);
+      buildNativeSkiaFilterDAG(state.filterGraph, state.deviceFromFilter, sourceImage->width(),
+                               sourceImage->height(), &finalTilePlan);
   if (nativeFilter == nullptr) {
     // If lowering failed, composite the unfiltered SourceGraphic back.
     currentCanvas_->drawImage(sourceImage, 0, 0);
     return;
   }
 
+  if (finalTilePlan.valid) {
+    const SkImageInfo info =
+        SkImageInfo::Make(sourceImage->width(), sourceImage->height(), kRGBA_8888_SkColorType,
+                          kPremul_SkAlphaType);
+    sk_sp<SkSurface> inputSurface = SkSurfaces::Raster(info);
+    if (inputSurface == nullptr) {
+      currentCanvas_->drawImage(sourceImage, 0, 0);
+      return;
+    }
+
+    {
+      SkCanvas* canvas = inputSurface->getCanvas();
+      canvas->clear(SK_ColorTRANSPARENT);
+      SkPaint paint;
+      paint.setImageFilter(finalTilePlan.inputFilter);
+      canvas->drawImage(sourceImage, 0, 0, SkSamplingOptions(), &paint);
+    }
+
+    sk_sp<SkImage> inputImage = inputSurface->makeImageSnapshot();
+    if (inputImage == nullptr) {
+      currentCanvas_->drawImage(sourceImage, 0, 0);
+      return;
+    }
+
+    if (skiaFeTileDebugStage() == "probe") {
+      SkPixmap pixmap;
+      if (inputImage->peekPixels(&pixmap)) {
+        const int left = std::max(0, static_cast<int>(std::floor(finalTilePlan.srcRect.fLeft)));
+        const int top = std::max(0, static_cast<int>(std::floor(finalTilePlan.srcRect.fTop)));
+        const int right = std::min(pixmap.width(),
+                                   static_cast<int>(std::ceil(finalTilePlan.srcRect.fRight)));
+        const int bottom = std::min(pixmap.height(),
+                                    static_cast<int>(std::ceil(finalTilePlan.srcRect.fBottom)));
+
+        int contentMinX = right;
+        int contentMinY = bottom;
+        int contentMaxX = left - 1;
+        int contentMaxY = top - 1;
+        int contentPixels = 0;
+
+        for (int y = top; y < bottom; ++y) {
+          for (int x = left; x < right; ++x) {
+            const auto* pixel =
+                pixmap.addr32(x, y);
+            if (SkColorGetA(*pixel) != 0) {
+              contentMinX = std::min(contentMinX, x);
+              contentMinY = std::min(contentMinY, y);
+              contentMaxX = std::max(contentMaxX, x);
+              contentMaxY = std::max(contentMaxY, y);
+              ++contentPixels;
+            }
+          }
+        }
+
+        std::cerr << "[Skia feTile probe] rasterized input within srcRect\n";
+        debugLogRect("  srcRect", finalTilePlan.srcRect);
+        if (contentPixels == 0) {
+          std::cerr << "  content=<empty>\n";
+        } else {
+          std::cerr << "  content bbox: [" << contentMinX << ", " << contentMinY << " -> "
+                    << contentMaxX << ", " << contentMaxY << "] pixels=" << contentPixels
+                    << "\n";
+        }
+
+        for (int y = top; y < std::min(bottom, top + 5); ++y) {
+          std::cerr << "  row " << y << ":";
+          bool inRun = false;
+          int runStart = left;
+          for (int x = left; x < right; ++x) {
+            const auto* pixel = pixmap.addr32(x, y);
+            const bool occupied = SkColorGetA(*pixel) != 0;
+            if (occupied && !inRun) {
+              runStart = x;
+              inRun = true;
+            } else if (!occupied && inRun) {
+              std::cerr << " [" << runStart << "," << (x - 1) << "]";
+              inRun = false;
+            }
+          }
+          if (inRun) {
+            std::cerr << " [" << runStart << "," << (right - 1) << "]";
+          }
+          std::cerr << "\n";
+        }
+      }
+    }
+
+    if (skiaFeTileDebugStage() == "probe") {
+      currentCanvas_->save();
+      currentCanvas_->resetMatrix();
+      currentCanvas_->drawImage(inputImage, 0, 0, SkSamplingOptions());
+      currentCanvas_->restore();
+      return;
+    }
+
+    const int tileWidth =
+        std::max(1, static_cast<int>(std::ceil(finalTilePlan.srcRect.width())));
+    const int tileHeight =
+        std::max(1, static_cast<int>(std::ceil(finalTilePlan.srcRect.height())));
+    sk_sp<SkSurface> tileSurface = SkSurfaces::Raster(
+        SkImageInfo::Make(tileWidth, tileHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
+    if (tileSurface == nullptr) {
+      currentCanvas_->drawImage(sourceImage, 0, 0);
+      return;
+    }
+
+    {
+      SkCanvas* canvas = tileSurface->getCanvas();
+      canvas->clear(SK_ColorTRANSPARENT);
+      canvas->drawImageRect(inputImage, finalTilePlan.srcRect,
+                            SkRect::MakeWH(static_cast<SkScalar>(tileWidth),
+                                           static_cast<SkScalar>(tileHeight)),
+                            SkSamplingOptions(), nullptr, SkCanvas::kStrict_SrcRectConstraint);
+    }
+
+    sk_sp<SkImage> tileImage = tileSurface->makeImageSnapshot();
+    if (tileImage == nullptr) {
+      currentCanvas_->drawImage(sourceImage, 0, 0);
+      return;
+    }
+
+    sk_sp<SkSurface> tiledSurface = SkSurfaces::Raster(info);
+    if (tiledSurface == nullptr) {
+      currentCanvas_->drawImage(sourceImage, 0, 0);
+      return;
+    }
+
+    {
+      SkCanvas* canvas = tiledSurface->getCanvas();
+      canvas->clear(SK_ColorTRANSPARENT);
+      canvas->clipRect(finalTilePlan.dstRect);
+      const SkScalar tileStepX = finalTilePlan.srcRect.width();
+      const SkScalar tileStepY = finalTilePlan.srcRect.height();
+      const SkScalar startX =
+          finalTilePlan.srcRect.fLeft +
+          std::floor((finalTilePlan.dstRect.fLeft - finalTilePlan.srcRect.fLeft) / tileStepX) *
+              tileStepX;
+      const SkScalar startY =
+          finalTilePlan.srcRect.fTop +
+          std::floor((finalTilePlan.dstRect.fTop - finalTilePlan.srcRect.fTop) / tileStepY) *
+              tileStepY;
+      for (SkScalar y = startY; y < finalTilePlan.dstRect.fBottom;
+           y += finalTilePlan.srcRect.height()) {
+        for (SkScalar x = startX; x < finalTilePlan.dstRect.fRight;
+             x += finalTilePlan.srcRect.width()) {
+          canvas->drawImage(tileImage, x, y, SkSamplingOptions());
+        }
+      }
+    }
+
+    sk_sp<SkImage> tiledImage = tiledSurface->makeImageSnapshot();
+    if (tiledImage == nullptr) {
+      currentCanvas_->drawImage(sourceImage, 0, 0);
+      return;
+    }
+
+    currentCanvas_->save();
+    currentCanvas_->resetMatrix();
+    if (state.filterRegion.has_value() &&
+        (!NearZero(state.originalDeviceFromFilter.data[1], 1e-6) ||
+         !NearZero(state.originalDeviceFromFilter.data[2], 1e-6))) {
+      const Boxd& filterRegion = *state.filterRegion;
+      const Vector2d topLeft =
+          state.originalDeviceFromFilter.transformPosition(filterRegion.topLeft);
+      const Vector2d topRight = state.originalDeviceFromFilter.transformPosition(
+          Vector2d(filterRegion.bottomRight.x, filterRegion.topLeft.y));
+      const Vector2d bottomRight =
+          state.originalDeviceFromFilter.transformPosition(filterRegion.bottomRight);
+      const Vector2d bottomLeft = state.originalDeviceFromFilter.transformPosition(
+          Vector2d(filterRegion.topLeft.x, filterRegion.bottomRight.y));
+
+      SkPath clipPath;
+      clipPath.moveTo(toSkia(topLeft));
+      clipPath.lineTo(toSkia(topRight));
+      clipPath.lineTo(toSkia(bottomRight));
+      clipPath.lineTo(toSkia(bottomLeft));
+      clipPath.close();
+      currentCanvas_->clipPath(clipPath, SkClipOp::kIntersect, true);
+    }
+    currentCanvas_->drawImage(tiledImage, 0, 0, SkSamplingOptions());
+    currentCanvas_->restore();
+    return;
+  }
+
+  if (skiaFilterDebugEnabled()) {
+    const SkIRect sourceBounds = SkIRect::MakeWH(sourceImage->width(), sourceImage->height());
+    std::cerr << "[Skia filter] popFilterLayer\n";
+    debugLogIRect("  sourceImage bounds", sourceBounds);
+    debugLogIRect("  native forwardBounds",
+                  nativeFilter->filterBounds(sourceBounds, SkMatrix::I(),
+                                             SkImageFilter::kForward_MapDirection));
+    debugLogIRect("  native reverseBounds",
+                  nativeFilter->filterBounds(sourceBounds, SkMatrix::I(),
+                                             SkImageFilter::kReverse_MapDirection, &sourceBounds));
+  }
+
   // Crop to the filter region in device space.
   if (state.filterRegion.has_value()) {
     const SkRect cropRect =
         toSkia(state.deviceFromFilter.transformBox(*state.filterRegion));
+    if (skiaFilterDebugEnabled()) {
+      debugLogRect("  final cropRect", cropRect);
+    }
     nativeFilter = SkImageFilters::Crop(cropRect, std::move(nativeFilter));
+  }
+
+  if (state.filterBufferOffsetX != 0 || state.filterBufferOffsetY != 0) {
+    nativeFilter = SkImageFilters::Offset(-state.filterBufferOffsetX, -state.filterBufferOffsetY,
+                                          std::move(nativeFilter));
   }
 
   // Apply the SkImageFilter DAG to the SourceGraphic image. We draw the sourceImage through
@@ -1771,6 +2162,27 @@ void RendererSkia::popFilterLayer() {
   filterPaint.setImageFilter(std::move(nativeFilter));
   currentCanvas_->save();
   currentCanvas_->resetMatrix();
+  if (state.filterRegion.has_value() &&
+      (!NearZero(state.originalDeviceFromFilter.data[1], 1e-6) ||
+       !NearZero(state.originalDeviceFromFilter.data[2], 1e-6))) {
+    const Boxd& filterRegion = *state.filterRegion;
+    const Vector2d topLeft =
+        state.originalDeviceFromFilter.transformPosition(filterRegion.topLeft);
+    const Vector2d topRight = state.originalDeviceFromFilter.transformPosition(
+        Vector2d(filterRegion.bottomRight.x, filterRegion.topLeft.y));
+    const Vector2d bottomRight =
+        state.originalDeviceFromFilter.transformPosition(filterRegion.bottomRight);
+    const Vector2d bottomLeft = state.originalDeviceFromFilter.transformPosition(
+        Vector2d(filterRegion.topLeft.x, filterRegion.bottomRight.y));
+
+    SkPath clipPath;
+    clipPath.moveTo(toSkia(topLeft));
+    clipPath.lineTo(toSkia(topRight));
+    clipPath.lineTo(toSkia(bottomRight));
+    clipPath.lineTo(toSkia(bottomLeft));
+    clipPath.close();
+    currentCanvas_->clipPath(clipPath, SkClipOp::kIntersect, true);
+  }
   currentCanvas_->drawImage(sourceImage, 0, 0, SkSamplingOptions(), &filterPaint);
   currentCanvas_->restore();
 }

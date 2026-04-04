@@ -237,9 +237,12 @@ private:
     sk_sp<SkSurface> surface;
     sk_sp<SkSurface> fillPaintSurface;
     sk_sp<SkSurface> strokePaintSurface;
+    int filterBufferOffsetX = 0;
+    int filterBufferOffsetY = 0;
     SkCanvas* parentCanvas = nullptr;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
+    Transformd originalDeviceFromFilter;
     Transformd deviceFromFilter;
   };
 
