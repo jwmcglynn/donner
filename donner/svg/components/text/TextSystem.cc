@@ -55,7 +55,17 @@ bool hasXmlSpacePreserve(Registry& registry, Entity entity) {
 
 RcString collapseTextWhitespace(std::string_view text, bool preserveSpaces) {
   if (preserveSpaces) {
-    return RcString(text);
+    // xml:space="preserve": convert newlines/tabs to spaces but keep all spaces (no collapse).
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+      if (c == '\t' || c == '\n' || c == '\r') {
+        out.push_back(' ');
+      } else {
+        out.push_back(c);
+      }
+    }
+    return RcString(out);
   }
 
   std::string out;

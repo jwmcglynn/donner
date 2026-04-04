@@ -16,6 +16,7 @@ SVGTextPathElement SVGTextPathElement::CreateOn(EntityHandle handle) {
 
 void SVGTextPathElement::setHref(const RcStringOrRef& href) {
   handle_.get_or_emplace<components::TextPathComponent>().href = RcString(href);
+  invalidateTextGeometry();
 }
 
 std::optional<RcString> SVGTextPathElement::href() const {
@@ -29,6 +30,7 @@ std::optional<RcString> SVGTextPathElement::href() const {
 
 void SVGTextPathElement::setStartOffset(std::optional<Lengthd> offset) {
   handle_.get_or_emplace<components::TextPathComponent>().startOffset = offset;
+  invalidateTextGeometry();
 }
 
 std::optional<Lengthd> SVGTextPathElement::startOffset() const {

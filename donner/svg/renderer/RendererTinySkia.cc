@@ -23,6 +23,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
@@ -1365,8 +1366,19 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   }
 
   auto& textEngine = registry.ctx().get<TextEngine>();
-  const TextLayoutParams layoutParams = toTextLayoutParams(params);
-  std::vector<TextRun> runs = textEngine.layout(text, layoutParams);
+
+  // Use cached layout runs from ComputedTextGeometryComponent when available.
+  std::vector<TextRun> runs;
+  if (params.textRootEntity != entt::null) {
+    if (const auto* cache =
+            registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
+      runs = cache->runs;
+    }
+  }
+  if (runs.empty()) {
+    const TextLayoutParams layoutParams = toTextLayoutParams(params);
+    runs = textEngine.layout(text, layoutParams);
+  }
 
   float scale = 0.0f;
   const float fontSizePx = static_cast<float>(

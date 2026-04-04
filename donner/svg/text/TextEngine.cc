@@ -663,9 +663,9 @@ void addBox(Boxd& accum, bool& initialized, const Boxd& box) {
   }
 }
 
-std::vector<const components::ComputedTextPathComponent::CharacterGeometry*> filteredCharacters(
-    Registry& registry, EntityHandle handle, const components::ComputedTextPathComponent& cache) {
-  std::vector<const components::ComputedTextPathComponent::CharacterGeometry*> result;
+std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*> filteredCharacters(
+    Registry& registry, EntityHandle handle, const components::ComputedTextGeometryComponent& cache) {
+  std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*> result;
   for (const auto& character : cache.characters) {
     if (character.rendered && isDescendantOf(registry, character.sourceEntity, handle.entity())) {
       result.push_back(&character);
@@ -1356,13 +1356,19 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
   return shaped.glyphs.front().xAdvance;
 }
 
-const components::ComputedTextPathComponent& TextEngine::ensureComputedTextPathComponent(
+const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextGeometryComponent(
     EntityHandle handle) const {
   const Entity textRootEntity = findTextRootEntity(handle);
   UTILS_RELEASE_ASSERT_MSG(textRootEntity != entt::null, "Text content element has no text root");
 
-  auto emptyAndReturn = [&]() -> const components::ComputedTextPathComponent& {
-    return registry_.emplace_or_replace<components::ComputedTextPathComponent>(textRootEntity);
+  // Return cached component if it already exists.
+  if (const auto* existing =
+          registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
+    return *existing;
+  }
+
+  auto emptyAndReturn = [&]() -> const components::ComputedTextGeometryComponent& {
+    return registry_.emplace_or_replace<components::ComputedTextGeometryComponent>(textRootEntity);
   };
 
   const auto* computedText = registry_.try_get<components::ComputedTextComponent>(textRootEntity);
@@ -1379,7 +1385,7 @@ const components::ComputedTextPathComponent& TextEngine::ensureComputedTextPathC
 
   const std::vector<TextRun> runs = const_cast<TextEngine*>(this)->layout(styledText, params);
 
-  components::ComputedTextPathComponent cache;
+  components::ComputedTextGeometryComponent cache;
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
 
@@ -1494,12 +1500,14 @@ const components::ComputedTextPathComponent& TextEngine::ensureComputedTextPathC
     }
   }
 
-  return registry_.emplace_or_replace<components::ComputedTextPathComponent>(textRootEntity,
+  cache.runs = runs;
+
+  return registry_.emplace_or_replace<components::ComputedTextGeometryComponent>(textRootEntity,
                                                                              std::move(cache));
 }
 
 std::vector<PathSpline> TextEngine::computedGlyphPaths(EntityHandle handle) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   std::vector<PathSpline> result;
   for (const auto& glyph : cache.glyphs) {
     if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
@@ -1510,7 +1518,7 @@ std::vector<PathSpline> TextEngine::computedGlyphPaths(EntityHandle handle) cons
 }
 
 Boxd TextEngine::computedInkBounds(EntityHandle handle) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   Boxd result;
   bool initialized = false;
   for (const auto& glyph : cache.glyphs) {
@@ -1523,17 +1531,17 @@ Boxd TextEngine::computedInkBounds(EntityHandle handle) const {
 
 Boxd TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
   const Entity rootEntity = findTextRootEntity(handle);
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   return handle.entity() == rootEntity ? cache.emBoxBounds : computedInkBounds(handle);
 }
 
 long TextEngine::getNumberOfChars(EntityHandle handle) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   return static_cast<long>(filteredCharacters(registry_, handle, cache).size());
 }
 
 double TextEngine::getComputedTextLength(EntityHandle handle) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   double total = 0.0;
   for (const auto* character : filteredCharacters(registry_, handle, cache)) {
     total += character->advance;
@@ -1543,7 +1551,7 @@ double TextEngine::getComputedTextLength(EntityHandle handle) const {
 
 double TextEngine::getSubStringLength(EntityHandle handle, std::size_t charnum,
                                       std::size_t nchars) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   double total = 0.0;
   for (size_t i = charnum; i < characters.size() && i < charnum + nchars; ++i) {
@@ -1553,7 +1561,7 @@ double TextEngine::getSubStringLength(EntityHandle handle, std::size_t charnum,
 }
 
 Vector2d TextEngine::getStartPositionOfChar(EntityHandle handle, std::size_t charnum) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   if (charnum >= characters.size()) {
     return Vector2d();
@@ -1562,7 +1570,7 @@ Vector2d TextEngine::getStartPositionOfChar(EntityHandle handle, std::size_t cha
 }
 
 Vector2d TextEngine::getEndPositionOfChar(EntityHandle handle, std::size_t charnum) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   if (charnum >= characters.size()) {
     return Vector2d();
@@ -1571,7 +1579,7 @@ Vector2d TextEngine::getEndPositionOfChar(EntityHandle handle, std::size_t charn
 }
 
 Boxd TextEngine::getExtentOfChar(EntityHandle handle, std::size_t charnum) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   if (charnum >= characters.size()) {
     return Boxd();
@@ -1580,7 +1588,7 @@ Boxd TextEngine::getExtentOfChar(EntityHandle handle, std::size_t charnum) const
 }
 
 double TextEngine::getRotationOfChar(EntityHandle handle, std::size_t charnum) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   if (charnum >= characters.size()) {
     return 0.0;
@@ -1589,7 +1597,7 @@ double TextEngine::getRotationOfChar(EntityHandle handle, std::size_t charnum) c
 }
 
 long TextEngine::getCharNumAtPosition(EntityHandle handle, const Vector2d& point) const {
-  const auto& cache = ensureComputedTextPathComponent(handle);
+  const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   for (size_t i = 0; i < characters.size(); ++i) {
     if (characters[i]->extent.contains(point)) {

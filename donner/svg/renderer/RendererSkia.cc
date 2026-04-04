@@ -33,6 +33,7 @@
     "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
 #endif
 #ifdef DONNER_TEXT_FULL
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
@@ -1958,8 +1959,19 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
 
     auto& fontManager = registry.ctx().get<FontManager>();
     auto& textEngine = registry.ctx().get<TextEngine>();
-    const TextLayoutParams layoutParams = toTextLayoutParams(params);
-    std::vector<TextRun> runs = textEngine.layout(text, layoutParams);
+
+    // Use cached layout runs from ComputedTextGeometryComponent when available.
+    std::vector<TextRun> runs;
+    if (params.textRootEntity != entt::null) {
+      if (const auto* cache =
+              registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
+        runs = cache->runs;
+      }
+    }
+    if (runs.empty()) {
+      const TextLayoutParams layoutParams = toTextLayoutParams(params);
+      runs = textEngine.layout(text, layoutParams);
+    }
 
     for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
       const auto& run = runs[runIndex];

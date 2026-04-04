@@ -24,7 +24,7 @@ font entities inside the same document `entt::registry` used by the rest of the 
 layout-adjacent systems, and text DOM public APIs, and is registered in `registry.ctx()` for
 shared access. `TextSystem` remains the ECS-facing layer that flattens raw text DOM state into
 `ComputedTextComponent`, while `TextEngine` consumes that computed text state to perform shaping,
-layout, glyph geometry extraction, and `ComputedTextPathComponent` caching for a specific text
+layout, glyph geometry extraction, and `ComputedTextGeometryComponent` caching for a specific text
 root. The two backend implementations are `TextBackendSimple` (stb_truetype) and
 `TextBackendFull` (HarfBuzz + FreeType). The refactor also includes a readability pass to reduce
 function length and cyclomatic complexity in the engine code.
@@ -457,15 +457,15 @@ unit tests for `TextBackendSimple`.
 
 ### Phase 4: ECS caching + public API
 
-- [x] Add `ComputedTextPathComponent` to the ECS registry
+- [x] Add `ComputedTextGeometryComponent` to the ECS registry
 - [x] Add `SVGTextElement::convertToPath()`, `inkBoundingBox()`, `objectBoundingBox()`
 - [x] Implement `SVGTextContentElement` public APIs on top of cached geometry
 - [x] Keep `SVGTextContentElement` thin and delegate geometry/public API work to `TextEngine`
 - [x] Make text public APIs prepare only the specific text root they query, not the full render tree
 - [x] Add focused tests for text geometry/public API behavior
-- [ ] Wire invalidation to text/font/positioning property changes for `ComputedTextPathComponent`
-- [ ] Reuse `ComputedTextPathComponent` directly during renderer text drawing
-- [ ] Add broader tests for cache invalidation semantics
+- [x] Wire invalidation to text/font/positioning property changes for `ComputedTextGeometryComponent`
+- [x] Reuse `ComputedTextGeometryComponent` directly during renderer text drawing
+- [x] Add broader tests for cache invalidation semantics
 
 ### Phase 5: Cleanup
 
@@ -519,7 +519,7 @@ donner/svg/resources/
 
 donner/svg/components/
   text/ComputedTextComponent.h      # Flattened text/tree/positioning ECS state
-  text/ComputedTextPathComponent.h  # Cached glyph geometry, character metrics, bounds
+  text/ComputedTextGeometryComponent.h  # Cached glyph geometry, character metrics, bounds
 ```
 
 ## Capability Model
@@ -544,17 +544,17 @@ The `TextEngine` calls `isCursive()` to decide whether to suppress letter-spacin
 `hasSmallCapsFeature()` to decide native vs synthesized small-caps, and calls `bitmapGlyph()` with
 a fallback to `glyphOutline()` — all without compile-time branching.
 
-## ECS Caching: ComputedTextPathComponent
+## ECS Caching: ComputedTextGeometryComponent
 
 Text layout and outline extraction are expensive. Following the existing ECS "computed" pattern
-(`ComputedStyleComponent`, `ComputedPathComponent`, etc.), `ComputedTextPathComponent` caches the
+(`ComputedStyleComponent`, `ComputedPathComponent`, etc.), `ComputedTextGeometryComponent` caches the
 laid-out glyph geometry and per-character metrics for one text root:
 
 ```cpp
 namespace donner::svg::components {
 
 /// Cached text layout results. Attached to the text root entity.
-struct ComputedTextPathComponent {
+struct ComputedTextGeometryComponent {
   struct GlyphGeometry {
     entt::entity sourceEntity = entt::null;
     PathSpline path;
@@ -583,21 +583,26 @@ struct ComputedTextPathComponent {
 
 ### Invalidation
 
-The component should be invalidated (removed or recomputed) when any of these change:
+The component is invalidated (removed) via `SVGTextContentElement::invalidateTextGeometry()`, which
+walks up to the text root entity and removes `ComputedTextGeometryComponent`. This is called from:
 
-- Text content (character data, `<tspan>` structure)
-- Font properties (family, size, weight, style, stretch, variant)
-- Positioning attributes (x, y, dx, dy, rotate, text-anchor, dominant-baseline)
-- textLength or lengthAdjust
-- textPath reference or path data
+- `SVGTextContentElement`: `setTextLength`, `setLengthAdjust`, `appendText`, `advanceTextChunk`
+- `SVGTextPositioningElement`: `setX/Y/Dx/Dy/Rotate` and their list variants (10 setters)
+- `SVGTextPathElement`: `setHref`, `setStartOffset`
+
+A `TextGeometry` dirty flag (`DirtyFlagsComponent::TextGeometry`) is marked alongside `RenderInstance`
+on the text root entity. Font property changes (family, size, weight, style, stretch, variant)
+cascade through the style system and are handled by the full render tree rebuild path.
 
 This integrates with the existing incremental invalidation system (see
 [incremental_invalidation.md](../incremental_invalidation.md)).
 
 ### Renderer integration
 
-`SVGTextContentElement` and `SVGTextElement` already use `ComputedTextPathComponent` through
-`TextEngine` for public text geometry APIs. Renderer reuse of the cache is still planned work.
+`SVGTextContentElement` and `SVGTextElement` use `ComputedTextGeometryComponent` through
+`TextEngine` for public text geometry APIs. Both renderers (`RendererTinySkia`, `RendererSkia`)
+check for cached `TextRun` data in `ComputedTextGeometryComponent` before calling `layout()`,
+avoiding redundant text shaping when the cache is populated.
 
 ## Public API: Text-to-Path and Bounds
 
@@ -630,7 +635,7 @@ public:
 };
 ```
 
-These methods prepare only the queried text root, populate `ComputedTextPathComponent` if needed,
+These methods prepare only the queried text root, populate `ComputedTextGeometryComponent` if needed,
 then read from the cached data. This keeps the DOM wrapper thin and avoids requiring full render
 tree instantiation for text geometry queries.
 
@@ -686,7 +691,7 @@ Each backend gets tests against real fonts to validate its `TextBackend` impleme
   produce expected glyph IDs, cursive detection matches expected scripts, bitmap extraction
   returns valid RGBA data. Migrated from existing `TextShaper_tests.cc`.
 
-### ComputedTextPathComponent tests
+### ComputedTextGeometryComponent tests
 
 - Cache populated on first render, subsequent renders skip layout
 - Invalidation: modifying text content / font properties / positioning clears the cache

@@ -161,6 +161,8 @@ struct TextParams {
   LengthAdjust lengthAdjust = LengthAdjust::Default;
   /// @font-face declarations for custom font resolution.
   std::span<const css::FontFace> fontFaces;
+  /// Entity of the text root element, for cached layout lookup. entt::null if unknown.
+  entt::entity textRootEntity = entt::null;
 };
 
 /**

@@ -1,7 +1,11 @@
 #include "donner/svg/SVGTextContentElement.h"
 
 #include "donner/base/Vector2.h"
+#include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
@@ -26,6 +30,26 @@ const TextEngine* tryGetPreparedTextEngine(EntityHandle handle) {
 
 SVGTextContentElement::SVGTextContentElement(EntityHandle handle) : SVGGraphicsElement(handle) {
   handle_.emplace<components::TextComponent>();
+}
+
+void SVGTextContentElement::invalidateTextGeometry() {
+  // Walk up to the text root and remove cached text layout.
+  Registry& registry = *handle_.registry();
+  Entity current = handle_.entity();
+  while (current != entt::null) {
+    if (registry.any_of<components::TextRootComponent>(current)) {
+      registry.remove<components::ComputedTextGeometryComponent>(current);
+      registry.get_or_emplace<components::DirtyFlagsComponent>(current).mark(
+          components::DirtyFlagsComponent::TextGeometry |
+          components::DirtyFlagsComponent::RenderInstance);
+      return;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (!tree) {
+      break;
+    }
+    current = tree->parent();
+  }
 }
 
 std::vector<PathSpline> SVGTextContentElement::computedGlyphPaths() const {
@@ -58,6 +82,7 @@ std::optional<Lengthd> SVGTextContentElement::textLength() const {
 
 void SVGTextContentElement::setTextLength(std::optional<Lengthd> value) {
   handle_.get<components::TextComponent>().textLength = value;
+  invalidateTextGeometry();
 }
 
 LengthAdjust SVGTextContentElement::lengthAdjust() const {
@@ -66,6 +91,7 @@ LengthAdjust SVGTextContentElement::lengthAdjust() const {
 
 void SVGTextContentElement::setLengthAdjust(LengthAdjust value) {
   handle_.get_or_emplace<components::TextComponent>().lengthAdjust = value;
+  invalidateTextGeometry();
 }
 
 long SVGTextContentElement::getNumberOfChars() const {
@@ -152,6 +178,8 @@ void SVGTextContentElement::appendText(std::string_view text) {
   } else {
     textComponent.textChunks.emplace_back(text);
   }
+
+  invalidateTextGeometry();
 }
 
 void SVGTextContentElement::advanceTextChunk() {
@@ -160,6 +188,7 @@ void SVGTextContentElement::advanceTextChunk() {
     textComponent.textChunks.push_back(RcString(""));
   }
   textComponent.textChunks.push_back(RcString(""));
+  invalidateTextGeometry();
 }
 
 RcString SVGTextContentElement::textContent() const {

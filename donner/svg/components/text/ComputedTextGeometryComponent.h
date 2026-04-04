@@ -7,6 +7,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/core/PathSpline.h"
+#include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::components {
 
@@ -17,7 +18,7 @@ namespace donner::svg::components {
  * per-glyph outlines and per-character metrics so DOM APIs can answer geometry queries without
  * duplicating text layout logic.
  */
-struct ComputedTextPathComponent {
+struct ComputedTextGeometryComponent {
   /**
    * Outline geometry for a single rendered glyph.
    */
@@ -43,6 +44,7 @@ struct ComputedTextPathComponent {
 
   std::vector<GlyphGeometry> glyphs;          ///< Cached glyph outlines for the text root.
   std::vector<CharacterGeometry> characters;  ///< Cached character metrics in logical order.
+  std::vector<TextRun> runs;                  ///< Cached layout runs for renderer reuse.
   Boxd inkBounds;                             ///< Union of glyph ink bounds.
   Boxd emBoxBounds;                           ///< Union of em-box bounds used for text bbox.
 };

@@ -9,7 +9,7 @@
 #include "donner/base/ParseError.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
-#include "donner/svg/components/text/ComputedTextPathComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextBackend.h"
 #include "donner/svg/text/TextLayoutParams.h"
@@ -72,7 +72,7 @@ public:
                                   components::ComputedTextComponent& text) const;
 
   /// Ensure cached text geometry exists for the text root containing \p handle.
-  const components::ComputedTextPathComponent& ensureComputedTextPathComponent(
+  const components::ComputedTextGeometryComponent& ensureComputedTextGeometryComponent(
       EntityHandle handle) const;
 
   /// Return glyph outlines for the text subtree rooted at \p handle.

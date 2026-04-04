@@ -269,6 +269,9 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
     params.fontFaces = resourceManager->fontFaces();
   }
 
+  // Pass the text root entity for cached layout lookup.
+  params.textRootEntity = instance.dataHandle(registry).entity();
+
   return params;
 }
 

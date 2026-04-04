@@ -270,4 +270,85 @@ TEST(SVGTextElementPublicApiTests, TspanApisFilterToOwnSubtree) {
   EXPECT_EQ(span.getStartPositionOfChar(0), root.getStartPositionOfChar(1));
 }
 
+// ── Cache invalidation tests ────────────────────────────────────────────────
+
+TEST(SVGTextElementCacheTests, GeometryIsCachedAcrossQueries) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // First query populates cache.
+  const double len1 = textElement.getComputedTextLength();
+  // Second query should return same result from cache.
+  const double len2 = textElement.getComputedTextLength();
+  EXPECT_DOUBLE_EQ(len1, len2);
+}
+
+TEST(SVGTextElementCacheTests, SetTextLengthInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABCDEF</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // textLength affects glyph positions, so use start position of last char.
+  const Vector2d posBefore = textElement.getStartPositionOfChar(5);
+
+  // Setting textLength should invalidate the cache and change glyph positions.
+  textElement.setTextLength(Lengthd(200.0, Lengthd::Unit::Px));
+  const Vector2d posAfter = textElement.getStartPositionOfChar(5);
+  // The last character should have moved significantly.
+  EXPECT_GT(std::abs(posAfter.x - posBefore.x), 10.0);
+}
+
+TEST(SVGTextElementCacheTests, SetPositionInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">AB</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  const Vector2d startBefore = textElement.getStartPositionOfChar(0);
+  EXPECT_NEAR(startBefore.x, 10.0, 0.5);
+
+  // Change X position.
+  textElement.setX(Lengthd(50.0, Lengthd::Unit::Px));
+  const Vector2d startAfter = textElement.getStartPositionOfChar(0);
+  EXPECT_NEAR(startAfter.x, 50.0, 0.5);
+}
+
+TEST(SVGTextElementCacheTests, TSpanPositionChangeInvalidatesParent) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="root" x="10" y="20" font-family="fallback-font" font-size="12px">
+        A<tspan id="span">B</tspan>
+      </text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+
+  // Prime the cache.
+  const Vector2d spanStartBefore = span.getStartPositionOfChar(0);
+
+  // Change dx on the tspan.
+  span.setDx(Lengthd(20.0, Lengthd::Unit::Px));
+  const Vector2d spanStartAfter = span.getStartPositionOfChar(0);
+  // The span's character should have moved by ~20px.
+  EXPECT_NEAR(spanStartAfter.x - spanStartBefore.x, 20.0, 1.0);
+}
+
 }  // namespace donner::svg

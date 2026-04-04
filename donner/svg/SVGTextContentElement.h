@@ -145,6 +145,12 @@ public:
   void selectSubString(std::size_t charnum, std::size_t nchars);
 
   /**
+   * Invalidate cached text layout for the text root containing this element.
+   * Called when any text property that affects layout changes.
+   */
+  void invalidateTextGeometry();
+
+  /**
    * Append text content from text or CDATA nodes.
    *
    * @param text Text content to append.
