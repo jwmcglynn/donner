@@ -61,6 +61,13 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "font_metadata",
+    srcs = ["FontMetadata.cc"],
+    hdrs = ["FontMetadata.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+)
+
+donner_cc_library(
     name = "font_loader",
     srcs = ["FontLoader.cc"],
     hdrs = ["FontLoader.h"],

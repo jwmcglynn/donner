@@ -53,7 +53,7 @@ cc_library(
     ] + select({
         "//donner/svg/renderer:text_enabled": [
             "//donner/svg/resources:font_manager",
-            "@stb//:truetype",
+            "//donner/svg/text:text_engine",
         ],
         "//conditions:default": [],
     }),

@@ -11,7 +11,7 @@ cc_library(
         "TextRootComponent.h",
     ],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
         "//donner/svg/core",

@@ -1,10 +1,14 @@
-#include "donner/svg/renderer/TextEngine.h"
+#include "donner/svg/text/TextEngine.h"
 
 #include <cmath>
 #include <string>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
+#include "donner/svg/text/TextBackendSimple.h"
+#ifdef DONNER_TEXT_FULL
+#include "donner/svg/text/TextBackendFull.h"
+#endif
 #include "donner/svg/core/WritingMode.h"
 
 namespace donner::svg {
@@ -38,7 +42,8 @@ std::string encodeUtf8(uint32_t cp) {
 }
 
 /// Returns true if \p font shapes \p cp to a non-.notdef glyph.
-bool fontSupportsCodepoint(TextBackend& backend, FontHandle font, float fontSizePx, uint32_t cp) {
+bool fontSupportsCodepoint(const TextBackend& backend, FontHandle font, float fontSizePx,
+                           uint32_t cp) {
   if (!font || cp == 0) {
     return false;
   }
@@ -50,7 +55,7 @@ bool fontSupportsCodepoint(TextBackend& backend, FontHandle font, float fontSize
 }
 
 /// Finds a registered font that covers \p cp, preserving \p currentFont when it already does.
-FontHandle findCoverageFallbackFont(TextBackend& backend, FontManager& fontManager,
+FontHandle findCoverageFallbackFont(const TextBackend& backend, FontManager& fontManager,
                                     FontHandle currentFont, float fontSizePx, uint32_t cp) {
   if (cp == 0 || fontSupportsCodepoint(backend, currentFont, fontSizePx, cp)) {
     return currentFont;
@@ -111,11 +116,34 @@ bool isNonSpacing(uint32_t cp) {
 
 }  // namespace
 
-TextEngine::TextEngine(TextBackend& backend, FontManager& fontManager)
-    : backend_(backend), fontManager_(fontManager) {}
+TextEngine::TextEngine(FontManager& fontManager) : fontManager_(fontManager) {
+#ifdef DONNER_TEXT_FULL
+  backend_ = std::make_unique<TextBackendFull>(fontManager_);
+#else
+  backend_ = std::make_unique<TextBackendSimple>(fontManager_);
+#endif
+}
+
+TextEngine::~TextEngine() = default;
+
+void TextEngine::addFontFace(const css::FontFace& face) {
+  fontManager_.addFontFace(face);
+  ++registeredFontFaceCount_;
+}
+
+void TextEngine::addFontFaces(std::span<const css::FontFace> faces) {
+  if (faces.size() <= registeredFontFaceCount_) {
+    return;
+  }
+
+  for (size_t i = registeredFontFaceCount_; i < faces.size(); ++i) {
+    fontManager_.addFontFace(faces[i]);
+  }
+  registeredFontFaceCount_ = faces.size();
+}
 
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
-                                        const TextParams& params) {
+                                        const TextLayoutParams& params) {
   // ── Resolve base font ─────────────────────────────────────────────────────────
   FontHandle font;
   for (const auto& family : params.fontFamilies) {
@@ -133,11 +161,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
   // ── Compute dominant-baseline shift ───────────────────────────────────────────
   // The shift moves the alphabetic baseline so that the dominant baseline sits at y.
-  const float scale = backend_.scaleForPixelHeight(font, fontSizePx);
+  const float scale = backend_->scaleForPixelHeight(font, fontSizePx);
   double baselineShift = 0.0;
   if (params.dominantBaseline != DominantBaseline::Auto &&
       params.dominantBaseline != DominantBaseline::Alphabetic) {
-    const FontVMetrics vm = backend_.fontVMetrics(font);
+    const FontVMetrics vm = backend_->fontVMetrics(font);
     // ascent > 0 (above baseline), descent < 0 (below baseline), in font units.
     switch (params.dominantBaseline) {
       case DominantBaseline::Auto:
@@ -232,7 +260,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             : fontSizePx;
 
     const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
-    spanFont = findCoverageFallbackFont(backend_, fontManager_, spanFont, spanFontSizePx,
+    spanFont = findCoverageFallbackFont(*backend_, fontManager_, spanFont, spanFontSizePx,
                                         spanTestCodepoint);
     run.font = spanFont;
 
@@ -240,7 +268,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // The simple backend can't handle them but produces empty shapeRun results,
     // which the renderer gracefully skips.
 
-    const float spanScale = backend_.scaleForEmToPixels(spanFont, spanFontSizePx);
+    const float spanScale = backend_->scaleForEmToPixels(spanFont, spanFontSizePx);
 
     // ── Per-span baseline-shift ─────────────────────────────────────────────────
     // Positive CSS baseline-shift = shift up, which in SVG Y-down = subtract from Y.
@@ -250,7 +278,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     double spanBaselineShiftPx;
     using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
     if (span.baselineShiftKeyword == BSK::Sub || span.baselineShiftKeyword == BSK::Super) {
-      const auto subSuper = backend_.subSuperMetrics(spanFont);
+      const auto subSuper = backend_->subSuperMetrics(spanFont);
       if (subSuper.has_value()) {
         // OS/2 offsets are in font design units (positive = up). Convert to pixels and
         // negate for CSS convention (positive CSS baseline-shift = shift up = negative Y).
@@ -275,15 +303,15 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     // Resolve ancestor baseline-shifts, using font OS/2 metrics for sub/super keywords.
     {
-      const auto subSuper = backend_.subSuperMetrics(spanFont);
+      const auto subSuper = backend_->subSuperMetrics(spanFont);
       for (const auto& ancestor : span.ancestorBaselineShifts) {
         if (subSuper.has_value() && ancestor.keyword == BSK::Sub) {
           const float ancestorScale =
-              backend_.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+              backend_->scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
           spanBaselineShiftPx += -static_cast<double>(subSuper->subscriptYOffset) * ancestorScale;
         } else if (subSuper.has_value() && ancestor.keyword == BSK::Super) {
           const float ancestorScale =
-              backend_.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+              backend_->scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
           spanBaselineShiftPx += static_cast<double>(subSuper->superscriptYOffset) * ancestorScale;
         } else {
           FontMetrics ancestorFm = params.fontMetrics;
@@ -299,7 +327,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     double effectiveBaselineShift = baselineShift;
     if (span.alignmentBaseline != DominantBaseline::Auto) {
       effectiveBaselineShift = 0.0;
-      const FontVMetrics vm = backend_.fontVMetrics(spanFont);
+      const FontVMetrics vm = backend_->fontVMetrics(spanFont);
       switch (span.alignmentBaseline) {
         case DominantBaseline::Auto:
         case DominantBaseline::Alphabetic: break;
@@ -466,8 +494,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
       const auto shaped =
-          backend_.shapeRun(spanFont, spanFontSizePx, spanText, chunk.byteStart,
-                            chunk.byteEnd - chunk.byteStart, vertical, span.fontVariant, false);
+          backend_->shapeRun(spanFont, spanFontSizePx, spanText, chunk.byteStart,
+                             chunk.byteEnd - chunk.byteStart, vertical, span.fontVariant, false);
 
       // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
       // When a multi-glyph RTL chunk starts because of an absolute y position on the
@@ -496,8 +524,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
         crossKern =
-            backend_.crossSpanKern(prevChunkFont, prevChunkFontSizePx, spanFont, spanFontSizePx,
-                                   prevChunkLastCodepoint, firstCp, vertical);
+            backend_->crossSpanKern(prevChunkFont, prevChunkFontSizePx, spanFont, spanFontSizePx,
+                                    prevChunkLastCodepoint, firstCp, vertical);
         appliedCrossKern = true;
       } else if (ci == 0 && !span.startsNewChunk && prevSpanLastCodepoint != 0 &&
                  !shaped.glyphs.empty()) {
@@ -505,8 +533,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
         crossKern =
-            backend_.crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont, spanFontSizePx,
-                                   prevSpanLastCodepoint, firstCp, vertical);
+            backend_->crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont, spanFontSizePx,
+                                    prevSpanLastCodepoint, firstCp, vertical);
         appliedCrossKern = true;
       }
 
@@ -592,7 +620,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             // Center on the central baseline: shift X so the midpoint between the scaled
             // ascender and descender aligns with the text position. Use pixel-height scaling
             // (ascent-to-descent = fontSize) so the center is proportionally correct.
-            const FontVMetrics vm = backend_.fontVMetrics(spanFont);
+            const FontVMetrics vm = backend_->fontVMetrics(spanFont);
             // Compute ascent-descent-based scale: pixelHeight / (ascent - descent).
             // This differs from em-based scaling used elsewhere.
             const double phScale = (vm.ascent != vm.descent) ? static_cast<double>(spanFontSizePx) /
@@ -627,7 +655,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
           penY += glyph.yAdvance;
           // Letter-spacing: suppress for cursive scripts.
-          if (!backend_.isCursive(codepoint)) {
+          if (!backend_->isCursive(codepoint)) {
             penY += span.letterSpacingPx;
           }
           // Word-spacing after U+0020 (space).
@@ -732,7 +760,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           penX += sg.xAdvance;
 
           // CSS letter-spacing: extra space after every character, suppressed for cursive scripts.
-          if (!backend_.isCursive(codepoint)) {
+          if (!backend_->isCursive(codepoint)) {
             penX += span.letterSpacingPx;
           }
           // CSS word-spacing: extra space after U+0020 (space) characters.
@@ -1024,6 +1052,60 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   }
 
   return runs;
+}
+
+FontVMetrics TextEngine::fontVMetrics(FontHandle font) const {
+  return backend_->fontVMetrics(font);
+}
+
+float TextEngine::scaleForPixelHeight(FontHandle font, float pixelHeight) const {
+  return backend_->scaleForPixelHeight(font, pixelHeight);
+}
+
+float TextEngine::scaleForEmToPixels(FontHandle font, float pixelHeight) const {
+  return backend_->scaleForEmToPixels(font, pixelHeight);
+}
+
+std::optional<UnderlineMetrics> TextEngine::underlineMetrics(FontHandle font) const {
+  return backend_->underlineMetrics(font);
+}
+
+std::optional<SubSuperMetrics> TextEngine::subSuperMetrics(FontHandle font) const {
+  return backend_->subSuperMetrics(font);
+}
+
+PathSpline TextEngine::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+  return backend_->glyphOutline(font, glyphIndex, scale);
+}
+
+bool TextEngine::isBitmapOnly(FontHandle font) const {
+  return backend_->isBitmapOnly(font);
+}
+
+std::optional<TextBackend::BitmapGlyph> TextEngine::bitmapGlyph(FontHandle font, int glyphIndex,
+                                                                float scale) const {
+  return backend_->bitmapGlyph(font, glyphIndex, scale);
+}
+
+std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fontFamilies) {
+  FontHandle font;
+  for (const auto& family : fontFamilies) {
+    font = fontManager_.findFont(family);
+    if (font) {
+      break;
+    }
+  }
+  if (!font) {
+    font = fontManager_.fallbackFont();
+  }
+
+  TextBackendSimple measurementBackend(fontManager_);
+  const auto shaped =
+      measurementBackend.shapeRun(font, 1.0f, "0", 0, 1, false, FontVariant::Normal, false);
+  if (shaped.glyphs.empty()) {
+    return std::nullopt;
+  }
+  return shaped.glyphs.front().xAdvance;
 }
 
 }  // namespace donner::svg

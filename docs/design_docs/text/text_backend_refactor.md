@@ -16,10 +16,14 @@ also reaches through `FontManager` to call stb_truetype functions directly (font
 parsing), even when the full engine is active.
 
 This refactor introduces a `TextBackend` interface that abstracts all font-backend operations
-(metrics, outlines, table data, shaping), then restructures the layout engines to share the
-backend-agnostic SVG positioning code through a single `TextEngine`. The two backends become
-`TextBackendSimple` (stb_truetype) and `TextBackendFull` (HarfBuzz + FreeType). The refactor also
-includes a readability pass to reduce function length and cyclomatic complexity in the engine code.
+(metrics, outlines, shaping), then restructures the layout engines to share the backend-agnostic
+SVG positioning code through a single `TextEngine`. `FontManager` is reduced to a font registry
+that owns raw font bytes, family matching, and `FontHandle` allocation only. `TextEngine` owns the
+selected backend privately, exposes the narrow text API used by renderers and layout-adjacent
+systems, and is registered in `entt::registry::ctx()` for shared access. The two backend
+implementations are `TextBackendSimple` (stb_truetype) and `TextBackendFull` (HarfBuzz +
+FreeType). The refactor also includes a readability pass to reduce function length and cyclomatic
+complexity in the engine code.
 
 ## Goals
 
@@ -30,6 +34,8 @@ includes a readability pass to reduce function length and cyclomatic complexity 
   baseline-shift, textLength adjustment, text-on-path — all shared in one place.
 - **Clean capability model.** Backend-specific features (cursive detection, bitmap glyphs, OpenType
   feature queries) are explicit in the `TextBackend` API, not hidden behind `#ifdef`.
+- **Clear service split.** `FontManager` is a raw font registry only; anything involving shaping,
+  metrics, outlines, or multi-glyph behavior goes through `TextEngine`.
 - **Rename and unify.** `TextLayout` and `TextShaper` merge into a single `TextEngine` that
   accepts a `TextBackend`. `TextBackendSimple` replaces stb_truetype-specific code,
   `TextBackendFull` replaces HarfBuzz+FreeType code. Output types become `TextGlyph` and `TextRun`.
@@ -44,7 +50,7 @@ includes a readability pass to reduce function length and cyclomatic complexity 
 - Changing the build-time engine selection mechanism (`DONNER_TEXT_FULL` / `--config=text-full`).
 - Runtime engine switching.
 - Adding new text features (multi-line, `font` shorthand, etc.).
-- Changing FontManager's public API for non-text consumers.
+- Adding runtime backend switching.
 
 ## Current State
 
@@ -116,15 +122,14 @@ This makes the code difficult to review, modify, and test in isolation. Individu
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    RendererTinySkia                          │
-│  drawText() calls engine.layout(), backend.glyphOutline(),  │
-│  backend.fontVMetrics(), backend.underlineMetrics()          │
+│        Renderers / ShapeSystem / other text clients          │
+│  call TextEngine layout/metrics/outline/bitmap APIs          │
 └────────────────────────┬────────────────────────────────────┘
                          │ uses
 ┌────────────────────────▼────────────────────────────────────┐
-│               TextEngine (shared)                           │
+│               TextEngine (shared service)                    │
 │  layout() → SVG positioning, chunking, anchor, textLength   │
-│  Delegates to TextBackend for font-specific operations      │
+│  Owns selected backend and hides backend choice             │
 └────────────────────────┬────────────────────────────────────┘
                          │ owns one of
           ┌──────────────┴──────────────┐
@@ -134,6 +139,13 @@ This makes the code difficult to review, modify, and test in isolation. Individu
 │ glyph outlines       │ │ glyph outlines, bitmaps, cursive    │
 │ kern table kerning   │ │ GSUB/GPOS shaping, smcp feature     │
 └──────────────────────┘ └─────────────────────────────────────┘
+                         │
+                         │ reads raw font bytes / family lookup
+┌────────────────────────▼────────────────────────────────────┐
+│                  FontManager (registry)                     │
+│  @font-face registration, family matching, raw font data    │
+│  No shaping, outlines, or table-derived font semantics      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### TextBackend Interface
@@ -284,22 +296,27 @@ struct TextRun {
 }  // namespace donner::svg::renderer
 ```
 
-### TextEngine (Shared Layout Logic)
+### TextEngine (Shared Text Service)
 
 ```cpp
 class TextEngine {
 public:
-  explicit TextEngine(TextBackend& backend);
+  explicit TextEngine(FontManager& fontManager);
 
   /// Full SVG text layout: shaping → positioning → chunking → anchor → textLength.
   std::vector<TextRun> layout(const components::ComputedTextComponent& text,
                               const TextParams& params);
 
-  /// Access the backend (for renderer to call glyphOutline, fontVMetrics, etc.).
-  TextBackend& backend() { return backend_; }
+  FontVMetrics fontVMetrics(FontHandle font) const;
+  PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const;
+  std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const;
+  std::optional<TextBackend::BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
+                                                      float scale) const;
+  std::optional<double> measureChUnitInEm(std::span<const RcString> fontFamilies);
 
 private:
-  TextBackend& backend_;
+  FontManager& fontManager_;
+  std::unique_ptr<TextBackend> backend_;
 
   // ── Shared helpers (currently duplicated) ───────────────────
   static double calculateBaselineShift(DominantBaseline baseline,
@@ -313,9 +330,10 @@ private:
 };
 ```
 
-The `layout()` method contains all the shared SVG positioning code. It calls
-`backend_.shapeRun()` to produce glyph IDs and advances, then positions them according to SVG
-text layout rules (per-character coordinates, dominant-baseline, text-anchor, textLength, etc.).
+The `layout()` method contains all the shared SVG positioning code. It calls the internally-owned
+backend to produce glyph IDs and advances, then positions them according to SVG text layout rules
+(per-character coordinates, dominant-baseline, text-anchor, textLength, etc.). Callers never
+observe the backend type directly.
 
 ### TextBackendSimple and TextBackendFull
 
@@ -347,36 +365,31 @@ public:
 
 ### Renderer Changes
 
-`RendererTinySkia::drawText()` stops using `stbtt_fontinfo*` directly:
+`RendererTinySkia::drawText()` and `RendererSkia::drawText()` stop instantiating backends directly
+and instead use a shared `TextEngine` service:
 
 ```cpp
 void RendererTinySkia::drawText(const ComputedTextComponent& text, const TextParams& params) {
-  // Engine selection still at build time, but both produce the same types.
-#ifdef DONNER_TEXT_FULL
-  TextBackendFull backend(fontManager);
-#else
-  TextBackendSimple backend(fontManager);
-#endif
-  TextEngine engine(backend);
+  TextEngine engine(fontManager);
   std::vector<TextRun> runs = engine.layout(text, params);
 
-  // --- Font metrics for text bbox: use backend, not stbtt ---
+  // --- Font metrics for text bbox: use engine, not stbtt ---
   for (const auto& run : runs) {
-    FontVMetrics metrics = backend.fontVMetrics(run.font);
-    float scale = backend.scaleForPixelHeight(run.font, fontSizePx);
+    FontVMetrics metrics = engine.fontVMetrics(run.font);
+    float scale = engine.scaleForPixelHeight(run.font, fontSizePx);
     double emTop = static_cast<double>(metrics.ascent) * scale;
     double emBottom = -static_cast<double>(metrics.descent) * scale;
     // ... bbox computation ...
   }
 
-  // --- Glyph outlines: use backend, not stbtt/shaper ---
+  // --- Glyph outlines: use engine, not stbtt/shaper ---
   for (const auto& glyph : run.glyphs) {
-    PathSpline path = backend.glyphOutline(run.font, glyph.glyphIndex, scale);
+    PathSpline path = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
     // ... no #ifdef needed ...
   }
 
-  // --- Text decoration: use backend, not raw table parsing ---
-  auto underline = backend.underlineMetrics(run.font, fontSizePx);
+  // --- Text decoration: use engine, not raw table parsing ---
+  auto underline = engine.underlineMetrics(run.font);
   // ... position decoration lines ...
 }
 ```
@@ -495,30 +508,30 @@ CJK vertical layout (`a-writing-mode-012`, 11928px → PASS):
 
 ### Phase 5: Cleanup
 
-- [ ] Remove `fontInfo()` from `FontManager`'s public API
-- [ ] Update `ImageComparisonTestFixture` table-reading helpers to use `TextBackend`
+- [x] Remove `fontInfo()` from `FontManager`'s public API
+- [x] Replace `ImageComparisonTestFixture` table-reading helpers with a shared font metadata utility
 - [x] Switch from reimplemented UTF-8 decoding to `donner/base/Utf8.h`
+- [x] Move the text stack into `donner/svg/text/`
+- [x] Register `TextEngine` in `registry.ctx()` for shared text measurement/layout access
+- [x] Keep `TextParams` renderer-specific and use `TextLayoutParams` in the text layer
 - [x] Update design docs
 
 ## Validation Status
 
 Current verification for this refactor:
 
-- [x] `bazel test //...`
-- [x] `bazel test //donner/svg/renderer/tests:text_backend_full_tests --config=text-full`
-- [x] `bazel test //donner/svg/renderer/tests:text_engine_tests --config=text-full`
-- [x] `bazel test //donner/svg/renderer/tests:resvg_test_suite --config=text-full --test_output=errors`
-- [x] `bazel test //donner/svg/renderer/tests:resvg_test_suite --test_output=errors`
-- [ ] `bazel build //donner/svg/renderer:renderer_skia --config=text-full`
-      Not verifiable in the current environment because the Skia renderer target is incompatible
-      on this machine.
+- [ ] `bazel test //...`
+- [ ] `bazel test //... --config=text-full`
+- [ ] `bazel test //... --config=text-full --config=skia`
 
 The refactored `TextEngine` + `TextBackendFull` path now matches the previous text-full
 behavior for the resvg suite while removing the duplicated layout logic from `TextShaper`.
-`RendererSkia` now uses `TextEngine + TextBackendFull`, and the legacy `TextShaper` source,
+`RendererSkia` and `RendererTinySkia` now use `TextEngine`, and the legacy `TextShaper` source,
 target, and dedicated test target have been removed. `TextLayout` and its dedicated test target
 have also been removed because the production renderer no longer uses the legacy simple-layout
-implementation.
+implementation. `FontManager` is now a font registry only and no longer exposes raw
+`stbtt_fontinfo*` or backend-facing font semantics as public API. The image-comparison fixture now
+uses a shared font metadata parser instead of maintaining its own inline OpenType table readers.
 
 ## File Structure (After)
 

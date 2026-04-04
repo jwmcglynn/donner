@@ -6,9 +6,7 @@
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #ifdef DONNER_TEXT_ENABLED
-#define STBTT_DEF extern
-#include <stb/stb_truetype.h>
-#include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/TextEngine.h"
 #endif
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
@@ -23,8 +21,7 @@ namespace {
 
 /// Create a FontMetrics with viewport size and font-size context, so that CSS units
 /// (em/ex/ch/rem/vw/vh/vmin/vmax) resolve correctly.
-FontMetrics fontMetricsForElement(Registry& registry,
-                                  const ComputedStyleComponent& style) {
+FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleComponent& style) {
   FontMetrics metrics;
 
   if (auto* ctx = registry.ctx().find<SVGDocumentContext>()) {
@@ -49,37 +46,16 @@ FontMetrics fontMetricsForElement(Registry& registry,
   // Element's computed font-size for em/ex/ch units.
   if (style.properties) {
     // Resolve font-size using default metrics (font-size itself can't be em-relative to itself).
-    metrics.fontSize = style.properties->fontSize.getRequired().toPixels(
-        Boxd(), FontMetrics(), Lengthd::Extent::Mixed);
+    metrics.fontSize = style.properties->fontSize.getRequired().toPixels(Boxd(), FontMetrics(),
+                                                                         Lengthd::Extent::Mixed);
   }
 
 #ifdef DONNER_TEXT_ENABLED
-  // Measure the actual "0" glyph advance for ch units using the element's font.
-  if (auto* fontManager = registry.ctx().find<FontManager>()) {
-    // Resolve font family from the element's style.
-    FontHandle font;
+  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
     if (style.properties) {
-      for (const auto& family : style.properties->fontFamily.getRequired()) {
-        font = fontManager->findFont(family);
-        if (font) {
-          break;
-        }
-      }
-    }
-    if (!font) {
-      font = fontManager->fallbackFont();
-    }
-
-    if (const stbtt_fontinfo* info = fontManager->fontInfo(font)) {
-      // Measure the "0" glyph (U+0030) advance width.
-      int advanceWidth = 0;
-      int leftSideBearing = 0;
-      const int glyphIndex = stbtt_FindGlyphIndex(info, 0x30);  // '0'
-      if (glyphIndex != 0) {
-        stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &leftSideBearing);
-        // Convert to em ratio: advance / unitsPerEm.
-        const float scale = fontManager->scaleForPixelHeight(font, 1.0f);
-        metrics.chUnitInEm = static_cast<double>(advanceWidth) * scale;
+      if (const auto chUnit =
+              textEngine->measureChUnitInEm(style.properties->fontFamily.getRequired())) {
+        metrics.chUnitInEm = *chUnit;
       }
     }
   }
@@ -495,7 +471,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 }
 
 ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                  const parser::PropertyParseFnParams& params) {
+                                                 const parser::PropertyParseFnParams& params) {
   if (name == "d") {
     auto maybeError = ParseDFromAttributes(handle.get_or_emplace<PathComponent>(), params);
     if (maybeError) {

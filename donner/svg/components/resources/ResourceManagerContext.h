@@ -115,7 +115,7 @@ private:
   /// logic.
   std::unique_ptr<ResourceLoaderInterface> loader_;
 
-  /// All registered @font-face declarations (persistent, for FontManager resolution).
+  /// All registered @font-face declarations (persistent, for FontRegistry resolution).
   std::vector<css::FontFace> fontFaces_;
 
   /// A list of all font faces that need to be loaded.

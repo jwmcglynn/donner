@@ -75,6 +75,7 @@ donner_cc_library(
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:terminal_image_viewer",
+        "//donner/svg/resources:font_metadata",
         "@com_google_gtest//:gtest",
         "@pixelmatch-cpp17",
     ],
@@ -205,8 +206,9 @@ donner_cc_test(
     ],
     deps = [
         "//donner/base:base_test_utils",
-        "//donner/svg/renderer:text_backend_full",
-        "//donner/svg/renderer:text_engine",
+        "//donner/svg/text:text_backend_full",
+        "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_layout_params",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -219,7 +221,7 @@ donner_cc_test(
     ],
     deps = [
         "//donner/base:base_test_utils",
-        "//donner/svg/renderer:text_backend_full",
+        "//donner/svg/text:text_backend_full",
         "@com_google_gtest//:gtest_main",
     ],
 )

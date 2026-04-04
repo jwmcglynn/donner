@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
-#include <numbers>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -17,16 +17,15 @@
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#ifdef DONNER_FILTERS_ENABLED
+#include "donner/svg/renderer/FilterGraphExecutor.h"
+#endif
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
-#ifdef DONNER_TEXT_FULL
-#include "donner/svg/renderer/TextBackendFull.h"
-#else
-#include "donner/svg/renderer/TextBackendSimple.h"
-#endif
-#include "donner/svg/renderer/TextEngine.h"
 #include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/TextLayoutParams.h"
 #endif
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/PathBuilder.h"
@@ -35,6 +34,24 @@
 namespace donner::svg {
 
 namespace {
+
+#ifdef DONNER_TEXT_ENABLED
+TextLayoutParams toTextLayoutParams(const TextParams& params) {
+  TextLayoutParams layoutParams;
+  layoutParams.fontFamilies = params.fontFamilies;
+  layoutParams.fontSize = params.fontSize;
+  layoutParams.viewBox = params.viewBox;
+  layoutParams.fontMetrics = params.fontMetrics;
+  layoutParams.textAnchor = params.textAnchor;
+  layoutParams.dominantBaseline = params.dominantBaseline;
+  layoutParams.writingMode = params.writingMode;
+  layoutParams.letterSpacingPx = params.letterSpacingPx;
+  layoutParams.wordSpacingPx = params.wordSpacingPx;
+  layoutParams.textLength = params.textLength;
+  layoutParams.lengthAdjust = params.lengthAdjust;
+  return layoutParams;
+}
+#endif
 
 const Boxd kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 
@@ -152,9 +169,7 @@ PathSpline transformPathSpline(const PathSpline& spline, const Transformd& trans
                        transform.transformPosition(points[command.pointIndex + 1]),
                        transform.transformPosition(points[command.pointIndex + 2]));
         break;
-      case PathSpline::CommandType::ClosePath:
-        result.closePath();
-        break;
+      case PathSpline::CommandType::ClosePath: result.closePath(); break;
     }
   }
 
@@ -350,8 +365,9 @@ Vector2d patternRasterScaleForTransform(const Transformd& deviceFromPattern) {
 
 Vector2d effectivePatternRasterScale(const Boxd& tileRect, int pixelWidth, int pixelHeight,
                                      const Vector2d& fallbackScale) {
-  const double scaleX =
-      NearZero(tileRect.width()) ? fallbackScale.x : static_cast<double>(pixelWidth) / tileRect.width();
+  const double scaleX = NearZero(tileRect.width())
+                            ? fallbackScale.x
+                            : static_cast<double>(pixelWidth) / tileRect.width();
   const double scaleY = NearZero(tileRect.height())
                             ? fallbackScale.y
                             : static_cast<double>(pixelHeight) / tileRect.height();
@@ -380,214 +396,10 @@ void drawRectIntoMask(tiny_skia::Mask& mask, const Boxd& rect, const Transformd&
   mask.fillPath(path, tiny_skia::FillRule::Winding, antialias, toTinyTransform(transform));
 }
 
-struct ConvolutionKernel {
-  std::vector<float> weights;
-  std::vector<std::uint32_t> numerators;
-  std::uint32_t divisor = 1;
-  int origin = 0;
-};
-
-ConvolutionKernel makeGaussianKernel(double sigma) {
-  if (sigma <= 0.0) {
-    return {{1.0f}, {}, 1u, 0};
-  }
-
-  const int radius = std::max(1, static_cast<int>(std::ceil(sigma * 3.0)));
-  std::vector<float> weights(static_cast<std::size_t>(radius * 2 + 1));
-
-  const double twoSigmaSquared = 2.0 * sigma * sigma;
-  double sum = 0.0;
-  for (int i = -radius; i <= radius; ++i) {
-    const double weight = std::exp(-(i * i) / twoSigmaSquared);
-    weights[static_cast<std::size_t>(i + radius)] = static_cast<float>(weight);
-    sum += weight;
-  }
-
-  for (float& weight : weights) {
-    weight = static_cast<float>(weight / sum);
-  }
-
-  return {std::move(weights), {}, 1u, radius};
-}
-
-ConvolutionKernel makeBoxKernel(int minOffset, int maxOffset) {
-  const int width = maxOffset - minOffset + 1;
-  std::vector<std::uint32_t> numerators(static_cast<std::size_t>(width), 1u);
-  return {{}, std::move(numerators), static_cast<std::uint32_t>(width), -minOffset};
-}
-
-ConvolutionKernel convolveKernels(const ConvolutionKernel& lhs, const ConvolutionKernel& rhs) {
-  ConvolutionKernel result;
-  result.origin = lhs.origin + rhs.origin;
-  result.divisor = lhs.divisor * rhs.divisor;
-
-  if (!lhs.numerators.empty() && !rhs.numerators.empty()) {
-    result.numerators.assign(lhs.numerators.size() + rhs.numerators.size() - 1u, 0u);
-    for (std::size_t lhsIndex = 0; lhsIndex < lhs.numerators.size(); ++lhsIndex) {
-      for (std::size_t rhsIndex = 0; rhsIndex < rhs.numerators.size(); ++rhsIndex) {
-        result.numerators[lhsIndex + rhsIndex] += lhs.numerators[lhsIndex] * rhs.numerators[rhsIndex];
-      }
-    }
-  } else {
-    result.weights.assign(lhs.weights.size() + rhs.weights.size() - 1u, 0.0f);
-    for (std::size_t lhsIndex = 0; lhsIndex < lhs.weights.size(); ++lhsIndex) {
-      for (std::size_t rhsIndex = 0; rhsIndex < rhs.weights.size(); ++rhsIndex) {
-        result.weights[lhsIndex + rhsIndex] += lhs.weights[lhsIndex] * rhs.weights[rhsIndex];
-      }
-    }
-  }
-
-  return result;
-}
-
-ConvolutionKernel makeBoxApproximationKernel(double sigma) {
-  if (sigma <= 0.0) {
-    return {{1.0f}, {}, 1u, 0};
-  }
-
-  const double kWindowScale =
-      3.0 * std::sqrt(2.0 * std::numbers::pi_v<double>) / 4.0;
-  const int window =
-      std::max(1, static_cast<int>(std::floor(sigma * kWindowScale + 0.5)));
-  if (window <= 1) {
-    return {{1.0f}, {}, 1u, 0};
-  }
-
-  if ((window & 1) != 0) {
-    const int radius = window / 2;
-    const ConvolutionKernel box = makeBoxKernel(-radius, radius);
-    return convolveKernels(convolveKernels(box, box), box);
-  }
-
-  const int half = window / 2;
-  const ConvolutionKernel leftShifted = makeBoxKernel(-half, half - 1);
-  const ConvolutionKernel rightShifted = makeBoxKernel(-(half - 1), half);
-  const ConvolutionKernel centered = makeBoxKernel(-half, half);
-  return convolveKernels(convolveKernels(leftShifted, rightShifted), centered);
-}
-
-ConvolutionKernel makeBlurKernel(double sigma) {
-  if (sigma < 2.0) {
-    return makeGaussianKernel(sigma);
-  }
-
-  return makeBoxApproximationKernel(sigma);
-}
-
-void convolveHorizontal(const std::vector<std::uint8_t>& src, std::vector<std::uint8_t>& dst,
-                        int width, int height, const ConvolutionKernel& kernel) {
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      for (int channel = 0; channel < 4; ++channel) {
-        if (!kernel.numerators.empty()) {
-          std::uint64_t sum = 0;
-          for (std::size_t kernelIndex = 0; kernelIndex < kernel.numerators.size();
-               ++kernelIndex) {
-            const int sampleX = x + static_cast<int>(kernelIndex) - kernel.origin;
-            if (sampleX < 0 || sampleX >= width) {
-              continue;
-            }
-
-            const std::size_t srcIndex =
-                static_cast<std::size_t>((y * width + sampleX) * 4 + channel);
-            sum += static_cast<std::uint64_t>(kernel.numerators[kernelIndex]) * src[srcIndex];
-          }
-
-          const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-          dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(
-              static_cast<long>((sum + kernel.divisor / 2u) / kernel.divisor), 0L, 255L));
-          continue;
-        }
-
-        float sum = 0.0f;
-        for (std::size_t kernelIndex = 0; kernelIndex < kernel.weights.size(); ++kernelIndex) {
-          const int sampleX = x + static_cast<int>(kernelIndex) - kernel.origin;
-          if (sampleX < 0 || sampleX >= width) {
-            continue;
-          }
-
-          const std::size_t srcIndex =
-              static_cast<std::size_t>((y * width + sampleX) * 4 + channel);
-          sum += kernel.weights[kernelIndex] * static_cast<float>(src[srcIndex]);
-        }
-
-        const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-        dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(std::lround(sum), 0L, 255L));
-      }
-    }
-  }
-}
-
-void convolveVertical(const std::vector<std::uint8_t>& src, std::vector<std::uint8_t>& dst,
-                      int width, int height, const ConvolutionKernel& kernel) {
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      for (int channel = 0; channel < 4; ++channel) {
-        if (!kernel.numerators.empty()) {
-          std::uint64_t sum = 0;
-          for (std::size_t kernelIndex = 0; kernelIndex < kernel.numerators.size();
-               ++kernelIndex) {
-            const int sampleY = y + static_cast<int>(kernelIndex) - kernel.origin;
-            if (sampleY < 0 || sampleY >= height) {
-              continue;
-            }
-
-            const std::size_t srcIndex =
-                static_cast<std::size_t>((sampleY * width + x) * 4 + channel);
-            sum += static_cast<std::uint64_t>(kernel.numerators[kernelIndex]) * src[srcIndex];
-          }
-
-          const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-          dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(
-              static_cast<long>((sum + kernel.divisor / 2u) / kernel.divisor), 0L, 255L));
-          continue;
-        }
-
-        float sum = 0.0f;
-        for (std::size_t kernelIndex = 0; kernelIndex < kernel.weights.size(); ++kernelIndex) {
-          const int sampleY = y + static_cast<int>(kernelIndex) - kernel.origin;
-          if (sampleY < 0 || sampleY >= height) {
-            continue;
-          }
-
-          const std::size_t srcIndex =
-              static_cast<std::size_t>((sampleY * width + x) * 4 + channel);
-          sum += kernel.weights[kernelIndex] * static_cast<float>(src[srcIndex]);
-        }
-
-        const std::size_t dstIndex = static_cast<std::size_t>((y * width + x) * 4 + channel);
-        dst[dstIndex] = static_cast<std::uint8_t>(std::clamp(std::lround(sum), 0L, 255L));
-      }
-    }
-  }
-}
-
-void applyGaussianBlur(tiny_skia::Pixmap& pixmap, double sigmaX, double sigmaY) {
-  const int width = static_cast<int>(pixmap.width());
-  const int height = static_cast<int>(pixmap.height());
-  if (width <= 0 || height <= 0) {
-    return;
-  }
-
-  std::vector<std::uint8_t> buffer(pixmap.data().begin(), pixmap.data().end());
-  std::vector<std::uint8_t> scratch(buffer.size());
-
-  if (sigmaX > 0.0) {
-    const ConvolutionKernel kernel = makeBlurKernel(sigmaX);
-    convolveHorizontal(buffer, scratch, width, height, kernel);
-    buffer.swap(scratch);
-  }
-
-  if (sigmaY > 0.0) {
-    const ConvolutionKernel kernel = makeBlurKernel(sigmaY);
-    convolveVertical(buffer, scratch, width, height, kernel);
-    buffer.swap(scratch);
-  }
-
-  std::copy(buffer.begin(), buffer.end(), pixmap.data().begin());
-}
-
-std::vector<std::uint8_t> premultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
+#ifndef DONNER_FILTERS_ENABLED
+// When filters are disabled, FilterGraphExecutor.h is not included so PremultiplyRgba is not
+// available. Provide a local copy for drawImage().
+std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
   std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
   for (std::size_t i = 0; i + 3 < result.size(); i += 4) {
     const unsigned alpha = result[i + 3];
@@ -601,16 +413,177 @@ std::vector<std::uint8_t> premultiplyRgba(std::span<const std::uint8_t> rgbaPixe
 
   return result;
 }
+#endif  // !DONNER_FILTERS_ENABLED
+
+#ifdef DONNER_FILTERS_ENABLED
+// Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
+
+/**
+ * Returns true if the filter graph is a linear chain of single-input blur-family primitives
+ * eligible for the transformed local-raster path.
+ *
+ * Eligible graphs have:
+ * - Only GaussianBlur, Offset, or DropShadow primitives
+ * - Each node has at most one input, and that input is Previous or implicit SourceGraphic
+ * - No named `result` attributes
+ * - No primitive subregions (x/y/width/height unset on every node)
+ * - primitiveUnits is not objectBoundingBox
+ */
+bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
+  if (filterGraph.nodes.empty()) {
+    return false;
+  }
+
+  if (filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+    return false;
+  }
+
+  bool hasBlur = false;
+
+  for (std::size_t i = 0; i < filterGraph.nodes.size(); ++i) {
+    const components::FilterNode& node = filterGraph.nodes[i];
+
+    // Check primitive type: only GaussianBlur, Offset, DropShadow allowed.
+    const bool isBlur =
+        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
+        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
+    const bool isOffset =
+        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
+    if (!isBlur && !isOffset) {
+      return false;
+    }
+    hasBlur |= isBlur;
+
+    // No named result reuse.
+    if (node.result.has_value()) {
+      return false;
+    }
+
+    // No primitive subregions.
+    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+        node.height.has_value()) {
+      return false;
+    }
+
+    // Linear chain: each node has 0 or 1 inputs, and that input is Previous or SourceGraphic
+    // (for the first node).
+    if (node.inputs.size() > 1) {
+      return false;
+    }
+
+    if (node.inputs.size() == 1) {
+      const auto& input = node.inputs[0];
+      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
+        // OK
+      } else if (const auto* stdInput =
+                     std::get_if<components::FilterStandardInput>(&input.value)) {
+        if (*stdInput != components::FilterStandardInput::SourceGraphic) {
+          return false;
+        }
+      } else {
+        // Named input - not eligible.
+        return false;
+      }
+    }
+  }
+
+  // Must have at least one blur primitive to benefit from the transformed path.
+  return hasBlur;
+}
+
+bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
+                            components::FilterStandardInput input) {
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    for (const components::FilterInput& nodeInput : node.inputs) {
+      const auto* standardInput = std::get_if<components::FilterStandardInput>(&nodeInput.value);
+      if (standardInput != nullptr && *standardInput == input) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/// Returns true if the filter graph contains spatial primitives (feOffset, feDisplacementMap)
+/// that can shift content from outside the viewport into view.
+bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
+  using namespace components::filter_primitive;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    if (std::holds_alternative<Offset>(node.primitive)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
+  for (const auto& node : filterGraph.nodes) {
+    bool anisotropic = false;
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          }
+        },
+        node.primitive);
+    if (anisotropic) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
+                                  const Transformd& deviceFromFilter) {
+  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
+  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
+  const bool hasSkew = !NearZero(dot, 1e-6);
+  if (hasSkew) {
+    return true;
+  }
+
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (!hasRotation) {
+    return false;
+  }
+
+  return graphHasAnisotropicBlur(filterGraph);
+}
+
+/**
+ * Computes the required blur padding in user-space units for the transformed local-raster path.
+ * Returns 3σ + 1 for the maximum stdDeviation across all blur primitives.
+ */
+double computeBlurPadding(const components::FilterGraph& filterGraph) {
+  double maxSigma = 0.0;
+  for (const auto& node : filterGraph.nodes) {
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          }
+        },
+        node.primitive);
+  }
+  return maxSigma * 3.0 + 1.0;
+}
+#endif  // DONNER_FILTERS_ENABLED
 
 }  // namespace
 
 RendererTinySkia::RendererTinySkia(bool verbose) : verbose_(verbose) {}
 
-RendererTinySkia::~RendererTinySkia() {
-#ifdef DONNER_TEXT_ENABLED
-  delete static_cast<FontManager*>(fontManagerPtr_);
-#endif
-}
+RendererTinySkia::~RendererTinySkia() = default;
 RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
 RendererTinySkia& RendererTinySkia::operator=(RendererTinySkia&&) noexcept = default;
 
@@ -651,6 +624,16 @@ void RendererTinySkia::setTransform(const Transformd& transform) {
     const Transformd& rasterFromTile = surfaceStack_.back().patternRasterFromTile;
     currentTransform_ =
         scaleTransformOutput(transform, Vector2d(rasterFromTile.data[0], rasterFromTile.data[3]));
+  } else if (!surfaceStack_.empty() && surfaceStack_.back().kind == SurfaceKind::FilterLayer) {
+    const auto& frame = surfaceStack_.back();
+    if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+      // Offset the transform so content at negative device coordinates renders into the
+      // expanded filter buffer. Same pattern as PatternTile's rasterFromTile adjustment.
+      currentTransform_ =
+          transform * Transformd::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
+    } else {
+      currentTransform_ = transform;
+    }
   } else {
     currentTransform_ = transform;
   }
@@ -695,12 +678,23 @@ void RendererTinySkia::popClip() {
   clipStack_.pop_back();
 }
 
-void RendererTinySkia::pushIsolatedLayer(double opacity) {
+void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::IsolatedLayer;
   frame.opacity = opacity;
-  frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
-                                         static_cast<int>(currentPixmap().height()));
+  frame.blendMode = blendMode;
+  const int width = static_cast<int>(currentPixmap().width());
+  const int height = static_cast<int>(currentPixmap().height());
+  frame.pixmap = createTransparentPixmap(width, height);
+  if (!surfaceStack_.empty()) {
+    const SurfaceFrame& parent = surfaceStack_.back();
+    if (parent.fillPaintPixmap.has_value()) {
+      frame.fillPaintPixmap = createTransparentPixmap(width, height);
+    }
+    if (parent.strokePaintPixmap.has_value()) {
+      frame.strokePaintPixmap = createTransparentPixmap(width, height);
+    }
+  }
   surfaceStack_.push_back(std::move(frame));
 }
 
@@ -711,27 +705,284 @@ void RendererTinySkia::popIsolatedLayer() {
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
-  compositePixmap(frame.pixmap, frame.opacity);
+  compositePixmap(frame.pixmap, frame.opacity, frame.blendMode);
+  if (!surfaceStack_.empty()) {
+    SurfaceFrame& parent = surfaceStack_.back();
+    if (frame.fillPaintPixmap.has_value() && parent.fillPaintPixmap.has_value()) {
+      compositePixmapInto(*parent.fillPaintPixmap, *frame.fillPaintPixmap, frame.opacity);
+    }
+    if (frame.strokePaintPixmap.has_value() && parent.strokePaintPixmap.has_value()) {
+      compositePixmapInto(*parent.strokePaintPixmap, *frame.strokePaintPixmap, frame.opacity);
+    }
+  }
 }
 
-void RendererTinySkia::pushFilterLayer(std::span<const FilterEffect> effects) {
+void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGraph,
+                                       const std::optional<Boxd>& filterRegion) {
+#ifdef DONNER_FILTERS_ENABLED
   SurfaceFrame frame;
   frame.kind = SurfaceKind::FilterLayer;
-  frame.effects.assign(effects.begin(), effects.end());
-  frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
-                                         static_cast<int>(currentPixmap().height()));
+  frame.filterGraph = filterGraph;
+  frame.filterRegion = filterRegion;
+  frame.deviceFromFilter = currentTransform_;
+
+  const int viewportWidth = static_cast<int>(currentPixmap().width());
+  const int viewportHeight = static_cast<int>(currentPixmap().height());
+
+  // Compute the filter buffer dimensions. When the filter region's AABB in device space extends
+  // beyond the viewport (e.g., due to skew or rotation placing content at negative coordinates),
+  // expand the buffer so the SourceGraphic captures all content. This is needed because feOffset
+  // or other spatial primitives may shift content into the viewport later.
+  int bufferX0 = 0;
+  int bufferY0 = 0;
+  int width = viewportWidth;
+  int height = viewportHeight;
+
+  if (filterRegion.has_value()) {
+    const Boxd deviceRegion = currentTransform_.transformBox(*filterRegion);
+    const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
+    const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
+    const int regionX1 = static_cast<int>(std::ceil(deviceRegion.bottomRight.x));
+    const int regionY1 = static_cast<int>(std::ceil(deviceRegion.bottomRight.y));
+
+    // Expand buffer to cover the union of viewport and filter region AABB.
+    bufferX0 = std::min(0, regionX0);
+    bufferY0 = std::min(0, regionY0);
+    const int bufferX1 = std::max(viewportWidth, regionX1);
+    const int bufferY1 = std::max(viewportHeight, regionY1);
+    width = bufferX1 - bufferX0;
+    height = bufferY1 - bufferY0;
+
+    // Cap to a reasonable maximum to avoid huge allocations.
+    constexpr int kMaxBufferDim = 4096;
+    width = std::min(width, kMaxBufferDim);
+    height = std::min(height, kMaxBufferDim);
+  }
+
+  // Expand the buffer into negative device coordinates only when the filter graph contains
+  // spatial primitives (feOffset, feDisplacementMap) that can shift content into the viewport
+  // from outside. Without such primitives, content at negative coordinates would never be
+  // visible, so expansion is unnecessary.
+  if ((bufferX0 < 0 || bufferY0 < 0) && graphHasSpatialShift(filterGraph)) {
+    constexpr int kMaxExpansion = 4096;
+    frame.filterBufferOffsetX = std::min(-bufferX0, std::max(0, kMaxExpansion - viewportWidth));
+    frame.filterBufferOffsetY = std::min(-bufferY0, std::max(0, kMaxExpansion - viewportHeight));
+    width = viewportWidth + frame.filterBufferOffsetX;
+    height = viewportHeight + frame.filterBufferOffsetY;
+  } else {
+    // No expansion needed — use viewport dimensions.
+    width = viewportWidth;
+    height = viewportHeight;
+  }
+  frame.pixmap = createTransparentPixmap(width, height);
+  if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint)) {
+    frame.fillPaintPixmap = createTransparentPixmap(width, height);
+  }
+  if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint)) {
+    frame.strokePaintPixmap = createTransparentPixmap(width, height);
+  }
+
+  // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
+  // The SourceGraphic for the filter should be the element's unclipped content. Save and clear
+  // the current clip mask so that content renders unclipped into the filter's offscreen buffer.
+  // The clip mask is restored in popFilterLayer and applied when compositing the filter output.
+  frame.savedClipMask = std::move(currentClipMask_);
+  frame.savedClipStack = std::move(clipStack_);
+  currentClipMask_.reset();
+  clipStack_.clear();
+
   surfaceStack_.push_back(std::move(frame));
+
+  // Apply the buffer offset to the current transform. setTransform (called by RendererDriver)
+  // ran BEFORE this filter layer was pushed, so currentTransform_ doesn't include the offset yet.
+  // Subsequent setTransform calls will pick up the offset from surfaceStack_.back(), but we
+  // need to fix the already-set transform for the element being filtered.
+  const auto& pushedFrame = surfaceStack_.back();
+  if (pushedFrame.filterBufferOffsetX != 0 || pushedFrame.filterBufferOffsetY != 0) {
+    currentTransform_ = currentTransform_ * Transformd::Translate(pushedFrame.filterBufferOffsetX,
+                                                                  pushedFrame.filterBufferOffsetY);
+  }
+#else
+  UTILS_UNUSED(filterGraph);
+  UTILS_UNUSED(filterRegion);
+#endif
 }
 
 void RendererTinySkia::popFilterLayer() {
+#ifdef DONNER_FILTERS_ENABLED
   if (surfaceStack_.empty() || surfaceStack_.back().kind != SurfaceKind::FilterLayer) {
     return;
   }
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
-  applyFilters(frame.pixmap, frame.effects);
-  compositePixmap(frame.pixmap, 1.0);
+
+  // Restore the clip mask that was saved in pushFilterLayer. This allows the clip to be applied
+  // to the filter output during compositing, implementing the SVG rendering order:
+  // paint → filter → clip-path → mask → opacity.
+  currentClipMask_ = std::move(frame.savedClipMask);
+  clipStack_ = std::move(frame.savedClipStack);
+
+  // Transform is maintained by RendererDriver via setTransform. The filter buffer offset
+  // (if any) was applied in setTransform and is automatically removed when the surface is
+  // popped, since setTransform checks surfaceStack_.back().
+
+  // Use the transformed local-raster path for eligible simple blur chains with
+  // rotation or skew transforms. This resamples device content into an axis-aligned local
+  // raster, applies the blur in filter-local coordinates, and composites back. This produces
+  // correct blur orientation for rotated/skewed elements.
+  // Only activate when the transform has rotation/skew (off-diagonal elements non-zero).
+  // For pure scale+translate, the device-space blur is already correct.
+  const bool useTransformedBlurPath =
+      frame.filterRegion.has_value() && frame.filterRegion->width() > 0 &&
+      frame.filterRegion->height() > 0 && !NearZero(frame.deviceFromFilter.determinant()) &&
+      isEligibleForTransformedBlurPath(frame.filterGraph) &&
+      shouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter);
+
+  if (useTransformedBlurPath) {
+    const Transformd& deviceFromFilter = frame.deviceFromFilter;
+    const Boxd& filterRegion = *frame.filterRegion;
+
+    // Compute local raster density from the filter transform basis vectors.
+    const double scaleX =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
+    const double scaleY =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+
+    const double blurPadding = computeBlurPadding(frame.filterGraph);
+    const Boxd paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
+                            filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
+
+    const int localWidth = std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX)));
+    const int localHeight =
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY)));
+
+    // Allocate local-raster pixmap.
+    tiny_skia::Pixmap localPixmap = createTransparentPixmap(localWidth, localHeight);
+    if (localPixmap.width() == 0 || localPixmap.height() == 0) {
+      goto device_space_fallback;
+    }
+
+    {
+      // Resample device pixels into local filter coordinates.
+      // Transform chain: device → filter (inverse of deviceFromFilter) → padded origin
+      // (translate) → local raster pixels (scale).
+      // Operator* convention: (A * B)(p) = B(A(p)), so A is applied first.
+      const Transformd filterFromDevice = deviceFromFilter.inverse();
+      const Transformd deviceToLocal =
+          filterFromDevice *
+          Transformd::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
+          Transformd::Scale(scaleX, scaleY);
+
+      {
+        tiny_skia::PixmapPaint resamplePaint;
+        resamplePaint.opacity = 1.0f;
+        resamplePaint.blendMode = tiny_skia::BlendMode::Source;
+        resamplePaint.quality = tiny_skia::FilterQuality::Bilinear;
+
+        auto localView = localPixmap.mutableView();
+        tiny_skia::Painter::drawPixmap(localView, 0, 0, frame.pixmap.view(), resamplePaint,
+                                       toTinyTransform(deviceToLocal));
+      }
+
+      // Execute the filter graph in local raster space.
+      const Transformd localTransform = Transformd::Scale(scaleX, scaleY);
+      const Boxd localFilterRegion(
+          Vector2d(blurPadding, blurPadding),
+          Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
+
+      ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localTransform, localFilterRegion,
+                               false);
+
+      // Clip to the original filter region within the padded raster.
+      ClipFilterOutputToRegion(localPixmap, localFilterRegion, localTransform);
+
+      // Composite the filtered local raster back to the parent device pixmap.
+      // Transform chain: local raster → filter coords (inverse scale + translate back) → device.
+      // Operator* convention: (A * B)(p) = B(A(p)), so A is applied first.
+      const Transformd deviceFromLocal =
+          Transformd::Scale(1.0 / scaleX, 1.0 / scaleY) *
+          Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) * deviceFromFilter;
+
+      tiny_skia::PixmapPaint compositePaint;
+      compositePaint.opacity = 1.0f;
+      compositePaint.blendMode = tiny_skia::BlendMode::SourceOver;
+      compositePaint.quality = tiny_skia::FilterQuality::Bilinear;
+      compositePaint.unpremulStore = surfaceStack_.empty();
+
+      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+      auto pixmapView = currentPixmapView();
+      tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, localPixmap.view(), compositePaint,
+                                     toTinyTransform(deviceFromLocal), mask);
+    }
+  } else {
+  device_space_fallback: {
+    // When the filter buffer is offset (expanded to capture content at negative device
+    // coordinates), adjust the deviceFromFilter transform to include the offset.
+    const Transformd bufferDeviceFromFilter =
+        (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
+            ? frame.deviceFromFilter *
+                  Transformd::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
+            : frame.deviceFromFilter;
+
+    ApplyFilterGraphToPixmap(
+        frame.pixmap, frame.filterGraph, bufferDeviceFromFilter, frame.filterRegion, true,
+        frame.fillPaintPixmap.has_value() ? &*frame.fillPaintPixmap : nullptr,
+        frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr);
+    ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, bufferDeviceFromFilter);
+
+    {
+      // Composite the filter result with the restored clip mask applied, so the clip-path
+      // clips the filter output rather than the input.
+      tiny_skia::PixmapPaint paint;
+      paint.opacity = 1.0f;
+      paint.blendMode = tiny_skia::BlendMode::SourceOver;
+      paint.quality = tiny_skia::FilterQuality::Nearest;
+      paint.unpremulStore = surfaceStack_.empty();
+
+      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+      auto pixmapView = currentPixmapView();
+
+      if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+        // The filter buffer is expanded beyond the viewport. Extract the viewport-sized region
+        // at the buffer offset and composite that. drawPixmap doesn't support negative dest
+        // coordinates, so we copy the relevant region into a viewport-sized pixmap first.
+        const int vpW = static_cast<int>(pixmapView.width());
+        const int vpH = static_cast<int>(pixmapView.height());
+        tiny_skia::Pixmap viewportRegion = createTransparentPixmap(vpW, vpH);
+        const auto srcData = frame.pixmap.data();
+        auto dstData = viewportRegion.data();
+        const int bufW = static_cast<int>(frame.pixmap.width());
+        const int bufH = static_cast<int>(frame.pixmap.height());
+        const int ox = frame.filterBufferOffsetX;
+        const int oy = frame.filterBufferOffsetY;
+        for (int y = 0; y < vpH; ++y) {
+          const int srcY = y + oy;
+          if (srcY < 0 || srcY >= bufH) {
+            continue;
+          }
+          // Copy the overlapping row segment.
+          const int srcXStart = std::max(0, ox);
+          const int srcXEnd = std::min(bufW, ox + vpW);
+          if (srcXStart >= srcXEnd) {
+            continue;
+          }
+          const int dstX = srcXStart - ox;
+          const auto srcOff = static_cast<std::size_t>((srcY * bufW + srcXStart) * 4);
+          const auto dstOff = static_cast<std::size_t>((y * vpW + dstX) * 4);
+          const auto count = static_cast<std::size_t>((srcXEnd - srcXStart) * 4);
+          std::memcpy(&dstData[dstOff], &srcData[srcOff], count);
+        }
+        tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, viewportRegion.view(), paint,
+                                       tiny_skia::Transform::identity(), mask);
+      } else {
+        tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, frame.pixmap.view(), paint,
+                                       tiny_skia::Transform::identity(), mask);
+      }
+    }
+  }
+  }
+#endif  // DONNER_FILTERS_ENABLED
 }
 
 void RendererTinySkia::pushMask(const std::optional<Boxd>& maskBounds) {
@@ -763,8 +1014,20 @@ void RendererTinySkia::transitionMaskToContent() {
   }
 
   frame.kind = SurfaceKind::MaskContent;
-  frame.pixmap = createTransparentPixmap(static_cast<int>(frame.pixmap.width()),
-                                         static_cast<int>(frame.pixmap.height()));
+  const int width = static_cast<int>(frame.pixmap.width());
+  const int height = static_cast<int>(frame.pixmap.height());
+  frame.pixmap = createTransparentPixmap(width, height);
+  frame.fillPaintPixmap.reset();
+  frame.strokePaintPixmap.reset();
+  if (surfaceStack_.size() >= 2u) {
+    const SurfaceFrame& parent = surfaceStack_[surfaceStack_.size() - 2u];
+    if (parent.fillPaintPixmap.has_value()) {
+      frame.fillPaintPixmap = createTransparentPixmap(width, height);
+    }
+    if (parent.strokePaintPixmap.has_value()) {
+      frame.strokePaintPixmap = createTransparentPixmap(width, height);
+    }
+  }
 }
 
 void RendererTinySkia::popMask() {
@@ -777,18 +1040,35 @@ void RendererTinySkia::popMask() {
   if (frame.maskAlpha.has_value()) {
     auto pixmapView = frame.pixmap.mutableView();
     tiny_skia::Painter::applyMask(pixmapView, *frame.maskAlpha);
+    if (frame.fillPaintPixmap.has_value()) {
+      auto fillView = frame.fillPaintPixmap->mutableView();
+      tiny_skia::Painter::applyMask(fillView, *frame.maskAlpha);
+    }
+    if (frame.strokePaintPixmap.has_value()) {
+      auto strokeView = frame.strokePaintPixmap->mutableView();
+      tiny_skia::Painter::applyMask(strokeView, *frame.maskAlpha);
+    }
   }
   compositePixmap(frame.pixmap, 1.0);
+  if (!surfaceStack_.empty()) {
+    SurfaceFrame& parent = surfaceStack_.back();
+    if (frame.fillPaintPixmap.has_value() && parent.fillPaintPixmap.has_value()) {
+      compositePixmapInto(*parent.fillPaintPixmap, *frame.fillPaintPixmap, 1.0);
+    }
+    if (frame.strokePaintPixmap.has_value() && parent.strokePaintPixmap.has_value()) {
+      compositePixmapInto(*parent.strokePaintPixmap, *frame.strokePaintPixmap, 1.0);
+    }
+  }
 }
 
-void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) {
+void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::PatternTile;
   frame.savedTransform = currentTransform_;
   frame.savedTransformStack = transformStack_;
   frame.savedClipMask = currentClipMask_;
   frame.savedClipStack = clipStack_;
-  const Transformd deviceFromPattern = frame.savedTransform * patternToTarget;
+  const Transformd deviceFromPattern = frame.savedTransform * targetFromPattern;
   const Vector2d requestedRasterScale = patternRasterScaleForTransform(deviceFromPattern);
   const int pixelWidth =
       std::max(1, static_cast<int>(std::ceil(tileRect.width() * requestedRasterScale.x)));
@@ -797,11 +1077,11 @@ void RendererTinySkia::beginPatternTile(const Boxd& tileRect, const Transformd& 
   const Vector2d rasterScale =
       effectivePatternRasterScale(tileRect, pixelWidth, pixelHeight, requestedRasterScale);
   frame.patternRasterFromTile = Transformd::Scale(rasterScale);
-  frame.patternToTarget = patternToTarget;
-  frame.patternToTarget.data[4] *= rasterScale.x;
-  frame.patternToTarget.data[5] *= rasterScale.y;
-  frame.patternToTarget =
-      frame.patternToTarget * Transformd::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
+  frame.targetFromPattern = targetFromPattern;
+  frame.targetFromPattern.data[4] *= rasterScale.x;
+  frame.targetFromPattern.data[5] *= rasterScale.y;
+  frame.targetFromPattern =
+      frame.targetFromPattern * Transformd::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
   frame.pixmap = createTransparentPixmap(pixelWidth, pixelHeight);
 
   surfaceStack_.push_back(std::move(frame));
@@ -824,7 +1104,7 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
   transformStack_ = std::move(frame.savedTransformStack);
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
-  PatternPaintState state{std::move(frame.pixmap), frame.patternToTarget};
+  PatternPaintState state{std::move(frame.pixmap), frame.targetFromPattern};
   if (forStroke) {
     patternStrokePaint_ = std::move(state);
   } else {
@@ -844,12 +1124,26 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
 
   const tiny_skia::Path tinyPath = toTinyPath(path.path);
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  tiny_skia::Pixmap* fillPaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
+          ? &*surfaceStack_.back().fillPaintPixmap
+          : nullptr;
+  tiny_skia::Pixmap* strokePaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value()
+          ? &*surfaceStack_.back().strokePaintPixmap
+          : nullptr;
 
   const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(path.path.bounds())) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint, toTinyFillRule(path.fillRule),
                                  toTinyTransform(currentTransform_), mask);
+    if (fillPaintPixmap != nullptr) {
+      auto fillPaintView = fillPaintPixmap->mutableView();
+      tiny_skia::Painter::fillPath(fillPaintView, tinyPath, *fillPaint,
+                                   toTinyFillRule(path.fillRule),
+                                   toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternFill) {
       patternFillPaint_.reset();
     }
@@ -892,6 +1186,11 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, tinyPath, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (strokePaintPixmap != nullptr) {
+      auto strokePaintView = strokePaintPixmap->mutableView();
+      tiny_skia::Painter::strokePath(strokePaintView, tinyPath, *strokePaint, tinyStroke,
+                                     toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -909,11 +1208,25 @@ void RendererTinySkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
     return;
   }
 
+  tiny_skia::Pixmap* fillPaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
+          ? &*surfaceStack_.back().fillPaintPixmap
+          : nullptr;
+  tiny_skia::Pixmap* strokePaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value()
+          ? &*surfaceStack_.back().strokePaintPixmap
+          : nullptr;
+
   const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(rect)) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillRect(pixmapView, *tinyRect, *fillPaint,
                                  toTinyTransform(currentTransform_), mask);
+    if (fillPaintPixmap != nullptr) {
+      auto fillPaintView = fillPaintPixmap->mutableView();
+      tiny_skia::Painter::fillRect(fillPaintView, *tinyRect, *fillPaint,
+                                   toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternFill) {
       patternFillPaint_.reset();
     }
@@ -931,6 +1244,11 @@ void RendererTinySkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, path, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (strokePaintPixmap != nullptr) {
+      auto strokePaintView = strokePaintPixmap->mutableView();
+      tiny_skia::Painter::strokePath(strokePaintView, path, *strokePaint, tinyStroke,
+                                     toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -951,11 +1269,25 @@ void RendererTinySkia::drawEllipse(const Boxd& bounds, const StrokeParams& strok
   }
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  tiny_skia::Pixmap* fillPaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
+          ? &*surfaceStack_.back().fillPaintPixmap
+          : nullptr;
+  tiny_skia::Pixmap* strokePaintPixmap =
+      !surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value()
+          ? &*surfaceStack_.back().strokePaintPixmap
+          : nullptr;
+
   const bool usedPatternFill = patternFillPaint_.has_value();
   if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(bounds)) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, path, *fillPaint, tiny_skia::FillRule::Winding,
                                  toTinyTransform(currentTransform_), mask);
+    if (fillPaintPixmap != nullptr) {
+      auto fillPaintView = fillPaintPixmap->mutableView();
+      tiny_skia::Painter::fillPath(fillPaintView, path, *fillPaint, tiny_skia::FillRule::Winding,
+                                   toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternFill) {
       patternFillPaint_.reset();
     }
@@ -972,6 +1304,11 @@ void RendererTinySkia::drawEllipse(const Boxd& bounds, const StrokeParams& strok
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::strokePath(pixmapView, path, *strokePaint, tinyStroke,
                                    toTinyTransform(currentTransform_), mask);
+    if (strokePaintPixmap != nullptr) {
+      auto strokePaintView = strokePaintPixmap->mutableView();
+      tiny_skia::Painter::strokePath(strokePaintView, path, *strokePaint, tinyStroke,
+                                     toTinyTransform(currentTransform_), mask);
+    }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -988,7 +1325,7 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
     return;
   }
 
-  std::vector<std::uint8_t> premultiplied = premultiplyRgba(image.data);
+  std::vector<std::uint8_t> premultiplied = PremultiplyRgba(image.data);
   auto maybePixmap = tiny_skia::Pixmap::fromVec(
       std::move(premultiplied), tiny_skia::IntSize(static_cast<std::uint32_t>(image.width),
                                                    static_cast<std::uint32_t>(image.height)));
@@ -1015,36 +1352,21 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
                                  toTinyTransform(imageFromLocal), mask);
 }
 
-void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
+void RendererTinySkia::drawText(Registry& registry, const components::ComputedTextComponent& text,
                                 const TextParams& params) {
 #ifdef DONNER_TEXT_ENABLED
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
   }
 
-  // Lazy-initialize the font manager.
-  if (!fontManagerPtr_) {
-    fontManagerPtr_ = new FontManager();
-  }
-  auto& fontManager = *static_cast<FontManager*>(fontManagerPtr_);
-
-  // Register @font-face declarations so custom fonts can be resolved.
-  // Only add new faces (faces_ grows monotonically, so track how many we've seen).
-  const size_t existingFaces = fontManager.numFaces();
-  if (params.fontFaces.size() > existingFaces) {
-    for (size_t i = existingFaces; i < params.fontFaces.size(); ++i) {
-      fontManager.addFontFace(params.fontFaces[i]);
-    }
+  if (!registry.ctx().contains<TextEngine>()) {
+    maybeWarnUnsupportedText();
+    return;
   }
 
-#ifdef DONNER_TEXT_FULL
-  TextBackendFull backend(fontManager);
-#else
-  TextBackendSimple backend(fontManager);
-#endif
-  TextEngine engine(backend, fontManager);
-  std::vector<TextRun> runs = engine.layout(text, params);
-
+  auto& textEngine = registry.ctx().get<TextEngine>();
+  const TextLayoutParams layoutParams = toTextLayoutParams(params);
+  std::vector<TextRun> runs = textEngine.layout(text, layoutParams);
 
   float scale = 0.0f;
   const float fontSizePx = static_cast<float>(
@@ -1072,11 +1394,11 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       }
 
       // Get font metrics for this run to compute proper em-box vertical extent.
-      float runScale = run.font ? backend.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+      float runScale = run.font ? textEngine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
       double emTop = static_cast<double>(runFontSizePx);  // fallback: full font size above baseline
-      double emBottom = 0.0;                               // fallback: baseline
+      double emBottom = 0.0;                              // fallback: baseline
       if (run.font && runScale > 0.0f) {
-        const FontVMetrics metrics = backend.fontVMetrics(run.font);
+        const FontVMetrics metrics = textEngine.fontVMetrics(run.font);
         // ascent is positive (above baseline), descent is negative (below baseline).
         // In SVG's y-down space: top = baseline - ascent*scale, bottom = baseline - descent*scale.
         emTop = static_cast<double>(metrics.ascent) * runScale;
@@ -1106,8 +1428,8 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     paint.unpremulStore = surfaceStack_.empty();
 
     css::RGBA rgba = color.rgba();
-    rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) *
-                                             params.opacity * paintOpacity_ * spanOpacity));
+    rgba.a = static_cast<uint8_t>(
+        std::round(static_cast<double>(rgba.a) * params.opacity * paintOpacity_ * spanOpacity));
     paint.shader = toTinyColor(rgba);
     return paint;
   };
@@ -1135,10 +1457,10 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     }
 
     if (run.font != FontHandle()) {
-      scale = backend.scaleForPixelHeight(run.font, spanFontSizePx);
+      scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
     }
 
-    const bool isBitmapFont = run.font && backend.isBitmapOnly(run.font);
+    const bool isBitmapFont = run.font && textEngine.isBitmapOnly(run.font);
     if (!isBitmapFont && scale == 0.0f) {
       continue;
     }
@@ -1149,8 +1471,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
       const float spanFillOpacity = NarrowToFloat(paint_.fillOpacity);
 
-      if (const auto* solid =
-              std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+      if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
         // Per-span solid fill color.
         spanFillPaint = makeSolidFillPaint(
             css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
@@ -1160,7 +1481,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
         // for objectBoundingBox mapping, per SVG spec ("tspan doesn't have a bbox").
         const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
         if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
-                                                     spanCurrentColor, combinedOpacity)) {
+                                                    spanCurrentColor, combinedOpacity)) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.unpremulStore = surfaceStack_.empty();
           paint.shader = std::move(*shader);
@@ -1182,21 +1503,20 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
       PathSpline glyphPath;
       if (!isBitmapFont) {
-        glyphPath = backend.glyphOutline(run.font, glyph.glyphIndex,
-                                         scale * glyph.fontSizeScale);
+        glyphPath =
+            textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = backend.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        auto bitmap = textEngine.bitmapGlyph(run.font, glyph.glyphIndex, scale);
         // DEBUG
         if (bitmap) {
           // Premultiply alpha for correct blending.
           std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
           auto maybePixmap = tiny_skia::Pixmap::fromVec(
-              std::move(premul),
-              tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
-                                 static_cast<uint32_t>(bitmap->height)));
+              std::move(premul), tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
+                                                    static_cast<uint32_t>(bitmap->height)));
           if (!maybePixmap.has_value()) {
             continue;
           }
@@ -1210,9 +1530,9 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
           // Use the same transform pattern as drawImage: Scale * Translate * currentTransform_.
           const double imgScaleX = targetW / static_cast<double>(bitmap->width);
           const double imgScaleY = targetH / static_cast<double>(bitmap->height);
-          const Transformd imageFromLocal =
-              Transformd::Scale(imgScaleX, imgScaleY) *
-              Transformd::Translate(Vector2d(targetX, targetY)) * currentTransform_;
+          const Transformd imageFromLocal = Transformd::Scale(imgScaleX, imgScaleY) *
+                                            Transformd::Translate(Vector2d(targetX, targetY)) *
+                                            currentTransform_;
 
           tiny_skia::PixmapPaint paint;
           paint.opacity = NarrowToFloat(paintOpacity_);
@@ -1220,8 +1540,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
           paint.quality = tiny_skia::FilterQuality::Bilinear;
           paint.unpremulStore = surfaceStack_.empty();
 
-          const tiny_skia::Mask* mask =
-              currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+          const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
           auto pixmapView = currentPixmapView();
           tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
                                          toTinyTransform(imageFromLocal), mask);
@@ -1234,12 +1553,13 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       }
 
       // Place glyph geometry in document space, then let the renderer's current transform map it
-      // to device space. This avoids relying on composed affine semantics that differ from TinySkia's.
+      // to device space. This avoids relying on composed affine semantics that differ from
+      // TinySkia's.
       Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
       if (glyph.rotateDegrees != 0.0) {
-        glyphFromLocal = Transformd::Rotate(glyph.rotateDegrees *
-                                            MathConstants<double>::kPi / 180.0) *
-                         glyphFromLocal;
+        glyphFromLocal =
+            Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+            glyphFromLocal;
       }
 
       const tiny_skia::Path tinyPath = toTinyPath(transformPathSpline(glyphPath, glyphFromLocal));
@@ -1261,21 +1581,21 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
     // Draw text-decoration lines using font metrics.
     if (params.textDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
-      const FontVMetrics vmetrics = backend.fontVMetrics(run.font);
+      const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
       const int ascent = vmetrics.ascent;
       const int descent = vmetrics.descent;
 
       // Read underline position/thickness from the font's 'post' table.
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
-      if (auto ul = backend.underlineMetrics(run.font)) {
+      if (auto ul = textEngine.underlineMetrics(run.font)) {
         fontUnderlinePos = ul->position;
         fontUnderlineThick = ul->thickness;
       }
 
       // Post table metrics are in font design units — scale by fontSize/unitsPerEm, not by
       // scaleForPixelHeight (which normalizes to ascent-descent height instead of em).
-      const float emScale = backend.scaleForEmToPixels(run.font, fontSizePx);
+      const float emScale = textEngine.scaleForEmToPixels(run.font, fontSizePx);
       // Use font metrics for thickness, with heuristic fallback.
       const double thickness = fontUnderlineThick > 0.0
                                    ? fontUnderlineThick * emScale
@@ -1300,9 +1620,8 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       const double decoTopY = decoOffsetY - thickness / 2.0;
 
       // Check if any glyph has rotation — if so, draw per-glyph decoration segments.
-      const bool hasRotation = std::any_of(
-          run.glyphs.begin(), run.glyphs.end(),
-          [](const auto& g) { return g.rotateDegrees != 0.0; });
+      const bool hasRotation = std::any_of(run.glyphs.begin(), run.glyphs.end(),
+                                           [](const auto& g) { return g.rotateDegrees != 0.0; });
 
       if (hasRotation) {
         // Per-glyph decoration: each segment is a rectangle under the glyph, rotated with it.
@@ -1322,9 +1641,9 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
           // Apply the same transform as the glyph: rotate then translate.
           Transformd segTransform = Transformd::Translate(glyph.xPosition, glyph.yPosition);
           if (glyph.rotateDegrees != 0.0) {
-            segTransform = Transformd::Rotate(glyph.rotateDegrees *
-                                              MathConstants<double>::kPi / 180.0) *
-                           segTransform;
+            segTransform =
+                Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                segTransform;
           }
 
           const tiny_skia::Path tinySegPath =
@@ -1562,7 +1881,7 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeFillPaint(const Boxd& boun
     paint.shader =
         tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
                            tiny_skia::FilterQuality::Bilinear, NarrowToFloat(paint_.fillOpacity),
-                           toTinyTransform(patternFillPaint_->patternToTarget));
+                           toTinyTransform(patternFillPaint_->targetFromPattern));
     return paint;
   }
 
@@ -1603,7 +1922,7 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeStrokePaint(const Boxd& bo
     paint.shader =
         tiny_skia::Pattern(patternStrokePaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
                            tiny_skia::FilterQuality::Bilinear, NarrowToFloat(paint_.strokeOpacity),
-                           toTinyTransform(patternStrokePaint_->patternToTarget));
+                           toTinyTransform(patternStrokePaint_->targetFromPattern));
     return paint;
   }
 
@@ -1646,46 +1965,49 @@ tiny_skia::Pixmap RendererTinySkia::createTransparentPixmap(int width, int heigh
   return std::move(*maybePixmap);
 }
 
-void RendererTinySkia::compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity) {
+void RendererTinySkia::compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity,
+                                       MixBlendMode blendMode) {
+  compositePixmapInto(currentPixmap(), pixmap, opacity, blendMode);
+}
+
+/// Map donner MixBlendMode to tiny_skia::BlendMode.
+static tiny_skia::BlendMode toTinyBlendMode(MixBlendMode mode) {
+  switch (mode) {
+    case MixBlendMode::Normal: return tiny_skia::BlendMode::SourceOver;
+    case MixBlendMode::Multiply: return tiny_skia::BlendMode::Multiply;
+    case MixBlendMode::Screen: return tiny_skia::BlendMode::Screen;
+    case MixBlendMode::Overlay: return tiny_skia::BlendMode::Overlay;
+    case MixBlendMode::Darken: return tiny_skia::BlendMode::Darken;
+    case MixBlendMode::Lighten: return tiny_skia::BlendMode::Lighten;
+    case MixBlendMode::ColorDodge: return tiny_skia::BlendMode::ColorDodge;
+    case MixBlendMode::ColorBurn: return tiny_skia::BlendMode::ColorBurn;
+    case MixBlendMode::HardLight: return tiny_skia::BlendMode::HardLight;
+    case MixBlendMode::SoftLight: return tiny_skia::BlendMode::SoftLight;
+    case MixBlendMode::Difference: return tiny_skia::BlendMode::Difference;
+    case MixBlendMode::Exclusion: return tiny_skia::BlendMode::Exclusion;
+    case MixBlendMode::Hue: return tiny_skia::BlendMode::Hue;
+    case MixBlendMode::Saturation: return tiny_skia::BlendMode::Saturation;
+    case MixBlendMode::Color: return tiny_skia::BlendMode::Color;
+    case MixBlendMode::Luminosity: return tiny_skia::BlendMode::Luminosity;
+  }
+  return tiny_skia::BlendMode::SourceOver;
+}
+
+void RendererTinySkia::compositePixmapInto(tiny_skia::Pixmap& destination,
+                                           const tiny_skia::Pixmap& pixmap, double opacity,
+                                           MixBlendMode blendMode) {
   if (opacity <= 0.0 || pixmap.width() == 0 || pixmap.height() == 0) {
     return;
   }
 
   tiny_skia::PixmapPaint paint;
   paint.opacity = NarrowToFloat(opacity);
-  paint.blendMode = tiny_skia::BlendMode::SourceOver;
+  paint.blendMode = toTinyBlendMode(blendMode);
   paint.quality = tiny_skia::FilterQuality::Nearest;
-  paint.unpremulStore = surfaceStack_.empty();
+  paint.unpremulStore = &destination == &frame_;
 
-  auto pixmapView = currentPixmapView();
-  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, pixmap.view(), paint);
-}
-
-void RendererTinySkia::applyFilters(tiny_skia::Pixmap& pixmap,
-                                    std::span<const FilterEffect> effects) {
-  for (const FilterEffect& effect : effects) {
-    std::visit(
-        [&](const auto& resolvedEffect) {
-          using T = std::decay_t<decltype(resolvedEffect)>;
-          if constexpr (std::is_same_v<T, FilterEffect::Blur>) {
-            applyGaussianBlur(pixmap, resolvedEffect.stdDeviationX.value,
-                              resolvedEffect.stdDeviationY.value);
-          } else if constexpr (!std::is_same_v<T, FilterEffect::None>) {
-            maybeWarnUnsupportedFilter(effect);
-          }
-        },
-        effect.value);
-  }
-}
-
-void RendererTinySkia::maybeWarnUnsupportedFilter(const FilterEffect& effect) {
-  (void)effect;
-  if (!verbose_ || warnedUnsupportedFilter_) {
-    return;
-  }
-
-  warnedUnsupportedFilter_ = true;
-  std::cerr << "RendererTinySkia: some filter effects are not implemented\n";
+  auto destinationView = destination.mutableView();
+  tiny_skia::Painter::drawPixmap(destinationView, 0, 0, pixmap.view(), paint);
 }
 
 void RendererTinySkia::maybeWarnUnsupportedText() {

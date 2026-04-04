@@ -1,4 +1,4 @@
-#include "donner/svg/renderer/TextEngine.h"
+#include "donner/svg/text/TextEngine.h"
 
 #include <gtest/gtest.h>
 
@@ -8,7 +8,8 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
-#include "donner/svg/renderer/TextBackendFull.h"
+#include "donner/svg/text/TextBackendFull.h"
+#include "donner/svg/text/TextLayoutParams.h"
 
 namespace donner::svg {
 
@@ -23,8 +24,8 @@ components::ComputedTextComponent::TextSpan MakeSpan(const std::string& str) {
   return span;
 }
 
-TextParams MakeTextParams(double fontSize) {
-  TextParams params;
+TextLayoutParams MakeTextParams(double fontSize) {
+  TextLayoutParams params;
   params.fontSize = Lengthd(fontSize, Lengthd::Unit::Px);
   params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
@@ -64,8 +65,7 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
 
 TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   FontManager fontManager;
-  TextBackendFull backend(fontManager);
-  TextEngine engine(backend, fontManager);
+  TextEngine engine(fontManager);
 
   ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
   const FontHandle amiri = LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri");
@@ -78,7 +78,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   span.rotateList = {45.0};
   text.spans.push_back(std::move(span));
 
-  TextParams params = MakeTextParams(64.0);
+  TextLayoutParams params = MakeTextParams(64.0);
   params.fontFamilies = {RcString("Noto Sans")};
   const auto runs = engine.layout(text, params);
 
@@ -92,8 +92,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
 
 TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   FontManager fontManager;
-  TextBackendFull backend(fontManager);
-  TextEngine engine(backend, fontManager);
+  TextEngine engine(fontManager);
 
   const FontHandle japaneseFont = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(japaneseFont));
@@ -105,7 +104,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   span.yList.push_back(Lengthd(30.0, Lengthd::Unit::None));
   text.spans.push_back(std::move(span));
 
-  TextParams params = MakeTextParams(64.0);
+  TextLayoutParams params = MakeTextParams(64.0);
   params.fontFamilies = {RcString("Mplus 1p")};
   params.writingMode = WritingMode::VerticalRl;
   const auto runs = engine.layout(text, params);
@@ -116,9 +115,9 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
     EXPECT_GT(glyph.glyphIndex, 0);
   }
 
-  const float scale = backend.scaleForEmToPixels(runs[0].font, 64.0f);
+  const float scale = engine.scaleForEmToPixels(runs[0].font, 64.0f);
   const PathSpline firstGlyphPath =
-      backend.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, scale);
+      engine.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, scale);
   ASSERT_FALSE(firstGlyphPath.empty());
 
   Boxd positionedBounds = firstGlyphPath.bounds();
@@ -131,8 +130,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
 
 TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
   FontManager fontManager;
-  TextBackendFull backend(fontManager);
-  TextEngine engine(backend, fontManager);
+  TextEngine engine(fontManager);
 
   ASSERT_TRUE(
       static_cast<bool>(LoadResvgFont(fontManager, "NotoColorEmoji.ttf", "Noto Color Emoji")));
@@ -146,7 +144,7 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
                 Lengthd(130.0, Lengthd::Unit::None), Lengthd(150.0, Lengthd::Unit::None)};
   text.spans.push_back(std::move(span));
 
-  TextParams params = MakeTextParams(32.0);
+  TextLayoutParams params = MakeTextParams(32.0);
   params.fontFamilies = {RcString("Noto Color Emoji")};
   const auto runs = engine.layout(text, params);
 
@@ -159,8 +157,7 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
 
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   FontManager fontManager;
-  TextBackendFull backend(fontManager);
-  TextEngine engine(backend, fontManager);
+  TextEngine engine(fontManager);
 
   ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
 
@@ -170,7 +167,7 @@ TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
   text.spans.push_back(span);
 
-  TextParams params = MakeTextParams(64.0);
+  TextLayoutParams params = MakeTextParams(64.0);
   params.fontFamilies = {RcString("Noto Sans")};
 
   const auto unrotatedRuns = engine.layout(text, params);

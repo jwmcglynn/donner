@@ -1,4 +1,4 @@
-#include "donner/svg/renderer/TextBackendFull.h"
+#include "donner/svg/text/TextBackendFull.h"
 
 #include <gtest/gtest.h>
 

@@ -11,9 +11,6 @@
 #endif
 #include "embed_resources/PublicSansFont.h"
 
-#define STBTT_DEF extern
-#include <stb/stb_truetype.h>
-
 namespace donner::svg {
 
 namespace {
@@ -23,6 +20,10 @@ constexpr uint32_t kWoffMagic = 0x774F4646;
 
 /// WOFF 2.0 magic: 'wOF2'
 constexpr uint32_t kWoff2Magic = 0x774F4632;
+constexpr uint32_t kSfntTrueType = 0x00010000;
+constexpr uint32_t kSfntCff = 0x4F54544F;    // "OTTO"
+constexpr uint32_t kSfntApple = 0x74727565;  // "true"
+constexpr uint32_t kSfntType1 = 0x74797031;  // "typ1"
 
 /// Write a uint32_t in big-endian format.
 void writeBE32(uint8_t* p, uint32_t v) {
@@ -118,28 +119,6 @@ std::vector<uint8_t> reconstructSfnt(const fonts::WoffFont& woff) {
   return sfnt;
 }
 
-/// Check if raw font data has a valid 'head' table and read unitsPerEm.
-/// Returns 0 if the head table is not found.
-uint16_t readUnitsPerEm(const uint8_t* data, size_t size) {
-  if (size < 12) {
-    return 0;
-  }
-  const int numTables = (data[4] << 8) | data[5];
-  for (int i = 0; i < numTables; ++i) {
-    const size_t off = 12 + static_cast<size_t>(i) * 16;
-    if (off + 16 > size) {
-      break;
-    }
-    if (data[off] == 'h' && data[off + 1] == 'e' && data[off + 2] == 'a' && data[off + 3] == 'd') {
-      const uint32_t tableOff = readBE32(data + off + 8);
-      if (tableOff + 20 <= size) {
-        return static_cast<uint16_t>((data[tableOff + 18] << 8) | data[tableOff + 19]);
-      }
-    }
-  }
-  return 0;
-}
-
 }  // namespace
 
 struct FontManager::LoadedFont {
@@ -147,9 +126,6 @@ struct FontManager::LoadedFont {
   std::shared_ptr<const std::vector<uint8_t>> sharedData;  // Shared ref (for raw TTF/OTF).
   const uint8_t* dataPtr = nullptr;  // Points into either ownedData or sharedData.
   size_t dataSize = 0;               // Size of font data.
-  stbtt_fontinfo info{};             // stb_truetype parsed font handle.
-  bool bitmapOnly = false;           // True if stbtt_InitFont failed (CBDT/COLR color font).
-  uint16_t unitsPerEm = 1000;        // From head table, for bitmap-only fonts.
 };
 
 FontManager::FontManager() = default;
@@ -267,7 +243,12 @@ FontHandle FontManager::loadFontData(std::span<const uint8_t> data) {
 #endif
   }
 
-  // Treat as raw TTF/OTF. Copy the data since stb_truetype holds a pointer.
+  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple &&
+      magic != kSfntType1) {
+    return FontHandle();
+  }
+
+  // Treat as raw TTF/OTF.
   std::vector<uint8_t> owned(data.begin(), data.end());
   return loadRawFont(std::move(owned));
 }
@@ -295,43 +276,13 @@ FontHandle FontManager::loadFontDataShared(
 #endif
   }
 
-  // Raw TTF/OTF: share the data via shared_ptr (no copy). stb_truetype holds a pointer
-  // into the data, and the shared_ptr keeps it alive.
+  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple &&
+      magic != kSfntType1) {
+    return FontHandle();
+  }
+
+  // Raw TTF/OTF: share the data via shared_ptr (no copy).
   return loadRawFont(data);
-}
-
-const stbtt_fontinfo* FontManager::fontInfo(FontHandle handle) const {
-  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
-    return nullptr;
-  }
-  const auto& font = fonts_[static_cast<size_t>(handle.index())];
-  if (font->bitmapOnly) {
-    return nullptr;  // No stb_truetype info for bitmap-only fonts.
-  }
-  return &font->info;
-}
-
-bool FontManager::isBitmapOnly(FontHandle handle) const {
-  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
-    return false;
-  }
-  return fonts_[static_cast<size_t>(handle.index())]->bitmapOnly;
-}
-
-float FontManager::scaleForPixelHeight(FontHandle handle, float pixelHeight) const {
-  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
-    return 0.0f;
-  }
-  const auto& font = fonts_[static_cast<size_t>(handle.index())];
-  if (font->bitmapOnly) {
-    // For bitmap-only fonts, compute scale from the head table's unitsPerEm.
-    return font->unitsPerEm > 0 ? pixelHeight / static_cast<float>(font->unitsPerEm) : 0.0f;
-  }
-  const stbtt_fontinfo* info = &font->info;
-  // Use em-based scaling: CSS/SVG font-size specifies the em-square size, not the
-  // ascent-to-descent distance. stbtt_ScaleForMappingEmToPixels maps 1em to the given pixel
-  // size, matching how Skia and browsers interpret font-size.
-  return stbtt_ScaleForMappingEmToPixels(info, pixelHeight);
 }
 
 std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
@@ -366,19 +317,6 @@ FontHandle FontManager::loadRawFont(std::vector<uint8_t> data) {
   font->ownedData = std::move(data);
   font->dataPtr = font->ownedData.data();
 
-  if (!stbtt_InitFont(&font->info, font->dataPtr, 0)) {
-    // stb_truetype can't handle this font (e.g., CBDT color emoji with no glyf table).
-    // In text-full builds, FreeType/HarfBuzz can still use the raw data. Accept the font
-    // as bitmap-only if it has a valid head table.
-    const uint16_t upem = readUnitsPerEm(font->dataPtr, font->dataSize);
-    if (upem == 0) {
-      std::cerr << "FontManager: stbtt_InitFont failed and no valid head table\n";
-      return FontHandle();
-    }
-    font->bitmapOnly = true;
-    font->unitsPerEm = upem;
-  }
-
   const int index = static_cast<int>(fonts_.size());
   fonts_.push_back(std::move(font));
   return FontHandle(index);
@@ -389,16 +327,6 @@ FontHandle FontManager::loadRawFont(std::shared_ptr<const std::vector<uint8_t>> 
   font->dataSize = sharedData->size();
   font->sharedData = std::move(sharedData);
   font->dataPtr = font->sharedData->data();
-
-  if (!stbtt_InitFont(&font->info, font->dataPtr, 0)) {
-    const uint16_t upem = readUnitsPerEm(font->dataPtr, font->dataSize);
-    if (upem == 0) {
-      std::cerr << "FontManager: stbtt_InitFont failed and no valid head table\n";
-      return FontHandle();
-    }
-    font->bitmapOnly = true;
-    font->unitsPerEm = upem;
-  }
 
   const int index = static_cast<int>(fonts_.size());
   fonts_.push_back(std::move(font));
