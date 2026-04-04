@@ -131,6 +131,22 @@ ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentVa
   TextDecoration result = TextDecoration::None;
 
   for (const auto& component : components) {
+    if (component.tryGetToken<css::Token::Comma>()) {
+      ParseError err;
+      err.reason = "Invalid text-decoration value";
+      err.location = component.sourceOffset();
+      return err;
+    }
+
+    if (const auto* delim = component.tryGetToken<css::Token::Delim>()) {
+      if (delim->value == ',') {
+        ParseError err;
+        err.reason = "Invalid text-decoration value";
+        err.location = component.sourceOffset();
+        return err;
+      }
+    }
+
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
       const RcString& value = ident->value;
       if (value.equalsLowercase("none")) {

@@ -104,12 +104,17 @@ Update golden images: `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel ru
 
 - Always aim to **root-cause** pixel diff issues, even if the code is in vendored libraries (e.g., tiny-skia-cpp).
 - Don't just bump thresholds — investigate WHY pixels differ and fix the underlying code when possible.
+- Threshold adjustments are a last resort after the rendering bug has been investigated and reduced as far as practical.
+- Threshold changes are not a way to paper over incorrect rendering just to get tests passing.
 - Enabling skipped tests with large thresholds is not useful without understanding the root cause.
 
 ## Resvg Test Threshold Conventions
 
 - For pixel diffs <100, just **omit the entry** — the default `Params()` applies automatically via `getTestsWithPrefix`.
-- Only add an override entry with `Params::WithThreshold(kDefaultThreshold, N)` when diffs are >=100.
+- When adjusting tolerance, prefer changing the floating-point threshold first; that is the normal way to handle minor AA or shading differences.
+- Only add an override entry with `Params::WithThreshold(threshold, N)` when you have already investigated the root cause and determined the remaining differences are acceptable residual rasterization differences.
+- Do not raise max mismatched pixels by itself as an easy escape hatch.
+- If you want to increase max mismatched pixels materially, that requires explicit human review and approval.
 - Don't add `{"test.svg", Params()}` entries — omit them entirely.
 - `Params::Skip()` for tests that can't pass yet.
 - For resvg tests labeled "UB" (undefined behavior): always `Params::Skip()` — the golden images have "UB" text overlaid so they aren't comparable.

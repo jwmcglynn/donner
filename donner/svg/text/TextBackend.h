@@ -16,7 +16,7 @@ struct FontVMetrics {
   int lineGap = 0;
 };
 
-/// Underline/strikethrough positioning from the 'post' table, in pixels.
+/// Line decoration positioning metrics in font design units.
 struct UnderlineMetrics {
   double position = 0;   ///< Signed offset from baseline in font design units (negative = below).
   double thickness = 0;  ///< Stroke thickness in font design units.
@@ -62,6 +62,10 @@ public:
   /// Returns std::nullopt if the table is missing.
   virtual std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const = 0;
 
+  /// Strikeout position/thickness from the OS/2 table, in font design units.
+  /// Returns std::nullopt if the table is missing.
+  virtual std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle font) const = 0;
+
   /// Sub/superscript Y offsets from the OS/2 table, in font design units.
   /// Returns std::nullopt if the table is missing.
   virtual std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const = 0;
@@ -100,7 +104,7 @@ public:
   /// Extract a bitmap glyph (CBDT/CBLC color emoji). Returns std::nullopt if
   /// the glyph is not a bitmap. Simple backends always return std::nullopt.
   virtual std::optional<BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
-                                                  float scale) const = 0;
+                                                 float scale) const = 0;
 
   // ── Shaping ───────────────────────────────────────────────────
 
@@ -139,8 +143,7 @@ public:
   /// @return Shaped glyphs with advances, kerning, and cluster mapping.
   virtual ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
                              size_t byteOffset, size_t byteLength, bool isVertical,
-                             FontVariant fontVariant,
-                             bool forceLogicalOrder) const = 0;
+                             FontVariant fontVariant, bool forceLogicalOrder) const = 0;
 
   /// Compute cross-span kerning between the last codepoint of the previous span
   /// and the first codepoint of the current span.

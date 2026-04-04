@@ -129,6 +129,15 @@ TEST(PropertyRegistry, ParseColor) {
   EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
 }
 
+TEST(PropertyRegistry, RejectsCommaSeparatedTextDecoration) {
+  PropertyRegistry registry;
+
+  EXPECT_THAT(
+      registry.parsePresentationAttribute("text-decoration", "underline,overline,line-through"),
+      ParseErrorIs("Invalid text-decoration value"));
+  EXPECT_EQ(registry.textDecoration.get(), TextDecoration::None);
+}
+
 TEST(PropertyRegistry, ParsePresentationAttribute) {
   {
     PropertyRegistry registry;
@@ -389,15 +398,13 @@ TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: semi-condensed");
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(static_cast<int>(FontStretch::SemiCondensed)));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::SemiCondensed)));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: semi-expanded");
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(static_cast<int>(FontStretch::SemiExpanded)));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::SemiExpanded)));
   }
 
   {
@@ -409,23 +416,20 @@ TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: extra-expanded");
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(static_cast<int>(FontStretch::ExtraExpanded)));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::ExtraExpanded)));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: ultra-expanded");
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(static_cast<int>(FontStretch::UltraExpanded)));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::UltraExpanded)));
   }
 
   // SVG 1.1 relative keywords stored as sentinel values.
   {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: narrower");
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(PropertyRegistry::kFontStretchNarrower));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(PropertyRegistry::kFontStretchNarrower));
   }
 
   {
@@ -525,8 +529,7 @@ TEST(PropertyRegistry, ResolveFontStretch) {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: narrower");
     registry.resolveFontStretch(static_cast<int>(FontStretch::Normal));
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(static_cast<int>(FontStretch::SemiCondensed)));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::SemiCondensed)));
   }
 
   // wider from Normal → SemiExpanded.
@@ -534,8 +537,7 @@ TEST(PropertyRegistry, ResolveFontStretch) {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: wider");
     registry.resolveFontStretch(static_cast<int>(FontStretch::Normal));
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(static_cast<int>(FontStretch::SemiExpanded)));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::SemiExpanded)));
   }
 
   // narrower clamps at UltraCondensed.
@@ -552,8 +554,7 @@ TEST(PropertyRegistry, ResolveFontStretch) {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: wider");
     registry.resolveFontStretch(static_cast<int>(FontStretch::UltraExpanded));
-    EXPECT_THAT(registry.fontStretch.get(),
-                Optional(static_cast<int>(FontStretch::UltraExpanded)));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::UltraExpanded)));
   }
 
   // Non-sentinel values are not modified.

@@ -22,6 +22,7 @@ public:
   float scaleForPixelHeight(FontHandle font, float pixelHeight) const override;
   float scaleForEmToPixels(FontHandle font, float pixelHeight) const override;
   std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const override;
+  std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle font) const override;
   std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const override;
   PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const override;
   bool isBitmapOnly(FontHandle font) const override;

@@ -115,13 +115,13 @@ INSTANTIATE_TEST_SUITE_P(DominantBaseline, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     Fill, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-fill",  //
-        {
-            {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
-            {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
-            {"a-fill-027.svg", Params::Skip()},  // Not impl: Fallback with icc-color
-        })),
+    ValuesIn(getTestsWithPrefix("a-fill",  //
+                                {
+                                    {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
+                                    {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
+                                    {"a-fill-027.svg",
+                                     Params::Skip()},  // Not impl: Fallback with icc-color
+                                })),
     TestNameFromFilename);
 
 // Non-text filter coverage is intentionally disabled on the text branch cleanup path.
@@ -188,11 +188,13 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-font-family-007.svg",
              Params::WithThreshold(kDefaultThreshold, 1300)},  // Source Sans Pro
             {"a-font-family-008.svg",
-             Params::WithThreshold(kDefaultThreshold, 1300)},  // Font list: Source Sans Pro fallback
+             Params::WithThreshold(kDefaultThreshold,
+                                   1300)},              // Font list: Source Sans Pro fallback
             {"a-font-family-009.svg", Params::Skip()},  // Fallback from invalid family (different
-                                                         // default font than resvg)
+                                                        // default font than resvg)
             {"a-font-family-010.svg",
-             Params::WithThreshold(kDefaultThreshold, 1000)},  // Fallback list: "Invalid, Noto Sans"
+             Params::WithThreshold(kDefaultThreshold,
+                                   1000)},  // Fallback list: "Invalid, Noto Sans"
             {"a-font-family-011.svg",
              Params::WithThreshold(kDefaultThreshold, 5200)},  // Bold sans-serif (Noto Sans Bold)
 
@@ -315,7 +317,18 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     TextDecoration, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
-        "a-text-decoration")),
+        "a-text-decoration",
+        {
+            {"a-text-decoration-008.svg", Params::WithThreshold(0.1f)},   // Minor AA diffs
+            {"a-text-decoration-013.svg", Params::WithThreshold(0.05f)},  // Minor shading diffs
+            {"a-text-decoration-015.svg", Params::WithThreshold(0.1f)},   // Minor AA diffs
+            {"a-text-decoration-016.svg", Params::WithThreshold(0.1f)},   // Minor AA diffs
+            {"a-text-decoration-017.svg", Params::WithThreshold(0.1f)},   // Minor AA diffs
+            // custom golden: upstream resvg golden has a phantom green stroke artifact
+            {"a-text-decoration-019.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-a-text-decoration-019.png")},
+        })),
     TestNameFromFilename);
 
 // TODO(jwm): We don't implement text-rendering, but the image comparison test fuzziness

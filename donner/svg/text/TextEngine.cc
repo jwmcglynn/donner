@@ -311,23 +311,18 @@ double computeBaselineShift(DominantBaseline baseline, const FontVMetrics& vm, f
     case DominantBaseline::Middle:
     case DominantBaseline::Central:
       return static_cast<double>(vm.ascent + vm.descent) * 0.5 * scale;
-    case DominantBaseline::Hanging:
-      return static_cast<double>(vm.ascent) * 0.8 * scale;
-    case DominantBaseline::Mathematical:
-      return static_cast<double>(vm.ascent) * 0.5 * scale;
-    case DominantBaseline::TextTop:
-      return static_cast<double>(vm.ascent) * scale;
+    case DominantBaseline::Hanging: return static_cast<double>(vm.ascent) * 0.8 * scale;
+    case DominantBaseline::Mathematical: return static_cast<double>(vm.ascent) * 0.5 * scale;
+    case DominantBaseline::TextTop: return static_cast<double>(vm.ascent) * scale;
     case DominantBaseline::TextBottom:
-    case DominantBaseline::Ideographic:
-      return static_cast<double>(vm.descent) * scale;
+    case DominantBaseline::Ideographic: return static_cast<double>(vm.descent) * scale;
   }
   return 0.0;
 }
 
-std::vector<ChunkRange> findChunkRanges(
-    std::string_view spanText,
-    const SmallVector<std::optional<Lengthd>, 1>& xList,
-    const SmallVector<std::optional<Lengthd>, 1>& yList) {
+std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
+                                        const SmallVector<std::optional<Lengthd>, 1>& xList,
+                                        const SmallVector<std::optional<Lengthd>, 1>& yList) {
   std::vector<ChunkRange> chunkRanges;
   size_t scanPos = 0;
   unsigned int scanCharIdx = 0;
@@ -390,11 +385,9 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   return result;
 }
 
-void applyTextLength(std::vector<TextRun>& runs,
-                     const components::ComputedTextComponent& text,
-                     const std::vector<RunPenExtent>& runExtents,
-                     const TextLayoutParams& params, bool vertical, double currentPenX,
-                     double currentPenY) {
+void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
+                     const std::vector<RunPenExtent>& runExtents, const TextLayoutParams& params,
+                     bool vertical, double currentPenX, double currentPenY) {
   // Check if any span has per-span textLength.
   bool anySpanHasTextLength = false;
   for (const auto& span : text.spans) {
@@ -512,8 +505,7 @@ void applyTextLength(std::vector<TextRun>& runs,
 }
 
 /// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
-void applyTextAnchor(std::vector<TextRun>& runs,
-                     std::vector<ChunkBoundary>& chunkBoundaries,
+void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical) {
   // For each chunk, use the text-anchor from the first span that has actual glyph content.
   for (auto& chunk : chunkBoundaries) {
@@ -588,19 +580,18 @@ void applyTextAnchor(std::vector<TextRun>& runs,
 
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
 /// and ancestor baseline-shift accumulation.
-double computeSpanBaselineShiftPx(
-    const TextBackend& backend,
-    const components::ComputedTextComponent::TextSpan& span,
-    FontHandle spanFont, float spanScale, const TextLayoutParams& params) {
+double computeSpanBaselineShiftPx(const TextBackend& backend,
+                                  const components::ComputedTextComponent::TextSpan& span,
+                                  FontHandle spanFont, float spanScale,
+                                  const TextLayoutParams& params) {
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
 
   FontMetrics spanFontMetrics = params.fontMetrics;
   const float spanFontSizePx =
-      span.fontSize.value != 0.0
-          ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
-                                                       Lengthd::Extent::Mixed))
-          : static_cast<float>(
-                params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+      span.fontSize.value != 0.0 ? static_cast<float>(span.fontSize.toPixels(
+                                       params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed))
+                                 : static_cast<float>(params.fontSize.toPixels(
+                                       params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
   spanFontMetrics.fontSize = spanFontSizePx;
 
   double spanBaselineShiftPx;
@@ -665,7 +656,8 @@ void addBox(Boxd& accum, bool& initialized, const Boxd& box) {
 }
 
 std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*> filteredCharacters(
-    Registry& registry, EntityHandle handle, const components::ComputedTextGeometryComponent& cache) {
+    Registry& registry, EntityHandle handle,
+    const components::ComputedTextGeometryComponent& cache) {
   std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*> result;
   for (const auto& character : cache.characters) {
     if (character.rendered && isDescendantOf(registry, character.sourceEntity, handle.entity())) {
@@ -781,7 +773,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   double baselineShift = 0.0;
   if (params.dominantBaseline != DominantBaseline::Auto &&
       params.dominantBaseline != DominantBaseline::Alphabetic) {
-    baselineShift = computeBaselineShift(params.dominantBaseline, backend_->fontVMetrics(font), scale);
+    baselineShift =
+        computeBaselineShift(params.dominantBaseline, backend_->fontVMetrics(font), scale);
   }
 
   // ── Layout state ──────────────────────────────────────────────────────────────
@@ -1319,6 +1312,10 @@ std::optional<UnderlineMetrics> TextEngine::underlineMetrics(FontHandle font) co
   return backend_->underlineMetrics(font);
 }
 
+std::optional<UnderlineMetrics> TextEngine::strikeoutMetrics(FontHandle font) const {
+  return backend_->strikeoutMetrics(font);
+}
+
 std::optional<SubSuperMetrics> TextEngine::subSuperMetrics(FontHandle font) const {
   return backend_->subSuperMetrics(font);
 }
@@ -1504,7 +1501,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   cache.runs = runs;
 
   return registry_.emplace_or_replace<components::ComputedTextGeometryComponent>(textRootEntity,
-                                                                             std::move(cache));
+                                                                                 std::move(cache));
 }
 
 std::vector<PathSpline> TextEngine::computedGlyphPaths(EntityHandle handle) const {

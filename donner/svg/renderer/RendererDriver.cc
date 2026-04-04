@@ -42,6 +42,26 @@ namespace donner::svg {
 
 namespace {
 
+components::ResolvedPaintServer resolvePaintServer(Registry& registry, const PaintServer& paint) {
+  if (paint.is<PaintServer::Solid>()) {
+    return paint.get<PaintServer::Solid>();
+  }
+
+  if (paint.is<PaintServer::ElementReference>()) {
+    const auto& ref = paint.get<PaintServer::ElementReference>();
+    auto resolvedRef = ref.reference.resolve(registry);
+    if (resolvedRef && resolvedRef->handle) {
+      return components::PaintResolvedReference{*resolvedRef, ref.fallback, std::nullopt};
+    }
+
+    if (ref.fallback) {
+      return PaintServer::Solid(*ref.fallback);
+    }
+  }
+
+  return PaintServer::None();
+}
+
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
@@ -55,83 +75,76 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       continue;
     }
 
-    // Walk up to the parent if the entity itself has no style (e.g., text content node).
-    auto* style = registry.try_get<components::ComputedStyleComponent>(span.sourceEntity);
-    if (!style || !style->properties) {
-      if (auto* tree = registry.try_get<donner::components::TreeComponent>(span.sourceEntity)) {
-        if (tree->parent() != entt::null) {
-          style = registry.try_get<components::ComputedStyleComponent>(tree->parent());
-        }
+    const Boxd viewBox =
+        textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Boxd();
+    const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
+
+    // Walk up to the nearest ancestor with computed style so inherited paint and decoration
+    // continue to work for nested tspans with no local ComputedStyleComponent.
+    entt::entity styleEntity = span.sourceEntity;
+    auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+    while ((!style || !style->properties) &&
+           registry.all_of<donner::components::TreeComponent>(styleEntity)) {
+      const auto& tree = registry.get<donner::components::TreeComponent>(styleEntity);
+      if (tree.parent() == entt::null) {
+        break;
       }
+
+      styleEntity = tree.parent();
+      style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
     }
 
     if (style && style->properties) {
-      // Resolve the fill paint server. Solid colors are stored directly; gradient/pattern
-      // url() references are resolved to PaintResolvedReference for the renderer.
-      const PaintServer fill = style->properties->fill.getRequired();
-      if (fill.is<PaintServer::Solid>()) {
-        span.resolvedFill = fill.get<PaintServer::Solid>();
-      } else if (fill.is<PaintServer::ElementReference>()) {
-        const auto& ref = fill.get<PaintServer::ElementReference>();
-        auto resolvedRef = ref.reference.resolve(registry);
-        if (resolvedRef && resolvedRef->handle) {
-          span.resolvedFill =
-              components::PaintResolvedReference{*resolvedRef, ref.fallback, std::nullopt};
-        } else if (ref.fallback) {
-          span.resolvedFill = PaintServer::Solid(*ref.fallback);
-        }
-      }
+      span.resolvedFill = resolvePaintServer(registry, style->properties->fill.getRequired());
+      span.resolvedStroke = resolvePaintServer(registry, style->properties->stroke.getRequired());
+      span.fillOpacity = style->properties->fillOpacity.getRequired();
+      span.strokeOpacity = style->properties->strokeOpacity.getRequired();
+      span.strokeWidth = style->properties->strokeWidth.getRequired().toPixels(
+          viewBox, baseFm, Lengthd::Extent::Mixed);
+      span.strokeLinecap = style->properties->strokeLinecap.getRequired();
+      span.strokeLinejoin = style->properties->strokeLinejoin.getRequired();
+      span.strokeMiterLimit = style->properties->strokeMiterlimit.getRequired();
     }
 
     // Resolve decoration from ancestors. Per CSS Text Decoration §3, text-decoration is NOT
     // inherited but the visual decoration line propagates to descendants. Walk ancestors to
-    // accumulate decoration types and resolve paint from each declaring element.
+    // accumulate decoration types, but source paint from the innermost text element that
+    // contributes the decorated glyphs.
     {
-      const Boxd viewBox = textRootHandle.registry()
-                               ? components::LayoutSystem().getViewBox(textRootHandle)
-                               : Boxd();
-      const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
+      span.textDecoration = TextDecoration::None;
+      span.resolvedDecorationFill = PaintServer::None();
+      span.resolvedDecorationStroke = PaintServer::None();
+      span.decorationFillOpacity = 1.0;
+      span.decorationStrokeOpacity = 1.0;
+      span.decorationFontSizePx = 0.0f;
+      span.decorationStrokeWidth = 0.0;
+      span.decorationDeclarationCount = 0;
+
+      Entity decorationPaintEntity = entt::null;
+      Entity nearestTextStyleEntity =
+          registry.all_of<components::TextComponent>(styleEntity) ? styleEntity : entt::null;
 
       Entity walkEntity = styleEntity;
       while (walkEntity != entt::null) {
+        if (registry.all_of<components::TextComponent>(walkEntity)) {
+          nearestTextStyleEntity = walkEntity;
+        }
+
         auto* walkStyle = registry.try_get<components::ComputedStyleComponent>(walkEntity);
         if (walkStyle && walkStyle->properties) {
-          const TextDecoration ancestorDeco =
-              walkStyle->properties->textDecoration.getRequired();
+          const TextDecoration ancestorDeco = walkStyle->properties->textDecoration.getRequired();
           if (ancestorDeco != TextDecoration::None) {
-            // This ancestor declares decoration — accumulate and use its paint/metrics.
+            // This ancestor declares decoration — accumulate it for descendant glyphs.
             span.textDecoration |= ancestorDeco;
+            ++span.decorationDeclarationCount;
 
-            const auto& decoProps = walkStyle->properties.value();
-
-            // Use the first (innermost) declaring ancestor's paint for decoration.
-            if (std::holds_alternative<PaintServer::None>(span.resolvedDecorationFill)) {
-              const PaintServer decoFill = decoProps.fill.getRequired();
-              if (decoFill.is<PaintServer::Solid>()) {
-                span.resolvedDecorationFill = decoFill.get<PaintServer::Solid>();
-              } else if (decoFill.is<PaintServer::ElementReference>()) {
-                const auto& ref = decoFill.get<PaintServer::ElementReference>();
-                auto resolvedRef = ref.reference.resolve(registry);
-                if (resolvedRef && resolvedRef->handle) {
-                  span.resolvedDecorationFill =
-                      components::PaintResolvedReference{*resolvedRef, ref.fallback, std::nullopt};
-                } else if (ref.fallback) {
-                  span.resolvedDecorationFill = PaintServer::Solid(*ref.fallback);
-                }
+            if (decorationPaintEntity == entt::null) {
+              decorationPaintEntity = registry.all_of<components::TextComponent>(walkEntity)
+                                          ? walkEntity
+                                          : nearestTextStyleEntity;
+              if (decorationPaintEntity == entt::null) {
+                decorationPaintEntity = walkEntity;
               }
-
-              const PaintServer decoStroke = decoProps.stroke.getRequired();
-              if (decoStroke.is<PaintServer::Solid>()) {
-                span.resolvedDecorationStroke = decoStroke.get<PaintServer::Solid>();
-              }
-
-              span.decorationStrokeWidth =
-                  decoProps.strokeWidth.getRequired().toPixels(viewBox, baseFm,
-                                                               Lengthd::Extent::Mixed);
-
-              span.decorationFontSizePx = static_cast<float>(
-                  decoProps.fontSize.getRequired().toPixels(viewBox, baseFm,
-                                                             Lengthd::Extent::Mixed));
             }
           }
         }
@@ -141,6 +154,23 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
           break;
         }
         walkEntity = tree->parent();
+      }
+
+      if (decorationPaintEntity != entt::null) {
+        auto* decoStyle =
+            registry.try_get<components::ComputedStyleComponent>(decorationPaintEntity);
+        if (decoStyle && decoStyle->properties) {
+          const auto& decoProps = decoStyle->properties.value();
+          span.resolvedDecorationFill = resolvePaintServer(registry, decoProps.fill.getRequired());
+          span.resolvedDecorationStroke =
+              resolvePaintServer(registry, decoProps.stroke.getRequired());
+          span.decorationFillOpacity = decoProps.fillOpacity.getRequired();
+          span.decorationStrokeOpacity = decoProps.strokeOpacity.getRequired();
+          span.decorationStrokeWidth =
+              decoProps.strokeWidth.getRequired().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed);
+          span.decorationFontSizePx = static_cast<float>(
+              decoProps.fontSize.getRequired().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed));
+        }
       }
     }
   }

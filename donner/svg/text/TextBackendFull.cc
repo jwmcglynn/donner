@@ -287,6 +287,28 @@ std::optional<UnderlineMetrics> TextBackendFull::underlineMetrics(FontHandle fon
   return std::nullopt;
 }
 
+std::optional<UnderlineMetrics> TextBackendFull::strikeoutMetrics(FontHandle font) const {
+  hb_font_t* hbFont = getOrCreateHbFont(font);
+  if (!hbFont) {
+    return std::nullopt;
+  }
+
+  FT_Face ftFace = hb_ft_font_get_face(hbFont);
+  if (!ftFace) {
+    return std::nullopt;
+  }
+
+  auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(ftFace, FT_SFNT_OS2));
+  if (!os2) {
+    return std::nullopt;
+  }
+
+  UnderlineMetrics metrics;
+  metrics.position = static_cast<double>(os2->yStrikeoutPosition);
+  metrics.thickness = static_cast<double>(os2->yStrikeoutSize);
+  return metrics;
+}
+
 std::optional<SubSuperMetrics> TextBackendFull::subSuperMetrics(FontHandle font) const {
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {

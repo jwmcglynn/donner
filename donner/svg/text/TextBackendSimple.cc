@@ -121,6 +121,23 @@ std::optional<UnderlineMetrics> TextBackendSimple::underlineMetrics(FontHandle f
   return metrics;
 }
 
+std::optional<UnderlineMetrics> TextBackendSimple::strikeoutMetrics(FontHandle font) const {
+  const stbtt_fontinfo* info = getFontInfo(font);
+  if (!info) {
+    return std::nullopt;
+  }
+
+  const int tab = findFontTable(info->data, info->fontstart, "OS/2");
+  if (!tab) {
+    return std::nullopt;
+  }
+
+  UnderlineMetrics metrics;
+  metrics.thickness = static_cast<double>(readInt16BE(info->data, tab + 26));
+  metrics.position = static_cast<double>(readInt16BE(info->data, tab + 28));
+  return metrics;
+}
+
 std::optional<SubSuperMetrics> TextBackendSimple::subSuperMetrics(FontHandle font) const {
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {

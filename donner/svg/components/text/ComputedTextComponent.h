@@ -1,9 +1,8 @@
 #pragma once
 /// @file
 
-#include <optional>
-
 #include <entt/entt.hpp>
+#include <optional>
 
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
@@ -15,6 +14,7 @@
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PathSpline.h"
+#include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/Visibility.h"
@@ -71,6 +71,28 @@ struct ComputedTextComponent {
     /// Populated by RendererDriver from sourceEntity's ComputedStyleComponent.
     ResolvedPaintServer resolvedFill;
 
+    /// Resolved stroke paint for this span (solid color, gradient reference, or none).
+    /// Populated by RendererDriver from sourceEntity's ComputedStyleComponent.
+    ResolvedPaintServer resolvedStroke;
+
+    /// CSS `fill-opacity` value for this span (0.0-1.0).
+    double fillOpacity = 1.0;
+
+    /// CSS `stroke-opacity` value for this span (0.0-1.0).
+    double strokeOpacity = 1.0;
+
+    /// Stroke width in user units for this span.
+    double strokeWidth = 0.0;
+
+    /// Stroke line cap used for text outlines in this span.
+    StrokeLinecap strokeLinecap = StrokeLinecap::Butt;
+
+    /// Stroke line join used for text outlines in this span.
+    StrokeLinejoin strokeLinejoin = StrokeLinejoin::Miter;
+
+    /// Stroke miter limit used for text outlines in this span.
+    double strokeMiterLimit = 4.0;
+
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
     /// Populated by RendererDriver from sourceEntity.
     int fontWeight = 400;
@@ -105,9 +127,9 @@ struct ComputedTextComponent {
     BaselineShiftKeyword baselineShiftKeyword = BaselineShiftKeyword::Length;
 
     /// Unresolved baseline-shift values from ancestor tspan elements. Each entry is the ancestor's
-    /// (baseline-shift keyword, baseline-shift Lengthd, font-size in pixels). Layout engines resolve
-    /// each entry using font OS/2 metrics for sub/super or toPixels() for explicit lengths, then sum
-    /// to get the total ancestor shift.
+    /// (baseline-shift keyword, baseline-shift Lengthd, font-size in pixels). Layout engines
+    /// resolve each entry using font OS/2 metrics for sub/super or toPixels() for explicit lengths,
+    /// then sum to get the total ancestor shift.
     struct AncestorShift {
       BaselineShiftKeyword keyword;
       Lengthd shift;
@@ -144,11 +166,20 @@ struct ComputedTextComponent {
     /// Stroke paint from the declaring element (for stroking decoration lines).
     ResolvedPaintServer resolvedDecorationStroke;
 
+    /// CSS `fill-opacity` resolved from the text element that provides decoration paint.
+    double decorationFillOpacity = 1.0;
+
+    /// CSS `stroke-opacity` resolved from the text element that provides decoration paint.
+    double decorationStrokeOpacity = 1.0;
+
     /// Font size (in pixels) from the declaring element, for computing decoration metrics.
     float decorationFontSizePx = 0.0f;
 
     /// Stroke width from the declaring element, for stroking decoration lines.
     double decorationStrokeWidth = 0.0;
+
+    /// Number of ancestors that explicitly declared a non-none text-decoration for this span.
+    int decorationDeclarationCount = 0;
 
     /// Per-span text-anchor value. Used for per-chunk text-anchor adjustment:
     /// each text chunk uses the text-anchor of its first rendered character's element.

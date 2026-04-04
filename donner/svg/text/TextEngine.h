@@ -36,8 +36,7 @@ public:
   TextEngine(FontManager& fontManager, Registry& registry);
 
   /// Test-only constructor that injects a custom TextBackend.
-  TextEngine(FontManager& fontManager, Registry& registry,
-             std::unique_ptr<TextBackend> backend);
+  TextEngine(FontManager& fontManager, Registry& registry, std::unique_ptr<TextBackend> backend);
 
   ~TextEngine();
 
@@ -58,6 +57,7 @@ public:
   float scaleForPixelHeight(FontHandle font, float pixelHeight) const;
   float scaleForEmToPixels(FontHandle font, float pixelHeight) const;
   std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const;
+  std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle font) const;
   std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const;
   PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const;
   bool isBitmapOnly(FontHandle font) const;
