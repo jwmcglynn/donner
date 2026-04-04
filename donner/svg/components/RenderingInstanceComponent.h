@@ -77,11 +77,9 @@ struct ResolvedMask {
   /// properly resolve.
   bool valid() const { return reference.valid(); }
 
-  /// Deep copy (clones the parentMask chain).
+  /// Deep copy.
   ResolvedMask deepCopy() const {
-    ResolvedMask copy{reference, subtreeInfo, contentUnits,
-                      parentMask ? std::make_unique<ResolvedMask>(parentMask->deepCopy())
-                                 : nullptr};
+    ResolvedMask copy{reference, subtreeInfo, contentUnits};
     return copy;
   }
 };

@@ -14,4 +14,16 @@ SVGTextElement SVGTextElement::CreateOn(EntityHandle handle) {
   return SVGTextElement(handle);
 }
 
+std::vector<PathSpline> SVGTextElement::convertToPath() const {
+  return computedGlyphPaths();
+}
+
+Boxd SVGTextElement::inkBoundingBox() const {
+  return computedInkBounds();
+}
+
+Boxd SVGTextElement::objectBoundingBox() const {
+  return computedObjectBoundingBox();
+}
+
 }  // namespace donner::svg

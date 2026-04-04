@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -215,6 +216,58 @@ TEST(SVGTextElementViewportTests, MultipleTSpansComputed) {
       ................
       ................
   )"));
+}
+
+TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  EXPECT_EQ(textElement.getNumberOfChars(), 3);
+  EXPECT_NEAR(textElement.getComputedTextLength(), 25.0, 0.01);
+  EXPECT_NEAR(textElement.getSubStringLength(0, 2), 16.6406, 0.01);
+
+  const Vector2d start = textElement.getStartPositionOfChar(0);
+  EXPECT_NEAR(start.x, 10.0, 0.5);
+  EXPECT_NEAR(start.y, 20.0, 0.5);
+
+  const Boxd extent = textElement.getExtentOfChar(0);
+  EXPECT_THAT(extent, BoxEq(Vector2Near(10.4531, 11.3281), Vector2Near(18.125, 20.0)));
+  EXPECT_EQ(textElement.getCharNumAtPosition((extent.topLeft + extent.bottomRight) * 0.5), 0);
+
+  const std::vector<PathSpline> paths = textElement.convertToPath();
+  EXPECT_FALSE(paths.empty());
+  const Boxd inkBounds = textElement.inkBoundingBox();
+  EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.4531, 11.2031), Vector2Near(34.375, 20.125)));
+
+  const Boxd objectBounds = textElement.objectBoundingBox();
+  EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(35.0, 22.7)));
+}
+
+TEST(SVGTextElementPublicApiTests, TspanApisFilterToOwnSubtree) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="root" x="10" y="20" font-family="fallback-font" font-size="12px">
+        A<tspan id="span" dx="6" rotate="30">BC</tspan>
+      </text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+
+  EXPECT_EQ(root.getNumberOfChars(), 3);
+  EXPECT_EQ(span.getNumberOfChars(), 2);
+  EXPECT_NEAR(span.getComputedTextLength(), root.getSubStringLength(1, 2), 1e-6);
+  EXPECT_EQ(span.getExtentOfChar(0), root.getExtentOfChar(1));
+  EXPECT_DOUBLE_EQ(span.getRotationOfChar(0), 30.0);
+  EXPECT_EQ(span.getStartPositionOfChar(0), root.getStartPositionOfChar(1));
 }
 
 }  // namespace donner::svg

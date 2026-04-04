@@ -19,6 +19,7 @@ struct TextGlyph {
   double xAdvance = 0;         ///< Horizontal advance to next glyph.
   double yAdvance = 0;         ///< Vertical advance (used in vertical writing modes).
   double rotateDegrees = 0;    ///< Per-glyph rotation in degrees.
+  uint32_t cluster = 0;        ///< Byte offset into the span text for the glyph's source cluster.
   float fontSizeScale = 1.0f;  ///< Per-glyph font size multiplier (< 1.0 for small-caps).
 };
 
@@ -26,8 +27,8 @@ struct TextGlyph {
  * A run of positioned glyphs sharing the same font.
  */
 struct TextRun {
-  FontHandle font;               ///< Font handle for this run.
-  std::vector<TextGlyph> glyphs; ///< Positioned glyphs.
+  FontHandle font;                ///< Font handle for this run.
+  std::vector<TextGlyph> glyphs;  ///< Positioned glyphs.
 };
 
 }  // namespace donner::svg
