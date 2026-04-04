@@ -17,6 +17,7 @@
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/text/TextBackendSimple.h"
+#include "donner/svg/text/TextEngineHelpers.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
 #endif
@@ -298,6 +299,357 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
   }
 }
 
+}  // namespace
+
+namespace text_engine_detail {
+
+double computeBaselineShift(DominantBaseline baseline, const FontVMetrics& vm, float scale) {
+  switch (baseline) {
+    case DominantBaseline::Auto:
+    case DominantBaseline::Alphabetic: return 0.0;
+    case DominantBaseline::Middle:
+    case DominantBaseline::Central:
+      return static_cast<double>(vm.ascent + vm.descent) * 0.5 * scale;
+    case DominantBaseline::Hanging:
+      return static_cast<double>(vm.ascent) * 0.8 * scale;
+    case DominantBaseline::Mathematical:
+      return static_cast<double>(vm.ascent) * 0.5 * scale;
+    case DominantBaseline::TextTop:
+      return static_cast<double>(vm.ascent) * scale;
+    case DominantBaseline::TextBottom:
+    case DominantBaseline::Ideographic:
+      return static_cast<double>(vm.descent) * scale;
+  }
+  return 0.0;
+}
+
+std::vector<ChunkRange> findChunkRanges(
+    std::string_view spanText,
+    const SmallVector<std::optional<Lengthd>, 1>& xList,
+    const SmallVector<std::optional<Lengthd>, 1>& yList) {
+  std::vector<ChunkRange> chunkRanges;
+  size_t scanPos = 0;
+  unsigned int scanCharIdx = 0;
+  bool scanFirst = true;
+  bool scanPrevWasZwj = false;
+  size_t currentChunkStart = 0;
+
+  while (scanPos < spanText.size()) {
+    size_t byteStart = scanPos;
+    uint32_t cp = decodeUtf8(spanText, scanPos);
+
+    bool scanCombining = isNonSpacing(cp) || scanPrevWasZwj;
+    scanPrevWasZwj = (cp == 0x200D);
+    if (!scanCombining && !scanFirst) {
+      scanCharIdx += (cp >= 0x10000) ? 2 : 1;
+    }
+    scanFirst = false;
+
+    bool hasAbsX = scanCharIdx < xList.size() && xList[scanCharIdx].has_value();
+    bool hasAbsY = scanCharIdx < yList.size() && yList[scanCharIdx].has_value();
+
+    if ((hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
+      chunkRanges.push_back({currentChunkStart, byteStart});
+      currentChunkStart = byteStart;
+    }
+  }
+  chunkRanges.push_back({currentChunkStart, spanText.size()});
+  return chunkRanges;
+}
+
+ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
+  ByteIndexMappings result;
+  result.byteToCharIdx.resize(spanText.size(), 0);
+  result.byteToRawCpIdx.resize(spanText.size(), 0);
+
+  unsigned int ci = 0;
+  unsigned int rawCi = 0;
+  bool mapFirst = true;
+  bool mapPrevZwj = false;
+  size_t bi = 0;
+
+  while (bi < spanText.size()) {
+    size_t startBi = bi;
+    const uint32_t cp = decodeUtf8(spanText, bi);
+    const bool nonSpacing = isNonSpacing(cp) || mapPrevZwj;
+    mapPrevZwj = (cp == 0x200D);
+    if (!nonSpacing && !mapFirst) {
+      ci += (cp >= 0x10000) ? 2 : 1;
+    }
+    if (!mapFirst) {
+      rawCi += (cp >= 0x10000) ? 2 : 1;
+    }
+    mapFirst = false;
+    for (size_t j = startBi; j < bi && j < spanText.size(); ++j) {
+      result.byteToCharIdx[j] = ci;
+      result.byteToRawCpIdx[j] = rawCi;
+    }
+  }
+
+  return result;
+}
+
+void applyTextLength(std::vector<TextRun>& runs,
+                     const components::ComputedTextComponent& text,
+                     const std::vector<RunPenExtent>& runExtents,
+                     const TextLayoutParams& params, bool vertical, double currentPenX,
+                     double currentPenY) {
+  // Check if any span has per-span textLength.
+  bool anySpanHasTextLength = false;
+  for (const auto& span : text.spans) {
+    if (span.textLength.has_value()) {
+      anySpanHasTextLength = true;
+      break;
+    }
+  }
+
+  // ── Per-span textLength ───────────────────────────────────────────────
+  if (anySpanHasTextLength) {
+    for (size_t i = 0; i < runs.size() && i < text.spans.size(); ++i) {
+      auto& run = runs[i];
+      const auto& span = text.spans[i];
+      if (!span.textLength.has_value() || run.glyphs.empty()) {
+        continue;
+      }
+
+      const double runStartPos = vertical ? run.glyphs[0].yPosition : run.glyphs[0].xPosition;
+      const auto& extent = runExtents[i];
+      double naturalLength =
+          vertical ? (extent.endY - extent.startY) : (extent.endX - extent.startX);
+
+      if (naturalLength <= 0.0) {
+        continue;
+      }
+
+      const double targetLength = span.textLength->toPixels(
+          params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+
+      if (targetLength <= 0.0) {
+        continue;
+      }
+
+      if (span.lengthAdjust == LengthAdjust::Spacing) {
+        const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
+        const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
+        for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+          if (vertical) {
+            run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
+          } else {
+            run.glyphs[gi].xPosition += extraPerGap * static_cast<double>(gi);
+          }
+        }
+      } else {
+        const double scaleFactor = targetLength / naturalLength;
+        for (auto& g : run.glyphs) {
+          if (vertical) {
+            g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
+            g.yAdvance *= scaleFactor;
+          } else {
+            g.xPosition = runStartPos + (g.xPosition - runStartPos) * scaleFactor;
+            g.xAdvance *= scaleFactor;
+          }
+        }
+      }
+    }
+  }
+
+  // ── Global textLength ────────────���────────────────────────────────────
+  double globalStartX = currentPenX;
+  double globalStartY = currentPenY;
+  for (const auto& r : runs) {
+    if (!r.glyphs.empty()) {
+      globalStartX = r.glyphs[0].xPosition;
+      globalStartY = r.glyphs[0].yPosition;
+      break;
+    }
+  }
+
+  const double globalNaturalLength =
+      vertical ? (currentPenY - globalStartY) : (currentPenX - globalStartX);
+
+  if (!anySpanHasTextLength && params.textLength.has_value() && globalNaturalLength > 0.0) {
+    const double targetLength = params.textLength->toPixels(
+        params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+
+    if (targetLength > 0.0) {
+      size_t totalGlyphs = 0;
+      for (const auto& r : runs) {
+        totalGlyphs += r.glyphs.size();
+      }
+
+      if (params.lengthAdjust == LengthAdjust::Spacing) {
+        const size_t numGaps = totalGlyphs > 1 ? totalGlyphs - 1 : 1;
+        const double extraPerGap =
+            (targetLength - globalNaturalLength) / static_cast<double>(numGaps);
+        size_t glyphIdx = 0;
+        for (auto& r : runs) {
+          for (auto& g : r.glyphs) {
+            if (vertical) {
+              g.yPosition += extraPerGap * static_cast<double>(glyphIdx);
+            } else {
+              g.xPosition += extraPerGap * static_cast<double>(glyphIdx);
+            }
+            ++glyphIdx;
+          }
+        }
+      } else {
+        const double scaleFactor = targetLength / globalNaturalLength;
+        for (auto& r : runs) {
+          for (auto& g : r.glyphs) {
+            if (vertical) {
+              g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
+              g.yAdvance *= scaleFactor;
+            } else {
+              g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
+              g.xAdvance *= scaleFactor;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
+void applyTextAnchor(std::vector<TextRun>& runs,
+                     std::vector<ChunkBoundary>& chunkBoundaries,
+                     const components::ComputedTextComponent& text, bool vertical) {
+  // For each chunk, use the text-anchor from the first span that has actual glyph content.
+  for (auto& chunk : chunkBoundaries) {
+    for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
+      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+      if (gStart < runs[ri].glyphs.size()) {
+        chunk.textAnchor = text.spans[ri].textAnchor;
+        break;
+      }
+    }
+  }
+
+  // Apply text-anchor adjustment per text chunk.
+  for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
+    const auto& chunk = chunkBoundaries[ci];
+    if (chunk.textAnchor == TextAnchor::Start) {
+      continue;
+    }
+
+    size_t endRunIdx = runs.size();
+    size_t endGlyphIdx = 0;
+    if (ci + 1 < chunkBoundaries.size()) {
+      endRunIdx = chunkBoundaries[ci + 1].runIndex;
+      endGlyphIdx = chunkBoundaries[ci + 1].glyphIndex;
+    }
+
+    double chunkStartPos = 0.0;
+    double chunkEndPos = 0.0;
+    bool foundFirst = false;
+    for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+      const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
+      for (size_t gi = gStart; gi < gEnd; ++gi) {
+        const auto& g = runs[ri].glyphs[gi];
+        const double pos = vertical ? g.yPosition : g.xPosition;
+        const double adv = vertical ? g.yAdvance : g.xAdvance;
+        if (!foundFirst) {
+          chunkStartPos = pos;
+          chunkEndPos = pos + adv;
+          foundFirst = true;
+        } else {
+          chunkEndPos = pos + adv;
+        }
+      }
+    }
+
+    if (!foundFirst) {
+      continue;
+    }
+
+    const double chunkLength = chunkEndPos - chunkStartPos;
+    double shift = 0.0;
+    if (chunk.textAnchor == TextAnchor::Middle) {
+      shift = -chunkLength / 2.0;
+    } else if (chunk.textAnchor == TextAnchor::End) {
+      shift = -chunkLength;
+    }
+
+    for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
+      const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
+      for (size_t gi = gStart; gi < gEnd; ++gi) {
+        if (vertical) {
+          runs[ri].glyphs[gi].yPosition += shift;
+        } else {
+          runs[ri].glyphs[gi].xPosition += shift;
+        }
+      }
+    }
+  }
+}
+
+/// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
+/// and ancestor baseline-shift accumulation.
+double computeSpanBaselineShiftPx(
+    const TextBackend& backend,
+    const components::ComputedTextComponent::TextSpan& span,
+    FontHandle spanFont, float spanScale, const TextLayoutParams& params) {
+  using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+
+  FontMetrics spanFontMetrics = params.fontMetrics;
+  const float spanFontSizePx =
+      span.fontSize.value != 0.0
+          ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
+                                                       Lengthd::Extent::Mixed))
+          : static_cast<float>(
+                params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+  spanFontMetrics.fontSize = spanFontSizePx;
+
+  double spanBaselineShiftPx;
+  if (span.baselineShiftKeyword == BSK::Sub || span.baselineShiftKeyword == BSK::Super) {
+    const auto subSuper = backend.subSuperMetrics(spanFont);
+    if (subSuper.has_value()) {
+      if (span.baselineShiftKeyword == BSK::Sub) {
+        spanBaselineShiftPx = -static_cast<double>(subSuper->subscriptYOffset) * spanScale;
+      } else {
+        spanBaselineShiftPx = static_cast<double>(subSuper->superscriptYOffset) * spanScale;
+      }
+    } else {
+      spanBaselineShiftPx =
+          span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+    }
+  } else {
+    spanBaselineShiftPx =
+        span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
+  }
+
+  // Resolve ancestor baseline-shifts.
+  {
+    const auto subSuper = backend.subSuperMetrics(spanFont);
+    for (const auto& ancestor : span.ancestorBaselineShifts) {
+      if (subSuper.has_value() && ancestor.keyword == BSK::Sub) {
+        const float ancestorScale =
+            backend.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+        spanBaselineShiftPx += -static_cast<double>(subSuper->subscriptYOffset) * ancestorScale;
+      } else if (subSuper.has_value() && ancestor.keyword == BSK::Super) {
+        const float ancestorScale =
+            backend.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+        spanBaselineShiftPx += static_cast<double>(subSuper->superscriptYOffset) * ancestorScale;
+      } else {
+        FontMetrics ancestorFm = params.fontMetrics;
+        ancestorFm.fontSize = ancestor.fontSizePx;
+        spanBaselineShiftPx +=
+            ancestor.shift.toPixels(params.viewBox, ancestorFm, Lengthd::Extent::Y);
+      }
+    }
+  }
+
+  return spanBaselineShiftPx;
+}
+
+}  // namespace text_engine_detail
+
+using namespace text_engine_detail;  // NOLINT(google-build-using-namespace)
+
+namespace {
+
 void addBox(Boxd& accum, bool& initialized, const Boxd& box) {
   if (box.isEmpty()) {
     return;
@@ -332,6 +684,10 @@ TextEngine::TextEngine(FontManager& fontManager, Registry& registry)
   backend_ = std::make_unique<TextBackendSimple>(fontManager_, registry_);
 #endif
 }
+
+TextEngine::TextEngine(FontManager& fontManager, Registry& registry,
+                       std::unique_ptr<TextBackend> backend)
+    : fontManager_(fontManager), registry_(registry), backend_(std::move(backend)) {}
 
 TextEngine::~TextEngine() = default;
 
@@ -420,39 +776,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
   // ── Compute dominant-baseline shift ───────────────────────────────────────────
-  // The shift moves the alphabetic baseline so that the dominant baseline sits at y.
   const float scale = backend_->scaleForPixelHeight(font, fontSizePx);
   double baselineShift = 0.0;
   if (params.dominantBaseline != DominantBaseline::Auto &&
       params.dominantBaseline != DominantBaseline::Alphabetic) {
-    const FontVMetrics vm = backend_->fontVMetrics(font);
-    // ascent > 0 (above baseline), descent < 0 (below baseline), in font units.
-    switch (params.dominantBaseline) {
-      case DominantBaseline::Auto:
-      case DominantBaseline::Alphabetic: break;
-      case DominantBaseline::Middle:
-      case DominantBaseline::Central:
-        // Center of the em box: (ascent + descent) / 2 above the alphabetic baseline.
-        baselineShift = static_cast<double>(vm.ascent + vm.descent) * 0.5 * scale;
-        break;
-      case DominantBaseline::Hanging:
-        // Hanging baseline: approximately 80% of ascent above alphabetic.
-        baselineShift = static_cast<double>(vm.ascent) * 0.8 * scale;
-        break;
-      case DominantBaseline::Mathematical:
-        // Mathematical baseline: approximately 50% of ascent above alphabetic.
-        baselineShift = static_cast<double>(vm.ascent) * 0.5 * scale;
-        break;
-      case DominantBaseline::TextTop:
-        // Top of em box: ascent above alphabetic.
-        baselineShift = static_cast<double>(vm.ascent) * scale;
-        break;
-      case DominantBaseline::TextBottom:
-      case DominantBaseline::Ideographic:
-        // Bottom of em box / ideographic baseline: descent below alphabetic.
-        baselineShift = static_cast<double>(vm.descent) * scale;
-        break;
-    }
+    baselineShift = computeBaselineShift(params.dominantBaseline, backend_->fontVMetrics(font), scale);
   }
 
   // ── Layout state ──────────────────────────────────────────────────────────────
@@ -465,23 +793,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   FontHandle prevSpanFont;
   float prevSpanFontSizePx = 0.0f;
 
-  // Text chunk boundaries for per-chunk text-anchor adjustment.
-  // A new chunk starts at the first glyph, at any span with startsNewChunk=true,
-  // and at any character with an absolute x or y position within a span.
-  struct ChunkBoundary {
-    size_t runIndex = 0;    // Index into runs vector.
-    size_t glyphIndex = 0;  // Index into the run's glyph vector.
-    TextAnchor textAnchor = TextAnchor::Start;
-  };
   std::vector<ChunkBoundary> chunkBoundaries;
-
-  // Per-run pen start position, tracked for per-span textLength calculation.
-  struct RunPenExtent {
-    double startX = 0.0;
-    double startY = 0.0;
-    double endX = 0.0;
-    double endY = 0.0;
-  };
   std::vector<RunPenExtent> runExtents;
 
   // ── Per-span layout loop ──────────────────────────────────────────────────────
@@ -531,84 +843,14 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     const float spanScale = backend_->scaleForEmToPixels(spanFont, spanFontSizePx);
 
     // ── Per-span baseline-shift ─────────────────────────────────────────────────
-    // Positive CSS baseline-shift = shift up, which in SVG Y-down = subtract from Y.
-    // For sub/super keywords, prefer font OS/2 metrics over hardcoded em constants.
-    FontMetrics spanFontMetrics = params.fontMetrics;
-    spanFontMetrics.fontSize = spanFontSizePx;
-    double spanBaselineShiftPx;
-    using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
-    if (span.baselineShiftKeyword == BSK::Sub || span.baselineShiftKeyword == BSK::Super) {
-      const auto subSuper = backend_->subSuperMetrics(spanFont);
-      if (subSuper.has_value()) {
-        // OS/2 offsets are in font design units (positive = up). Convert to pixels and
-        // negate for CSS convention (positive CSS baseline-shift = shift up = negative Y).
-        if (span.baselineShiftKeyword == BSK::Sub) {
-          // Subscript: ySubscriptYOffset measures distance below baseline (positive value).
-          // CSS sub shifts DOWN, so the CSS value is negative.
-          spanBaselineShiftPx = -static_cast<double>(subSuper->subscriptYOffset) * spanScale;
-        } else {
-          // Superscript: ySuperscriptYOffset measures distance above baseline (positive value).
-          // CSS super shifts UP, so the CSS value is positive.
-          spanBaselineShiftPx = static_cast<double>(subSuper->superscriptYOffset) * spanScale;
-        }
-      } else {
-        // Fallback to em-based constants if OS/2 table is missing.
-        spanBaselineShiftPx =
-            span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
-      }
-    } else {
-      spanBaselineShiftPx =
-          span.baselineShift.toPixels(params.viewBox, spanFontMetrics, Lengthd::Extent::Y);
-    }
-
-    // Resolve ancestor baseline-shifts, using font OS/2 metrics for sub/super keywords.
-    {
-      const auto subSuper = backend_->subSuperMetrics(spanFont);
-      for (const auto& ancestor : span.ancestorBaselineShifts) {
-        if (subSuper.has_value() && ancestor.keyword == BSK::Sub) {
-          const float ancestorScale =
-              backend_->scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
-          spanBaselineShiftPx += -static_cast<double>(subSuper->subscriptYOffset) * ancestorScale;
-        } else if (subSuper.has_value() && ancestor.keyword == BSK::Super) {
-          const float ancestorScale =
-              backend_->scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
-          spanBaselineShiftPx += static_cast<double>(subSuper->superscriptYOffset) * ancestorScale;
-        } else {
-          FontMetrics ancestorFm = params.fontMetrics;
-          ancestorFm.fontSize = ancestor.fontSizePx;
-          spanBaselineShiftPx +=
-              ancestor.shift.toPixels(params.viewBox, ancestorFm, Lengthd::Extent::Y);
-        }
-      }
-    }
+    const double spanBaselineShiftPx =
+        computeSpanBaselineShiftPx(*backend_, span, spanFont, spanScale, params);
 
     // ── Alignment-baseline override ─────────────────────────────────────────────
-    // If alignment-baseline is set on this span, it overrides the text-level dominant-baseline.
     double effectiveBaselineShift = baselineShift;
     if (span.alignmentBaseline != DominantBaseline::Auto) {
-      effectiveBaselineShift = 0.0;
-      const FontVMetrics vm = backend_->fontVMetrics(spanFont);
-      switch (span.alignmentBaseline) {
-        case DominantBaseline::Auto:
-        case DominantBaseline::Alphabetic: break;
-        case DominantBaseline::Middle:
-        case DominantBaseline::Central:
-          effectiveBaselineShift = static_cast<double>(vm.ascent + vm.descent) * 0.5 * spanScale;
-          break;
-        case DominantBaseline::Hanging:
-          effectiveBaselineShift = static_cast<double>(vm.ascent) * 0.8 * spanScale;
-          break;
-        case DominantBaseline::Mathematical:
-          effectiveBaselineShift = static_cast<double>(vm.ascent) * 0.5 * spanScale;
-          break;
-        case DominantBaseline::TextTop:
-          effectiveBaselineShift = static_cast<double>(vm.ascent) * spanScale;
-          break;
-        case DominantBaseline::TextBottom:
-        case DominantBaseline::Ideographic:
-          effectiveBaselineShift = static_cast<double>(vm.descent) * spanScale;
-          break;
-      }
+      effectiveBaselineShift =
+          computeBaselineShift(span.alignmentBaseline, backend_->fontVMetrics(spanFont), spanScale);
     }
 
     // ── Initial pen position ────────────────────────────────────────────────────
@@ -671,77 +913,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     const double runPenStartY = penY;
 
     // ── Pre-scan span text to find chunk byte ranges ─────────────────────────────
-    // A chunk boundary occurs when a non-first codepoint has an absolute x or y
-    // position. We shape each chunk separately so that the HarfBuzz backend
-    // (where kerning is baked into advances) doesn't produce incorrect kerning
-    // across chunk boundaries.
-    struct ChunkRange {
-      size_t byteStart = 0;
-      size_t byteEnd = 0;
-    };
-    std::vector<ChunkRange> chunkRanges;
-    {
-      size_t scanPos = 0;
-      unsigned int scanCharIdx = 0;
-      bool scanFirst = true;
-      bool scanPrevWasZwj = false;
-      size_t currentChunkStart = 0;
-
-      while (scanPos < spanText.size()) {
-        size_t byteStart = scanPos;
-        uint32_t cp = decodeUtf8(spanText, scanPos);
-
-        bool scanCombining = isNonSpacing(cp) || scanPrevWasZwj;
-        scanPrevWasZwj = (cp == 0x200D);
-        if (!scanCombining && !scanFirst) {
-          scanCharIdx += (cp >= 0x10000) ? 2 : 1;
-        }
-        scanFirst = false;
-
-        // Check if this character has absolute positioning.
-        bool hasAbsX = scanCharIdx < xListLocal.size() && xListLocal[scanCharIdx].has_value();
-        bool hasAbsY = scanCharIdx < yListLocal.size() && yListLocal[scanCharIdx].has_value();
-
-        if ((hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
-          // Start a new chunk at this character.
-          chunkRanges.push_back({currentChunkStart, byteStart});
-          currentChunkStart = byteStart;
-        }
-      }
-      // Final chunk.
-      chunkRanges.push_back({currentChunkStart, spanText.size()});
-    }
+    const std::vector<ChunkRange> chunkRanges = findChunkRanges(spanText, xListLocal, yListLocal);
 
     // ── Build byte→index mappings for the span text ──────────────────────────────
-    // byteToCharIdx: SVG addressable character index (combining marks share base index).
-    // byteToRawCpIdx: Raw codepoint index (every codepoint gets its own index, for rotation).
-    std::vector<unsigned int> byteToCharIdx(spanText.size(), 0);
-    std::vector<unsigned int> byteToRawCpIdx(spanText.size(), 0);
-    {
-      unsigned int ci = 0;
-      unsigned int rawCi = 0;
-      bool mapFirst = true;
-      bool mapPrevZwj = false;
-      size_t bi = 0;
-      while (bi < spanText.size()) {
-        size_t startBi = bi;
-        const uint32_t cp = decodeUtf8(spanText, bi);
-        const bool nonSpacing = isNonSpacing(cp) || mapPrevZwj;
-        mapPrevZwj = (cp == 0x200D);
-        if (!nonSpacing && !mapFirst) {
-          ci += (cp >= 0x10000) ? 2 : 1;
-        }
-        if (!mapFirst) {
-          rawCi += (cp >= 0x10000) ? 2 : 1;
-        }
-        mapFirst = false;
-        // Fill all bytes of this codepoint with the same indices.
-        for (size_t j = startBi; j < bi && j < spanText.size(); ++j) {
-          byteToCharIdx[j] = ci;
-          byteToRawCpIdx[j] = rawCi;
-        }
-      }
-    }
+    const ByteIndexMappings indexMappings = buildByteIndexMappings(spanText);
+    const auto& byteToCharIdx = indexMappings.byteToCharIdx;
+    const auto& byteToRawCpIdx = indexMappings.byteToRawCpIdx;
 
     // ── Shape each chunk and iterate its glyphs ─────────────────────────────────
     uint32_t lastCodepoint = 0;
@@ -1116,201 +1293,10 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   }
 
   // ── textLength and text-anchor adjustments ────────────────────────────────────
-  // textLength can be specified per-span (on tspan elements) or globally (on the text element).
-  // Per-span textLength takes priority.
   if (!runs.empty()) {
     const bool vertical = isVertical(params.writingMode);
-
-    // Check if any span has per-span textLength.
-    bool anySpanHasTextLength = false;
-    for (const auto& span : text.spans) {
-      if (span.textLength.has_value()) {
-        anySpanHasTextLength = true;
-        break;
-      }
-    }
-
-    // ── Apply per-span textLength to individual runs ────────────────────────────
-    if (anySpanHasTextLength) {
-      for (size_t i = 0; i < runs.size() && i < text.spans.size(); ++i) {
-        auto& run = runs[i];
-        const auto& span = text.spans[i];
-        if (!span.textLength.has_value() || run.glyphs.empty()) {
-          continue;
-        }
-
-        const double runStartPos = vertical ? run.glyphs[0].yPosition : run.glyphs[0].xPosition;
-        // Natural length from pen tracking (includes kerning, letter-spacing, word-spacing).
-        const auto& extent = runExtents[i];
-        double naturalLength =
-            vertical ? (extent.endY - extent.startY) : (extent.endX - extent.startX);
-
-        if (naturalLength <= 0.0) {
-          continue;
-        }
-
-        const double targetLength = span.textLength->toPixels(
-            params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
-
-        if (targetLength <= 0.0) {
-          continue;
-        }
-
-        if (span.lengthAdjust == LengthAdjust::Spacing) {
-          const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
-          const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
-          for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
-            if (vertical) {
-              run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
-            } else {
-              run.glyphs[gi].xPosition += extraPerGap * static_cast<double>(gi);
-            }
-          }
-        } else {
-          const double scaleFactor = targetLength / naturalLength;
-          for (auto& g : run.glyphs) {
-            if (vertical) {
-              g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
-              g.yAdvance *= scaleFactor;
-            } else {
-              g.xPosition = runStartPos + (g.xPosition - runStartPos) * scaleFactor;
-              g.xAdvance *= scaleFactor;
-            }
-          }
-        }
-      }
-    }
-
-    // ── Global textLength ───────────────────────────────────────────────────────
-    double globalStartX = currentPenX;
-    double globalStartY = currentPenY;
-    for (const auto& r : runs) {
-      if (!r.glyphs.empty()) {
-        globalStartX = r.glyphs[0].xPosition;
-        globalStartY = r.glyphs[0].yPosition;
-        break;
-      }
-    }
-
-    const double globalNaturalLength =
-        vertical ? (currentPenY - globalStartY) : (currentPenX - globalStartX);
-
-    // Apply global textLength only when no span has per-span textLength.
-    if (!anySpanHasTextLength && params.textLength.has_value() && globalNaturalLength > 0.0) {
-      const double targetLength = params.textLength->toPixels(
-          params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
-
-      if (targetLength > 0.0) {
-        size_t totalGlyphs = 0;
-        for (const auto& r : runs) {
-          totalGlyphs += r.glyphs.size();
-        }
-
-        if (params.lengthAdjust == LengthAdjust::Spacing) {
-          const size_t numGaps = totalGlyphs > 1 ? totalGlyphs - 1 : 1;
-          const double extraPerGap =
-              (targetLength - globalNaturalLength) / static_cast<double>(numGaps);
-          size_t glyphIdx = 0;
-          for (auto& r : runs) {
-            for (auto& g : r.glyphs) {
-              if (vertical) {
-                g.yPosition += extraPerGap * static_cast<double>(glyphIdx);
-              } else {
-                g.xPosition += extraPerGap * static_cast<double>(glyphIdx);
-              }
-              ++glyphIdx;
-            }
-          }
-        } else {
-          const double scaleFactor = targetLength / globalNaturalLength;
-          for (auto& r : runs) {
-            for (auto& g : r.glyphs) {
-              if (vertical) {
-                g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
-                g.yAdvance *= scaleFactor;
-              } else {
-                g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
-                g.xAdvance *= scaleFactor;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // ── Fix up chunk text-anchors ───────────────────────────────────────────────
-    // For each chunk, use the text-anchor from the first span that has actual glyph content
-    // (skipping empty whitespace-only spans).
-    for (auto& chunk : chunkBoundaries) {
-      for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
-        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-        if (gStart < runs[ri].glyphs.size()) {
-          chunk.textAnchor = text.spans[ri].textAnchor;
-          break;
-        }
-      }
-    }
-
-    // ── Apply text-anchor adjustment per text chunk ─────────────────────────────
-    for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
-      const auto& chunk = chunkBoundaries[ci];
-      if (chunk.textAnchor == TextAnchor::Start) {
-        continue;
-      }
-
-      // Determine the end boundary (next chunk or end of all runs).
-      size_t endRunIdx = runs.size();
-      size_t endGlyphIdx = 0;
-      if (ci + 1 < chunkBoundaries.size()) {
-        endRunIdx = chunkBoundaries[ci + 1].runIndex;
-        endGlyphIdx = chunkBoundaries[ci + 1].glyphIndex;
-      }
-
-      // Compute chunk extent: first glyph position to last glyph end position.
-      double chunkStartPos = 0.0;
-      double chunkEndPos = 0.0;
-      bool foundFirst = false;
-      for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
-        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-        const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
-        for (size_t gi = gStart; gi < gEnd; ++gi) {
-          const auto& g = runs[ri].glyphs[gi];
-          const double pos = vertical ? g.yPosition : g.xPosition;
-          const double adv = vertical ? g.yAdvance : g.xAdvance;
-          if (!foundFirst) {
-            chunkStartPos = pos;
-            chunkEndPos = pos + adv;
-            foundFirst = true;
-          } else {
-            chunkEndPos = pos + adv;
-          }
-        }
-      }
-
-      if (!foundFirst) {
-        continue;
-      }
-
-      const double chunkLength = chunkEndPos - chunkStartPos;
-      double shift = 0.0;
-      if (chunk.textAnchor == TextAnchor::Middle) {
-        shift = -chunkLength / 2.0;
-      } else if (chunk.textAnchor == TextAnchor::End) {
-        shift = -chunkLength;
-      }
-
-      for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
-        const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-        const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
-        for (size_t gi = gStart; gi < gEnd; ++gi) {
-          if (vertical) {
-            runs[ri].glyphs[gi].yPosition += shift;
-          } else {
-            runs[ri].glyphs[gi].xPosition += shift;
-          }
-        }
-      }
-    }
+    applyTextLength(runs, text, runExtents, params, vertical, currentPenX, currentPenY);
+    applyTextAnchor(runs, chunkBoundaries, text, vertical);
   }
 
   return runs;

@@ -181,14 +181,30 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "text_backend_full_tests",
-    srcs = ["TextBackendFull_tests.cc"],
+    name = "text_engine_helpers_tests",
+    srcs = [
+        "MockTextBackend.h",
+        "TextEngineHelpers_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/text:text_backend",
+        "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_layout_params",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "text_backend_tests",
+    srcs = ["TextBackend_tests.cc"],
     data = [
         "@resvg-test-suite//:fonts",
     ],
     deps = [
         "//donner/base:base_test_utils",
+        "//donner/svg/text:text_backend",
         "//donner/svg/text:text_backend_full",
+        "//donner/svg/text:text_backend_simple",
         "@com_google_gtest//:gtest_main",
     ],
 )

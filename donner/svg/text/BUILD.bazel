@@ -49,7 +49,10 @@ donner_cc_library(
 donner_cc_library(
     name = "text_engine",
     srcs = ["TextEngine.cc"],
-    hdrs = ["TextEngine.h"],
+    hdrs = [
+        "TextEngine.h",
+        "TextEngineHelpers.h",
+    ],
     defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],

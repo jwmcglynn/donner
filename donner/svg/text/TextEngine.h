@@ -34,6 +34,11 @@ namespace donner::svg {
 class TextEngine {
 public:
   TextEngine(FontManager& fontManager, Registry& registry);
+
+  /// Test-only constructor that injects a custom TextBackend.
+  TextEngine(FontManager& fontManager, Registry& registry,
+             std::unique_ptr<TextBackend> backend);
+
   ~TextEngine();
 
   TextEngine(const TextEngine&) = delete;

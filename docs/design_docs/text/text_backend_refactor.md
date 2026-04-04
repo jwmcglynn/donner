@@ -432,7 +432,7 @@ unit tests for `TextBackendSimple`.
 - [x] Implement `TextBackendSimple` wrapping stb_truetype calls
 - [x] Refactor `RendererTinySkia` to use `TextBackend` instead of `stbtt_fontinfo*`
 - [x] All existing tests pass with no behavioral changes
-- [ ] Add unit tests for `TextBackendSimple` (metrics, outlines, shaping)
+- [x] Add unit tests for `TextBackendSimple` (metrics, outlines, shaping)
 
 ### Phase 2: TextEngine extraction
 
@@ -441,8 +441,8 @@ unit tests for `TextBackendSimple`.
 - [x] `RendererTinySkia` uses `TextEngine` for the simple (non-text-full) path
 - [x] Chunk-based shaping: engine splits spans at absolute positions before calling `shapeRun()`
 - [x] All renderer_tests and resvg_test_suite pass (base config)
-- [ ] Break `layout()` into named helpers (resolveSpanFont, positionGlyphs, applyTextAnchor, etc.)
-- [ ] Add MockTextBackend unit tests for each helper
+- [x] Break `layout()` into named helpers (computeBaselineShift, findChunkRanges, buildByteIndexMappings, applyTextLength, applyTextAnchor, computeSpanBaselineShiftPx)
+- [x] Add MockTextBackend unit tests for each helper
 - [x] Delete `TextLayout.h/cc`
 
 ### Phase 3: TextBackendFull
@@ -511,6 +511,7 @@ donner/svg/text/
   TextBackendSimple.h/cc   # stb_truetype implementation of TextBackend
   TextBackendFull.h/cc     # HarfBuzz+FreeType implementation (text_full only)
   TextEngine.h/cc          # Shared SVG text layout, geometry cache, and public API support
+  TextEngineHelpers.h      # Extracted layout helpers (baseline shift, chunking, textLength, text-anchor)
   TextTypes.h              # TextGlyph, TextRun (unified output types)
 
 donner/svg/resources/
