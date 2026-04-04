@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/TextEngine.h"
 
 #include <cmath>
+#include <string>
 
 #include "donner/base/MathUtils.h"
 #include "donner/svg/core/WritingMode.h"
@@ -56,6 +57,70 @@ uint32_t decodeUtf8(const std::string_view str, size_t& i) {
   // Invalid leading byte.
   i += 1;
   return 0xFFFD;
+}
+
+/// Returns the first non-ASCII codepoint in \p str, or 0 if none exists.
+uint32_t firstNonAsciiCodepoint(const std::string_view str) {
+  for (size_t i = 0; i < str.size();) {
+    const uint32_t cp = decodeUtf8(str, i);
+    if (cp > 0x7F) {
+      return cp;
+    }
+  }
+
+  return 0;
+}
+
+/// Encode a single Unicode codepoint as UTF-8.
+std::string encodeUtf8(uint32_t cp) {
+  std::string result;
+  if (cp <= 0x7F) {
+    result.push_back(static_cast<char>(cp));
+  } else if (cp <= 0x7FF) {
+    result.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+    result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else if (cp <= 0xFFFF) {
+    result.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+    result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else {
+    result.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+    result.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+    result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  }
+
+  return result;
+}
+
+/// Returns true if \p font shapes \p cp to a non-.notdef glyph.
+bool fontSupportsCodepoint(TextBackend& backend, FontHandle font, float fontSizePx, uint32_t cp) {
+  if (!font || cp == 0) {
+    return false;
+  }
+
+  const std::string utf8 = encodeUtf8(cp);
+  const auto shaped =
+      backend.shapeRun(font, fontSizePx, utf8, 0, utf8.size(), false, FontVariant::Normal, false);
+  return !shaped.glyphs.empty() && shaped.glyphs.front().glyphIndex != 0;
+}
+
+/// Finds a registered font that covers \p cp, preserving \p currentFont when it already does.
+FontHandle findCoverageFallbackFont(TextBackend& backend, FontManager& fontManager,
+                                    FontHandle currentFont, float fontSizePx, uint32_t cp) {
+  if (cp == 0 || fontSupportsCodepoint(backend, currentFont, fontSizePx, cp)) {
+    return currentFont;
+  }
+
+  for (size_t i = 0; i < fontManager.numFaces(); ++i) {
+    FontHandle candidate = fontManager.findFont(fontManager.faceFamilyName(i));
+    if (candidate && candidate != currentFont &&
+        fontSupportsCodepoint(backend, candidate, fontSizePx, cp)) {
+      return candidate;
+    }
+  }
+
+  return currentFont;
 }
 
 /**
@@ -172,8 +237,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   // A new chunk starts at the first glyph, at any span with startsNewChunk=true,
   // and at any character with an absolute x or y position within a span.
   struct ChunkBoundary {
-    size_t runIndex = 0;   // Index into runs vector.
-    size_t glyphIndex = 0; // Index into the run's glyph vector.
+    size_t runIndex = 0;    // Index into runs vector.
+    size_t glyphIndex = 0;  // Index into the run's glyph vector.
     TextAnchor textAnchor = TextAnchor::Start;
   };
   std::vector<ChunkBoundary> chunkBoundaries;
@@ -190,7 +255,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   // ── Per-span layout loop ──────────────────────────────────────────────────────
   for (const auto& span : text.spans) {
     TextRun run;
-    run.font = font;
 
     // Hidden spans (display:none) are not rendered. Push empty run.
     if (span.hidden) {
@@ -199,27 +263,22 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       continue;
     }
 
+    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+
     // ── Per-span font resolution ────────────────────────────────────────────────
     FontHandle spanFont = font;
     if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
         span.fontStretch != FontStretch::Normal) {
       for (const auto& family : params.fontFamilies) {
-        FontHandle candidate = fontManager_.findFont(
-            family, span.fontWeight, static_cast<int>(span.fontStyle),
-            static_cast<int>(span.fontStretch));
+        FontHandle candidate =
+            fontManager_.findFont(family, span.fontWeight, static_cast<int>(span.fontStyle),
+                                  static_cast<int>(span.fontStretch));
         if (candidate) {
           spanFont = candidate;
           break;
         }
       }
     }
-    run.font = spanFont;
-
-    // Note: bitmap-only fonts (e.g., color emoji) are valid for the full backend.
-    // The simple backend can't handle them but produces empty shapeRun results,
-    // which the renderer gracefully skips.
-
-    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
     const float spanFontSizePx =
@@ -227,6 +286,16 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
                                                         Lengthd::Extent::Mixed))
             : fontSizePx;
+
+    const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
+    spanFont = findCoverageFallbackFont(backend_, fontManager_, spanFont, spanFontSizePx,
+                                        spanTestCodepoint);
+    run.font = spanFont;
+
+    // Note: bitmap-only fonts (e.g., color emoji) are valid for the full backend.
+    // The simple backend can't handle them but produces empty shapeRun results,
+    // which the renderer gracefully skips.
+
     const float spanScale = backend_.scaleForEmToPixels(spanFont, spanFontSizePx);
 
     // ── Per-span baseline-shift ─────────────────────────────────────────────────
@@ -267,13 +336,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         if (subSuper.has_value() && ancestor.keyword == BSK::Sub) {
           const float ancestorScale =
               backend_.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
-          spanBaselineShiftPx +=
-              -static_cast<double>(subSuper->subscriptYOffset) * ancestorScale;
+          spanBaselineShiftPx += -static_cast<double>(subSuper->subscriptYOffset) * ancestorScale;
         } else if (subSuper.has_value() && ancestor.keyword == BSK::Super) {
           const float ancestorScale =
               backend_.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
-          spanBaselineShiftPx +=
-              static_cast<double>(subSuper->superscriptYOffset) * ancestorScale;
+          spanBaselineShiftPx += static_cast<double>(subSuper->superscriptYOffset) * ancestorScale;
         } else {
           FontMetrics ancestorFm = params.fontMetrics;
           ancestorFm.fontSize = ancestor.fontSizePx;
@@ -400,10 +467,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         scanFirst = false;
 
         // Check if this character has absolute positioning.
-        bool hasAbsX =
-            scanCharIdx < xListLocal.size() && xListLocal[scanCharIdx].has_value();
-        bool hasAbsY =
-            scanCharIdx < yListLocal.size() && yListLocal[scanCharIdx].has_value();
+        bool hasAbsX = scanCharIdx < xListLocal.size() && xListLocal[scanCharIdx].has_value();
+        bool hasAbsY = scanCharIdx < yListLocal.size() && yListLocal[scanCharIdx].has_value();
 
         if ((hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
           // Start a new chunk at this character.
@@ -456,9 +521,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
-      const auto shaped = backend_.shapeRun(spanFont, spanFontSizePx, spanText,
-                                            chunk.byteStart, chunk.byteEnd - chunk.byteStart,
-                                            vertical, span.fontVariant, false);
+      const auto shaped =
+          backend_.shapeRun(spanFont, spanFontSizePx, spanText, chunk.byteStart,
+                            chunk.byteEnd - chunk.byteStart, vertical, span.fontVariant, false);
 
       // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
       // When a multi-glyph RTL chunk starts because of an absolute y position on the
@@ -466,8 +531,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       // returns RTL glyphs in visual order (last DOM char first), so the engine would
       // otherwise apply the explicit y to the wrong glyph. Pre-compute the override.
       std::optional<double> chunkYOverride;
-      const bool isRTLChunk = shaped.glyphs.size() > 1 &&
-                              shaped.glyphs.front().cluster > shaped.glyphs.back().cluster;
+      const bool isRTLChunk =
+          shaped.glyphs.size() > 1 && shaped.glyphs.front().cluster > shaped.glyphs.back().cluster;
       if (isRTLChunk && ci > 0) {
         // The chunk started at chunk.byteStart — check if that byte's charIdx has absolute y.
         const unsigned int firstCharIdx =
@@ -486,18 +551,18 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         // Cross-chunk kerning (between chunks within the same span).
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
-        crossKern = backend_.crossSpanKern(prevChunkFont, prevChunkFontSizePx, spanFont,
-                                           spanFontSizePx, prevChunkLastCodepoint, firstCp,
-                                           vertical);
+        crossKern =
+            backend_.crossSpanKern(prevChunkFont, prevChunkFontSizePx, spanFont, spanFontSizePx,
+                                   prevChunkLastCodepoint, firstCp, vertical);
         appliedCrossKern = true;
       } else if (ci == 0 && !span.startsNewChunk && prevSpanLastCodepoint != 0 &&
                  !shaped.glyphs.empty()) {
         // Cross-span kerning for the first chunk.
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
-        crossKern = backend_.crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont,
-                                           spanFontSizePx, prevSpanLastCodepoint, firstCp,
-                                           vertical);
+        crossKern =
+            backend_.crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont, spanFontSizePx,
+                                   prevSpanLastCodepoint, firstCp, vertical);
         appliedCrossKern = true;
       }
 
@@ -511,7 +576,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         size_t clusterPos = sg.cluster;
         const uint32_t codepoint = decodeUtf8(spanText, clusterPos);
 
-
         // Look up per-character indices from the byte→index mappings.
         const unsigned int charIdx =
             sg.cluster < byteToCharIdx.size() ? byteToCharIdx[sg.cluster] : 0;
@@ -521,8 +585,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         if (vertical) {
           // ── Vertical mode ─────────────────────────────────────────────────────
           // Primary advance is along Y, cross-axis is X.
-          const bool hasAbsoluteY =
-              charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+          const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
           const bool hasAbsoluteX_v =
               charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
           if ((hasAbsoluteX_v || hasAbsoluteY) && !(ci == 0 && gi == 0)) {
@@ -588,13 +651,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             const FontVMetrics vm = backend_.fontVMetrics(spanFont);
             // Compute ascent-descent-based scale: pixelHeight / (ascent - descent).
             // This differs from em-based scaling used elsewhere.
-            const double phScale =
-                (vm.ascent != vm.descent)
-                    ? static_cast<double>(spanFontSizePx) / (vm.ascent - vm.descent)
-                    : 0.0;
+            const double phScale = (vm.ascent != vm.descent) ? static_cast<double>(spanFontSizePx) /
+                                                                   (vm.ascent - vm.descent)
+                                                             : 0.0;
             const double centralBaselineOffset =
-                (static_cast<double>(vm.ascent) + static_cast<double>(vm.descent)) * phScale /
-                2.0;
+                (static_cast<double>(vm.ascent) + static_cast<double>(vm.descent)) * phScale / 2.0;
             glyph.xPosition -= centralBaselineOffset;
 
             double baseRotation = 90.0;
@@ -606,8 +667,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
               glyph.rotateDegrees = baseRotation;
             }
           } else {
-            // Upright CJK: vertical advance = em height.
+            // Upright CJK: use backend-provided vertical offsets and advance.
             glyph.yAdvance = sg.yAdvance > 0 ? sg.yAdvance : spanFontSizePx;
+            glyph.xPosition = penX + sg.xOffset;
+            glyph.yPosition = penY + sg.yOffset;
+
             if (rawCpIdx < span.rotateList.size()) {
               glyph.rotateDegrees = span.rotateList[rawCpIdx];
             } else if (!span.rotateList.empty()) {
@@ -628,10 +692,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           }
         } else {
           // ── Horizontal mode ───────────────────────────────────────────────────
-          const bool hasAbsoluteX =
-              charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
-          const bool hasAbsoluteY =
-              charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+          const bool hasAbsoluteX = charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
+          const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
 
           // A within-span absolute x or y starts a new text chunk (unless it's the
           // first glyph of the span that already started a chunk via startsNewChunk).
@@ -692,7 +754,36 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             glyph.rotateDegrees = span.rotateList.back();
           }
 
+          // Rotate combining mark offsets around the base glyph so the cluster rotates together.
+          if (glyph.rotateDegrees != 0.0 && !run.glyphs.empty() && glyph.xAdvance == 0.0) {
+            const auto& base = run.glyphs.back();
+            if (base.xAdvance != 0.0) {
+              const double angle = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+              const double dx = glyph.xPosition - base.xPosition;
+              const double dy = glyph.yPosition - base.yPosition;
+              const double cosA = std::cos(angle);
+              const double sinA = std::sin(angle);
+              glyph.xPosition = base.xPosition + dx * cosA - dy * sinA;
+              glyph.yPosition = base.yPosition + dx * sinA + dy * cosA;
+            }
+          }
+
           run.glyphs.push_back(glyph);
+
+          // Supplementary characters consume a trailing UTF-16 code unit. Apply its coordinate
+          // values to the next glyph to preserve SVG's UTF-16 indexed positioning semantics.
+          if (codepoint >= 0x10000) {
+            const unsigned int lowIdx = charIdx + 1;
+            if (lowIdx < yListLocal.size() && yListLocal[lowIdx].has_value()) {
+              penY = yListLocal[lowIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::Y) +
+                     defaultY;
+            }
+            if (lowIdx < xListLocal.size() && xListLocal[lowIdx].has_value()) {
+              penX = xListLocal[lowIdx]->toPixels(params.viewBox, params.fontMetrics,
+                                                  Lengthd::Extent::X);
+            }
+          }
 
           penX += sg.xAdvance;
 
@@ -814,8 +905,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           continue;
         }
 
-        const double runStartPos =
-            vertical ? run.glyphs[0].yPosition : run.glyphs[0].xPosition;
+        const double runStartPos = vertical ? run.glyphs[0].yPosition : run.glyphs[0].xPosition;
         // Natural length from pen tracking (includes kerning, letter-spacing, word-spacing).
         const auto& extent = runExtents[i];
         double naturalLength =
@@ -826,8 +916,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         }
 
         const double targetLength = span.textLength->toPixels(
-            params.viewBox, params.fontMetrics,
-            vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+            params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
 
         if (targetLength <= 0.0) {
           continue;
@@ -835,8 +924,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
         if (span.lengthAdjust == LengthAdjust::Spacing) {
           const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
-          const double extraPerGap =
-              (targetLength - naturalLength) / static_cast<double>(numGaps);
+          const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
           for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
             if (vertical) {
               run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
@@ -876,8 +964,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // Apply global textLength only when no span has per-span textLength.
     if (!anySpanHasTextLength && params.textLength.has_value() && globalNaturalLength > 0.0) {
       const double targetLength = params.textLength->toPixels(
-          params.viewBox, params.fontMetrics,
-          vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+          params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
 
       if (targetLength > 0.0) {
         size_t totalGlyphs = 0;

@@ -57,9 +57,37 @@ bool isCursiveScript(uint32_t cp) {
   return false;
 }
 
-
 /// Small-caps synthesis scale factor.
 constexpr float kSmallCapScale = 0.8f;
+
+/// Decode a single UTF-8 codepoint from a byte offset in a string.
+uint32_t decodeCodepointAt(std::string_view str, size_t byteOffset) {
+  if (byteOffset >= str.size()) {
+    return 0;
+  }
+
+  const auto byte = static_cast<uint8_t>(str[byteOffset]);
+  if (byte < 0x80) {
+    return byte;
+  }
+  if ((byte & 0xE0) == 0xC0 && byteOffset + 1 < str.size()) {
+    return (static_cast<uint32_t>(byte & 0x1F) << 6) |
+           (static_cast<uint32_t>(str[byteOffset + 1]) & 0x3F);
+  }
+  if ((byte & 0xF0) == 0xE0 && byteOffset + 2 < str.size()) {
+    return (static_cast<uint32_t>(byte & 0x0F) << 12) |
+           ((static_cast<uint32_t>(str[byteOffset + 1]) & 0x3F) << 6) |
+           (static_cast<uint32_t>(str[byteOffset + 2]) & 0x3F);
+  }
+  if ((byte & 0xF8) == 0xF0 && byteOffset + 3 < str.size()) {
+    return (static_cast<uint32_t>(byte & 0x07) << 18) |
+           ((static_cast<uint32_t>(str[byteOffset + 1]) & 0x3F) << 12) |
+           ((static_cast<uint32_t>(str[byteOffset + 2]) & 0x3F) << 6) |
+           (static_cast<uint32_t>(str[byteOffset + 3]) & 0x3F);
+  }
+
+  return 0xFFFD;
+}
 
 }  // namespace
 
@@ -169,10 +197,9 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
   for (int i = 0; i < numTables; ++i) {
     const int loc = 12 + 16 * i;
     if (d[loc] == 'h' && d[loc + 1] == 'h' && d[loc + 2] == 'e' && d[loc + 3] == 'a') {
-      const int offset = static_cast<int>((static_cast<unsigned>(d[loc + 8]) << 24) |
-                                           (static_cast<unsigned>(d[loc + 9]) << 16) |
-                                           (static_cast<unsigned>(d[loc + 10]) << 8) |
-                                           static_cast<unsigned>(d[loc + 11]));
+      const int offset = static_cast<int>(
+          (static_cast<unsigned>(d[loc + 8]) << 24) | (static_cast<unsigned>(d[loc + 9]) << 16) |
+          (static_cast<unsigned>(d[loc + 10]) << 8) | static_cast<unsigned>(d[loc + 11]));
       FontVMetrics metrics;
       metrics.ascent = static_cast<int16_t>((d[offset + 4] << 8) | d[offset + 5]);
       metrics.descent = static_cast<int16_t>((d[offset + 6] << 8) | d[offset + 7]);
@@ -237,10 +264,9 @@ std::optional<UnderlineMetrics> TextBackendFull::underlineMetrics(FontHandle fon
   for (int i = 0; i < numTables; ++i) {
     const int loc = 12 + 16 * i;
     if (d[loc] == 'p' && d[loc + 1] == 'o' && d[loc + 2] == 's' && d[loc + 3] == 't') {
-      const int offset = static_cast<int>((static_cast<unsigned>(d[loc + 8]) << 24) |
-                                           (static_cast<unsigned>(d[loc + 9]) << 16) |
-                                           (static_cast<unsigned>(d[loc + 10]) << 8) |
-                                           static_cast<unsigned>(d[loc + 11]));
+      const int offset = static_cast<int>(
+          (static_cast<unsigned>(d[loc + 8]) << 24) | (static_cast<unsigned>(d[loc + 9]) << 16) |
+          (static_cast<unsigned>(d[loc + 10]) << 8) | static_cast<unsigned>(d[loc + 11]));
       UnderlineMetrics metrics;
       metrics.position =
           static_cast<double>(static_cast<int16_t>((d[offset + 8] << 8) | d[offset + 9]));
@@ -400,8 +426,8 @@ bool TextBackendFull::isBitmapOnly(FontHandle font) const {
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,
-                                                                      int glyphIndex,
-                                                                      float requestedScale) const {
+                                                                     int glyphIndex,
+                                                                     float requestedScale) const {
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return std::nullopt;
@@ -509,10 +535,10 @@ bool TextBackendFull::hasSmallCapsFeature(FontHandle font) const {
 // ---------------------------------------------------------------------------
 
 TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSizePx,
-                                                  std::string_view spanText, size_t byteOffset,
-                                                  size_t byteLength, bool isVertical,
-                                                  FontVariant fontVariant,
-                                                  bool forceLogicalOrder) const {
+                                                 std::string_view spanText, size_t byteOffset,
+                                                 size_t byteLength, bool isVertical,
+                                                 FontVariant fontVariant,
+                                                 bool forceLogicalOrder) const {
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return {};
@@ -541,14 +567,35 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
   }
 
   // Detect direction and script from the text chunk.
-  // Always shape horizontally — the engine handles vertical positioning by converting
-  // horizontal advances to vertical for sideways glyphs. This matches the simple backend
-  // behavior and avoids HarfBuzz TTB mode issues with fonts lacking vertical metrics.
   const char* chunkData = spanText.data() + byteOffset;
   const int chunkLen = static_cast<int>(byteLength);
+  bool useVerticalShaping = false;
+  if (isVertical) {
+    for (size_t i = 0; i < byteLength;) {
+      const uint32_t cp = decodeCodepointAt(std::string_view(chunkData, byteLength), i);
+      if (cp >= 0x2E80) {
+        useVerticalShaping = true;
+        break;
+      }
+
+      const auto byte = static_cast<uint8_t>(chunkData[i]);
+      if (byte >= 0xF0) {
+        i += 4;
+      } else if (byte >= 0xE0) {
+        i += 3;
+      } else if (byte >= 0xC0) {
+        i += 2;
+      } else {
+        i += 1;
+      }
+    }
+  }
 
   hb_buffer_t* detectBuf = hb_buffer_create();
   hb_buffer_add_utf8(detectBuf, chunkData, chunkLen, 0, chunkLen);
+  if (useVerticalShaping) {
+    hb_buffer_set_direction(detectBuf, HB_DIRECTION_TTB);
+  }
   hb_buffer_guess_segment_properties(detectBuf);
   const hb_direction_t detectedDirection = hb_buffer_get_direction(detectBuf);
   const hb_script_t detectedScript = hb_buffer_get_script(detectBuf);
@@ -564,10 +611,9 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
     // Check for native OpenType small-caps feature.
     hb_face_t* hbFace = hb_font_get_face(hbFont);
     unsigned int featureIndex = 0;
-    useSmcpFeature =
-        hbFace && hb_ot_layout_language_find_feature(hbFace, HB_OT_TAG_GSUB, 0,
-                                                      HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX,
-                                                      HB_TAG('s', 'm', 'c', 'p'), &featureIndex);
+    useSmcpFeature = hbFace && hb_ot_layout_language_find_feature(
+                                   hbFace, HB_OT_TAG_GSUB, 0, HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX,
+                                   HB_TAG('s', 'm', 'c', 'p'), &featureIndex);
 
     if (!useSmcpFeature) {
       // Synthesize: convert lowercase to uppercase and track which bytes changed.
@@ -595,9 +641,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
   };
   std::vector<ShapedGlyphInfo> allGlyphs;
 
-  auto shapeRange = [&](const char* text, size_t rangeStart, size_t rangeEnd,
-                        bool isSmallCapRange, hb_feature_t* features,
-                        unsigned int numFeatures) {
+  auto shapeRange = [&](const char* text, size_t rangeStart, size_t rangeEnd, bool isSmallCapRange,
+                        hb_feature_t* features, unsigned int numFeatures) {
     hb_buffer_t* buf = hb_buffer_create();
     hb_buffer_add_utf8(buf, text + rangeStart, static_cast<int>(rangeEnd - rangeStart), 0,
                        static_cast<int>(rangeEnd - rangeStart));
@@ -607,7 +652,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
     // split RTL text into individual characters, each is shaped independently in LTR to
     // avoid RTL-specific GPOS adjustments that differ from the connected-text advances.
     const unsigned int bufLen = hb_buffer_get_length(buf);
-    hb_buffer_set_direction(buf, bufLen <= 1 ? HB_DIRECTION_LTR : detectedDirection);
+    hb_buffer_set_direction(
+        buf, (!useVerticalShaping && bufLen <= 1) ? HB_DIRECTION_LTR : detectedDirection);
     hb_buffer_set_script(buf, detectedScript);
     hb_buffer_set_language(buf, detectedLanguage);
     hb_shape(hbFont, buf, features, numFeatures);
@@ -651,8 +697,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
       if (sc) {
         // Shape small-cap sub-run at reduced font size.
         if (FT_IS_SCALABLE(ftFace)) {
-          FT_Set_Char_Size(ftFace, 0,
-                           static_cast<FT_F26Dot6>(fontSizePx * kSmallCapScale * 64.0f), 72, 72);
+          FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * kSmallCapScale * 64.0f),
+                           72, 72);
           hb_ft_font_changed(hbFont);
         }
 
@@ -686,6 +732,36 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
     glyph.yKern = 0;
     glyph.cluster = sg.info.cluster + static_cast<uint32_t>(byteOffset);
     glyph.fontSizeScale = sg.isSynthSmallCap ? kSmallCapScale : 1.0f;
+
+    if (isVertical && useVerticalShaping) {
+      const uint32_t codepoint = decodeCodepointAt(spanText, glyph.cluster);
+      const bool sideways = (codepoint > 0 && codepoint < 0x2E80);
+      if (sideways) {
+        glyph.xAdvance =
+            static_cast<double>(hb_font_get_glyph_h_advance(hbFont, sg.info.codepoint)) *
+            pixelScale;
+        glyph.yAdvance = 0.0;
+        glyph.xOffset = 0.0;
+        glyph.yOffset = 0.0;
+      } else {
+        FT_Face verticalFace = hb_ft_font_get_face(hbFont);
+        if (verticalFace && verticalFace->units_per_EM > 0) {
+          double vertOriginY = glyph.yOffset;
+          const double emScale = fontSizePx / static_cast<double>(verticalFace->units_per_EM);
+          auto* vhea = static_cast<TT_VertHeader*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_VHEA));
+          if (vhea && vhea->Ascender > 0) {
+            vertOriginY = static_cast<double>(vhea->Ascender) * emScale;
+          } else {
+            auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_OS2));
+            if (os2 && os2->sTypoAscender > 0) {
+              vertOriginY = static_cast<double>(os2->sTypoAscender) * emScale;
+            }
+          }
+          glyph.yOffset = vertOriginY;
+        }
+      }
+    }
+
     result.glyphs.push_back(glyph);
   }
 
@@ -704,10 +780,9 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
 // Cross-span kerning
 // ---------------------------------------------------------------------------
 
-double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx,
-                                       FontHandle /*curFont*/, float /*curSizePx*/,
-                                       uint32_t prevCodepoint, uint32_t curCodepoint,
-                                       bool isVertical) const {
+double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle /*curFont*/,
+                                      float /*curSizePx*/, uint32_t prevCodepoint,
+                                      uint32_t curCodepoint, bool isVertical) const {
   hb_font_t* hbFont = getOrCreateHbFont(prevFont);
   if (!hbFont) {
     return 0.0;

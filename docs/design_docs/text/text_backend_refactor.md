@@ -2,7 +2,7 @@
 
 [Back to hub](../text_rendering.md)
 
-**Status:** Proposed
+**Status:** In Progress
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-02
 
@@ -421,52 +421,68 @@ unit tests for `TextBackendSimple`.
 - [x] `TextEngine::layout()` uses capability queries (`isCursive()`, `hasSmallCapsFeature()`)
 - [x] Remove `#ifdef DONNER_TEXT_FULL` code duplication from `RendererTinySkia::drawText()`
 - [x] All base-config tests pass
-- [ ] Close text-full parity gaps (9 regressions, see below)
+- [ ] Close text-full parity gaps (1 remaining of 9 original, see below)
 - [ ] Delete `TextShaper.h/cc`
 - [ ] Add unit tests for `TextBackendFull`
 
 #### Phase 3a: Close text-full parity gaps
 
-Font metrics and underline (fixed):
+**Closed (9 of 9):**
+
+Font metrics and underline:
 - [x] Read hhea table directly in `TextBackendFull::fontVMetrics()` to match stb_truetype
 - [x] Read post table directly in `TextBackendFull::underlineMetrics()` to match simple backend
 - [x] `a-text-rendering-005`: PASS (was 1137px, now 2px)
 - [x] `e-tspan-030`: PASS (was 933px, now 385px)
 
-Per-character rotation (partially fixed):
+Per-character rotation:
 - [x] Build byte→rawCpIdx mapping for rotation list indexing (matching old TextShaper)
 - [x] `e-text-033`: PASS (was 775px)
-- [ ] `e-text-034` (1715px): Complex diacritics with HarfBuzz cluster mapping
-- [ ] `e-text-036` (4872px): Arabic RTL with rotation
 
-RTL per-character positioning (`e-text-030` 2385px, `e-text-036` 4872px, `e-text-034` 1715px):
-- [x] Added DOM-order sorting for multi-glyph RTL chunks with per-char positioning in
-      the engine. This ensures explicit y/x attributes cascade correctly when HarfBuzz
-      outputs glyphs in visual (reversed) order.
-- [ ] Remaining issue: the old TextShaper's `layoutLTR` mode forced LTR direction for
-      single-char chunks in RTL text with per-char coords. This affected GPOS adjustments
-      on isolated Arabic characters. The advances are identical for single-char chunks,
-      but the x_offset may differ between RTL and LTR shaping.
-- [ ] Fix plan: port the old TextShaper's `layoutLTR` detection to the backend's shapeRun.
-      When shapeRun detects a single-codepoint buffer with RTL direction, force LTR to
-      match browser behavior for per-char-positioned RTL text.
-
-Emoji bitmap glyphs (`e-text-027/028`, fixed; `e-text-029` still failing):
-- [x] Found and fixed FontManager cache bug: `addFontFace()` now clears the lookup cache.
-- [x] Removed TextEngine bitmap-only font fallback that incorrectly rejected emoji fonts.
-- [x] Delegated `TextBackendFull::isBitmapOnly()` to FontManager for consistent classification.
-- [x] Fixed `scaleForEmToPixels`: use `hb_face_get_upem()` instead of `ftFace->units_per_EM`
-      for bitmap-only fonts. FreeType sets `units_per_EM = 0` for non-scalable fonts but
-      HarfBuzz reads 2048 from the head table correctly.
+Emoji bitmap glyphs:
+- [x] Fixed FontManager cache: `addFontFace()` clears lookup cache for stale fallbacks
+- [x] Fixed `scaleForEmToPixels`: use `hb_face_get_upem()` for bitmap-only fonts
+      (FreeType sets `units_per_EM = 0` for non-scalable fonts)
+- [x] Removed TextEngine bitmap-only font rejection; delegated `isBitmapOnly` to FontManager
 - [x] `e-text-027`: PASS (40px), `e-text-028`: PASS (33px)
-- [ ] `e-text-029` (7389px): compound emoji with per-character y — same RTL/chunk issue
 
-CJK vertical layout (`a-writing-mode-012`, 11928px):
-- [ ] Root cause: "Mplus 1p" font not found, falling back to Public Sans which lacks CJK
-      glyphs. The old TextShaper's per-script font fallback (lines 306-342) checked codepoint
-      coverage and fell back to registered fonts. TextEngine relies on FontManager which may
-      not have the same fallback behavior.
-- [ ] Fix: port the per-script font fallback from TextShaper to TextEngine or TextBackendFull.
+RTL per-character positioning:
+- [x] RTL Y-override for multi-glyph chunks: when a multi-glyph RTL chunk starts because
+      of an absolute y, all glyphs in the chunk share that y (matching old `chunkYOverrides`)
+- [x] Single-codepoint LTR forcing in `TextBackendFull::shapeRun`
+- [x] `forceLogicalOrder` parameter on `shapeRun` for future backend-side RTL sorting
+- [x] `e-text-030`: PASS (357px, matching old code exactly)
+
+FontManager improvements (applied outside the refactor):
+- [x] Case-insensitive font family matching via `StringUtils::Equals<IgnoreCase>`
+
+Compound emoji with per-char y (`e-text-029`, 7389px → PASS):
+- [x] Restore UTF-16 low-surrogate coordinate carryover in `TextEngine` so supplementary
+      characters consume the trailing code unit's positioning values.
+- [x] Result: `e-text-029` now passes in `--config=text-full`.
+
+Complex diacritics with rotation (`e-text-034`, 1715px → PASS):
+- [x] Restore combining-mark rotation behavior from the old `TextShaper` path by rotating
+      mark offsets around the base glyph origin after applying per-glyph rotate values.
+- [x] Result: `e-text-034` now passes in `--config=text-full`.
+
+Arabic with rotation (`e-text-036`, 4872px → PASS):
+- [x] Restore script-aware font fallback in `TextEngine` so spans can switch to a registered
+      font with glyph coverage (for example Amiri when `Noto Sans` lacks Arabic coverage).
+- [x] Result: `e-text-036` now passes in `--config=text-full`.
+
+CJK vertical layout (`a-writing-mode-012`, 11928px → PASS):
+- [x] Port per-script font fallback into `TextEngine`; the test now resolves a Japanese-capable
+      font instead of collapsing to missing glyphs.
+- [x] Add case-insensitive font family matching in `FontManager` so CSS family lookup matches
+      the names registered from the resvg font set.
+- [x] Restore the old `TextShaper` vertical-origin behavior for upright CJK by exposing
+      backend-provided vertical offsets from `TextBackendFull` and consuming them in
+      `TextEngine`.
+- [x] Scope HarfBuzz vertical shaping to chunks that contain upright CJK so sideways Latin
+      vertical text keeps the previous horizontal-shaping behavior.
+- [x] Result: `a-writing-mode-012` passes, and the full `//donner/svg/renderer/tests:resvg_test_suite`
+      target passes under `--config=text-full`.
 
 ### Phase 4: ECS caching + public API
 
@@ -482,7 +498,17 @@ CJK vertical layout (`a-writing-mode-012`, 11928px):
 - [ ] Remove `fontInfo()` from `FontManager`'s public API
 - [ ] Update `ImageComparisonTestFixture` table-reading helpers to use `TextBackend`
 - [ ] Switch from reimplemented UTF-8 decoding to `donner/base/Utf8.h`
-- [ ] Update design docs
+- [x] Update design docs
+
+## Validation Status
+
+Current verification for this refactor:
+
+- [x] `bazel test //donner/svg/renderer/tests:text_engine_tests --config=text-full`
+- [x] `bazel test //donner/svg/renderer/tests:resvg_test_suite --config=text-full --test_output=errors`
+
+The refactored `TextEngine` + `TextBackendFull` path now matches the previous text-full
+behavior for the resvg suite while removing the duplicated layout logic from `TextShaper`.
 
 ## File Structure (After)
 

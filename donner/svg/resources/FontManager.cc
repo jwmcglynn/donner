@@ -3,6 +3,7 @@
 #include <cstring>
 #include <iostream>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/fonts/WoffFont.h"
 #include "donner/base/fonts/WoffParser.h"
 #ifdef DONNER_TEXT_WOFF2_ENABLED
@@ -129,8 +130,7 @@ uint16_t readUnitsPerEm(const uint8_t* data, size_t size) {
     if (off + 16 > size) {
       break;
     }
-    if (data[off] == 'h' && data[off + 1] == 'e' && data[off + 2] == 'a' &&
-        data[off + 3] == 'd') {
+    if (data[off] == 'h' && data[off + 1] == 'e' && data[off + 2] == 'a' && data[off + 3] == 'd') {
       const uint32_t tableOff = readBE32(data + off + 8);
       if (tableOff + 20 <= size) {
         return static_cast<uint16_t>((data[tableOff + 18] << 8) | data[tableOff + 19]);
@@ -149,7 +149,7 @@ struct FontManager::LoadedFont {
   size_t dataSize = 0;               // Size of font data.
   stbtt_fontinfo info{};             // stb_truetype parsed font handle.
   bool bitmapOnly = false;           // True if stbtt_InitFont failed (CBDT/COLR color font).
-  uint16_t unitsPerEm = 1000;       // From head table, for bitmap-only fonts.
+  uint16_t unitsPerEm = 1000;        // From head table, for bitmap-only fonts.
 };
 
 FontManager::FontManager() = default;
@@ -183,7 +183,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   int bestScore = std::numeric_limits<int>::max();
 
   for (const auto& face : faces_) {
-    if (face.familyName != family) {
+    if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
       continue;
     }
     // Style mismatch is most costly, then stretch, then weight.
@@ -230,8 +230,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     for (const auto& source : bestFace->sources) {
       FontHandle handle;
       if (source.kind == css::FontFaceSource::Kind::Data) {
-        const auto& dataPtr =
-            std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
+        const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
         handle = loadFontDataShared(dataPtr);
       }
       if (handle) {
@@ -302,8 +301,7 @@ FontHandle FontManager::loadFontDataShared(
 }
 
 const stbtt_fontinfo* FontManager::fontInfo(FontHandle handle) const {
-  if (!handle || handle.index() < 0 ||
-      static_cast<size_t>(handle.index()) >= fonts_.size()) {
+  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
     return nullptr;
   }
   const auto& font = fonts_[static_cast<size_t>(handle.index())];
@@ -314,16 +312,14 @@ const stbtt_fontinfo* FontManager::fontInfo(FontHandle handle) const {
 }
 
 bool FontManager::isBitmapOnly(FontHandle handle) const {
-  if (!handle || handle.index() < 0 ||
-      static_cast<size_t>(handle.index()) >= fonts_.size()) {
+  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
     return false;
   }
   return fonts_[static_cast<size_t>(handle.index())]->bitmapOnly;
 }
 
 float FontManager::scaleForPixelHeight(FontHandle handle, float pixelHeight) const {
-  if (!handle || handle.index() < 0 ||
-      static_cast<size_t>(handle.index()) >= fonts_.size()) {
+  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
     return 0.0f;
   }
   const auto& font = fonts_[static_cast<size_t>(handle.index())];
@@ -339,8 +335,7 @@ float FontManager::scaleForPixelHeight(FontHandle handle, float pixelHeight) con
 }
 
 std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
-  if (!handle || handle.index() < 0 ||
-      static_cast<size_t>(handle.index()) >= fonts_.size()) {
+  if (!handle || handle.index() < 0 || static_cast<size_t>(handle.index()) >= fonts_.size()) {
     return {};
   }
   const auto& font = fonts_[static_cast<size_t>(handle.index())];
