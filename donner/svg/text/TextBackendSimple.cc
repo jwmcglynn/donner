@@ -1,6 +1,7 @@
-#include "donner/svg/renderer/TextBackendSimple.h"
+#include "donner/svg/text/TextBackendSimple.h"
 
 #include "donner/base/Utf8.h"
+#include "donner/svg/text/FontDataUtils.h"
 
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
@@ -45,8 +46,36 @@ constexpr float kSmallCapScale = 0.8f;
 
 TextBackendSimple::TextBackendSimple(FontManager& fontManager) : fontManager_(fontManager) {}
 
+const stbtt_fontinfo* TextBackendSimple::getFontInfo(FontHandle font) const {
+  if (!font) {
+    return nullptr;
+  }
+
+  const auto fontData = fontManager_.fontData(font);
+  if (fontData.empty() || !HasOutlineTables(fontData)) {
+    return nullptr;
+  }
+
+  const size_t index = static_cast<size_t>(font.index());
+  if (index >= parsedFonts_.size()) {
+    parsedFonts_.resize(index + 1);
+    parsedFontsInitialized_.resize(index + 1, false);
+    parsedFontsValid_.resize(index + 1, false);
+  }
+
+  if (!parsedFontsInitialized_[index]) {
+    parsedFontsInitialized_[index] = true;
+    const auto fontData = fontManager_.fontData(font);
+    if (!fontData.empty() && stbtt_InitFont(&parsedFonts_[index], fontData.data(), 0)) {
+      parsedFontsValid_[index] = true;
+    }
+  }
+
+  return parsedFontsValid_[index] ? &parsedFonts_[index] : nullptr;
+}
+
 FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {
-  const stbtt_fontinfo* info = fontManager_.fontInfo(font);
+  const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
   }
@@ -56,11 +85,18 @@ FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {
 }
 
 float TextBackendSimple::scaleForPixelHeight(FontHandle font, float pixelHeight) const {
-  return fontManager_.scaleForPixelHeight(font, pixelHeight);
+  const stbtt_fontinfo* info = getFontInfo(font);
+  if (info) {
+    return stbtt_ScaleForMappingEmToPixels(info, pixelHeight);
+  }
+
+  const auto fontData = fontManager_.fontData(font);
+  const uint16_t upem = ReadUnitsPerEm(fontData);
+  return upem > 0 ? pixelHeight / static_cast<float>(upem) : 0.0f;
 }
 
 float TextBackendSimple::scaleForEmToPixels(FontHandle font, float pixelHeight) const {
-  const stbtt_fontinfo* info = fontManager_.fontInfo(font);
+  const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return 0.0f;
   }
@@ -68,7 +104,7 @@ float TextBackendSimple::scaleForEmToPixels(FontHandle font, float pixelHeight) 
 }
 
 std::optional<UnderlineMetrics> TextBackendSimple::underlineMetrics(FontHandle font) const {
-  const stbtt_fontinfo* info = fontManager_.fontInfo(font);
+  const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return std::nullopt;
   }
@@ -85,7 +121,7 @@ std::optional<UnderlineMetrics> TextBackendSimple::underlineMetrics(FontHandle f
 }
 
 std::optional<SubSuperMetrics> TextBackendSimple::subSuperMetrics(FontHandle font) const {
-  const stbtt_fontinfo* info = fontManager_.fontInfo(font);
+  const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return std::nullopt;
   }
@@ -103,7 +139,7 @@ std::optional<SubSuperMetrics> TextBackendSimple::subSuperMetrics(FontHandle fon
 }
 
 PathSpline TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
-  const stbtt_fontinfo* info = fontManager_.fontInfo(font);
+  const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
   }
@@ -180,7 +216,8 @@ PathSpline TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, floa
 }
 
 bool TextBackendSimple::isBitmapOnly(FontHandle font) const {
-  return fontManager_.isBitmapOnly(font);
+  const auto fontData = fontManager_.fontData(font);
+  return !fontData.empty() && !HasOutlineTables(fontData);
 }
 
 bool TextBackendSimple::isCursive(uint32_t /*codepoint*/) const {
@@ -202,12 +239,12 @@ TextBackend::ShapedRun TextBackendSimple::shapeRun(FontHandle font, float fontSi
                                                    size_t byteLength, bool isVertical,
                                                    FontVariant fontVariant,
                                                    bool /*forceLogicalOrder*/) const {
-  const stbtt_fontinfo* info = fontManager_.fontInfo(font);
+  const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
   }
 
-  const float scale = fontManager_.scaleForPixelHeight(font, fontSizePx);
+  const float scale = scaleForPixelHeight(font, fontSizePx);
   if (scale == 0.0f) {
     return {};
   }
@@ -280,12 +317,12 @@ double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx,
                                         FontHandle /*curFont*/, float /*curSizePx*/,
                                         uint32_t prevCodepoint, uint32_t curCodepoint,
                                         bool isVertical) const {
-  const stbtt_fontinfo* info = fontManager_.fontInfo(prevFont);
+  const stbtt_fontinfo* info = getFontInfo(prevFont);
   if (!info) {
     return 0.0;
   }
 
-  const float scale = fontManager_.scaleForPixelHeight(prevFont, prevSizePx);
+  const float scale = scaleForPixelHeight(prevFont, prevSizePx);
   const int prevGlyph = stbtt_FindGlyphIndex(info, static_cast<int>(prevCodepoint));
   const int curGlyph = stbtt_FindGlyphIndex(info, static_cast<int>(curCodepoint));
   const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, curGlyph);

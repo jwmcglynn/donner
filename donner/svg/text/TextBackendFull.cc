@@ -1,4 +1,4 @@
-#include "donner/svg/renderer/TextBackendFull.h"
+#include "donner/svg/text/TextBackendFull.h"
 
 #include <ft2build.h>
 
@@ -14,6 +14,7 @@
 #include <hb.h>
 
 #include "donner/base/Utf8.h"
+#include "donner/svg/text/FontDataUtils.h"
 
 namespace donner::svg {
 
@@ -401,11 +402,8 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
 // ---------------------------------------------------------------------------
 
 bool TextBackendFull::isBitmapOnly(FontHandle font) const {
-  // Delegate to FontManager which uses stb_truetype-based detection.
-  // stbtt_InitFont fails for CBDT-only fonts (no glyf/CFF data), marking them as bitmap-only.
-  // FreeType's FT_IS_SCALABLE would incorrectly report CBDT fonts as scalable since FreeType
-  // can handle them, but we need to match the renderer's glyph outline vs bitmap fallback logic.
-  return fontManager_.isBitmapOnly(font);
+  const auto data = fontManager_.fontData(font);
+  return !data.empty() && !HasOutlineTables(data);
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,

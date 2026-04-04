@@ -20,231 +20,12 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/resources/FontMetadata.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
 namespace donner::svg {
 
 namespace {
-
-/**
- * Read the font family name from the TrueType/OpenType name table (nameID 1).
- * This matches how font databases (fontconfig, fontdb) identify font families,
- * ensuring our test fixture registers fonts under the same family names that
- * renderers like resvg use.
- *
- * Returns empty string on failure.
- */
-std::string fontFamilyFromData(const std::vector<uint8_t>& data) {
-  if (data.size() < 12) {
-    return {};
-  }
-
-  auto readU16 = [&](size_t offset) -> uint16_t {
-    return static_cast<uint16_t>((data[offset] << 8) | data[offset + 1]);
-  };
-  auto readU32 = [&](size_t offset) -> uint32_t {
-    return (static_cast<uint32_t>(data[offset]) << 24) |
-           (static_cast<uint32_t>(data[offset + 1]) << 16) |
-           (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
-  };
-
-  // Find 'name' table in the offset table.
-  const uint16_t numTables = readU16(4);
-  size_t nameTableOffset = 0;
-  size_t nameTableLength = 0;
-  for (uint16_t i = 0; i < numTables; ++i) {
-    const size_t rec = 12 + i * 16;
-    if (rec + 16 > data.size()) {
-      return {};
-    }
-    if (data[rec] == 'n' && data[rec + 1] == 'a' && data[rec + 2] == 'm' &&
-        data[rec + 3] == 'e') {
-      nameTableOffset = readU32(rec + 8);
-      nameTableLength = readU32(rec + 12);
-      break;
-    }
-  }
-  if (nameTableOffset == 0 || nameTableOffset + nameTableLength > data.size()) {
-    return {};
-  }
-
-  // Parse name table header.
-  const uint16_t nameCount = readU16(nameTableOffset + 2);
-  const size_t stringStorageOffset = nameTableOffset + readU16(nameTableOffset + 4);
-
-  // Decode a name record at the given offset into a UTF-16BE ASCII string.
-  auto decodeName = [&](size_t recOff) -> std::string {
-    const uint16_t length = readU16(recOff + 8);
-    const uint16_t offset = readU16(recOff + 10);
-    const size_t strStart = stringStorageOffset + offset;
-    if (strStart + length > data.size()) {
-      return {};
-    }
-    std::string result;
-    for (size_t j = 0; j + 1 < length; j += 2) {
-      const uint16_t ch = static_cast<uint16_t>((data[strStart + j] << 8) |
-                                                 data[strStart + j + 1]);
-      result.push_back(ch < 128 ? static_cast<char>(ch) : '?');
-    }
-    return result;
-  };
-
-  // Prefer nameID 16 (Typographic Family) over nameID 1 (Font Family), platform 3 (Windows).
-  // nameID 16 groups width/weight/style variants under one family (e.g., "Noto Sans" for both
-  // Regular and ExtraCondensed), while nameID 1 may include subfamily qualifiers.
-  std::string nameID1;
-  for (uint16_t i = 0; i < nameCount; ++i) {
-    const size_t recOff = nameTableOffset + 6 + i * 12;
-    if (recOff + 12 > data.size()) {
-      break;
-    }
-    const uint16_t platformID = readU16(recOff);
-    const uint16_t nameID = readU16(recOff + 6);
-
-    if (platformID != 3) {
-      continue;
-    }
-    if (nameID == 16) {
-      std::string result = decodeName(recOff);
-      if (!result.empty()) {
-        return result;  // Prefer typographic family name.
-      }
-    }
-    if (nameID == 1 && nameID1.empty()) {
-      nameID1 = decodeName(recOff);
-    }
-  }
-
-  return nameID1;
-}
-
-/**
- * Read the font weight from the OS/2 table's usWeightClass field.
- * Returns 400 (normal) on failure.
- */
-int fontWeightFromData(const std::vector<uint8_t>& data) {
-  if (data.size() < 12) {
-    return 400;
-  }
-
-  auto readU16 = [&](size_t offset) -> uint16_t {
-    return static_cast<uint16_t>((data[offset] << 8) | data[offset + 1]);
-  };
-  auto readU32 = [&](size_t offset) -> uint32_t {
-    return (static_cast<uint32_t>(data[offset]) << 24) |
-           (static_cast<uint32_t>(data[offset + 1]) << 16) |
-           (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
-  };
-
-  // Find 'OS/2' table.
-  const uint16_t numTables = readU16(4);
-  for (uint16_t i = 0; i < numTables; ++i) {
-    const size_t rec = 12 + i * 16;
-    if (rec + 16 > data.size()) {
-      return 400;
-    }
-    if (data[rec] == 'O' && data[rec + 1] == 'S' && data[rec + 2] == '/' &&
-        data[rec + 3] == '2') {
-      const size_t tableOffset = readU32(rec + 8);
-      // usWeightClass is at offset 4 in the OS/2 table.
-      if (tableOffset + 6 > data.size()) {
-        return 400;
-      }
-      return readU16(tableOffset + 4);
-    }
-  }
-
-  return 400;
-}
-
-/**
- * Read the font style from the OS/2 table's fsSelection field.
- * Returns 0 (normal) on failure, 1 for italic, 2 for oblique.
- */
-int fontStyleFromData(const std::vector<uint8_t>& data) {
-  if (data.size() < 12) {
-    return 0;
-  }
-
-  auto readU16 = [&](size_t offset) -> uint16_t {
-    return static_cast<uint16_t>((data[offset] << 8) | data[offset + 1]);
-  };
-  auto readU32 = [&](size_t offset) -> uint32_t {
-    return (static_cast<uint32_t>(data[offset]) << 24) |
-           (static_cast<uint32_t>(data[offset + 1]) << 16) |
-           (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
-  };
-
-  const uint16_t numTables = readU16(4);
-  for (uint16_t i = 0; i < numTables; ++i) {
-    const size_t rec = 12 + i * 16;
-    if (rec + 16 > data.size()) {
-      return 0;
-    }
-    if (data[rec] == 'O' && data[rec + 1] == 'S' && data[rec + 2] == '/' &&
-        data[rec + 3] == '2') {
-      const size_t tableOffset = readU32(rec + 8);
-      // fsSelection is at offset 62 in the OS/2 table.
-      if (tableOffset + 64 > data.size()) {
-        return 0;
-      }
-      const uint16_t fsSelection = readU16(tableOffset + 62);
-      // Bit 0: ITALIC, Bit 9: OBLIQUE (OS/2 v4+).
-      if (fsSelection & (1 << 9)) {
-        return 2;  // Oblique
-      }
-      if (fsSelection & 1) {
-        return 1;  // Italic
-      }
-      return 0;
-    }
-  }
-
-  return 0;
-}
-
-/**
- * Read the font width/stretch from the OS/2 table's usWidthClass field.
- * Returns 5 (normal) on failure. Values 1-9 matching CSS font-stretch / FontStretch enum.
- */
-int fontStretchFromData(const std::vector<uint8_t>& data) {
-  if (data.size() < 12) {
-    return 5;
-  }
-
-  auto readU16 = [&](size_t offset) -> uint16_t {
-    return static_cast<uint16_t>((data[offset] << 8) | data[offset + 1]);
-  };
-  auto readU32 = [&](size_t offset) -> uint32_t {
-    return (static_cast<uint32_t>(data[offset]) << 24) |
-           (static_cast<uint32_t>(data[offset + 1]) << 16) |
-           (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
-  };
-
-  const uint16_t numTables = readU16(4);
-  for (uint16_t i = 0; i < numTables; ++i) {
-    const size_t rec = 12 + i * 16;
-    if (rec + 16 > data.size()) {
-      return 5;
-    }
-    if (data[rec] == 'O' && data[rec + 1] == 'S' && data[rec + 2] == '/' &&
-        data[rec + 3] == '2') {
-      const size_t tableOffset = readU32(rec + 8);
-      // usWidthClass is at offset 6 in the OS/2 table.
-      if (tableOffset + 8 > data.size()) {
-        return 5;
-      }
-      const uint16_t widthClass = readU16(tableOffset + 6);
-      // OS/2 usWidthClass: 1=ultra-condensed ... 5=normal ... 9=ultra-expanded.
-      if (widthClass >= 1 && widthClass <= 9) {
-        return widthClass;
-      }
-      return 5;
-    }
-  }
-
-  return 5;
-}
 
 /// Load all TTF/OTF fonts from a directory and register them as @font-face rules on the document.
 /// Cache of font faces loaded from a directory, keyed by directory path.
@@ -282,22 +63,15 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
     std::vector<uint8_t> fontData(static_cast<size_t>(size));
     fontFile.read(reinterpret_cast<char*>(fontData.data()), size);
 
-    // Read the font family name and weight from the font's internal tables (name table
-    // nameID 1 and OS/2 usWeightClass). This matches how font databases like fontconfig
-    // and fontdb identify fonts, ensuring we register fonts under the same family names
-    // that reference renderers like resvg use.
-    std::string family = fontFamilyFromData(fontData);
-    if (family.empty()) {
+    const auto metadata = ParseFontMetadata(fontData);
+    if (!metadata.has_value()) {
       continue;  // Skip fonts with unreadable name tables.
     }
-    const int weight = fontWeightFromData(fontData);
-    const int style = fontStyleFromData(fontData);
-    const int stretch = fontStretchFromData(fontData);
 
     // Only register regular (400) and bold (700) weight variants. Extreme weights like Thin
     // (100), Light (300), or Black (900) use different glyph shapes that our stb_truetype
     // renderer cannot match to the reference renderer's output.
-    if (weight != 400 && weight != 700) {
+    if (metadata->fontWeight != 400 && metadata->fontWeight != 700) {
       continue;
     }
 
@@ -306,10 +80,10 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
     source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData));
 
     css::FontFace face;
-    face.familyName = RcString(family);
-    face.fontWeight = weight;
-    face.fontStyle = style;
-    face.fontStretch = stretch;
+    face.familyName = RcString(metadata->familyName);
+    face.fontWeight = metadata->fontWeight;
+    face.fontStyle = metadata->fontStyle;
+    face.fontStretch = metadata->fontStretch;
     face.sources.push_back(std::move(source));
     faces.push_back(std::move(face));
   }

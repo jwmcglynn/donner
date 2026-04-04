@@ -10,8 +10,6 @@
 
 #include "donner/css/FontFace.h"
 
-struct stbtt_fontinfo;
-
 namespace donner::svg {
 
 /**
@@ -54,22 +52,22 @@ namespace donner::svg {
  *
  * FontManager is the shared font infrastructure used by both the Skia and TinySkia backends.
  * It handles:
- * - Loading raw TTF/OTF font data via stb_truetype.
+ * - Loading raw TTF/OTF font data.
  * - Loading WOFF 1.0 fonts via the existing WoffParser, reconstructing the sfnt byte stream,
- *   then initializing via stb_truetype.
+ *   then storing the reconstructed sfnt bytes.
  * - Resolving `@font-face` source cascades.
  * - Falling back to the embedded Public Sans font when no match is found.
  * - Caching loaded fonts by family name for reuse.
  *
- * The font data is owned by FontManager and remains valid for the lifetime of the manager,
- * which is required since stb_truetype holds a pointer into the font data buffer.
+ * The font data is owned by FontManager and remains valid for the lifetime of the manager so
+ * text backends can create their own parsed font objects from the raw bytes.
  */
 class FontManager {
 public:
   FontManager();
   ~FontManager();
 
-  // Non-copyable, non-movable (stbtt_fontinfo holds pointers into owned data).
+  // Non-copyable, non-movable.
   FontManager(const FontManager&) = delete;
   FontManager& operator=(const FontManager&) = delete;
   FontManager(FontManager&&) = delete;
@@ -128,29 +126,6 @@ public:
   FontHandle loadFontData(std::span<const uint8_t> data);
 
   /**
-   * Access the stb_truetype font info for a handle.
-   *
-   * @param handle A valid FontHandle obtained from findFont() or loadFontData().
-   * @return Pointer to the stbtt_fontinfo, or nullptr if the handle is invalid or bitmap-only.
-   */
-  const stbtt_fontinfo* fontInfo(FontHandle handle) const;
-
-  /**
-   * Returns true if the font is bitmap-only (e.g., CBDT color emoji).
-   * These fonts have no glyf outlines and require FreeType for rendering.
-   */
-  bool isBitmapOnly(FontHandle handle) const;
-
-  /**
-   * Get the scale factor to produce a font whose EM-square maps to the given pixel height.
-   *
-   * @param handle A valid FontHandle.
-   * @param pixelHeight Desired font height in pixels.
-   * @return Scale factor, or 0 if the handle is invalid.
-   */
-  float scaleForPixelHeight(FontHandle handle, float pixelHeight) const;
-
-  /**
    * Get the raw font data bytes for a handle.
    *
    * This is useful for backends (like Skia) that need to create their own font objects from
@@ -185,6 +160,8 @@ public:
   FontHandle fallbackFont();
 
 private:
+  friend class FontManager;
+
   struct LoadedFont;
 
   /**

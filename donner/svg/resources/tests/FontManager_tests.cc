@@ -6,9 +6,6 @@
 #include <fstream>
 #include <vector>
 
-#define STBTT_DEF extern
-#include <stb/stb_truetype.h>
-
 #include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
@@ -29,16 +26,8 @@ TEST(FontManagerTest, FallbackFontLoads) {
   FontHandle handle = mgr.fallbackFont();
   EXPECT_TRUE(static_cast<bool>(handle));
 
-  const stbtt_fontinfo* info = mgr.fontInfo(handle);
-  ASSERT_NE(info, nullptr);
-
-  // Verify font metrics are reasonable.
-  int ascent = 0;
-  int descent = 0;
-  int lineGap = 0;
-  stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
-  EXPECT_GT(ascent, 0);
-  EXPECT_LT(descent, 0);  // descent is typically negative
+  auto data = mgr.fontData(handle);
+  EXPECT_FALSE(data.empty());
 }
 
 TEST(FontManagerTest, FallbackFontIsCached) {
@@ -57,18 +46,7 @@ TEST(FontManagerTest, LoadRawOtfData) {
   FontHandle handle = mgr.loadFontData(data);
   EXPECT_TRUE(static_cast<bool>(handle));
 
-  const stbtt_fontinfo* info = mgr.fontInfo(handle);
-  ASSERT_NE(info, nullptr);
-
-  // Verify that we can look up a glyph for 'A'.
-  int glyphIndex = stbtt_FindGlyphIndex(info, 'A');
-  EXPECT_GT(glyphIndex, 0);
-
-  // Verify advance width is positive.
-  int advanceWidth = 0;
-  int leftSideBearing = 0;
-  stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &leftSideBearing);
-  EXPECT_GT(advanceWidth, 0);
+  EXPECT_FALSE(mgr.fontData(handle).empty());
 }
 
 TEST(FontManagerTest, LoadWoff1Data) {
@@ -79,18 +57,7 @@ TEST(FontManagerTest, LoadWoff1Data) {
 
   FontHandle handle = mgr.loadFontData(woffData);
   EXPECT_TRUE(static_cast<bool>(handle));
-
-  const stbtt_fontinfo* info = mgr.fontInfo(handle);
-  ASSERT_NE(info, nullptr);
-
-  // Verify font metrics are readable (the test font is "WOFF Test CFF" and may not have
-  // standard Latin glyphs, but stb_truetype should parse it successfully).
-  int ascent = 0;
-  int descent = 0;
-  int lineGap = 0;
-  stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
-  // CFF fonts should report valid vertical metrics.
-  EXPECT_NE(ascent, 0);
+  EXPECT_FALSE(mgr.fontData(handle).empty());
 }
 
 TEST(FontManagerTest, InvalidDataReturnsInvalidHandle) {
@@ -106,25 +73,10 @@ TEST(FontManagerTest, InvalidDataReturnsInvalidHandle) {
   EXPECT_FALSE(static_cast<bool>(h2));
 }
 
-TEST(FontManagerTest, FontInfoReturnsNullForInvalidHandle) {
+TEST(FontManagerTest, InvalidHandleReturnsEmptyMeasurements) {
   FontManager mgr;
   FontHandle invalid;
-  EXPECT_EQ(mgr.fontInfo(invalid), nullptr);
-  EXPECT_EQ(mgr.scaleForPixelHeight(invalid, 16.0f), 0.0f);
   EXPECT_TRUE(mgr.fontData(invalid).empty());
-}
-
-TEST(FontManagerTest, ScaleForPixelHeight) {
-  FontManager mgr;
-  FontHandle handle = mgr.fallbackFont();
-  ASSERT_TRUE(static_cast<bool>(handle));
-
-  float scale = mgr.scaleForPixelHeight(handle, 16.0f);
-  EXPECT_GT(scale, 0.0f);
-
-  // Larger pixel height should give a larger scale factor.
-  float scaleLarge = mgr.scaleForPixelHeight(handle, 32.0f);
-  EXPECT_GT(scaleLarge, scale);
 }
 
 TEST(FontManagerTest, FontDataReturnsNonEmpty) {
@@ -178,54 +130,7 @@ TEST(FontManagerTest, AddFontFaceWithDataSource) {
   FontHandle fallback = mgr.fallbackFont();
   EXPECT_NE(handle, fallback);
 
-  // But both should work.
-  const stbtt_fontinfo* testInfo = mgr.fontInfo(handle);
-  ASSERT_NE(testInfo, nullptr);
-  EXPECT_GT(stbtt_FindGlyphIndex(testInfo, 'A'), 0);
-}
-
-TEST(FontManagerTest, GlyphShapeExtraction) {
-  FontManager mgr;
-  FontHandle handle = mgr.fallbackFont();
-  ASSERT_TRUE(static_cast<bool>(handle));
-
-  const stbtt_fontinfo* info = mgr.fontInfo(handle);
-  ASSERT_NE(info, nullptr);
-
-  int glyphIndex = stbtt_FindGlyphIndex(info, 'A');
-  ASSERT_GT(glyphIndex, 0);
-
-  stbtt_vertex* vertices = nullptr;
-  int numVertices = stbtt_GetGlyphShape(info, glyphIndex, &vertices);
-  EXPECT_GT(numVertices, 0);
-  EXPECT_NE(vertices, nullptr);
-
-  // Verify we got valid vertex types.
-  for (int i = 0; i < numVertices; ++i) {
-    EXPECT_TRUE(vertices[i].type == STBTT_vmove || vertices[i].type == STBTT_vline ||
-                vertices[i].type == STBTT_vcurve || vertices[i].type == STBTT_vcubic);
-  }
-
-  stbtt_FreeShape(info, vertices);
-}
-
-TEST(FontManagerTest, KernAdvance) {
-  FontManager mgr;
-  FontHandle handle = mgr.fallbackFont();
-  ASSERT_TRUE(static_cast<bool>(handle));
-
-  const stbtt_fontinfo* info = mgr.fontInfo(handle);
-  ASSERT_NE(info, nullptr);
-
-  int glyphA = stbtt_FindGlyphIndex(info, 'A');
-  int glyphV = stbtt_FindGlyphIndex(info, 'V');
-  ASSERT_GT(glyphA, 0);
-  ASSERT_GT(glyphV, 0);
-
-  // AV is a commonly kerned pair — the kern advance may be negative or zero depending
-  // on the font, but the call should not crash.
-  int kern = stbtt_GetGlyphKernAdvance(info, glyphA, glyphV);
-  (void)kern;  // Just verify no crash; actual value is font-dependent.
+  EXPECT_FALSE(mgr.fontData(handle).empty());
 }
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
@@ -237,13 +142,7 @@ TEST(FontManagerTest, LoadWoff2Data) {
 
   FontHandle handle = mgr.loadFontData(woff2Data);
   EXPECT_TRUE(static_cast<bool>(handle));
-
-  const stbtt_fontinfo* info = mgr.fontInfo(handle);
-  ASSERT_NE(info, nullptr);
-
-  // Should be able to find Latin glyphs (this WOFF2 was created from Public Sans).
-  int glyphIndex = stbtt_FindGlyphIndex(info, 'A');
-  EXPECT_GT(glyphIndex, 0);
+  EXPECT_FALSE(mgr.fontData(handle).empty());
 }
 #endif
 

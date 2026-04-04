@@ -124,10 +124,23 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "stroke_params",
+    hdrs = ["StrokeParams.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/svg/core",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_interface",
-    hdrs = ["RendererInterface.h"],
+    hdrs = [
+        "RendererInterface.h",
+        "StrokeParams.h",
+    ],
     visibility = ["//visibility:public"],
     deps = [
+        ":stroke_params",
         "//donner/base",
         "//donner/css:core",
         "//donner/svg/components",
@@ -204,6 +217,9 @@ donner_cc_library(
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
+    }) + select({
+        ":text_full_enabled": ["DONNER_TEXT_FULL"],
+        "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
     deps = [
@@ -212,7 +228,10 @@ donner_cc_library(
         "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/animation:components",
     ] + select({
-        ":text_enabled": ["//donner/svg/resources:font_manager"],
+        ":text_enabled": [
+            "//donner/svg/resources:font_manager",
+            "//donner/svg/text:text_engine",
+        ],
         "//conditions:default": [],
     }),
 )
@@ -277,73 +296,12 @@ donner_cc_library(
         ":renderer_interface",
         ":renderer_utils",
         ":skia_deps",
-        ":text_backend_full",
-        ":text_engine",
         "//donner/base/fonts",
         "//donner/svg",
         "//donner/svg/core",
         "//donner/svg/renderer/common",
-        "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_engine",
         "//third_party/public-sans",
-    ],
-)
-
-donner_cc_library(
-    name = "text_types",
-    hdrs = ["TextTypes.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        "//donner/svg/resources:font_manager",
-    ],
-)
-
-donner_cc_library(
-    name = "text_backend",
-    hdrs = ["TextBackend.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":text_types",
-        "//donner/svg/core",
-        "//donner/svg/resources:font_manager",
-    ],
-)
-
-donner_cc_library(
-    name = "text_backend_simple",
-    srcs = ["TextBackendSimple.cc"],
-    hdrs = ["TextBackendSimple.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":text_backend",
-        "//donner/svg/resources:font_manager",
-        "@stb//:truetype",
-    ],
-)
-
-donner_cc_library(
-    name = "text_engine",
-    srcs = ["TextEngine.cc"],
-    hdrs = ["TextEngine.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":renderer_interface",
-        ":text_backend",
-        ":text_types",
-        "//donner/base",
-        "//donner/svg/resources:font_manager",
-    ],
-)
-
-donner_cc_library(
-    name = "text_backend_full",
-    srcs = ["TextBackendFull.cc"],
-    hdrs = ["TextBackendFull.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":text_backend",
-        "//donner/svg/resources:font_manager",
-        "@freetype",
-        "@harfbuzz",
     ],
 )
 
@@ -377,11 +335,10 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }) + select({
-        ":text_full_enabled": [":text_backend_full"],
-        ":text_enabled": [":text_backend_simple"],
+        ":text_enabled": ["//donner/svg/text:text_engine"],
         "//conditions:default": [],
     }) + select({
-        ":text_enabled": [":text_engine"],
+        ":text_enabled": ["//donner/svg/text:text_layout_params"],
         "//conditions:default": [],
     }),
 )

@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-#include "donner/svg/renderer/TextBackend.h"
+#include "donner/svg/text/TextBackend.h"
 
 struct hb_font_t;
 
@@ -35,10 +35,10 @@ public:
   bool isCursive(uint32_t codepoint) const override;
   bool hasSmallCapsFeature(FontHandle font) const override;
   std::optional<BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
-                                          float scale) const override;
+                                         float scale) const override;
   ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
-                     size_t byteOffset, size_t byteLength, bool isVertical,
-                     FontVariant fontVariant, bool forceLogicalOrder) const override;
+                     size_t byteOffset, size_t byteLength, bool isVertical, FontVariant fontVariant,
+                     bool forceLogicalOrder) const override;
   double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont, float curSizePx,
                        uint32_t prevCodepoint, uint32_t curCodepoint,
                        bool isVertical) const override;

@@ -4,6 +4,7 @@
 #include <optional>
 #include <set>
 
+#include "donner/base/parser/LengthParser.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -11,7 +12,6 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
-#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
@@ -20,14 +20,6 @@
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
-#include "donner/svg/components/shape/CircleComponent.h"
-#include "donner/svg/components/shape/ComputedPathComponent.h"
-#include "donner/svg/components/shape/EllipseComponent.h"
-#include "donner/svg/components/shape/LineComponent.h"
-#include "donner/svg/components/shape/PathComponent.h"
-#include "donner/svg/components/shape/RectComponent.h"
-#include "donner/base/parser/LengthParser.h"
-#include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
@@ -36,8 +28,20 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
-#include "donner/svg/graph/Reference.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shape/CircleComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/EllipseComponent.h"
+#include "donner/svg/components/shape/LineComponent.h"
+#include "donner/svg/components/shape/PathComponent.h"
+#include "donner/svg/components/shape/RectComponent.h"
+#include "donner/svg/graph/Reference.h"
+#include "donner/svg/parser/TransformParser.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/TextEngine.h"
+#endif
+#include "donner/svg/components/SpatialGrid.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -45,7 +49,6 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
-#include "donner/svg/components/SpatialGrid.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
@@ -113,7 +116,9 @@ public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
                                 const ContextPaintServers& initialContext = {},
                                 bool ignoreNonrenderable = false)
-      : registry_(registry), verbose_(verbose), ignoreNonrenderable_(ignoreNonrenderable),
+      : registry_(registry),
+        verbose_(verbose),
+        ignoreNonrenderable_(ignoreNonrenderable),
         contextPaintServers_(initialContext) {
     // Get the LayoutSystem from the registry context if available
     LayoutSystem* layoutSystem = nullptr;
@@ -561,8 +566,7 @@ public:
     // This gives each entity its own copy, avoiding view iterator sharing conflicts.
     const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
     if (!computedShadow ||
-        !computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenParentMask)
-            .has_value()) {
+        !computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenParentMask).has_value()) {
       return;
     }
 
@@ -614,9 +618,9 @@ public:
 
 private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  Registry& registry_;           //!< Registry being operated on for rendering..
-  bool verbose_;                 //!< If true, enable verbose logging.
-  bool ignoreNonrenderable_;     //!< If true, skip the Nonrenderable behavior check.
+  Registry& registry_;        //!< Registry being operated on for rendering..
+  bool verbose_;              //!< If true, enable verbose logging.
+  bool ignoreNonrenderable_;  //!< If true, skip the Nonrenderable behavior check.
 
   int drawOrder_ = 0;                       //!< The current draw order index.
   Entity lastRenderedEntity_ = entt::null;  //!< The last entity rendered.
@@ -676,22 +680,14 @@ HitTestConfig configFromPointerEvents(PointerEvents pe) {
       return {false, false, false, false, false};  // Should be filtered before this call.
     case PointerEvents::BoundingBox:
       return {false, false, false, false, false};  // Handled separately.
-    case PointerEvents::VisiblePainted:
-      return {true, true, true, true, true};
-    case PointerEvents::VisibleFill:
-      return {true, false, true, false, false};
-    case PointerEvents::VisibleStroke:
-      return {false, true, true, false, false};
-    case PointerEvents::Visible:
-      return {true, true, true, false, false};
-    case PointerEvents::Painted:
-      return {true, true, false, true, true};
-    case PointerEvents::Fill:
-      return {true, false, false, false, false};
-    case PointerEvents::Stroke:
-      return {false, true, false, false, false};
-    case PointerEvents::All:
-      return {true, true, false, false, false};
+    case PointerEvents::VisiblePainted: return {true, true, true, true, true};
+    case PointerEvents::VisibleFill: return {true, false, true, false, false};
+    case PointerEvents::VisibleStroke: return {false, true, true, false, false};
+    case PointerEvents::Visible: return {true, true, true, false, false};
+    case PointerEvents::Painted: return {true, true, false, true, true};
+    case PointerEvents::Fill: return {true, false, false, false, false};
+    case PointerEvents::Stroke: return {false, true, false, false, false};
+    case PointerEvents::All: return {true, true, false, false, false};
   }
   UTILS_UNREACHABLE();
 }
@@ -765,11 +761,10 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
       return true;
     }
 
-    const Vector2d pointInLocal =
-        LayoutSystem()
-            .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-            .inverse()
-            .transformPosition(point);
+    const Vector2d pointInLocal = LayoutSystem()
+                                      .getEntityFromWorldTransform(EntityHandle(registry_, entity))
+                                      .inverse()
+                                      .transformPosition(point);
 
     // Test fill intersection.
     if (config.testFill) {
@@ -869,8 +864,9 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
 
       const auto bounds =
           ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
-      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
-              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
+      if (bounds && bounds->topLeft.x <= rect.bottomRight.x &&
+          bounds->bottomRight.x >= rect.topLeft.x && bounds->topLeft.y <= rect.bottomRight.y &&
+          bounds->bottomRight.y >= rect.topLeft.y) {
         results.push_back(entity);
       }
     }
@@ -885,8 +881,9 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
 
       const auto bounds =
           ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
-      if (bounds && bounds->topLeft.x <= rect.bottomRight.x && bounds->bottomRight.x >= rect.topLeft.x &&
-              bounds->topLeft.y <= rect.bottomRight.y && bounds->bottomRight.y >= rect.topLeft.y) {
+      if (bounds && bounds->topLeft.x <= rect.bottomRight.x &&
+          bounds->bottomRight.x >= rect.topLeft.x && bounds->topLeft.y <= rect.bottomRight.y &&
+          bounds->bottomRight.y >= rect.topLeft.y) {
         results.push_back(*it);
       }
     }
@@ -957,8 +954,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
   // Advance animations after style computation but before layout.
   {
-    const double documentTime =
-        registry_.ctx().get<SVGDocumentContext>().documentTime;
+    const double documentTime = registry_.ctx().get<SVGDocumentContext>().documentTime;
     AnimationSystem().advance(registry_, documentTime, outWarnings);
   }
 
@@ -975,10 +971,8 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
           // which requires an entity handle for this attribute).
           auto result = parser::TransformParser::Parse(attrValue);
           if (result.hasResult()) {
-            auto& transform =
-                registry_.get_or_emplace<components::TransformComponent>(entity);
-            transform.transform.set(CssTransform(result.result()),
-                                    css::Specificity::Override());
+            auto& transform = registry_.get_or_emplace<components::TransformComponent>(entity);
+            transform.transform.set(CssTransform(result.result()), css::Specificity::Override());
           }
         } else if (attrName == "d") {
           // Path 'd' overrides need special handling: update PathComponent directly
@@ -990,11 +984,10 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
             // Invalidate computed path.
             registry_.remove<components::ComputedPathComponent>(entity);
           }
-        } else if (attrName == "cx" || attrName == "cy" || attrName == "r" ||
-                   attrName == "rx" || attrName == "ry" || attrName == "x" ||
-                   attrName == "y" || attrName == "width" || attrName == "height" ||
-                   attrName == "x1" || attrName == "y1" || attrName == "x2" ||
-                   attrName == "y2") {
+        } else if (attrName == "cx" || attrName == "cy" || attrName == "r" || attrName == "rx" ||
+                   attrName == "ry" || attrName == "x" || attrName == "y" || attrName == "width" ||
+                   attrName == "height" || attrName == "x1" || attrName == "y1" ||
+                   attrName == "x2" || attrName == "y2") {
           // Geometry attribute override: parse as length and set on the shape component.
           donner::parser::LengthParser::Options opts;
           opts.unitOptional = true;
@@ -1091,14 +1084,15 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
 
 #ifdef DONNER_TEXT_ENABLED
-  // Create a shared FontManager in the registry context for font-relative unit resolution
-  // (ch, ex). This must happen after loadResources() so @font-face data is available.
+  // Create shared font registry + text engine in the registry context.
+  // This must happen after loadResources() so @font-face data is available.
   {
     auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
     auto& fontManager = registry_.ctx().emplace<FontManager>();
     for (const auto& face : resourceManager.fontFaces()) {
       fontManager.addFontFace(face);
     }
+    registry_.ctx().emplace<TextEngine>(fontManager);
   }
 #endif
 
@@ -1189,13 +1183,11 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
         continue;
       }
       for (auto [branchType, ref] : offscreen->branches()) {
-        const std::optional<size_t> instanceIndex =
-            computedShadow.findOffscreenShadow(branchType);
+        const std::optional<size_t> instanceIndex = computedShadow.findOffscreenShadow(branchType);
         if (!instanceIndex) {
           continue;
         }
-        for (const Entity shadowEntity :
-             computedShadow.offscreenShadowEntities(*instanceIndex)) {
+        for (const Entity shadowEntity : computedShadow.offscreenShadowEntities(*instanceIndex)) {
           const auto* shadowStyle = registry_.try_get<ComputedStyleComponent>(shadowEntity);
           if (!shadowStyle || !shadowStyle->properties) {
             continue;
@@ -1258,8 +1250,8 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     for (auto view = registry_.view<OffscreenShadowTreeComponent>(); auto entity : view) {
       auto [offscreenTree] = view.get(entity);
       // Only process entities that have an OffscreenMask branch.
-      if (auto maskTarget = offscreenTree.branchTargetEntity(registry_,
-                                                              ShadowBranchType::OffscreenMask)) {
+      if (auto maskTarget =
+              offscreenTree.branchTargetEntity(registry_, ShadowBranchType::OffscreenMask)) {
         // Check if the mask element has its own mask= property.
         EntityHandle maskHandle(registry_, *maskTarget);
         const auto* maskStyle = maskHandle.try_get<ComputedStyleComponent>();
@@ -1280,12 +1272,12 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
       auto& offscreen = registry_.get<OffscreenShadowTreeComponent>(entity);
       offscreen.setBranchHref(ShadowBranchType::OffscreenParentMask, parentHref);
 
-      if (auto targetEntity = offscreen.branchTargetEntity(registry_,
-                                                            ShadowBranchType::OffscreenParentMask)) {
+      if (auto targetEntity =
+              offscreen.branchTargetEntity(registry_, ShadowBranchType::OffscreenParentMask)) {
         auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
         const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
-            EntityHandle(registry_, entity), computedShadow,
-            ShadowBranchType::OffscreenParentMask, targetEntity.value(), parentHref, outWarnings);
+            EntityHandle(registry_, entity), computedShadow, ShadowBranchType::OffscreenParentMask,
+            targetEntity.value(), parentHref, outWarnings);
         if (maybeInstanceIndex) {
           const std::span<const Entity> shadowEntities =
               computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());

@@ -23,13 +23,9 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
-#ifdef DONNER_TEXT_FULL
-#include "donner/svg/renderer/TextBackendFull.h"
-#else
-#include "donner/svg/renderer/TextBackendSimple.h"
-#endif
-#include "donner/svg/renderer/TextEngine.h"
 #include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/TextLayoutParams.h"
 #endif
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/PathBuilder.h"
@@ -38,6 +34,33 @@
 namespace donner::svg {
 
 namespace {
+
+#ifdef DONNER_TEXT_ENABLED
+struct TextContext {
+  FontManager fontManager;
+  TextEngine textEngine;
+
+  TextContext() : fontManager(), textEngine(fontManager) {}
+};
+#endif
+
+#ifdef DONNER_TEXT_ENABLED
+TextLayoutParams toTextLayoutParams(const TextParams& params) {
+  TextLayoutParams layoutParams;
+  layoutParams.fontFamilies = params.fontFamilies;
+  layoutParams.fontSize = params.fontSize;
+  layoutParams.viewBox = params.viewBox;
+  layoutParams.fontMetrics = params.fontMetrics;
+  layoutParams.textAnchor = params.textAnchor;
+  layoutParams.dominantBaseline = params.dominantBaseline;
+  layoutParams.writingMode = params.writingMode;
+  layoutParams.letterSpacingPx = params.letterSpacingPx;
+  layoutParams.wordSpacingPx = params.wordSpacingPx;
+  layoutParams.textLength = params.textLength;
+  layoutParams.lengthAdjust = params.lengthAdjust;
+  return layoutParams;
+}
+#endif
 
 const Boxd kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 
@@ -155,9 +178,7 @@ PathSpline transformPathSpline(const PathSpline& spline, const Transformd& trans
                        transform.transformPosition(points[command.pointIndex + 1]),
                        transform.transformPosition(points[command.pointIndex + 2]));
         break;
-      case PathSpline::CommandType::ClosePath:
-        result.closePath();
-        break;
+      case PathSpline::CommandType::ClosePath: result.closePath(); break;
     }
   }
 
@@ -573,7 +594,7 @@ RendererTinySkia::RendererTinySkia(bool verbose) : verbose_(verbose) {}
 
 RendererTinySkia::~RendererTinySkia() {
 #ifdef DONNER_TEXT_ENABLED
-  delete static_cast<FontManager*>(fontManagerPtr_);
+  delete static_cast<TextContext*>(textContextPtr_);
 #endif
 }
 RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
@@ -621,8 +642,8 @@ void RendererTinySkia::setTransform(const Transformd& transform) {
     if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
       // Offset the transform so content at negative device coordinates renders into the
       // expanded filter buffer. Same pattern as PatternTile's rasterFromTile adjustment.
-      currentTransform_ = transform * Transformd::Translate(
-          frame.filterBufferOffsetX, frame.filterBufferOffsetY);
+      currentTransform_ =
+          transform * Transformd::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
     } else {
       currentTransform_ = transform;
     }
@@ -734,10 +755,8 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
     const Boxd deviceRegion = currentTransform_.transformBox(*filterRegion);
     const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
     const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
-    const int regionX1 =
-        static_cast<int>(std::ceil(deviceRegion.bottomRight.x));
-    const int regionY1 =
-        static_cast<int>(std::ceil(deviceRegion.bottomRight.y));
+    const int regionX1 = static_cast<int>(std::ceil(deviceRegion.bottomRight.x));
+    const int regionY1 = static_cast<int>(std::ceil(deviceRegion.bottomRight.y));
 
     // Expand buffer to cover the union of viewport and filter region AABB.
     bufferX0 = std::min(0, regionX0);
@@ -793,8 +812,8 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   // need to fix the already-set transform for the element being filtered.
   const auto& pushedFrame = surfaceStack_.back();
   if (pushedFrame.filterBufferOffsetX != 0 || pushedFrame.filterBufferOffsetY != 0) {
-    currentTransform_ = currentTransform_ * Transformd::Translate(
-        pushedFrame.filterBufferOffsetX, pushedFrame.filterBufferOffsetY);
+    currentTransform_ = currentTransform_ * Transformd::Translate(pushedFrame.filterBufferOffsetX,
+                                                                  pushedFrame.filterBufferOffsetY);
   }
 #else
   UTILS_UNUSED(filterGraph);
@@ -896,8 +915,7 @@ void RendererTinySkia::popFilterLayer() {
       // Operator* convention: (A * B)(p) = B(A(p)), so A is applied first.
       const Transformd deviceFromLocal =
           Transformd::Scale(1.0 / scaleX, 1.0 / scaleY) *
-          Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
-          deviceFromFilter;
+          Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) * deviceFromFilter;
 
       tiny_skia::PixmapPaint compositePaint;
       compositePaint.opacity = 1.0f;
@@ -916,8 +934,8 @@ void RendererTinySkia::popFilterLayer() {
     // coordinates), adjust the deviceFromFilter transform to include the offset.
     const Transformd bufferDeviceFromFilter =
         (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
-            ? frame.deviceFromFilter * Transformd::Translate(
-                  frame.filterBufferOffsetX, frame.filterBufferOffsetY)
+            ? frame.deviceFromFilter *
+                  Transformd::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
             : frame.deviceFromFilter;
 
     ApplyFilterGraphToPixmap(
@@ -1354,29 +1372,16 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     return;
   }
 
-  // Lazy-initialize the font manager.
-  if (!fontManagerPtr_) {
-    fontManagerPtr_ = new FontManager();
+  // Lazy-initialize the font engine.
+  if (!textContextPtr_) {
+    textContextPtr_ = new TextContext();
   }
-  auto& fontManager = *static_cast<FontManager*>(fontManagerPtr_);
-
-  // Register @font-face declarations so custom fonts can be resolved.
-  // Only add new faces (faces_ grows monotonically, so track how many we've seen).
-  const size_t existingFaces = fontManager.numFaces();
-  if (params.fontFaces.size() > existingFaces) {
-    for (size_t i = existingFaces; i < params.fontFaces.size(); ++i) {
-      fontManager.addFontFace(params.fontFaces[i]);
-    }
+  auto& textContext = *static_cast<TextContext*>(textContextPtr_);
+  for (const auto& face : params.fontFaces) {
+    textContext.fontManager.addFontFace(face);
   }
-
-#ifdef DONNER_TEXT_FULL
-  TextBackendFull backend(fontManager);
-#else
-  TextBackendSimple backend(fontManager);
-#endif
-  TextEngine engine(backend, fontManager);
-  std::vector<TextRun> runs = engine.layout(text, params);
-
+  const TextLayoutParams layoutParams = toTextLayoutParams(params);
+  std::vector<TextRun> runs = textContext.textEngine.layout(text, layoutParams);
 
   float scale = 0.0f;
   const float fontSizePx = static_cast<float>(
@@ -1404,11 +1409,12 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       }
 
       // Get font metrics for this run to compute proper em-box vertical extent.
-      float runScale = run.font ? backend.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+      float runScale =
+          run.font ? textContext.textEngine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
       double emTop = static_cast<double>(runFontSizePx);  // fallback: full font size above baseline
-      double emBottom = 0.0;                               // fallback: baseline
+      double emBottom = 0.0;                              // fallback: baseline
       if (run.font && runScale > 0.0f) {
-        const FontVMetrics metrics = backend.fontVMetrics(run.font);
+        const FontVMetrics metrics = textContext.textEngine.fontVMetrics(run.font);
         // ascent is positive (above baseline), descent is negative (below baseline).
         // In SVG's y-down space: top = baseline - ascent*scale, bottom = baseline - descent*scale.
         emTop = static_cast<double>(metrics.ascent) * runScale;
@@ -1438,8 +1444,8 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     paint.unpremulStore = surfaceStack_.empty();
 
     css::RGBA rgba = color.rgba();
-    rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) *
-                                             params.opacity * paintOpacity_ * spanOpacity));
+    rgba.a = static_cast<uint8_t>(
+        std::round(static_cast<double>(rgba.a) * params.opacity * paintOpacity_ * spanOpacity));
     paint.shader = toTinyColor(rgba);
     return paint;
   };
@@ -1467,10 +1473,10 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     }
 
     if (run.font != FontHandle()) {
-      scale = backend.scaleForPixelHeight(run.font, spanFontSizePx);
+      scale = textContext.textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
     }
 
-    const bool isBitmapFont = run.font && backend.isBitmapOnly(run.font);
+    const bool isBitmapFont = run.font && textContext.textEngine.isBitmapOnly(run.font);
     if (!isBitmapFont && scale == 0.0f) {
       continue;
     }
@@ -1481,8 +1487,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
       const float spanFillOpacity = NarrowToFloat(paint_.fillOpacity);
 
-      if (const auto* solid =
-              std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+      if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
         // Per-span solid fill color.
         spanFillPaint = makeSolidFillPaint(
             css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
@@ -1492,7 +1497,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
         // for objectBoundingBox mapping, per SVG spec ("tspan doesn't have a bbox").
         const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
         if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
-                                                     spanCurrentColor, combinedOpacity)) {
+                                                    spanCurrentColor, combinedOpacity)) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.unpremulStore = surfaceStack_.empty();
           paint.shader = std::move(*shader);
@@ -1514,21 +1519,20 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
       PathSpline glyphPath;
       if (!isBitmapFont) {
-        glyphPath = backend.glyphOutline(run.font, glyph.glyphIndex,
-                                         scale * glyph.fontSizeScale);
+        glyphPath = textContext.textEngine.glyphOutline(run.font, glyph.glyphIndex,
+                                                        scale * glyph.fontSizeScale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = backend.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        auto bitmap = textContext.textEngine.bitmapGlyph(run.font, glyph.glyphIndex, scale);
         // DEBUG
         if (bitmap) {
           // Premultiply alpha for correct blending.
           std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
           auto maybePixmap = tiny_skia::Pixmap::fromVec(
-              std::move(premul),
-              tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
-                                 static_cast<uint32_t>(bitmap->height)));
+              std::move(premul), tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
+                                                    static_cast<uint32_t>(bitmap->height)));
           if (!maybePixmap.has_value()) {
             continue;
           }
@@ -1542,9 +1546,9 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
           // Use the same transform pattern as drawImage: Scale * Translate * currentTransform_.
           const double imgScaleX = targetW / static_cast<double>(bitmap->width);
           const double imgScaleY = targetH / static_cast<double>(bitmap->height);
-          const Transformd imageFromLocal =
-              Transformd::Scale(imgScaleX, imgScaleY) *
-              Transformd::Translate(Vector2d(targetX, targetY)) * currentTransform_;
+          const Transformd imageFromLocal = Transformd::Scale(imgScaleX, imgScaleY) *
+                                            Transformd::Translate(Vector2d(targetX, targetY)) *
+                                            currentTransform_;
 
           tiny_skia::PixmapPaint paint;
           paint.opacity = NarrowToFloat(paintOpacity_);
@@ -1552,8 +1556,7 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
           paint.quality = tiny_skia::FilterQuality::Bilinear;
           paint.unpremulStore = surfaceStack_.empty();
 
-          const tiny_skia::Mask* mask =
-              currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+          const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
           auto pixmapView = currentPixmapView();
           tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
                                          toTinyTransform(imageFromLocal), mask);
@@ -1566,12 +1569,13 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       }
 
       // Place glyph geometry in document space, then let the renderer's current transform map it
-      // to device space. This avoids relying on composed affine semantics that differ from TinySkia's.
+      // to device space. This avoids relying on composed affine semantics that differ from
+      // TinySkia's.
       Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
       if (glyph.rotateDegrees != 0.0) {
-        glyphFromLocal = Transformd::Rotate(glyph.rotateDegrees *
-                                            MathConstants<double>::kPi / 180.0) *
-                         glyphFromLocal;
+        glyphFromLocal =
+            Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+            glyphFromLocal;
       }
 
       const tiny_skia::Path tinyPath = toTinyPath(transformPathSpline(glyphPath, glyphFromLocal));
@@ -1593,21 +1597,21 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
     // Draw text-decoration lines using font metrics.
     if (params.textDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
-      const FontVMetrics vmetrics = backend.fontVMetrics(run.font);
+      const FontVMetrics vmetrics = textContext.textEngine.fontVMetrics(run.font);
       const int ascent = vmetrics.ascent;
       const int descent = vmetrics.descent;
 
       // Read underline position/thickness from the font's 'post' table.
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
-      if (auto ul = backend.underlineMetrics(run.font)) {
+      if (auto ul = textContext.textEngine.underlineMetrics(run.font)) {
         fontUnderlinePos = ul->position;
         fontUnderlineThick = ul->thickness;
       }
 
       // Post table metrics are in font design units — scale by fontSize/unitsPerEm, not by
       // scaleForPixelHeight (which normalizes to ascent-descent height instead of em).
-      const float emScale = backend.scaleForEmToPixels(run.font, fontSizePx);
+      const float emScale = textContext.textEngine.scaleForEmToPixels(run.font, fontSizePx);
       // Use font metrics for thickness, with heuristic fallback.
       const double thickness = fontUnderlineThick > 0.0
                                    ? fontUnderlineThick * emScale
@@ -1632,9 +1636,8 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       const double decoTopY = decoOffsetY - thickness / 2.0;
 
       // Check if any glyph has rotation — if so, draw per-glyph decoration segments.
-      const bool hasRotation = std::any_of(
-          run.glyphs.begin(), run.glyphs.end(),
-          [](const auto& g) { return g.rotateDegrees != 0.0; });
+      const bool hasRotation = std::any_of(run.glyphs.begin(), run.glyphs.end(),
+                                           [](const auto& g) { return g.rotateDegrees != 0.0; });
 
       if (hasRotation) {
         // Per-glyph decoration: each segment is a rectangle under the glyph, rotated with it.
@@ -1654,9 +1657,9 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
           // Apply the same transform as the glyph: rotate then translate.
           Transformd segTransform = Transformd::Translate(glyph.xPosition, glyph.yPosition);
           if (glyph.rotateDegrees != 0.0) {
-            segTransform = Transformd::Rotate(glyph.rotateDegrees *
-                                              MathConstants<double>::kPi / 180.0) *
-                           segTransform;
+            segTransform =
+                Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                segTransform;
           }
 
           const tiny_skia::Path tinySegPath =

@@ -17,14 +17,14 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
-#include "donner/svg/core/MixBlendMode.h"
-#include "donner/svg/core/WritingMode.h"
 #include "donner/svg/core/FillRule.h"
 #include "donner/svg/core/LengthAdjust.h"
+#include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/PathSpline.h"
-#include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/core/WritingMode.h"
+#include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg {
@@ -66,25 +66,6 @@ struct PathShape {
   /// Layer index for boolean combination: paths on the same layer are unioned, layers are
   /// intersected.
   int layer = 0;
-};
-
-/**
- * Stroke configuration used for path and primitive drawing.
- */
-struct StrokeParams {
-  /// Stroke width in user units.
-  double strokeWidth = 0.0;
-  StrokeLinecap lineCap = StrokeLinecap::Butt;
-  StrokeLinejoin lineJoin = StrokeLinejoin::Miter;
-  /// Maximum miter ratio before converting to bevel.
-  double miterLimit = 4.0;
-  /// Dash pattern lengths alternating on/off segments.
-  std::vector<double> dashArray;
-  /// Dash phase offset.
-  double dashOffset = 0.0;
-  /// SVG pathLength attribute value; 0 means unused. When non-zero, dash arrays and offsets are
-  /// scaled by the ratio of the actual path length to this value.
-  double pathLength = 0.0;
 };
 
 /**
