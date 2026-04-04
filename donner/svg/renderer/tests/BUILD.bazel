@@ -1,4 +1,10 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "renderer_backend_compatible_with")
+load(
+    "//build_defs:rules.bzl",
+    "donner_cc_library",
+    "donner_cc_test",
+    "donner_transitioned_executable",
+    "renderer_backend_compatible_with",
+)
 
 donner_cc_library(
     name = "renderer_image_test_utils",
@@ -72,7 +78,7 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "renderer_tests",
+    name = "renderer_tests_impl",
     srcs = [
         "Renderer_tests.cc",
     ],
@@ -84,6 +90,26 @@ donner_cc_test(
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_transitioned_executable(
+    name = "renderer_tests_tiny_skia",
+    dep = ":renderer_tests_impl",
+    renderer_backend = "tiny_skia",
+    testonly = 1,
+)
+
+donner_transitioned_executable(
+    name = "renderer_tests_skia",
+    dep = ":renderer_tests_impl",
+    renderer_backend = "skia",
+    testonly = 1,
+)
+
+alias(
+    name = "renderer_tests",
+    actual = ":renderer_tests_tiny_skia",
+    testonly = 1,
 )
 
 donner_cc_test(
@@ -133,7 +159,7 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "resvg_test_suite",
+    name = "resvg_test_suite_impl",
     srcs = [
         "resvg_test_suite.cc",
     ],
@@ -148,6 +174,26 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_transitioned_executable(
+    name = "resvg_test_suite_tiny_skia",
+    dep = ":resvg_test_suite_impl",
+    renderer_backend = "tiny_skia",
+    testonly = 1,
+)
+
+donner_transitioned_executable(
+    name = "resvg_test_suite_skia",
+    dep = ":resvg_test_suite_impl",
+    renderer_backend = "skia",
+    testonly = 1,
+)
+
+alias(
+    name = "resvg_test_suite",
+    actual = ":resvg_test_suite_tiny_skia",
+    testonly = 1,
 )
 
 donner_cc_test(
