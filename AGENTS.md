@@ -32,6 +32,9 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
 - Apply `const` generously; mark single‑argument constructors `explicit` unless intended implicit.
 - Use `enum class` and provide `operator<<` for debugging.
 - Assert preconditions using `UTILS_RELEASE_ASSERT` or `assert` for debug builds.
+- Do not introduce `std::any` in Donner code. Prefer concrete value types, `std::variant`,
+  forward declarations, or existing handle/value wrappers. If a type already behaves like a cheap
+  value handle, store it by value instead of type-erasing it.
 
 ## Architecture
 

@@ -11,6 +11,8 @@
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/FontResource.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/resources/SubDocumentCache.h"
+#include "donner/svg/core/ProcessingMode.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::components {
@@ -41,6 +43,36 @@ public:
   void setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
     loader_ = std::move(loader);
   }
+
+  /**
+   * Set the processing mode for this document. In secure modes (\ref ProcessingMode::SecureStatic,
+   * \ref ProcessingMode::SecureAnimated), external resource loading is disabled per SVG2 §2.7.1.
+   *
+   * @param mode Processing mode to set.
+   */
+  void setProcessingMode(ProcessingMode mode) { processingMode_ = mode; }
+
+  /**
+   * Set the callback used to parse SVG content into sub-documents. This is called when an
+   * `<image>` element references an SVG file. The callback is injected to avoid circular
+   * build dependencies between the component layer and `SVGParser`.
+   *
+   * @param callback Callback that parses SVG bytes into an \ref SVGDocumentHandle.
+   */
+  void setSvgParseCallback(SubDocumentCache::ParseCallback callback) {
+    svgParseCallback_ = std::move(callback);
+  }
+
+  /**
+   * Load an external SVG document by URL, for use by `<use>` elements referencing external files.
+   * The document is cached in the \\ref SubDocumentCache.
+   *
+   * @param url URL of the external SVG to load.
+   * @param outWarnings If non-null, warnings will be added to this vector.
+   * @return Parsed document handle, or `std::nullopt` on failure.
+   */
+  std::optional<SVGDocumentHandle> loadExternalSVG(const RcString& url,
+                                                   std::vector<ParseError>* outWarnings);
 
   /**
    * Get the size of an image resource for an entity, if it has one and successfully loaded.
@@ -83,6 +115,12 @@ private:
 
   /// A list of all successfully loaded fonts.
   std::vector<FontResource> loadedFonts_;
+
+  /// Processing mode for this document.
+  ProcessingMode processingMode_ = ProcessingMode::DynamicInteractive;
+
+  /// Callback to parse SVG content into sub-documents (injected to avoid circular deps).
+  SubDocumentCache::ParseCallback svgParseCallback_;
 };
 
 }  // namespace donner::svg::components

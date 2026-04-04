@@ -22,6 +22,7 @@ cc_library(
         "Pattern.h",
         "PointerEvents.h",
         "PreserveAspectRatio.h",
+        "ProcessingMode.h",
         "Stroke.h",
         "TransformOrigin.h",
         "UserAgentStylesheet.h",

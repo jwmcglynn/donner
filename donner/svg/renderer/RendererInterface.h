@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "donner/base/Box.h"
-#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/RcString.h"
+#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
@@ -141,7 +141,7 @@ struct TextParams {
  * Backend-agnostic rendering interface consumed by the traversal driver.
  */
 class RendererInterface {
- public:
+public:
   virtual ~RendererInterface() = default;
 
   /**
@@ -287,6 +287,16 @@ class RendererInterface {
    * consumers. The snapshot must remain valid after the render pass completes.
    */
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
+
+  /**
+   * Creates an independent offscreen renderer instance of the same type as this one.
+   * Used for rendering sub-documents into intermediate pixmaps when a backend needs an isolated
+   * offscreen pass.
+   * Returns nullptr if offscreen rendering is not supported.
+   */
+  [[nodiscard]] virtual std::unique_ptr<RendererInterface> createOffscreenInstance() const {
+    return nullptr;
+  }
 };
 
 }  // namespace donner::svg

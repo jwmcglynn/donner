@@ -147,6 +147,7 @@ public:
    * Captures a CPU-readable snapshot of the last-rendered frame.
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+  [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
   /**
    * Render the given \ref SVGDocument into ASCII art. The generated image is of given size, and has
