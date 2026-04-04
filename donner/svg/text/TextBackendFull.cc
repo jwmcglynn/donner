@@ -84,6 +84,34 @@ uint32_t decodeCodepointAt(std::string_view str, size_t byteOffset) {
 /// FT_Face. We also hold our own reference (from FT_New_Memory_Face). Destruction order: destroy
 /// hb_font first (decrefs FT_Face from 2->1), then FT_Done_Face (decrefs 1->0, frees).
 struct TextBackendFull::HbFontEntry {
+  HbFontEntry() = default;
+  HbFontEntry(const HbFontEntry&) = delete;
+  HbFontEntry& operator=(const HbFontEntry&) = delete;
+
+  HbFontEntry(HbFontEntry&& other) noexcept : font(other.font), ftFace(other.ftFace) {
+    other.font = nullptr;
+    other.ftFace = nullptr;
+  }
+
+  HbFontEntry& operator=(HbFontEntry&& other) noexcept {
+    if (this == &other) {
+      return *this;
+    }
+
+    if (font) {
+      hb_font_destroy(font);
+    }
+    if (ftFace) {
+      FT_Done_Face(ftFace);
+    }
+
+    font = other.font;
+    ftFace = other.ftFace;
+    other.font = nullptr;
+    other.ftFace = nullptr;
+    return *this;
+  }
+
   hb_font_t* font = nullptr;
   FT_Face ftFace = nullptr;
 
@@ -101,7 +129,8 @@ struct TextBackendFull::HbFontEntry {
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-TextBackendFull::TextBackendFull(FontManager& fontManager) : fontManager_(fontManager) {}
+TextBackendFull::TextBackendFull(FontManager& fontManager, Registry& registry)
+    : fontManager_(fontManager), registry_(registry) {}
 
 TextBackendFull::~TextBackendFull() = default;
 
@@ -114,9 +143,8 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
     return nullptr;
   }
 
-  const auto idx = static_cast<size_t>(handle.index());
-  if (idx < hbFonts_.size() && hbFonts_[idx]) {
-    return hbFonts_[idx]->font;
+  if (const auto* entry = registry_.try_get<HbFontEntry>(handle.entity())) {
+    return entry->font;
   }
 
   // Create a FreeType face from the raw font data, then wrap it with HarfBuzz.
@@ -125,42 +153,38 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
     return nullptr;
   }
 
-  auto entry = std::make_unique<HbFontEntry>();
+  auto& entry = registry_.emplace<HbFontEntry>(handle.entity());
 
   // FT_New_Memory_Face does NOT copy the data — it keeps a pointer. The font data is owned by
   // FontManager (via shared_ptr), so it outlives the FT_Face.
   FT_Error err = FT_New_Memory_Face(getFtLibrary(), data.data(), static_cast<FT_Long>(data.size()),
-                                    0, &entry->ftFace);
+                                    0, &entry.ftFace);
   if (err != 0) {
+    registry_.remove<HbFontEntry>(handle.entity());
     return nullptr;
   }
 
   // Set a default size (will be overridden per shaping call).
   // For bitmap-only fonts (CBDT), use FT_Select_Size to pick the first strike;
   // FT_Set_Char_Size fails for non-scalable fonts.
-  if (entry->ftFace->num_fixed_sizes > 0 && !FT_IS_SCALABLE(entry->ftFace)) {
-    FT_Select_Size(entry->ftFace, 0);
+  if (entry.ftFace->num_fixed_sizes > 0 && !FT_IS_SCALABLE(entry.ftFace)) {
+    FT_Select_Size(entry.ftFace, 0);
   } else {
-    FT_Set_Char_Size(entry->ftFace, 0, 16 * 64, 72, 72);
+    FT_Set_Char_Size(entry.ftFace, 0, 16 * 64, 72, 72);
   }
 
   // Create HarfBuzz font backed by FreeType for GSUB/GPOS shaping.
-  entry->font = hb_ft_font_create_referenced(entry->ftFace);
+  entry.font = hb_ft_font_create_referenced(entry.ftFace);
+  if (!entry.font) {
+    registry_.remove<HbFontEntry>(handle.entity());
+    return nullptr;
+  }
 
   // Disable hinting for glyph outline extraction so outlines match raw font data
   // (consistent with stb_truetype and resvg's ttf-parser). Hinting changes glyph
   // proportions, causing width/height mismatches against reference renderers.
-  hb_ft_font_set_load_flags(entry->font, FT_LOAD_NO_HINTING);
-
-  hb_font_t* result = entry->font;
-
-  // Store in cache.
-  if (idx >= hbFonts_.size()) {
-    hbFonts_.resize(idx + 1);
-  }
-  hbFonts_[idx] = std::move(entry);
-
-  return result;
+  hb_ft_font_set_load_flags(entry.font, FT_LOAD_NO_HINTING);
+  return entry.font;
 }
 
 // ---------------------------------------------------------------------------
@@ -415,11 +439,11 @@ std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle 
   }
 
   // Use the cached entry's FT_Face directly.
-  const auto idx = static_cast<size_t>(font.index());
-  if (idx >= hbFonts_.size() || !hbFonts_[idx] || !hbFonts_[idx]->ftFace) {
+  const auto* entry = registry_.try_get<HbFontEntry>(font.entity());
+  if (!entry || !entry->ftFace) {
     return std::nullopt;
   }
-  FT_Face ftFace = hbFonts_[idx]->ftFace;
+  FT_Face ftFace = entry->ftFace;
 
   // For bitmap-only fonts (CBDT), select the best available strike size.
   if (ftFace->num_fixed_sizes > 0) {

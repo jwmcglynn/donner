@@ -296,7 +296,7 @@ public:
   /**
    * Draws pre-shaped text with the provided paint parameters.
    */
-  virtual void drawText(const components::ComputedTextComponent& text,
+  virtual void drawText(Registry& registry, const components::ComputedTextComponent& text,
                         const TextParams& params) = 0;
 
   /**

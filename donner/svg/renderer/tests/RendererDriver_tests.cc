@@ -107,7 +107,8 @@ public:
   MOCK_METHOD(void, drawEllipse, (const Boxd& bounds, const StrokeParams& stroke), (override));
   MOCK_METHOD(void, drawImage, (const ImageResource& image, const ImageParams& params), (override));
   MOCK_METHOD(void, drawText,
-              (const components::ComputedTextComponent& text, const TextParams& params),
+              (Registry & registry, const components::ComputedTextComponent& text,
+               const TextParams& params),
               (override));
   MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
 };
@@ -235,8 +236,9 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
   EXPECT_CALL(renderer, endFrame()).Times(1);
   EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
-  EXPECT_CALL(renderer,
-              drawText(_, Field(&TextParams::fillColor, Eq(css::Color(css::RGBA(0, 255, 0, 255))))))
+  EXPECT_CALL(
+      renderer,
+      drawText(_, _, Field(&TextParams::fillColor, Eq(css::Color(css::RGBA(0, 255, 0, 255))))))
       .Times(AtLeast(1));
 
   driver.draw(document);

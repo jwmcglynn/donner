@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/css/FontFace.h"
 
 namespace donner::svg {
@@ -21,19 +22,19 @@ public:
   FontHandle() = default;
 
   /// Returns true if this handle is valid (refers to a loaded font).
-  explicit operator bool() const { return index_ >= 0; }
+  explicit operator bool() const { return entity_ != entt::null; }
 
   /// Equality comparison.
-  bool operator==(const FontHandle& other) const { return index_ == other.index_; }
-  bool operator!=(const FontHandle& other) const { return index_ != other.index_; }
+  bool operator==(const FontHandle& other) const { return entity_ == other.entity_; }
+  bool operator!=(const FontHandle& other) const { return entity_ != other.entity_; }
 
-  /// Get the raw index (for internal use and hash maps).
-  int index() const { return index_; }
+  /// Get the raw entity identifier (for internal use and hash maps).
+  Entity entity() const { return entity_; }
 
 private:
   friend class FontManager;
-  explicit FontHandle(int index) : index_(index) {}
-  int index_ = -1;
+  explicit FontHandle(Entity entity) : entity_(entity) {}
+  Entity entity_ = entt::null;
 };
 
 }  // namespace donner::svg
@@ -41,7 +42,7 @@ private:
 template <>
 struct std::hash<donner::svg::FontHandle> {
   size_t operator()(const donner::svg::FontHandle& h) const noexcept {
-    return std::hash<int>{}(h.index());
+    return std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(h.entity()));
   }
 };
 
@@ -56,15 +57,17 @@ namespace donner::svg {
  * - Loading WOFF 1.0 fonts via the existing WoffParser, reconstructing the sfnt byte stream,
  *   then storing the reconstructed sfnt bytes.
  * - Resolving `@font-face` source cascades.
+ * - Caching resolved family/style lookups to avoid repeated face scans.
  * - Falling back to the embedded Public Sans font when no match is found.
- * - Caching loaded fonts by family name for reuse.
+ * - Storing backend caches on the same font entity as the loaded bytes.
  *
- * The font data is owned by FontManager and remains valid for the lifetime of the manager so
- * text backends can create their own parsed font objects from the raw bytes.
+ * FontManager uses entt entities to store font data, with one entity per registered `@font-face`
+ * rule or directly-loaded font. Text backends can cache parsed backend objects directly on the same
+ * entity.
  */
 class FontManager {
 public:
-  FontManager();
+  explicit FontManager(Registry& registry);
   ~FontManager();
 
   // Non-copyable, non-movable.
@@ -85,7 +88,7 @@ public:
    * Find or load a font matching the given family name.
    *
    * Resolution order:
-   * 1. Return a cached font if one exists for this family.
+   * 1. Return an already-loaded entity if the best matching face has already been resolved.
    * 2. Walk registered `@font-face` rules whose `font-family` matches, trying each source.
    * 3. Fall back to the embedded Public Sans font.
    *
@@ -139,7 +142,7 @@ public:
   /**
    * Get the number of registered @font-face rules.
    */
-  size_t numFaces() const { return faces_.size(); }
+  size_t numFaces() const;
 
   /**
    * Get the family name of a registered @font-face rule by index.
@@ -147,12 +150,7 @@ public:
    * @param index Index into the registered faces (0 to numFaces()-1).
    * @return The family name, or empty string_view if index is out of range.
    */
-  std::string_view faceFamilyName(size_t index) const {
-    if (index < faces_.size()) {
-      return faces_[index].familyName;
-    }
-    return {};
-  }
+  std::string_view faceFamilyName(size_t index) const;
 
   /**
    * Get the handle for the embedded fallback font (Public Sans).
@@ -160,27 +158,29 @@ public:
   FontHandle fallbackFont();
 
 private:
-  friend class FontManager;
-
-  struct LoadedFont;
+  struct FontFaceComponent;
+  struct LoadedFontComponent;
 
   /**
    * Internal: load raw TTF/OTF data (not WOFF) from an owned buffer.
    *
+   * @param entity Target entity.
    * @param data Owned font data buffer. Must remain valid for the lifetime of the FontManager.
-   * @return A valid FontHandle on success, or an invalid handle on failure.
+   * @return True on success.
    */
-  FontHandle loadRawFont(std::vector<uint8_t> data);
-  FontHandle loadRawFont(std::shared_ptr<const std::vector<uint8_t>> sharedData);
-  FontHandle loadFontDataShared(const std::shared_ptr<const std::vector<uint8_t>>& data);
+  bool setRawFontData(Entity entity, std::vector<uint8_t> data);
+  bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData);
+  bool loadFontDataSharedIntoEntity(Entity entity,
+                                    const std::shared_ptr<const std::vector<uint8_t>>& data);
 
   /**
    * Internal: load a WOFF 1.0 font by parsing and reconstructing the sfnt byte stream.
    *
+   * @param entity Target entity.
    * @param data Raw WOFF data.
-   * @return A valid FontHandle on success, or an invalid handle on failure.
+   * @return True on success.
    */
-  FontHandle loadWoff1(std::span<const uint8_t> data);
+  bool loadWoff1(Entity entity, std::span<const uint8_t> data);
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
   /**
@@ -188,20 +188,30 @@ private:
    *
    * Only available when built with the `text_full` feature flag.
    *
+   * @param entity Target entity.
    * @param data Raw WOFF2 data.
-   * @return A valid FontHandle on success, or an invalid handle on failure.
+   * @return True on success.
    */
-  FontHandle loadWoff2(std::span<const uint8_t> data);
+  bool loadWoff2(Entity entity, std::span<const uint8_t> data);
 #endif
 
-  /// Registered @font-face rules.
-  std::vector<css::FontFace> faces_;
+  /**
+   * Internal: load font bytes into an existing entity.
+   *
+   * @param entity Target entity.
+   * @param data Raw font file bytes.
+   * @return True on success.
+   */
+  bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data);
 
-  /// Cache: family name → FontHandle.
+  /// Returns true if \p handle refers to a live font entity in the registry.
+  bool isValidHandle(FontHandle handle) const;
+
+  /// Internal EnTT storage for font faces, loaded font bytes, and backend caches.
+  Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+
+  /// Cache: family/style query key → resolved font handle.
   std::unordered_map<std::string, FontHandle> cache_;
-
-  /// All loaded fonts. Indices correspond to FontHandle::index_.
-  std::vector<std::unique_ptr<LoadedFont>> fonts_;
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;

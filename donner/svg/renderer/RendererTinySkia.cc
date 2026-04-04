@@ -36,15 +36,6 @@ namespace donner::svg {
 namespace {
 
 #ifdef DONNER_TEXT_ENABLED
-struct TextContext {
-  FontManager fontManager;
-  TextEngine textEngine;
-
-  TextContext() : fontManager(), textEngine(fontManager) {}
-};
-#endif
-
-#ifdef DONNER_TEXT_ENABLED
 TextLayoutParams toTextLayoutParams(const TextParams& params) {
   TextLayoutParams layoutParams;
   layoutParams.fontFamilies = params.fontFamilies;
@@ -592,11 +583,7 @@ double computeBlurPadding(const components::FilterGraph& filterGraph) {
 
 RendererTinySkia::RendererTinySkia(bool verbose) : verbose_(verbose) {}
 
-RendererTinySkia::~RendererTinySkia() {
-#ifdef DONNER_TEXT_ENABLED
-  delete static_cast<TextContext*>(textContextPtr_);
-#endif
-}
+RendererTinySkia::~RendererTinySkia() = default;
 RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
 RendererTinySkia& RendererTinySkia::operator=(RendererTinySkia&&) noexcept = default;
 
@@ -1365,23 +1352,21 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
                                  toTinyTransform(imageFromLocal), mask);
 }
 
-void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
+void RendererTinySkia::drawText(Registry& registry, const components::ComputedTextComponent& text,
                                 const TextParams& params) {
 #ifdef DONNER_TEXT_ENABLED
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
   }
 
-  // Lazy-initialize the font engine.
-  if (!textContextPtr_) {
-    textContextPtr_ = new TextContext();
+  if (!registry.ctx().contains<TextEngine>()) {
+    maybeWarnUnsupportedText();
+    return;
   }
-  auto& textContext = *static_cast<TextContext*>(textContextPtr_);
-  for (const auto& face : params.fontFaces) {
-    textContext.fontManager.addFontFace(face);
-  }
+
+  auto& textEngine = registry.ctx().get<TextEngine>();
   const TextLayoutParams layoutParams = toTextLayoutParams(params);
-  std::vector<TextRun> runs = textContext.textEngine.layout(text, layoutParams);
+  std::vector<TextRun> runs = textEngine.layout(text, layoutParams);
 
   float scale = 0.0f;
   const float fontSizePx = static_cast<float>(
@@ -1409,12 +1394,11 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
       }
 
       // Get font metrics for this run to compute proper em-box vertical extent.
-      float runScale =
-          run.font ? textContext.textEngine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+      float runScale = run.font ? textEngine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
       double emTop = static_cast<double>(runFontSizePx);  // fallback: full font size above baseline
       double emBottom = 0.0;                              // fallback: baseline
       if (run.font && runScale > 0.0f) {
-        const FontVMetrics metrics = textContext.textEngine.fontVMetrics(run.font);
+        const FontVMetrics metrics = textEngine.fontVMetrics(run.font);
         // ascent is positive (above baseline), descent is negative (below baseline).
         // In SVG's y-down space: top = baseline - ascent*scale, bottom = baseline - descent*scale.
         emTop = static_cast<double>(metrics.ascent) * runScale;
@@ -1473,10 +1457,10 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
     }
 
     if (run.font != FontHandle()) {
-      scale = textContext.textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
+      scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
     }
 
-    const bool isBitmapFont = run.font && textContext.textEngine.isBitmapOnly(run.font);
+    const bool isBitmapFont = run.font && textEngine.isBitmapOnly(run.font);
     if (!isBitmapFont && scale == 0.0f) {
       continue;
     }
@@ -1519,13 +1503,13 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
       PathSpline glyphPath;
       if (!isBitmapFont) {
-        glyphPath = textContext.textEngine.glyphOutline(run.font, glyph.glyphIndex,
-                                                        scale * glyph.fontSizeScale);
+        glyphPath =
+            textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = textContext.textEngine.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        auto bitmap = textEngine.bitmapGlyph(run.font, glyph.glyphIndex, scale);
         // DEBUG
         if (bitmap) {
           // Premultiply alpha for correct blending.
@@ -1597,21 +1581,21 @@ void RendererTinySkia::drawText(const components::ComputedTextComponent& text,
 
     // Draw text-decoration lines using font metrics.
     if (params.textDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
-      const FontVMetrics vmetrics = textContext.textEngine.fontVMetrics(run.font);
+      const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
       const int ascent = vmetrics.ascent;
       const int descent = vmetrics.descent;
 
       // Read underline position/thickness from the font's 'post' table.
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
-      if (auto ul = textContext.textEngine.underlineMetrics(run.font)) {
+      if (auto ul = textEngine.underlineMetrics(run.font)) {
         fontUnderlinePos = ul->position;
         fontUnderlineThick = ul->thickness;
       }
 
       // Post table metrics are in font design units — scale by fontSize/unitsPerEm, not by
       // scaleForPixelHeight (which normalizes to ascent-descent height instead of em).
-      const float emScale = textContext.textEngine.scaleForEmToPixels(run.font, fontSizePx);
+      const float emScale = textEngine.scaleForEmToPixels(run.font, fontSizePx);
       // Use font metrics for thickness, with heuristic fallback.
       const double thickness = fontUnderlineThick > 0.0
                                    ? fontUnderlineThick * emScale

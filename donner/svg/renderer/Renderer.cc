@@ -104,8 +104,9 @@ void Renderer::drawImage(const ImageResource& image, const ImageParams& params) 
   impl_->drawImage(image, params);
 }
 
-void Renderer::drawText(const components::ComputedTextComponent& text, const TextParams& params) {
-  impl_->drawText(text, params);
+void Renderer::drawText(Registry& registry, const components::ComputedTextComponent& text,
+                        const TextParams& params) {
+  impl_->drawText(registry, text, params);
 }
 
 RendererBitmap Renderer::takeSnapshot() const {

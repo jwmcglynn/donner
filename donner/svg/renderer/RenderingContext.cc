@@ -1088,11 +1088,11 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   // This must happen after loadResources() so @font-face data is available.
   {
     auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
-    auto& fontManager = registry_.ctx().emplace<FontManager>();
+    auto& fontManager = registry_.ctx().emplace<FontManager>(registry_);
     for (const auto& face : resourceManager.fontFaces()) {
       fontManager.addFontFace(face);
     }
-    registry_.ctx().emplace<TextEngine>(fontManager);
+    registry_.ctx().emplace<TextEngine>(fontManager, registry_);
   }
 #endif
 

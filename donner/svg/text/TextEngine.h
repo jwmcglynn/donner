@@ -23,14 +23,15 @@ namespace donner::svg {
  *
  * Usage:
  * @code
- *   FontManager fontManager;
- *   TextEngine engine(fontManager);
+ *   Registry registry;
+ *   auto& fontManager = registry.ctx().emplace<FontManager>(registry);
+ *   auto& engine = registry.ctx().emplace<TextEngine>(fontManager, registry);
  *   std::vector<TextRun> runs = engine.layout(text, params);
  * @endcode
  */
 class TextEngine {
 public:
-  explicit TextEngine(FontManager& fontManager);
+  TextEngine(FontManager& fontManager, Registry& registry);
   ~TextEngine();
 
   TextEngine(const TextEngine&) = delete;
@@ -58,6 +59,7 @@ public:
 
 private:
   FontManager& fontManager_;
+  Registry& registry_;
   std::unique_ptr<TextBackend> backend_;
   size_t registeredFontFaceCount_ = 0;
 };

@@ -182,7 +182,8 @@ public:
    * @param text The shaped text runs.
    * @param params Text styling parameters.
    */
-  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override;
+  void drawText(Registry& registry, const components::ComputedTextComponent& text,
+                const TextParams& params) override;
 
   /**
    * Captures a CPU-readable snapshot of the current frame.
@@ -267,11 +268,6 @@ private:
   bool verbose_ = false;
   bool antialias_ = true;
   bool warnedUnsupportedText_ = false;
-
-  /// Opaque pointer to text stack state, only used when DONNER_TEXT_ENABLED is defined.
-  /// Stored as void* to avoid requiring text headers when text is disabled.
-  void* textContextPtr_ = nullptr;
-
   RenderViewport viewport_;
   PaintParams paint_;
   double paintOpacity_ = 1.0;

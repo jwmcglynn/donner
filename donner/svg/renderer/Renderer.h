@@ -174,7 +174,8 @@ public:
    * @param text The shaped text runs.
    * @param params Text styling parameters.
    */
-  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override;
+  void drawText(Registry& registry, const components::ComputedTextComponent& text,
+                const TextParams& params) override;
 
   /**
    * Captures a CPU-readable snapshot of the current frame.

@@ -1,8 +1,6 @@
 #pragma once
 /// @file
 
-#include <vector>
-
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
 
@@ -18,7 +16,7 @@ namespace donner::svg {
  */
 class TextBackendSimple final : public TextBackend {
 public:
-  explicit TextBackendSimple(FontManager& fontManager);
+  TextBackendSimple(FontManager& fontManager, Registry& registry);
 
   FontVMetrics fontVMetrics(FontHandle font) const override;
   float scaleForPixelHeight(FontHandle font, float pixelHeight) const override;
@@ -42,9 +40,7 @@ private:
   const stbtt_fontinfo* getFontInfo(FontHandle font) const;
 
   FontManager& fontManager_;
-  mutable std::vector<stbtt_fontinfo> parsedFonts_;
-  mutable std::vector<bool> parsedFontsInitialized_;
-  mutable std::vector<bool> parsedFontsValid_;
+  Registry& registry_;
 };
 
 }  // namespace donner::svg

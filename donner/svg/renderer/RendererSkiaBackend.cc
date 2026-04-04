@@ -27,7 +27,9 @@ public:
 
   void popClip() override { renderer_.popClip(); }
 
-  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override { renderer_.pushIsolatedLayer(opacity, blendMode); }
+  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override {
+    renderer_.pushIsolatedLayer(opacity, blendMode);
+  }
 
   void popIsolatedLayer() override { renderer_.popIsolatedLayer(); }
 
@@ -68,8 +70,9 @@ public:
     renderer_.drawImage(image, params);
   }
 
-  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override {
-    renderer_.drawText(text, params);
+  void drawText(Registry& registry, const components::ComputedTextComponent& text,
+                const TextParams& params) override {
+    renderer_.drawText(registry, text, params);
   }
 
   RendererBitmap takeSnapshot() const override { return renderer_.takeSnapshot(); }

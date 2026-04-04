@@ -10,33 +10,33 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/ParseError.h"
 #include "donner/base/RelativeLengthMetrics.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
-#include "donner/svg/components/filter/FilterComponent.h"
-#include "donner/svg/components/paint/MarkerComponent.h"
-#include "donner/svg/components/paint/MaskComponent.h"
-#include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
-#include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
+#include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
-#include "donner/base/xml/components/TreeComponent.h"
-#include "donner/svg/components/SVGDocumentContext.h"
-#include "donner/svg/graph/Reference.h"
-#include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/core/Overflow.h"
-#include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/graph/Reference.h"
+#include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 
@@ -46,8 +46,7 @@ namespace {
 /// Called before drawText so that layout engines and renderers have access to
 /// fill color, font-weight, baseline-shift, alignment-baseline, opacity,
 /// letter-spacing, and word-spacing.
-void resolvePerSpanStyles(Registry& registry,
-                          components::ComputedTextComponent& text,
+void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
                           const Boxd& viewBox, const FontMetrics& fontMetrics) {
   for (auto& span : text.spans) {
     if (span.sourceEntity == entt::null) {
@@ -68,8 +67,7 @@ void resolvePerSpanStyles(Registry& registry,
     entt::entity styleEntity = span.sourceEntity;
     if (!style || !style->properties) {
       // Style was obtained from parent; record that entity.
-      if (auto* tree =
-              registry.try_get<donner::components::TreeComponent>(span.sourceEntity)) {
+      if (auto* tree = registry.try_get<donner::components::TreeComponent>(span.sourceEntity)) {
         if (tree->parent() != entt::null) {
           styleEntity = tree->parent();
         }
@@ -82,8 +80,7 @@ void resolvePerSpanStyles(Registry& registry,
       span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
       span.fontWeight = style->properties->fontWeight.getRequired();
       span.fontStyle = style->properties->fontStyle.getRequired();
-      span.fontStretch =
-          static_cast<FontStretch>(style->properties->fontStretch.getRequired());
+      span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.getRequired());
       span.fontVariant = style->properties->fontVariant.getRequired();
       span.fontSize = style->properties->fontSize.getRequired();
       span.visibility = style->properties->visibility.getRequired();
@@ -97,15 +94,13 @@ void resolvePerSpanStyles(Registry& registry,
 
       // Per SVG spec, baseline-shift only applies to inline text elements (tspan, textPath),
       // not to the root <text> element. Clear it for the text root so it doesn't affect content.
-      const bool isTextRoot =
-          registry.any_of<components::TextRootComponent>(styleEntity);
+      const bool isTextRoot = registry.any_of<components::TextRootComponent>(styleEntity);
       if (isTextRoot) {
         span.baselineShift = Lengthd(0, Lengthd::Unit::None);
       } else {
         // Detect sub/super keywords so layout engines can resolve from font OS/2 metrics.
         using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
-        if (span.baselineShift.unit == Lengthd::Unit::Em &&
-            span.baselineShift.value == -0.33) {
+        if (span.baselineShift.unit == Lengthd::Unit::Em && span.baselineShift.value == -0.33) {
           span.baselineShiftKeyword = BSK::Sub;
         } else if (span.baselineShift.unit == Lengthd::Unit::Em &&
                    span.baselineShift.value == 0.4) {
@@ -114,33 +109,27 @@ void resolvePerSpanStyles(Registry& registry,
 
         // Collect unresolved baseline-shift values from ancestor tspan elements so layout
         // engines can resolve sub/super keywords from font OS/2 metrics at layout time.
-        auto* ancestorTree =
-            registry.try_get<donner::components::TreeComponent>(styleEntity);
+        auto* ancestorTree = registry.try_get<donner::components::TreeComponent>(styleEntity);
         if (ancestorTree) {
           entt::entity ancestor = ancestorTree->parent();
           while (ancestor != entt::null &&
                  !registry.any_of<components::TextRootComponent>(ancestor)) {
-            auto* ancestorStyle =
-                registry.try_get<components::ComputedStyleComponent>(ancestor);
+            auto* ancestorStyle = registry.try_get<components::ComputedStyleComponent>(ancestor);
             if (ancestorStyle && ancestorStyle->properties) {
-              const Lengthd ancestorShift =
-                  ancestorStyle->properties->baselineShift.getRequired();
+              const Lengthd ancestorShift = ancestorStyle->properties->baselineShift.getRequired();
               const double ancestorFontSizePx =
                   ancestorStyle->properties->fontSize.getRequired().toPixels(
                       viewBox, fontMetrics, Lengthd::Extent::Mixed);
               BSK ancestorKeyword = BSK::Length;
-              if (ancestorShift.unit == Lengthd::Unit::Em &&
-                  ancestorShift.value == -0.33) {
+              if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == -0.33) {
                 ancestorKeyword = BSK::Sub;
-              } else if (ancestorShift.unit == Lengthd::Unit::Em &&
-                         ancestorShift.value == 0.4) {
+              } else if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == 0.4) {
                 ancestorKeyword = BSK::Super;
               }
               span.ancestorBaselineShifts.push_back(
                   {ancestorKeyword, ancestorShift, ancestorFontSizePx});
             }
-            auto* tree2 =
-                registry.try_get<donner::components::TreeComponent>(ancestor);
+            auto* tree2 = registry.try_get<donner::components::TreeComponent>(ancestor);
             if (!tree2) break;
             ancestor = tree2->parent();
           }
@@ -150,8 +139,7 @@ void resolvePerSpanStyles(Registry& registry,
       // Resolve per-span textLength from the source entity's own TextComponent.
       // Only the element's own textLength is used; the parent text element's
       // textLength is handled globally via TextParams.
-      if (auto* textComp =
-              registry.try_get<components::TextComponent>(span.sourceEntity)) {
+      if (auto* textComp = registry.try_get<components::TextComponent>(span.sourceEntity)) {
         if (textComp->textLength.has_value()) {
           span.textLength = textComp->textLength;
           span.lengthAdjust = textComp->lengthAdjust;
@@ -324,8 +312,8 @@ std::optional<components::FilterGraph> resolveFilterGraph(
               // url() nodes run in the <filter> element's color space (typically linearRGB)
               // while CSS function nodes use the graph-level sRGB.
               if (auto resolvedRef = e.reference.resolve(registry);
-                  resolvedRef && resolvedRef->handle.template all_of<
-                                     components::ComputedFilterComponent>()) {
+                  resolvedRef &&
+                  resolvedRef->handle.template all_of<components::ComputedFilterComponent>()) {
                 if (const auto* computed =
                         registry.try_get<components::ComputedFilterComponent>(*resolvedRef)) {
                   const auto srcColorSpace = computed->filterGraph.colorInterpolationFilters;
@@ -453,8 +441,7 @@ std::optional<components::FilterGraph> resolveFilterGraph(
   }
 
   if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
-    if (const auto* computed =
-            registry.try_get<components::ComputedFilterComponent>(*reference)) {
+    if (const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference)) {
       return computed->filterGraph;
     }
   }
@@ -463,9 +450,9 @@ std::optional<components::FilterGraph> resolveFilterGraph(
 }
 
 /// Compute the filter region bounds in entity-local coordinates from a resolved filter reference.
-std::optional<Boxd> computeFilterRegion(
-    Registry& registry, const components::ResolvedFilterEffect& filter,
-    const components::RenderingInstanceComponent& instance) {
+std::optional<Boxd> computeFilterRegion(Registry& registry,
+                                        const components::ResolvedFilterEffect& filter,
+                                        const components::RenderingInstanceComponent& instance) {
   const auto* reference = std::get_if<ResolvedReference>(&filter);
   if (!reference) {
     // For CSS filter function lists, check if any entry is a url() reference.
@@ -703,8 +690,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Boxd filterViewBox =
-        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -732,8 +718,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       }
     }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
-    const bool filterHidesElement =
-        instance.resolvedFilter.has_value() && !hasFilterLayer;
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
@@ -783,13 +768,11 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
-                     instance.dataHandle(registry)
-                         .try_get<components::ComputedTextComponent>()) {
-        const auto* textComp =
-            instance.dataHandle(registry).try_get<components::TextComponent>();
+                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
-        renderer_.drawText(*text, textParams);
+        renderer_.drawText(registry, *text, textParams);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -908,10 +891,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     if (verbose_) {
       const Transformd combined = layerBaseTransform_ * instance.entityFromWorldTransform;
       std::cout << "[traverse] entity=" << entt::to_integral(entity)
-                << " visible=" << instance.visible
-                << " maskDepth=" << instance.mask.has_value()
-                << " hasSubtree=" << instance.subtreeInfo.has_value()
-                << " transform=" << combined << "\n";
+                << " visible=" << instance.visible << " maskDepth=" << instance.mask.has_value()
+                << " hasSubtree=" << instance.subtreeInfo.has_value() << " transform=" << combined
+                << "\n";
     }
     renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
 
@@ -924,8 +906,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Boxd filterViewBox =
-        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -957,8 +938,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
     // Per SVG spec, an empty or invalid filter reference makes the element invisible.
-    const bool filterHidesElement =
-        instance.resolvedFilter.has_value() && !hasFilterLayer;
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     // Clip paths are in entity-local coordinates.
     // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
@@ -1017,21 +997,17 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
-                     instance.dataHandle(registry)
-                         .try_get<components::ComputedTextComponent>()) {
-        const auto* textComp =
-            instance.dataHandle(registry).try_get<components::TextComponent>();
+                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
-        renderer_.drawText(*text, textParams);
+        renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
-                     instance.dataHandle(registry)
-                         .try_get<components::LoadedSVGImageComponent>()) {
+                     instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         // SVG sub-document referenced by <image>.
         if (svgImage->subDocument != nullptr) {
           const auto* sizedElement =
-              instance.dataHandle(registry)
-                  .try_get<components::ComputedSizedElementComponent>();
+              instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
           if (verbose_) {
             std::cout << "[svg-image] sizedElement=" << (sizedElement != nullptr);
             if (sizedElement) {
@@ -1041,12 +1017,10 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           }
           if (sizedElement != nullptr) {
             const auto* preserveAspectRatioComp =
-                instance.dataHandle(registry)
-                    .try_get<components::PreserveAspectRatioComponent>();
+                instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
             const PreserveAspectRatio aspectRatio =
-                preserveAspectRatioComp != nullptr
-                    ? preserveAspectRatioComp->preserveAspectRatio
-                    : PreserveAspectRatio::Default();
+                preserveAspectRatioComp != nullptr ? preserveAspectRatioComp->preserveAspectRatio
+                                                   : PreserveAspectRatio::Default();
             const double opacity = style.properties->opacity.getRequired();
 
             auto* subDoc = std::any_cast<SVGDocument>(svgImage->subDocument);
@@ -1057,16 +1031,14 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           }
         }
       } else if (const auto* externalUse =
-                     instance.dataHandle(registry)
-                         .try_get<components::ExternalUseComponent>()) {
+                     instance.dataHandle(registry).try_get<components::ExternalUseComponent>()) {
         // External SVG sub-document referenced by <use>.
         if (externalUse->subDocument != nullptr) {
           auto* subDoc = std::any_cast<SVGDocument>(externalUse->subDocument);
           if (subDoc != nullptr) {
             // Pass the <use> element's fill/stroke as context-fill/context-stroke
             // for the sub-document (SVG2 context paint inheritance).
-            setSubDocumentContextPaint(*subDoc, instance.resolvedFill,
-                                       instance.resolvedStroke);
+            setSubDocumentContextPaint(*subDoc, instance.resolvedFill, instance.resolvedStroke);
 
             if (!externalUse->fragment.empty()) {
               // Fragment reference: render only the referenced element from the sub-document.
@@ -1074,8 +1046,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
               // at the <use> element's location in the parent document.
               const Transformd parentAbsoluteTransform =
                   layerBaseTransform_ * instance.entityFromWorldTransform;
-              drawSubDocumentElement(*subDoc, externalUse->fragment,
-                                     parentAbsoluteTransform,
+              drawSubDocumentElement(*subDoc, externalUse->fragment, parentAbsoluteTransform,
                                      style.properties->opacity.getRequired());
             } else {
               // Whole-document reference: render the entire sub-document.
@@ -1083,11 +1054,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
               // current transform (used by pushClip). Only pass the layer base transform
               // to include parent device scaling without the <use> element's own position.
               const Vector2i subDocSize = subDoc->canvasSize();
-              const Boxd viewportBounds =
-                  Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
+              const Boxd viewportBounds = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
               drawSubDocument(*subDoc, viewportBounds, PreserveAspectRatio::Default(),
-                              style.properties->opacity.getRequired(),
-                              layerBaseTransform_);
+                              style.properties->opacity.getRequired(), layerBaseTransform_);
             }
           }
         }
@@ -1214,8 +1183,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     if (verbose_) {
       const Transformd combined = layerBaseTransform_ * instance.entityFromWorldTransform;
       std::cout << "[traverseRange] entity=" << entt::to_integral(entity)
-                << " visible=" << instance.visible
-                << "\n  layerBase=" << layerBaseTransform_
+                << " visible=" << instance.visible << "\n  layerBase=" << layerBaseTransform_
                 << "\n  entityFromWorld=" << instance.entityFromWorldTransform
                 << "\n  combined=" << combined << "\n";
     }
@@ -1230,8 +1198,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Boxd filterViewBox =
-        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -1259,8 +1226,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       }
     }
     const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
-    const bool filterHidesElement =
-        instance.resolvedFilter.has_value() && !hasFilterLayer;
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     // Per SVG spec: paint → filter → clip-path. Push clip before filter so clip applies to
     // the filter output. The filter layer saves/clears the clip mask internally.
@@ -1310,28 +1276,22 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
-                     instance.dataHandle(registry)
-                         .try_get<components::ComputedTextComponent>()) {
-        const auto* textComp =
-            instance.dataHandle(registry).try_get<components::TextComponent>();
+                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, textParams.viewBox, textParams.fontMetrics);
-        renderer_.drawText(*text, textParams);
+        renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
-                     instance.dataHandle(registry)
-                         .try_get<components::LoadedSVGImageComponent>()) {
+                     instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         if (svgImage->subDocument != nullptr) {
           const auto* sizedElement =
-              instance.dataHandle(registry)
-                  .try_get<components::ComputedSizedElementComponent>();
+              instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
           if (sizedElement != nullptr) {
             const auto* preserveAspectRatioComp =
-                instance.dataHandle(registry)
-                    .try_get<components::PreserveAspectRatioComponent>();
+                instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
             const PreserveAspectRatio aspectRatio =
-                preserveAspectRatioComp != nullptr
-                    ? preserveAspectRatioComp->preserveAspectRatio
-                    : PreserveAspectRatio::Default();
+                preserveAspectRatioComp != nullptr ? preserveAspectRatioComp->preserveAspectRatio
+                                                   : PreserveAspectRatio::Default();
 
             auto* subDoc = std::any_cast<SVGDocument>(svgImage->subDocument);
             if (subDoc != nullptr) {
@@ -1342,17 +1302,14 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
           }
         }
       } else if (const auto* image =
-                     instance.dataHandle(registry)
-                         .try_get<components::LoadedImageComponent>()) {
+                     instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
             toImageParams(instance, style, *image, registry);
         if (imageParams.has_value()) {
           const auto* sizedElement =
-              instance.dataHandle(registry)
-                  .try_get<components::ComputedSizedElementComponent>();
+              instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
           const auto* preserveAspectRatio =
-              instance.dataHandle(registry)
-                  .try_get<components::PreserveAspectRatioComponent>();
+              instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
 
           if (sizedElement != nullptr) {
             ResolvedClip imageClip;
@@ -1508,9 +1465,8 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     layerBaseTransform_ = instance.entityFromWorldTransform;
 
     if (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
-      const Transformd userSpaceFromMaskContent =
-          Transformd::Scale(shapeLocalBounds.size()) *
-          Transformd::Translate(shapeLocalBounds.topLeft);
+      const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
+                                                  Transformd::Translate(shapeLocalBounds.topLeft);
       layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
     }
 
@@ -1531,8 +1487,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
 
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
                                    const components::RenderingInstanceComponent& instance,
-                                   const components::PaintResolvedReference& ref,
-                                   bool forStroke) {
+                                   const components::PaintResolvedReference& ref, bool forStroke) {
   if (!ref.subtreeInfo) {
     return;
   }
@@ -1557,8 +1512,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   const Boxd pathBounds =
       components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
 
-  const bool objectBoundingBox =
-      computedPattern->patternUnits == PatternUnits::ObjectBoundingBox;
+  const bool objectBoundingBox = computedPattern->patternUnits == PatternUnits::ObjectBoundingBox;
   const bool patternContentObjectBoundingBox =
       computedPattern->patternContentUnits == PatternContentUnits::ObjectBoundingBox;
 
@@ -1593,8 +1547,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
                        Transformd::Translate(-origin);
   }
 
-  const Transformd patternTileFromTarget =
-      Transformd::Translate(rect.topLeft) * patternTransform;
+  const Transformd patternTileFromTarget = Transformd::Translate(rect.topLeft) * patternTransform;
 
   renderer_.beginPatternTile(rect.toOrigin(), patternTileFromTarget);
 
@@ -1732,8 +1685,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   if (needsClip) {
     renderer_.setTransform(Transformd());
     ResolvedClip markerClip;
-    markerClip.clipRect =
-        markerUserSpaceFromWorld.transformBox(markerViewBox.value_or(markerSize));
+    markerClip.clipRect = markerUserSpaceFromWorld.transformBox(markerViewBox.value_or(markerSize));
     renderer_.pushClip(markerClip);
   }
 
@@ -1784,8 +1736,7 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
   // (mapping from document to canvas/device space). Including docFromCanvas here cancels that out,
   // so the net result maps sub-doc element coordinates through subDocFromLocal (to parent document
   // space), then through parentAbsoluteTransform (to device space).
-  const Transformd baseTransform =
-      subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
+  const Transformd baseTransform = subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
 
   // Save and override layerBaseTransform for sub-document rendering.
   const Transformd savedLayerBase = layerBaseTransform_;
@@ -1832,9 +1783,8 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   }
 
   // Determine the subtree range: from the target entity to its last descendant.
-  const Entity lastEntity = targetInstance->subtreeInfo
-                                ? targetInstance->subtreeInfo->lastRenderedEntity
-                                : targetEntity;
+  const Entity lastEntity =
+      targetInstance->subtreeInfo ? targetInstance->subtreeInfo->lastRenderedEntity : targetEntity;
 
   // Apply opacity as an isolated layer if needed.
   const bool needsOpacityLayer = opacity < 1.0;
@@ -1847,9 +1797,11 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   // sub-document root. By composing parentAbsoluteTransform with the inverse of the target's
   // transform, we strip the sub-document ancestors and place the element at the <use> position.
   // For each entity in the subtree:
-  //   finalTransform = parentAbsolute * inverse(target) * entity = parentAbsolute * entityFromTarget
+  //   finalTransform = parentAbsolute * inverse(target) * entity = parentAbsolute *
+  //   entityFromTarget
   const Transformd savedLayerBase = layerBaseTransform_;
-  layerBaseTransform_ = parentAbsoluteTransform * targetInstance->entityFromWorldTransform.inverse();
+  layerBaseTransform_ =
+      parentAbsoluteTransform * targetInstance->entityFromWorldTransform.inverse();
 
   // Traverse only the target element's subtree from the sub-document's render tree.
   RenderingInstanceView subView(subDocument.registry());
@@ -1869,8 +1821,7 @@ void RendererDriver::setSubDocumentContextPaint(
     subDocument.registry().ctx().emplace<components::RenderingContext>(subDocument.registry());
   }
   auto& renderCtx = subDocument.registry().ctx().get<components::RenderingContext>();
-  renderCtx.setInitialContextPaint(
-      std::any(contextFill), std::any(contextStroke));
+  renderCtx.setInitialContextPaint(std::any(contextFill), std::any(contextStroke));
 }
 
 void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) {
@@ -1931,8 +1882,8 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
 }
 
 void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGraph,
-                                                Registry& registry,
-                                                const std::optional<Boxd>& filterRegion) {
+                                               Registry& registry,
+                                               const std::optional<Boxd>& filterRegion) {
   // Lazily create the recursion guard set if needed.
   std::unordered_set<entt::id_type> localGuard;
   const bool ownsGuard = (feImageFragmentGuard_ == nullptr);
@@ -2073,9 +2024,9 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
       // Simplest approach: iterate all instances and remove any on non-renderable entities.
       std::vector<Entity> toRemove;
       for (auto entity : registry.view<components::RenderingInstanceComponent>()) {
-        // If the entity's data handle has Nonrenderable behavior, it was added by standalone render.
-        const auto* behavior =
-            registry.try_get<components::RenderingBehaviorComponent>(entity);
+        // If the entity's data handle has Nonrenderable behavior, it was added by standalone
+        // render.
+        const auto* behavior = registry.try_get<components::RenderingBehaviorComponent>(entity);
         if (behavior && behavior->behavior == components::RenderingBehavior::Nonrenderable) {
           toRemove.push_back(entity);
         }

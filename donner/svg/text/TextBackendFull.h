@@ -1,9 +1,6 @@
 #pragma once
 /// @file
 
-#include <memory>
-#include <vector>
-
 #include "donner/svg/text/TextBackend.h"
 
 struct hb_font_t;
@@ -18,7 +15,7 @@ namespace donner::svg {
  */
 class TextBackendFull final : public TextBackend {
 public:
-  explicit TextBackendFull(FontManager& fontManager);
+  TextBackendFull(FontManager& fontManager, Registry& registry);
   ~TextBackendFull() override;
 
   // Non-copyable (owns HarfBuzz/FreeType resources).
@@ -45,10 +42,10 @@ public:
 
 private:
   FontManager& fontManager_;
+  Registry& registry_;
 
-  /// Cache of HarfBuzz font objects, keyed by FontHandle index.
+  /// Cache entry stored on the font entity.
   struct HbFontEntry;
-  mutable std::vector<std::unique_ptr<HbFontEntry>> hbFonts_;
 
   /// Get or create a HarfBuzz font object for a FontHandle.
   hb_font_t* getOrCreateHbFont(FontHandle handle) const;

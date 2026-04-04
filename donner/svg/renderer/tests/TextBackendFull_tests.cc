@@ -41,8 +41,9 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
 }
 
 TEST(TextBackendFullTest, ShapeRunProducesGlyphsForLatinText) {
-  FontManager fontManager;
-  TextBackendFull backend(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
 
   const FontHandle font = fontManager.fallbackFont();
   ASSERT_TRUE(static_cast<bool>(font));
@@ -63,8 +64,9 @@ TEST(TextBackendFullTest, ShapeRunProducesGlyphsForLatinText) {
 }
 
 TEST(TextBackendFullTest, VerticalLatinUsesSidewaysAdvances) {
-  FontManager fontManager;
-  TextBackendFull backend(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
 
   const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
   ASSERT_TRUE(static_cast<bool>(font));
@@ -82,8 +84,9 @@ TEST(TextBackendFullTest, VerticalLatinUsesSidewaysAdvances) {
 }
 
 TEST(TextBackendFullTest, VerticalCjkUsesVerticalOffsets) {
-  FontManager fontManager;
-  TextBackendFull backend(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
 
   const FontHandle font = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(font));
@@ -100,8 +103,9 @@ TEST(TextBackendFullTest, VerticalCjkUsesVerticalOffsets) {
 }
 
 TEST(TextBackendFullTest, BitmapGlyphReturnsEmojiBitmap) {
-  FontManager fontManager;
-  TextBackendFull backend(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
 
   const FontHandle font = LoadResvgFont(fontManager, "NotoColorEmoji.ttf", "Noto Color Emoji");
   ASSERT_TRUE(static_cast<bool>(font));
@@ -121,8 +125,9 @@ TEST(TextBackendFullTest, BitmapGlyphReturnsEmojiBitmap) {
 }
 
 TEST(TextBackendFullTest, ReportsCursiveAndSmallCapsCapabilities) {
-  FontManager fontManager;
-  TextBackendFull backend(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
 
   const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
   ASSERT_TRUE(static_cast<bool>(font));
@@ -133,8 +138,9 @@ TEST(TextBackendFullTest, ReportsCursiveAndSmallCapsCapabilities) {
 }
 
 TEST(TextBackendFullTest, SynthesizedSmallCapsMarksLowercaseGlyphs) {
-  FontManager fontManager;
-  TextBackendFull backend(fontManager);
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
 
   const FontHandle font = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(font));
