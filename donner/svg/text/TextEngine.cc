@@ -1332,23 +1332,27 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         }
       }
 
-      const auto endSample = pathSpline.pointAtArcLength(pathSpline.pathLength());
+      // Resume pen at the arc length where text actually ended on the path.
+      // Use the raw path point (without perpShift) so the next flat span can
+      // apply its own baseline shift cleanly via the defaultY mechanism.
+      const double textEndArcLength = startOffset + advanceAccum;
+      const auto endSample = pathSpline.pointAtArcLength(textEndArcLength);
       if (endSample.valid) {
-        // Resume pen position at the path endpoint, adjusted for the perpendicular
-        // baseline shift so subsequent flat text aligns with the path's visual end.
         currentPenX = endSample.point.x;
         currentPenY = endSample.point.y;
-        if (perpShift != 0.0) {
-          currentPenX += std::sin(endSample.angle) * perpShift;
-          currentPenY -= std::cos(endSample.angle) * perpShift;
-        }
-        haveCurrentPosition = true;
       } else {
-        currentPenX = 0.0;
-        currentPenY = 0.0;
-        haveCurrentPosition = true;
+        // Text extended past the path — use geometric endpoint.
+        const auto pathEnd = pathSpline.pointAtArcLength(pathSpline.pathLength());
+        if (pathEnd.valid) {
+          currentPenX = pathEnd.point.x;
+          currentPenY = pathEnd.point.y;
+        } else {
+          currentPenX = 0.0;
+          currentPenY = 0.0;
+        }
       }
-      prevDefaultY = 0.0;  // Path sets absolute position; no shift to undo.
+      haveCurrentPosition = true;
+      prevDefaultY = 0.0;
       prevTextPathSource = span.textPathSourceEntity;
       prevTextPathEndOffset = startOffset + advanceAccum;
       prevTextPathPerpShift = perpShift;

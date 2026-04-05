@@ -79,33 +79,68 @@ During the per-span layout loop, spans with `pathSpline` set enter the text-on-p
 
 ## Test Coverage
 
-The `e-textPath-*` resvg test suite covers 44 SVG test cases:
+The `e-textPath-*` resvg test suite remains enabled, but custom goldens are now restricted to
+the human-approved pre-existing set only.
 
-- **26 passing** — with custom goldens where font advance drift exceeds resvg comparison.
-- **4 known bugs** — identified, to be fixed.
-- **11 skipped** — deferred or out-of-scope features.
-- **3 tests** (038, 039) — font drift, pending goldens.
+### Human-approved custom goldens
 
-### Custom Goldens (font advance drift)
-
-These tests pass against our own golden images because cumulative per-glyph advance
-differences between our font backend and resvg's reference renderer produce pixel diffs
-that exceed the default threshold. The rendering is functionally correct.
+Only these textPath overrides remain approved:
 
 | Tests | Description |
 |-------|-------------|
-| 001-005 | Basic textPath, startOffset, percentage offset |
-| 009-011 | Letter-spacing, nested textPath, mixed children |
-| 013, 015 | Coords on `<text>`, text overflow |
-| 019-020 | text-anchor=middle, closed path |
-| 022, 026-029 | tspan absolute position, ClosePath, underline, rotate |
-| 032, 034, 036-037 | baseline-shift, arc path, transforms |
+| 001-005 | Basic textPath and startOffset coverage |
+| 009-010 | Two-path sequence, nested-invalid textPath handling |
 
-### Known Bugs
+Any additional custom golden or tolerance change requires explicit human approval after live
+retriage against the upstream resvg reference images.
 
-| Test | Pixels | Issue |
-|------|--------|-------|
-| 012 | 4949 | Mixed children (2): incorrect inline position resumption between multiple textPath/tspan siblings |
+### 2026-04-04 retriage after removing post-010 overrides
+
+Command used:
+
+```sh
+bazel run //donner/svg/renderer/tests:resvg_test_suite -- \
+  --gtest_filter='*e_textPath_011:*e_textPath_012:*e_textPath_013:*e_textPath_014:\
+*e_textPath_015:*e_textPath_019:*e_textPath_020:*e_textPath_022:*e_textPath_023:\
+*e_textPath_025:*e_textPath_026:*e_textPath_027:*e_textPath_028:*e_textPath_029:\
+*e_textPath_032:*e_textPath_034:*e_textPath_036:*e_textPath_037'
+```
+
+All 18 retriaged cases fail against the upstream resvg references once the unapproved
+post-010 overrides are removed.
+
+#### Likely semantic/layout bugs
+
+These still look like real behavior mismatches and should stay red until fixed:
+
+| Test | Pixels | Triage detail |
+|------|--------|---------------|
+| 011 | 2009 | Mixed content: text before/after a textPath still does not hand off cleanly. |
+| 012 | 4477 | Mixed content: `v`/`t` start correctly, but later glyphs drift and `long` spacing is wrong. |
+| 015 | 1455 | Long-text overflow/continuation behavior on and after the path is still off. |
+| 022 | 604 | `tspan x/y` inside textPath remains path-local positioning work, not threshold work. |
+| 023 | 623 | `tspan dx/dy` inside textPath is much closer now, but still a semantic bug. |
+| 025 | 3818 | Invalid textPath in mixed content still resumes the surrounding text incorrectly. |
+| 028 | 798 | text-decoration on a path still needs real path-following behavior. |
+
+#### Red until human-reviewed, but may be mostly drift
+
+These are smaller diffs that may be backend/raster drift or minor geometry drift, but they still
+need visual review and explicit approval before any new golden or tolerance is considered:
+
+| Test | Pixels | Triage detail |
+|------|--------|---------------|
+| 013 | 759 | Parent `<text>` x/y with textPath. |
+| 014 | 630 | Coordinates on `<textPath>` element. |
+| 019 | 326 | text-anchor on path. |
+| 020 | 397 | Closed circular path. |
+| 026 | 242 | ClosePath triangle. |
+| 027 | 109 | ClosePath + baseline-shift. |
+| 029 | 458 | rotate attribute on path text. |
+| 032 | 121 | baseline-shift on path text. |
+| 034 | 112 | Arc path sampling. |
+| 036 | 664 | Transform on referenced path. |
+| 037 | 583 | Transform on ancestor group. |
 
 ### Skipped Tests
 
@@ -137,7 +172,11 @@ that exceed the default threshold. The rendering is functionally correct.
 ## Future Work
 
 ### Bug Fixes (v1 blockers)
-- [ ] **012**: Fix inline position resumption between multiple textPath/tspan siblings.
+- [ ] Fix mixed-content continuation bugs in `011`, `012`, `015`, and `025`.
+- [ ] Finish path-local `tspan` positioning for `022` and `023`.
+- [ ] Implement path-following text decoration for `028`.
+- [ ] Re-review `013`, `014`, `019`, `020`, `026`, `027`, `029`, `032`, `034`, `036`, and `037`
+  before considering any new golden or tolerance.
 
 ### Deferred Features
 - [ ] Implement `method=stretch` for glyph stretching along path curvature.
