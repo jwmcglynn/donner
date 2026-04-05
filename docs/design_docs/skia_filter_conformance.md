@@ -13,8 +13,8 @@ Close all gaps in the Skia backend's SVG filter rendering so that
 every non-UB test without skips or inflated thresholds.
 
 The Skia backend started with **193 failing filter tests**. After the fixes
-described below, **35 remain** (158 fixed, 82%). The TinySkia backend is not
-regressed.
+described below, **10 remain** (183 fixed, 95%) in the current worktree
+validated on 2026-04-04. The TinySkia backend is not regressed.
 
 ## Goals
 
@@ -48,7 +48,9 @@ drawn content area, not the full filter region.
 Instead of using `saveLayer` with the SkImageFilter directly, we:
 
 1. **`pushFilterLayer`**: Capture the SourceGraphic into an offscreen
-   `SkSurface` (full viewport size). Redirect all drawing to this surface.
+   `SkSurface` (full viewport size). Redirect only the paint output to this
+   surface. Clip-path and mask remain outside the filter layer so they apply
+   to the filtered result, not the SourceGraphic input.
 
 2. **`popFilterLayer`**: Snapshot the SourceGraphic as `SkImage`. Build the
    native `SkImageFilter` DAG via `buildNativeSkiaFilterDAG`. Apply the filter
@@ -59,8 +61,8 @@ Instead of using `saveLayer` with the SkImageFilter directly, we:
 RendererDriver
   ├── pushFilterLayer(filterGraph, filterRegion)
   │     ├── Create offscreen SkSurface (full viewport)
-  │     ├── Replay clip stack onto offscreen canvas
   │     ├── Set offscreen canvas matrix = parent CTM
+  │     ├── Clip SourceGraphic input to filter region
   │     └── Redirect drawing to offscreen canvas
   └── popFilterLayer()
         ├── Restore parent canvas
@@ -95,6 +97,12 @@ uses Skia's optimized implementations.
 Since `drawImage` with `resetMatrix()` operates in device-pixel coordinates,
 all filter parameters (offsets, radii, frequencies, light positions, subregions)
 are pre-transformed from user-space to device-pixel-space.
+
+**D3a: Filter inputs are clipped before filtering; clip-path and mask are not.**
+The implicit `SourceGraphic` input is cropped to the filter region before
+running the Skia filter DAG. Entity clip-path and mask remain outside the
+filter layer so they apply in SVG order: paint, then filter, then clip-path,
+then mask.
 
 **D4: SkColor4f is always unpremultiplied.**
 Skia's `SkColor4f` API expects straight (unpremultiplied) RGBA values. The
@@ -179,23 +187,44 @@ internally.
   `setTransform` when inside a filter layer with a non-zero buffer offset.
   Fixed: feMerge-001/002/003.
 
-### Phase 9: Remaining Work
+### Phase 9: Source Clipping + OBB Blur + Effect Order (DONE)
 
-- [ ] **feTurbulence (10)**: Skia's native noise algorithm differs from SVG
-  spec. Requires implementing the SVG spec's exact Perlin noise and injecting
-  as SkImage (premul/straight format issues need resolution first).
-- [ ] **e-filter composite (11)**: Chains of upstream issues — will improve as
-  turbulence is fixed.
-- [ ] **feSpotLight (5)**: Cone angle precision (4 small), transform (1 golden
-  override).
-- [ ] **feMerge (3)**: Buffer offset compensation broken for multi-input filters.
-  When the filter region extends into negative device coordinates, the expanded
-  buffer's `Offset(-N,-N)` compensation doesn't correctly shift Merge outputs.
-  Root cause confirmed: disabling buffer expansion fixes the tests. Needs a
-  different compensation approach (e.g., pre-shift SourceGraphic in the buffer).
-- [ ] **feSpecularLighting (3)**: Skia vs spec lighting computation differences.
-- [ ] **Remaining per-primitive (6)**: feConvolveMatrix (2), feGaussianBlur (2),
-  feDropShadow (1), feFlood (1).
+- [x] **SourceGraphic clipping**: Crop the implicit `SourceGraphic` input to
+  the filter region before Skia primitives run. Fixed:
+  `e-filter-002/003/004/017/018`.
+- [x] **OBB blur scaling**: Apply `primitiveUnits="objectBoundingBox"` scaling
+  to blur sigmas and subregion expansion in the native Skia path. Fixed:
+  `e-filter-012/030/055`.
+- [x] **Effect stack ordering**: Stop replaying clip-path into the filter
+  capture and reorder masked filtered content so the effective SVG order is
+  paint → filter → clip-path → mask. Fixed: `e-filter-052/054`.
+
+### Phase 10: Transformed Blur Under Skew (DONE)
+
+- [x] **Skewed blur chain path**: For eligible skewed blur chains, resample the
+  captured SourceGraphic into an axis-aligned local Skia surface, run the
+  native Skia filter DAG there, and composite back through the original
+  transform. Fixed: `e-filter-026`.
+
+### Phase 11: Remaining Work
+
+- [x] **feTurbulence (10)**: Replaced Skia's native noise with SVG-spec Perlin
+  noise generator (ported from tiny-skia). Key insight: do NOT set
+  `skipLinearRGBPostWrap` — the noise must go through the normal linearRGB
+  color space handling, matching how Skia's native shader works.
+- [ ] **feSpotLight (5)**: Four tests cluster around cone-angle / spotlight
+  parameter behavior, and one larger failure still looks like a coordinate or
+  transform mapping issue.
+- [ ] **feSpecularLighting (3)**: Mixed cluster. Two tests are small
+  highlight-shape deviations, while `specularExponent="0"` still diverges
+  badly from the expected output.
+- [ ] **Remaining per-primitive (2)**: feConvolveMatrix (1), feFlood (1).
+
+Current 2026-04-04 worktree note:
+- `feMerge-001/002/003` no longer reproduce in the latest Skia run.
+- `feDropShadow-006` also no longer reproduces.
+- Keep both areas on the regression watchlist until the current `RendererSkia`
+  changes are finalized.
 
 ## Progress
 
@@ -214,27 +243,47 @@ internally.
 | 44 | -10 | feTile subregion fix, feImage edge cases, feFlood-006, misc fixes |
 | 38 | -6 | Two-input subregion union for feBlend/feComposite |
 | 35 | -3 | Buffer offset compensation in setTransform for feMerge |
+| 33 | -2 | Current worktree no longer reproduces feMerge or feDropShadow failures |
+| 23 | -10 | Source clipping, OBB blur scaling, and correct filter/clip/mask ordering |
+| 21 | -2 | Skia-only transformed local-raster blur path clears the last `e-filter` case |
+| 20 | -1 | feGaussianBlur extreme sigma fix |
+| 10 | -10 | SVG-spec Perlin noise replaces Skia native noise for feTurbulence |
 
-## Remaining Failures (35 total)
+## Remaining Failures (10 total)
+- `feSpotLight`: 5
+  Cone-angle / spotlight parameter behavior, plus one larger coordinate
+  mismatch.
+- `feSpecularLighting`: 3
+  Highlight-shape and exponent behavior still differ from expected output.
+- `feConvolveMatrix`: 1
+  Kernel normalization / zero-sum behavior for `e-feConvolveMatrix-014`.
+- `feFlood`: 1
+  `primitiveUnits="objectBoundingBox"` subregion sizing for
+  `e-feFlood-008`.
 
-| Category | Count | Root Cause |
-|----------|-------|------------|
-| e-filter (composite) | 11 | Chains of upstream issues (turbulence, etc.) |
-| feTurbulence | 10 | Skia native noise ≠ SVG spec algorithm |
-| feSpotLight | 5 | Cone angle precision (4 small), transform (1 golden override) |
-| feSpecularLighting | 3 | Skia vs spec lighting computation differences |
-| feConvolveMatrix | 2 | Incomplete kernel (011), sum=0 divisor (014) |
-| feGaussianBlur | 2 | Edge handling (002: sigma clamping, 012: AA) |
-| feDropShadow | 1 | Likely linearRGB interaction (006) |
-| feFlood | 1 | OBB+transform (008) |
+### First-Level Triage
 
-### Known Skia Limitations
+- `Spot light parameter behavior` (5)
+  Tests: `e-feSpotLight-006/007/008/010/012`
+  First hypothesis: Cone-angle and spotlight parameter handling mostly differ
+  by small lighting precision, except `012`, which still looks like a larger
+  coordinate-mapping issue.
+- `Specular lighting exponent behavior` (3)
+  Tests: `e-feSpecularLighting-002/006/007`
+  First hypothesis: Small highlight-shape differences remain, and
+  `specularExponent="0"` still produces a substantially wrong result.
+- `Single-primitive stragglers` (2)
+  Tests: `e-feConvolveMatrix-014`, `e-feFlood-008`
+  First hypothesis: These look isolated: kernel normalization / zero-sum
+  handling for convolve, and OBB subregion sizing for flood.
 
-**feTurbulence (10 tests):** Skia's `SkShaders::MakeTurbulence`/`MakeFractalNoise`
-implements a different Perlin noise algorithm than the SVG spec (different
-lookup tables and gradient vectors). The noise patterns are visually similar
-but not pixel-identical. Fixing requires implementing the SVG spec's exact
-noise algorithm and injecting as an SkImage into the filter DAG.
+### Failure Details
+
+- **Largest remaining diffs:** `e-feSpecularLighting-007` (168068),
+  `e-feFlood-008` (17494).
+- **Small-diff precision cluster:** `e-feSpecularLighting-002` (113),
+  `e-feSpotLight-006` (157), `e-feSpecularLighting-006` (806),
+  `e-feSpotLight-007/008/010` (1373 each).
 
 
 ## Testing and Validation
@@ -244,3 +293,6 @@ noise algorithm and injecting as an SkImage into the filter DAG.
   (TinySkia) — verified passing after each change
 - **Cross-config parity:** Both backends should need the same (or fewer)
   threshold overrides
+- **Current snapshot:** `LLM=1 bazel test //donner/svg/renderer/tests:resvg_test_suite
+  --config=skia --test_output=errors` on 2026-04-04 produced 10 remaining
+  failures in the current worktree

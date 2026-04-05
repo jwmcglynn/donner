@@ -18,7 +18,6 @@
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradientShader.h"
 #include "include/effects/SkImageFilters.h"
-#include "include/effects/SkPerlinNoiseShader.h"
 #include "include/pathops/SkPathOps.h"
 
 #ifdef DONNER_USE_CORETEXT
@@ -568,6 +567,286 @@ void buildTransferTable(const components::filter_primitive::ComponentTransfer::F
   }
 }
 
+// ---------------------------------------------------------------------------
+// SVG-spec Perlin noise generator for feTurbulence.
+// Implements the exact algorithm from the Filter Effects Level 1 spec so that
+// output is pixel-identical to the reference (resvg). Skia's native
+// SkPerlinNoiseShader uses different lookup tables and gradient vectors.
+// Ported from third_party/tiny-skia-cpp/src/tiny_skia/filter/Turbulence.cpp
+// (cannot take a dependency on that library from the Skia backend).
+// ---------------------------------------------------------------------------
+
+namespace svg_turbulence {
+
+constexpr int kBLen = 0x100;
+constexpr int kBLenPlus2 = kBLen + 2;
+constexpr int kPerlinN = 0x1000;
+constexpr long kRandM = 2147483647;  // NOLINT
+constexpr long kRandA = 16807;       // NOLINT
+constexpr long kRandQ = 127773;      // NOLINT
+constexpr long kRandR = 2836;        // NOLINT
+
+struct StitchInfo {
+  int width = 0;
+  int height = 0;
+  int wrapX = 0;
+  int wrapY = 0;
+};
+
+class Generator {
+public:
+  explicit Generator(double seedVal) { init(seedVal); }
+
+  // Float-precision 4-channel noise matching tiny-skia's noise2_4ch_f.
+  void noise2_4ch_f(float x, float y, const StitchInfo* stitch, float out[4]) const {
+    float t = x + static_cast<float>(kPerlinN);
+    int bx0 = static_cast<int>(static_cast<int64_t>(t));
+    int bx1 = bx0 + 1;
+    float rx0 = t - static_cast<float>(static_cast<int64_t>(t));
+    float rx1 = rx0 - 1.0f;
+
+    t = y + static_cast<float>(kPerlinN);
+    int by0 = static_cast<int>(static_cast<int64_t>(t));
+    int by1 = by0 + 1;
+    float ry0 = t - static_cast<float>(static_cast<int64_t>(t));
+    float ry1 = ry0 - 1.0f;
+
+    if (stitch) {
+      if (bx0 >= stitch->wrapX) bx0 -= stitch->width;
+      if (bx1 >= stitch->wrapX) bx1 -= stitch->width;
+      if (by0 >= stitch->wrapY) by0 -= stitch->height;
+      if (by1 >= stitch->wrapY) by1 -= stitch->height;
+    }
+
+    bx0 &= 0xFF;
+    bx1 &= 0xFF;
+    by0 &= 0xFF;
+    by1 &= 0xFF;
+
+    const int i = latticeSelector_[bx0];
+    const int j = latticeSelector_[bx1];
+    const int b00 = latticeSelector_[i + by0];
+    const int b10 = latticeSelector_[j + by0];
+    const int b01 = latticeSelector_[i + by1];
+    const int b11 = latticeSelector_[j + by1];
+
+    const float sx = sCurve(rx0);
+    const float sy = sCurve(ry0);
+
+    for (int ch = 0; ch < 4; ++ch) {
+      float u = gradX4_[b00][ch] * rx0 + gradY4_[b00][ch] * ry0;
+      float v = gradX4_[b10][ch] * rx1 + gradY4_[b10][ch] * ry0;
+      const float af = u + sx * (v - u);
+
+      u = gradX4_[b01][ch] * rx0 + gradY4_[b01][ch] * ry1;
+      v = gradX4_[b11][ch] * rx1 + gradY4_[b11][ch] * ry1;
+      const float bf = u + sx * (v - u);
+
+      out[ch] = af + sy * (bf - af);
+    }
+  }
+
+private:
+  void init(double seedVal) {
+    long seed;  // NOLINT
+    if (seedVal <= 0) {
+      seed = -(static_cast<long>(seedVal)) % (kRandM - 1) + 1;  // NOLINT
+    } else if (seedVal > kRandM - 1) {
+      seed = kRandM - 1;
+    } else {
+      seed = static_cast<long>(seedVal);  // NOLINT
+    }
+
+    for (int ch = 0; ch < 4; ch++) {
+      for (int k = 0; k < kBLen; k++) {
+        if (ch == 0) {
+          latticeSelector_[k] = k;
+        }
+        seed = random(seed);
+        gradient_[ch][k][0] =
+            static_cast<double>((seed % (kBLen + kBLen)) - kBLen) / kBLen;
+        seed = random(seed);
+        gradient_[ch][k][1] =
+            static_cast<double>((seed % (kBLen + kBLen)) - kBLen) / kBLen;
+
+        const double mag = std::sqrt(gradient_[ch][k][0] * gradient_[ch][k][0] +
+                                     gradient_[ch][k][1] * gradient_[ch][k][1]);
+        if (mag > 1e-10) {
+          gradient_[ch][k][0] /= mag;
+          gradient_[ch][k][1] /= mag;
+        }
+      }
+    }
+
+    for (int i = kBLen - 1; i > 0; i--) {
+      seed = random(seed);
+      const int target = static_cast<int>(seed % kBLen);
+      std::swap(latticeSelector_[i], latticeSelector_[target]);
+    }
+
+    for (int i = 0; i < kBLenPlus2; i++) {
+      latticeSelector_[kBLen + i] = latticeSelector_[i];
+      for (int ch = 0; ch < 4; ch++) {
+        gradient_[ch][kBLen + i][0] = gradient_[ch][i][0];
+        gradient_[ch][kBLen + i][1] = gradient_[ch][i][1];
+      }
+    }
+
+    // Build SOA float gradient tables for float-precision noise.
+    constexpr int kTableSize = kBLen + kBLenPlus2;
+    for (int idx = 0; idx < kTableSize; ++idx) {
+      for (int ch = 0; ch < 4; ++ch) {
+        gradX4_[idx][ch] = static_cast<float>(gradient_[ch][idx][0]);
+        gradY4_[idx][ch] = static_cast<float>(gradient_[ch][idx][1]);
+      }
+    }
+  }
+
+  static long random(long seed) {  // NOLINT
+    long result = kRandA * (seed % kRandQ) - kRandR * (seed / kRandQ);  // NOLINT
+    if (result <= 0) {
+      result += kRandM;
+    }
+    return result;
+  }
+
+  static float sCurve(float t) { return t * t * (3.0f - 2.0f * t); }
+
+  int latticeSelector_[kBLen + kBLenPlus2] = {};
+  double gradient_[4][kBLen + kBLenPlus2][2] = {};
+  float gradX4_[kBLen + kBLenPlus2][4] = {};
+  float gradY4_[kBLen + kBLenPlus2][4] = {};
+};
+
+}  // namespace svg_turbulence
+
+/// Generate SVG-spec feTurbulence noise into an SkImage.
+sk_sp<SkImage> generateSvgTurbulenceImage(
+    int width, int height, const components::filter_primitive::Turbulence& primitive,
+    const Transformd& deviceFromFilter, int tileWidth, int tileHeight) {
+  if (width <= 0 || height <= 0) {
+    return nullptr;
+  }
+
+  const bool isFractalNoise =
+      primitive.type == components::filter_primitive::Turbulence::Type::FractalNoise;
+
+  // Edge cases: negative frequency → transparent black.
+  if (primitive.baseFrequencyX < 0.0 || primitive.baseFrequencyY < 0.0) {
+    SkBitmap bitmap;
+    bitmap.allocPixels(SkImageInfo::MakeN32Premul(width, height));
+    bitmap.eraseColor(SK_ColorTRANSPARENT);
+    return bitmap.asImage();
+  }
+
+  // numOctaves <= 0: transparent for turbulence, gray (128) for fractalNoise.
+  if (primitive.numOctaves <= 0) {
+    SkBitmap bitmap;
+    bitmap.allocPixels(SkImageInfo::MakeN32Premul(width, height));
+    if (isFractalNoise) {
+      bitmap.eraseARGB(128, 128, 128, 128);
+    } else {
+      bitmap.eraseColor(SK_ColorTRANSPARENT);
+    }
+    return bitmap.asImage();
+  }
+
+  // Compute the 2x2 inverse of deviceFromFilter (filterFromDevice).
+  // Matches FilterGraphExecutor.cc:484-497.
+  const double da = deviceFromFilter.data[0];
+  const double db = deviceFromFilter.data[1];
+  const double dc = deviceFromFilter.data[2];
+  const double dd = deviceFromFilter.data[3];
+  double det = da * dd - db * dc;
+  if (std::abs(det) < 1e-10) {
+    det = 1.0;
+  }
+  const double invDet = 1.0 / det;
+  const float fA = static_cast<float>(dd * invDet);
+  const float fB = static_cast<float>(-dc * invDet);
+  const float fC = static_cast<float>(-db * invDet);
+  const float fD = static_cast<float>(da * invDet);
+
+  const float baseFreqXf = static_cast<float>(primitive.baseFrequencyX);
+  const float baseFreqYf = static_cast<float>(primitive.baseFrequencyY);
+
+  svg_turbulence::Generator gen(primitive.seed);
+  const int numOctaves = std::min(primitive.numOctaves, 24);
+
+  SkBitmap bitmap;
+  bitmap.allocPixels(SkImageInfo::MakeN32Premul(width, height));
+  uint32_t* basePixels = bitmap.getAddr32(0, 0);
+  const int pixelsPerRow = static_cast<int>(bitmap.rowBytes() / 4);
+
+  for (int y = 0; y < height; y++) {
+    const float py = static_cast<float>(y);
+    for (int x = 0; x < width; x++) {
+      const float px = static_cast<float>(x);
+      const float ux = fA * px + fB * py;
+      const float uy = fC * px + fD * py;
+
+      float pixel[4] = {0, 0, 0, 0};
+      float freqX = baseFreqXf;
+      float freqY = baseFreqYf;
+      float invRatio = 1.0f;
+
+      for (int octave = 0; octave < numOctaves; octave++) {
+        const float nx = ux * freqX;
+        const float ny = uy * freqY;
+
+        svg_turbulence::StitchInfo stitch;
+        svg_turbulence::StitchInfo* stitchPtr = nullptr;
+        if (primitive.stitchTiles) {
+          stitch.width = static_cast<int>(static_cast<float>(tileWidth) * freqX);
+          stitch.height = static_cast<int>(static_cast<float>(tileHeight) * freqY);
+          if (stitch.width < 1) stitch.width = 1;
+          if (stitch.height < 1) stitch.height = 1;
+          stitch.wrapX = stitch.width + svg_turbulence::kPerlinN;
+          stitch.wrapY = stitch.height + svg_turbulence::kPerlinN;
+          stitchPtr = &stitch;
+        }
+
+        float noise[4];
+        gen.noise2_4ch_f(nx, ny, stitchPtr, noise);
+
+        if (isFractalNoise) {
+          for (int ch = 0; ch < 4; ++ch) {
+            pixel[ch] += noise[ch] * invRatio;
+          }
+        } else {
+          for (int ch = 0; ch < 4; ++ch) {
+            pixel[ch] += std::abs(noise[ch]) * invRatio;
+          }
+        }
+
+        freqX *= 2.0f;
+        freqY *= 2.0f;
+        invRatio *= 0.5f;
+      }
+
+      // Map noise to [0,255] unpremultiplied.
+      uint8_t rgba[4];
+      if (isFractalNoise) {
+        for (int ch = 0; ch < 4; ch++) {
+          const float val = std::clamp((pixel[ch] + 1.0f) * 0.5f, 0.0f, 1.0f);
+          rgba[ch] = static_cast<uint8_t>(std::clamp(val * 255.0f + 0.5f, 0.0f, 255.0f));
+        }
+      } else {
+        for (int ch = 0; ch < 4; ch++) {
+          const float val = std::clamp(pixel[ch], 0.0f, 1.0f);
+          rgba[ch] = static_cast<uint8_t>(std::clamp(val * 255.0f + 0.5f, 0.0f, 255.0f));
+        }
+      }
+
+      // Premultiply and write in native pixel format.
+      basePixels[y * pixelsPerRow + x] = SkPreMultiplyARGB(rgba[3], rgba[0], rgba[1], rgba[2]);
+    }
+  }
+
+  bitmap.setImmutable();
+  return bitmap.asImage();
+}
+
 /// Attempt to lower the entire FilterGraph to a single SkImageFilter DAG.
 
 /// Returns nullptr if any node can't be lowered (caller should fall back to CPU path).
@@ -1040,25 +1319,20 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Turbulence>) {
-            // Use Skia's native Perlin noise. While it doesn't exactly match the SVG
-            // spec's algorithm (different lookup tables), it produces visually similar
-            // results and avoids premultiplied/straight alpha format mismatches that
-            // occur with the spec-compliant implementation.
-            const SkScalar freqX = NearZero(scaleX, 1e-12)
-                                       ? static_cast<SkScalar>(primitive.baseFrequencyX)
-                                       : static_cast<SkScalar>(primitive.baseFrequencyX / scaleX);
-            const SkScalar freqY = NearZero(scaleY, 1e-12)
-                                       ? static_cast<SkScalar>(primitive.baseFrequencyY)
-                                       : static_cast<SkScalar>(primitive.baseFrequencyY / scaleY);
-            sk_sp<SkShader> shader;
-            if (primitive.type == fp::Turbulence::Type::FractalNoise) {
-              shader = SkShaders::MakeFractalNoise(freqX, freqY, primitive.numOctaves,
-                                                   static_cast<SkScalar>(primitive.seed));
-            } else {
-              shader = SkShaders::MakeTurbulence(freqX, freqY, primitive.numOctaves,
-                                                 static_cast<SkScalar>(primitive.seed));
+            // Use SVG-spec Perlin noise rather than Skia's native noise, which uses
+            // different lookup tables/gradient vectors and produces non-conformant output.
+            sk_sp<SkImage> noiseImage = generateSvgTurbulenceImage(
+                sourceWidth, sourceHeight, primitive, deviceFromFilter,
+                sourceWidth, sourceHeight);
+            if (!noiseImage) {
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              return true;
             }
-            result = SkImageFilters::Shader(std::move(shader));
+            sk_sp<SkShader> noiseShader = noiseImage->makeShader(
+                SkTileMode::kClamp, SkTileMode::kClamp,
+                SkSamplingOptions(SkFilterMode::kNearest));
+            result = SkImageFilters::Shader(std::move(noiseShader));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::DiffuseLighting>) {
