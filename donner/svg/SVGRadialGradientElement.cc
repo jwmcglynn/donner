@@ -15,26 +15,32 @@ SVGRadialGradientElement SVGRadialGradientElement::CreateOn(EntityHandle handle)
 }
 
 void SVGRadialGradientElement::setCx(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::RadialGradientComponent>().cx = value;
 }
 
 void SVGRadialGradientElement::setCy(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::RadialGradientComponent>().cy = value;
 }
 
 void SVGRadialGradientElement::setR(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::RadialGradientComponent>().r = value;
 }
 
 void SVGRadialGradientElement::setFx(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::RadialGradientComponent>().fx = value;
 }
 
 void SVGRadialGradientElement::setFy(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::RadialGradientComponent>().fy = value;
 }
 
 void SVGRadialGradientElement::setFr(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::RadialGradientComponent>().fr = value;
 }
 
