@@ -118,6 +118,7 @@ public:
                const TextParams& params),
               (override));
   MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
+  MOCK_METHOD(std::unique_ptr<RendererInterface>, createOffscreenInstance, (), (const, override));
 };
 
 class RendererDriverTest : public ::testing::Test {
