@@ -747,6 +747,22 @@ def generate_all_packages() -> None:
                     print(f"Skipping target {bazel_label}")
                     continue
 
+                # Backend-specific targets: wrap in conditionals or skip
+                _SKIA_ONLY_TARGETS = {
+                    "donner_svg_renderer_renderer_skia",
+                    "donner_svg_renderer_skia_deps",
+                    "donner_svg_renderer_skia_deps_opt",
+                    "donner_svg_renderer_skia_deps_unconfigured",
+                }
+                _TINY_SKIA_ONLY_TARGETS = {
+                    "donner_svg_renderer_renderer_tiny_skia",
+                    "donner_svg_renderer_filter_graph_executor",
+                }
+                if cmake_name in _SKIA_ONLY_TARGETS:
+                    f.write(f'if(DONNER_RENDERER_BACKEND STREQUAL "skia")\n')
+                elif cmake_name in _TINY_SKIA_ONLY_TARGETS:
+                    f.write(f'if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")\n')
+
                 if kind == "embed_resources":
                     print(
                         "Adding target:",
