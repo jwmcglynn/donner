@@ -1,4 +1,4 @@
-# Design: Parser Diagnostics v2
+# Design: Parser Diagnostics v2 {#ParserDiagnosticsV2}
 
 **Status:** Design
 **Author:** Claude Opus 4.6
@@ -9,10 +9,11 @@
 
 Replace the existing `ParseError` / `std::vector<ParseError>*` diagnostics infrastructure with a
 unified `ParseDiagnostic` type that carries severity, source ranges (not just a single offset), and
-structured metadata. Introduce a `DiagnosticBag` collector that replaces the ad-hoc
-`std::vector<ParseError>* outWarnings` pattern used throughout the parser stack. The goal is
-clang-quality diagnostics: every parser reports precise source ranges, and a console formatter can
-render errors with source text and underline arrows.
+human-readable messages. Introduce `ParseWarningSink` as a first-class abstraction that replaces
+the ad-hoc `std::vector<ParseError>* outWarnings` pattern, with implicit zero-cost suppression of
+formatting overhead when warnings are disabled. The goal is clang-quality diagnostics: every parser
+reports precise source ranges, and a console formatter can render errors with source text and
+caret/tilde indicators.
 
 No backward compatibility with the existing `ParseError` API is required.
 
@@ -20,14 +21,16 @@ No backward compatibility with the existing `ParseError` API is required.
 
 - **Unified diagnostic type** (`ParseDiagnostic`) shared across all parsers: XML, SVG, CSS, path,
   transform, etc.
-- **Full source ranges**: every diagnostic carries a `FileOffsetRange` (start + end), not just a
-  single `FileOffset`.
+- **Full source ranges**: every diagnostic carries a `SourceRange` (`[start, end)` half-open
+  interval), not just a single `FileOffset`.
 - **Severity levels**: distinguish errors (fatal) from warnings (non-fatal).
-- **First-class collection**: `DiagnosticBag` always accepts diagnostics but can be configured to
-  discard them, avoiding string formatting overhead when diagnostics are disabled.
-- **Console rendering**: a utility that prints diagnostics with source context and caret/underline
-  arrows (similar to clang/rustc output).
-- **Comprehensive test coverage**: every parser has tests verifying that reported ranges are accurate.
+- **First-class warning collection**: `ParseWarningSink` is always passed to parser entry points.
+  When disabled, warning emission is near-zero-cost---formatting overhead is implicitly avoided
+  without the caller doing anything special.
+- **Console rendering**: a diagnostic renderer that prints source context with caret/tilde
+  indicators (similar to clang/rustc output).
+- **Comprehensive test coverage**: every parser has tests verifying that reported ranges are
+  accurate.
 
 ## Non-Goals
 
@@ -36,53 +39,50 @@ No backward compatibility with the existing `ParseError` API is required.
   codes can be added later if programmatic error handling is needed).
 - Fixit suggestions or auto-correction (future work).
 - Internationalization of error messages.
-- Changing the CSS tokenizer's `ErrorToken` system (it operates at a different layer and can be
-  bridged to `ParseDiagnostic` at the parser boundary).
+- LSP/IDE protocol support or machine-readable JSON diagnostics in this phase.
+- Redesigning non-parser error types outside ParseResult/ParseError flows (e.g.
+  `ResourceLoaderError`, `UrlLoaderError`).
 
 ## Next Steps
 
-1. Implement the core types: `ParseDiagnostic`, `DiagnosticBag`, updated `ParseResult<T>`.
-2. Migrate `ParserBase` and one concrete parser (e.g. `PathParser`) to validate the design
-   end-to-end.
-3. Add the console diagnostic formatter and verify it produces readable output.
+1. Land base types (`SourceRange`, `ParseDiagnostic`, `ParseWarningSink`) in `donner/base`.
+2. Migrate one parser vertical end-to-end (`PathParser` + `SVGParserContext`) as a proving path.
+3. Implement the diagnostic renderer and verify it produces readable output.
 
 ## Implementation Plan
 
-- [ ] **Milestone 1: Core types**
-  - [ ] Create `ParseDiagnostic` struct in `donner/base/ParseDiagnostic.h`
-  - [ ] Create `DiagnosticBag` class in `donner/base/DiagnosticBag.h`
-  - [ ] Update `ParseResult<T>` to use `ParseDiagnostic` instead of `ParseError`
-  - [ ] Update `ParseResultTestUtils.h` matchers for the new types
-  - [ ] Delete `ParseError.h` / `ParseError.cc` (replaced by `ParseDiagnostic`)
-- [ ] **Milestone 2: Migrate base parsers**
-  - [ ] Update `ParserBase` to produce `ParseDiagnostic` with ranges
-  - [ ] Migrate `NumberParser`, `IntegerParser`, `LengthParser`
-  - [ ] Migrate `DataUrlParser` to use `ParseDiagnostic` (remove `DataUrlParserError` enum)
-  - [ ] Add range-accuracy tests for each base parser
-- [ ] **Milestone 3: Migrate SVG parsers**
-  - [ ] Migrate `PathParser` (key test case: partial results with accurate ranges)
-  - [ ] Migrate `TransformParser`, `ViewBoxParser`, `AngleParser`
+- [ ] **Milestone 1: Introduce base diagnostics model in `donner/base`**
+  - [ ] Add `SourceRange` with half-open `[start, end)` semantics and parent-offset remapping.
+  - [ ] Add `ParseDiagnostic` value type with severity, reason, range.
+  - [ ] Add `ParseWarningSink` with no-op and collecting implementations, lazy-format API.
+  - [ ] Update `ParseResult<T>` to use `ParseDiagnostic` instead of `ParseError`.
+  - [ ] Update `ParseResultTestUtils.h` matchers for the new types.
+  - [ ] Delete `ParseError.h` / `ParseError.cc`.
+  - [ ] Unit tests for `SourceRange` math, `ParseDiagnostic` invariants, sink behavior.
+- [ ] **Milestone 2: Range-correctness migration for parsers**
+  - [ ] Update `ParserBase` to produce `ParseDiagnostic` with ranges.
+  - [ ] Migrate `NumberParser`, `IntegerParser`, `LengthParser`.
+  - [ ] Migrate `PathParser` (key test case: partial results with accurate ranges).
+  - [ ] Migrate `TransformParser`, `ViewBoxParser`, `AngleParser`.
   - [ ] Migrate `LengthPercentageParser`, `PreserveAspectRatioParser`, `Number2dParser`,
-    `PointsListParser`, `CssTransformParser`, `ListParser`
-  - [ ] Migrate `AttributeParser` (change `std::optional<ParseError>` return to
-    `std::optional<ParseDiagnostic>`)
-  - [ ] Replace `SVGParserContext` warnings storage with `DiagnosticBag`
-  - [ ] Migrate `SVGParser` public API: replace `std::vector<ParseError>* outWarnings`
-  - [ ] Add range-accuracy tests for each SVG parser
-- [ ] **Milestone 4: Migrate XML and CSS parsers**
-  - [ ] Migrate `XMLParser` to produce `ParseDiagnostic`
-  - [ ] Migrate CSS `ColorParser`, `SelectorParser` to produce `ParseDiagnostic`
-  - [ ] Bridge CSS tokenizer `ErrorToken` to `ParseDiagnostic` at parser boundary
-  - [ ] Make `StylesheetParser` report diagnostics via `DiagnosticBag` (currently silent)
-  - [ ] Add range-accuracy tests for CSS/XML parsers
-- [ ] **Milestone 5: Console diagnostic formatter**
-  - [ ] Implement `DiagnosticFormatter` that renders diagnostics with source context and
-    caret/underline arrows
-  - [ ] Add golden tests for formatter output
-- [ ] **Milestone 6: Cleanup**
-  - [ ] Remove all references to old `ParseError` type
-  - [ ] Audit and remove any remaining `std::vector<ParseError>*` patterns
-  - [ ] Update documentation
+    `PointsListParser`, `CssTransformParser`, `ListParser`.
+  - [ ] Migrate `DataUrlParser` to use `ParseDiagnostic` (remove `DataUrlParserError` enum).
+  - [ ] Add range-accuracy tests for each parser.
+- [ ] **Milestone 3: Warning plumbing migration**
+  - [ ] Migrate `SVGParserContext` to hold `ParseWarningSink&` instead of `std::vector<ParseError>*`.
+  - [ ] Migrate `AttributeParser` to use `ParseDiagnostic`.
+  - [ ] Migrate `SVGParser` public API: replace `std::vector<ParseError>* outWarnings` with
+    `ParseWarningSink&`.
+  - [ ] Standardize subparser remapping with `SourceRange`-aware composition helpers.
+  - [ ] Migrate `XMLParser` to produce `ParseDiagnostic`.
+  - [ ] Migrate CSS `ColorParser`, `SelectorParser` to produce `ParseDiagnostic`.
+  - [ ] Bridge CSS tokenizer `ErrorToken` to `ParseDiagnostic` at parser boundary.
+  - [ ] Make `StylesheetParser` report diagnostics via `ParseWarningSink`.
+  - [ ] Add range-accuracy tests for CSS/XML parsers.
+- [ ] **Milestone 4: Diagnostic rendering utilities**
+  - [ ] Implement `DiagnosticRenderer` for single-line and multi-line source highlights.
+  - [ ] Add severity labels (error/warning) and optional filename prefixes.
+  - [ ] Add golden/snapshot tests for renderer output.
 
 ## Proposed Architecture
 
@@ -90,15 +90,80 @@ No backward compatibility with the existing `ParseError` API is required.
 
 ```
 donner/base/
-  FileOffset.h          (unchanged - keep FileOffset and FileOffsetRange)
+  FileOffset.h          (unchanged - keep FileOffset)
+  SourceRange.h         (NEW - replaces FileOffsetRange, half-open [start, end))
   ParseDiagnostic.h     (NEW - replaces ParseError.h)
-  DiagnosticBag.h       (NEW - replaces std::vector<ParseError>*)
+  ParseWarningSink.h    (NEW - replaces std::vector<ParseError>*)
   ParseResult.h         (MODIFIED - uses ParseDiagnostic)
+```
+
+### High-level data flow
+
+```mermaid
+flowchart TD
+    A[Source Text] --> B[XMLParser]
+    B --> C[SVGParser]
+    C --> D[AttributeParser]
+    D --> E["SubParsers: Path, Transform, Color, ..."]
+
+    B -->|fatal errors| F["ParseResult&lt;T&gt;"]
+    C -->|warnings| G[ParseWarningSink]
+    D -->|warnings| G
+    E -->|warnings via remapAndMerge| G
+
+    F --> H[Caller]
+    G --> H
+    H --> I[DiagnosticRenderer]
+    I --> J[Console Output with Arrows]
+
+    style G fill:#f9f,stroke:#333
+    style I fill:#bbf,stroke:#333
 ```
 
 ### Core Types
 
-#### `ParseDiagnostic` (replaces `ParseError`)
+#### `SourceRange`
+
+```cpp
+// donner/base/SourceRange.h
+namespace donner {
+
+/**
+ * Half-open source range [start, end) representing a span of characters in a parsed input.
+ *
+ * Both endpoints carry optional line metadata for multi-line inputs. Supports parent-offset
+ * remapping for subparser composition.
+ */
+struct SourceRange {
+  FileOffset start;  ///< Start of the range (inclusive).
+  FileOffset end;    ///< End of the range (exclusive).
+
+  /// Create a range from a start offset and a length.
+  static SourceRange OffsetAndLength(size_t offset, size_t length);
+
+  /// Create a range covering a single character at the given offset.
+  static SourceRange AtOffset(size_t offset);
+
+  /// Create a zero-length insertion point at the given offset.
+  static SourceRange Point(FileOffset location);
+
+  /// Remap this range into absolute coordinates given a parent parser's origin offset.
+  [[nodiscard]] SourceRange addParentOffset(FileOffset parentOffset) const;
+
+  /// Equality operator.
+  bool operator==(const SourceRange&) const = default;
+
+  /// Ostream output.
+  friend std::ostream& operator<<(std::ostream& os, const SourceRange& range);
+};
+
+}  // namespace donner
+```
+
+This replaces `FileOffsetRange` with clearer half-open semantics and the `addParentOffset`
+remapping that currently lives in ad-hoc code scattered across `SVGParserContext` and `FileOffset`.
+
+#### `ParseDiagnostic`
 
 ```cpp
 // donner/base/ParseDiagnostic.h
@@ -110,7 +175,6 @@ enum class DiagnosticSeverity : uint8_t {
   Error,    ///< Fatal issue; parsing may stop or produce partial results.
 };
 
-/// Ostream output operator for DiagnosticSeverity.
 std::ostream& operator<<(std::ostream& os, DiagnosticSeverity severity);
 
 /**
@@ -125,29 +189,20 @@ struct ParseDiagnostic {
   /// Human-readable description of the problem.
   RcString reason;
 
-  /// Source range that this diagnostic applies to. For point diagnostics where
-  /// the end is unknown, start == end.
-  FileOffsetRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
+  /// Source range that this diagnostic applies to.
+  SourceRange range;
 
-  /// Create an error diagnostic at a single offset (convenience).
-  static ParseDiagnostic Error(RcString reason, FileOffset location) {
-    return {DiagnosticSeverity::Error, std::move(reason), {location, location}};
-  }
+  /// Create an error diagnostic at a single offset.
+  static ParseDiagnostic Error(RcString reason, FileOffset location);
 
   /// Create an error diagnostic with a source range.
-  static ParseDiagnostic Error(RcString reason, FileOffsetRange range) {
-    return {DiagnosticSeverity::Error, std::move(reason), range};
-  }
+  static ParseDiagnostic Error(RcString reason, SourceRange range);
 
   /// Create a warning diagnostic at a single offset.
-  static ParseDiagnostic Warning(RcString reason, FileOffset location) {
-    return {DiagnosticSeverity::Warning, std::move(reason), {location, location}};
-  }
+  static ParseDiagnostic Warning(RcString reason, FileOffset location);
 
   /// Create a warning diagnostic with a source range.
-  static ParseDiagnostic Warning(RcString reason, FileOffsetRange range) {
-    return {DiagnosticSeverity::Warning, std::move(reason), range};
-  }
+  static ParseDiagnostic Warning(RcString reason, SourceRange range);
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const ParseDiagnostic& diag);
@@ -156,96 +211,110 @@ struct ParseDiagnostic {
 }  // namespace donner
 ```
 
-Key design decisions:
-- **`FileOffsetRange` instead of `FileOffset`**: Every diagnostic has a start and end. For
-  point-level diagnostics where we only know the start, `start == end`. This is forward-compatible
-  with parsers that don't yet track end positions.
-- **Static factory methods**: `Error(...)` and `Warning(...)` make call sites readable and prevent
-  accidentally constructing a warning with error severity.
-- **No error codes**: String reasons remain the primary message. Adding an optional error code enum
-  is future work if programmatic matching is needed beyond tests.
+#### `ParseWarningSink`
 
-#### `DiagnosticBag` (replaces `std::vector<ParseError>*`)
+The key design requirement is that **callers should not need to do anything special to avoid
+formatting overhead when warnings are disabled**. This is achieved with a template `add` method
+that accepts a callable (factory). The callable is only invoked when the sink is enabled, so the
+`RcString` formatting inside the lambda body is never executed when warnings are suppressed.
 
 ```cpp
-// donner/base/DiagnosticBag.h
+// donner/base/ParseWarningSink.h
 namespace donner {
 
 /**
- * Collects ParseDiagnostic instances during parsing. Always safe to call addWarning/addError
- * on; when constructed in "discard" mode, diagnostics are silently dropped without formatting
- * overhead.
+ * Collects parse warnings during parsing. Always safe to call `add()` on---when disabled,
+ * warnings are silently dropped without invoking the factory callable, implicitly avoiding
+ * string formatting overhead.
  *
  * Replaces the `std::vector<ParseError>* outWarnings` pattern.
+ *
+ * Usage:
+ * @code
+ * // The lambda is only invoked if the sink is enabled---no formatting overhead when disabled.
+ * sink.add([&] {
+ *   return ParseDiagnostic::Warning(
+ *       RcString::fromFormat("Unknown attribute '%s'", name.c_str()), range);
+ * });
+ * @endcode
  */
-class DiagnosticBag {
+class ParseWarningSink {
 public:
-  /// Construct a bag that stores diagnostics.
-  DiagnosticBag() = default;
+  /// Construct a sink that collects warnings.
+  ParseWarningSink() = default;
 
-  /// Construct a bag that discards all diagnostics (no-op sink).
-  static DiagnosticBag Discard();
+  /// Construct a disabled sink that discards all warnings (no-op).
+  static ParseWarningSink Disabled();
 
-  /// Add a diagnostic.
-  void add(ParseDiagnostic&& diag);
-
-  /// Convenience: add an error.
-  void addError(RcString reason, FileOffset location);
-  void addError(RcString reason, FileOffsetRange range);
-
-  /// Convenience: add a warning.
-  void addWarning(RcString reason, FileOffset location);
-  void addWarning(RcString reason, FileOffsetRange range);
-
-  /// Returns true if any error-severity diagnostics have been added.
-  bool hasErrors() const;
-
-  /// Returns true if any diagnostics have been added.
-  bool hasDiagnostics() const;
-
-  /// Returns true if this bag is in discard mode.
-  bool isDiscarding() const;
-
-  /// Access the collected diagnostics.
-  const std::vector<ParseDiagnostic>& diagnostics() const;
-
-  /// Access only warnings.
-  std::vector<ParseDiagnostic> warnings() const;
-
-  /// Access only errors.
-  std::vector<ParseDiagnostic> errors() const;
-
-  /// Merge all diagnostics from another bag into this one.
-  void merge(DiagnosticBag&& other);
+  /// Returns true if the sink is enabled (will store warnings).
+  bool isEnabled() const { return enabled_; }
 
   /**
-   * Merge diagnostics from a subparser, remapping offsets using the given ParserOrigin-style
-   * parent offset. Replaces SVGParserContext::addSubparserWarning.
+   * Add a warning via a factory callable. The callable is only invoked when the sink is enabled,
+   * implicitly avoiding formatting overhead when warnings are disabled.
+   *
+   * @tparam Factory A callable returning ParseDiagnostic.
    */
-  void mergeFromSubparser(DiagnosticBag&& other, FileOffset parentOffset);
+  template <typename Factory>
+    requires std::invocable<Factory> &&
+             std::same_as<std::invoke_result_t<Factory>, ParseDiagnostic>
+  void add(Factory&& factory) {
+    if (enabled_) {
+      warnings_.push_back(std::forward<Factory>(factory)());
+    }
+  }
+
+  /// Add a pre-constructed warning (for cases where the diagnostic is already built).
+  void add(ParseDiagnostic&& warning);
+
+  /// Access the collected warnings.
+  const std::vector<ParseDiagnostic>& warnings() const { return warnings_; }
+
+  /// Returns true if any warnings have been added.
+  bool hasWarnings() const { return !warnings_.empty(); }
+
+  /// Merge all warnings from another sink into this one.
+  void merge(ParseWarningSink&& other);
+
+  /**
+   * Merge warnings from a subparser, remapping source ranges using the given parent offset.
+   * Replaces SVGParserContext::addSubparserWarning.
+   */
+  void mergeFromSubparser(ParseWarningSink&& other, FileOffset parentOffset);
 
 private:
-  std::vector<ParseDiagnostic> diagnostics_;
-  bool discarding_ = false;
+  std::vector<ParseDiagnostic> warnings_;
+  bool enabled_ = true;
 };
 
 }  // namespace donner
 ```
 
-Key design decisions:
-- **Always-safe API**: `DiagnosticBag` never requires a null check. The `Discard()` factory creates
-  a no-op sink, replacing the `if (warnings_) { ... }` null-pointer pattern throughout
-  `SVGParserContext`.
-- **Lazy formatting optimization**: When `isDiscarding()` is true, callers can skip expensive string
-  formatting. This can be wrapped in a macro or inline helper:
-  ```cpp
-  // In hot paths, avoid formatting when discarding:
-  if (!bag.isDiscarding()) {
-    bag.addWarning(RcString::fromFormat("Unknown attribute '%s'", name), range);
-  }
-  ```
-- **Subparser merging**: `mergeFromSubparser` replaces `SVGParserContext::fromSubparser` and
-  `addSubparserWarning`, centralizing the offset remapping logic.
+**Why a template `add` with a callable?** The current pattern requires callers to explicitly guard
+formatting:
+```cpp
+// OLD: caller must remember to check, easy to forget
+if (warnings_) {
+  warnings_->push_back(ParseError{RcString::fromFormat("Bad '%s'", name), offset});
+}
+```
+
+With `ParseWarningSink`, the zero-cost behavior is implicit:
+```cpp
+// NEW: formatting is automatically skipped when disabled
+sink.add([&] {
+  return ParseDiagnostic::Warning(RcString::fromFormat("Bad '%s'", name), range);
+});
+```
+
+The lambda body (including the `RcString::fromFormat` call) is never executed when the sink is
+disabled. Callers don't need to check `isEnabled()` or wrap anything in conditionals.
+
+For the common case where the diagnostic string is a literal (no formatting needed), the
+direct `add(ParseDiagnostic&&)` overload avoids lambda boilerplate:
+```cpp
+sink.add(ParseDiagnostic::Warning("Missing attribute", range));
+```
 
 #### Updated `ParseResult<T>`
 
@@ -289,149 +358,123 @@ private:
 }  // namespace donner
 ```
 
-This is a drop-in replacement: the API shape is identical, only the contained error type changes
-from `ParseError` to `ParseDiagnostic`.
+The API shape is identical to today. Only the contained error type changes from `ParseError` to
+`ParseDiagnostic`. Fatal errors still flow through `ParseResult<T>`, while non-fatal warnings
+flow through `ParseWarningSink`.
 
-### Data Flow
+### SVGParserContext Changes
 
-```mermaid
-graph TD
-    A[Source Text] --> B[XMLParser]
-    B --> C[SVGParser]
-    C --> D[AttributeParser]
-    D --> E[SubParsers: Path, Transform, Color, ...]
-
-    B -->|errors| F[DiagnosticBag]
-    C -->|warnings| F
-    D -->|warnings| F
-    E -->|errors via mergeFromSubparser| F
-
-    F --> G[DiagnosticFormatter]
-    G --> H[Console Output with Arrows]
-
-    style F fill:#f9f,stroke:#333
-    style G fill:#bbf,stroke:#333
-```
-
-### Console Diagnostic Formatter
-
-The formatter renders diagnostics against source text, producing output like:
-
-```
-error: Failed to parse number: Unexpected character
-  --> input.svg:2:24
-   |
- 2 |   <path d="M 100 100 h 2!" />
-   |                         ^ unexpected character
-```
-
-For range diagnostics:
-
-```
-warning: Unknown attribute 'user-attribute' (disableUserAttributes: true)
-  --> input.svg:2:18
-   |
- 2 |   <rect stroke="red" user-attribute="value" />
-   |                       ^^^^^^^^^^^^^^^^^^^^^^^^ unknown attribute
-```
+`SVGParserContext` currently owns the `std::vector<ParseError>*` and does offset remapping. It will
+hold a `ParseWarningSink&` reference instead:
 
 ```cpp
-// donner/base/DiagnosticFormatter.h
+class SVGParserContext {
+public:
+  SVGParserContext(std::string_view input, ParseWarningSink& warningSink,
+                   const SVGParser::Options& options);
+
+  /// The warning sink for this parse session.
+  ParseWarningSink& warningSink() { return warningSink_; }
+
+  /// Add a warning from a subparser, remapping source ranges to absolute coordinates.
+  void addSubparserWarning(ParseDiagnostic&& diag, ParserOrigin origin);
+
+  /// Remap a diagnostic from a subparser back to the original input string.
+  ParseDiagnostic fromSubparser(ParseDiagnostic&& diag, ParserOrigin origin);
+
+  // ... rest unchanged (getAttributeLocation, offsetToLine, etc.)
+
+private:
+  ParseWarningSink& warningSink_;
+  // ...
+};
+```
+
+### SVGParser Public API
+
+```cpp
+class SVGParser {
+public:
+  // Primary API: caller provides a warning sink.
+  static ParseResult<SVGDocument> ParseSVG(
+      std::string_view source,
+      ParseWarningSink& warningSink,
+      Options options = {},
+      SVGDocument::Settings settings = {}) noexcept;
+
+  // Convenience: warnings are discarded.
+  static ParseResult<SVGDocument> ParseSVG(
+      std::string_view source,
+      Options options = {},
+      SVGDocument::Settings settings = {}) noexcept;
+};
+```
+
+### Diagnostic Renderer
+
+```cpp
+// donner/base/DiagnosticRenderer.h
 namespace donner {
 
-class DiagnosticFormatter {
+class DiagnosticRenderer {
 public:
   struct Options {
-    /// Maximum number of context lines to show before/after the diagnostic.
-    int contextLines = 1;
-    /// Enable colorized output (ANSI escape codes).
-    bool colorize = false;
-    /// Optional filename to display in the header.
-    std::string_view filename;
+    int contextLines = 1;         ///< Context lines before/after the diagnostic.
+    bool colorize = false;        ///< Enable ANSI color codes.
+    std::string_view filename;    ///< Optional filename for the header.
   };
 
-  /**
-   * Format a single diagnostic against the source text.
-   *
-   * @param source The full source text that was parsed.
-   * @param diag The diagnostic to format.
-   * @param options Formatting options.
-   * @return Formatted diagnostic string.
-   */
+  /// Format a single diagnostic against source text.
   static std::string format(std::string_view source, const ParseDiagnostic& diag,
                             const Options& options = {});
 
-  /**
-   * Format all diagnostics in a bag against the source text.
-   */
-  static std::string formatAll(std::string_view source, const DiagnosticBag& bag,
+  /// Format all warnings in a sink against source text.
+  static std::string formatAll(std::string_view source, const ParseWarningSink& sink,
                                const Options& options = {});
 };
 
 }  // namespace donner
 ```
 
+Renderer behavior:
+- **Single-line range**: caret at start + tildes for span width.
+- **Zero-length (point)**: caret at insertion point.
+- **Multi-line span**: first/last line emphasis with bounded context.
+- **Resilient fallback**: best-effort output if source text is unavailable or range is malformed.
+
+Example output:
+
+```text
+warning: Invalid paint server value
+  --> line 4, col 12
+4 | <path fill="url(#)"/>
+  |             ^~~~~~
+```
+
 ### Migration Pattern for Parsers
 
-Each parser migration follows the same pattern:
-
-**Before:**
+**Before (return error):**
 ```cpp
-// NumberParser returning single-offset error
 return ParseError{RcString("Unexpected character"), FileOffset::Offset(pos)};
 ```
 
-**After:**
+**After (return error):**
 ```cpp
-// NumberParser returning range error
-return ParseDiagnostic::Error(
-    RcString("Unexpected character"),
-    FileOffsetRange{currentOffset(), currentOffset(1)});
+return ParseDiagnostic::Error("Unexpected character",
+    SourceRange::OffsetAndLength(pos, 1));
 ```
 
-**SVGParser before:**
+**Before (emit warning):**
 ```cpp
-static ParseResult<SVGDocument> ParseSVG(
-    std::string_view source,
-    std::vector<ParseError>* outWarnings = nullptr,
-    Options options = {});
+context.addWarning(ParseError{RcString::fromFormat("Bad '%s'", name), offset});
 ```
 
-**SVGParser after:**
+**After (emit warning, lazy):**
 ```cpp
-static ParseResult<SVGDocument> ParseSVG(
-    std::string_view source,
-    DiagnosticBag& diagnostics,
-    Options options = {});
-
-// Overload for callers that don't need diagnostics:
-static ParseResult<SVGDocument> ParseSVG(
-    std::string_view source,
-    Options options = {});
-```
-
-### SVGParserContext Changes
-
-`SVGParserContext` currently owns the `std::vector<ParseError>*` and does offset remapping. It will
-be updated to hold a `DiagnosticBag&` reference instead:
-
-```cpp
-class SVGParserContext {
-public:
-  SVGParserContext(std::string_view input, DiagnosticBag& diagnostics,
-                   const SVGParser::Options& options);
-
-  /// Add a warning diagnostic.
-  void addWarning(RcString reason, FileOffsetRange range);
-
-  /// Add a warning from a subparser, remapping offsets.
-  void addSubparserWarning(ParseDiagnostic&& diag, ParserOrigin origin);
-
-  // ... rest unchanged
-private:
-  DiagnosticBag& diagnostics_;
-  // ...
-};
+context.warningSink().add([&] {
+  return ParseDiagnostic::Warning(
+      RcString::fromFormat("Bad '%s'", name), range);
+});
 ```
 
 ## API / Interfaces
@@ -440,138 +483,163 @@ private:
 
 | Type | Header | Role |
 |------|--------|------|
+| `SourceRange` | `donner/base/SourceRange.h` | Half-open `[start, end)` source span |
 | `ParseDiagnostic` | `donner/base/ParseDiagnostic.h` | Shared diagnostic value type |
 | `DiagnosticSeverity` | `donner/base/ParseDiagnostic.h` | Error vs Warning enum |
-| `DiagnosticBag` | `donner/base/DiagnosticBag.h` | Diagnostic collector/sink |
+| `ParseWarningSink` | `donner/base/ParseWarningSink.h` | Warning collector/sink |
 | `ParseResult<T>` | `donner/base/ParseResult.h` | Result-or-error (uses `ParseDiagnostic`) |
-| `DiagnosticFormatter` | `donner/base/DiagnosticFormatter.h` | Console rendering utility |
+| `DiagnosticRenderer` | `donner/base/DiagnosticRenderer.h` | Console rendering utility |
 | `FileOffset` | `donner/base/FileOffset.h` | Single source position (unchanged) |
-| `FileOffsetRange` | `donner/base/FileOffset.h` | Source range (unchanged) |
 
 ### Removed Types
 
 | Type | Replacement |
 |------|-------------|
 | `ParseError` | `ParseDiagnostic` |
+| `FileOffsetRange` | `SourceRange` |
 | `DataUrlParserError` | `ParseDiagnostic` returned via `ParseResult` |
+
+## Performance
+
+- **Zero-cost when disabled**: `ParseWarningSink::Disabled()` creates a sink where the template
+  `add(factory)` method short-circuits before invoking the factory callable. No `RcString`
+  formatting, no allocations, no virtual dispatch.
+- **Implicit for callers**: Unlike the old pattern where callers had to remember to check
+  `if (warnings_)`, the lazy-factory API makes zero-cost suppression automatic.
+- **No additional allocations on success path**: `ParseResult<T>` still uses `std::optional`.
+  `ParseDiagnostic` is slightly larger than `ParseError` (adds severity + one extra `FileOffset`
+  for range end), but this only matters on error paths.
+- **Reuse existing line-offset indexing**: `SVGParserContext` already maintains `LineOffsets`;
+  the same data is reused for `SourceRange` construction.
+
+## Security / Privacy
+
+Parsers process untrusted SVG/XML/CSS input, so diagnostics must avoid introducing amplification
+or data-leak risks.
+
+```mermaid
+flowchart LR
+    A[Untrusted input text] --> B[Parser]
+    B --> C[Diagnostic range + reason]
+    C --> D[Renderer]
+    D --> E[Logs / console output]
+```
+
+- Clamp/validate ranges before rendering to prevent out-of-bounds access.
+- Truncate rendered source excerpts and reason length in logging paths.
+- Avoid echoing unrelated large input regions in diagnostics.
+- Add negative tests for malformed ranges and very long lines.
 
 ## Testing and Validation
 
-### Range Accuracy Tests
+### Unit tests (`donner/base`)
 
-Every parser gets a dedicated test verifying that the reported range accurately covers the
-problematic source text. The test pattern:
+- `SourceRange` construction, offset math, parent-offset remapping, edge cases (empty, single-char,
+  end-of-string).
+- `ParseDiagnostic` invariants: severity, copy/move, factory methods.
+- `ParseWarningSink`: no-op vs collecting behavior, lazy-factory suppression (verify factory is not
+  invoked when disabled), merge and subparser remapping.
+
+### Parser tests
+
+Every parser gets range-accuracy tests. Example pattern:
 
 ```cpp
 TEST(PathParser, ErrorRangeAccuracy) {
   auto result = PathParser::Parse("M 100 100 h 2!");
-  ASSERT_THAT(result, HasDiagnostic(
-      DiagnosticSeverity::Error,
-      "Failed to parse number: Unexpected character",
-      SourceRange(13, 14)));  // covers "!"
+  ASSERT_THAT(result, AllOf(
+      ParseErrorIs("Failed to parse number: Unexpected character"),
+      DiagnosticRangeIs(SourceRange::OffsetAndLength(13, 1))));
 }
 ```
 
 New test matchers:
 
 ```cpp
-// Matches a ParseDiagnostic by severity, message, and range.
-MATCHER_P3(DiagnosticIs, severity, messageMatcher, rangeMatcher, "");
+// Matches a ParseDiagnostic by message.
+MATCHER_P(ParseErrorIs, messageMatcher, "");
 
 // Matches the source range of a diagnostic.
-MATCHER_P2(SourceRange, startOffset, endOffset, "");
+MATCHER_P(DiagnosticRangeIs, expectedRange, "");
 
-// Matches that a DiagnosticBag contains a specific diagnostic.
-MATCHER_P(HasDiagnostic, diagnosticMatcher, "");
+// Matches severity of a diagnostic.
+MATCHER_P(DiagnosticSeverityIs, expectedSeverity, "");
 ```
 
-### Formatter Golden Tests
+### Golden/snapshot tests
 
-The `DiagnosticFormatter` output is tested with golden files to prevent regressions in formatting:
+Renderer output is tested with inline golden strings to catch formatting regressions:
 
 ```cpp
-TEST(DiagnosticFormatter, ErrorWithRange) {
-  const auto source = R"(<path d="M 100 100 h 2!" />)";
-  ParseDiagnostic diag = ParseDiagnostic::Error(...);
-  EXPECT_EQ(DiagnosticFormatter::format(source, diag, options), R"(
-error: Failed to parse number: Unexpected character
-  --> test.svg:1:24
-   |
- 1 | <path d="M 100 100 h 2!" />
-   |                         ^ unexpected character
-)");
+TEST(DiagnosticRenderer, SingleLineRange) {
+  auto diag = ParseDiagnostic::Error("Unexpected character",
+                                      SourceRange::OffsetAndLength(24, 1));
+  EXPECT_EQ(DiagnosticRenderer::format(source, diag, {.filename = "test.svg"}),
+            "error: Unexpected character\n"
+            "  --> test.svg:1:25\n"
+            "   |\n"
+            " 1 | <path d=\"M 100 100 h 2!\" />\n"
+            "   |                         ^\n");
 }
 ```
 
-### Test Matrix
+### Fuzz / negative tests
 
-| Parser | Error ranges | Warning ranges | Partial results |
-|--------|:---:|:---:|:---:|
-| `NumberParser` | yes | - | - |
-| `IntegerParser` | yes | - | - |
-| `PathParser` | yes | - | yes |
-| `TransformParser` | yes | - | - |
-| `ViewBoxParser` | yes | - | - |
-| `AngleParser` | yes | - | - |
-| `LengthPercentageParser` | yes | - | - |
-| `PreserveAspectRatioParser` | yes | - | - |
-| `CssTransformParser` | yes | - | - |
-| `ColorParser` | yes | - | - |
-| `SelectorParser` | yes | - | - |
-| `XMLParser` | yes | - | - |
-| `SVGParser` | yes | yes | - |
-| `AttributeParser` | yes | yes | - |
-| `StylesheetParser` | - | yes | - |
-
-## Performance
-
-- **Zero-cost when disabled**: `DiagnosticBag::Discard()` drops all diagnostics without allocation.
-  Callers should check `isDiscarding()` before doing expensive string formatting.
-- **No additional allocations on success path**: `ParseResult<T>` still uses `std::optional` for
-  both the result and the diagnostic. The `ParseDiagnostic` struct is slightly larger than
-  `ParseError` (adds severity enum + one extra `FileOffset` for end), but this is only allocated on
-  error paths.
-- **DiagnosticBag** uses a `std::vector` internally, same as the current `std::vector<ParseError>*`
-  pattern but with one fewer level of indirection (no null-pointer check on each add).
+- Extend parser fuzz harnesses to assert no crashes with malformed ranges.
+- Add renderer robustness tests for adversarial range values (past end-of-string, reversed
+  start/end, very long lines).
 
 ## Alternatives Considered
 
-### 1. Error code enum per parser
+### 1. Keep `ParseError`, just add an `endOffset` field
 
-Each parser could define its own `enum class` of error types (like `DataUrlParserError`). This
-would enable exhaustive `switch` handling but adds significant boilerplate for little practical
-benefit---most callers just log the message. String matching in tests is sufficient for now.
-
-**Rejected**: Too much boilerplate, low practical benefit.
+- Pros: smallest API diff.
+- Cons: warnings remain ad hoc; harder to share renderer and severity model.
+- **Rejected**: doesn't address the warning plumbing problem.
 
 ### 2. Keep `ParseError` and add `ParseWarning` as a separate type
 
-Instead of a unified `ParseDiagnostic` with severity, keep `ParseError` for errors and add a
-separate `ParseWarning` struct.
-
-**Rejected**: Leads to duplicated infrastructure (two bag types, two sets of matchers, etc.) for
-types that are structurally identical. A severity field is simpler.
+- Pros: explicit type distinction.
+- Cons: duplicated infrastructure (two types, two sets of matchers, two collection patterns).
+- **Rejected**: a severity field on a unified type is simpler.
 
 ### 3. `std::expected`-based `ParseResult`
 
-Replace custom `ParseResult<T>` with `std::expected<T, ParseDiagnostic>` (C++23).
+- Pros: standard library type.
+- Cons: C++23 (Donner targets C++20); doesn't support partial-result pattern.
+- **Rejected**.
 
-**Rejected**: Donner targets C++20. Also, `std::expected` doesn't support the "both result AND
-error" partial-result pattern that `PathParser` relies on.
+### 4. Virtual `ParseWarningSink` interface
+
+- Pros: extensible (custom sink implementations).
+- Cons: virtual dispatch overhead on every `add()` call; harder to inline the enabled check.
+- **Rejected**: concrete class with template `add` gives zero-cost inlining without virtual
+  dispatch. A virtual interface can be added later if custom sinks are needed.
+
+### 5. Global thread-local diagnostics collector
+
+- Pros: minimal signature churn.
+- Cons: hidden state, poor testability, unsafe in concurrent scenarios.
+- **Rejected**.
 
 ## Open Questions
 
-1. **Should `DiagnosticBag` be thread-safe?** Currently all parsing is single-threaded. If parallel
-   parsing is added later, `DiagnosticBag` would need a mutex or per-thread bags that merge.
-   Recommendation: keep it single-threaded for now.
+1. **Should `SourceRange` replace `FileOffsetRange` globally?** `FileOffsetRange` is currently used
+   in `XMLNode::getAttributeLocation`. We could either rename it or keep both and convert at
+   boundaries.
 
-2. **Should the formatter support multi-line ranges?** For v1, single-line underlines are
-   sufficient. Multi-line range rendering (like rustc's `|` markers) can be added later.
+2. **Should the renderer live in `donner/base` or a separate utility library?** It depends on
+   whether non-parser code (e.g. CLI tools) needs it. Recommendation: `donner/base` for now since
+   it only depends on base types.
+
+3. **Default truncation limits for renderer output?** Need to decide on max source-excerpt width
+   and max reason length for logging paths.
 
 ## Future Work
 
 - [ ] Structured error codes for programmatic error handling.
 - [ ] Fixit suggestions ("did you mean ...?").
-- [ ] Multi-line range rendering in the formatter.
+- [ ] Multi-line range rendering in the renderer.
 - [ ] LSP-compatible diagnostic output (JSON) for editor integration.
-- [ ] Thread-safe `DiagnosticBag` for parallel parsing.
+- [ ] Machine-readable diagnostic serialization for CI tooling.
+- [ ] Parser feature metrics (warning/error counts by parser type).
