@@ -8,9 +8,10 @@
 
 - `FontManager` tests: load TTF/OTF/WOFF1, verify `stbtt_fontinfo` initialization, test
   cascade fallback, verify font metrics.
-- `TextLayout` tests: lay out known strings with embedded Public Sans, verify glyph positions
-  against expected values, test `text-anchor` adjustment.
-- `Woff2Parser` tests: decompress known WOFF2 files, verify output matches reference TTF.
+- `TextEngine` helper tests: verify chunking, text-anchor, `textLength`, `lengthAdjust`,
+  and baseline-shift calculations without real fonts.
+- `TextBackend` tests: verify shaping, metrics, and outline extraction for both base and full
+  backends.
 - Glyph outline tests: extract outlines for known glyphs, verify path geometry matches expected
   curves.
 
@@ -45,9 +46,31 @@ CI runs all feature combinations to ensure both enabled and disabled paths work.
 - TinySkia renders glyph outlines as vector paths (no hinting), so small-size text will look
   slightly different from Skia's hinted rasterization regardless of shaping tier.
 
-## Current Test Failure Analysis (2026-03-30) {#test-failures}
+## Current Snapshot (2026-04-04) {#current-snapshot}
 
-Snapshot of resvg test suite failures for the base config (TinySkia backend).
+Current base-tier (`text`, TinySkia) resvg status for the most relevant text slices:
+
+| Slice | Current status | Notes |
+|---|---|---|
+| `e-text-*` | 30/30 enabled tests passing | 12 disabled: mostly text-full-only or explicit skips |
+| `e-tspan-*` | 23/24 enabled tests passing | Active failure: `e-tspan-030`; 7 disabled |
+| `a-text-decoration-*` | All enabled tests passing | Includes custom golden for `019` |
+| `a-lengthAdjust-*` | All enabled tests passing | `spacingAndGlyphs` now stretches glyphs along text direction |
+| `a-dominant-baseline-*` | Enabled coverage passing at default threshold | Coverage is still thin |
+| `a-letter-spacing-*` | All enabled tests passing in base tier | Arabic case requires text-full; 3 disabled/UB cases remain |
+| `a-textLength-*` | All enabled tests passing | `a-textLength-008` still disabled |
+| `a-writing-mode-*` | All enabled tests passing | 10 disabled mixed-script / rotate / dx/dy cases remain |
+| `e-textPath-*` | Still disabled | Largest intentional feature gap |
+
+Release-significant gaps from the current snapshot:
+
+- `e-tspan-030` is the main remaining active base-tier failure.
+- `e-textPath-*` is still intentionally out of the enabled suite.
+- BiDi and advanced mixed-script vertical text remain explicitly deferred.
+
+## Historical Failure Analysis (2026-03-30) {#test-failures}
+
+Historical snapshot of resvg test suite failures for the base config (TinySkia backend).
 73 tests fail at the default threshold (100 max pixels).
 
 Note: Previous counts (42) were artificially low because the `a-font` suite used a

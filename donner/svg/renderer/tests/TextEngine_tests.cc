@@ -208,4 +208,83 @@ TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   EXPECT_NEAR(rotatedMark.yPosition - rotatedBase.yPosition, expectedDy, 1.0);
 }
 
+TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+
+  components::ComputedTextComponent text;
+  auto span1 = MakeSpan("Some ");
+  auto span2 = MakeSpan("long");
+  span2.startsNewChunk = false;
+  auto span3 = MakeSpan(" text");
+  span3.startsNewChunk = false;
+
+  PathSpline path;
+  path.moveTo(Vector2d(0.0, 0.0));
+  path.lineTo(Vector2d(200.0, 0.0));
+
+  span1.pathSpline = path;
+  span1.textPathSourceEntity = Entity{1};
+  span2.pathSpline = path;
+  span2.textPathSourceEntity = Entity{1};
+  span3.pathSpline = path;
+  span3.textPathSourceEntity = Entity{1};
+
+  span2.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+  span2.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  span3.dxList = {Lengthd(5.0, Lengthd::Unit::None)};
+  span3.dyList = {Lengthd(-10.0, Lengthd::Unit::None)};
+
+  text.spans.push_back(std::move(span1));
+  text.spans.push_back(std::move(span2));
+  text.spans.push_back(std::move(span3));
+
+  TextLayoutParams params = MakeTextParams(24.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_EQ(runs.size(), 3u);
+  ASSERT_FALSE(runs[0].glyphs.empty());
+  ASSERT_FALSE(runs[1].glyphs.empty());
+  ASSERT_FALSE(runs[2].glyphs.empty());
+
+  EXPECT_GT(runs[1].glyphs.front().xPosition, 5.0);
+  EXPECT_NEAR(runs[1].glyphs.front().yPosition, 0.0, 1.0);
+  EXPECT_GT(runs[2].glyphs.front().xPosition, runs[1].glyphs.front().xPosition);
+  EXPECT_NEAR(runs[2].glyphs.front().yPosition, 0.0, 1.0);
+}
+
+TEST(TextEngineTest, TextAfterTextPathStartsAtPathEnd) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+
+  components::ComputedTextComponent text;
+  auto pathSpan = MakeSpan("Some");
+  auto trailingSpan = MakeSpan(" tail");
+  trailingSpan.startsNewChunk = false;
+
+  PathSpline path;
+  path.moveTo(Vector2d(0.0, 0.0));
+  path.lineTo(Vector2d(200.0, 0.0));
+  pathSpan.pathSpline = path;
+  pathSpan.textPathSourceEntity = Entity{1};
+
+  text.spans.push_back(std::move(pathSpan));
+  text.spans.push_back(std::move(trailingSpan));
+
+  TextLayoutParams params = MakeTextParams(24.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_EQ(runs.size(), 2u);
+  ASSERT_FALSE(runs[1].glyphs.empty());
+  EXPECT_GT(runs[1].glyphs.front().xPosition, 180.0);
+}
+
 }  // namespace donner::svg

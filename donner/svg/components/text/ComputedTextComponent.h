@@ -214,8 +214,13 @@ struct ComputedTextComponent {
 
     /// If set, glyphs in this span are positioned along this path (for \ref xml_textPath).
     std::optional<PathSpline> pathSpline;
+    /// The \ref xml_textPath entity that supplied \ref pathSpline, if any.
+    entt::entity textPathSourceEntity = entt::null;
     /// Start offset along the path (resolved to pixels).
     double pathStartOffset = 0.0;
+    /// True when a \ref xml_textPath element's href could not be resolved. Per SVG spec,
+    /// a textPath with an invalid or missing href does not render.
+    bool textPathFailed = false;
   };
 
   // Computed spans with positioning data for rendering.

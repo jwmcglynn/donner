@@ -2,27 +2,30 @@
 
 [Back to hub](../text_rendering.md)
 
-**Status:** Implemented (Phases 1-6)
+**Status:** Implemented (base + text_full tiers)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-09
 **Tracking:** [#242](https://github.com/jwmcglynn/donner/issues/242)
 
 ## Summary
 
-Text is one of the highest-impact remaining gaps for v1.0. The SVG parsing layer already handles
-`<text>`, `<tspan>`, and `<textPath>` elements and produces `ComputedTextComponent` with resolved
-span positions. The Skia backend has basic text rendering via `SkFont`/`SkFontMgr`, but lacks
-stroke rendering, rotation, and `@font-face` integration. The TinySkia backend has no text
-rendering at all.
+Donner ships a two-tier text stack:
+
+1. **Base text** (`text`) — stb_truetype-based shaping/layout for common SVG text.
+2. **Full text** (`text_full`) — HarfBuzz + FreeType for complex scripts, bitmap emoji,
+   WOFF2, and native OpenType shaping.
+
+Both tiers share a single `TextEngine` with pluggable backends
+(`TextBackendSimple` / `TextBackendFull`). Skia and TinySkia both render text today.
 
 This design covers:
 
-1. **Base text support** — using stb_truetype (already vendored, ~55 KB) for font loading, glyph
-   metrics, `kern`-table kerning, and glyph outline extraction. Zero new dependencies.
-2. **Finishing Skia text** — stroke, `@font-face`/WOFF, text-anchor, remaining SVG text properties.
-3. **Adding TinySkia text** — rendering glyphs as filled/stroked paths via stb_truetype outlines.
-4. **Optional WOFF2** — gated behind a separate feature flag.
-5. **Feature tiers** — build-time opt-in via Bazel flags controlling binary size cost.
+1. **Base text support** — common `<text>` / `<tspan>` rendering, positioning, decoration,
+   `textLength`, `lengthAdjust`, and `@font-face`.
+2. **Shared layout architecture** — one `TextEngine`, one `TextBackend` interface, no duplicated
+   layout logic between base and full tiers.
+3. **Optional advanced shaping** — HarfBuzz/FreeType/WOFF2 only when `text_full` is enabled.
+4. **Feature tiers** — build-time opt-in via Bazel flags controlling binary size cost.
 
 Full OpenType shaping (GSUB/GPOS via HarfBuzz) is available as an opt-in `text_full` tier
 (`--config=text-full`) to avoid roughly doubling the binary size when not needed.
@@ -33,13 +36,14 @@ Full OpenType shaping (GSUB/GPOS via HarfBuzz) is available as an opt-in `text_f
 - Support `@font-face` with TTF/OTF and WOFF 1.0 web fonts.
 - Add zero new dependencies for the base text tier (stb_truetype is already vendored).
 - Keep binary size and build time impact minimal and opt-in via feature tiers.
-- Design the architecture so HarfBuzz shaping can be added later as a drop-in upgrade.
+- Keep the architecture shared so HarfBuzz shaping remains a drop-in upgrade.
 - Maintain build-time backend selection.
 
 ## Non-Goals
 
 - Full bidirectional text (mixed LTR/RTL in a single `<text>` element via the Unicode Bidi algorithm).
-- Vertical writing modes (`writing-mode: vertical-rl`).
+- Full mixed-script vertical writing mode parity.
+- Complete `<textPath>` parity (`method`, `spacing`, `side`, `path` attribute, effect interactions).
 - SVG fonts (`<font>` element — deprecated in SVG2).
 - Font subsetting or optimization.
 - System font discovery for TinySkia (embedded/loaded fonts only).

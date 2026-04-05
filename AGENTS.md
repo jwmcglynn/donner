@@ -104,6 +104,9 @@ Update golden images: `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel ru
 
 - Always aim to **root-cause** pixel diff issues, even if the code is in vendored libraries (e.g., tiny-skia-cpp).
 - Don't just bump thresholds — investigate WHY pixels differ and fix the underlying code when possible.
+- For text rendering, "glyph outline differences" is almost never a sufficient explanation for a
+  resvg failure. Treat that as a red herring unless you have strong evidence from the rendered
+  output and font data.
 - Threshold adjustments are a last resort after the rendering bug has been investigated and reduced as far as practical.
 - Threshold changes are not a way to paper over incorrect rendering just to get tests passing.
 - Enabling skipped tests with large thresholds is not useful without understanding the root cause.
@@ -111,10 +114,16 @@ Update golden images: `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel ru
 ## Resvg Test Threshold Conventions
 
 - For pixel diffs <100, just **omit the entry** — the default `Params()` applies automatically via `getTestsWithPrefix`.
-- When adjusting tolerance, prefer changing the floating-point threshold first; that is the normal way to handle minor AA or shading differences.
-- Only add an override entry with `Params::WithThreshold(threshold, N)` when you have already investigated the root cause and determined the remaining differences are acceptable residual rasterization differences.
+- Any non-default threshold or other tolerance override requires explicit human review and approval.
+- When a tolerance adjustment is approved, prefer changing the floating-point threshold first; that
+  is the normal way to handle minor AA or shading differences.
+- Only add an override entry with `Params::WithThreshold(threshold, N)` when you have already
+  investigated the root cause and determined the remaining differences are acceptable residual
+  rasterization differences.
 - Do not raise max mismatched pixels by itself as an easy escape hatch.
 - If you want to increase max mismatched pixels materially, that requires explicit human review and approval.
+- Do not assume that "only 200 pixels off" is small. Many real false-positives have landed close
+  to that range, so even low-hundreds max-diff values can still hide meaningful rendering bugs.
 - Don't add `{"test.svg", Params()}` entries — omit them entirely.
 - `Params::Skip()` for tests that can't pass yet.
 - For resvg tests labeled "UB" (undefined behavior): always `Params::Skip()` — the golden images have "UB" text overlaid so they aren't comparable.

@@ -4,14 +4,15 @@
 
 ## RTL Text and Complex Scripts (Phase 7) {#rtl}
 
-**Status:** In progress
+**Status:** Partially implemented
 **Prerequisite:** text-full (HarfBuzz + FreeType)
 
 ### Current State
 
 - HarfBuzz auto-detects script and direction from text content (Arabic → RTL, Latin → LTR).
 - GSUB joining forms work correctly — Arabic characters connect properly in the top line of e-text-030 (no per-character coordinates).
-- Per-character coordinate lists (`x`, `y`, `dx`, `dy`) break for RTL because the pen direction isn't reversed.
+- Per-character coordinate lists are handled for the covered text-full RTL cases.
+- Remaining major gap: full Unicode BiDi reordering for mixed-direction paragraphs and spans.
 
 ### Problem: RTL Pen Direction
 
@@ -40,8 +41,8 @@ The SVG spec says `x` specifies the position of the first character's start edge
 **Problem**: When `y="140 150 160 170"` is applied to RTL text "الويب", the glyph loop processes
 glyphs in visual (LTR) order, but the y values should be applied in DOM order per Chrome/resvg.
 
-**Solution implemented**: When RTL text has per-character x/y coordinates, `TextShaper` switches to
-LTR layout mode (`layoutLTR`):
+**Solution implemented**: When RTL text has per-character x/y coordinates, `TextEngine` with
+`TextBackendFull` switches to logical-order chunk handling for coordinate application:
 - Chunks are built in logical (DOM) order instead of visual order
 - Single-character chunks shape with `HB_DIRECTION_LTR`; multi-character chunks keep RTL for correct Arabic joining
 - `posIdx` uses `charIdx` (logical) instead of `gi` (visual) for coordinate lookups

@@ -2,9 +2,13 @@
 
 [Back to hub](../text_rendering.md)
 
-**Status:** In Progress
+**Status:** Implemented
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-02
+**Updated:** 2026-04-04
+
+> This refactor is complete. `TextEngine`, `TextBackendSimple`, and `TextBackendFull`
+> are the current shipped text architecture.
 
 ## Summary
 

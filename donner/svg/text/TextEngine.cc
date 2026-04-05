@@ -790,6 +790,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   uint32_t prevSpanLastCodepoint = 0;  // Last codepoint of previous span, for cross-span kerning.
   FontHandle prevSpanFont;
   float prevSpanFontSizePx = 0.0f;
+  Entity prevTextPathSource = entt::null;
+  double prevTextPathEndOffset = 0.0;
+  double prevTextPathPerpShift = 0.0;
 
   std::vector<ChunkBoundary> chunkBoundaries;
   std::vector<RunPenExtent> runExtents;
@@ -799,7 +802,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     TextRun run;
 
     // Hidden spans (display:none) are not rendered. Push empty run.
-    if (span.hidden) {
+    // Also hide textPath spans whose href could not be resolved (SVG spec §10.12.1).
+    if (span.hidden || span.textPathFailed) {
+      prevTextPathSource = entt::null;
+      prevTextPathEndOffset = 0.0;
+      prevTextPathPerpShift = 0.0;
       runExtents.push_back({0.0, 0.0, 0.0, 0.0});
       runs.push_back(std::move(run));
       continue;
@@ -1222,11 +1229,59 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // If the span has path data, reposition glyphs along the path.
     if (span.pathSpline && !run.glyphs.empty()) {
       const auto& pathSpline = *span.pathSpline;
-      const double startOffset = span.pathStartOffset;
+
+      // Compute total text advance (including inter-glyph letter-spacing) for text-anchor.
+      double totalAdvance = 0.0;
+      for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+        totalAdvance += run.glyphs[gi].xAdvance;
+        if (gi + 1 < run.glyphs.size()) {
+          totalAdvance += span.letterSpacingPx;
+        }
+      }
+
+      // Apply text-anchor by shifting the effective startOffset along the path.
+      // Per SVG spec §10.12.3, text-anchor adjusts where text is placed on the path
+      // relative to the startOffset point.
+      double anchorShift = 0.0;
+      if (span.textAnchor == TextAnchor::Middle) {
+        anchorShift = -totalAdvance / 2.0;
+      } else if (span.textAnchor == TextAnchor::End) {
+        anchorShift = -totalAdvance;
+      }
+      const bool sameTextPath = span.textPathSourceEntity != entt::null &&
+                                span.textPathSourceEntity == prevTextPathSource;
+      const bool hasExplicitPathX = span.hasExplicitX();
+      double startOffset = sameTextPath && !span.startsNewChunk && !hasExplicitPathX
+                               ? prevTextPathEndOffset
+                               : span.pathStartOffset;
+      if (hasExplicitPathX) {
+        startOffset =
+            span.xList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+      }
+      if (!span.dxList.empty() && span.dxList[0].has_value()) {
+        startOffset +=
+            span.dxList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+      }
+      if (!span.dyList.empty() && span.dyList[0].has_value()) {
+        startOffset +=
+            span.dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+      }
+      startOffset += anchorShift;
+
+      // Compute perpendicular baseline offset (dominant-baseline + per-span baseline-shift).
+      // For text-on-path, this shifts glyphs perpendicular to the path tangent instead of
+      // vertically. In flat layout, defaultY is negative for "above" (superscript). Here we
+      // negate it so positive perpShift = above the path.
+      const bool hasExplicitPathY = span.hasExplicitY();
+      double perpShift = sameTextPath && !span.startsNewChunk && !hasExplicitPathY
+                             ? prevTextPathPerpShift
+                             : -defaultY;
+      (void)hasExplicitPathY;
 
       // Reposition each glyph at the midpoint of its advance along the path.
       double advanceAccum = 0.0;
-      for (auto& g : run.glyphs) {
+      for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+        auto& g = run.glyphs[gi];
         // Sample the path at the center of this glyph's advance width.
         const double glyphMid = startOffset + advanceAccum + g.xAdvance * 0.5;
         const auto sample = pathSpline.pointAtArcLength(glyphMid);
@@ -1237,6 +1292,14 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           const double halfAdv = g.xAdvance * 0.5;
           g.xPosition = sample.point.x - halfAdv * std::cos(sample.angle);
           g.yPosition = sample.point.y - halfAdv * std::sin(sample.angle);
+
+          // Apply baseline shift perpendicular to the path tangent.
+          // The perpendicular "above" direction is (sin(θ), -cos(θ)) in SVG coordinates.
+          if (perpShift != 0.0) {
+            g.xPosition += std::sin(sample.angle) * perpShift;
+            g.yPosition -= std::cos(sample.angle) * perpShift;
+          }
+
           // Convert tangent angle to degrees and add the per-glyph rotation
           // (already set from per-character rotateList).
           g.rotateDegrees = sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
@@ -1246,9 +1309,13 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         }
 
         advanceAccum += g.xAdvance;
+        // Add inter-glyph letter-spacing (not after the last glyph).
+        if (gi + 1 < run.glyphs.size()) {
+          advanceAccum += span.letterSpacingPx;
+        }
       }
 
-      const auto endSample = pathSpline.pointAtArcLength(startOffset + advanceAccum);
+      const auto endSample = pathSpline.pointAtArcLength(pathSpline.pathLength());
       if (endSample.valid) {
         currentPenX = endSample.point.x;
         currentPenY = endSample.point.y;
@@ -1259,13 +1326,16 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         haveCurrentPosition = true;
       }
       prevDefaultY = 0.0;  // Path sets absolute position; no shift to undo.
+      prevTextPathSource = span.textPathSourceEntity;
+      prevTextPathEndOffset = startOffset + advanceAccum;
+      prevTextPathPerpShift = perpShift;
 
       // Hidden/collapsed spans on a path still advance along the path but are not drawn.
       if (span.visibility != Visibility::Visible) {
         run.glyphs.clear();
       }
 
-      // Skip textLength and text-anchor adjustments for path-based text.
+      // Path-based text handles text-anchor above; skip the post-loop adjustment.
       runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
       runs.push_back(std::move(run));
       continue;
@@ -1279,6 +1349,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     prevSpanLastCodepoint = lastCodepoint;
     prevSpanFont = spanFont;
     prevSpanFontSizePx = spanFontSizePx;
+    prevTextPathSource = entt::null;
+    prevTextPathEndOffset = 0.0;
+    prevTextPathPerpShift = 0.0;
 
     // Hidden/collapsed spans participate in layout (pen advances above) but their glyphs
     // are not rendered. Clear the glyph list so the renderer skips this run.

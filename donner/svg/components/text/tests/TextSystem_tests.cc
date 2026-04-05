@@ -346,13 +346,128 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
   // Whitespace between elements is preserved and collapses to single spaces per SVG §10.15.
   // The leading space of "Some " comes from its trailing whitespace in the first root chunk.
   // Each inter-element boundary produces a " " span from the root element's whitespace chunks.
-  EXPECT_THAT(nonEmptyTexts,
-              testing::ElementsAre("Some ", "very", " ", "long", " ", "text", " ."));
-  EXPECT_THAT(nonEmptyOnPath,
-              testing::ElementsAre(false, true, false, false, false, true, false));
+  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "very", " ", "long", " ", "text", " ."));
+  EXPECT_THAT(nonEmptyOnPath, testing::ElementsAre(false, true, false, false, false, true, false));
   // All spans should have a source entity for style resolution.
-  EXPECT_THAT(nonEmptyHasSource,
-              testing::ElementsAre(true, true, true, true, true, true, true));
+  EXPECT_THAT(nonEmptyHasSource, testing::ElementsAre(true, true, true, true, true, true, true));
+}
+
+TEST_F(TextSystemTest, NestedTextPathUsesNearestValidOuterTextPath) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+         viewBox="0 0 200 200">
+      <defs>
+        <path id="path1" d="M 20 73 C 35 108 85 108 100 73 C 115 38 165 38 180 73"/>
+        <path id="path2" d="M 20 127 C 35 162 85 162 100 127 C 115 92 165 92 180 127"/>
+      </defs>
+      <text id="t" font-size="24">
+        <textPath xlink:href="#path1">
+          Some long text
+          <textPath xlink:href="#path2">Ignored nested path</textPath>
+        </textPath>
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  std::vector<const ComputedTextComponent::TextSpan*> nonEmptySpans;
+  for (const auto& span : computed->spans) {
+    if (!span.text.empty()) {
+      nonEmptySpans.push_back(&span);
+    }
+  }
+
+  ASSERT_THAT(nonEmptySpans, testing::SizeIs(testing::Ge(2)));
+  ASSERT_TRUE(nonEmptySpans[0]->pathSpline.has_value());
+  ASSERT_TRUE(nonEmptySpans[1]->pathSpline.has_value());
+
+  const auto outerStart = nonEmptySpans[0]->pathSpline->pointAtArcLength(0.0);
+  const auto nestedStart = nonEmptySpans[1]->pathSpline->pointAtArcLength(0.0);
+  ASSERT_TRUE(outerStart.valid);
+  ASSERT_TRUE(nestedStart.valid);
+  EXPECT_NEAR(outerStart.point.x, nestedStart.point.x, 1e-6);
+  EXPECT_NEAR(outerStart.point.y, nestedStart.point.y, 1e-6);
+}
+
+TEST_F(TextSystemTest, TextPathTspanChildrenProduceSeparatePathSpans) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+         viewBox="0 0 200 200">
+      <defs>
+        <path id="path1" d="M 20 100 C 35 135 85 135 100 100 C 115 65 165 65 180 100"/>
+      </defs>
+      <text id="t" font-size="24">
+        <textPath xlink:href="#path1">
+          Some <tspan fill="green" x="10" y="20">long</tspan> text
+        </textPath>
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  std::vector<std::string> nonEmptyTexts;
+  std::vector<bool> onPath;
+  for (const auto& span : computed->spans) {
+    if (span.text.empty()) {
+      continue;
+    }
+    nonEmptyTexts.push_back(span.text.str());
+    onPath.push_back(span.pathSpline.has_value());
+  }
+
+  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "long", " text"));
+  EXPECT_THAT(onPath, testing::ElementsAre(true, true, true));
+  const auto it = std::find_if(computed->spans.begin(), computed->spans.end(),
+                               [](const auto& span) { return span.text.str() == "long"; });
+  ASSERT_NE(it, computed->spans.end());
+  EXPECT_TRUE(it->hasExplicitX());
+  EXPECT_TRUE(it->hasExplicitY());
+  EXPECT_DOUBLE_EQ(it->xList[0]->value, 10.0);
+  EXPECT_DOUBLE_EQ(it->yList[0]->value, 20.0);
+}
+
+TEST_F(TextSystemTest, TextPathWhitespaceAroundTspansIsPreservedInSpans) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+         viewBox="0 0 200 200">
+      <defs>
+        <path id="path1" d="M 20 100 C 35 135 85 135 100 100 C 115 65 165 65 180 100"/>
+      </defs>
+      <text id="t" font-size="24">
+        <textPath xlink:href="#path1">
+          Some
+          <tspan fill="green" dx="10" dy="20">long</tspan>
+          <tspan fill="blue" dx="-5" dy="-20">text</tspan>
+        </textPath>
+      </text>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  std::vector<std::string> nonEmptyTexts;
+  std::vector<bool> onPath;
+  for (const auto& span : computed->spans) {
+    if (span.text.empty()) {
+      continue;
+    }
+    nonEmptyTexts.push_back(span.text.str());
+    onPath.push_back(span.pathSpline.has_value());
+  }
+
+  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Some ", "long", " ", "text"));
+  EXPECT_THAT(onPath, testing::ElementsAre(true, true, true, true));
 }
 
 // --- UTF-8 multibyte characters ---

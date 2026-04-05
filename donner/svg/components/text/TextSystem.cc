@@ -8,6 +8,7 @@
 
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -133,9 +134,37 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
     return;
   }
 
-  span.pathSpline = computedPath->spline;
+  // Apply the referenced path element's local transform to the path geometry.
+  // Per SVG §10.12.2, textPath uses the path in the referenced element's user coordinate space.
+  const auto* localTransform =
+      registry.try_get<ComputedLocalTransformComponent>(resolved->handle.entity());
+  if (localTransform && !localTransform->entityFromParent.isIdentity()) {
+    const Transformd& parentFromEntity = localTransform->entityFromParent;
+    const auto& srcPoints = computedPath->spline.points();
+    const auto& srcCommands = computedPath->spline.commands();
+    PathSpline transformed;
+    for (const auto& cmd : srcCommands) {
+      switch (cmd.type) {
+        case PathSpline::CommandType::MoveTo:
+          transformed.moveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
+          break;
+        case PathSpline::CommandType::LineTo:
+          transformed.lineTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
+          break;
+        case PathSpline::CommandType::CurveTo:
+          transformed.curveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]),
+                              parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 1]),
+                              parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 2]));
+          break;
+        case PathSpline::CommandType::ClosePath: transformed.closePath(); break;
+      }
+    }
+    span.pathSpline = std::move(transformed);
+  } else {
+    span.pathSpline = computedPath->spline;
+  }
   if (textPath.startOffset) {
-    const double pathLen = computedPath->spline.pathLength();
+    const double pathLen = span.pathSpline->pathLength();
     if (textPath.startOffset->unit == Lengthd::Unit::Percent) {
       span.pathStartOffset = textPath.startOffset->value * pathLen / 100.0;
     } else {
@@ -143,6 +172,27 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
           textPath.startOffset->toPixels(Boxd({0, 0}, {0, 0}), FontMetrics(), Lengthd::Extent::X);
     }
   }
+}
+
+Entity findApplicableTextPathEntity(Registry& registry, Entity entity) {
+  Entity current = entity;
+  while (current != entt::null) {
+    if (registry.any_of<TextPathComponent>(current)) {
+      if (const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+          tree && tree->parent() != entt::null &&
+          registry.any_of<TextRootComponent>(tree->parent())) {
+        return current;
+      }
+    }
+
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (!tree) {
+      break;
+    }
+    current = tree->parent();
+  }
+
+  return entt::null;
 }
 
 }  // namespace
@@ -254,16 +304,16 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
     span.sourceEntity = handle.entity();
 
-    const TextPathComponent* textPath = handle.try_get<TextPathComponent>();
-    if (!textPath) {
-      const auto& tree = handle.get<donner::components::TreeComponent>();
-      if (tree.parent() != entt::null) {
-        EntityHandle parentHandle(registry, tree.parent());
-        textPath = parentHandle.try_get<TextPathComponent>();
+    const Entity textPathEntity = findApplicableTextPathEntity(registry, handle.entity());
+    if (textPathEntity != entt::null) {
+      const auto& textPath = registry.get<TextPathComponent>(textPathEntity);
+      resolveTextPath(registry, textPath, span, outWarnings);
+      if (!span.pathSpline) {
+        // textPath href could not be resolved — mark as failed so glyphs are hidden.
+        span.textPathFailed = true;
+      } else {
+        span.textPathSourceEntity = textPathEntity;
       }
-    }
-    if (textPath) {
-      resolveTextPath(registry, *textPath, span, outWarnings);
     }
 
     computed.spans.push_back(span);
