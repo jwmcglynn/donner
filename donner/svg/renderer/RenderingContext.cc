@@ -335,7 +335,12 @@ public:
                         std::vector<ComputedClipPathsComponent::ClipPath>& clipPaths,
                         RecursionGuard guard, int layer = 0) {
     bool hasAnyChildren = false;
+    bool encounteredInvalidReference = false;
     const auto appendClipPathFromEntity = [&](EntityHandle entity) {
+      if (encounteredInvalidReference) {
+        return;
+      }
+
       const auto* clipPathData = entity.try_get<components::ComputedPathComponent>();
       const auto* computedStyle = entity.try_get<components::ComputedStyleComponent>();
       if (!clipPathData || !computedStyle) {
@@ -355,7 +360,7 @@ public:
           if (!guard.hasRecursion(resolved.reference.handle)) {
             if (!collectClipPaths(resolved.reference.handle, clipPaths,
                                   guard.with(resolved.reference.handle), layer + 1)) {
-              // Invalid clip-path reference.
+              encounteredInvalidReference = true;
               return;
             }
           }
@@ -387,6 +392,10 @@ public:
 
     donner::components::ForAllChildren(
         clipPathHandle, [&](EntityHandle child) { appendClipPathFromEntity(child); });
+
+    if (encounteredInvalidReference) {
+      return false;
+    }
 
     return hasAnyChildren;
   }
