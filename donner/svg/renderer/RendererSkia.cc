@@ -215,11 +215,16 @@ std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
       const Vector2d imagePoint = imageFromDevice.transformPosition(devicePoint);
       const double sourceX = imagePoint.x - 0.5;
       const double sourceY = imagePoint.y - 0.5;
-      const int x0 = static_cast<int>(std::floor(sourceX));
-      const int y0 = static_cast<int>(std::floor(sourceY));
-      if (x0 + 1 < 0 || x0 >= sourceWidth || y0 + 1 < 0 || y0 >= sourceHeight) {
+      // Skip pixels whose sample center falls outside the source image. This prevents
+      // edge-clamped bilinear sampling from extending the image beyond its placement
+      // rectangle (important for feImage with preserveAspectRatio where the image doesn't
+      // fill the full subregion).
+      if (sourceX < -0.5 || sourceX >= sourceWidth - 0.5 ||
+          sourceY < -0.5 || sourceY >= sourceHeight - 0.5) {
         continue;
       }
+      const int x0 = static_cast<int>(std::floor(sourceX));
+      const int y0 = static_cast<int>(std::floor(sourceY));
 
       const float fx = static_cast<float>(sourceX - x0);
       const float fy = static_cast<float>(sourceY - y0);
@@ -1979,10 +1984,47 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             const SkRect srcRect = SkRect::MakeWH(static_cast<SkScalar>(primitive.imageWidth),
                                                   static_cast<SkScalar>(primitive.imageHeight));
 
+            const bool hasShear = !NearZero(deviceFromFilter.data[1], 1e-6) ||
+                                  !NearZero(deviceFromFilter.data[2], 1e-6);
+
+            if (primitive.isFragmentReference && hasShear) {
+              // Fragment references with host transform (skew/rotation): rasterize the
+              // fragment through the combined transform that maps from fragment pixel coords
+              // to device pixel coords, including the host's transform and filter region offset.
+              const Transformd viewBoxScaleInv = Transformd::Scale(
+                  NearZero(filterGraph.userToPixelScale.x, 1e-12)
+                      ? 1.0
+                      : 1.0 / filterGraph.userToPixelScale.x,
+                  NearZero(filterGraph.userToPixelScale.y, 1e-12)
+                      ? 1.0
+                      : 1.0 / filterGraph.userToPixelScale.y);
+              const Transformd regionOffset = Transformd::Translate(
+                  primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
+              const Transformd deviceFromFragment =
+                  viewBoxScaleInv * regionOffset * deviceFromFilter;
+
+              const std::vector<std::uint8_t> rasterized =
+                  RasterizeTransformedImagePremultiplied(
+                      premultiplied, primitive.imageWidth, primitive.imageHeight,
+                      deviceFromFragment, Boxd(), Transformd(), sourceWidth, sourceHeight);
+              const SkImageInfo rasterizedInfo = SkImageInfo::Make(
+                  sourceWidth, sourceHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+              const SkPixmap rasterizedPixmap(rasterizedInfo, rasterized.data(),
+                                              static_cast<size_t>(sourceWidth) * 4);
+              sk_sp<SkImage> rasterizedImage =
+                  SkImages::RasterFromPixmapCopy(rasterizedPixmap);
+              if (!rasterizedImage) {
+                return false;
+              }
+              result = SkImageFilters::Image(
+                  std::move(rasterizedImage),
+                  SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest));
+              return true;
+            }
+
             if (primitive.isFragmentReference) {
-              // Fragment references: rendered at natural document positions, then offset by the
-              // filter region origin in device pixels. The offset is a post-translation (applied
-              // after the element's transform) so it doesn't interact with skew/rotation.
+              // Fragment references without host shear: apply a simple device-space
+              // post-translation to position content at the filter region origin.
               const double deviceOffsetX =
                   primitive.fragmentRegionTopLeft.x * filterGraph.userToPixelScale.x;
               const double deviceOffsetY =
@@ -1998,9 +2040,6 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
               result = std::move(imageFilter);
               return true;
             }
-
-            const bool hasShear = !NearZero(deviceFromFilter.data[1], 1e-6) ||
-                                  !NearZero(deviceFromFilter.data[2], 1e-6);
             if (hasShear) {
               const Boxd userSubregion = resolveNodeSubregion(node);
               const Boxd imageBox =
