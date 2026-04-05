@@ -61,6 +61,7 @@ private:
   static void setSubDocumentContextPaint(
       SVGDocument& subDocument, const components::ResolvedPaintServer& contextFill,
       const components::ResolvedPaintServer& contextStroke);
+  static void clearSubDocumentContextPaint(SVGDocument& subDocument);
 
   struct DeferredPop {
     Entity lastEntity{};

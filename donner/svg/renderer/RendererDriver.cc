@@ -386,14 +386,15 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                  parentAbsoluteTransform, style.properties->opacity.getRequired());
         } else {
           // Whole-document reference: render the entire sub-document.
-          // For <use>, the entity's position is already captured via the renderer's
-          // current transform (used by pushClip). Only pass the layer base transform
-          // to include parent device scaling without the <use> element's own position.
+          // Include the <use> element's transform so the sub-document is positioned correctly.
           const Vector2i subDocSize = subDocument.canvasSize();
           const Boxd viewportBounds = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
           drawSubDocument(subDocument, viewportBounds, PreserveAspectRatio::Default(),
-                          style.properties->opacity.getRequired(), layerBaseTransform_);
+                          style.properties->opacity.getRequired(),
+                          layerBaseTransform_ * instance.entityFromWorldTransform);
         }
+
+        clearSubDocumentContextPaint(subDocument);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -1042,6 +1043,12 @@ void RendererDriver::setSubDocumentContextPaint(
   }
   auto& renderCtx = subDocument.registry().ctx().get<components::RenderingContext>();
   renderCtx.setInitialContextPaint(contextFill, contextStroke);
+}
+
+void RendererDriver::clearSubDocumentContextPaint(SVGDocument& subDocument) {
+  if (subDocument.registry().ctx().contains<components::RenderingContext>()) {
+    subDocument.registry().ctx().get<components::RenderingContext>().clearInitialContextPaint();
+  }
 }
 
 }  // namespace donner::svg

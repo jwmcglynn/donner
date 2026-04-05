@@ -52,6 +52,13 @@ public:
    */
   void setInitialContextPaint(const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke);
 
+  /**
+   * Clear previously set context-fill and context-stroke values.
+   * Call after rendering a sub-document to prevent stale context paint from leaking to subsequent
+   * renders of the same cached sub-document handle.
+   */
+  void clearInitialContextPaint();
+
 private:
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.

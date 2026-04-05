@@ -569,6 +569,11 @@ void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
   initialContextStroke_ = stroke;
 }
 
+void RenderingContext::clearInitialContextPaint() {
+  initialContextFill_.reset();
+  initialContextStroke_.reset();
+}
+
 void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
   // TODO(jwmcglynn): Support partial invalidation, where we only recompute the subtree that has
   // changed.
@@ -671,8 +676,8 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
         const RcString docUrl(ref.documentUrl());
         auto subDoc = resourceManager.loadExternalSVG(docUrl, outWarnings);
         if (subDoc) {
-          registry_.emplace<ExternalUseComponent>(entity, std::move(*subDoc),
-                                                  RcString(ref.fragment()));
+          registry_.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDoc),
+                                                             RcString(ref.fragment()));
         }
       } else if (outWarnings) {
         ParseError err;
