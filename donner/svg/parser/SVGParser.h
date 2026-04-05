@@ -7,7 +7,6 @@
 #include "donner/base/ParseResult.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::parser {
 
@@ -90,11 +89,6 @@ public:
   static ParseResult<SVGDocument> ParseSVG(
       std::string_view source, std::vector<ParseError>* outWarnings = nullptr, Options options = {},
       SVGDocument::Settings settings = {}) noexcept;
-
-  /// @overload ParseSVG with a standalone resource loader for backwards compatibility.
-  static ParseResult<SVGDocument> ParseSVG(
-      std::string_view source, std::vector<ParseError>* outWarnings, Options options,
-      std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept;
 
   /**
    * Parses an SVG XML document from an XML document tree.

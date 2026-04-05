@@ -92,6 +92,7 @@ public:
   static SVGDocument CreateFromHandle(SVGDocumentHandle handle) {
     return SVGDocument(std::move(handle));
   }
+
   /// Get the root ECS Entity of the document, for advanced use.
   EntityHandle rootEntityHandle() const;
 

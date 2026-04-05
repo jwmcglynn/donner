@@ -195,12 +195,13 @@ int main(int argc, char* argv[]) {
   parser::SVGParser::Options svgOptions;
   svgOptions.enableExperimental = experimental;
 
-  auto resourceLoader =
+  SVGDocument::Settings settings;
+  settings.resourceLoader =
       std::make_unique<SandboxedFileResourceLoader>(std::filesystem::current_path(), filename);
 
   Trace traceParse("Parse");
   auto maybeResult = parser::SVGParser::ParseSVG(fileData, quiet ? nullptr : &warnings, svgOptions,
-                                                 std::move(resourceLoader));
+                                                 std::move(settings));
   traceParse.stop();
 
   if (maybeResult.hasError()) {

@@ -469,14 +469,14 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
   parser::SVGParser::Options options;
   options.enableExperimental = true;
 
-  std::unique_ptr<ResourceLoaderInterface> resourceLoader;
+  SVGDocument::Settings settings;
   if (resourceDir) {
-    resourceLoader = std::make_unique<SandboxedFileResourceLoader>(*resourceDir,
-                                                                   std::filesystem::path(filename));
+    settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(
+        *resourceDir, std::filesystem::path(filename));
   }
 
   auto maybeResult = parser::SVGParser::ParseSVG(fileData, /*outWarnings=*/nullptr, options,
-                                                 std::move(resourceLoader));
+                                                 std::move(settings));
   EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
   if (maybeResult.hasError()) {
     return SVGDocument();

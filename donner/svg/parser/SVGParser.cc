@@ -334,14 +334,6 @@ public:
   }
 };
 
-ParseResult<SVGDocument> SVGParser::ParseSVG(
-    std::string_view source, std::vector<ParseError>* outWarnings, SVGParser::Options options,
-    std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept {
-  SVGDocument::Settings settings;
-  settings.resourceLoader = std::move(resourceLoader);
-  return ParseSVG(source, outWarnings, options, std::move(settings));
-}
-
 ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
                                              std::vector<ParseError>* outWarnings,
                                              SVGParser::Options options,
