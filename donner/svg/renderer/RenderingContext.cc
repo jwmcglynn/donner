@@ -344,6 +344,49 @@ public:
                         std::vector<ComputedClipPathsComponent::ClipPath>& clipPaths,
                         RecursionGuard guard, int layer = 0) {
     bool hasAnyChildren = false;
+    bool encounteredInvalidReference = false;
+    const auto appendClipPathFromEntity = [&](EntityHandle entity, bool enforceVisibility) {
+      if (encounteredInvalidReference) {
+        return;
+      }
+
+      // Shadow entities (from <use>) store data on the light entity but styles on the shadow.
+      const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
+      const EntityHandle dataEntity =
+          shadowEntity ? EntityHandle(registry_, shadowEntity->lightEntity) : entity;
+
+      const auto* clipPathData = dataEntity.try_get<components::ComputedPathComponent>();
+      const auto* computedStyle = entity.try_get<components::ComputedStyleComponent>();
+      if (!clipPathData || !computedStyle) {
+        return;
+      }
+
+      const auto& style = computedStyle->properties.value();
+      if (enforceVisibility && (style.visibility.getRequired() != Visibility::Visible ||
+                                style.display.getRequired() == Display::None)) {
+        return;
+      }
+
+      // Check to see if this element has its own clip paths set.
+      if (style.clipPath.get()) {
+        if (auto resolved = resolveClipPath(entity, style.clipPath.getRequired());
+            resolved.valid()) {
+          if (!guard.hasRecursion(resolved.reference.handle)) {
+            if (!collectClipPaths(resolved.reference.handle, clipPaths,
+                                  guard.with(resolved.reference.handle), layer + 1)) {
+              encounteredInvalidReference = true;
+              return;
+            }
+          }
+        }
+      }
+
+      hasAnyChildren = true;
+
+      const Transformd entityFromParent = LayoutSystem().getEntityFromWorldTransform(entity);
+      const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
+      clipPaths.emplace_back(clipPathData->spline, entityFromParent, clipRule, layer);
+    };
 
     // Check for clip-path on the <clipPath> itself
     if (const auto* computedStyle = clipPathHandle.try_get<components::ComputedStyleComponent>()) {
@@ -362,37 +405,36 @@ public:
     }
 
     donner::components::ForAllChildren(clipPathHandle, [&](EntityHandle child) {
-      if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
-        if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
-          const auto& style = computedStyle->properties.value();
-          if (style.visibility.getRequired() != Visibility::Visible ||
-              style.display.getRequired() == Display::None) {
-            return;
-          }
+      appendClipPathFromEntity(child, true);
 
-          // Check to see if this element has its own clip paths set.
-          if (style.clipPath.get()) {
-            if (auto resolved = resolveClipPath(child, style.clipPath.getRequired());
-                resolved.valid()) {
-              if (!guard.hasRecursion(resolved.reference.handle)) {
-                if (!collectClipPaths(resolved.reference.handle, clipPaths,
-                                      guard.with(resolved.reference.handle), layer + 1)) {
-                  // Invalid clip-path reference.
-                  return;
-                }
-              }
-            }
-          }
+      const auto* typeComponent = child.try_get<ElementTypeComponent>();
+      if (!typeComponent || typeComponent->type() != ElementType::Use) {
+        return;
+      }
 
-          hasAnyChildren = true;
+      const auto* useStyle = child.try_get<components::ComputedStyleComponent>();
+      if (!useStyle) {
+        return;
+      }
 
-          const Transformd entityFromParent = LayoutSystem().getEntityFromWorldTransform(child);
+      const auto& useProperties = useStyle->properties.value();
+      if (useProperties.visibility.getRequired() != Visibility::Visible ||
+          useProperties.display.getRequired() == Display::None) {
+        return;
+      }
 
-          const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
-          clipPaths.emplace_back(clipPathData->spline, entityFromParent, clipRule, layer);
+      if (const auto* computedShadow = child.try_get<ComputedShadowTreeComponent>();
+          computedShadow && computedShadow->mainBranch) {
+        const Entity shadowRoot = computedShadow->mainBranch->shadowRoot();
+        if (shadowRoot != entt::null) {
+          appendClipPathFromEntity(EntityHandle(registry_, shadowRoot), false);
         }
       }
     });
+
+    if (encounteredInvalidReference) {
+      return false;
+    }
 
     return hasAnyChildren;
   }
