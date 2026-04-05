@@ -245,7 +245,7 @@ std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
   return output;
 }
 
-void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
+void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip, bool antialias = true) {
   if (clip.clipRect.has_value()) {
     canvas->clipRect(toSkia(*clip.clipRect));
   }
@@ -288,7 +288,7 @@ void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
     Op(targetPath, skPath, kUnion_SkPathOp, &targetPath);
   }
 
-  canvas->clipPath(fullPath, SkClipOp::kIntersect, true);
+  canvas->clipPath(fullPath, SkClipOp::kIntersect, antialias);
 }
 
 bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
@@ -2555,7 +2555,7 @@ void RendererSkia::pushClip(const ResolvedClip& clip) {
 
   const SkMatrix clipMatrix = currentCanvas_->getTotalMatrix();
   currentCanvas_->save();
-  applyClipToCanvas(currentCanvas_, clip);
+  applyClipToCanvas(currentCanvas_, clip, antialias_);
   ++clipDepth_;
   activeClips_.push_back(ClipStackEntry{clip, clipMatrix});
 }
