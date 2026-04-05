@@ -302,7 +302,7 @@ TEST(SVGClipPathElementTests, RenderingUseChild) {
         <clipPath id="clipUse">
           <use href="#shapeRef" />
         </clipPath>
-        <rect width="16" height="16" clip-path="url(#clipUse)" fill="white" />
+        <rect width="16" height="16" clip-path="url(#clipUse)" fill="black" />
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
@@ -336,7 +336,7 @@ TEST(SVGClipPathElementTests, RenderingUseChildDisplayNone) {
         <clipPath id="clipUse">
           <use href="#shapeRef" display="none" />
         </clipPath>
-        <rect width="16" height="16" clip-path="url(#clipUse)" fill="white" />
+        <rect width="16" height="16" clip-path="url(#clipUse)" fill="black" />
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
