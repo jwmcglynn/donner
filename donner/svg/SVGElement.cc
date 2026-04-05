@@ -210,11 +210,14 @@ void SVGElement::setStyle(std::string_view style) {
 }
 
 void SVGElement::updateStyle(std::string_view style) {
-  handle_.get_or_emplace<components::StyleComponent>().updateStyle(style);
+  auto& styleComponent = handle_.get_or_emplace<components::StyleComponent>();
+  styleComponent.updateStyle(style);
 
-  // TODO(jwmcglynn): Update the style attribute too
-  // handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
-  //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
+  auto& attributes = handle_.get_or_emplace<donner::components::AttributesComponent>();
+  const std::string mergedStyle = styleComponent.properties.mergeStyleAttribute(
+      attributes.getAttribute(xml::XMLQualifiedNameRef("style")).value_or(""), style);
+  attributes.setAttribute(*handle_.registry(), xml::XMLQualifiedName("style"),
+                          RcString(mergedStyle));
 
   components::StyleSystem().invalidateComputed(handle_);
   markNeedsFullStyleRecompute(handle_);
@@ -249,8 +252,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
   if (!trySetResult.result()) {
     // Try element-specific presentation attributes (cx, cy, r, rx, ry, d, etc.).
-    parser::PropertyParseFnParams params =
-        parser::PropertyParseFnParams::CreateForAttribute(value);
+    parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
     trySetResult = parser::ParsePresentationAttribute(type(), handle_, actualName, params);
   }
 

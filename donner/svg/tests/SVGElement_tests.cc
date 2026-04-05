@@ -926,8 +926,6 @@ TEST_F(SVGElementTests, EntityHandle) {
   EXPECT_EQ(handle, handle2);
 }
 
-#if 0
-// TODO: This needs support for updating the style attribute
 TEST_F(SVGElementTests, UpdateStyle) {
   // This tests setting an initial style, then updating only part of it.
   auto element = create();
@@ -947,10 +945,10 @@ TEST_F(SVGElementTests, UpdateStyle) {
   RcString styleString = maybeStyle.value();
   EXPECT_THAT(styleString, testing::HasSubstr("fill: red"));
   EXPECT_THAT(styleString, testing::HasSubstr("stroke: green"));
+  EXPECT_THAT(styleString, testing::Not(testing::HasSubstr("stroke: blue")));
   EXPECT_THAT(styleString, testing::HasSubstr("opacity: 0.8"));
   EXPECT_THAT(styleString, testing::HasSubstr("visibility: hidden"));
 }
-#endif
 
 TEST_F(SVGElementTests, FindMatchingAttributes) {
   // create() is an Unknown element, but that’s fine for testing generic XML attributes

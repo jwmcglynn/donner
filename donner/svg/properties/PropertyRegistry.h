@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <string>
+
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
 #include "donner/base/ParseResult.h"
 #include "donner/base/SmallVector.h"
@@ -372,6 +374,20 @@ public:
    * @param str Input string from a style attribute, e.g. "fill: red; stroke: blue".
    */
   void parseStyle(std::string_view str);
+
+  /**
+   * Merge an existing and updated `style` attribute string using declaration names.
+   *
+   * Declarations from \p updateStyle replace existing declarations with the same property name.
+   * Unrelated existing declarations are preserved. The returned string is normalized into
+   * `name: value` declaration segments separated by `; `.
+   *
+   * @param existingStyle Existing `style` attribute value.
+   * @param updateStyle Updated declarations to apply.
+   * @return Merged `style` attribute string.
+   */
+  std::string mergeStyleAttribute(std::string_view existingStyle,
+                                  std::string_view updateStyle) const;
 
   /**
    * Parse a common presentation attribute (CSS properties like fill, stroke, etc.) or `transform`.
