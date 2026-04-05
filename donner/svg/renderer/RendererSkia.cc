@@ -847,6 +847,278 @@ sk_sp<SkImage> generateSvgTurbulenceImage(
   return bitmap.asImage();
 }
 
+// ---------------------------------------------------------------------------
+// Custom SVG-spec spotlight lighting for feDiffuseLighting/feSpecularLighting.
+// Replaces Skia's native SpotLitDiffuse/SpotLitSpecular which has cone angle
+// anti-aliasing differences and incorrect cone shape under non-conformal transforms.
+// Ported from third_party/tiny-skia-cpp/src/tiny_skia/filter/Lighting.cpp.
+// ---------------------------------------------------------------------------
+
+namespace svg_lighting {
+
+double normalize3(double& x, double& y, double& z) {
+  const double len = std::sqrt(x * x + y * y + z * z);
+  if (len > 0.0) {
+    x /= len;
+    y /= len;
+    z /= len;
+  }
+  return len;
+}
+
+double getAlpha(const uint8_t* pixels, int w, int h, int x, int y) {
+  x = std::clamp(x, 0, w - 1);
+  y = std::clamp(y, 0, h - 1);
+  return pixels[static_cast<std::size_t>((y * w + x) * 4 + 3)] / 255.0;
+}
+
+void computeNormal(const uint8_t* pixels, int w, int h, int x, int y,
+                   double surfaceScale, double& nx, double& ny, double& nz) {
+  if (x == 0) {
+    const double right = getAlpha(pixels, w, h, x + 1, y);
+    const double topRight = (y > 0) ? getAlpha(pixels, w, h, x + 1, y - 1) : right;
+    const double bottomRight = (y < h - 1) ? getAlpha(pixels, w, h, x + 1, y + 1) : right;
+    const double center = getAlpha(pixels, w, h, x, y);
+    const double top = (y > 0) ? getAlpha(pixels, w, h, x, y - 1) : center;
+    const double bottom = (y < h - 1) ? getAlpha(pixels, w, h, x, y + 1) : center;
+    if (y == 0) {
+      nx = -surfaceScale * (2.0 * (right - center) + (bottomRight - bottom)) / 3.0;
+      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomRight - right)) / 3.0;
+    } else if (y == h - 1) {
+      nx = -surfaceScale * (2.0 * (right - center) + (topRight - top)) / 3.0;
+      ny = -surfaceScale * (2.0 * (center - top) + (right - topRight)) / 3.0;
+    } else {
+      nx = -surfaceScale * (2.0 * (right - center) + (topRight - top) + (bottomRight - bottom)) /
+           4.0;
+      ny = -surfaceScale * (2.0 * (bottom - top) + (bottomRight - topRight)) / 4.0;
+    }
+  } else if (x == w - 1) {
+    const double left = getAlpha(pixels, w, h, x - 1, y);
+    const double topLeft = (y > 0) ? getAlpha(pixels, w, h, x - 1, y - 1) : left;
+    const double bottomLeft = (y < h - 1) ? getAlpha(pixels, w, h, x - 1, y + 1) : left;
+    const double center = getAlpha(pixels, w, h, x, y);
+    const double top = (y > 0) ? getAlpha(pixels, w, h, x, y - 1) : center;
+    const double bottom = (y < h - 1) ? getAlpha(pixels, w, h, x, y + 1) : center;
+    if (y == 0) {
+      nx = -surfaceScale * (2.0 * (center - left) + (bottom - bottomLeft)) / 3.0;
+      ny = -surfaceScale * (2.0 * (bottom - center) + (bottomLeft - left)) / 3.0;
+    } else if (y == h - 1) {
+      nx = -surfaceScale * (2.0 * (center - left) + (top - topLeft)) / 3.0;
+      ny = -surfaceScale * (2.0 * (center - top) + (left - topLeft)) / 3.0;
+    } else {
+      nx = -surfaceScale *
+           (2.0 * (center - left) + (top - topLeft) + (bottom - bottomLeft)) / 4.0;
+      ny = -surfaceScale * (2.0 * (bottom - top) + (bottomLeft - topLeft)) / 4.0;
+    }
+  } else {
+    const double left = getAlpha(pixels, w, h, x - 1, y);
+    const double right = getAlpha(pixels, w, h, x + 1, y);
+    const double center = getAlpha(pixels, w, h, x, y);
+    if (y == 0) {
+      const double bottomLeft = getAlpha(pixels, w, h, x - 1, y + 1);
+      const double bottom = getAlpha(pixels, w, h, x, y + 1);
+      const double bottomRight = getAlpha(pixels, w, h, x + 1, y + 1);
+      nx = -surfaceScale * (2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
+      ny = -surfaceScale *
+           (2.0 * (bottom - center) + (bottomRight - right) + (bottomLeft - left)) / 4.0;
+    } else if (y == h - 1) {
+      const double topLeft = getAlpha(pixels, w, h, x - 1, y - 1);
+      const double top = getAlpha(pixels, w, h, x, y - 1);
+      const double topRight = getAlpha(pixels, w, h, x + 1, y - 1);
+      nx = -surfaceScale * (2.0 * (right - left) + (topRight - topLeft)) / 4.0;
+      ny = -surfaceScale *
+           (2.0 * (center - top) + (right - topRight) + (left - topLeft)) / 4.0;
+    } else {
+      const double topLeft = getAlpha(pixels, w, h, x - 1, y - 1);
+      const double top = getAlpha(pixels, w, h, x, y - 1);
+      const double topRight = getAlpha(pixels, w, h, x + 1, y - 1);
+      const double bottomLeft = getAlpha(pixels, w, h, x - 1, y + 1);
+      const double bottom = getAlpha(pixels, w, h, x, y + 1);
+      const double bottomRight = getAlpha(pixels, w, h, x + 1, y + 1);
+      nx = -surfaceScale *
+           ((topRight - topLeft) + 2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
+      ny = -surfaceScale *
+           ((bottomLeft - topLeft) + 2.0 * (bottom - top) + (bottomRight - topRight)) / 4.0;
+    }
+  }
+  nz = 1.0;
+}
+
+double spotLightFactor(double deviceLx, double deviceLy, double deviceLz,
+                       double spotDirX, double spotDirY, double spotDirZ,
+                       double spotExp, const std::optional<double>& limitingConeAngle,
+                       bool hasShear,
+                       // User-space params for shear case:
+                       double ux, double uy, double uz,
+                       double userLightX, double userLightY, double userLightZ,
+                       double userSpotDirX, double userSpotDirY, double userSpotDirZ) {
+  const double cosAngleDevice = -(deviceLx * spotDirX + deviceLy * spotDirY + deviceLz * spotDirZ);
+  if (cosAngleDevice <= 0.0) {
+    return 0.0;
+  }
+
+  double cosAngle = cosAngleDevice;
+  if (hasShear) {
+    double ulx = ux - userLightX;
+    double uly = uy - userLightY;
+    double ulz = uz - userLightZ;
+    normalize3(ulx, uly, ulz);
+    cosAngle = ulx * userSpotDirX + uly * userSpotDirY + ulz * userSpotDirZ;
+    if (cosAngle <= 0.0) {
+      return 0.0;
+    }
+  }
+
+  double coneFactor = 1.0;
+  if (limitingConeAngle.has_value()) {
+    const double cosOuter = std::cos(*limitingConeAngle * std::numbers::pi / 180.0);
+    constexpr double kAntiAliasThreshold = 0.016;
+    const double cosInner = cosOuter + kAntiAliasThreshold;
+    if (cosAngle < cosOuter) {
+      return 0.0;
+    }
+    if (cosAngle < cosInner) {
+      coneFactor = (cosAngle - cosOuter) / kAntiAliasThreshold;
+    }
+  }
+
+  const double exp = spotExp > 0.0 ? spotExp : 1.0;
+  return std::pow(cosAngle, exp) * coneFactor;
+}
+
+}  // namespace svg_lighting
+
+/// Generate custom spotlight lighting into an SkImage.
+/// Replaces Skia's native SpotLitDiffuse/SpotLitSpecular for SVG-spec conformance.
+sk_sp<SkImage> generateSpotLighting(
+    const sk_sp<SkImage>& srcImage, int width, int height,
+    const Transformd& deviceFromFilter, double pixelScale,
+    double userX, double userY, double userZ,
+    double userPtX, double userPtY, double userPtZ,
+    double spotExponent, const std::optional<double>& limitingConeAngle,
+    float lightR, float lightG, float lightB,
+    double surfaceScale,
+    bool isSpecular, double kd_or_ks, double shininess) {
+  if (!srcImage || width <= 0 || height <= 0) {
+    return nullptr;
+  }
+
+  // Read source pixels (RGBA8 premultiplied) for alpha channel.
+  const auto readInfo = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
+                                          kPremul_SkAlphaType);
+  std::vector<uint8_t> srcPixels(static_cast<size_t>(width) * height * 4);
+  if (!srcImage->readPixels(readInfo, srcPixels.data(),
+                            static_cast<size_t>(width) * 4, 0, 0)) {
+    return nullptr;
+  }
+
+  // Transform light positions to device space.
+  const Vector2d lightDev = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+  const Vector2d targetDev = deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
+  const double lightDevX = lightDev.x, lightDevY = lightDev.y;
+  const double lightDevZ = userZ * pixelScale;
+  const double targetDevZ = userPtZ * pixelScale;
+
+  // Spot direction in device space.
+  double spotDirX = targetDev.x - lightDevX;
+  double spotDirY = targetDev.y - lightDevY;
+  double spotDirZ = targetDevZ - lightDevZ;
+  svg_lighting::normalize3(spotDirX, spotDirY, spotDirZ);
+
+  // Detect non-conformal transforms (shear/skew).
+  const double ta = deviceFromFilter.data[0], tb = deviceFromFilter.data[1];
+  const double tc = deviceFromFilter.data[2], td = deviceFromFilter.data[3];
+  const double axisDot = ta * tc + tb * td;
+  const bool hasShear = axisDot * axisDot > 0.0003 * (ta * ta + tb * tb) * (tc * tc + td * td);
+
+  // User-space spot direction (for cone check under shear).
+  double userSpotDirX = userPtX - userX;
+  double userSpotDirY = userPtY - userY;
+  double userSpotDirZ = userPtZ - userZ;
+  svg_lighting::normalize3(userSpotDirX, userSpotDirY, userSpotDirZ);
+
+  // Inverse transform for pixel→user-space mapping under shear.
+  Transformd inv;
+  if (hasShear) {
+    inv = deviceFromFilter.inverse();
+  }
+
+  // surfaceScale is used as-is for normal computation and surface point Z,
+  // matching the tiny-skia reference (Lighting.cpp). The light Z position uses
+  // pixelScale separately (passed via lightDevZ = userZ * pixelScale).
+
+  SkBitmap bitmap;
+  bitmap.allocPixels(SkImageInfo::MakeN32Premul(width, height));
+  uint32_t* outPixels = bitmap.getAddr32(0, 0);
+  const int outStride = static_cast<int>(bitmap.rowBytes() / 4);
+
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      const double px = static_cast<double>(x);
+      const double py = static_cast<double>(y);
+
+      // 1. Compute surface normal from alpha channel.
+      double nx, ny, nz;
+      svg_lighting::computeNormal(srcPixels.data(), width, height, x, y, surfaceScale,
+                                  nx, ny, nz);
+      svg_lighting::normalize3(nx, ny, nz);
+
+      // 2. Light direction (surface-to-light, device space).
+      const double alpha = svg_lighting::getAlpha(srcPixels.data(), width, height, x, y);
+      const double pz = surfaceScale * alpha;
+      double lx = lightDevX - px;
+      double ly = lightDevY - py;
+      double lz = lightDevZ - pz;
+      svg_lighting::normalize3(lx, ly, lz);
+
+      // 3. Spotlight factor.
+      double ux = 0, uy = 0, uz = 0;
+      if (hasShear) {
+        ux = inv.data[0] * px + inv.data[2] * py + inv.data[4];
+        uy = inv.data[1] * px + inv.data[3] * py + inv.data[5];
+        uz = surfaceScale * alpha;
+      }
+
+      const double spotFactor = svg_lighting::spotLightFactor(
+          lx, ly, lz, spotDirX, spotDirY, spotDirZ,
+          spotExponent, limitingConeAngle, hasShear,
+          ux, uy, uz, userX, userY, userZ,
+          userSpotDirX, userSpotDirY, userSpotDirZ);
+
+      // 4. Final color computation.
+      double r, g, b, a;
+      if (!isSpecular) {
+        // Diffuse: kd * max(0, N·L) * spotFactor * lightColor, alpha = 1.
+        const double nDotL = std::max(0.0, nx * lx + ny * ly + nz * lz);
+        const double intensity = kd_or_ks * nDotL * spotFactor;
+        r = std::clamp(intensity * lightR, 0.0, 1.0);
+        g = std::clamp(intensity * lightG, 0.0, 1.0);
+        b = std::clamp(intensity * lightB, 0.0, 1.0);
+        a = 1.0;
+      } else {
+        // Specular: ks * pow(max(0, N·H), shininess) * spotFactor * lightColor, alpha = max(r,g,b).
+        double hx = lx, hy = ly, hz = lz + 1.0;  // H = normalize(L + eye), eye = (0,0,1)
+        svg_lighting::normalize3(hx, hy, hz);
+        const double nDotH = std::max(0.0, nx * hx + ny * hy + nz * hz);
+        const double intensity = kd_or_ks * std::pow(nDotH, shininess) * spotFactor;
+        r = std::clamp(intensity * lightR, 0.0, 1.0);
+        g = std::clamp(intensity * lightG, 0.0, 1.0);
+        b = std::clamp(intensity * lightB, 0.0, 1.0);
+        a = std::max({r, g, b});
+      }
+
+      const uint8_t rb = static_cast<uint8_t>(r * 255.0 + 0.5);
+      const uint8_t gb = static_cast<uint8_t>(g * 255.0 + 0.5);
+      const uint8_t bb = static_cast<uint8_t>(b * 255.0 + 0.5);
+      const uint8_t ab = static_cast<uint8_t>(a * 255.0 + 0.5);
+      outPixels[y * outStride + x] = SkPreMultiplyARGB(ab, rb, gb, bb);
+    }
+  }
+
+  bitmap.setImmutable();
+  return bitmap.asImage();
+}
+
 /// Attempt to lower the entire FilterGraph to a single SkImageFilter DAG.
 
 /// Returns nullptr if any node can't be lowered (caller should fall back to CPU path).
@@ -854,7 +1126,8 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                                               const Transformd& deviceFromFilter,
                                               int sourceWidth,
                                               int sourceHeight,
-                                              FinalTilePlan* finalTilePlan = nullptr) {
+                                              FinalTilePlan* finalTilePlan = nullptr,
+                                              sk_sp<SkImage> sourceImage = nullptr) {
   namespace fp = components::filter_primitive;
   std::map<RcString, sk_sp<SkImageFilter>> namedResults;
 
@@ -1381,25 +1654,38 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                 break;
               }
               case fp::LightSource::Type::Spot: {
-                const Vector2d pos = deviceFromFilter.transformPosition(Vector2d(userX, userY));
-                const Vector2d tgt = deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
-                const SkPoint3 location = {static_cast<SkScalar>(pos.x),
-                                           static_cast<SkScalar>(pos.y),
-                                           static_cast<SkScalar>(userZ * pixelScale)};
-                const SkPoint3 target = {static_cast<SkScalar>(tgt.x),
-                                         static_cast<SkScalar>(tgt.y),
-                                         static_cast<SkScalar>(userPtZ * pixelScale)};
-                const SkScalar cutoff = light.limitingConeAngle.has_value()
-                                            ? static_cast<SkScalar>(*light.limitingConeAngle)
-                                            : 180.0f;
-                // Per SVG spec, negative specularExponent on feSpotLight means "not set" → default 1.
-                // Per SVG spec, negative specularExponent on feSpotLight means "not set" → default 1.
-                const SkScalar spotExp = light.spotExponent < 0
-                                             ? 1.0f
-                                             : static_cast<SkScalar>(light.spotExponent);
-                result = SkImageFilters::SpotLitDiffuse(
-                    location, target, spotExp, cutoff, lightColor,
-                    surfaceScale, kd, std::move(in1));
+                // Use custom SVG-spec spotlight lighting for correct cone anti-aliasing
+                // and user-space cone check under non-conformal transforms.
+                const auto rgba = primitive.lightingColor.asRGBA();
+                sk_sp<SkImage> spotImage = generateSpotLighting(
+                    sourceImage, sourceWidth, sourceHeight, deviceFromFilter, pixelScale,
+                    userX, userY, userZ, userPtX, userPtY, userPtZ,
+                    light.spotExponent, light.limitingConeAngle,
+                    rgba.r / 255.0f, rgba.g / 255.0f, rgba.b / 255.0f,
+                    primitive.surfaceScale,
+                    false, primitive.diffuseConstant, 0);
+                if (spotImage) {
+                  sk_sp<SkShader> shader = spotImage->makeShader(
+                      SkTileMode::kClamp, SkTileMode::kClamp,
+                      SkSamplingOptions(SkFilterMode::kNearest));
+                  result = SkImageFilters::Shader(std::move(shader));
+                  skipLinearRGBPostWrap = true;
+                } else {
+                  // Fallback to Skia native if sourceImage unavailable.
+                  const Vector2d pos = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+                  const Vector2d tgt =
+                      deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
+                  result = SkImageFilters::SpotLitDiffuse(
+                      {static_cast<SkScalar>(pos.x), static_cast<SkScalar>(pos.y),
+                       static_cast<SkScalar>(userZ * pixelScale)},
+                      {static_cast<SkScalar>(tgt.x), static_cast<SkScalar>(tgt.y),
+                       static_cast<SkScalar>(userPtZ * pixelScale)},
+                      static_cast<SkScalar>(light.spotExponent < 0 ? 1.0 : light.spotExponent),
+                      light.limitingConeAngle.has_value()
+                          ? static_cast<SkScalar>(*light.limitingConeAngle)
+                          : 180.0f,
+                      lightColor, surfaceScale, kd, std::move(in1));
+                }
                 break;
               }
             }
@@ -1452,24 +1738,21 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                 break;
               }
               case fp::LightSource::Type::Spot: {
+                // Use Skia's native specular spotlight (custom specular needs further
+                // investigation for correct alpha/premultiplication handling).
                 const Vector2d pos = deviceFromFilter.transformPosition(Vector2d(userX, userY));
-                const Vector2d tgt = deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
-                const SkPoint3 location = {static_cast<SkScalar>(pos.x),
-                                           static_cast<SkScalar>(pos.y),
-                                           static_cast<SkScalar>(userZ * pixelScale)};
-                const SkPoint3 target = {static_cast<SkScalar>(tgt.x),
-                                         static_cast<SkScalar>(tgt.y),
-                                         static_cast<SkScalar>(userPtZ * pixelScale)};
-                const SkScalar cutoff = light.limitingConeAngle.has_value()
-                                            ? static_cast<SkScalar>(*light.limitingConeAngle)
-                                            : 180.0f;
-                // Per SVG spec, negative specularExponent on feSpotLight means "not set" → default 1.
-                const SkScalar spotExp = light.spotExponent < 0
-                                             ? 1.0f
-                                             : static_cast<SkScalar>(light.spotExponent);
+                const Vector2d tgt =
+                    deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
                 result = SkImageFilters::SpotLitSpecular(
-                    location, target, spotExp, cutoff, lightColor,
-                    surfaceScale, ks, shininess, std::move(in1));
+                    {static_cast<SkScalar>(pos.x), static_cast<SkScalar>(pos.y),
+                     static_cast<SkScalar>(userZ * pixelScale)},
+                    {static_cast<SkScalar>(tgt.x), static_cast<SkScalar>(tgt.y),
+                     static_cast<SkScalar>(userPtZ * pixelScale)},
+                    static_cast<SkScalar>(light.spotExponent < 0 ? 1.0 : light.spotExponent),
+                    light.limitingConeAngle.has_value()
+                        ? static_cast<SkScalar>(*light.limitingConeAngle)
+                        : 180.0f,
+                    lightColor, surfaceScale, ks, shininess, std::move(in1));
                 break;
               }
             }
@@ -2407,7 +2690,8 @@ void RendererSkia::popFilterLayer() {
             Boxd::FromXYWH(blurPadding, blurPadding, filterRegion.width(), filterRegion.height());
 
         sk_sp<SkImageFilter> localFilter = buildNativeSkiaFilterDAG(
-            localGraph, localTransform, localSourceImage->width(), localSourceImage->height());
+            localGraph, localTransform, localSourceImage->width(), localSourceImage->height(),
+            nullptr, localSourceImage);
         if (localFilter != nullptr) {
           localFilter = SkImageFilters::Crop(
               toSkia(localTransform.transformBox(*localGraph.filterRegion)), std::move(localFilter));
@@ -2488,7 +2772,7 @@ void RendererSkia::popFilterLayer() {
   FinalTilePlan finalTilePlan;
   sk_sp<SkImageFilter> nativeFilter =
       buildNativeSkiaFilterDAG(state.filterGraph, state.deviceFromFilter, sourceImage->width(),
-                               sourceImage->height(), &finalTilePlan);
+                               sourceImage->height(), &finalTilePlan, sourceImage);
   if (nativeFilter == nullptr) {
     // If lowering failed, composite the unfiltered SourceGraphic back.
     currentCanvas_->drawImage(sourceImage, 0, 0);

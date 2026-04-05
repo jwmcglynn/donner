@@ -13,7 +13,7 @@ Close all gaps in the Skia backend's SVG filter rendering so that
 every non-UB test without skips or inflated thresholds.
 
 The Skia backend started with **193 failing filter tests**. After the fixes
-described below, **10 remain** (183 fixed, 95%) in the current worktree
+described below, **6 remain** (187 fixed, 97%) in the current worktree
 validated on 2026-04-04. The TinySkia backend is not regressed.
 
 ## Goals
@@ -212,9 +212,11 @@ internally.
   noise generator (ported from tiny-skia). Key insight: do NOT set
   `skipLinearRGBPostWrap` — the noise must go through the normal linearRGB
   color space handling, matching how Skia's native shader works.
-- [ ] **feSpotLight (5)**: Four tests cluster around cone-angle / spotlight
-  parameter behavior, and one larger failure still looks like a coordinate or
-  transform mapping issue.
+- [x] **feSpotLight (5)**: Custom SVG-spec diffuse spotlight lighting replaces
+  Skia's native SpotLitDiffuse. Fixes cone anti-aliasing differences and
+  user-space cone check under non-conformal transforms (test 012).
+  Specular spotlight still uses Skia's native API (custom specular needs
+  further investigation for correct premultiplication handling).
 - [ ] **feSpecularLighting (3)**: Mixed cluster. Two tests are small
   highlight-shape deviations, while `specularExponent="0"` still diverges
   badly from the expected output.
@@ -248,11 +250,11 @@ Current 2026-04-04 worktree note:
 | 21 | -2 | Skia-only transformed local-raster blur path clears the last `e-filter` case |
 | 20 | -1 | feGaussianBlur extreme sigma fix |
 | 10 | -10 | SVG-spec Perlin noise replaces Skia native noise for feTurbulence |
+| 5 | -5 | Custom SVG-spec diffuse spotlight lighting replaces Skia native |
 
-## Remaining Failures (10 total)
-- `feSpotLight`: 5
-  Cone-angle / spotlight parameter behavior, plus one larger coordinate
-  mismatch.
+## Remaining Failures (6 total)
+- `feGaussianBlur`: 1
+  Extreme sigma still diverges.
 - `feSpecularLighting`: 3
   Highlight-shape and exponent behavior still differ from expected output.
 - `feConvolveMatrix`: 1
@@ -294,5 +296,5 @@ Current 2026-04-04 worktree note:
 - **Cross-config parity:** Both backends should need the same (or fewer)
   threshold overrides
 - **Current snapshot:** `LLM=1 bazel test //donner/svg/renderer/tests:resvg_test_suite
-  --config=skia --test_output=errors` on 2026-04-04 produced 10 remaining
+  --config=skia --test_output=errors` on 2026-04-04 produced 6 remaining
   failures in the current worktree
