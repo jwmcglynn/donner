@@ -36,7 +36,7 @@ TEST(SVGRadialGradientElementTests, Cast) {
 }
 
 TEST(SVGRadialGradientElementTests, RenderingDefaults) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -69,7 +69,7 @@ TEST(SVGRadialGradientElementTests, RenderingDefaults) {
 }
 
 TEST(SVGRadialGradientElementTests, GradientCoordinates) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -154,7 +154,7 @@ TEST(SVGRadialGradientElementTests, GradientUnitsObjectBoundingBox) {
   EXPECT_THAT(gradient->gradientUnits(), testing::Eq(GradientUnits::ObjectBoundingBox));
 }
 TEST(SVGRadialGradientElementTests, GradientUnitsRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -220,7 +220,7 @@ TEST(SVGRadialGradientElementTests, GradientUnitsRendering) {
 }
 
 TEST(SVGRadialGradientElementTests, RenderingTransform) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -301,7 +301,7 @@ TEST(SVGRadialGradientElementTests, SpreadMethodRepeat) {
 }
 
 TEST(SVGRadialGradientElementTests, SpreadMethodRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -399,7 +399,7 @@ TEST(SVGRadialGradientElementTests, HrefSimple) {
 }
 
 TEST(SVGRadialGradientElementTests, HrefInheritanceChildrenXYRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -443,7 +443,7 @@ TEST(SVGRadialGradientElementTests, HrefInheritanceChildrenXYRendering) {
 }
 
 TEST(SVGRadialGradientElementTests, HrefInheritanceSharedParamsRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 

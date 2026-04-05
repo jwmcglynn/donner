@@ -214,7 +214,7 @@ TEST(SVGEllipseElementTests, Rendering) {
 /// Verify that an ellipse element with stroke only is rendered as expected.
 /// (This test uses an ellipse with no fill and a white stroke.)
 TEST(SVGEllipseElementTests, RenderingStroke) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 

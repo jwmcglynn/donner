@@ -36,7 +36,7 @@ TEST(SVGClipPathElementTests, InvalidClipPathUnits) {
 }
 
 TEST(SVGClipPathElementTests, RenderingDefaults) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -68,7 +68,7 @@ TEST(SVGClipPathElementTests, RenderingDefaults) {
 }
 
 TEST(SVGClipPathElementTests, RenderingObjectBoundingBox) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -238,7 +238,7 @@ TEST(SVGClipPathElementTests, MultiplePathsWithDifferentClipRulesSideBySide) {
  * Verify that transforms on elements within a clipPath are applied correctly.
  */
 TEST(SVGClipPathElementTests, RenderingTransform) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -275,7 +275,7 @@ TEST(SVGClipPathElementTests, RenderingTransform) {
  * is correctly applied when rendering.
  */
 TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 

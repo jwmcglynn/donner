@@ -52,7 +52,7 @@ TEST(SVGPatternElementTests, PatternContentUnits) {
 }
 
 TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -84,7 +84,7 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
 }
 
 TEST(SVGPatternElementTests, ObjectBoundingBoxTiledRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -116,7 +116,7 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxTiledRendering) {
 }
 
 TEST(SVGPatternElementTests, ObjectBoundingBoxTiledWithXYRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -148,7 +148,7 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxTiledWithXYRendering) {
 }
 
 TEST(SVGPatternElementTests, UserSpaceOnUseRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -181,7 +181,7 @@ TEST(SVGPatternElementTests, UserSpaceOnUseRendering) {
 }
 
 TEST(SVGPatternElementTests, UserSpaceOnUseWithXYRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -214,7 +214,7 @@ TEST(SVGPatternElementTests, UserSpaceOnUseWithXYRendering) {
 }
 
 TEST(SVGPatternElementTests, PatternContentObjectBoundingBoxRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -251,7 +251,7 @@ TEST(SVGPatternElementTests, PatternContentObjectBoundingBoxRendering) {
  * tile rect with x/y.
  */
 TEST(SVGPatternElementTests, UnitsNonDefaultWithXYRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -295,7 +295,7 @@ TEST(SVGPatternElementTests, PatternTransform) {
 }
 
 TEST(SVGPatternElementTests, PatternTransformRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -328,7 +328,7 @@ TEST(SVGPatternElementTests, PatternTransformRendering) {
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -360,7 +360,7 @@ TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
         )"));
 }
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -393,7 +393,7 @@ TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsAndXYRendering) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 

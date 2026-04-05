@@ -116,7 +116,7 @@ TEST(SVGTextElementTests, TextContentMultipleNodes) {
 
 // Simple rendering test for a single-letter <text> element
 TEST(SVGTextElementViewportTests, SimpleLetter) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
@@ -152,7 +152,7 @@ TEST(SVGTextElementViewportTests, SimpleLetter) {
 // Verify that a <text> element with multiple <tspan> children generates multiple
 // computed text spans.
 TEST(SVGTextElementViewportTests, MultipleTSpansComputed) {
-  if (RendererTestUtils::isTinySkiaBackend()) {
+  if (RendererTestUtils::IsTinySkiaBackend()) {
     GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 

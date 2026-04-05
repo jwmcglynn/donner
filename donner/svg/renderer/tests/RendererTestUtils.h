@@ -116,7 +116,7 @@ public:
   /**
    * Returns true when the active test renderer backend is tiny-skia.
    */
-  static bool isTinySkiaBackend() { return ActiveRendererBackend() == RendererBackend::TinySkia; }
+  static bool IsTinySkiaBackend() { return ActiveRendererBackend() == RendererBackend::TinySkia; }
 
   /**
    * Convert a snapshot bitmap to ASCII art, mapping grayscale intensity to ten glyph levels.
