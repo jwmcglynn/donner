@@ -757,6 +757,7 @@ def generate_all_packages() -> None:
                 _TINY_SKIA_ONLY_TARGETS = {
                     "donner_svg_renderer_renderer_tiny_skia",
                     "donner_svg_renderer_filter_graph_executor",
+                    "donner_svg_renderer_tests_filter_graph_executor_tests",
                 }
                 if cmake_name in _SKIA_ONLY_TARGETS:
                     f.write(f'if(DONNER_RENDERER_BACKEND STREQUAL "skia")\n')
