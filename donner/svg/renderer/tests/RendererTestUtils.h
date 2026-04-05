@@ -145,8 +145,11 @@ public:
         const uint8_t r = snapshot.pixels[pixelIndex];
         const uint8_t g = snapshot.pixels[pixelIndex + 1];
         const uint8_t b = snapshot.pixels[pixelIndex + 2];
+        const uint8_t a = snapshot.pixels[pixelIndex + 3];
         const uint8_t intensity = static_cast<uint8_t>(
-            (static_cast<uint32_t>(r) + static_cast<uint32_t>(g) + static_cast<uint32_t>(b)) / 3u);
+            ((static_cast<uint32_t>(r) + static_cast<uint32_t>(g) + static_cast<uint32_t>(b)) *
+             static_cast<uint32_t>(a)) /
+            (3u * 255u));
         const std::size_t tableIndex =
             static_cast<std::size_t>(intensity) * (kGrayscaleTable.size() - 1u) / 255u;
         asciiArt.push_back(kGrayscaleTable[tableIndex]);
