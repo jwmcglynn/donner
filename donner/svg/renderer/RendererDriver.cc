@@ -240,35 +240,6 @@ PaintParams toPaintParams(Registry& registry,
   return paint;
 }
 
-TextParams toTextParams(Registry& registry,
-                        const components::RenderingInstanceComponent& instance,
-                        const components::ComputedStyleComponent& style) {
-  TextParams params;
-  const auto& properties = style.properties.value();
-  const css::RGBA currentColor = properties.color.getRequired().rgba();
-
-  params.opacity = properties.opacity.getRequired();
-
-  // Resolve fill color for text.
-  if (const auto* solid = std::get_if<PaintServer::Solid>(&instance.resolvedFill)) {
-    const float fillOpacity = NarrowToFloat(properties.fillOpacity.getRequired());
-    params.fillColor = css::Color(solid->color.resolve(currentColor, fillOpacity));
-  }
-
-  if (const auto* stroke = std::get_if<PaintServer::Solid>(&instance.resolvedStroke)) {
-    const float strokeOpacity = NarrowToFloat(properties.strokeOpacity.getRequired());
-    params.strokeColor = css::Color(stroke->color.resolve(currentColor, strokeOpacity));
-    params.strokeParams = toStrokeParams(registry, instance, style);
-  }
-
-  params.fontFamilies = properties.fontFamily.getRequiredRef();
-  params.fontSize = properties.fontSize.getRequired();
-  params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  params.fontMetrics = FontMetrics();
-
-  return params;
-}
-
 ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style, Registry& registry) {
   ResolvedClip clip;

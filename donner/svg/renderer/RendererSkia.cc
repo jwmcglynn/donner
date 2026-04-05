@@ -1417,16 +1417,67 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
           } else if constexpr (std::is_same_v<T, fp::Flood>) {
             const auto rgba = primitive.floodColor.asRGBA();
             const float opacity = static_cast<float>(primitive.floodOpacity);
-            // SkColor4f is always unpremultiplied in Skia's API. Pass straight RGBA.
-            const SkColor4f color = {
-                static_cast<float>(rgba.r) / 255.0f,
-                static_cast<float>(rgba.g) / 255.0f,
-                static_cast<float>(rgba.b) / 255.0f,
-                static_cast<float>(rgba.a) / 255.0f * opacity};
+            const float fr = static_cast<float>(rgba.r) / 255.0f;
+            const float fg = static_cast<float>(rgba.g) / 255.0f;
+            const float fb = static_cast<float>(rgba.b) / 255.0f;
+            const float fa = static_cast<float>(rgba.a) / 255.0f * opacity;
+
+            // For non-axis-aligned transforms with explicit subregion, pre-rasterize
+            // the flood with per-pixel clipping to the transformed subregion quadrilateral.
+            // SkImageFilters::Crop only supports axis-aligned rects, producing wrong shapes.
+            const bool hasShear =
+                !NearZero(deviceFromFilter.data[1], 1e-6) ||
+                !NearZero(deviceFromFilter.data[2], 1e-6);
+            const bool hasExplicitSubregion =
+                node.x.has_value() || node.y.has_value() ||
+                node.width.has_value() || node.height.has_value();
+
+            if (hasShear && hasExplicitSubregion) {
+              // Resolve the user-space subregion and clip per-pixel.
+              const Boxd userSubregion = resolveNodeSubregion(node);
+              const Transformd filterFromDevice = deviceFromFilter.inverse();
+
+              SkBitmap bitmap;
+              bitmap.allocPixels(SkImageInfo::MakeN32Premul(sourceWidth, sourceHeight));
+              uint32_t* pixels = bitmap.getAddr32(0, 0);
+              const int stride = static_cast<int>(bitmap.rowBytes() / 4);
+
+              for (int y = 0; y < sourceHeight; y++) {
+                for (int x = 0; x < sourceWidth; x++) {
+                  // Transform device pixel to filter/user space.
+                  const double ux = filterFromDevice.data[0] * (x + 0.5) +
+                                    filterFromDevice.data[2] * (y + 0.5) +
+                                    filterFromDevice.data[4];
+                  const double uy = filterFromDevice.data[1] * (x + 0.5) +
+                                    filterFromDevice.data[3] * (y + 0.5) +
+                                    filterFromDevice.data[5];
+                  if (ux >= userSubregion.topLeft.x && ux < userSubregion.bottomRight.x &&
+                      uy >= userSubregion.topLeft.y && uy < userSubregion.bottomRight.y) {
+                    const uint8_t rb = static_cast<uint8_t>(fr * fa * 255.0f + 0.5f);
+                    const uint8_t gb = static_cast<uint8_t>(fg * fa * 255.0f + 0.5f);
+                    const uint8_t bb = static_cast<uint8_t>(fb * fa * 255.0f + 0.5f);
+                    const uint8_t ab = static_cast<uint8_t>(fa * 255.0f + 0.5f);
+                    pixels[y * stride + x] = SkPreMultiplyARGB(ab, rb, gb, bb);
+                  } else {
+                    pixels[y * stride + x] = 0;  // Transparent.
+                  }
+                }
+              }
+
+              bitmap.setImmutable();
+              sk_sp<SkShader> shader = bitmap.asImage()->makeShader(
+                  SkTileMode::kClamp, SkTileMode::kClamp,
+                  SkSamplingOptions(SkFilterMode::kNearest));
+              result = SkImageFilters::Shader(std::move(shader));
+            } else {
+              // SkColor4f is always unpremultiplied in Skia's API. Pass straight RGBA.
+              const SkColor4f color = {fr, fg, fb, fa};
+              result = SkImageFilters::Shader(SkShaders::Color(color, nullptr));
+            }
+
             // Skip linearRGB post-wrap — the flood color is in sRGB and Skia handles
             // the premultiplication internally.
             skipLinearRGBPostWrap = true;
-            result = SkImageFilters::Shader(SkShaders::Color(color, nullptr));
             return true;
 
           } else if constexpr (std::is_same_v<T, fp::Blend>) {
