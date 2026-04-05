@@ -22,40 +22,27 @@ struct AsciiImage {
   std::string generated;  //!< ASCII art of generated image, with lines separated by `\n`
 
   /**
-   * Compare the rendered ASCII image to a golden ASCII string, and output the image differences if
-   * any.
-   *
-   * Example:
-   * ```
-   * const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
-   *       <rect width="8" height="8" fill="white" />
-   *       )");
-   *
-   * EXPECT_TRUE(generatedAscii.matches(R"(
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       )"));
-   * ```
-   *
-   * @param golden The golden ASCII image to compare the rendered output to, which should be a
-   * multiline string, whitespaces and the first newlines are removed.
-   * @return true if the image matches.
+   * Compare the rendered ASCII image to a golden ASCII string.
    */
-  bool matches(std::string_view golden) const {
+  bool matches(std::string_view golden) const { return matchesImpl(golden, true); }
+
+  /**
+   * Try matching against the primary golden, falling back to an alternate if the active backend
+   * differs.  Use this when Skia and tiny-skia produce structurally different output (e.g. pattern
+   * sampling or curve rasterization differences).
+   *
+   * @param golden Primary golden (typically tiny-skia output).
+   * @param alternateGolden Fallback golden (typically Skia output).
+   */
+  bool matchesOneOf(std::string_view golden, std::string_view alternateGolden) const {
+    if (matchesImpl(golden, false)) {
+      return true;
+    }
+    return matchesImpl(alternateGolden, true);
+  }
+
+private:
+  bool matchesImpl(std::string_view golden, bool emitDiagnostics) const {
     // Remove spaces and newlines at the beginning of the golden image.
     while (!golden.empty() && (std::isspace(golden.front()) || golden.front() == '\n')) {
       golden.remove_prefix(1);
@@ -82,9 +69,11 @@ struct AsciiImage {
 
       if (genLine != goldLine) {
         hasDifferences = true;
-        diffStream << "Line " << lineNum << ":\n";
-        diffStream << "Generated: " << genLine << "\n";
-        diffStream << "Expected:  " << goldLine << "\n\n";
+        if (emitDiagnostics) {
+          diffStream << "Line " << lineNum << ":\n";
+          diffStream << "Generated: " << genLine << "\n";
+          diffStream << "Expected:  " << goldLine << "\n\n";
+        }
       }
 
       if (genEnd != generated.end()) {
@@ -99,7 +88,7 @@ struct AsciiImage {
       ++lineNum;
     }
 
-    if (hasDifferences) {
+    if (hasDifferences && emitDiagnostics) {
       std::cerr << "ASCII outputs differ:\n" << diffStream.str();
       std::cerr << "\nGenerated image:\n--------\n" << generated << "--------\n";
     }
